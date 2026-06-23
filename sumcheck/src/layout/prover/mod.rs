@@ -104,15 +104,54 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
         self.claims().num_variables_table(id)
     }
 
-    /// Records opening claims for the selected columns of one table.
+    /// Records opening claims for the selected columns of one table at a sampled point.
     ///
-    /// - Current openings evaluate a column at the sampled point.
+    /// - The local-frame opening point is drawn from the transcript.
+    /// - Current openings evaluate a column at that point.
     /// - Next openings evaluate the repeat-last successor view at the same point.
-    /// - Returned evaluations list all current openings first, then all next openings.
+    /// - Returned evaluations list all current openings first.
+    /// - Returned evaluations list all next openings second.
     fn eval<Ch>(
         &mut self,
         table_idx: usize,
         batch: &OpeningRequest,
+        challenger: &mut Ch,
+    ) -> OpeningEvals<EF>
+    where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Draw the local-frame opening point as powers of one challenge.
+        // This is the standalone-PCS convention: the verifier picks the evaluation point.
+        let point = Point::expand_from_univariate(
+            challenger.sample_algebra_element(),
+            self.num_variables_table(table_idx),
+        );
+        self.eval_at(table_idx, batch, &point, challenger)
+    }
+
+    /// Records opening claims for the selected columns of one table at a prescribed point.
+    ///
+    /// The caller supplies the local-frame opening point instead of sampling it.
+    /// An outer protocol that fixes the point opens its columns here.
+    ///
+    /// - Current openings evaluate a column at the supplied point.
+    /// - Next openings evaluate the repeat-last successor view at the same point.
+    /// - The claimed evaluations are absorbed into the transcript.
+    /// - The current group is absorbed first.
+    /// - Returned evaluations list all current openings first.
+    /// - Returned evaluations list all next openings second.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point.
+    /// - Fiat-Shamir transcript.
+    fn eval_at<Ch>(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
         challenger: &mut Ch,
     ) -> OpeningEvals<EF>
     where

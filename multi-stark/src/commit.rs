@@ -175,6 +175,11 @@ mod tests {
             &self.pcs
         }
 
+        fn min_num_variables(&self) -> usize {
+            // The mock commits columns directly, with no padding floor.
+            0
+        }
+
         fn build_witness(&self, columns: Vec<Poly<F>>) -> Vec<Poly<F>> {
             // The mock scheme commits columns directly, with no stacking or folding.
             columns

@@ -4,16 +4,17 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{CanObserve, DuplexChallenger};
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
-use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_merkle_tree::MerkleTreeMmcs;
+use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, Witness};
 use p3_sumcheck::test_util::{random_table_specs, table_specs_to_tables};
-use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
+use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -21,6 +22,7 @@ use rand::rngs::SmallRng;
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use crate::pcs::prover::WhirProver;
+use crate::pcs::verifier::errors::VerifierError;
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -150,10 +152,222 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
     }
 }
 
+/// How a prescribed-point run deviates from the honest transcript.
+///
+/// Each non-honest mode attacks one opening binding.
+#[derive(Clone, Copy)]
+enum Tamper {
+    /// Verify honestly, at the prover's points and claimed values.
+    None,
+    /// Verify at a point the prover never opened.
+    ///
+    /// The claimed value belongs to the prover's point, so the WHIR proof must reject.
+    VerifierPoint,
+    /// Corrupt a claimed opened value before verifying.
+    ///
+    /// The commitment fixes the true value, so the WHIR proof must reject.
+    ProofEval,
+}
+
+/// Drive the prescribed-point opening path: open and verify at caller-chosen points.
+///
+/// Returns the verifier result so a test can assert acceptance.
+/// Optionally applies one mutation to check that the broken binding is rejected.
+fn run_whir_pcs_at_prescribed_points<L: Layout<F, EF>>(
+    specs: &[TableSpec],
+    folding_factor: FoldingFactor,
+    soundness_type: SecurityAssumption,
+    pow_bits: usize,
+    tamper: Tamper,
+) -> Result<(), VerifierError> {
+    let folding = folding_factor.at_round(0);
+    let tables = table_specs_to_tables(specs);
+    let witness = L::new_witness(tables, folding);
+    let protocol = OpeningProtocol::new(specs.to_vec()).pad_to_min_num_variables(folding);
+    let shapes = protocol.table_shapes();
+
+    // One arbitrary non-boolean point per opening batch, sized to its table's local frame.
+    // A frame or ordering mistake would change the opened values, so the test would catch it.
+    let points: Vec<Point<EF>> = protocol
+        .iter_openings()
+        .enumerate()
+        .map(|(b, (table_idx, _batch))| {
+            let n = shapes[table_idx].num_variables();
+            Point::new(
+                (0..n)
+                    .map(|c| EF::from_u64((7 + b * 13 + c * 3) as u64))
+                    .collect(),
+            )
+        })
+        .collect();
+
+    // Merkle and protocol parameters mirror the sampled-point lifecycle runner.
+    let num_variables = witness.num_variables();
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+    let params = ProtocolParameters {
+        security_level: 32,
+        pow_bits,
+        round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+        folding_factor,
+        soundness_type,
+        starting_log_inv_rate: 1,
+    };
+    let config = WhirConfig::new(num_variables, params).unwrap();
+    let pcs = TestWhirPcs::<L>::new(config, MyDft::default(), mmcs);
+
+    // Prover: commit, then open every batch at its prescribed point.
+    let (commitment, mut proof) = {
+        let mut challenger = challenger();
+        let mut ds = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut ds);
+        ds.observe_domain_separator(&mut challenger);
+
+        let (commitment, prover_data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs,
+                witness,
+                &mut challenger,
+            );
+        let proof = pcs.open_at(prover_data, &protocol, &points, &mut challenger);
+        (commitment, proof)
+    };
+
+    // Verifier: replay the transcript and check the openings at the same points,
+    // unless a tamper variant breaks one of the bindings first.
+    let verify_points = if matches!(tamper, Tamper::VerifierPoint) {
+        // Shift the first batch's first coordinate so the claimed value no longer matches.
+        let mut perturbed = points;
+        let mut coords = perturbed[0].as_slice().to_vec();
+        coords[0] += EF::ONE;
+        perturbed[0] = Point::new(coords);
+        perturbed
+    } else {
+        points
+    };
+
+    if matches!(tamper, Tamper::ProofEval) {
+        // Bump the first claimed current-point value off the committed one.
+        let batch = &proof.evals[0];
+        let mut current = batch.current().to_vec();
+        current[0] += EF::ONE;
+        proof.evals[0] = OpeningBatch::new(current, batch.next().to_vec());
+    }
+
+    let mut challenger = challenger();
+    let mut ds = DomainSeparator::new(vec![]);
+    pcs.add_domain_separator::<8>(&mut ds);
+    ds.observe_domain_separator(&mut challenger);
+    // The prescribed-point verifier does not absorb the commitment.
+    // The caller absorbs it once, matching the prover's commit phase.
+    challenger.observe(commitment.clone());
+    pcs.verify_at(
+        &commitment,
+        &proof,
+        &protocol,
+        &verify_points,
+        &mut challenger,
+    )
+    .map(|_evals| ())
+}
+
+#[test]
+fn prescribed_point_open_verify_roundtrips() {
+    // Fixture state: one arity-8 table with two columns, opened at two prescribed points.
+    //
+    //     point 0: current columns {0, 1}
+    //     point 1: current column  {0}
+    //
+    // The arity is kept comfortably above the SIMD packing width.
+    // A polynomial smaller than the packing width cannot drive the packed sumcheck.
+    //
+    // Opening at caller-chosen points and verifying at the same points must accept.
+    let specs = [TableSpec::new(
+        TableShape::new(8, 2),
+        vec![
+            OpeningBatch::new(vec![0, 1], Vec::new()),
+            OpeningBatch::new(vec![0], Vec::new()),
+        ],
+    )];
+    run_whir_pcs_at_prescribed_points::<PrefixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(2),
+        SecurityAssumption::CapacityBound,
+        0,
+        Tamper::None,
+    )
+    .expect("prescribed-point round-trip must verify");
+}
+
+#[test]
+fn prescribed_point_verify_rejects_wrong_point() {
+    // Fixture state: one batch opens current and successor values.
+    let specs = [TableSpec::new(
+        TableShape::new(8, 2),
+        vec![OpeningBatch::new(vec![0, 1], vec![0])],
+    )];
+    // Mutation: verify at a point the prover did not open.
+    let err = run_whir_pcs_at_prescribed_points::<PrefixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(2),
+        SecurityAssumption::CapacityBound,
+        0,
+        Tamper::VerifierPoint,
+    )
+    .unwrap_err();
+    match err {
+        VerifierError::SumcheckFailed {
+            round,
+            expected,
+            actual,
+        } => {
+            // The opening sumcheck binds the claim to the prover's point.
+            // Verifying at a different point first disagrees at round 5.
+            assert_eq!(round, 5);
+            assert_eq!(
+                expected,
+                "1841252927 + 394466335 X + 1831684817 X^2 + 521830660 X^3"
+            );
+            assert_eq!(
+                actual,
+                "1535800973 + 1619442985 X + 1493239317 X^2 + 1782746132 X^3"
+            );
+        }
+        other => panic!("expected round-polynomial mismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn prescribed_point_verify_rejects_tampered_eval() {
+    // Fixture state: one batch opens current and successor values.
+    let specs = [TableSpec::new(
+        TableShape::new(8, 2),
+        vec![OpeningBatch::new(vec![0, 1], vec![0])],
+    )];
+    // Mutation: shift one claimed current value by one field element.
+    let err = run_whir_pcs_at_prescribed_points::<PrefixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(2),
+        SecurityAssumption::CapacityBound,
+        0,
+        Tamper::ProofEval,
+    )
+    .unwrap_err();
+    match err {
+        VerifierError::MerkleProofInvalid { position, reason } => {
+            // The tampered eval is absorbed, so the verifier derives different query
+            // positions than the prover authenticated, and opens an unauthenticated one.
+            assert_eq!(position, 9);
+            assert_eq!(reason, "Base field Merkle proof verification failed");
+        }
+        other => panic!("expected a Merkle opening rejection, got {other:?}"),
+    }
+}
+
 /// Smoke matrix covering each WHIR parameter axis at least once.
 ///
-/// The full randomized sweep lives in [`test_whir_end_to_end_exhaustive`] and
-/// runs from the Heavy CI workflow.
+/// The full randomized sweep runs from the Heavy CI workflow.
 #[test]
 fn test_whir_end_to_end() {
     let table_spec_sets = [
@@ -438,8 +652,9 @@ mod error_variant_tests {
     /// - Single table of arity 12 with two columns.
     /// - Two opening batches: first opens both columns; second opens column 0.
     ///
-    /// Yields `protocol.num_openings() == 2` and the inner batch sizes
-    /// `(2, 1)`. Both axes can be tampered independently.
+    /// The fixture has two opening batches.
+    /// The inner batch sizes are two and one.
+    /// Both axes can be tampered independently.
     #[allow(clippy::type_complexity)]
     fn commit_and_open() -> (
         TestWhirPcs<L>,

@@ -14,6 +14,13 @@ pub mod config;
 pub mod folder;
 pub mod metadata;
 pub mod opening;
+pub mod proof;
+pub mod prover;
 pub mod rounds;
 pub mod selectors;
+pub mod verifier;
 pub mod zerocheck;
+
+pub use proof::MultiStarkProof;
+pub use prover::prove;
+pub use verifier::{VerificationError, verify};
