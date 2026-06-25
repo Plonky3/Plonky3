@@ -18,6 +18,9 @@ type Ch = DuplexChallenger<F, Perm, 16, 8>;
 
 const NUM_COLS: usize = 2;
 
+/// Width of the wide trace whose columns are mostly current-row-only filler.
+const WIDE_COLS: usize = 64;
+
 struct FibAir;
 struct FibRow<T> {
     left: T,
@@ -71,6 +74,61 @@ fn fib_trace(n: usize) -> RowMajorMatrix<F> {
     RowMajorMatrix::new(values, NUM_COLS)
 }
 
+/// Wide AIR carrying a Fibonacci recurrence in columns 0 and 1, with the
+/// remaining `WIDE_COLS - 2` columns committed but read only on the current row.
+///
+/// `all_next` selects the declared next-row footprint: `true` declares every
+/// column (the conservative default for an AIR that does not override
+/// [`BaseAir::main_next_row_columns`]), `false` declares just the two columns
+/// the constraints read on the next row. Both share one [`Air::eval`], so the
+/// prover-time gap between them reflects the successor-table cost of the
+/// undeclared columns.
+struct WideFibAir {
+    all_next: bool,
+}
+
+impl<X> BaseAir<X> for WideFibAir {
+    fn width(&self) -> usize {
+        WIDE_COLS
+    }
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        if self.all_next {
+            (0..WIDE_COLS).collect()
+        } else {
+            vec![0, 1]
+        }
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for WideFibAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice();
+        let next = main.next_slice();
+        let mut trans = builder.when_transition();
+        trans.assert_eq(local[1], next[0]);
+        trans.assert_eq(local[0] + local[1], next[1]);
+    }
+}
+
+fn wide_fib_trace(n: usize) -> RowMajorMatrix<F> {
+    let mut left = F::ZERO;
+    let mut right = F::ONE;
+    let mut values = Vec::with_capacity(WIDE_COLS * n);
+    for i in 0..n {
+        values.push(left);
+        values.push(right);
+        // Filler columns: committed and opened at the current row, never read ahead.
+        for c in 2..WIDE_COLS {
+            values.push(F::from_u64((i + c) as u64));
+        }
+        let next_right = left + right;
+        left = right;
+        right = next_right;
+    }
+    RowMajorMatrix::new(values, WIDE_COLS)
+}
+
 fn fresh_challenger() -> Ch {
     let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
     let perm = Perm::new_from_rng_128(&mut rng);
@@ -95,5 +153,25 @@ fn bench_zerocheck(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_zerocheck);
+fn bench_wide_zerocheck(c: &mut Criterion) {
+    let mut group = c.benchmark_group("zerocheck_prove_wide");
+    group.sample_size(10);
+    for log_height in [16, 18, 20] {
+        let n = 1 << log_height;
+        let trace = wide_fib_trace(n);
+        for (label, all_next) in [("all_next", true), ("sparse_next", false)] {
+            let air = WideFibAir { all_next };
+            let zerocheck = AirZerocheck::new(&air, 0);
+            group.bench_with_input(BenchmarkId::new(label, log_height), &n, |b, _| {
+                b.iter(|| {
+                    let mut ch = fresh_challenger();
+                    zerocheck.prove::<F, EF, _>(&trace, &[], &mut ch)
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_zerocheck, bench_wide_zerocheck);
 criterion_main!(benches);
