@@ -222,6 +222,7 @@ mod tests {
         // Prover side.
         let mut prover_state = prover_from(&columns);
         let mut p_ch = fresh_challenger();
+        p_ch.observe_algebra_element(claimed_sum);
         let (proof, prover_challenges) =
             prover_state.prove::<F, _>(&mut p_ch, log_m, 3, 0, claimed_sum);
 
@@ -256,6 +257,7 @@ mod tests {
 
         let mut prover_state = prover_from(&columns);
         let mut p_ch = fresh_challenger();
+        p_ch.observe_algebra_element(claimed_sum);
         let (proof, prover_challenges) =
             prover_state.prove::<F, _>(&mut p_ch, log_m, 3, pow_bits, claimed_sum);
 
@@ -291,6 +293,7 @@ mod tests {
 
         let mut prover_state = prover_from(&columns);
         let mut p_ch = fresh_challenger();
+        p_ch.observe_algebra_element(claimed_sum);
         let (mut proof, _) = prover_state.prove::<F, _>(&mut p_ch, log_m, 3, pow_bits, claimed_sum);
 
         let last_round = log_m - 1;
