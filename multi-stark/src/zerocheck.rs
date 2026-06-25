@@ -214,7 +214,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         EF: ExtensionField<F>,
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
             + for<'b> Air<MultilinearFolder<'b, F, F::Packing, EF::ExtensionPacking>>
-            + for<'b> Air<MultilinearFolder<'b, F, EF, EF, EF>>
+            + for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
             + Air<SymbolicAirBuilder<F, EF>>,
         EF::ExtensionPacking: From<EF> + From<F::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
@@ -329,7 +329,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF, F>> + Air<SymbolicAirBuilder<F, EF>>,
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>> + Air<SymbolicAirBuilder<F, EF>>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Reject column kinds this version cannot prove, and read the layout once.

@@ -42,8 +42,8 @@ pub(crate) struct RoundStateBase<'a, A, F, EF> {
 pub(crate) struct RoundStateExt<'a, A, F, EF> {
     /// AIR whose alpha-batched constraint is being evaluated.
     air: &'a A,
-    /// Public inputs forwarded to the AIR, lifted into the extension field.
-    public_values: Vec<EF>,
+    /// Public inputs forwarded to the AIR, in the base field.
+    public_values: &'a [F],
     /// Random scalar batching the AIR constraints.
     alpha: EF,
     /// Zerocheck weight `eq(tau, x)` over the remaining hypercube.
@@ -56,8 +56,6 @@ pub(crate) struct RoundStateExt<'a, A, F, EF> {
     next_tail: Vec<EF>,
     /// Per-round sumcheck degree.
     degree: usize,
-    /// Type witness for the base field; no runtime storage.
-    _marker: core::marker::PhantomData<F>,
 }
 
 impl<'a, A, F, EF> RoundStateBase<'a, A, F, EF>
@@ -346,21 +344,20 @@ where
 
         RoundStateExt {
             air: self.air,
-            public_values: self.public_values.iter().copied().map(EF::from).collect(),
+            public_values: self.public_values,
             alpha: self.alpha,
             eq: self.eq,
             degree: self.degree,
             columns,
             next_tail,
             boundary: BoundaryEvals::new(EF::ONE - r, r, EF::ONE - r),
-            _marker: core::marker::PhantomData,
         }
     }
 }
 
 impl<'a, A, F, EF> RoundProver<EF> for RoundStateExt<'a, A, F, EF>
 where
-    A: for<'b> Air<MultilinearFolder<'b, F, EF, EF, EF>>,
+    A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
     F: Field,
     EF: ExtensionField<F>,
 {
@@ -398,7 +395,7 @@ where
     #[tracing::instrument(skip_all)]
     pub(crate) fn round_poly(&self) -> Vec<EF>
     where
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF, EF>>,
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
     {
         let width = self.width();
         let num_evals = self.num_evals();
@@ -453,7 +450,7 @@ where
                         &local_point,
                         &next_point,
                         boundary,
-                        &self.public_values,
+                        self.public_values,
                         self.alpha,
                     )
                     .eval_air(self.air);
@@ -474,7 +471,7 @@ where
                             &local_point,
                             &next_point,
                             boundary,
-                            &self.public_values,
+                            self.public_values,
                             self.alpha,
                         )
                         .eval_air(self.air);

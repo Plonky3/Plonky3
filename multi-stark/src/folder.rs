@@ -5,8 +5,6 @@
 //!   - the prover walks the boolean hypercube row by row,
 //!   - the verifier evaluates at the random sumcheck challenge.
 
-use core::marker::PhantomData;
-
 use p3_air::{Air, AirBuilder, RowWindow};
 use p3_field::{Algebra, PrimeCharacteristicRing};
 
@@ -14,15 +12,15 @@ use crate::selectors::BoundaryEvals;
 
 /// Folder shared by the prover and the verifier.
 #[derive(Debug)]
-pub struct MultilinearFolder<'a, F, Var, Acc, PublicVar = F> {
+pub struct MultilinearFolder<'a, F, Var, Acc> {
     /// Two-row main window holding the current and shifted-by-one rows.
     ///
     /// The shifted row carries zero in its last position.
     pub main_window: RowWindow<'a, Var>,
     /// Boundary-selector values shared by all selector accessors.
     pub boundary: BoundaryEvals<Var>,
-    /// Public inputs forwarded to the AIR.
-    pub public_values: &'a [PublicVar],
+    /// Public inputs forwarded to the AIR, always in the base field.
+    pub public_values: &'a [F],
     /// Random scalar driving alpha-batching of constraints.
     pub alpha: Acc,
     /// Running alpha-batched accumulator capturing every asserted-zero constraint.
@@ -33,11 +31,9 @@ pub struct MultilinearFolder<'a, F, Var, Acc, PublicVar = F> {
     ///
     /// Empty when the AIR declares no periodic columns.
     pub periodic_values: &'a [Var],
-    /// Type witness for the base field; no runtime storage.
-    pub _phantom: PhantomData<F>,
 }
 
-impl<'a, F, Var, Acc, PublicVar> MultilinearFolder<'a, F, Var, Acc, PublicVar>
+impl<'a, F, Var, Acc> MultilinearFolder<'a, F, Var, Acc>
 where
     Acc: PrimeCharacteristicRing,
 {
@@ -61,7 +57,7 @@ where
         local: &'a [Var],
         next: &'a [Var],
         boundary: BoundaryEvals<Var>,
-        public_values: &'a [PublicVar],
+        public_values: &'a [F],
         alpha: Acc,
     ) -> Self {
         Self {
@@ -75,7 +71,6 @@ where
             preprocessed_window: RowWindow::from_two_rows(&[], &[]),
             // No periodic columns until attached.
             periodic_values: &[],
-            _phantom: PhantomData,
         }
     }
 
@@ -145,19 +140,19 @@ where
     }
 }
 
-impl<'a, F, Var, Acc, PublicVar> AirBuilder for MultilinearFolder<'a, F, Var, Acc, PublicVar>
+impl<'a, F, Var, Acc> AirBuilder for MultilinearFolder<'a, F, Var, Acc>
 where
-    F: PrimeCharacteristicRing + Sync,
+    F: PrimeCharacteristicRing + Into<Var> + Copy + Sync,
     Var: Algebra<F> + Algebra<Var> + Copy + Send + Sync,
     Acc: Algebra<Var> + Copy,
-    PublicVar: Into<Var> + Copy,
 {
     type F = F;
     type Expr = Var;
     type Var = Var;
     type MainWindow = RowWindow<'a, Var>;
     type PreprocessedWindow = RowWindow<'a, Var>;
-    type PublicVar = PublicVar;
+    // Public values stay in the base field and lift into the expression type on read.
+    type PublicVar = F;
     type PeriodicVar = Var;
 
     #[inline]
