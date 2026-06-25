@@ -220,13 +220,8 @@ impl<'a, A> AirZerocheck<'a, A> {
         // After every variable is bound, each table holds its evaluation at the point.
         let local = state.local.iter().map(|p| p.as_slice()[0]).collect();
 
-        // Only the columns the AIR reads on the next row need a successor claim.
-        let next = self
-            .air
-            .main_next_row_columns()
-            .iter()
-            .map(|&column| state.next[column].as_slice()[0])
-            .collect();
+        // Each successor table holds one next-row column's opening, in the AIR's declared order.
+        let next = state.next.iter().map(|p| p.as_slice()[0]).collect();
 
         ZerocheckProof {
             sumcheck,
@@ -375,7 +370,9 @@ struct RoundState<'a, A, F, EF> {
     transition: Poly<EF>,
     /// Current-row values of each main column.
     local: Vec<Poly<EF>>,
-    /// Next-row values of each main column, with repeat-last at the final row.
+    /// Main columns the AIR reads on the next row, in its declared order.
+    next_columns: Vec<usize>,
+    /// Next-row values of the `next_columns`, with repeat-last at the final row.
     next: Vec<Poly<EF>>,
     /// Per-round sumcheck degree.
     degree: usize,
@@ -385,6 +382,7 @@ impl<'a, A, F, EF> RoundState<'a, A, F, EF>
 where
     F: Field,
     EF: ExtensionField<F>,
+    A: BaseAir<F>,
 {
     /// Build the prover state from a trace and a sampled zerocheck point.
     fn new(
@@ -398,20 +396,30 @@ where
         let height = trace.height();
         let width = trace.width;
 
-        let mut local = Vec::with_capacity(width);
-        let mut next = Vec::with_capacity(width);
-        for c in 0..width {
-            // Lift column `c` into the extension field in row order.
-            let column: Vec<EF> = (0..height)
-                .map(|i| EF::from(trace.values[i * width + c]))
-                .collect();
-            // Successor column: row i reads row i+1, and the final row repeats itself.
-            let mut successor = Vec::with_capacity(height);
-            successor.extend_from_slice(&column[1..]);
-            successor.push(column[height - 1]);
-            local.push(Poly::new(column));
-            next.push(Poly::new(successor));
-        }
+        // Lift every main column into the extension field in row order.
+        let local: Vec<Poly<EF>> = (0..width)
+            .map(|c| {
+                Poly::new(
+                    (0..height)
+                        .map(|i| EF::from(trace.values[i * width + c]))
+                        .collect(),
+                )
+            })
+            .collect();
+
+        // Only the columns the AIR reads on the next row need a successor table.
+        let next_columns = air.main_next_row_columns();
+        let next: Vec<Poly<EF>> = next_columns
+            .iter()
+            .map(|&c| {
+                // Successor column: row i reads row i+1, and the final row repeats itself.
+                let column = local[c].as_slice();
+                let mut successor = Vec::with_capacity(height);
+                successor.extend_from_slice(&column[1..]);
+                successor.push(column[height - 1]);
+                Poly::new(successor)
+            })
+            .collect();
 
         // eq(tau, x) over the hypercube.
         let eq = Poly::new_from_point(tau, EF::ONE);
@@ -433,6 +441,7 @@ where
             last: Poly::new(last),
             transition: Poly::new(transition),
             local,
+            next_columns,
             next,
             degree,
         }
@@ -474,9 +483,12 @@ where
             let (acc, _, _) = (0..half).into_par_iter().par_fold_reduce(
                 || (EF::ZERO, EF::zero_vec(width), EF::zero_vec(width)),
                 |(mut acc, mut local_row, mut next_row), s| {
-                    for c in 0..width {
-                        local_row[c] = self.local[c].fix_prefix_var_at(z, s);
-                        next_row[c] = self.next[c].fix_prefix_var_at(z, s);
+                    for (dst, poly) in local_row.iter_mut().zip(&self.local) {
+                        *dst = poly.fix_prefix_var_at(z, s);
+                    }
+                    // Undeclared next-row entries stay zero; the AIR never reads them.
+                    for (&c, poly) in self.next_columns.iter().zip(&self.next) {
+                        next_row[c] = poly.fix_prefix_var_at(z, s);
                     }
                     let boundary = BoundaryEvals {
                         first: self.first.fix_prefix_var_at(z, s),
