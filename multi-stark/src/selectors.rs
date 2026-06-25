@@ -92,7 +92,7 @@ impl<EF: Field> BoundaryEvals<EF> {
     /// # Arguments
     ///
     /// - `rs`: challenge coordinates, one per binary trace variable.
-    pub(super) fn at(rs: &[EF]) -> Self {
+    pub fn at(rs: &[EF]) -> Self {
         // Thread both running products through the same loop:
         //
         //     first := first * (1 - r)
