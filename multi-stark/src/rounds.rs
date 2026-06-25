@@ -20,7 +20,7 @@ use crate::selectors::BoundaryEvals;
 ///
 /// Stores the base trace as one transposed row-major matrix: each matrix row is one trace column.
 #[derive(Debug, Clone)]
-pub(crate) struct RoundStateBase<'a, A, F: Field, EF: ExtensionField<F>> {
+pub(crate) struct RoundStateBase<'a, A, F, EF> {
     /// AIR whose alpha-batched constraint is being evaluated.
     air: &'a A,
     /// Public inputs forwarded to the AIR.
@@ -39,7 +39,7 @@ pub(crate) struct RoundStateBase<'a, A, F: Field, EF: ExtensionField<F>> {
 ///
 /// Owns the folded trace columns, equality weights, boundary selectors, and repeat-last next-row
 /// tail values needed by the remaining rounds.
-pub(crate) struct RoundStateExt<'a, A, F: Field, EF: ExtensionField<F>> {
+pub(crate) struct RoundStateExt<'a, A, F, EF> {
     /// AIR whose alpha-batched constraint is being evaluated.
     air: &'a A,
     /// Public inputs forwarded to the AIR, lifted into the extension field.
@@ -398,7 +398,7 @@ where
     #[tracing::instrument(skip_all)]
     pub(crate) fn round_poly(&self) -> Vec<EF>
     where
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF, EF>> + Sync,
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF, EF>>,
     {
         let width = self.width();
         let num_evals = self.num_evals();

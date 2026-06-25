@@ -8,16 +8,13 @@
 use core::marker::PhantomData;
 
 use p3_air::{Air, AirBuilder, RowWindow};
-use p3_field::{Algebra, Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, PrimeCharacteristicRing};
 
 use crate::selectors::BoundaryEvals;
 
 /// Folder shared by the prover and the verifier.
 #[derive(Debug)]
-pub struct MultilinearFolder<'a, F, Var, Acc, PublicVar = F>
-where
-    F: PrimeCharacteristicRing,
-{
+pub struct MultilinearFolder<'a, F, Var, Acc, PublicVar = F> {
     /// Two-row main window holding the current and shifted-by-one rows.
     ///
     /// The shifted row carries zero in its last position.
@@ -42,7 +39,6 @@ where
 
 impl<'a, F, Var, Acc, PublicVar> MultilinearFolder<'a, F, Var, Acc, PublicVar>
 where
-    F: PrimeCharacteristicRing,
     Acc: PrimeCharacteristicRing,
 {
     /// Build a folder for a single AIR evaluation.
@@ -151,7 +147,7 @@ where
 
 impl<'a, F, Var, Acc, PublicVar> AirBuilder for MultilinearFolder<'a, F, Var, Acc, PublicVar>
 where
-    F: Field,
+    F: PrimeCharacteristicRing + Sync,
     Var: Algebra<F> + Algebra<Var> + Copy + Send + Sync,
     Acc: Algebra<Var> + Copy,
     PublicVar: Into<Var> + Copy,

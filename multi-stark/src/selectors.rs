@@ -41,7 +41,7 @@ impl<Packed> BoundaryEvals<Packed> {
     pub(super) fn row_pair_packed<F>(row: usize, half: usize, height: usize) -> (Self, Self)
     where
         F: Field<Packing = Packed>,
-        Packed: PackedValue<Value = F> + Sub<Output = Packed> + Copy,
+        Packed: PackedValue<Value = F> + Sub<Output = Packed>,
     {
         let boundary = Self::from_packed_row::<F>(row, height);
         let hi_boundary = Self::from_packed_row::<F>(row + half, height);
