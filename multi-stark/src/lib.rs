@@ -14,5 +14,6 @@ pub mod config;
 pub mod folder;
 pub mod metadata;
 pub mod opening;
+pub mod rounds;
 pub mod selectors;
 pub mod zerocheck;

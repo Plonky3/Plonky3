@@ -487,6 +487,59 @@ impl<F: Field> Poly<F> {
 }
 
 impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
+    /// Folds the most significant variable of an evaluation table into a new polynomial.
+    ///
+    /// The input is the evaluation table over the boolean hypercube.
+    /// The most significant variable splits it into a low half and a high half.
+    /// The challenge collapses that variable by linear interpolation between the halves:
+    /// ```text
+    /// p'(x') = (1 - r) * p(0, x') + r * p(1, x')
+    /// ```
+    ///
+    /// The result has one fewer variable.
+    /// The element type may widen, so a base-field table folds into an extension-field polynomial.
+    ///
+    /// Takes a borrowed slice rather than a polynomial.
+    /// This folds a trace column straight from its matrix row, with no wrapping copy.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the table has at most one entry, since then there is no variable to fold.
+    pub fn fix_prefix_var_from_evals<F>(evals: &[A], r: F) -> Poly<F>
+    where
+        F: Algebra<A> + Copy + Send + Sync,
+    {
+        // A single value is already constant, so no variable remains to fold.
+        assert!(evals.len() > 1, "no free variables");
+
+        // The most significant variable splits the table into equal halves:
+        //
+        //     p0 = evaluations at x_0 = 0
+        //     p1 = evaluations at x_0 = 1
+        let (p0, p1) = evals.split_at(evals.len() / 2);
+
+        // Each output entry interpolates one (low, high) pair at the challenge:
+        //
+        //     p'(x') = p0(x') + (p1(x') - p0(x')) * r
+        if evals.len() >= PARALLEL_THRESHOLD {
+            // Parallel path: the table is large enough to amortize thread fan-out.
+            Poly::new(
+                p0.par_iter()
+                    .zip(p1.par_iter())
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                    .collect(),
+            )
+        } else {
+            // Sequential path: small tables where threads would not pay off.
+            Poly::new(
+                p0.iter()
+                    .zip(p1.iter())
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                    .collect(),
+            )
+        }
+    }
+
     /// Fixes the prefix variable at a challenge value, returning a folded polynomial.
     ///
     /// Computes:
@@ -504,25 +557,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         F: Algebra<A> + Copy + Send + Sync,
     {
         assert!(self.as_constant().is_none(), "no free variables");
-        // Split evaluations into the x_0 = 0 half (p0) and x_0 = 1 half (p1).
-        let (p0, p1) = self.0.split_at(self.num_evals() / 2);
-        if self.num_evals() >= PARALLEL_THRESHOLD {
-            // Parallel: linear interpolation between each (p0, p1) pair.
-            Poly::new(
-                p0.par_iter()
-                    .zip(p1.par_iter())
-                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect(),
-            )
-        } else {
-            // Sequential: same linear interpolation.
-            Poly::new(
-                p0.iter()
-                    .zip(p1.iter())
-                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect(),
-            )
-        }
+        Self::fix_prefix_var_from_evals(self.as_slice(), r)
     }
 
     /// Evaluates the prefix-variable fix at a single residual index, without
