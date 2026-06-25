@@ -19,7 +19,7 @@ use crate::selectors::BoundaryEvals;
 /// Sumcheck prover state for the AIR zerocheck.
 ///
 /// Stores the base trace as one transposed row-major matrix: each matrix row is one trace column.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct RoundStateBase<'a, A, F, EF> {
     /// AIR whose alpha-batched constraint is being evaluated.
     air: &'a A,
@@ -177,7 +177,7 @@ where
                 }
 
                 let (mut boundary, boundary_diff) =
-                    BoundaryEvals::<F::Packing>::row_pair_packed::<F>(s, scalar_half, height);
+                    BoundaryEvals::<F::Packing>::row_pair_packed(s, scalar_half, height);
 
                 let g = MultilinearFolder::new(
                     &local_point,
@@ -342,7 +342,7 @@ where
             .columns
             .par_row_slices()
             .map(|col| fix_prefix_var(col, r))
-            .collect::<Vec<_>>();
+            .collect();
 
         RoundStateExt {
             air: self.air,
@@ -507,11 +507,12 @@ where
 
         self.eq.fix_prefix_var_mut(r);
 
-        self.columns = self
-            .columns
-            .par_iter()
-            .map(|col| fix_prefix_var(col.as_slice(), r))
-            .collect();
+        // Both halves already live in the extension field.
+        // So each column folds in place, reusing its buffer.
+        // No per-round reallocation is needed.
+        self.columns
+            .par_iter_mut()
+            .for_each(|col| col.fix_prefix_var_mut(r));
 
         self.boundary.apply(r);
     }

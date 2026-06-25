@@ -17,31 +17,39 @@ use crate::split_eq::SplitEq;
 
 pub(crate) const PARALLEL_THRESHOLD: usize = 4096;
 
-/// Fixes the prefix variable at a challenge value, returning a folded polynomial.
+/// Folds the most significant variable of a multilinear polynomial at a challenge.
 ///
-/// Computes:
+/// The input is the evaluation table over the boolean hypercube.
+/// The most significant variable splits it into a low half and a high half.
+/// The challenge collapses that variable by linear interpolation between the halves:
 /// ```text
 /// p'(x') = (1 - r) * p(0, x') + r * p(1, x')
 /// ```
 ///
-/// The result has one fewer variable (n - 1).
+/// The result is the evaluation table of a polynomial with one fewer variable.
 ///
 /// # Panics
 ///
-/// Panics if the polynomial is constant (zero free variables).
+/// Panics if the table has at most one entry, since then there is no variable to fold.
 pub fn fix_prefix_var<A, F>(poly: &[A], r: F) -> Poly<F>
 where
     A: Copy + Send + Sync + PrimeCharacteristicRing,
     F: Algebra<A> + Copy + Send + Sync,
 {
+    // A single value is already constant, so no variable remains to fold.
     assert!(poly.len() > 1, "no free variables");
 
-    let num_evals = poly.len();
-    // assert!(poly.as_constant().is_none(), "no free variables");
-    // Split evaluations into the x_0 = 0 half (p0) and x_0 = 1 half (p1).
-    let (p0, p1) = poly.split_at(num_evals / 2);
-    if num_evals >= PARALLEL_THRESHOLD {
-        // Parallel: linear interpolation between each (p0, p1) pair.
+    // The most significant variable splits the table into equal halves:
+    //
+    //     p0 = evaluations at x_0 = 0
+    //     p1 = evaluations at x_0 = 1
+    let (p0, p1) = poly.split_at(poly.len() / 2);
+
+    // Each output entry interpolates one (low, high) pair at the challenge:
+    //
+    //     p'(x') = p0(x') + (p1(x') - p0(x')) * r
+    if poly.len() >= PARALLEL_THRESHOLD {
+        // Parallel path: the table is large enough to amortize thread fan-out.
         Poly::new(
             p0.par_iter()
                 .zip(p1.par_iter())
@@ -49,7 +57,7 @@ where
                 .collect(),
         )
     } else {
-        // Sequential: same linear interpolation.
+        // Sequential path: small tables where threads would not pay off.
         Poly::new(
             p0.iter()
                 .zip(p1.iter())

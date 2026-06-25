@@ -132,15 +132,21 @@ impl<'a, A> AirZerocheck<'a, A> {
 
     /// Per-round degree of the zerocheck sumcheck.
     ///
-    /// The summed integrand `eq(tau, x) * g(x)` has per-variable degree
-    /// `deg(g) + 1`, where the `+ 1` is the multilinear `eq(tau, x)`.
+    /// The summed integrand is `eq(tau, x) * g(x)`.
+    /// Its per-variable degree is the constraint per-variable degree, plus one for the multilinear weight.
     ///
-    /// `deg(g)` is the largest per-variable degree among the asserted constraints,
-    /// read from `poly_degree` at domain size two. At that domain size every leaf
-    /// scores its per-variable degree, so each column and each selector — including
-    /// the transition selector, which `degree_multiple` undercounts as zero — is
-    /// degree one. This is exact, provided columns and selectors are per-variable
-    /// degree at most one, which standard AIRs satisfy.
+    /// The constraint degree comes from one of two sources:
+    /// - a constant-time hint supplied by the AIR, when present;
+    /// - otherwise a symbolic pass that scores each constraint at domain size two.
+    ///
+    /// At domain size two every column and every boundary selector scores degree one, so the symbolic value is exact.
+    ///
+    /// The prover and the verifier both call this, so they always agree on the degree.
+    /// The hint must be at least the true per-variable degree:
+    /// - a smaller value under-determines the round polynomial and breaks soundness;
+    /// - a larger value only inflates the proof and the per-row work.
+    ///
+    /// A debug assertion pins the hint against the symbolic value.
     ///
     /// # Arguments
     ///
@@ -151,21 +157,31 @@ impl<'a, A> AirZerocheck<'a, A> {
         EF: ExtensionField<F>,
         A: Air<SymbolicAirBuilder<F, EF>>,
     {
+        // Largest per-variable degree among the asserted constraints, scored at domain size two.
+        // No periodic columns reach this point, so the periodic-column lengths are empty.
+        let symbolic_constraint_degree = || {
+            let (base, ext) = get_all_symbolic_constraints::<F, EF, A>(self.air, layout);
+            let base_degree = base
+                .iter()
+                .map(|c| c.poly_degree(2, &[]))
+                .max()
+                .unwrap_or(0);
+            let ext_degree = ext.iter().map(|c| c.poly_degree(2, &[])).max().unwrap_or(0);
+            base_degree.max(ext_degree)
+        };
+
         if let Some(degree) = self.air.max_constraint_degree() {
+            // A hint below the true constraint degree drops evaluations from each round polynomial.
+            // Reject such a hint in debug builds.
+            debug_assert!(
+                degree >= symbolic_constraint_degree(),
+                "max_constraint_degree hint is below the symbolic constraint degree"
+            );
             return degree + 1;
         }
 
-        // Per-variable degree of g from the symbolic constraints (domain size two),
-        // then the `+ 1` for the multilinear eq weight. No periodic columns reach
-        // this point (the layout check rejects them), so the periods are empty.
-        let (base, ext) = get_all_symbolic_constraints::<F, EF, A>(self.air, layout);
-        let base_degree = base
-            .iter()
-            .map(|c| c.poly_degree(2, &[]))
-            .max()
-            .unwrap_or(0);
-        let ext_degree = ext.iter().map(|c| c.poly_degree(2, &[])).max().unwrap_or(0);
-        base_degree.max(ext_degree) + 1
+        // Add one for the multilinear eq weight.
+        symbolic_constraint_degree() + 1
     }
 
     /// Prove that the AIR's alpha-batched constraint vanishes on every trace row.
@@ -748,27 +764,42 @@ mod tests {
 
     #[test]
     fn zerocheck_poseidon2() {
+        // Invariant on the Poseidon2 permutation AIR:
+        //   - each current-row opening equals the column multilinear at the bound point;
+        //   - each next-row opening equals the shifted column at that point;
+        //   - prover and verifier bind the same sumcheck point.
+        //
+        // Trace height is the only axis, swept exhaustively over 1..10.
         for num_vars in 1..10 {
+            // Trace height 2^num_vars, i.e. one hashed input per row.
             let num_hashes = 1 << num_vars;
 
+            // Deterministic round constants, so the trace and transcript are reproducible.
             let mut rng = SmallRng::seed_from_u64(1);
             let constants = RoundConstants::from_rng(&mut rng);
             let air: BabyBearPoseidon2Air = Poseidon2Air::new(constants);
+
+            // Witness trace: each row is one full permutation, satisfying every constraint.
             let trace =
                 tracing::info_span!("zerocheck_poseidon2_generate_trace", num_vars, num_hashes)
                     .in_scope(|| air.generate_trace_rows(num_hashes, 0));
 
+            // Prove the alpha-batched constraint vanishes on every row.
             let zerocheck = AirZerocheck::new(&air, 0);
             let mut prover_challenger = fresh_challenger();
             let (proof, point_prover) =
                 zerocheck.prove::<F, EF, _>(&trace, &[], &mut prover_challenger);
 
+            // Reference columns: one multilinear per trace column, in row order.
+            //
+            //     row-major trace --transpose--> one row per column
             let columns = trace.transpose();
             let columns = columns
                 .row_slices()
                 .map(|col| Poly::new(col.to_vec()))
                 .collect::<Vec<_>>();
 
+            // Each current-row opening must equal the column multilinear at the bound point.
             columns
                 .iter()
                 .zip(proof.local.iter())
@@ -776,6 +807,7 @@ mod tests {
                     assert_eq!(col.eval_base(&point_prover), local);
                 });
 
+            // Each next-row opening must equal the same column shifted by one row.
             air.main_next_row_columns()
                 .iter()
                 .zip(proof.next.iter())
@@ -783,6 +815,7 @@ mod tests {
                     assert_eq!(columns[column].eval_next_base(&point_prover), next);
                 });
 
+            // Replaying the transcript must reproduce the prover's bound point exactly.
             let mut verifier_challenger = fresh_challenger();
             let point_verifier = zerocheck
                 .verify::<F, EF, _>(&proof, num_vars, &[], &mut verifier_challenger)
