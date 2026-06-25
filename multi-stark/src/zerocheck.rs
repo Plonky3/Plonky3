@@ -18,6 +18,7 @@ use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundProver};
@@ -463,37 +464,38 @@ where
         // hypercube once the active variable is dropped.
         let half = self.eq.num_evals() / 2;
 
-        // Reused per-row buffers handed to the folder.
-        let mut local_row = EF::zero_vec(width);
-        let mut next_row = EF::zero_vec(width);
-
         // Transmit h at nodes 0, 2, 3, ..., degree; the verifier recovers h(1).
         let mut out = Vec::with_capacity(self.degree);
         for node in core::iter::once(0).chain(2..=self.degree) {
             let z = EF::from_usize(node);
 
             // Sum the weighted constraint over the remaining hypercube.
-            let mut acc = EF::ZERO;
-            for s in 0..half {
-                for c in 0..width {
-                    local_row[c] = self.local[c].fix_prefix_var_at(z, s);
-                    next_row[c] = self.next[c].fix_prefix_var_at(z, s);
-                }
-                let boundary = BoundaryEvals {
-                    first: self.first.fix_prefix_var_at(z, s),
-                    last: self.last.fix_prefix_var_at(z, s),
-                    transition: self.transition.fix_prefix_var_at(z, s),
-                };
-                let g = MultilinearFolder::new(
-                    &local_row,
-                    &next_row,
-                    boundary,
-                    self.public_values,
-                    self.alpha,
-                )
-                .eval_air(self.air);
-                acc += self.eq.fix_prefix_var_at(z, s) * g;
-            }
+            // Each worker keeps its own per-row scratch buffers across the fold.
+            let (acc, _, _) = (0..half).into_par_iter().par_fold_reduce(
+                || (EF::ZERO, EF::zero_vec(width), EF::zero_vec(width)),
+                |(mut acc, mut local_row, mut next_row), s| {
+                    for c in 0..width {
+                        local_row[c] = self.local[c].fix_prefix_var_at(z, s);
+                        next_row[c] = self.next[c].fix_prefix_var_at(z, s);
+                    }
+                    let boundary = BoundaryEvals {
+                        first: self.first.fix_prefix_var_at(z, s),
+                        last: self.last.fix_prefix_var_at(z, s),
+                        transition: self.transition.fix_prefix_var_at(z, s),
+                    };
+                    let g = MultilinearFolder::new(
+                        &local_row,
+                        &next_row,
+                        boundary,
+                        self.public_values,
+                        self.alpha,
+                    )
+                    .eval_air(self.air);
+                    acc += self.eq.fix_prefix_var_at(z, s) * g;
+                    (acc, local_row, next_row)
+                },
+                |(a, la, na), (b, _, _)| (a + b, la, na),
+            );
             out.push(acc);
         }
         out
