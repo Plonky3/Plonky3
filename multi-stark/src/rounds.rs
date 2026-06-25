@@ -10,7 +10,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::{Poly, fix_prefix_var};
+use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::generic_degree::RoundProver;
 
 use crate::folder::MultilinearFolder;
@@ -339,7 +339,7 @@ where
         let columns = self
             .columns
             .par_row_slices()
-            .map(|col| fix_prefix_var(col, r))
+            .map(|col| Poly::fix_prefix_var_from_evals(col, r))
             .collect();
 
         RoundStateExt {
