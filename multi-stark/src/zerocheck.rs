@@ -10,7 +10,6 @@
 //! The generic-degree sumcheck proves that sum.
 //! A zerocheck always claims zero, so the verifier rejects any proof that claims a different sum.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder, get_all_symbolic_constraints};
@@ -20,13 +19,13 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundProver};
 use p3_util::log2_strict_usize;
 use thiserror::Error;
 
 use crate::folder::MultilinearFolder;
 use crate::opening::OpeningClaims;
+use crate::rounds::RoundStateBase;
 use crate::selectors::BoundaryEvals;
 
 /// Reasons the zerocheck verifier rejects a proof.
@@ -153,6 +152,10 @@ impl<'a, A> AirZerocheck<'a, A> {
         EF: ExtensionField<F>,
         A: Air<SymbolicAirBuilder<F, EF>>,
     {
+        if let Some(degree) = self.air.max_constraint_degree() {
+            return degree + 1;
+        }
+
         // Per-variable degree of g from the symbolic constraints (domain size two),
         // then the `+ 1` for the multilinear eq weight. No periodic columns reach
         // this point (the layout check rejects them), so the periods are empty.
@@ -184,16 +187,21 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// # Panics
     ///
     /// Panics if the AIR declares preprocessed or periodic columns, which this version does not support.
+    #[tracing::instrument(skip_all)]
     pub fn prove<F, EF, Challenger>(
         &self,
         trace: &RowMajorMatrix<F>,
         public_values: &[F],
         challenger: &mut Challenger,
-    ) -> ZerocheckProof<F, EF>
+    ) -> (ZerocheckProof<F, EF>, Point<EF>)
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, EF>> + Air<SymbolicAirBuilder<F, EF>>,
+        A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
+            + for<'b> Air<MultilinearFolder<'b, F, F::Packing, EF::ExtensionPacking>>
+            + for<'b> Air<MultilinearFolder<'b, F, EF, EF, EF>>
+            + Air<SymbolicAirBuilder<F, EF>>,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         let log_height = log2_strict_usize(trace.height());
@@ -211,23 +219,62 @@ impl<'a, A> AirZerocheck<'a, A> {
         // Draw the batching scalar then the zerocheck point, in that fixed order.
         let (alpha, tau) = sample_zerocheck_challenges(challenger, log_height);
 
-        let mut state = RoundState::new(self.air, public_values, alpha, &tau, trace, degree);
+        let state = RoundStateBase::<'_, _, F, EF>::new(
+            self.air,
+            public_values,
+            alpha,
+            &Point::new(tau),
+            trace,
+            degree,
+        );
 
-        // The claim is zero: every constraint must vanish on the hypercube.
-        let (sumcheck, _point) =
-            state.prove::<F, _>(challenger, log_height, degree, self.pow_bits, EF::ZERO);
+        // Bind the transcript to the claimed sum so the challenges depend on the statement.
+        challenger.observe_algebra_element(EF::ZERO);
 
-        // After every variable is bound, each table holds its evaluation at the point.
-        let local = state.local.iter().map(|p| p.as_slice()[0]).collect();
+        let mut sumcheck = GenericDegreeProof {
+            claimed_sum: EF::ZERO,
+            round_polys: Vec::with_capacity(log_height),
+            pow_witnesses: Vec::with_capacity(if self.pow_bits > 0 { log_height } else { 0 }),
+        };
+        let mut challenges = Vec::with_capacity(log_height);
 
-        // Each successor table holds one next-row column's opening, in the AIR's declared order.
-        let next = state.next.iter().map(|p| p.as_slice()[0]).collect();
+        let evals = state.round_poly();
+        challenger.observe_algebra_slice(&evals);
 
-        ZerocheckProof {
-            sumcheck,
-            local,
-            next,
+        // Optional proof-of-work; raises the cost of grinding a favorable challenge.
+        if self.pow_bits > 0 {
+            sumcheck.pow_witnesses.push(challenger.grind(self.pow_bits));
         }
+
+        let r: EF = challenger.sample_algebra_element();
+        let mut state = state.fold(r);
+
+        sumcheck.round_polys.push(evals);
+        challenges.push(r);
+
+        let (proof_rest, point_rest) =
+            state.prove(challenger, log_height - 1, degree, self.pow_bits, EF::ZERO);
+        challenges.extend_from_slice(point_rest.as_slice());
+
+        sumcheck.round_polys.extend(proof_rest.round_polys);
+        sumcheck.pow_witnesses.extend(proof_rest.pow_witnesses);
+
+        let (local, next, _) = state.evals();
+        let next = self
+            .air
+            .main_next_row_columns()
+            .iter()
+            .map(|&column| next[column])
+            .collect();
+
+        (
+            ZerocheckProof {
+                sumcheck,
+                local,
+                next,
+            },
+            Point::new(challenges),
+        )
     }
 
     /// Verify a zerocheck proof.
@@ -263,11 +310,11 @@ impl<'a, A> AirZerocheck<'a, A> {
         log_height: usize,
         public_values: &[F],
         challenger: &mut Challenger,
-    ) -> Result<(), ZerocheckError>
+    ) -> Result<Point<EF>, ZerocheckError>
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, EF>> + Air<SymbolicAirBuilder<F, EF>>,
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF, F>> + Air<SymbolicAirBuilder<F, EF>>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Reject column kinds this version cannot prove, and read the layout once.
@@ -327,7 +374,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         if final_sum != eq_at_point * g {
             return Err(ZerocheckError::FinalSumMismatch);
         }
-        Ok(())
+        Ok(claims.point)
     }
 }
 
@@ -350,181 +397,24 @@ where
     (alpha, tau)
 }
 
-/// Sumcheck prover state for the AIR zerocheck.
-///
-/// Every table shares the same hypercube and is bound one variable per round.
-struct RoundState<'a, A, F, EF> {
-    /// AIR whose alpha-batched constraint is being evaluated.
-    air: &'a A,
-    /// Public inputs forwarded to the AIR.
-    public_values: &'a [F],
-    /// Random scalar batching the AIR constraints.
-    alpha: EF,
-    /// Zerocheck weight `eq(tau, x)` over the remaining hypercube.
-    eq: Poly<EF>,
-    /// First-row selector table, `1` at row zero and `0` elsewhere.
-    first: Poly<EF>,
-    /// Last-row selector table, `1` at the final row and `0` elsewhere.
-    last: Poly<EF>,
-    /// Transition selector table, `0` at the final row and `1` elsewhere.
-    transition: Poly<EF>,
-    /// Current-row values of each main column.
-    local: Vec<Poly<EF>>,
-    /// Main columns the AIR reads on the next row, in its declared order.
-    next_columns: Vec<usize>,
-    /// Next-row values of the `next_columns`, with repeat-last at the final row.
-    next: Vec<Poly<EF>>,
-    /// Per-round sumcheck degree.
-    degree: usize,
-}
-
-impl<'a, A, F, EF> RoundState<'a, A, F, EF>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    A: BaseAir<F>,
-{
-    /// Build the prover state from a trace and a sampled zerocheck point.
-    fn new(
-        air: &'a A,
-        public_values: &'a [F],
-        alpha: EF,
-        tau: &[EF],
-        trace: &RowMajorMatrix<F>,
-        degree: usize,
-    ) -> Self {
-        let height = trace.height();
-        let width = trace.width;
-
-        // Lift every main column into the extension field in row order.
-        let local: Vec<Poly<EF>> = (0..width)
-            .map(|c| {
-                Poly::new(
-                    (0..height)
-                        .map(|i| EF::from(trace.values[i * width + c]))
-                        .collect(),
-                )
-            })
-            .collect();
-
-        // Only the columns the AIR reads on the next row need a successor table.
-        let next_columns = air.main_next_row_columns();
-        let next: Vec<Poly<EF>> = next_columns
-            .iter()
-            .map(|&c| {
-                // Successor column: row i reads row i+1, and the final row repeats itself.
-                let column = local[c].as_slice();
-                let mut successor = Vec::with_capacity(height);
-                successor.extend_from_slice(&column[1..]);
-                successor.push(column[height - 1]);
-                Poly::new(successor)
-            })
-            .collect();
-
-        // eq(tau, x) over the hypercube.
-        let eq = Poly::new_from_point(tau, EF::ONE);
-
-        // Selector tables as plain indicators over the hypercube.
-        let mut first = EF::zero_vec(height);
-        first[0] = EF::ONE;
-        let mut last = EF::zero_vec(height);
-        last[height - 1] = EF::ONE;
-        let mut transition = vec![EF::ONE; height];
-        transition[height - 1] = EF::ZERO;
-
-        Self {
-            air,
-            public_values,
-            alpha,
-            eq,
-            first: Poly::new(first),
-            last: Poly::new(last),
-            transition: Poly::new(transition),
-            local,
-            next_columns,
-            next,
-            degree,
-        }
-    }
-}
-
-impl<'a, A, F, EF> RoundProver<EF> for RoundState<'a, A, F, EF>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    A: for<'b> Air<MultilinearFolder<'b, F, EF>>,
-{
-    fn fold(&mut self, r: EF) {
-        self.eq.fix_prefix_var_mut(r);
-        self.first.fix_prefix_var_mut(r);
-        self.last.fix_prefix_var_mut(r);
-        self.transition.fix_prefix_var_mut(r);
-        for p in &mut self.local {
-            p.fix_prefix_var_mut(r);
-        }
-        for p in &mut self.next {
-            p.fix_prefix_var_mut(r);
-        }
-    }
-
-    fn round_poly(&self) -> Vec<EF> {
-        let width = self.local.len();
-        // Each table currently spans `2 * half` evaluations; `half` is the residual
-        // hypercube once the active variable is dropped.
-        let half = self.eq.num_evals() / 2;
-
-        // Transmit h at nodes 0, 2, 3, ..., degree; the verifier recovers h(1).
-        let mut out = Vec::with_capacity(self.degree);
-        for node in core::iter::once(0).chain(2..=self.degree) {
-            let z = EF::from_usize(node);
-
-            // Sum the weighted constraint over the remaining hypercube.
-            // Each worker keeps its own per-row scratch buffers across the fold.
-            let (acc, _, _) = (0..half).into_par_iter().par_fold_reduce(
-                || (EF::ZERO, EF::zero_vec(width), EF::zero_vec(width)),
-                |(mut acc, mut local_row, mut next_row), s| {
-                    for (dst, poly) in local_row.iter_mut().zip(&self.local) {
-                        *dst = poly.fix_prefix_var_at(z, s);
-                    }
-                    // Undeclared next-row entries stay zero; the AIR never reads them.
-                    for (&c, poly) in self.next_columns.iter().zip(&self.next) {
-                        next_row[c] = poly.fix_prefix_var_at(z, s);
-                    }
-                    let boundary = BoundaryEvals {
-                        first: self.first.fix_prefix_var_at(z, s),
-                        last: self.last.fix_prefix_var_at(z, s),
-                        transition: self.transition.fix_prefix_var_at(z, s),
-                    };
-                    let g = MultilinearFolder::new(
-                        &local_row,
-                        &next_row,
-                        boundary,
-                        self.public_values,
-                        self.alpha,
-                    )
-                    .eval_air(self.air);
-                    acc += self.eq.fix_prefix_var_at(z, s) * g;
-                    (acc, local_row, next_row)
-                },
-                |(a, la, na), (b, _, _)| (a + b, la, na),
-            );
-            out.push(acc);
-        }
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use alloc::vec::Vec;
     use core::borrow::Borrow;
 
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
-    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_baby_bear::{
+        BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
+        BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear,
+    };
     use p3_challenger::DuplexChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_multilinear_util::poly::Poly;
+    use p3_poseidon2_air::{Poseidon2Air, RoundConstants};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -536,6 +426,21 @@ mod tests {
     type Ch = DuplexChallenger<F, Perm, 16, 8>;
 
     const NUM_COLS: usize = 2;
+    const POSEIDON2_WIDTH: usize = 16;
+    const POSEIDON2_SBOX_DEGREE: u64 = BABYBEAR_S_BOX_DEGREE;
+    const POSEIDON2_SBOX_REGISTERS: usize = 1;
+    const POSEIDON2_HALF_FULL_ROUNDS: usize = BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS;
+    const POSEIDON2_PARTIAL_ROUNDS: usize = BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16;
+
+    type BabyBearPoseidon2Air = Poseidon2Air<
+        F,
+        GenericPoseidon2LinearLayersBabyBear,
+        POSEIDON2_WIDTH,
+        POSEIDON2_SBOX_DEGREE,
+        POSEIDON2_SBOX_REGISTERS,
+        POSEIDON2_HALF_FULL_ROUNDS,
+        POSEIDON2_PARTIAL_ROUNDS,
+    >;
 
     fn fresh_challenger() -> Ch {
         // Fixed seed so prover and verifier transcripts match exactly.
@@ -628,7 +533,7 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let proof = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
 
         let mut verifier_challenger = fresh_challenger();
         zerocheck
@@ -645,7 +550,8 @@ mod tests {
         let pis = fib_public_values(n);
 
         let mut challenger = fresh_challenger();
-        let proof = AirZerocheck::new(&FibAir, 0).prove::<F, EF, _>(&trace, &pis, &mut challenger);
+        let (proof, point) =
+            AirZerocheck::new(&FibAir, 0).prove::<F, EF, _>(&trace, &pis, &mut challenger);
 
         // Each Fibonacci constraint is per-variable degree 2 (a degree-1 selector
         // times a degree-1 column), so the eq-weighted integrand is degree 3.
@@ -653,6 +559,7 @@ mod tests {
         let degree = AirZerocheck::new(&FibAir, 0).sumcheck_degree::<F, EF>(layout);
         assert_eq!(degree, 3);
         assert_eq!(proof.sumcheck.num_rounds(), log2_strict_usize(n));
+        assert_eq!(point.num_variables(), log2_strict_usize(n));
         for round in &proof.sumcheck.round_polys {
             assert_eq!(round.len(), degree);
         }
@@ -669,7 +576,7 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let proof = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
 
         let mut verifier_challenger = fresh_challenger();
         let err = zerocheck
@@ -687,7 +594,7 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let mut proof = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (mut proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
         proof.local[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();
@@ -707,7 +614,7 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let mut proof = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (mut proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
         proof.next[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();
@@ -728,7 +635,7 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let mut proof = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (mut proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
 
         // Declare a nonzero sum; the verifier must reject before any further work.
         proof.sumcheck.claimed_sum += EF::ONE;
@@ -757,7 +664,7 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let mut proof = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (mut proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
 
         // Remove one opened value so the count no longer matches the AIR width.
         proof.local.pop();
@@ -826,7 +733,7 @@ mod tests {
         let zerocheck = AirZerocheck::new(&ConstColAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let proof = zerocheck.prove::<F, EF, _>(&trace, &[], &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, &[], &mut prover_challenger);
 
         // Two committed columns yield two current-row claims.
         assert_eq!(proof.local.len(), 2);
@@ -838,5 +745,50 @@ mod tests {
         zerocheck
             .verify::<F, EF, _>(&proof, log2_strict_usize(n), &[], &mut verifier_challenger)
             .expect("subset-next AIR must verify");
+    }
+
+    #[test]
+    fn zerocheck_poseidon2() {
+        for num_vars in 1..10 {
+            let num_hashes = 1 << num_vars;
+
+            let mut rng = SmallRng::seed_from_u64(1);
+            let constants = RoundConstants::from_rng(&mut rng);
+            let air: BabyBearPoseidon2Air = Poseidon2Air::new(constants);
+            let trace =
+                tracing::info_span!("zerocheck_poseidon2_generate_trace", num_vars, num_hashes)
+                    .in_scope(|| air.generate_trace_rows(num_hashes, 0));
+
+            let zerocheck = AirZerocheck::new(&air, 0);
+            let mut prover_challenger = fresh_challenger();
+            let (proof, point_prover) =
+                zerocheck.prove::<F, EF, _>(&trace, &[], &mut prover_challenger);
+
+            let columns = trace.transpose();
+            let columns = columns
+                .row_slices()
+                .map(|col| Poly::new(col.to_vec()))
+                .collect::<Vec<_>>();
+
+            columns
+                .iter()
+                .zip(proof.local.iter())
+                .for_each(|(col, &local)| {
+                    assert_eq!(col.eval_base(&point_prover), local);
+                });
+
+            air.main_next_row_columns()
+                .iter()
+                .zip(proof.next.iter())
+                .for_each(|(&column, &next)| {
+                    assert_eq!(columns[column].eval_next_base(&point_prover), next);
+                });
+
+            let mut verifier_challenger = fresh_challenger();
+            let point_verifier = zerocheck
+                .verify::<F, EF, _>(&proof, num_vars, &[], &mut verifier_challenger)
+                .unwrap();
+            assert_eq!(point_prover, point_verifier);
+        }
     }
 }

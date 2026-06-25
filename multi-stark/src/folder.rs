@@ -8,43 +8,42 @@
 use core::marker::PhantomData;
 
 use p3_air::{Air, AirBuilder, RowWindow};
-use p3_field::{ExtensionField, Field};
+use p3_field::{Algebra, Field, PrimeCharacteristicRing};
 
 use crate::selectors::BoundaryEvals;
 
 /// Folder shared by the prover and the verifier.
 #[derive(Debug)]
-pub struct MultilinearFolder<'a, F, EF>
+pub struct MultilinearFolder<'a, F, Var, Acc, PublicVar = F>
 where
-    F: Field,
-    EF: ExtensionField<F>,
+    F: PrimeCharacteristicRing,
 {
     /// Two-row main window holding the current and shifted-by-one rows.
     ///
     /// The shifted row carries zero in its last position.
-    pub main_window: RowWindow<'a, EF>,
+    pub main_window: RowWindow<'a, Var>,
     /// Boundary-selector values shared by all selector accessors.
-    pub boundary: BoundaryEvals<EF>,
+    pub boundary: BoundaryEvals<Var>,
     /// Public inputs forwarded to the AIR.
-    pub public_values: &'a [F],
+    pub public_values: &'a [PublicVar],
     /// Random scalar driving alpha-batching of constraints.
-    pub alpha: EF,
+    pub alpha: Acc,
     /// Running alpha-batched accumulator capturing every asserted-zero constraint.
-    pub accumulator: EF,
+    pub accumulator: Acc,
     /// Two-row preprocessed window; zero-width when the AIR has no preprocessed columns.
-    pub preprocessed_window: RowWindow<'a, EF>,
+    pub preprocessed_window: RowWindow<'a, Var>,
     /// Periodic column values at the current evaluation point, one per declared periodic column.
     ///
     /// Empty when the AIR declares no periodic columns.
-    pub periodic_values: &'a [EF],
+    pub periodic_values: &'a [Var],
     /// Type witness for the base field; no runtime storage.
     pub _phantom: PhantomData<F>,
 }
 
-impl<'a, F, EF> MultilinearFolder<'a, F, EF>
+impl<'a, F, Var, Acc, PublicVar> MultilinearFolder<'a, F, Var, Acc, PublicVar>
 where
-    F: Field,
-    EF: ExtensionField<F>,
+    F: PrimeCharacteristicRing,
+    Acc: PrimeCharacteristicRing,
 {
     /// Build a folder for a single AIR evaluation.
     ///
@@ -63,11 +62,11 @@ where
     /// - `alpha`: random scalar driving constraint batching.
     #[inline]
     pub fn new(
-        local: &'a [EF],
-        next: &'a [EF],
-        boundary: BoundaryEvals<EF>,
-        public_values: &'a [F],
-        alpha: EF,
+        local: &'a [Var],
+        next: &'a [Var],
+        boundary: BoundaryEvals<Var>,
+        public_values: &'a [PublicVar],
+        alpha: Acc,
     ) -> Self {
         Self {
             // Pair the two borrowed rows into the window the AIR reads from.
@@ -75,8 +74,8 @@ where
             boundary,
             public_values,
             alpha,
-            accumulator: EF::ZERO,
             // Zero-width preprocessed window covers AIRs without a preprocessed trace.
+            accumulator: Acc::ZERO,
             preprocessed_window: RowWindow::from_two_rows(&[], &[]),
             // No periodic columns until attached.
             periodic_values: &[],
@@ -92,7 +91,7 @@ where
     /// - `next`: preprocessed column values at the shifted-by-one row.
     #[inline]
     #[must_use]
-    pub fn with_preprocessed(mut self, current: &'a [EF], next: &'a [EF]) -> Self {
+    pub fn with_preprocessed(mut self, current: &'a [Var], next: &'a [Var]) -> Self {
         self.preprocessed_window = RowWindow::from_two_rows(current, next);
         self
     }
@@ -104,7 +103,7 @@ where
     /// - `periodic_values`: one entry per declared periodic column, in declaration order.
     #[inline]
     #[must_use]
-    pub const fn with_periodic(mut self, periodic_values: &'a [EF]) -> Self {
+    pub const fn with_periodic(mut self, periodic_values: &'a [Var]) -> Self {
         self.periodic_values = periodic_values;
         self
     }
@@ -119,7 +118,7 @@ where
     /// - `n` is the total number of asserted constraints.
     #[inline]
     #[must_use]
-    pub const fn into_accumulator(self) -> EF {
+    pub fn into_accumulator(self) -> Acc {
         self.accumulator
     }
 
@@ -140,29 +139,30 @@ where
     /// - `n` is the total number of asserted constraints.
     #[inline]
     #[must_use]
-    pub fn eval_air<A>(mut self, air: &A) -> EF
+    pub fn eval_air<A>(mut self, air: &A) -> Acc
     where
         A: Air<Self>,
+        Self: AirBuilder,
     {
-        // Drive every asserted constraint into the accumulator.
         air.eval(&mut self);
-        // The accumulator now holds the alpha-batched constraint value.
         self.into_accumulator()
     }
 }
 
-impl<'a, F, EF> AirBuilder for MultilinearFolder<'a, F, EF>
+impl<'a, F, Var, Acc, PublicVar> AirBuilder for MultilinearFolder<'a, F, Var, Acc, PublicVar>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    Var: Algebra<F> + Algebra<Var> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+    PublicVar: Into<Var> + Copy,
 {
     type F = F;
-    type Expr = EF;
-    type Var = EF;
-    type MainWindow = RowWindow<'a, EF>;
-    type PreprocessedWindow = RowWindow<'a, EF>;
-    type PublicVar = F;
-    type PeriodicVar = EF;
+    type Expr = Var;
+    type Var = Var;
+    type MainWindow = RowWindow<'a, Var>;
+    type PreprocessedWindow = RowWindow<'a, Var>;
+    type PublicVar = PublicVar;
+    type PeriodicVar = Var;
 
     #[inline]
     fn main(&self) -> Self::MainWindow {
@@ -227,6 +227,7 @@ mod tests {
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
+    type TestFolder<'a> = MultilinearFolder<'a, F, EF, EF>;
 
     /// Mini Fibonacci AIR used to exercise every selector path.
     ///
@@ -349,8 +350,7 @@ mod tests {
             };
             let boundary = boundary_at_row(i, n);
 
-            let value =
-                MultilinearFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&FibAir);
+            let value = TestFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&FibAir);
             assert_eq!(value, EF::ZERO, "row {i}: folder returned {value:?}");
         }
     }
@@ -374,8 +374,7 @@ mod tests {
         let next = row_in_ef(&trace, 1);
         let boundary = boundary_at_row(0, n);
 
-        let value =
-            MultilinearFolder::new(&local, &next, boundary, &bad_pis, alpha).eval_air(&FibAir);
+        let value = TestFolder::new(&local, &next, boundary, &bad_pis, alpha).eval_air(&FibAir);
         assert_ne!(value, EF::ZERO);
     }
 
@@ -409,7 +408,7 @@ mod tests {
             transition: EF::ONE,
         };
 
-        let value = MultilinearFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&FibAir);
+        let value = TestFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&FibAir);
 
         // Active constraints (the two transition checks), in declaration order:
         //
@@ -475,7 +474,7 @@ mod tests {
         let periodic = [EF::from_u64(5)];
 
         // Matching auxiliary columns -> both constraints are zero.
-        let value = MultilinearFolder::new(&main_local, &main_next, boundary, &[] as &[F], alpha)
+        let value = TestFolder::new(&main_local, &main_next, boundary, &[] as &[F], alpha)
             .with_preprocessed(&prep_local, &prep_next)
             .with_periodic(&periodic)
             .eval_air(&AuxAir);
@@ -483,7 +482,7 @@ mod tests {
 
         // Perturbed preprocessed column -> the first constraint is non-zero.
         let bad_prep = [EF::from_u64(6)];
-        let value = MultilinearFolder::new(&main_local, &main_next, boundary, &[] as &[F], alpha)
+        let value = TestFolder::new(&main_local, &main_next, boundary, &[] as &[F], alpha)
             .with_preprocessed(&bad_prep, &prep_next)
             .with_periodic(&periodic)
             .eval_air(&AuxAir);
@@ -491,7 +490,7 @@ mod tests {
 
         // Perturbed periodic column -> the second constraint is non-zero.
         let bad_periodic = [EF::from_u64(6)];
-        let value = MultilinearFolder::new(&main_local, &main_next, boundary, &[] as &[F], alpha)
+        let value = TestFolder::new(&main_local, &main_next, boundary, &[] as &[F], alpha)
             .with_preprocessed(&prep_local, &prep_next)
             .with_periodic(&bad_periodic)
             .eval_air(&AuxAir);

@@ -64,9 +64,6 @@ pub trait RoundProver<EF> {
         // A degree-zero polynomial would carry no information.
         assert!(degree > 0, "generic-degree sumcheck: degree must be > 0");
 
-        // Bind the transcript to the claimed sum so the challenges depend on the statement.
-        challenger.observe_algebra_element(claimed_sum);
-
         let mut proof = GenericDegreeProof {
             claimed_sum,
             round_polys: Vec::with_capacity(num_rounds),

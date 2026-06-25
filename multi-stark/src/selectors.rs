@@ -1,6 +1,8 @@
 //! Closed-form multilinear extensions used by the multilinear AIR prover.
 
-use p3_field::Field;
+use core::ops::{AddAssign, Sub};
+
+use p3_field::{Field, PackedValue};
 
 /// Boundary selectors evaluated at a sumcheck challenge.
 #[derive(Copy, Clone, Debug)]
@@ -13,13 +15,54 @@ pub struct BoundaryEvals<EF> {
     pub transition: EF,
 }
 
+impl<EF> BoundaryEvals<EF> {
+    pub(super) const fn new(first: EF, last: EF, transition: EF) -> Self {
+        Self {
+            first,
+            last,
+            transition,
+        }
+    }
+}
+
+impl<Packed> BoundaryEvals<Packed> {
+    pub(super) fn from_packed_row<F>(row: usize, height: usize) -> Self
+    where
+        F: Field<Packing = Packed>,
+        Packed: PackedValue<Value = F>,
+    {
+        Self::new(
+            Packed::from_fn(|lane| F::from_bool(row + lane == 0)),
+            Packed::from_fn(|lane| F::from_bool(row + lane + 1 == height)),
+            Packed::from_fn(|lane| F::from_bool(row + lane + 1 < height)),
+        )
+    }
+
+    pub(super) fn row_pair_packed<F>(row: usize, half: usize, height: usize) -> (Self, Self)
+    where
+        F: Field<Packing = Packed>,
+        Packed: PackedValue<Value = F> + Sub<Output = Packed> + Copy,
+    {
+        let boundary = Self::from_packed_row::<F>(row, height);
+        let hi_boundary = Self::from_packed_row::<F>(row + half, height);
+        (
+            boundary,
+            Self::new(
+                hi_boundary.first - boundary.first,
+                hi_boundary.last - boundary.last,
+                hi_boundary.transition - boundary.transition,
+            ),
+        )
+    }
+}
+
 impl<EF: Field> BoundaryEvals<EF> {
     /// Evaluate all three boundary selectors at the same challenge point.
     ///
     /// # Arguments
     ///
     /// - `rs`: challenge coordinates, one per binary trace variable.
-    pub fn at(rs: &[EF]) -> Self {
+    pub(super) fn at(rs: &[EF]) -> Self {
         // Thread both running products through the same loop:
         //
         //     first := first * (1 - r)
@@ -35,6 +78,71 @@ impl<EF: Field> BoundaryEvals<EF> {
             last,
             transition: EF::ONE - last,
         }
+    }
+
+    pub(super) fn apply(&mut self, r: EF) {
+        self.first *= EF::ONE - r;
+        self.last *= r;
+        self.transition = EF::ONE - self.last;
+    }
+
+    pub(super) fn from_row(row: usize, height: usize) -> Self {
+        Self::new(
+            EF::from_bool(row == 0),
+            EF::from_bool(row + 1 == height),
+            EF::from_bool(row + 1 < height),
+        )
+    }
+
+    pub(super) fn from_row_with_prefix(row: usize, height: usize, prefix: Self) -> Self {
+        let suffix = Self::from_row(row, height);
+        Self::new(
+            prefix.first * suffix.first,
+            prefix.last * suffix.last,
+            suffix.transition + suffix.last * prefix.transition,
+        )
+    }
+
+    pub(super) fn row_pair(row: usize, half: usize, height: usize) -> (Self, Self) {
+        let boundary = Self::from_row(row, height);
+        let hi_boundary = Self::from_row(row + half, height);
+        (
+            boundary,
+            Self::new(
+                hi_boundary.first - boundary.first,
+                hi_boundary.last - boundary.last,
+                hi_boundary.transition - boundary.transition,
+            ),
+        )
+    }
+
+    pub(super) fn row_pair_with_prefix(
+        row: usize,
+        half: usize,
+        height: usize,
+        prefix: Self,
+    ) -> (Self, Self) {
+        let boundary = Self::from_row_with_prefix(row, height, prefix);
+        let hi_boundary = Self::from_row_with_prefix(row + half, height, prefix);
+        (
+            boundary,
+            Self::new(
+                hi_boundary.first - boundary.first,
+                hi_boundary.last - boundary.last,
+                hi_boundary.transition - boundary.transition,
+            ),
+        )
+    }
+}
+
+impl<EF> AddAssign for BoundaryEvals<EF>
+where
+    EF: AddAssign,
+{
+    fn add_assign(&mut self, rhs: Self) {
+        self.first += rhs.first;
+        self.last += rhs.last;
+        self.transition += rhs.transition;
     }
 }
 

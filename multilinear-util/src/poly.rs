@@ -17,6 +17,48 @@ use crate::split_eq::SplitEq;
 
 pub(crate) const PARALLEL_THRESHOLD: usize = 4096;
 
+/// Fixes the prefix variable at a challenge value, returning a folded polynomial.
+///
+/// Computes:
+/// ```text
+/// p'(x') = (1 - r) * p(0, x') + r * p(1, x')
+/// ```
+///
+/// The result has one fewer variable (n - 1).
+///
+/// # Panics
+///
+/// Panics if the polynomial is constant (zero free variables).
+pub fn fix_prefix_var<A, F>(poly: &[A], r: F) -> Poly<F>
+where
+    A: Copy + Send + Sync + PrimeCharacteristicRing,
+    F: Algebra<A> + Copy + Send + Sync,
+{
+    assert!(poly.len() > 1, "no free variables");
+
+    let num_evals = poly.len();
+    // assert!(poly.as_constant().is_none(), "no free variables");
+    // Split evaluations into the x_0 = 0 half (p0) and x_0 = 1 half (p1).
+    let (p0, p1) = poly.split_at(num_evals / 2);
+    if num_evals >= PARALLEL_THRESHOLD {
+        // Parallel: linear interpolation between each (p0, p1) pair.
+        Poly::new(
+            p0.par_iter()
+                .zip(p1.par_iter())
+                .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                .collect(),
+        )
+    } else {
+        // Sequential: same linear interpolation.
+        Poly::new(
+            p0.iter()
+                .zip(p1.iter())
+                .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                .collect(),
+        )
+    }
+}
+
 /// Number of variables at which we switch from recursive scalar evaluation to the
 /// SIMD-packed `SplitEq` path.
 ///
@@ -504,25 +546,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         F: Algebra<A> + Copy + Send + Sync,
     {
         assert!(self.as_constant().is_none(), "no free variables");
-        // Split evaluations into the x_0 = 0 half (p0) and x_0 = 1 half (p1).
-        let (p0, p1) = self.0.split_at(self.num_evals() / 2);
-        if self.num_evals() >= PARALLEL_THRESHOLD {
-            // Parallel: linear interpolation between each (p0, p1) pair.
-            Poly::new(
-                p0.par_iter()
-                    .zip(p1.par_iter())
-                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect(),
-            )
-        } else {
-            // Sequential: same linear interpolation.
-            Poly::new(
-                p0.iter()
-                    .zip(p1.iter())
-                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect(),
-            )
-        }
+        fix_prefix_var(self.as_slice(), r)
     }
 
     /// Evaluates the prefix-variable fix at a single residual index, without
