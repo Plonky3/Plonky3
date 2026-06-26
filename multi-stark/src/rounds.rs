@@ -58,6 +58,34 @@ pub(crate) struct RoundStateExt<'a, A, F, EF> {
     degree: usize,
 }
 
+/// Per-worker scratch for the extension-field round-polynomial fold.
+///
+/// `out` accumulates the round-polynomial evaluations; the row buffers hold one
+/// residual row's interpolation node and its per-step difference. One instance
+/// is allocated per worker and reused across that worker's rows.
+struct ExtScratch<EF> {
+    out: Vec<EF>,
+    local_point: Vec<EF>,
+    local_diff: Vec<EF>,
+    next_point: Vec<EF>,
+    next_diff: Vec<EF>,
+}
+
+/// Per-worker scratch for the packed base-field first-round fold.
+///
+/// Mirrors [`ExtScratch`] with packed base-field row buffers and a pair of
+/// per-lane equality-weight buffers. One instance is allocated per worker and
+/// reused across that worker's packed blocks.
+struct PackedScratch<P, EF> {
+    out: Vec<EF>,
+    local_point: Vec<P>,
+    local_diff: Vec<P>,
+    next_point: Vec<P>,
+    next_diff: Vec<P>,
+    eq_value: Vec<EF>,
+    eq_diff: Vec<EF>,
+}
+
 impl<'a, A, F, EF> RoundStateBase<'a, A, F, EF>
 where
     F: Field,
@@ -123,126 +151,140 @@ where
         let alpha = EF::ExtensionPacking::from(self.alpha);
         assert_ne!(packed_half, 0);
 
-        (0..packed_half).into_par_iter().par_fold_reduce(
-            || EF::zero_vec(degree),
-            |mut out, packed_s| {
-                let s = packed_s * packing_width;
-                let mut local_point = F::Packing::zero_vec(width);
-                let mut local_diff = F::Packing::zero_vec(width);
-                let mut next_point = F::Packing::zero_vec(width);
-                let mut next_diff = F::Packing::zero_vec(width);
-                let mut eq_value = EF::zero_vec(packing_width);
-                let mut eq_diff = EF::zero_vec(packing_width);
+        (0..packed_half)
+            .into_par_iter()
+            .par_fold_reduce(
+                || PackedScratch {
+                    out: EF::zero_vec(degree),
+                    local_point: F::Packing::zero_vec(width),
+                    local_diff: F::Packing::zero_vec(width),
+                    next_point: F::Packing::zero_vec(width),
+                    next_diff: F::Packing::zero_vec(width),
+                    eq_value: EF::zero_vec(packing_width),
+                    eq_diff: EF::zero_vec(packing_width),
+                },
+                |mut scratch, packed_s| {
+                    let s = packed_s * packing_width;
 
-                for ((((local, local_delta), next), next_delta), column) in local_point
-                    .iter_mut()
-                    .zip(local_diff.iter_mut())
-                    .zip(next_point.iter_mut())
-                    .zip(next_diff.iter_mut())
-                    .zip(self.columns.row_slices())
-                {
-                    let local_lo = *F::Packing::from_slice(&column[s..s + packing_width]);
-                    let local_hi = *F::Packing::from_slice(
-                        &column[s + scalar_half..s + scalar_half + packing_width],
-                    );
-                    *local = local_lo;
-                    *local_delta = local_hi - local_lo;
-
-                    let next_lo = *F::Packing::from_slice(&column[s + 1..s + 1 + packing_width]);
-                    let next_hi_start = s + scalar_half + 1;
-                    let next_hi = if next_hi_start + packing_width <= height {
-                        *F::Packing::from_slice(
-                            &column[next_hi_start..next_hi_start + packing_width],
-                        )
-                    } else {
-                        F::Packing::from_fn(|lane| {
-                            let row = next_hi_start + lane;
-                            if row < height {
-                                column[row]
-                            } else {
-                                column[height - 1]
-                            }
-                        })
-                    };
-                    *next = next_lo;
-                    *next_delta = next_hi - next_lo;
-                }
-
-                for lane in 0..packing_width {
-                    let lo = self.eq.as_slice()[s + lane];
-                    eq_value[lane] = lo;
-                    eq_diff[lane] = self.eq.as_slice()[s + scalar_half + lane] - lo;
-                }
-
-                let (mut boundary, boundary_diff) =
-                    BoundaryEvals::<F::Packing>::row_pair_packed(s, scalar_half, height);
-
-                let g = MultilinearFolder::new(
-                    &local_point,
-                    &next_point,
-                    boundary,
-                    self.public_values,
-                    alpha,
-                )
-                .eval_air(self.air);
-
-                out[0] += EF::ExtensionPacking::to_ext_iter([g])
-                    .zip(&eq_value)
-                    .map(|(g, &eq)| eq * g)
-                    .sum::<EF>();
-
-                local_point
-                    .iter_mut()
-                    .zip(local_diff.iter())
-                    .zip(next_point.iter_mut())
-                    .zip(next_diff.iter())
-                    .for_each(|(((local, local_diff), next), next_diff)| {
-                        *local += *local_diff;
-                        *next += *next_diff;
-                    });
-                eq_value
-                    .iter_mut()
-                    .zip(eq_diff.iter())
-                    .for_each(|(value, diff)| *value += *diff);
-                boundary += boundary_diff;
-
-                for acc in &mut out[1..] {
-                    local_point
+                    for ((((local, local_delta), next), next_delta), column) in scratch
+                        .local_point
                         .iter_mut()
-                        .zip(local_diff.iter())
-                        .zip(next_point.iter_mut())
-                        .zip(next_diff.iter())
-                        .for_each(|(((local, local_diff), next), next_diff)| {
-                            *local += *local_diff;
-                            *next += *next_diff;
-                        });
-                    eq_value
-                        .iter_mut()
-                        .zip(eq_diff.iter())
-                        .for_each(|(value, diff)| *value += *diff);
-                    boundary += boundary_diff;
+                        .zip(scratch.local_diff.iter_mut())
+                        .zip(scratch.next_point.iter_mut())
+                        .zip(scratch.next_diff.iter_mut())
+                        .zip(self.columns.row_slices())
+                    {
+                        let local_lo = *F::Packing::from_slice(&column[s..s + packing_width]);
+                        let local_hi = *F::Packing::from_slice(
+                            &column[s + scalar_half..s + scalar_half + packing_width],
+                        );
+                        *local = local_lo;
+                        *local_delta = local_hi - local_lo;
+
+                        let next_lo =
+                            *F::Packing::from_slice(&column[s + 1..s + 1 + packing_width]);
+                        let next_hi_start = s + scalar_half + 1;
+                        let next_hi = if next_hi_start + packing_width <= height {
+                            *F::Packing::from_slice(
+                                &column[next_hi_start..next_hi_start + packing_width],
+                            )
+                        } else {
+                            F::Packing::from_fn(|lane| {
+                                let row = next_hi_start + lane;
+                                if row < height {
+                                    column[row]
+                                } else {
+                                    column[height - 1]
+                                }
+                            })
+                        };
+                        *next = next_lo;
+                        *next_delta = next_hi - next_lo;
+                    }
+
+                    for lane in 0..packing_width {
+                        let lo = self.eq.as_slice()[s + lane];
+                        scratch.eq_value[lane] = lo;
+                        scratch.eq_diff[lane] = self.eq.as_slice()[s + scalar_half + lane] - lo;
+                    }
+
+                    let (mut boundary, boundary_diff) =
+                        BoundaryEvals::<F::Packing>::row_pair_packed(s, scalar_half, height);
 
                     let g = MultilinearFolder::new(
-                        &local_point,
-                        &next_point,
+                        &scratch.local_point,
+                        &scratch.next_point,
                         boundary,
                         self.public_values,
                         alpha,
                     )
                     .eval_air(self.air);
-                    *acc += EF::ExtensionPacking::to_ext_iter([g])
-                        .zip(&eq_value)
+
+                    scratch.out[0] += EF::ExtensionPacking::to_ext_iter([g])
+                        .zip(&scratch.eq_value)
                         .map(|(g, &eq)| eq * g)
                         .sum::<EF>();
-                }
 
-                out
-            },
-            |mut lhs, rhs| {
-                lhs.iter_mut().zip(rhs).for_each(|(lhs, rhs)| *lhs += rhs);
-                lhs
-            },
-        )
+                    scratch
+                        .local_point
+                        .iter_mut()
+                        .zip(scratch.local_diff.iter())
+                        .zip(scratch.next_point.iter_mut())
+                        .zip(scratch.next_diff.iter())
+                        .for_each(|(((local, local_diff), next), next_diff)| {
+                            *local += *local_diff;
+                            *next += *next_diff;
+                        });
+                    scratch
+                        .eq_value
+                        .iter_mut()
+                        .zip(scratch.eq_diff.iter())
+                        .for_each(|(value, diff)| *value += *diff);
+                    boundary += boundary_diff;
+
+                    for node in 1..degree {
+                        scratch
+                            .local_point
+                            .iter_mut()
+                            .zip(scratch.local_diff.iter())
+                            .zip(scratch.next_point.iter_mut())
+                            .zip(scratch.next_diff.iter())
+                            .for_each(|(((local, local_diff), next), next_diff)| {
+                                *local += *local_diff;
+                                *next += *next_diff;
+                            });
+                        scratch
+                            .eq_value
+                            .iter_mut()
+                            .zip(scratch.eq_diff.iter())
+                            .for_each(|(value, diff)| *value += *diff);
+                        boundary += boundary_diff;
+
+                        let g = MultilinearFolder::new(
+                            &scratch.local_point,
+                            &scratch.next_point,
+                            boundary,
+                            self.public_values,
+                            alpha,
+                        )
+                        .eval_air(self.air);
+                        scratch.out[node] += EF::ExtensionPacking::to_ext_iter([g])
+                            .zip(&scratch.eq_value)
+                            .map(|(g, &eq)| eq * g)
+                            .sum::<EF>();
+                    }
+
+                    scratch
+                },
+                |mut lhs, rhs| {
+                    lhs.out
+                        .iter_mut()
+                        .zip(rhs.out)
+                        .for_each(|(lhs, rhs)| *lhs += rhs);
+                    lhs
+                },
+            )
+            .out
     }
 
     #[tracing::instrument(skip_all)]
@@ -407,21 +449,22 @@ where
             .into_par_iter()
             .zip(eq_lo.par_iter().zip(eq_hi.par_iter()))
             .par_fold_reduce(
-                || EF::zero_vec(degree),
-                |mut out, (s, (&eq_lo_value, &eq_hi_value))| {
-                    let mut local_point = EF::zero_vec(width);
-                    let mut local_diff = EF::zero_vec(width);
-                    let mut next_point = EF::zero_vec(width);
-                    let mut next_diff = EF::zero_vec(width);
-
-                    for (((((local, local_delta), next), next_delta), column), next_tail) in
-                        local_point
-                            .iter_mut()
-                            .zip(local_diff.iter_mut())
-                            .zip(next_point.iter_mut())
-                            .zip(next_diff.iter_mut())
-                            .zip(self.columns.iter())
-                            .zip(self.next_tail.iter())
+                || ExtScratch {
+                    out: EF::zero_vec(degree),
+                    local_point: EF::zero_vec(width),
+                    local_diff: EF::zero_vec(width),
+                    next_point: EF::zero_vec(width),
+                    next_diff: EF::zero_vec(width),
+                },
+                |mut scratch, (s, (&eq_lo_value, &eq_hi_value))| {
+                    for (((((local, local_delta), next), next_delta), column), next_tail) in scratch
+                        .local_point
+                        .iter_mut()
+                        .zip(scratch.local_diff.iter_mut())
+                        .zip(scratch.next_point.iter_mut())
+                        .zip(scratch.next_diff.iter_mut())
+                        .zip(self.columns.iter())
+                        .zip(self.next_tail.iter())
                     {
                         let column = column.as_slice();
                         let local_lo = column[s];
@@ -447,44 +490,48 @@ where
                     let eq_diff = eq_hi_value - eq_value;
 
                     let g = MultilinearFolder::new(
-                        &local_point,
-                        &next_point,
+                        &scratch.local_point,
+                        &scratch.next_point,
                         boundary,
                         self.public_values,
                         self.alpha,
                     )
                     .eval_air(self.air);
-                    out[0] += eq_value * g;
+                    scratch.out[0] += eq_value * g;
 
-                    EF::add_slices(&mut local_point, &local_diff);
-                    EF::add_slices(&mut next_point, &next_diff);
+                    EF::add_slices(&mut scratch.local_point, &scratch.local_diff);
+                    EF::add_slices(&mut scratch.next_point, &scratch.next_diff);
                     boundary += boundary_diff;
                     eq_value += eq_diff;
 
-                    for acc in &mut out[1..] {
-                        EF::add_slices(&mut local_point, &local_diff);
-                        EF::add_slices(&mut next_point, &next_diff);
+                    for node in 1..degree {
+                        EF::add_slices(&mut scratch.local_point, &scratch.local_diff);
+                        EF::add_slices(&mut scratch.next_point, &scratch.next_diff);
                         boundary += boundary_diff;
                         eq_value += eq_diff;
 
                         let g = MultilinearFolder::new(
-                            &local_point,
-                            &next_point,
+                            &scratch.local_point,
+                            &scratch.next_point,
                             boundary,
                             self.public_values,
                             self.alpha,
                         )
                         .eval_air(self.air);
-                        *acc += eq_value * g;
+                        scratch.out[node] += eq_value * g;
                     }
 
-                    out
+                    scratch
                 },
                 |mut lhs, rhs| {
-                    lhs.iter_mut().zip(rhs).for_each(|(lhs, rhs)| *lhs += rhs);
+                    lhs.out
+                        .iter_mut()
+                        .zip(rhs.out)
+                        .for_each(|(lhs, rhs)| *lhs += rhs);
                     lhs
                 },
             )
+            .out
     }
 
     #[tracing::instrument(skip_all)]
