@@ -1,9 +1,13 @@
 use alloc::vec::Vec;
 
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+use p3_field::PackedValue;
 use p3_field::integers::QuotientMap;
 use p3_field::{InjectiveMonomial, PrimeCharacteristicRing, PrimeField32};
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+use p3_mersenne_31::PackedMersenne31Neon;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 
 use super::Rpo;
@@ -173,14 +177,35 @@ impl Permutation<[Mersenne31; RPO_M31_WIDTH]> for RpoMersenne31 {
 
 impl CryptographicPermutation<[Mersenne31; RPO_M31_WIDTH]> for RpoMersenne31 {}
 
-/// Width-parallel inverse S-box `x -> x^(1/5)` over `[Mersenne31; 24]`.
+/// Inverse S-box `x -> x^(1/5)` over `[Mersenne31; 24]`.
 ///
-/// Computes `x^1717986917` via the same addition chain as
-/// [`p3_field::exponentiation::exp_1717986917`], but applied across all 24
-/// lanes step-by-step. Each step issues 24 independent multiplications,
-/// exposing 24-way ILP to the CPU.
+/// On aarch64 the 24-element state reinterprets as six packed NEON vectors so
+/// the addition chain runs four lanes per multiply; on other targets it runs
+/// lane-by-lane.
 #[inline]
 fn apply_inv_sbox_x5(state: &mut [Mersenne31; RPO_M31_WIDTH]) {
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        // `RPO_M31_WIDTH` is a multiple of the NEON packing width (4), so the
+        // whole state reinterprets as packed vectors with no remainder.
+        let packed: &mut [PackedMersenne31Neon; RPO_M31_WIDTH / 4] =
+            PackedMersenne31Neon::pack_slice_mut(state)
+                .try_into()
+                .unwrap();
+        inv_sbox_x5(packed);
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+    inv_sbox_x5(state);
+}
+
+/// Width-parallel inverse S-box `x -> x^(1/5)` over `[R; N]`.
+///
+/// Computes `x^1717986917` via the same addition chain as
+/// [`p3_field::exponentiation::exp_1717986917`], applied across all `N`
+/// lanes step-by-step. Each step issues `N` independent multiplications,
+/// exposing `N`-way ILP to the CPU.
+#[inline]
+fn inv_sbox_x5<R: PrimeCharacteristicRing + Copy, const N: usize>(state: &mut [R; N]) {
     // Binary expansion of 1717986917 (30 squares + 7 mults):
     //   1100110011001100110011001100101
     let p1 = *state;
@@ -194,8 +219,8 @@ fn apply_inv_sbox_x5(state: &mut [Mersenne31; RPO_M31_WIDTH]) {
     let mut p101 = p10;
     p101.iter_mut().zip(p11).for_each(|(t, x)| *t *= x);
 
-    let p110011 = exp_acc::<_, RPO_M31_WIDTH, 4>(p11, p11);
-    let p11001100000000 = square_n::<_, RPO_M31_WIDTH, 8>(p110011);
+    let p110011 = exp_acc::<_, N, 4>(p11, p11);
+    let p11001100000000 = square_n::<_, N, 8>(p110011);
 
     let mut p11001100110011 = p11001100000000;
     p11001100110011
@@ -203,10 +228,9 @@ fn apply_inv_sbox_x5(state: &mut [Mersenne31; RPO_M31_WIDTH]) {
         .zip(p110011)
         .for_each(|(t, x)| *t *= x);
 
-    let p1100110011001100110011 = exp_acc::<_, RPO_M31_WIDTH, 8>(p11001100000000, p11001100110011);
-    let p11001100110011001100110011 = exp_acc::<_, RPO_M31_WIDTH, 4>(p1100110011001100110011, p11);
-    let p1100110011001100110011001100000 =
-        square_n::<_, RPO_M31_WIDTH, 5>(p11001100110011001100110011);
+    let p1100110011001100110011 = exp_acc::<_, N, 8>(p11001100000000, p11001100110011);
+    let p11001100110011001100110011 = exp_acc::<_, N, 4>(p1100110011001100110011, p11);
+    let p1100110011001100110011001100000 = square_n::<_, N, 5>(p11001100110011001100110011);
 
     state
         .iter_mut()
