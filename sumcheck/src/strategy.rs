@@ -120,27 +120,24 @@ where
     (acc0 + w0 * e0, acc_inf + w1 * e1)
 }
 
-/// Computes `(h(0), h(inf))` for a prefix-binding sumcheck round.
+/// Shared prefix round-coefficient scaffold, parameterised over the basis steps.
 ///
-/// # Inputs
-///
-/// - `evals`   — multilinear evaluations of `f(X)` over the hypercube.
-/// - `weights` — multilinear evaluations of `w(X)` over the hypercube.
-///
-/// # Returns
-///
-/// - `h(0)`   = sum_{b in {0,1}^{n-1}} f(0, b) * w(0, b)
-/// - `h(inf)` = sum_{b} (f(1, b) - f(0, b)) * (w(1, b) - w(0, b))
-///
-/// # Complexity
-///
-/// O(2^n). Parallelised above a 2^14 threshold. The main loop is tiled by
-/// `K` over a delayed-reduction dot product; the `half mod K` tail uses a
-/// streaming fold.
-pub fn sumcheck_coefficients_prefix<B, A>(evals: &[B], weights: &[A]) -> (A, A)
+/// The tiling, `PAR_THRESHOLD` par-vs-serial split, and `K`-tail fold are
+/// identical across bases; only the per-tile and per-pair MAC differ. The
+/// evaluation and projective kernels supply their `chunk_step` / `pair_step`
+/// pair so this delicate delayed-reduction loop exists exactly once.
+#[inline]
+fn sumcheck_coefficients_prefix_with<B, A, Chunk, Pair>(
+    evals: &[B],
+    weights: &[A],
+    chunk_step: Chunk,
+    pair_step: Pair,
+) -> (A, A)
 where
     B: PrimeCharacteristicRing + Copy + Send + Sync,
     A: Algebra<B> + Copy + Send + Sync,
+    Chunk: Fn(&[B; K], &[B; K], &[A; K], &[A; K]) -> (A, A) + Sync,
+    Pair: Fn((A, A), B, B, A, A) -> (A, A),
 {
     // Precondition: paired slices must be aligned; half-and-half split addresses the prefix bit.
     assert_eq!(evals.len(), weights.len());
@@ -168,7 +165,7 @@ where
             .par_fold_reduce(
                 || (A::ZERO, A::ZERO),
                 |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
-                    let chunk = chunk_round_step::<B, A>(
+                    let chunk = chunk_step(
                         e_lo_c.try_into().unwrap(),
                         e_hi_c.try_into().unwrap(),
                         w_lo_c.try_into().unwrap(),
@@ -186,7 +183,7 @@ where
             .fold(
                 (A::ZERO, A::ZERO),
                 |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
-                    let chunk = chunk_round_step::<B, A>(
+                    let chunk = chunk_step(
                         e_lo_c.try_into().unwrap(),
                         e_hi_c.try_into().unwrap(),
                         w_lo_c.try_into().unwrap(),
@@ -203,10 +200,35 @@ where
         .zip(e_hi_tail.iter())
         .zip(w_lo_tail.iter().zip(w_hi_tail.iter()))
         .fold((A::ZERO, A::ZERO), |acc, ((&e0, &e1), (&w0, &w1))| {
-            round_step(acc, e0, e1, w0, w1)
+            pair_step(acc, e0, e1, w0, w1)
         });
 
     round_reduce(main, tail)
+}
+
+/// Computes `(h(0), h(inf))` for a prefix-binding sumcheck round.
+///
+/// # Inputs
+///
+/// - `evals`   — multilinear evaluations of `f(X)` over the hypercube.
+/// - `weights` — multilinear evaluations of `w(X)` over the hypercube.
+///
+/// # Returns
+///
+/// - `h(0)`   = sum_{b in {0,1}^{n-1}} f(0, b) * w(0, b)
+/// - `h(inf)` = sum_{b} (f(1, b) - f(0, b)) * (w(1, b) - w(0, b))
+///
+/// # Complexity
+///
+/// O(2^n). Parallelised above a 2^14 threshold. The main loop is tiled by
+/// `K` over a delayed-reduction dot product; the `half mod K` tail uses a
+/// streaming fold.
+pub fn sumcheck_coefficients_prefix<B, A>(evals: &[B], weights: &[A]) -> (A, A)
+where
+    B: PrimeCharacteristicRing + Copy + Send + Sync,
+    A: Algebra<B> + Copy + Send + Sync,
+{
+    sumcheck_coefficients_prefix_with(evals, weights, chunk_round_step::<B, A>, round_step::<B, A>)
 }
 
 /// Projective (monomial-basis) variant of [`sumcheck_coefficients_prefix`]
@@ -224,68 +246,12 @@ where
     B: PrimeCharacteristicRing + Copy + Send + Sync,
     A: Algebra<B> + Copy + Send + Sync,
 {
-    assert_eq!(evals.len(), weights.len());
-    assert!(evals.len().is_multiple_of(2));
-    let half = evals.len() / 2;
-    let (e_lo, e_hi) = evals.split_at(half);
-    let (w_lo, w_hi) = weights.split_at(half);
-
-    let body = (half / K) * K;
-    let (e_lo_main, e_lo_tail) = e_lo.split_at(body);
-    let (e_hi_main, e_hi_tail) = e_hi.split_at(body);
-    let (w_lo_main, w_lo_tail) = w_lo.split_at(body);
-    let (w_hi_main, w_hi_tail) = w_hi.split_at(body);
-
-    let main: (A, A) = if half > PAR_THRESHOLD {
-        e_lo_main
-            .par_chunks_exact(K)
-            .zip(e_hi_main.par_chunks_exact(K))
-            .zip(
-                w_lo_main
-                    .par_chunks_exact(K)
-                    .zip(w_hi_main.par_chunks_exact(K)),
-            )
-            .par_fold_reduce(
-                || (A::ZERO, A::ZERO),
-                |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
-                    let chunk = chunk_round_step_projective::<B, A>(
-                        e_lo_c.try_into().unwrap(),
-                        e_hi_c.try_into().unwrap(),
-                        w_lo_c.try_into().unwrap(),
-                        w_hi_c.try_into().unwrap(),
-                    );
-                    round_reduce(acc, chunk)
-                },
-                round_reduce,
-            )
-    } else {
-        e_lo_main
-            .chunks_exact(K)
-            .zip(e_hi_main.chunks_exact(K))
-            .zip(w_lo_main.chunks_exact(K).zip(w_hi_main.chunks_exact(K)))
-            .fold(
-                (A::ZERO, A::ZERO),
-                |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
-                    let chunk = chunk_round_step_projective::<B, A>(
-                        e_lo_c.try_into().unwrap(),
-                        e_hi_c.try_into().unwrap(),
-                        w_lo_c.try_into().unwrap(),
-                        w_hi_c.try_into().unwrap(),
-                    );
-                    round_reduce(acc, chunk)
-                },
-            )
-    };
-
-    let tail = e_lo_tail
-        .iter()
-        .zip(e_hi_tail.iter())
-        .zip(w_lo_tail.iter().zip(w_hi_tail.iter()))
-        .fold((A::ZERO, A::ZERO), |acc, ((&e0, &e1), (&w0, &w1))| {
-            round_step_projective(acc, e0, e1, w0, w1)
-        });
-
-    round_reduce(main, tail)
+    sumcheck_coefficients_prefix_with(
+        evals,
+        weights,
+        chunk_round_step_projective::<B, A>,
+        round_step_projective::<B, A>,
+    )
 }
 
 /// Computes `(h(0), h(inf))` for a suffix-binding sumcheck round.
