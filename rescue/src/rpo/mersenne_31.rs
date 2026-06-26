@@ -1,9 +1,10 @@
 use alloc::vec::Vec;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-use p3_field::PackedValue;
-use p3_field::integers::QuotientMap;
-use p3_field::{InjectiveMonomial, PrimeCharacteristicRing, PrimeField32};
+use p3_field::{Algebra, PackedValue};
+use p3_field::{InjectiveMonomial, PrimeCharacteristicRing};
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+use p3_field::{PrimeField32, integers::QuotientMap};
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
@@ -66,39 +67,87 @@ const MDS_FIRST_ROW_32: [u32; 32] = [
 /// RPO-M31 MDS: the 24x24 top-left sub-block of the 32x32 circulant defined
 /// by `MDS_FIRST_ROW_32`.
 ///
-/// Not itself circulant, so applied as a dense matrix-vector product. Inputs
-/// and coefficients fit in `u32`; their products in `u64`; the row sum of 24
-/// products in `u128`. Reduction back to M31 happens once per row.
+/// Applied as a dense matrix-vector product. On aarch64 each block of four
+/// output rows is one packed `mixed_dot_product` of the input with that block's
+/// column coefficients; elsewhere each row accumulates 24 `u64` products in a
+/// `u128` and reduces once.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MdsMatrixRpoMersenne31;
 
 impl Permutation<[Mersenne31; RPO_M31_WIDTH]> for MdsMatrixRpoMersenne31 {
     fn permute_mut(&self, state: &mut [Mersenne31; RPO_M31_WIDTH]) {
-        let lifted: [u64; RPO_M31_WIDTH] =
-            core::array::from_fn(|i| state[i].as_canonical_u32() as u64);
-
-        for row in 0..RPO_M31_WIDTH {
-            // Each (coeff, input) is < 2^31 so the product fits in u64; the
-            // sum of 24 such products is < 24 * 2^62 < 2^67, so we accumulate
-            // in u128 and reduce once at the end.
-            let mut acc: u128 = 0;
-            for col in 0..RPO_M31_WIDTH {
-                let coeff = MDS_FIRST_ROW_32[(col + 32 - row) % 32] as u64;
-                acc += (coeff * lifted[col]) as u128;
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        {
+            // Output row `r = 4*block + lane` is `sum_col coeff[r][col] * x[col]`.
+            // Packing four rows per lane turns each block into a single dot
+            // product of the input vector with the block's column coefficients.
+            let input = *state;
+            for block in 0..RPO_M31_WIDTH / 4 {
+                let rows = PackedMersenne31Neon::mixed_dot_product::<RPO_M31_WIDTH>(
+                    &MDS_PACKED_COLUMNS[block],
+                    &input,
+                );
+                state[4 * block..4 * block + 4].copy_from_slice(&rows.0);
             }
-            // SAFETY: `acc` < 2^67.
-            state[row] = unsafe { reduce_u128_to_m31(acc) };
+        }
+        #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+        {
+            let lifted: [u64; RPO_M31_WIDTH] =
+                core::array::from_fn(|i| state[i].as_canonical_u32() as u64);
+
+            for row in 0..RPO_M31_WIDTH {
+                // Each (coeff, input) is < 2^31 so the product fits in u64; the
+                // sum of 24 such products is < 24 * 2^62 < 2^67, so we accumulate
+                // in u128 and reduce once at the end.
+                let mut acc: u128 = 0;
+                for col in 0..RPO_M31_WIDTH {
+                    let coeff = MDS_FIRST_ROW_32[(col + 32 - row) % 32] as u64;
+                    acc += (coeff * lifted[col]) as u128;
+                }
+                // SAFETY: `acc` < 2^67.
+                state[row] = unsafe { reduce_u128_to_m31(acc) };
+            }
         }
     }
 }
 
 impl MdsPermutation<Mersenne31, RPO_M31_WIDTH> for MdsMatrixRpoMersenne31 {}
 
+/// Column-major packed coefficients of the RPO-M31 MDS, grouped into blocks of
+/// four output rows.
+///
+/// `MDS_PACKED_COLUMNS[block][col]` holds in its four lanes the coefficients
+/// `coeff[4*block + lane][col]`, where `coeff[row][col] =
+/// MDS_FIRST_ROW_32[(col + 32 - row) % 32]`.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+const MDS_PACKED_COLUMNS: [[PackedMersenne31Neon; RPO_M31_WIDTH]; RPO_M31_WIDTH / 4] = {
+    let mut table =
+        [[PackedMersenne31Neon(Mersenne31::new_array([0; 4])); RPO_M31_WIDTH]; RPO_M31_WIDTH / 4];
+    let mut block = 0;
+    while block < RPO_M31_WIDTH / 4 {
+        let mut col = 0;
+        while col < RPO_M31_WIDTH {
+            let mut lanes = [0u32; 4];
+            let mut lane = 0;
+            while lane < 4 {
+                let row = 4 * block + lane;
+                lanes[lane] = MDS_FIRST_ROW_32[(col + 32 - row) % 32];
+                lane += 1;
+            }
+            table[block][col] = PackedMersenne31Neon(Mersenne31::new_array(lanes));
+            col += 1;
+        }
+        block += 1;
+    }
+    table
+};
+
 /// Reduce a value in `[0, 2^67)` modulo `p = 2^31 - 1` using the identity
 /// `2^31 ≡ 1 (mod p)`.
 ///
 /// The bound `v < 2^67` is the caller's responsibility; for `MdsMatrixRpoMersenne31`
 /// it follows from `24 * (2^31 - 1)^2 < 2^67`.
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 #[inline]
 unsafe fn reduce_u128_to_m31(v: u128) -> Mersenne31 {
     const M: u64 = (1u64 << 31) - 1;
@@ -243,8 +292,29 @@ fn inv_sbox_x5<R: PrimeCharacteristicRing + Copy, const N: usize>(state: &mut [R
 mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
+    use proptest::prelude::*;
 
     use super::*;
+
+    /// Reference dense matrix-vector product against the circulant coefficients.
+    fn mds_naive(input: [Mersenne31; RPO_M31_WIDTH]) -> [Mersenne31; RPO_M31_WIDTH] {
+        core::array::from_fn(|row| {
+            (0..RPO_M31_WIDTH)
+                .map(|col| {
+                    Mersenne31::from_u32(MDS_FIRST_ROW_32[(col + 32 - row) % 32]) * input[col]
+                })
+                .sum()
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_mds_matches_naive(seeds in prop::array::uniform24(any::<u32>())) {
+            let input: [Mersenne31; RPO_M31_WIDTH] =
+                core::array::from_fn(|i| Mersenne31::from_u32(seeds[i]));
+            prop_assert_eq!(MdsMatrixRpoMersenne31.permute(input), mds_naive(input));
+        }
+    }
 
     #[test]
     fn rpo_mersenne31_test_vector() {
