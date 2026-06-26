@@ -1,6 +1,10 @@
 use alloc::vec::Vec;
 
-use p3_field::InjectiveMonomial;
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+use p3_field::PackedValue;
+use p3_field::{InjectiveMonomial, PrimeCharacteristicRing};
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+use p3_koala_bear::PackedKoalaBearNeon;
 use p3_koala_bear::{KoalaBear, MdsMatrixKoalaBear};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 
@@ -82,29 +86,50 @@ impl Permutation<[KoalaBear; RPO_KB_WIDTH]> for RpoKoalaBear {
 
 impl CryptographicPermutation<[KoalaBear; RPO_KB_WIDTH]> for RpoKoalaBear {}
 
-/// Width-parallel inverse S-box `x -> x^(1/3)` over `[KoalaBear; 24]`.
+/// Inverse S-box `x -> x^(1/3)` over `[KoalaBear; 24]`.
 ///
-/// Computes `x^1420470955` via the same addition chain as
-/// [`p3_field::exponentiation::exp_1420470955`], but applied across all 24
-/// lanes step-by-step. Each step issues 24 independent multiplications,
-/// exposing 24-way ILP to the CPU.
+/// On aarch64 the 24-element state reinterprets as six packed NEON vectors so
+/// the addition chain runs four lanes per multiply; on other targets it runs
+/// lane-by-lane.
 #[inline]
 fn apply_inv_sbox_x3(state: &mut [KoalaBear; RPO_KB_WIDTH]) {
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        // `RPO_KB_WIDTH` is a multiple of the NEON packing width (4), so the
+        // whole state reinterprets as packed vectors with no remainder.
+        let packed: &mut [PackedKoalaBearNeon; RPO_KB_WIDTH / 4] =
+            PackedKoalaBearNeon::pack_slice_mut(state)
+                .try_into()
+                .unwrap();
+        inv_sbox_x3(packed);
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+    inv_sbox_x3(state);
+}
+
+/// Width-parallel inverse S-box `x -> x^(1/3)` over `[R; N]`.
+///
+/// Computes `x^1420470955` via the same addition chain as
+/// [`p3_field::exponentiation::exp_1420470955`], applied across all `N`
+/// lanes step-by-step. Each step issues `N` independent multiplications,
+/// exposing `N`-way ILP to the CPU.
+#[inline]
+fn inv_sbox_x3<R: PrimeCharacteristicRing + Copy, const N: usize>(state: &mut [R; N]) {
     // Binary expansion of 1420470955 (29 squares + 7 mults):
     //   1010100101010101010101010101011
     let p1 = *state;
 
-    let p100 = square_n::<_, RPO_KB_WIDTH, 2>(p1);
+    let p100 = square_n::<_, N, 2>(p1);
 
     let mut p101 = p100;
     p101.iter_mut().zip(p1).for_each(|(t, x)| *t *= x);
 
-    let p10000 = square_n::<_, RPO_KB_WIDTH, 2>(p100);
+    let p10000 = square_n::<_, N, 2>(p100);
 
     let mut p10101 = p10000;
     p10101.iter_mut().zip(p101).for_each(|(t, x)| *t *= x);
 
-    let p10101000000 = square_n::<_, RPO_KB_WIDTH, 6>(p10101);
+    let p10101000000 = square_n::<_, N, 6>(p10101);
 
     let mut p10101010101 = p10101000000;
     p10101010101
@@ -118,11 +143,9 @@ fn apply_inv_sbox_x3(state: &mut [KoalaBear; RPO_KB_WIDTH]) {
         .zip(p10101010101)
         .for_each(|(t, x)| *t *= x);
 
-    let p101010010101010101010101 = exp_acc::<_, RPO_KB_WIDTH, 12>(p101010010101, p10101010101);
-    let p101010010101010101010101010101 =
-        exp_acc::<_, RPO_KB_WIDTH, 6>(p101010010101010101010101, p10101);
-    let p1010100101010101010101010101010 =
-        square_n::<_, RPO_KB_WIDTH, 1>(p101010010101010101010101010101);
+    let p101010010101010101010101 = exp_acc::<_, N, 12>(p101010010101, p10101010101);
+    let p101010010101010101010101010101 = exp_acc::<_, N, 6>(p101010010101010101010101, p10101);
+    let p1010100101010101010101010101010 = square_n::<_, N, 1>(p101010010101010101010101010101);
 
     state
         .iter_mut()
