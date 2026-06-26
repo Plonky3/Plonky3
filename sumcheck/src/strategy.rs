@@ -84,6 +84,42 @@ fn round_reduce<A: Copy + PrimeCharacteristicRing>(a: (A, A), b: (A, A)) -> (A, 
     (a.0 + b.0, a.1 + b.1)
 }
 
+/// Projective per-tile MAC (eprint 2026/762, Cor 3.2).
+///
+/// Like [`chunk_round_step`], but the table holds monomial coefficients, so over
+/// `{0, inf}` the leading coefficient is `sum_i w_hi[i] * e_hi[i]` directly, with
+/// no `hi - lo` differences:
+///
+/// ```text
+///     constant += sum_i  w_lo[i] * e_lo[i]
+///     leading  += sum_i  w_hi[i] * e_hi[i]
+/// ```
+#[inline(always)]
+fn chunk_round_step_projective<B, A>(
+    e_lo: &[B; K],
+    e_hi: &[B; K],
+    w_lo: &[A; K],
+    w_hi: &[A; K],
+) -> (A, A)
+where
+    B: PrimeCharacteristicRing + Copy,
+    A: Algebra<B> + Copy,
+{
+    let acc0 = A::mixed_dot_product::<K>(w_lo, e_lo);
+    let acc_inf = A::mixed_dot_product::<K>(w_hi, e_hi);
+    (acc0, acc_inf)
+}
+
+/// Projective per-pair MAC for the streaming tail (no subtraction).
+#[inline(always)]
+fn round_step_projective<B, A>((acc0, acc_inf): (A, A), e0: B, e1: B, w0: A, w1: A) -> (A, A)
+where
+    B: PrimeCharacteristicRing + Copy,
+    A: Algebra<B> + Copy,
+{
+    (acc0 + w0 * e0, acc_inf + w1 * e1)
+}
+
 /// Computes `(h(0), h(inf))` for a prefix-binding sumcheck round.
 ///
 /// # Inputs
@@ -168,6 +204,85 @@ where
         .zip(w_lo_tail.iter().zip(w_hi_tail.iter()))
         .fold((A::ZERO, A::ZERO), |acc, ((&e0, &e1), (&w0, &w1))| {
             round_step(acc, e0, e1, w0, w1)
+        });
+
+    round_reduce(main, tail)
+}
+
+/// Projective (monomial-basis) variant of [`sumcheck_coefficients_prefix`]
+/// (eprint 2026/762, Cor 3.2).
+///
+/// The table holds monomial coefficients, so the round coefficients are plain
+/// dot products of the two faces, with no per-element subtraction:
+///
+/// - `h(0)`   = sum_{b} w(0, b) * f(0, b)   (low face)
+/// - `h(inf)` = sum_{b} w(inf, b) * f(inf, b)   (high face, the leading coefficient)
+///
+/// Same `K`-tiled, delayed-reduction structure as the evaluation-basis kernel.
+pub fn sumcheck_coefficients_prefix_projective<B, A>(evals: &[B], weights: &[A]) -> (A, A)
+where
+    B: PrimeCharacteristicRing + Copy + Send + Sync,
+    A: Algebra<B> + Copy + Send + Sync,
+{
+    assert_eq!(evals.len(), weights.len());
+    assert!(evals.len().is_multiple_of(2));
+    let half = evals.len() / 2;
+    let (e_lo, e_hi) = evals.split_at(half);
+    let (w_lo, w_hi) = weights.split_at(half);
+
+    let body = (half / K) * K;
+    let (e_lo_main, e_lo_tail) = e_lo.split_at(body);
+    let (e_hi_main, e_hi_tail) = e_hi.split_at(body);
+    let (w_lo_main, w_lo_tail) = w_lo.split_at(body);
+    let (w_hi_main, w_hi_tail) = w_hi.split_at(body);
+
+    let main: (A, A) = if half > PAR_THRESHOLD {
+        e_lo_main
+            .par_chunks_exact(K)
+            .zip(e_hi_main.par_chunks_exact(K))
+            .zip(
+                w_lo_main
+                    .par_chunks_exact(K)
+                    .zip(w_hi_main.par_chunks_exact(K)),
+            )
+            .par_fold_reduce(
+                || (A::ZERO, A::ZERO),
+                |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
+                    let chunk = chunk_round_step_projective::<B, A>(
+                        e_lo_c.try_into().unwrap(),
+                        e_hi_c.try_into().unwrap(),
+                        w_lo_c.try_into().unwrap(),
+                        w_hi_c.try_into().unwrap(),
+                    );
+                    round_reduce(acc, chunk)
+                },
+                round_reduce,
+            )
+    } else {
+        e_lo_main
+            .chunks_exact(K)
+            .zip(e_hi_main.chunks_exact(K))
+            .zip(w_lo_main.chunks_exact(K).zip(w_hi_main.chunks_exact(K)))
+            .fold(
+                (A::ZERO, A::ZERO),
+                |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
+                    let chunk = chunk_round_step_projective::<B, A>(
+                        e_lo_c.try_into().unwrap(),
+                        e_hi_c.try_into().unwrap(),
+                        w_lo_c.try_into().unwrap(),
+                        w_hi_c.try_into().unwrap(),
+                    );
+                    round_reduce(acc, chunk)
+                },
+            )
+    };
+
+    let tail = e_lo_tail
+        .iter()
+        .zip(e_hi_tail.iter())
+        .zip(w_lo_tail.iter().zip(w_hi_tail.iter()))
+        .fold((A::ZERO, A::ZERO), |acc, ((&e0, &e1), (&w0, &w1))| {
+            round_step_projective(acc, e0, e1, w0, w1)
         });
 
     round_reduce(main, tail)
@@ -670,6 +785,31 @@ mod tests {
                 VariableOrder::Suffix.eval_constraints_poly(&constraints, &challenge),
                 eval_constraints_poly_reference(VariableOrder::Suffix, &constraints, &challenge),
             );
+        }
+    }
+
+    proptest! {
+        // Projective (monomial-basis) prefix round coefficients (eprint 2026/762,
+        // Cor 3.2) are h(0) = dot(lo, lo) and h(inf) = dot(hi, hi), with no
+        // subtraction, versus the evaluation-basis h(inf) = dot(hi - lo, hi - lo).
+        #[test]
+        fn prop_sumcheck_coefficients_prefix_projective_matches_reference(
+            k in 1usize..=12,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let n = 1usize << k;
+            let evals: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+
+            let (h0, h_inf) = super::sumcheck_coefficients_prefix_projective(&evals, &weights);
+
+            let half = n / 2;
+            let h0_ref: EF = (0..half).map(|i| weights[i] * evals[i]).sum();
+            let h_inf_ref: EF = (0..half).map(|i| weights[half + i] * evals[half + i]).sum();
+
+            prop_assert_eq!(h0, h0_ref);
+            prop_assert_eq!(h_inf, h_inf_ref);
         }
     }
 }
