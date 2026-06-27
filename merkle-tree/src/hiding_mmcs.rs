@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use spin::Mutex;
 
 use crate::mmcs::check_widths;
+use crate::pruning::PrunedMerklePaths;
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 
 /// A vector commitment scheme backed by a `MerkleTree`.
@@ -117,6 +118,12 @@ where
     type Commitment = MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>;
     /// The first item is salts; the second is the usual Merkle proof (sibling digests).
     type Proof = (Vec<Vec<P::Value>>, Vec<[PW::Value; DIGEST_ELEMS]>);
+    /// The first item is the per-query salts (`salts[q][m]`).
+    /// The second is the shared pruned multiproof.
+    type MultiProof = (
+        Vec<Vec<Vec<P::Value>>>,
+        PrunedMerklePaths<PW::Value, DIGEST_ELEMS>,
+    );
     type Error = MerkleTreeError;
 
     fn commit<M: Matrix<P::Value>>(
@@ -191,6 +198,81 @@ where
             index,
             BatchOpeningRef::new(&opened_salted_values, siblings),
         )
+    }
+
+    fn open_multi_batch<M: Matrix<P::Value>>(
+        &self,
+        indices: &[usize],
+        prover_data: &Self::ProverData<M>,
+    ) -> (Vec<Vec<Vec<P::Value>>>, Self::MultiProof) {
+        // The inner tree opens salted rows: each row is `real_row ++ salt`.
+        let (salted_values, pruned) = self.inner.open_multi_batch(indices, prover_data);
+
+        // Split every salted row back into its unsalted prefix and its salt suffix.
+        // Salts move into the proof.
+        // The unsalted rows are returned to the caller.
+        let mut salts = Vec::with_capacity(salted_values.len());
+        let opened_values = salted_values
+            .into_iter()
+            .map(|rows_at_index| {
+                let (opened, salts_at_index): (Vec<_>, Vec<_>) = rows_at_index
+                    .into_iter()
+                    .map(|row| {
+                        let (a, b) = row.split_at(row.len() - SALT_ELEMS);
+                        (a.to_vec(), b.to_vec())
+                    })
+                    .unzip();
+                salts.push(salts_at_index);
+                opened
+            })
+            .collect();
+
+        (opened_values, (salts, pruned))
+    }
+
+    fn verify_multi_batch<Row: AsRef<[P::Value]> + PartialEq>(
+        &self,
+        commit: &Self::Commitment,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+        opened_values: &[Vec<Row>],
+        proof: &Self::MultiProof,
+    ) -> Result<(), Self::Error> {
+        let (salts, pruned) = proof;
+
+        // Re-attach salts query by query, mirroring the single-opening path.
+        let mut salted_values = Vec::with_capacity(opened_values.len());
+        for (rows, salts_at_index) in zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
+        {
+            // Pin each unsalted row to its matrix width before salting.
+            // The inner tree only sees salted widths.
+            // An over-long row could otherwise hide behind an under-long salt.
+            check_widths(dimensions, rows)?;
+
+            let salted_rows = zip_eq(rows, salts_at_index, MerkleTreeError::WrongBatchSize)?
+                .map(|(opened, salt)| {
+                    opened
+                        .as_ref()
+                        .iter()
+                        .chain(salt.iter())
+                        .copied()
+                        .collect_vec()
+                })
+                .collect_vec();
+            salted_values.push(salted_rows);
+        }
+
+        // The inner tree commits to salt-widened rows, so widen the dimensions to match.
+        let salted_dimensions = dimensions
+            .iter()
+            .map(|dims| Dimensions {
+                width: dims.width + SALT_ELEMS,
+                height: dims.height,
+            })
+            .collect_vec();
+
+        self.inner
+            .verify_multi_batch(commit, &salted_dimensions, indices, &salted_values, pruned)
     }
 }
 
@@ -302,5 +384,78 @@ mod tests {
     #[test]
     fn hiding_mmcs_is_sync() {
         assert_sync::<MyMmcs>();
+    }
+
+    #[test]
+    fn multi_opening_round_trip() {
+        let mut rng = SmallRng::seed_from_u64(3);
+        // Three matrices of equal height but widths 2, 3, 4.
+        let mats = (0..3)
+            .map(|i| RowMajorMatrix::<F>::rand(&mut rng, 16, i + 2))
+            .collect_vec();
+        let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0, rng);
+        let (commit, prover_data) = mmcs.commit(mats);
+
+        // Open four leaves at once.
+        // Indices must be ascending and distinct.
+        let indices = vec![1usize, 4, 9, 15];
+        let (opened, proof) = mmcs.open_multi_batch(&indices, &prover_data);
+
+        // One opened row set per query, one row per committed matrix.
+        assert_eq!(opened.len(), indices.len());
+        assert!(opened.iter().all(|rows| rows.len() == dims.len()));
+
+        // The salt suffix is stripped: each returned row matches its matrix width.
+        for rows in &opened {
+            for (row, dim) in rows.iter().zip(&dims) {
+                assert_eq!(row.len(), dim.width);
+            }
+        }
+
+        // The single shared multiproof authenticates every opened row.
+        mmcs.verify_multi_batch(&commit, &dims, &indices, &opened, &proof)
+            .expect("round-trip multi-opening must verify");
+    }
+
+    #[test]
+    fn verify_multi_rejects_wrong_row_width() {
+        let mut rng = SmallRng::seed_from_u64(4);
+        // Commit to one matrix of width 4 through the hiding wrapper.
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0, rng);
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        let indices = vec![2usize, 5];
+        let (mut opened, proof) = mmcs.open_multi_batch(&indices, &prover_data);
+
+        // Mutation: append one extra element to the first query's only row.
+        //
+        //     query 0 row:  [a, b, c, d, EXTRA]   (5 values, width is 4)
+        opened[0][0].push(F::ONE);
+
+        // The unsalted width is checked before salt columns are re-appended.
+        // An over-long row cannot hide behind an under-long salt.
+        //
+        //     expected: 4 (matrix width)
+        //     got:      5 (opened row length)
+        let err = mmcs
+            .verify_multi_batch(&commit, &dims, &indices, &opened, &proof)
+            .expect_err("row longer than the matrix width must be rejected");
+        assert!(matches!(
+            err,
+            MerkleTreeError::WrongWidth {
+                matrix: 0,
+                expected: 4,
+                got: 5,
+            }
+        ));
     }
 }

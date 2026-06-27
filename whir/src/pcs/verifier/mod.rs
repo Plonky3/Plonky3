@@ -5,7 +5,7 @@ use core::ops::Deref;
 
 use errors::VerifierError;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{ExtensionMmcs, MultiOpeningMmcs};
+use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
@@ -47,7 +47,7 @@ pub struct WhirVerifier<'a, EF, F, MT, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,
-    MT: MultiOpeningMmcs<F>,
+    MT: Mmcs<F>,
 {
     /// Derived per-protocol parameters and per-round configuration.
     pub(crate) config: &'a WhirConfig<EF, F, Challenger>,
@@ -61,7 +61,7 @@ impl<'a, EF, F, MT, Challenger> WhirVerifier<'a, EF, F, MT, Challenger>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    MT: MultiOpeningMmcs<F>,
+    MT: Mmcs<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
 {
     /// Wraps the verifier-side dependencies into a single replay context.
@@ -410,7 +410,7 @@ impl<EF, F, MT, Challenger> Deref for WhirVerifier<'_, EF, F, MT, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,
-    MT: MultiOpeningMmcs<F>,
+    MT: Mmcs<F>,
 {
     type Target = WhirConfig<EF, F, Challenger>;
 

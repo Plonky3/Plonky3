@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{MultiOpeningMmcs, MultilinearPcs};
+use p3_commit::{Mmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_multilinear_util::point::Point;
@@ -86,7 +86,7 @@ where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    MT: MultiOpeningMmcs<F>,
+    MT: Mmcs<F>,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>

@@ -6,7 +6,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::extension::FlatMatrixView;
 use p3_matrix::{Dimensions, Matrix};
 
-use crate::{BatchOpening, BatchOpeningRef, Mmcs, MultiOpeningMmcs};
+use crate::{BatchOpening, BatchOpeningRef, Mmcs};
 
 /// A wrapper to lift an MMCS from a base field `F` to an extension field `EF`.
 ///
@@ -39,6 +39,7 @@ where
     type ProverData<M> = InnerMmcs::ProverData<FlatMatrixView<F, EF, M>>;
     type Commitment = InnerMmcs::Commitment;
     type Proof = InnerMmcs::Proof;
+    type MultiProof = InnerMmcs::MultiProof;
     type Error = InnerMmcs::Error;
 
     fn commit<M: Matrix<EF>>(&self, inputs: Vec<M>) -> (Self::Commitment, Self::ProverData<M>) {
@@ -94,15 +95,6 @@ where
             BatchOpeningRef::new(&opened_base_values, batch_opening.opening_proof),
         )
     }
-}
-
-impl<F, EF, InnerMmcs> MultiOpeningMmcs<EF> for ExtensionMmcs<F, EF, InnerMmcs>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    InnerMmcs: MultiOpeningMmcs<F>,
-{
-    type MultiProof = InnerMmcs::MultiProof;
 
     fn open_multi_batch<M: Matrix<EF>>(
         &self,

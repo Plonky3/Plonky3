@@ -20,6 +20,12 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     type ProverData<M>;
     type Commitment: Clone + Serialize + DeserializeOwned;
     type Proof: Clone + Serialize + DeserializeOwned;
+    /// Compact proof covering every index of one multi-opening.
+    ///
+    /// Opening `q` indices through [`Self::open_batch`] costs `q` full authentication paths.
+    /// Those paths overlap wherever two indices share an ancestor.
+    /// A multi-opening sends each shared digest once.
+    type MultiProof: Clone + Serialize + DeserializeOwned;
     type Error: Debug;
 
     /// Commits to a batch of matrices at once and returns both the commitment and associated prover data.
@@ -155,6 +161,41 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
         index: usize,
         batch_opening: BatchOpeningRef<'_, T, Self>,
     ) -> Result<(), Self::Error>;
+
+    /// Opens the given row indices from each committed matrix at once.
+    ///
+    /// Per-matrix index semantics follow [`Self::open_batch`].
+    ///
+    /// # Returns
+    ///
+    /// - `values[q][m]` — the opened row of matrix `m` at `indices[q]`.
+    /// - One [`Self::MultiProof`] authenticating all rows together.
+    fn open_multi_batch<M: Matrix<T>>(
+        &self,
+        indices: &[usize],
+        prover_data: &Self::ProverData<M>,
+    ) -> (Vec<Vec<Vec<T>>>, Self::MultiProof);
+
+    /// Verifies a multi-opening at the given indices.
+    ///
+    /// `indices` must come from verifier-side data (e.g. the transcript).
+    /// A proof opening any other index set is rejected.
+    ///
+    /// `opened_values[q][m]` is the claimed row of matrix `m` at `indices[q]`.
+    ///
+    /// Each row is any `AsRef<[T]>`.
+    /// A caller holding rows as slices verifies without copying them into owned buffers.
+    ///
+    /// Width enforcement follows [`Self::verify_batch`].
+    /// Every opened row must match its verifier-known matrix width.
+    fn verify_multi_batch<R: AsRef<[T]> + PartialEq>(
+        &self,
+        commit: &Self::Commitment,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+        opened_values: &[Vec<R>],
+        proof: &Self::MultiProof,
+    ) -> Result<(), Self::Error>;
 }
 
 /// Lets a shared reference be used wherever an owned [`Mmcs`] is expected.
@@ -162,6 +203,7 @@ impl<T: Send + Sync + Clone, M: Mmcs<T>> Mmcs<T> for &M {
     type ProverData<Mat> = M::ProverData<Mat>;
     type Commitment = M::Commitment;
     type Proof = M::Proof;
+    type MultiProof = M::MultiProof;
     type Error = M::Error;
 
     fn commit<Mat: Matrix<T>>(
@@ -201,55 +243,6 @@ impl<T: Send + Sync + Clone, M: Mmcs<T>> Mmcs<T> for &M {
             BatchOpeningRef::new(batch_opening.opened_values, batch_opening.opening_proof),
         )
     }
-}
-
-/// An [`Mmcs`] whose openings at many indices share one compact proof.
-///
-/// Opening `q` indices through [`Mmcs::open_batch`] costs `q` full authentication paths.
-/// Those paths overlap wherever two indices share an ancestor.
-/// A multi-opening sends each shared digest once.
-pub trait MultiOpeningMmcs<T: Send + Sync + Clone>: Mmcs<T> {
-    /// Compact proof covering every index of one multi-opening.
-    type MultiProof: Clone + Serialize + DeserializeOwned;
-
-    /// Opens the given row indices from each committed matrix at once.
-    ///
-    /// Per-matrix index semantics follow [`Mmcs::open_batch`].
-    ///
-    /// # Returns
-    ///
-    /// - `values[q][m]` — the opened row of matrix `m` at `indices[q]`.
-    /// - One [`Self::MultiProof`] authenticating all rows together.
-    fn open_multi_batch<M: Matrix<T>>(
-        &self,
-        indices: &[usize],
-        prover_data: &Self::ProverData<M>,
-    ) -> (Vec<Vec<Vec<T>>>, Self::MultiProof);
-
-    /// Verifies a multi-opening at the given indices.
-    ///
-    /// `indices` must come from verifier-side data (e.g. the transcript).
-    /// A proof opening any other index set is rejected.
-    ///
-    /// `opened_values[q][m]` is the claimed row of matrix `m` at `indices[q]`.
-    ///
-    /// Each row is any `AsRef<[T]>`.
-    /// A caller holding rows as slices verifies without copying them into owned buffers.
-    ///
-    /// Width enforcement follows [`Mmcs::verify_batch`]:
-    /// every opened row must match its verifier-known matrix width.
-    fn verify_multi_batch<R: AsRef<[T]> + PartialEq>(
-        &self,
-        commit: &Self::Commitment,
-        dimensions: &[Dimensions],
-        indices: &[usize],
-        opened_values: &[Vec<R>],
-        proof: &Self::MultiProof,
-    ) -> Result<(), Self::Error>;
-}
-
-impl<T: Send + Sync + Clone, M: MultiOpeningMmcs<T>> MultiOpeningMmcs<T> for &M {
-    type MultiProof = M::MultiProof;
 
     fn open_multi_batch<Mat: Matrix<T>>(
         &self,

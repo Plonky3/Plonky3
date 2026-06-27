@@ -14,7 +14,7 @@ pub use data::HidingWhirProverData;
 use data::ZkRoundData;
 use masks::{ProverMasks, fold_limb_chunks};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{ExtensionMmcs, Mmcs, MultiOpeningMmcs};
+use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, PackedValue, PrimeCharacteristicRing, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
@@ -64,7 +64,7 @@ where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    MT: MultiOpeningMmcs<F>,
+    MT: Mmcs<F>,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>

@@ -5,7 +5,7 @@ use core::mem;
 use core::ops::Deref;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{ExtensionMmcs, Mmcs, MultiOpeningMmcs};
+use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
@@ -105,7 +105,7 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
-    MT: MultiOpeningMmcs<F>,
+    MT: Mmcs<F>,
     L: Layout<F, EF>,
 {
     /// Builds a prover from a derived config, an FFT engine, and a base-field MMCS.

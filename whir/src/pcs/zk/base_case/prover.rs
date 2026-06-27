@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{ExtensionMmcs, Mmcs, MultiOpeningMmcs};
+use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField, dot_product};
 use p3_matrix::dense::RowMajorMatrix;
@@ -34,7 +34,7 @@ impl<F, EF, MT> BaseCaseZkProver<'_, F, EF, MT>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    MT: MultiOpeningMmcs<F>,
+    MT: Mmcs<F>,
     StandardUniform: Distribution<EF>,
 {
     /// Runs Construction 7.2 and returns the proof payload.

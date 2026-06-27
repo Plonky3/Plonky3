@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_commit::MultiOpeningMmcs;
+use p3_commit::Mmcs;
 use p3_matrix::{Dimensions, Matrix};
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::OpeningBatch;
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
     serialize = "F: Serialize, EF: Serialize, MT::MultiProof: Serialize",
     deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
-pub struct WhirProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
+pub struct WhirProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Initial OOD evaluations.
     pub initial_ood_answers: Vec<EF>,
     /// Initial sumcheck data.
@@ -55,7 +55,7 @@ pub struct WhirProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
     serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::MultiProof: Serialize",
     deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
-pub struct PcsProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
+pub struct PcsProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Proximity transcript: initial commitment, sumcheck rounds, per-round
     /// commitments, STIR query openings, and the final polynomial.
     pub whir: WhirProof<F, EF, MT>,
@@ -71,7 +71,7 @@ pub struct PcsProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
     serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::MultiProof: Serialize",
     deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
-pub struct WhirRoundProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
+pub struct WhirRoundProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Round commitment (Merkle root).
     pub commitment: Option<MT::Commitment>,
     /// OOD evaluations for this round.
@@ -104,7 +104,7 @@ impl<T: Send + Sync + Clone, P> SharedProofOpening<T, P> {
     /// Opens `indices` on a commitment holding exactly one matrix.
     pub(crate) fn open<MT, M>(mmcs: &MT, indices: &[usize], prover_data: &MT::ProverData<M>) -> Self
     where
-        MT: MultiOpeningMmcs<T, MultiProof = P>,
+        MT: Mmcs<T, MultiProof = P>,
         M: Matrix<T>,
     {
         let (values, proof) = mmcs.open_multi_batch(indices, prover_data);
@@ -135,7 +135,7 @@ impl<T: Send + Sync + Clone, P> SharedProofOpening<T, P> {
         indices: &[usize],
     ) -> Result<(), MT::Error>
     where
-        MT: MultiOpeningMmcs<T, MultiProof = P>,
+        MT: Mmcs<T, MultiProof = P>,
         T: PartialEq,
     {
         // WHIR commits one matrix per round, so each query opens one row.
@@ -158,7 +158,7 @@ pub enum QueryOpenings<F, EF, P> {
     Extension(SharedProofOpening<EF, P>),
 }
 
-impl<F: Clone + Send + Sync, EF, MT: MultiOpeningMmcs<F>> WhirProof<F, EF, MT> {
+impl<F: Clone + Send + Sync, EF, MT: Mmcs<F>> WhirProof<F, EF, MT> {
     /// Retrieve the PoW witness at a given round index.
     pub(crate) fn get_pow_after_commitment(&self, round_index: usize) -> Option<F> {
         self.rounds

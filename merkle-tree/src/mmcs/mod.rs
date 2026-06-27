@@ -29,7 +29,7 @@ use core::marker::PhantomData;
 
 use geometry::ArityAndPositions;
 use itertools::Itertools;
-use p3_commit::{Mmcs, MultiOpeningMmcs};
+use p3_commit::Mmcs;
 use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
@@ -775,42 +775,5 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         }
 
         Ok(())
-    }
-}
-
-impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize> MultiOpeningMmcs<P::Value>
-    for MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>
-where
-    P: PackedValue,
-    PW: PackedValue,
-    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
-        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
-        + Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
-        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
-        + Sync,
-    PW::Value: Eq + Clone,
-    [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
-{
-    type MultiProof = PrunedMerklePaths<PW::Value, DIGEST_ELEMS>;
-
-    fn open_multi_batch<M: Matrix<P::Value>>(
-        &self,
-        indices: &[usize],
-        prover_data: &Self::ProverData<M>,
-    ) -> (Vec<Vec<Vec<P::Value>>>, Self::MultiProof) {
-        let opening = self.open_batch_pruned(indices, prover_data);
-        (opening.opened_values, opening.pruned_proof)
-    }
-
-    fn verify_multi_batch<R: AsRef<[P::Value]> + PartialEq>(
-        &self,
-        commit: &Self::Commitment,
-        dimensions: &[Dimensions],
-        indices: &[usize],
-        opened_values: &[Vec<R>],
-        proof: &Self::MultiProof,
-    ) -> Result<(), Self::Error> {
-        self.verify_batch_pruned(commit, dimensions, indices, opened_values, proof)
     }
 }
