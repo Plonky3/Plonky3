@@ -671,14 +671,15 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     /// p'(x') = p(0, x') + p(1, x')
     /// ```
     ///
-    /// This is the `r = 1` plus `r = 0` aggregate of
-    /// [`fix_prefix_var_mut`](Self::fix_prefix_var_mut), and is useful for
-    /// dropping one factor from an equality table:
+    /// This is the prefix-variable fix evaluated at `r = 0` and `r = 1` and added.
+    ///
+    /// One use is dropping the leading factor of an equality table.
+    /// Summing the boolean values of the leading variable collapses its factor to one:
     /// ```text
-    /// Eq((a, tail), (x, y)) summed over x = Eq(tail, y)
+    /// sum over x of Eq((a, tail), (x, y)) = Eq(tail, y)
     /// ```
     ///
-    /// If the polynomial is already constant, this is a no-op.
+    /// A constant polynomial has no prefix variable, so this is a no-op.
     pub fn sum_prefix_var_mut(&mut self) {
         let num_evals = self.num_evals();
         if num_evals == 1 {
