@@ -13,7 +13,7 @@ use p3_matrix::interpolation::{InterpolateArbitrary, barycentric_weights};
 /// - The barycentric weights depend only on that domain.
 /// - They are precomputed once and reused across all rounds.
 /// - Each round then contributes only the per-challenge difference inverses.
-pub(super) struct RoundPolyInterpolator<EF> {
+pub struct RoundPolyInterpolator<EF> {
     /// Integer domain nodes `0, 1, …, degree`, lifted into the field.
     x_coords: Vec<EF>,
     /// Barycentric weight `w_i = 1 / prod_{j != i} (x_i - x_j)` of each node.
@@ -26,7 +26,7 @@ impl<EF: Field> RoundPolyInterpolator<EF> {
     /// # Arguments
     ///
     /// - `degree`: the per-variable degree, so the domain has `degree + 1` nodes.
-    pub(super) fn new(degree: usize) -> Self {
+    pub fn new(degree: usize) -> Self {
         // Domain: the integer nodes 0, 1, …, degree lifted into the field.
         let x_coords: Vec<EF> = (0..=degree).map(EF::from_usize).collect();
 
@@ -47,7 +47,7 @@ impl<EF: Field> RoundPolyInterpolator<EF> {
     /// # Returns
     ///
     /// `h(r)`, computed by barycentric Lagrange interpolation over the precomputed domain.
-    pub(super) fn eval(&self, evals: &[EF], sum_constraint: EF, r: EF) -> EF {
+    pub fn eval(&self, evals: &[EF], sum_constraint: EF, r: EF) -> EF {
         debug_assert_eq!(evals.len() + 1, self.x_coords.len());
 
         // Reconstruct the full evaluation vector at the integer nodes 0, 1, …, degree.

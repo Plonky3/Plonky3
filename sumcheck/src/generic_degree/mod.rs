@@ -8,3 +8,4 @@ mod util;
 pub use error::GenericDegreeError;
 pub use proof::GenericDegreeProof;
 pub use prover::RoundProver;
+pub use util::RoundPolyInterpolator;
