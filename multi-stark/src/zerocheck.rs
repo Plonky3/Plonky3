@@ -18,7 +18,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
-use p3_sumcheck::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundProver};
+use p3_sumcheck::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundPolyInterpolator};
 use p3_util::log2_strict_usize;
 use thiserror::Error;
 
@@ -233,14 +233,15 @@ impl<'a, A> AirZerocheck<'a, A> {
 
         // Draw the batching scalar then the zerocheck point, in that fixed order.
         let (alpha, tau) = sample_zerocheck_challenges(challenger, log_height);
+        let tau = Point::new(tau);
 
         let state = RoundStateBase::<'_, _, F, EF>::new(
             self.air,
             public_values,
             alpha,
-            &Point::new(tau),
+            &tau,
             trace,
-            degree,
+            degree - 1,
         );
 
         // Bind the transcript to the claimed sum so the challenges depend on the statement.
@@ -252,9 +253,16 @@ impl<'a, A> AirZerocheck<'a, A> {
             pow_witnesses: Vec::with_capacity(if self.pow_bits > 0 { log_height } else { 0 }),
         };
         let mut challenges = Vec::with_capacity(log_height);
+        let mut eq_prefix = EF::ONE;
+        let mut claim = EF::ZERO;
+        let interpolator = RoundPolyInterpolator::new(degree - 1);
 
         let evals = state.round_poly();
-        challenger.observe_algebra_slice(&evals);
+
+        let (standard_evals, q_unweighted_sum) =
+            standard_round_from_q_evals(&interpolator, &evals, claim, eq_prefix, tau.as_slice()[0]);
+
+        challenger.observe_algebra_slice(&standard_evals);
 
         // Optional proof-of-work; raises the cost of grinding a favorable challenge.
         if self.pow_bits > 0 {
@@ -262,17 +270,36 @@ impl<'a, A> AirZerocheck<'a, A> {
         }
 
         let r: EF = challenger.sample_algebra_element();
+        claim = interpolator.eval(&evals, q_unweighted_sum, r);
+        eq_prefix *= Point::eval_eq(&[tau.as_slice()[0]], &[r]);
         let mut state = state.fold(r);
 
-        sumcheck.round_polys.push(evals);
+        sumcheck.round_polys.push(standard_evals);
         challenges.push(r);
 
-        let (proof_rest, point_rest) =
-            state.prove(challenger, log_height - 1, degree, self.pow_bits, EF::ZERO);
-        challenges.extend_from_slice(point_rest.as_slice());
+        for round in 1..log_height {
+            let evals = state.round_poly();
+            let (standard_evals, unweighted_sum) = standard_round_from_q_evals(
+                &interpolator,
+                &evals,
+                claim,
+                eq_prefix,
+                tau.as_slice()[round],
+            );
+            challenger.observe_algebra_slice(&standard_evals);
 
-        sumcheck.round_polys.extend(proof_rest.round_polys);
-        sumcheck.pow_witnesses.extend(proof_rest.pow_witnesses);
+            if self.pow_bits > 0 {
+                sumcheck.pow_witnesses.push(challenger.grind(self.pow_bits));
+            }
+
+            let r: EF = challenger.sample_algebra_element();
+            claim = interpolator.eval(&evals, unweighted_sum, r);
+            eq_prefix *= Point::eval_eq(&[tau.as_slice()[round]], &[r]);
+            state.fold(r);
+
+            sumcheck.round_polys.push(standard_evals);
+            challenges.push(r);
+        }
 
         let (local, next, _) = state.evals();
         let next = self
@@ -391,6 +418,38 @@ impl<'a, A> AirZerocheck<'a, A> {
         }
         Ok(claims.point)
     }
+}
+
+/// Build the standard generic-degree round message from lower-degree internal `q` evals.
+///
+/// The optimized prover computes `q(X)` with the active equality factor removed.
+/// This reconstructs the omitted `q(1)` from
+/// `q_claim = (1 - tau) * q(0) + tau * q(1)`, extrapolates `q(d + 1)`,
+/// and returns the standard wire evals `[s(0), s(2), ..., s(d + 1)]` for
+/// `s(X) = eq_prefix * eq(tau, X) * q(X)`, plus the unweighted `q(0) + q(1)`
+/// sum needed to evaluate `q` with the standard interpolator.
+pub(crate) fn standard_round_from_q_evals<EF>(
+    interpolator: &RoundPolyInterpolator<EF>,
+    evals: &[EF],
+    claim: EF,
+    eq_prefix: EF,
+    tau: EF,
+) -> (Vec<EF>, EF)
+where
+    EF: Field,
+{
+    let unweighted_sum = evals[0] + (claim - (EF::ONE - tau) * evals[0]) * tau.inverse();
+
+    let degree = evals.len() + 1;
+    let last = interpolator.eval(evals, unweighted_sum, EF::from_usize(degree));
+
+    let standard_evals = (0..=degree)
+        .filter(|&node| node != 1)
+        .zip(evals.iter().copied().chain(core::iter::once(last)))
+        .map(|(node, q)| eq_prefix * Point::eval_eq(&[tau], &[EF::from_usize(node)]) * q)
+        .collect();
+
+    (standard_evals, unweighted_sum)
 }
 
 /// Draw the constraint-batching scalar and the zerocheck point, in that order.
