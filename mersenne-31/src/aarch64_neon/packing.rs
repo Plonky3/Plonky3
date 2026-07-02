@@ -14,8 +14,8 @@ use p3_field::op_assign_macros::{
 use p3_field::{
     Algebra, BasedVectorSpace, ExtensionField, Field, InjectiveMonomial, PackedField,
     PackedFieldPow2, PackedValue, PermutationMonomial, PrimeCharacteristicRing,
-    dispatch_chunked_mixed_dot_product, generic_batched_columnwise_dot_product,
-    impl_packed_field_pow_2, uint32x4_mod_add, uint32x4_mod_sub,
+    generic_batched_columnwise_dot_product, impl_packed_field_pow_2, uint32x4_mod_add,
+    uint32x4_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -278,11 +278,48 @@ impl Algebra<Mersenne31> for PackedMersenne31Neon {
 
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Mersenne31; N]) -> Self {
-        dispatch_chunked_mixed_dot_product::<Self, Mersenne31, N>(
-            a,
-            f,
-            <Self as Algebra<Mersenne31>>::BATCHED_LC_CHUNK,
-        )
+        mixed_dot_product::<N>(a, f)
+    }
+}
+
+/// Compute the dot product of `u` (packed) and `v` (scalar coefficients), deferring the
+/// Mersenne reduction. Each `v[i]` is broadcast across the packing lanes before
+/// multiplying, so this follows the same overflow argument and small-`N` fallback as
+/// `PrimeCharacteristicRing::dot_product` above.
+#[inline]
+fn mixed_dot_product<const N: usize>(
+    u: &[PackedMersenne31Neon; N],
+    v: &[Mersenne31; N],
+) -> PackedMersenne31Neon {
+    if N < 4 {
+        return u.iter().zip(v).map(|(&x, &y)| x * y).sum();
+    }
+
+    unsafe {
+        // Safety: If this code got compiled then NEON intrinsics are available.
+        let zero = aarch64::vdupq_n_u64(0);
+        let mut lo = zero;
+        let mut hi = zero;
+        let mut unreduced = 0;
+        for i in 0..N {
+            let a = u[i].to_vector();
+            let b = aarch64::vdupq_n_u32(v[i].value);
+            lo = aarch64::vmlal_u32(lo, aarch64::vget_low_u32(a), aarch64::vget_low_u32(b));
+            hi = aarch64::vmlal_high_u32(hi, a, b);
+            unreduced += 1;
+            if unreduced == 3 && N != 4 {
+                unreduced = 0;
+                lo = partial_reduce_u64(lo);
+                hi = partial_reduce_u64(hi);
+            }
+        }
+        let l = partial_reduce_u64(partial_reduce_u64(lo));
+        let h = partial_reduce_u64(partial_reduce_u64(hi));
+        let narrowed = aarch64::vuzp1q_u32(
+            aarch64::vreinterpretq_u32_u64(l),
+            aarch64::vreinterpretq_u32_u64(h),
+        );
+        PackedMersenne31Neon::from_vector(reduce_sum(narrowed))
     }
 }
 
