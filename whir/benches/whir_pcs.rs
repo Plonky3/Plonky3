@@ -7,7 +7,7 @@ use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
 use p3_challenger::DuplexChallenger;
-use p3_commit::MultilinearPcs;
+use p3_commit::{MultiOpeningMmcs, MultilinearPcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::extension::QuinticTrinomialExtensionField;
@@ -21,6 +21,7 @@ use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{
     DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
 };
+use p3_whir::pcs::proof::{PcsProof, QueryOpenings};
 use p3_whir::pcs::prover::WhirProver;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -109,6 +110,34 @@ fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFac
         rates.push(rate);
     }
     rates
+}
+
+/// Size and shape statistics extracted from one honestly-produced proof.
+struct ProofStats {
+    /// Total serialized proof size, in bytes (postcard encoding).
+    proof_bytes: usize,
+    /// Number of STIR query positions opened across all rounds.
+    stir_queries: usize,
+    /// Merkle sibling digests actually shipped, summed over every round.
+    ///
+    /// This is what the pruned multiproof sends: shared siblings travel once.
+    pruned_digests: usize,
+    /// Merkle sibling digests a per-query (unpruned) proof would have shipped.
+    ///
+    /// One full root-to-leaf path per query, with no sharing.
+    full_digests: usize,
+}
+
+impl ProofStats {
+    /// Percent of Merkle sibling digests removed by pruning.
+    ///
+    ///     saved = (full - pruned) / full
+    const fn merkle_saved_percent(&self) -> usize {
+        match ((self.full_digests - self.pruned_digests) * 100).checked_div(self.full_digests) {
+            Some(percent) => percent,
+            None => 0,
+        }
+    }
 }
 
 /// Pre-built benchmark fixture parameterized by the sumcheck layout mode.
@@ -272,6 +301,68 @@ impl<L: Layout<F, EF>> Bench<L> {
             );
         });
     }
+
+    /// Produce one honest proof outside any timing window.
+    fn build_proof(&self) -> PcsProof<F, EF, Mmcs> {
+        let mut challenger = self.challenger();
+        let (_, prover_data) = <Pcs<L> as MultilinearPcs<EF, Challenger>>::commit(
+            &self.pcs,
+            self.witness.clone(),
+            &mut challenger,
+        );
+        <Pcs<L> as MultilinearPcs<EF, Challenger>>::open(
+            &self.pcs,
+            prover_data,
+            self.protocol.clone(),
+            &mut challenger,
+        )
+    }
+
+    /// Measure serialized size and Merkle-path shape of one honest proof.
+    fn stats(&self) -> ProofStats {
+        let proof = self.build_proof();
+        let proof_bytes = postcard::to_allocvec(&proof)
+            .expect("proof serializes")
+            .len();
+
+        // The first sorted path shares nothing above it, so it keeps every sibling.
+        //   paths[0].siblings.len() = full root-to-leaf path length
+        //   full   = queries * that length   (the unpruned per-query cost)
+        //   pruned = sum over paths of siblings.len()
+        let round_stats =
+            |openings: &QueryOpenings<F, EF, <Mmcs as MultiOpeningMmcs<F>>::MultiProof>| {
+                let paths = match openings {
+                    QueryOpenings::Base(opening) => &opening.proof,
+                    QueryOpenings::Extension(opening) => &opening.proof,
+                };
+                let queries = paths.original_order.len();
+                let pruned: usize = paths.paths.iter().map(|p| p.siblings.len()).sum();
+                let full_path_len = paths.paths.first().map_or(0, |p| p.siblings.len());
+                (queries, pruned, queries * full_path_len)
+            };
+
+        let mut stir_queries = 0;
+        let mut pruned_digests = 0;
+        let mut full_digests = 0;
+        let mut accumulate =
+            |o: &QueryOpenings<F, EF, <Mmcs as MultiOpeningMmcs<F>>::MultiProof>| {
+                let (q, pruned, full) = round_stats(o);
+                stir_queries += q;
+                pruned_digests += pruned;
+                full_digests += full;
+            };
+        for round in &proof.whir.rounds {
+            accumulate(&round.openings);
+        }
+        accumulate(&proof.whir.final_openings);
+
+        ProofStats {
+            proof_bytes,
+            stir_queries,
+            pruned_digests,
+            full_digests,
+        }
+    }
 }
 
 /// Apply a uniform sample-size policy to heavy benchmark groups.
@@ -367,5 +458,36 @@ fn bench_options(c: &mut Criterion) {
     }
 }
 
+/// Print a proof-size and Merkle-pruning report across the scaling sizes.
+fn report_proof_size(_c: &mut Criterion) {
+    type L = SuffixProver<F, EF>;
+    let cases = [("small", SMALL), ("medium", MEDIUM), ("large", LARGE)];
+
+    eprintln!();
+    eprintln!(
+        "whir_pcs proof report  (security={SECURITY_LEVEL}, soundness={SOUNDNESS:?}, \
+         folding={FOLDING}, starting_log_inv_rate={LOG_INV_RATE}, evals={NUM_EVALUATIONS})"
+    );
+    eprintln!(
+        "{:<8} {:>5} {:>14} {:>9} {:>16} {:>14} {:>9}",
+        "case", "vars", "proof_bytes", "queries", "merkle_digests", "full_digests", "saved",
+    );
+    for (label, num_variables) in cases {
+        let stats = Bench::<L>::new(Options::sized(num_variables)).stats();
+        eprintln!(
+            "{:<8} {:>5} {:>14} {:>9} {:>16} {:>14} {:>8}%",
+            label,
+            num_variables,
+            stats.proof_bytes,
+            stats.stir_queries,
+            stats.pruned_digests,
+            stats.full_digests,
+            stats.merkle_saved_percent(),
+        );
+    }
+    eprintln!();
+}
+
 criterion_group!(benches, bench_scaling, bench_options);
-criterion_main!(benches);
+criterion_group!(reports, report_proof_size);
+criterion_main!(benches, reports);
