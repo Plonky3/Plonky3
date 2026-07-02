@@ -27,7 +27,7 @@ use p3_field::{
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::constraints::statement::EqStatement;
+use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
 use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::product_polynomial::ProductPolynomial;
@@ -420,8 +420,6 @@ fn bench_combine<B: BenchField>(c: &mut Criterion)
 where
     StandardUniform: Distribution<B::F> + Distribution<B::EF>,
 {
-    use p3_sumcheck::constraints::statement::SelectStatement;
-
     let mut group = c.benchmark_group(format!("sumcheck/{}/combine", B::NAME));
     group.sample_size(10);
 
