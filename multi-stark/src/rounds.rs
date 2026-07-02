@@ -15,6 +15,7 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
 use crate::folder::MultilinearFolder;
+use crate::packed_ext::PackedExt;
 use crate::selectors::BoundaryEvals;
 
 /// Sumcheck prover state for the AIR zerocheck.
@@ -393,8 +394,32 @@ where
         (columns, self.next_tail, self.boundary)
     }
 
+    /// Computes the round polynomial evaluations, dispatching to the
+    /// SIMD-packed kernel once there are enough residual rows to fill a
+    /// packed lane, mirroring [`RoundStateBase::round_poly`].
     #[tracing::instrument(skip_all)]
     pub(crate) fn round_poly(&self) -> Vec<EF>
+    where
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<
+                MultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, EF::ExtensionPacking>,
+                    PackedExt<F, EF::ExtensionPacking>,
+                >,
+            >,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
+    {
+        if self.num_evals() / 2 < F::Packing::WIDTH {
+            self.round_poly_unpacked()
+        } else {
+            self.round_poly_packed()
+        }
+    }
+
+    #[tracing::instrument(skip_all)]
+    fn round_poly_unpacked(&self) -> Vec<EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
     {
@@ -467,6 +492,171 @@ where
                         )
                         .eval_air(self.air);
                         *acc += eq_suffix * g;
+                    }
+
+                    scratch
+                },
+                |mut lhs, rhs| {
+                    lhs.out
+                        .iter_mut()
+                        .zip(rhs.out)
+                        .for_each(|(lhs, rhs)| *lhs += rhs);
+                    lhs
+                },
+            )
+            .out
+    }
+
+    /// SIMD-packed twin of [`Self::round_poly_unpacked`].
+    ///
+    /// Every column is already extension-valued (folded by earlier rounds),
+    /// so packing groups `F::Packing::WIDTH` consecutive residual rows of
+    /// each `Poly<EF>` column into one `EF::ExtensionPacking`, via an
+    /// unaligned [`PackedFieldExtension::from_ext_slice`] read exactly like
+    /// [`RoundStateBase::round_poly_packed`] does for its base-field
+    /// columns. The AIR is driven through [`PackedExt`], which wraps the
+    /// packed extension value so it supports arithmetic against the base
+    /// field `F` directly (see that type's docs for why this is needed).
+    #[tracing::instrument(skip_all)]
+    fn round_poly_packed(&self) -> Vec<EF>
+    where
+        A: for<'b> Air<
+            MultilinearFolder<
+                'b,
+                F,
+                PackedExt<F, EF::ExtensionPacking>,
+                PackedExt<F, EF::ExtensionPacking>,
+            >,
+        >,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
+    {
+        let width = self.width();
+        let height = self.num_evals();
+        let scalar_half = height / 2;
+        let packing_width = F::Packing::WIDTH;
+        let packed_half = scalar_half / packing_width;
+        let degree = self.degree;
+        let alpha = PackedExt::new(EF::ExtensionPacking::from(self.alpha));
+        assert_ne!(packed_half, 0);
+
+        self.eq_suffix
+            .as_slice()
+            .par_chunks_exact(packing_width)
+            .enumerate()
+            .par_fold_reduce(
+                || PackedScratch::<PackedExt<F, EF::ExtensionPacking>, EF>::new(degree, width),
+                |mut scratch, (packed_s, eq_suffix)| {
+                    let s = packed_s * packing_width;
+
+                    for (((((local, local_delta), next), next_delta), column), next_tail) in scratch
+                        .local_point
+                        .iter_mut()
+                        .zip(scratch.local_diff.iter_mut())
+                        .zip(scratch.next_point.iter_mut())
+                        .zip(scratch.next_diff.iter_mut())
+                        .zip(self.columns.iter())
+                        .zip(self.next_tail.iter())
+                    {
+                        let column = column.as_slice();
+                        let local_lo = PackedExt::new(EF::ExtensionPacking::from_ext_slice(
+                            &column[s..s + packing_width],
+                        ));
+                        let local_hi = PackedExt::new(EF::ExtensionPacking::from_ext_slice(
+                            &column[s + scalar_half..s + scalar_half + packing_width],
+                        ));
+                        *local = local_lo;
+                        *local_delta = local_hi - local_lo;
+
+                        let next_lo = PackedExt::new(EF::ExtensionPacking::from_ext_slice(
+                            &column[s + 1..s + 1 + packing_width],
+                        ));
+                        let next_hi_start = s + scalar_half + 1;
+                        let next_hi = if next_hi_start + packing_width <= height {
+                            PackedExt::new(EF::ExtensionPacking::from_ext_slice(
+                                &column[next_hi_start..next_hi_start + packing_width],
+                            ))
+                        } else {
+                            PackedExt::new(EF::ExtensionPacking::from_ext_fn(|lane| {
+                                let row = next_hi_start + lane;
+                                if row < height {
+                                    column[row]
+                                } else {
+                                    *next_tail
+                                }
+                            }))
+                        };
+                        *next = next_lo;
+                        *next_delta = next_hi - next_lo;
+                    }
+
+                    let (raw_boundary, raw_boundary_diff) =
+                        BoundaryEvals::row_pair_with_prefix_packed::<F>(
+                            s,
+                            scalar_half,
+                            height,
+                            self.boundary,
+                        );
+                    let mut boundary = BoundaryEvals::new(
+                        PackedExt::new(raw_boundary.first),
+                        PackedExt::new(raw_boundary.last),
+                        PackedExt::new(raw_boundary.transition),
+                    );
+                    let boundary_diff = BoundaryEvals::new(
+                        PackedExt::new(raw_boundary_diff.first),
+                        PackedExt::new(raw_boundary_diff.last),
+                        PackedExt::new(raw_boundary_diff.transition),
+                    );
+
+                    let g = MultilinearFolder::new(
+                        &scratch.local_point,
+                        &scratch.next_point,
+                        boundary,
+                        self.public_values,
+                        alpha,
+                    )
+                    .eval_air(self.air);
+                    scratch.out[0] += dot_product::<EF, _, _>(
+                        eq_suffix.iter().copied(),
+                        EF::ExtensionPacking::to_ext_iter([g.0]),
+                    );
+
+                    scratch
+                        .local_point
+                        .iter_mut()
+                        .zip(scratch.local_diff.iter())
+                        .zip(scratch.next_point.iter_mut())
+                        .zip(scratch.next_diff.iter())
+                        .for_each(|(((local, local_diff), next), next_diff)| {
+                            *local += *local_diff;
+                            *next += *next_diff;
+                        });
+                    boundary += boundary_diff;
+
+                    for acc in &mut scratch.out[1..] {
+                        scratch
+                            .local_point
+                            .iter_mut()
+                            .zip(scratch.local_diff.iter())
+                            .zip(scratch.next_point.iter_mut())
+                            .zip(scratch.next_diff.iter())
+                            .for_each(|(((local, local_diff), next), next_diff)| {
+                                *local += *local_diff;
+                                *next += *next_diff;
+                            });
+                        boundary += boundary_diff;
+
+                        let g = MultilinearFolder::new(
+                            &scratch.local_point,
+                            &scratch.next_point,
+                            boundary,
+                            self.public_values,
+                            alpha,
+                        )
+                        .eval_air(self.air);
+                        *acc += dot_product::<EF, _, _>(
+                            eq_suffix.iter().copied(),
+                            EF::ExtensionPacking::to_ext_iter([g.0]),
+                        );
                     }
 
                     scratch

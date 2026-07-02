@@ -24,6 +24,7 @@ use thiserror::Error;
 
 use crate::folder::MultilinearFolder;
 use crate::opening::OpeningClaims;
+use crate::packed_ext::PackedExt;
 use crate::rounds::RoundStateBase;
 use crate::selectors::BoundaryEvals;
 
@@ -215,7 +216,14 @@ impl<'a, A> AirZerocheck<'a, A> {
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
             + for<'b> Air<MultilinearFolder<'b, F, F::Packing, EF::ExtensionPacking>>
             + for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + Air<SymbolicAirBuilder<F, EF>>,
+            + for<'b> Air<
+                MultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, EF::ExtensionPacking>,
+                    PackedExt<F, EF::ExtensionPacking>,
+                >,
+            > + Air<SymbolicAirBuilder<F, EF>>,
         EF::ExtensionPacking: From<EF> + From<F::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
