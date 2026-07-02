@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::ops::Deref;
 
 use p3_field::PackedValue;
@@ -149,6 +150,63 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     {
         self.inner
             .padded_horizontally_packed_row(self.index_map.map_row_index(r))
+    }
+
+    #[inline]
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        let height = self.height();
+        let width = self.width();
+        // The row permutation generally scatters `r..r + P::WIDTH` across non-contiguous
+        // inner rows, so unlike `DenseMatrix` we cannot take a contiguous-slice fast path.
+        // Reading elements directly still avoids the `Vec` of row-slice guards that the
+        // default implementation allocates via `wrapping_row_slices`.
+        let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
+        (0..width).map(move |c| {
+            if no_wrap {
+                // Safety: r + i < height (fast-path guard), and c < width (loop bound).
+                P::from_fn(|i| unsafe { self.get_unchecked(r + i, c) })
+            } else {
+                // Safety: (r + i) % height < height, and c < width (loop bound).
+                P::from_fn(|i| unsafe { self.get_unchecked((r + i) % height, c) })
+            }
+        })
+    }
+
+    #[inline]
+    fn vertically_packed_row_pair<P>(&self, r: usize, step: usize) -> Vec<P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        let height = self.height();
+        let width = self.width();
+        let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
+        let next_no_wrap = P::WIDTH != 1 && r + step + P::WIDTH <= height;
+
+        (0..width)
+            .map(move |c| {
+                if no_wrap {
+                    // Safety: r + i < height (fast-path guard), and c < width (loop bound).
+                    P::from_fn(|i| unsafe { self.get_unchecked(r + i, c) })
+                } else {
+                    // Safety: (r + i) % height < height, and c < width (loop bound).
+                    P::from_fn(|i| unsafe { self.get_unchecked((r + i) % height, c) })
+                }
+            })
+            .chain((0..width).map(move |c| {
+                if next_no_wrap {
+                    // Safety: r + step + i < height (fast-path guard), and c < width (loop bound).
+                    P::from_fn(|i| unsafe { self.get_unchecked(r + step + i, c) })
+                } else {
+                    // Safety: (r + step + i) % height < height, and c < width (loop bound).
+                    P::from_fn(|i| unsafe { self.get_unchecked((r + step + i) % height, c) })
+                }
+            }))
+            .collect()
     }
 }
 
@@ -354,6 +412,102 @@ mod tests {
                 BabyBear::new(4),
                 BabyBear::new(0),
             ])]
+        );
+    }
+
+    #[test]
+    fn test_vertically_packed_row() {
+        // Define the packed type with width 2
+        type Packed = FieldArray<BabyBear, 2>;
+
+        // Create a 4x2 matrix of BabyBear elements:
+        // [ 1  2 ]
+        // [ 3  4 ]
+        // [ 5  6 ]
+        // [ 7  8 ]
+        let inner = RowMajorMatrix::new((1..=8).map(BabyBear::new).collect::<Vec<_>>(), 2);
+
+        // Reverse row mapping: visible row i maps to inner row (height - 1 - i).
+        // So the view (in inner-row order) is rows [3, 2, 1, 0].
+        let mapped_view = RowIndexMappedView {
+            index_map: ReverseMap(inner.height()),
+            inner,
+        };
+
+        // Non-wrapping gather: visible rows 0 and 1 map to inner rows 3 and 2.
+        let packed: Vec<_> = mapped_view.vertically_packed_row::<Packed>(0).collect();
+        assert_eq!(
+            packed,
+            vec![
+                Packed::from([BabyBear::new(7), BabyBear::new(5)]),
+                Packed::from([BabyBear::new(8), BabyBear::new(6)]),
+            ]
+        );
+
+        // Wrapping gather: visible rows 3 and 0 (wrapping past height=4) map to inner rows 0 and 3.
+        let packed: Vec<_> = mapped_view.vertically_packed_row::<Packed>(3).collect();
+        assert_eq!(
+            packed,
+            vec![
+                Packed::from([BabyBear::new(1), BabyBear::new(7)]),
+                Packed::from([BabyBear::new(2), BabyBear::new(8)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_vertically_packed_row_pair() {
+        // Define the packed type with width 2
+        type Packed = FieldArray<BabyBear, 2>;
+
+        // Create a 4x2 matrix of BabyBear elements:
+        // [ 1  2 ]
+        // [ 3  4 ]
+        // [ 5  6 ]
+        // [ 7  8 ]
+        let inner = RowMajorMatrix::new((1..=8).map(BabyBear::new).collect::<Vec<_>>(), 2);
+
+        // Reverse row mapping: visible row i maps to inner row (height - 1 - i).
+        // So the view (in inner-row order) is rows [3, 2, 1, 0].
+        let mapped_view = RowIndexMappedView {
+            index_map: ReverseMap(inner.height()),
+            inner,
+        };
+
+        // Both halves non-wrapping: visible rows [0, 1] and [2, 3] map to inner rows [3, 2] and [1, 0].
+        let packed = mapped_view.vertically_packed_row_pair::<Packed>(0, 2);
+        assert_eq!(
+            packed,
+            vec![
+                Packed::from([BabyBear::new(7), BabyBear::new(5)]),
+                Packed::from([BabyBear::new(8), BabyBear::new(6)]),
+                Packed::from([BabyBear::new(3), BabyBear::new(1)]),
+                Packed::from([BabyBear::new(4), BabyBear::new(2)]),
+            ]
+        );
+
+        // First half non-wrapping, second half wrapping past height=4.
+        let packed = mapped_view.vertically_packed_row_pair::<Packed>(1, 2);
+        assert_eq!(
+            packed,
+            vec![
+                Packed::from([BabyBear::new(5), BabyBear::new(3)]),
+                Packed::from([BabyBear::new(6), BabyBear::new(4)]),
+                Packed::from([BabyBear::new(1), BabyBear::new(7)]),
+                Packed::from([BabyBear::new(2), BabyBear::new(8)]),
+            ]
+        );
+
+        // Both halves wrapping past height=4.
+        let packed = mapped_view.vertically_packed_row_pair::<Packed>(3, 2);
+        assert_eq!(
+            packed,
+            vec![
+                Packed::from([BabyBear::new(1), BabyBear::new(7)]),
+                Packed::from([BabyBear::new(2), BabyBear::new(8)]),
+                Packed::from([BabyBear::new(5), BabyBear::new(3)]),
+                Packed::from([BabyBear::new(6), BabyBear::new(4)]),
+            ]
         );
     }
 
