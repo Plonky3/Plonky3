@@ -13,8 +13,8 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, dispatch_chunked_mixed_dot_product,
-    impl_packed_field_pow_2, mm256_mod_add, mm256_mod_sub,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm256_mod_add,
+    mm256_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -225,11 +225,7 @@ impl Algebra<Mersenne31> for PackedMersenne31AVX2 {
 
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Mersenne31; N]) -> Self {
-        dispatch_chunked_mixed_dot_product::<Self, Mersenne31, N>(
-            a,
-            f,
-            <Self as Algebra<Mersenne31>>::BATCHED_LC_CHUNK,
-        )
+        mixed_dot_product::<N>(a, f)
     }
 }
 
@@ -464,6 +460,49 @@ fn dot_product<const N: usize>(
         let t = x86_64::_mm256_blend_epi32::<0b10101010>(evn, odd_shifted);
 
         // Final reduction of values in `0..=2 P` to the canonical `0..=P`.
+        let t_sub_p = x86_64::_mm256_sub_epi32(t, P);
+        PackedMersenne31AVX2::from_vector(x86_64::_mm256_min_epu32(t, t_sub_p))
+    }
+}
+
+/// Compute the dot product of `u` (packed) and `v` (scalar coefficients), deferring the
+/// Mersenne reduction. Each `v[i]` is broadcast across the packing lanes before
+/// multiplying, so this follows the same overflow argument as `dot_product`.
+///
+/// A broadcast vector already has every lane equal, so the odd/even shuffle used to
+/// separate `dot_product`'s two operands is unnecessary on the broadcast side.
+#[inline]
+fn mixed_dot_product<const N: usize>(
+    u: &[PackedMersenne31AVX2; N],
+    v: &[Mersenne31; N],
+) -> PackedMersenne31AVX2 {
+    unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        let mut acc_evn = x86_64::_mm256_setzero_si256();
+        let mut acc_odd = x86_64::_mm256_setzero_si256();
+        let mut unreduced = 0;
+        for i in 0..N {
+            let lhs = u[i].to_vector();
+            let rhs = x86_64::_mm256_set1_epi32(v[i].value as i32);
+            acc_evn = x86_64::_mm256_add_epi64(acc_evn, x86_64::_mm256_mul_epu32(lhs, rhs));
+            acc_odd = x86_64::_mm256_add_epi64(
+                acc_odd,
+                x86_64::_mm256_mul_epu32(movehdup_epi32(lhs), rhs),
+            );
+            unreduced += 1;
+            if unreduced == 3 {
+                unreduced = 0;
+                acc_evn = fold_u64(acc_evn);
+                acc_odd = fold_u64(acc_odd);
+            }
+        }
+
+        let evn = fold_u64(fold_u64(acc_evn));
+        let odd = fold_u64(fold_u64(acc_odd));
+
+        let odd_shifted = x86_64::_mm256_slli_epi64::<32>(odd);
+        let t = x86_64::_mm256_blend_epi32::<0b10101010>(evn, odd_shifted);
+
         let t_sub_p = x86_64::_mm256_sub_epi32(t, P);
         PackedMersenne31AVX2::from_vector(x86_64::_mm256_min_epu32(t, t_sub_p))
     }

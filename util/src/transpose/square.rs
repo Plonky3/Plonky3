@@ -19,7 +19,7 @@ const PARALLEL_RECURSION_THRESHOLD: usize = 1 << 10;
 /// Transpose a small square matrix in-place using element-wise swaps.
 ///
 /// # Parameters
-/// - `arr`: A mutable reference to a 1D array representing a larger row-major matrix.
+/// - `ptr`: Pointer to the base of a 1D array representing a larger row-major matrix.
 /// - `log_stride`: Log2 of the stride between rows in the array.
 /// - `log_size`: Log2 of the dimension of the square matrix to transpose.
 /// - `x`: Offset (in rows and columns) from the top-left corner of the full array.
@@ -27,10 +27,10 @@ const PARALLEL_RECURSION_THRESHOLD: usize = 1 << 10;
 /// The matrix occupies a logical square region starting at `(x, x)` and of size `1 << log_size`.
 ///
 /// ## SAFETY
-/// - All accesses to `arr` must be in-bounds.
+/// - `ptr` must be valid for reads and writes of every offset this call touches.
 /// - `log_size <= log_stride` must hold to prevent overlapping indices during swaps.
 unsafe fn transpose_in_place_square_small<T>(
-    arr: &mut [T],
+    ptr: *mut T,
     log_stride: usize,
     log_size: usize,
     x: usize,
@@ -41,8 +41,8 @@ unsafe fn transpose_in_place_square_small<T>(
             for j in x..i {
                 // Compute memory offsets and swap M[i, j] <-> M[j, i]
                 swap(
-                    arr.get_unchecked_mut(i + (j << log_stride)),
-                    arr.get_unchecked_mut((i << log_stride) + j),
+                    ptr.add(i + (j << log_stride)),
+                    ptr.add((i << log_stride) + j),
                 );
             }
         }
@@ -212,10 +212,38 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
 ) where
     T: Copy + Send + Sync,
 {
+    // SAFETY: `arr.as_mut_ptr()` is valid for the accesses the recursion
+    // below performs, per this function's own safety contract.
+    unsafe {
+        transpose_in_place_square_ptr(arr.as_mut_ptr(), log_stride, log_size, x);
+    }
+}
+
+/// Raw-pointer core of [`transpose_in_place_square`].
+///
+/// Operating on a raw pointer throughout (rather than reconstructing a
+/// `&mut [T]` slice at each recursive call) avoids ever having two live
+/// mutable references over the same backing array: the parallel branch below
+/// recurses into disjoint quadrants concurrently, and two `&mut [T]` slices
+/// spanning the same memory are UB regardless of whether the accesses they
+/// perform actually overlap.
+///
+/// # Safety
+/// - `ptr` must be valid for reads and writes of every offset this call
+///   (and its recursive descendants) touches.
+/// - `log_size <= log_stride` must hold to prevent overlapping indices during swaps.
+unsafe fn transpose_in_place_square_ptr<T>(
+    ptr: *mut T,
+    log_stride: usize,
+    log_size: usize,
+    x: usize,
+) where
+    T: Copy + Send + Sync,
+{
     // If small, switch to base case
     if log_size <= BASE_CASE_LOG {
         unsafe {
-            transpose_in_place_square_small(arr, log_stride, log_size, x);
+            transpose_in_place_square_small(ptr, log_stride, log_size, x);
         }
         return;
     }
@@ -233,17 +261,15 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
 
         if elements >= PARALLEL_RECURSION_THRESHOLD {
             // Shared base pointer for parallel recursion
-            let base = AtomicPtr::new(arr.as_mut_ptr());
-            // Total length of the backing array
-            let len = arr.len();
+            let base = AtomicPtr::new(ptr);
 
             // Coordinate each quadrant via `join`:
             // - TL and BR are recursive calls
             // - TR and BL are swapped directly
             join(
                 || unsafe {
-                    transpose_in_place_square(
-                        core::slice::from_raw_parts_mut(base.load(Ordering::Relaxed), len),
+                    transpose_in_place_square_ptr(
+                        base.load(Ordering::Relaxed),
                         log_stride,
                         log_half_size,
                         x,
@@ -263,8 +289,8 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
                             );
                         },
                         || unsafe {
-                            transpose_in_place_square(
-                                core::slice::from_raw_parts_mut(base.load(Ordering::Relaxed), len),
+                            transpose_in_place_square_ptr(
+                                base.load(Ordering::Relaxed),
                                 log_stride,
                                 log_half_size,
                                 x + half,
@@ -278,12 +304,9 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
     }
 
     // Sequential version of above logic
-    // Raw pointer to the base of the array for manual offset calculations
-    let ptr = arr.as_mut_ptr();
-
     unsafe {
         // Transpose TL quadrant (top-left)
-        transpose_in_place_square(arr, log_stride, log_half_size, x);
+        transpose_in_place_square_ptr(ptr, log_stride, log_half_size, x);
         // Swap TR (top-right) with BL (bottom-left)
         transpose_swap(
             ptr.add((x << log_stride) + (x + half)),
@@ -292,7 +315,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
             (half, half),
         );
         // Transpose BR quadrant (bottom-right)
-        transpose_in_place_square(arr, log_stride, log_half_size, x + half);
+        transpose_in_place_square_ptr(ptr, log_stride, log_half_size, x + half);
     }
 }
 
