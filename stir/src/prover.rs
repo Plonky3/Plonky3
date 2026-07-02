@@ -114,12 +114,7 @@ where
         );
         challenger.observe(new_commit.clone());
 
-        // Step 2: query/OOD PoW. Placed BEFORE OOD sampling so PoW gates re-rolls of
-        // the OOD set (the prover would otherwise have unbounded freedom to re-commit
-        // the next codeword and resample favorable OOD points without paying PoW).
-        let pow_witness = challenger.grind(rc.pow_bits);
-
-        // Step 3: OOD sampling.
+        // Step 2: OOD sampling.
         // OOD points must be outside the current and next witness domains AND outside the
         // fold-query domain. Excluding the fold domain prevents an honest-prover failure
         // where an OOD point coincides with a sampled query point and the interpolation in
@@ -151,6 +146,10 @@ where
             .map(|&z| eval_poly(&fold_coeffs, z))
             .collect();
         challenger.observe_algebra_slice(&ood_answers);
+
+        // Step 3: query/OOD PoW. The witness is ground after observing the OOD answers so the
+        // prover cannot re-roll favorable OOD answers without paying the query-phase PoW cost.
+        let pow_witness = challenger.grind(rc.pow_bits);
 
         // Step 4: Query sampling.
         let fold_gen = F::two_adic_generator(fold_log_domain);

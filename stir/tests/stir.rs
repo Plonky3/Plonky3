@@ -254,6 +254,33 @@ mod babybear_stir {
     }
 
     #[test]
+    fn test_tampered_ood_answer_invalidates_following_pow_witness() {
+        let (config, dft, challenger, poly) = pow_proof_setup();
+        let round_with_pow = config
+            .round_configs
+            .iter()
+            .position(|rc| rc.pow_bits > 0)
+            .expect("expected at least one intermediate round with pow_bits > 0");
+
+        let mut p_ch = challenger.clone();
+        let (mut proof, _idx) = prove_stir(&config, poly, &dft, &mut p_ch);
+
+        assert!(!proof.round_proofs[round_with_pow].ood_answers.is_empty());
+        proof.round_proofs[round_with_pow].ood_answers[0] += EF::from(F::ONE);
+
+        let mut v_ch = challenger;
+        let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
+            .expect_err("tampered OOD answer must invalidate the following PoW witness");
+        assert!(
+            matches!(
+                err,
+                p3_stir::StirError::InvalidPowWitness { round } if round == round_with_pow
+            ),
+            "expected InvalidPowWitness in round {round_with_pow}, got {err:?}"
+        );
+    }
+
+    #[test]
     fn test_tampered_final_pow_witness_fails() {
         let (config, dft, challenger, poly) = pow_proof_setup();
         assert!(
@@ -653,6 +680,15 @@ mod babybear_pcs {
 
         let pcs = MyPcs::new(Dft::default(), val_mmcs, stir_params);
         (pcs, Challenger::new(perm))
+    }
+
+    #[test]
+    fn test_pcs_log_max_lde_height_reserves_blowup_bits() {
+        let (pcs, _challenger) = get_pcs();
+        assert_eq!(
+            <MyPcs as Pcs<Challenge, Challenger>>::log_max_lde_height(&pcs),
+            Val::TWO_ADICITY - 1
+        );
     }
 
     fn do_test_pcs(log_degrees: &[usize]) {

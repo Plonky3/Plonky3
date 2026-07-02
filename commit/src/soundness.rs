@@ -40,6 +40,7 @@ pub enum SecurityAssumption {
     CapacityBound,
 }
 
+#[doc(hidden)]
 impl SecurityAssumption {
     fn rate_from_log_inv_rate(log_inv_rate: usize) -> f64 {
         libm::pow(2., -(log_inv_rate as f64))
@@ -290,7 +291,7 @@ impl SecurityAssumption {
     /// eta-dependent arithmetic; the panic locks down that invariant so a
     /// future refactor that strays into the eta path under UD fails loudly.
     #[must_use]
-    pub const fn log_eta(&self, log_inv_rate: usize) -> f64 {
+    const fn log_eta(&self, log_inv_rate: usize) -> f64 {
         match self {
             // We don't use eta in UD
             Self::UniqueDecoding => panic!("log_eta is undefined for UniqueDecoding"),
@@ -303,7 +304,7 @@ impl SecurityAssumption {
 
     /// Given a RS code (specified by the log of the degree and log inv of the rate), compute the list size at the specified distance delta.
     #[must_use]
-    pub const fn list_size_bits(&self, log_degree: usize, log_inv_rate: usize) -> f64 {
+    const fn list_size_bits(&self, log_degree: usize, log_inv_rate: usize) -> f64 {
         match self {
             // In UD the list size is 1
             Self::UniqueDecoding => 0.,
@@ -327,7 +328,7 @@ impl SecurityAssumption {
     /// recommended schedule). The UD branch ignores `log_eta` because UD's `delta = (1 - rho) / 2`
     /// has no eta term — list size is always 1.
     #[must_use]
-    pub const fn list_size_bits_at_log_eta(
+    const fn list_size_bits_at_log_eta(
         &self,
         log_degree: usize,
         log_inv_rate: usize,
@@ -346,7 +347,7 @@ impl SecurityAssumption {
     /// Given a RS code (specified by the log of the degree and log inv of the rate) a field_size
     /// and an arity, compute the proximity gaps error (in bits) at the specified distance.
     #[must_use]
-    pub fn prox_gaps_error(
+    fn prox_gaps_error(
         &self,
         log_degree: usize,
         log_inv_rate: usize,
@@ -418,7 +419,7 @@ impl SecurityAssumption {
     /// Smaller `eta` yields larger `m` and thus a larger exceptional-set lower bound (fewer
     /// bits of security).
     #[must_use]
-    pub fn prox_gaps_error_at_log_eta(
+    fn prox_gaps_error_at_log_eta(
         &self,
         log_degree: usize,
         log_inv_rate: usize,
@@ -459,7 +460,7 @@ impl SecurityAssumption {
     /// - In JB, delta is (1 - sqrt(rho) - eta)
     /// - In CB, delta is (1 - rho - eta)
     #[must_use]
-    pub fn log_1_delta(&self, log_inv_rate: usize) -> f64 {
+    fn log_1_delta(&self, log_inv_rate: usize) -> f64 {
         let rate = 1. / f64::from(1 << log_inv_rate);
 
         let delta = match self {
@@ -493,7 +494,7 @@ impl SecurityAssumption {
     /// The error is list_size^2 * (degree/field_size_bits)^reps.
     /// NOTE: Here we are discounting the domain size as we assume it is negligible compared to the size of the field.
     #[must_use]
-    pub const fn ood_error(
+    const fn ood_error(
         &self,
         log_degree: usize,
         log_inv_rate: usize,
@@ -512,7 +513,7 @@ impl SecurityAssumption {
 
     /// Like [`Self::ood_error`] but evaluated at an explicit `log_eta`.
     #[must_use]
-    pub const fn ood_error_at_log_eta(
+    const fn ood_error_at_log_eta(
         &self,
         log_degree: usize,
         log_inv_rate: usize,
@@ -574,7 +575,7 @@ impl SecurityAssumption {
     ///
     /// The `+1` accounts for the union bound over the list.
     #[must_use]
-    pub const fn fold_sumcheck_error(
+    const fn fold_sumcheck_error(
         &self,
         field_size_bits: usize,
         num_variables: usize,
@@ -587,7 +588,7 @@ impl SecurityAssumption {
 
     /// Like [`Self::fold_sumcheck_error`] but evaluated at an explicit `log_eta`.
     #[must_use]
-    pub const fn fold_sumcheck_error_at_log_eta(
+    const fn fold_sumcheck_error_at_log_eta(
         &self,
         field_size_bits: usize,
         num_variables: usize,
@@ -634,7 +635,7 @@ impl SecurityAssumption {
 
     /// Like [`Self::queries_combination_error`] but evaluated at an explicit `log_eta`.
     #[must_use]
-    pub fn queries_combination_error_at_log_eta(
+    fn queries_combination_error_at_log_eta(
         &self,
         field_size_bits: usize,
         num_variables: usize,
@@ -684,7 +685,7 @@ impl SecurityAssumption {
     /// both expressed as bits of security (higher = better). The folding PoW must bridge from
     /// this value to `security_level`.
     #[must_use]
-    pub fn fold_algebraic_bits(
+    fn fold_algebraic_bits(
         &self,
         field_size_bits: usize,
         num_variables: usize,
@@ -790,7 +791,7 @@ impl SecurityAssumption {
     /// prover. Including the shake-check error in [`Self::stir_query_algebraic_bits`] keeps
     /// the parameter accounting honest.
     #[must_use]
-    pub fn shake_check_error(
+    fn shake_check_error(
         &self,
         field_size_bits: usize,
         num_queries: usize,

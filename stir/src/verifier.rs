@@ -214,13 +214,7 @@ where
         // (`fold_fiber` interpolates at subgroup coordinates).
         let fold_beta = gamma * EF::from(current_shift.inverse());
 
-        // Step 2: query/OOD PoW. Placed BEFORE OOD sampling so PoW gates re-rolls of the
-        // OOD set; mirrors the prover order so the transcript stays in sync.
-        if !challenger.check_witness(rc.pow_bits, rp.pow_witness) {
-            return Err(StirError::InvalidPowWitness { round });
-        }
-
-        // Step 3: OOD sampling and answer observation.
+        // Step 2: OOD sampling and answer observation.
         if rp.ood_answers.len() != rc.num_ood_samples {
             return Err(StirError::InvalidProofShape);
         }
@@ -247,6 +241,12 @@ where
         }
 
         challenger.observe_algebra_slice(&rp.ood_answers);
+
+        // Step 3: query/OOD PoW. Mirrors the prover order: grind after OOD answers are
+        // transcript-bound so the witness gates re-rolls of favorable OOD answers.
+        if !challenger.check_witness(rc.pow_bits, rp.pow_witness) {
+            return Err(StirError::InvalidPowWitness { round });
+        }
 
         // Step 4: combination challenge, query sampling, and fiber verification.
 

@@ -118,6 +118,10 @@ where
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
     }
 
+    fn log_max_lde_height(&self) -> usize {
+        Val::TWO_ADICITY.saturating_sub(self.stir.log_blowup)
+    }
+
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,

@@ -278,7 +278,9 @@ pub fn check_shake_consistency<F: Field>(
     values: &[F],
     rho: F,
 ) -> bool {
-    debug_assert_eq!(points.len(), values.len());
+    if points.len() != values.len() {
+        return false;
+    }
 
     // If rho coincides with one of the evaluation points the denominator (rho - y_i) would be
     // zero.  This is negligible for a random rho but we handle it defensively: the shake identity

@@ -229,6 +229,23 @@ fn test_shake_consistency_check() {
 }
 
 #[test]
+fn test_shake_consistency_mismatched_lengths_returns_false() {
+    let points = vec![ef(1), ef(2), ef(3)];
+    let values = vec![ef(5), ef(11), ef(23)];
+    let ans = interpolate_poly(&points, &values);
+    let shake = compute_shake_polynomial(&ans, &points);
+
+    let truncated_values = vec![ef(5), ef(11)];
+    assert!(!check_shake_consistency(
+        &ans,
+        &shake,
+        &points,
+        &truncated_values,
+        ef(100)
+    ));
+}
+
+#[test]
 fn test_shake_consistency_tampered_answer_fails() {
     let points = vec![ef(1), ef(2), ef(3)];
     let values = vec![ef(5), ef(11), ef(23)];
