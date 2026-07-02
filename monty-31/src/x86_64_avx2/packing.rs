@@ -76,6 +76,33 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX2<PMP> {
     const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
+
+    /// Fused DIF butterfly for forward FFT: computes `(x + y, (x - y) * roots)`.
+    ///
+    /// Skips the modular reduction on `x - y` by feeding the wrapped subtraction directly
+    /// into the signed Montgomery multiplication path.
+    #[inline(always)]
+    pub(crate) fn forward_butterfly(self, y: Self, roots: Self) -> (Self, Self) {
+        unsafe {
+            let x_vec = self.to_vector();
+            let y_vec = y.to_vector();
+            let roots_vec = roots.to_vector();
+
+            // Canonical modular addition.
+            let sum = mm256_mod_add(x_vec, y_vec, PMP::PACKED_P);
+
+            // Raw subtraction interpreted as signed lies in (-P, P).
+            let diff = x86_64::_mm256_sub_epi32(x_vec, y_vec);
+
+            let d_evn = monty_mul_signed::<PMP>(diff, roots_vec);
+            let d_odd = monty_mul_signed::<PMP>(movehdup_epi32(diff), movehdup_epi32(roots_vec));
+            let product_signed = blend_evn_odd(d_evn, d_odd);
+            let product = red_signed_to_canonical::<PMP>(product_signed);
+
+            // Safety: `sum` and `product` are canonical vectors.
+            (Self::from_vector(sum), Self::from_vector(product))
+        }
+    }
 }
 
 impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31AVX2<PMP> {

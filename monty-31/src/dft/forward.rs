@@ -71,13 +71,11 @@ fn forward_butterfly<T: PrimeCharacteristicRing + Copy>(x: T, y: T, roots: T) ->
 ///
 /// The DIF butterfly computes `(x + y, (x - y) · ω)` where `ω` is a twiddle factor.
 ///
-/// On aarch64, this delegates to `PackedMontyField31Neon::forward_butterfly`,
-/// which fuses the subtraction and multiplication to skip the modular reduction
-/// on `x - y`. See that method's documentation for the full rationale.
+/// On aarch64 and x86 packed backends, this delegates to architecture-specific
+/// `forward_butterfly` implementations that fuse subtraction and multiplication,
+/// skipping the modular reduction on `x - y`.
 ///
 /// On other architectures, this falls back to the generic `forward_butterfly`.
-///
-/// TODO: apply the same fused sub+mul optimization for AVX2/AVX-512 backends.
 #[inline(always)]
 fn monty_forward_butterfly<MP: FieldParameters + TwoAdicData>(
     x: <MontyField31<MP> as Field>::Packing,
@@ -91,7 +89,27 @@ fn monty_forward_butterfly<MP: FieldParameters + TwoAdicData>(
     {
         x.forward_butterfly(y, roots)
     }
-    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+    {
+        x.forward_butterfly(y, roots)
+    }
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(target_feature = "avx512f")
+    ))]
+    {
+        x.forward_butterfly(y, roots)
+    }
+    #[cfg(not(any(
+        all(target_arch = "aarch64", target_feature = "neon"),
+        all(target_arch = "x86_64", target_feature = "avx512f"),
+        all(
+            target_arch = "x86_64",
+            target_feature = "avx2",
+            not(target_feature = "avx512f")
+        ),
+    )))]
     {
         forward_butterfly(x, y, roots)
     }

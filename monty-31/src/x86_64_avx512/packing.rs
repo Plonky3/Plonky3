@@ -86,6 +86,34 @@ impl<PMP: PackedMontyParameters> PackedMontyField31AVX512<PMP> {
         Self([value; WIDTH])
     }
 
+    /// Fused DIF butterfly for forward FFT: computes `(x + y, (x - y) * roots)`.
+    ///
+    /// Skips the modular reduction on `x - y` by feeding the wrapped subtraction directly
+    /// into the signed Montgomery multiplication path.
+    #[inline(always)]
+    pub(crate) fn forward_butterfly(self, y: Self, roots: Self) -> (Self, Self) {
+        unsafe {
+            let x_vec = self.to_vector();
+            let y_vec = y.to_vector();
+            let roots_vec = roots.to_vector();
+
+            // Canonical modular addition.
+            let sum = mm512_mod_add(x_vec, y_vec, PMP::PACKED_P);
+
+            // Raw subtraction interpreted as signed lies in (-P, P).
+            let diff = x86_64::_mm512_sub_epi32(x_vec, y_vec);
+
+            let d_evn = monty_mul_signed::<PMP>(diff, roots_vec);
+            let d_odd = monty_mul_signed::<PMP>(movehdup_epi32(diff), movehdup_epi32(roots_vec));
+            let product_signed = mask_movehdup_epi32(d_odd, EVENS, d_evn);
+            let product_corr = x86_64::_mm512_add_epi32(product_signed, PMP::PACKED_P);
+            let product = x86_64::_mm512_min_epu32(product_signed, product_corr);
+
+            // Safety: `sum` and `product` are canonical vectors.
+            (Self::from_vector(sum), Self::from_vector(product))
+        }
+    }
+
     /// Copy values from `arr` into the packed vector padding by zeros if necessary.
     #[inline]
     fn from_monty_array<const N: usize>(arr: [MontyField31<PMP>; N]) -> Self
@@ -429,6 +457,19 @@ fn partial_monty_red_signed_to_signed<MPAVX512: MontyParametersAVX512>(input: __
 
         // This could equivalently be _mm512_sub_epi64
         x86_64::_mm512_sub_epi32(input, q_p)
+    }
+}
+
+/// Multiply the signed field elements in the even index entries.
+/// lhs[2i], rhs[2i] must be signed 32-bit integers such that
+/// lhs[2i] * rhs[2i] lies in {-2^31P, ..., 2^31P}.
+/// The output will lie in {-P, ..., P} and be stored in output[2i + 1].
+#[inline]
+#[must_use]
+fn monty_mul_signed<MPAVX512: MontyParametersAVX512>(lhs: __m512i, rhs: __m512i) -> __m512i {
+    unsafe {
+        let prod = x86_64::_mm512_mul_epi32(lhs, rhs);
+        partial_monty_red_signed_to_signed::<MPAVX512>(prod)
     }
 }
 
