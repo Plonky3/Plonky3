@@ -12,7 +12,7 @@ use p3_field::{ExtensionField, Field, PrimeField};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::builder::{SymbolicInteraction, SymbolicLocalInteraction};
+use crate::builder::{SymbolicExclusiveInteraction, SymbolicInteraction, SymbolicLocalInteraction};
 use crate::protocol::LookupProtocol;
 use crate::symbolic::InteractionSymbolicBuilder;
 
@@ -57,6 +57,35 @@ pub struct Lookup<F: Field> {
     /// - Owns fraction column `column + 1` of the permutation trace.
     /// - Column `0` of the permutation trace is the shared accumulator.
     pub column: usize,
+    /// Optional per-row selector flags that make this column mutually exclusive.
+    ///
+    /// - Without flags, the column sums one fraction per tuple.
+    /// - Without flags, the denominator is the product of every tuple term, so degrees add.
+    /// - With flags, at most one fires per row and selects one branch.
+    /// - With flags, the denominator degree is the per-branch maximum, not the sum.
+    /// - With flags, there is exactly one flag per tuple.
+    ///
+    /// # Soundness
+    ///
+    /// - The flags must be boolean.
+    /// - The flags must sum to at most one on every row.
+    /// - The AIR must enforce both rules.
+    /// - This field only carries the flags.
+    pub flags: Option<Vec<SymbolicExpression<F>>>,
+}
+
+impl<F: Field> Lookup<F> {
+    /// Number of denominator slots this lookup occupies per row.
+    ///
+    /// - An additive lookup pins one denominator per tuple.
+    /// - An exclusive lookup multiplexes its branches into a single denominator.
+    pub(crate) const fn num_denoms(&self) -> usize {
+        if self.flags.is_some() {
+            1
+        } else {
+            self.elements.len()
+        }
+    }
 }
 
 /// All lookups for one AIR, with column indices assigned.
@@ -74,17 +103,22 @@ impl<F: Field> Lookups<F> {
     {
         let mut builder = InteractionSymbolicBuilder::<F, EF>::new(AirLayout::from_air(air));
         air.eval(&mut builder);
-        Self::from_interactions(builder.global_interactions(), builder.local_interactions())
+        Self::from_interactions(
+            builder.global_interactions(),
+            builder.local_interactions(),
+            builder.exclusive_interactions(),
+        )
     }
 
     /// Build from raw symbolic interactions.
     ///
-    /// Local interactions first, then global — matching the LogUp column order.
+    /// Local interactions first, then global, then exclusive — matching the LogUp column order.
     fn from_interactions(
         global: &[SymbolicInteraction<F>],
         local: &[SymbolicLocalInteraction<F>],
+        exclusive: &[SymbolicExclusiveInteraction<F>],
     ) -> Self {
-        let mut lookups = Vec::with_capacity(local.len() + global.len());
+        let mut lookups = Vec::with_capacity(local.len() + global.len() + exclusive.len());
         let mut col = 0;
 
         for i in local {
@@ -97,6 +131,7 @@ impl<F: Field> Lookups<F> {
                 // Intra-AIR lookups balance within one AIR, so they sit out the cross-AIR bound.
                 count_weight: 0,
                 column: col,
+                flags: None,
             });
             col += 1;
         }
@@ -109,6 +144,28 @@ impl<F: Field> Lookups<F> {
                 // Preserve the emitting interaction's weight for the height-bound check.
                 count_weight: i.count_weight,
                 column: col,
+                flags: None,
+            });
+            col += 1;
+        }
+
+        for i in exclusive {
+            // One branch per mutually-exclusive case: a flag, a payload, a signed count.
+            let flags = i.branches.iter().map(|b| b.flag.clone()).collect();
+            let elements = i.branches.iter().map(|b| b.fields.clone()).collect();
+            let multiplicities = i.branches.iter().map(|b| b.count.clone()).collect();
+
+            // At most one branch fires per row.
+            // So the per-row bound is the max over branches, not the sum.
+            let count_weight = i.branches.iter().map(|b| b.count_weight).max().unwrap_or(0);
+
+            lookups.push(Lookup {
+                kind: Kind::Global(i.bus_name.clone()),
+                elements,
+                multiplicities,
+                count_weight,
+                column: col,
+                flags: Some(flags),
             });
             col += 1;
         }
@@ -154,6 +211,13 @@ impl<F: Field> Lookups<F> {
 
         // Sort each lookup: locals straight through, globals into their bus bucket.
         for lookup in self.0 {
+            // Exclusive lookups already occupy one column under a distinct denominator algebra.
+            // Folding them as additive tuples would change their meaning.
+            // So pass them through untouched.
+            if lookup.flags.is_some() {
+                packed.push(lookup);
+                continue;
+            }
             match &lookup.kind {
                 Kind::Local => packed.push(lookup),
                 Kind::Global(name) => match buses.iter_mut().find(|(n, _)| n == name) {
@@ -376,7 +440,7 @@ mod tests {
                 count_weight,
             })
             .collect();
-        Lookups::from_interactions(&global, &[])
+        Lookups::from_interactions(&global, &[], &[])
     }
 
     /// One global interaction carrying a single degree-1 main-column payload.
@@ -397,7 +461,7 @@ mod tests {
         // Each interaction is identical; only their count drives the packing tests.
         let global: Vec<SymbolicInteraction<F>> =
             (0..count).map(|_| global_payload(bus, 1)).collect();
-        Lookups::from_interactions(&global, &[])
+        Lookups::from_interactions(&global, &[], &[])
     }
 
     /// Column indices must stay `0..len` for the fraction-column mapping to hold.
@@ -430,7 +494,7 @@ mod tests {
             tuples: vec![(vec![], SymbolicExpression::from(F::ONE))],
         }];
 
-        let lookups = Lookups::from_interactions(&global, &local);
+        let lookups = Lookups::from_interactions(&global, &local, &[]);
 
         //     index 0: local        → weight 0 (never crosses AIRs)
         //     index 1: global query → weight 1
@@ -541,7 +605,7 @@ mod tests {
             global_payload("a", 1),
             global_payload("b", 1),
         ];
-        let packed = Lookups::from_interactions(&global, &[]).pack_same_bus(&LogUpGadget, 16);
+        let packed = Lookups::from_interactions(&global, &[], &[]).pack_same_bus(&LogUpGadget, 16);
 
         // Each bus collapses to one column.
         // The two buses never share a column.
@@ -565,7 +629,8 @@ mod tests {
             global_payload("a", 1),
             global_payload("a", 1),
         ];
-        let packed = Lookups::from_interactions(&global, &local).pack_same_bus(&LogUpGadget, 3);
+        let packed =
+            Lookups::from_interactions(&global, &local, &[]).pack_same_bus(&LogUpGadget, 3);
 
         assert_eq!(packed.len(), 3);
         assert_eq!(packed[0].kind, Kind::Local);
@@ -583,7 +648,7 @@ mod tests {
             .iter()
             .map(|&w| global_payload("a", w))
             .collect();
-        let unpacked = Lookups::from_interactions(&global, &[]);
+        let unpacked = Lookups::from_interactions(&global, &[], &[]);
         let before = unpacked.total_count_weight();
 
         let packed = unpacked.pack_same_bus(&LogUpGadget, 5);
@@ -638,7 +703,7 @@ mod tests {
             )],
         }];
         let global = vec![global_payload("bus", 1), global_payload("bus", 0)];
-        let lookups = Lookups::from_interactions(&global, &local);
+        let lookups = Lookups::from_interactions(&global, &local, &[]);
 
         let json = serde_json::to_string(&lookups).unwrap();
         let decoded: Lookups<F> = serde_json::from_str(&json).unwrap();
