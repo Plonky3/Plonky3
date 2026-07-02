@@ -14,6 +14,49 @@ use alloc::vec::Vec;
 use p3_field::Field;
 use p3_multilinear_util::point::Point;
 
+/// One table's opened column values at the bound point, split into the two views the folder reads.
+///
+/// A borrowed view, so the verifier passes opened values without copying them.
+/// One instance describes the main trace.
+/// Another describes the preprocessed trace.
+#[derive(Clone, Copy, Debug)]
+pub struct TableOpening<'a, EF> {
+    /// Current-row value of each column, in column order.
+    pub local: &'a [EF],
+    /// Column indices whose next row the AIR reads.
+    pub next_columns: &'a [usize],
+    /// Successor value of each next-row column, aligned with the index list.
+    pub next_values: &'a [EF],
+}
+
+impl<'a, EF> TableOpening<'a, EF> {
+    /// Bundle one table's opened values into a folder-ready view.
+    ///
+    /// # Arguments
+    ///
+    /// - `local`: current-row value of each column, in column order.
+    /// - `next_columns`: column indices whose next row the AIR reads.
+    /// - `next_values`: successor value of each such column, aligned with `next_columns`.
+    #[must_use]
+    pub const fn new(local: &'a [EF], next_columns: &'a [usize], next_values: &'a [EF]) -> Self {
+        Self {
+            local,
+            next_columns,
+            next_values,
+        }
+    }
+
+    /// An empty opening, for a table the AIR does not declare.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            local: &[],
+            next_columns: &[],
+            next_values: &[],
+        }
+    }
+}
+
 /// The evaluation claims an AIR zerocheck reduces to, all at one point.
 ///
 /// A commitment scheme later opens this bundle against the trace commitment.
