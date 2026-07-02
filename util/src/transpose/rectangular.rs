@@ -217,10 +217,14 @@ pub fn transpose<T: Copy + Send + Sync>(
         // Use NEON-optimized path for 4-byte elements.
         //
         // This covers common field types like MontyField31.
-        if core::mem::size_of::<T>() == 4 {
+        //
+        // The alignment check matters as much as the size check: a type like
+        // `Complex<Mersenne31>` is 8 bytes but only 4-byte aligned, so it must
+        // not take the 8-byte path below, which assumes u64 alignment.
+        if core::mem::size_of::<T>() == 4 && core::mem::align_of::<T>() == 4 {
             // SAFETY:
             // - input/output lengths verified above
-            // - T is 4 bytes, matching u32 size and alignment
+            // - T is 4 bytes and 4-byte aligned, matching u32 size and alignment
             // - Pointers derived from valid slices
             unsafe {
                 transpose_neon_4b(
@@ -238,10 +242,10 @@ pub fn transpose<T: Copy + Send + Sync>(
         // This covers 64-bit field types like Goldilocks.
         // A 128-bit NEON register holds 2 u64 elements, so we use
         // pairs of registers per row and a 1-stage butterfly.
-        if core::mem::size_of::<T>() == 8 {
+        if core::mem::size_of::<T>() == 8 && core::mem::align_of::<T>() == 8 {
             // SAFETY:
             // - input/output lengths verified above
-            // - T is 8 bytes, matching u64 size and alignment
+            // - T is 8 bytes and 8-byte aligned, matching u64 size and alignment
             // - Pointers derived from valid slices
             unsafe {
                 transpose_neon_8b(
@@ -1897,6 +1901,13 @@ mod tests {
 
     use super::*;
 
+    /// A type with the same size/alignment mismatch as `Complex<Mersenne31>`:
+    /// 8 bytes, but only 4-byte aligned. Must not be routed through the 8-byte
+    /// NEON path, which assumes `u64` alignment.
+    #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+    #[repr(C, align(4))]
+    struct Size8Align4([u8; 8]);
+
     /// Naive reference implementation for correctness testing.
     fn transpose_reference<T: Copy + Default>(input: &[T], width: usize, height: usize) -> Vec<T> {
         // Allocate output buffer with same size as input.
@@ -2047,6 +2058,29 @@ mod tests {
 
             // Allocate output.
             let mut output = vec![0u8; width * height];
+
+            // Run transpose.
+            transpose(&input, &mut output, width, height);
+
+            // Verify against reference.
+            let expected = transpose_reference(&input, width, height);
+            prop_assert_eq!(output, expected);
+        }
+
+        #[test]
+        fn proptest_transpose_size8_align4((width, height) in dimension_strategy()) {
+            // Skip empty and very large matrices.
+            if width == 0 || height == 0 || width * height > 100_000 {
+                return Ok(());
+            }
+
+            // Create input with unique values.
+            let input: Vec<Size8Align4> = (0..width * height)
+                .map(|i| Size8Align4((i as u64).to_le_bytes()))
+                .collect();
+
+            // Allocate output.
+            let mut output = vec![Size8Align4::default(); width * height];
 
             // Run transpose.
             transpose(&input, &mut output, width, height);
