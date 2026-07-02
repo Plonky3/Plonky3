@@ -664,6 +664,46 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         self.0.truncate(mid);
     }
 
+    /// Sums out the prefix variable, reducing the polynomial by one variable.
+    ///
+    /// Computes:
+    /// ```text
+    /// p'(x') = p(0, x') + p(1, x')
+    /// ```
+    ///
+    /// This is the prefix-variable fix evaluated at `r = 0` and `r = 1` and added.
+    ///
+    /// One use is dropping the leading factor of an equality table.
+    /// Summing the boolean values of the leading variable collapses its factor to one:
+    /// ```text
+    /// sum over x of Eq((a, tail), (x, y)) = Eq(tail, y)
+    /// ```
+    ///
+    /// A constant polynomial has no prefix variable, so this is a no-op.
+    pub fn sum_prefix_var_mut(&mut self) {
+        let num_evals = self.num_evals();
+        if num_evals == 1 {
+            return;
+        }
+
+        let mid = num_evals / 2;
+        // Split into x_0 = 0 (mutable) and x_0 = 1 (read-only) halves.
+        let (p0, p1) = self.0.split_at_mut(mid);
+
+        if num_evals >= PARALLEL_THRESHOLD {
+            // Parallel: sum each low/high pair in place.
+            p0.par_iter_mut()
+                .zip(p1.par_iter())
+                .for_each(|(a0, &a1)| *a0 += a1);
+        } else {
+            // Sequential: sum each low/high pair in place.
+            p0.iter_mut().zip(p1.iter()).for_each(|(a0, &a1)| *a0 += a1);
+        }
+
+        // Discard the second half; the first half now holds the summed result.
+        self.0.truncate(mid);
+    }
+
     /// Fixes the suffix variable at a challenge value, returning a folded polynomial.
     ///
     /// Computes:
@@ -984,6 +1024,27 @@ pub(crate) mod test {
         evals.0[1] = F::from_u64(5);
 
         assert_eq!(evals.0[1], F::from_u64(5));
+    }
+
+    #[test]
+    fn test_sum_prefix_var_mut() {
+        let mut evals = Poly::new((1..=8).map(F::from_u64).collect());
+
+        evals.sum_prefix_var_mut();
+
+        assert_eq!(
+            evals.as_slice(),
+            &[
+                F::from_u64(1 + 5),
+                F::from_u64(2 + 6),
+                F::from_u64(3 + 7),
+                F::from_u64(4 + 8),
+            ],
+        );
+
+        let mut constant = Poly::new(vec![F::from_u64(11)]);
+        constant.sum_prefix_var_mut();
+        assert_eq!(constant.as_slice(), &[F::from_u64(11)]);
     }
 
     #[test]

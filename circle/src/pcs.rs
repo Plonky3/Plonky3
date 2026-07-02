@@ -197,15 +197,18 @@ where
             mat.as_cow().cfft_perm_rows()
         } else {
             // The committed matrix is the LDE of a polynomial of `committed_domain.log_n -
-            // log_blowup` coefficients, so interpolating it leaves zeros above that index.
-            // Truncating to the original coefficient count lets `domain` be smaller than the
+            // log_blowup` coefficients. The first `2^log_sub` CFFT-ordered rows of the LDE
+            // are exactly the CFFT-ordered evaluations over the smaller `sub_domain` of that
+            // size (see `eval_at_point_on_subdomain_prefix_matches_full`), so interpolating
+            // that prefix instead of the full committed matrix recovers the same coefficients
+            // at `1 / blowup` of the CFFT work. This also lets `domain` be smaller than the
             // committed LDE (e.g. a quotient domain when `log_blowup` exceeds the quotient
             // degree), which `extrapolate` would reject.
-            let log_orig = committed_domain.log_n - self.fri_params.log_blowup;
-            let mut coeffs =
-                CircleEvaluations::from_cfft_order(committed_domain, mat).interpolate();
-            let width = coeffs.width();
-            coeffs.values.truncate((1 << log_orig) * width);
+            let log_sub = committed_domain.log_n - self.fri_params.log_blowup;
+            let sub_domain = CircleDomain::new(log_sub, committed_domain.shift);
+            let coeffs =
+                CircleEvaluations::from_cfft_order(sub_domain, mat.split_rows(1 << log_sub).0)
+                    .interpolate();
             CircleEvaluations::evaluate(domain, coeffs)
                 .to_cfft_order()
                 .as_cow()

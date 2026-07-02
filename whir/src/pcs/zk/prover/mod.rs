@@ -18,11 +18,10 @@ use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, PackedValue, PrimeCharacteristicRing, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrixView;
 use p3_maybe_rayon::prelude::*;
-use p3_multilinear_util::eq_batch::eval_eq_batch;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::split_eq::SplitEq;
 use p3_sumcheck::constraints::statement::SelectStatement;
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
@@ -136,40 +135,47 @@ where
         //
         //     W = sum_i alpha^i eq(z_i, .)        claim = sum_i alpha^i v_i
         let alpha: EF = challenger.sample_algebra_element();
-        let mut weights = EF::zero_vec(1 << num_variables);
+        let coeffs: Vec<EF> = alpha.powers().collect_n(claims.len());
         let mut claim = EF::ZERO;
-        if !claims.is_empty() {
-            let coeffs: Vec<EF> = alpha.powers().collect_n(claims.len());
-            // All claim tables land in one batched parallel sweep.
-            // Row `var` of the point matrix holds variable `var` across claims.
-            let mut points_flat = Vec::with_capacity(num_variables * claims.len());
-            for var in 0..num_variables {
-                for (point, _) in claims {
-                    assert_eq!(point.num_variables(), num_variables);
-                    points_flat.push(point.as_slice()[var]);
-                }
-            }
-            eval_eq_batch::<F, EF, false>(
-                RowMajorMatrixView::new(&points_flat, claims.len()),
-                &mut weights,
-                &coeffs,
-            );
-            for ((_, eval), coeff) in claims.iter().zip(&coeffs) {
-                claim += *coeff * *eval;
-            }
+        for ((point, eval), coeff) in claims.iter().zip(&coeffs) {
+            assert_eq!(point.num_variables(), num_variables);
+            claim += *coeff * *eval;
         }
-        // Lift the base-field message into the extension once, in parallel.
-        let evals: Vec<EF> = prover_data
-            .message
-            .as_slice()
-            .par_iter()
-            .map(|&v| v.into())
-            .collect();
-        let product = ProductPolynomial::new_unpacked(
-            VariableOrder::Prefix,
-            Poly::new(evals),
-            Poly::new(weights),
-        );
+
+        // Build the weight and evaluation polynomials in SIMD-packed form
+        // whenever the hypercube is large enough, mirroring the non-ZK
+        // sumcheck's packed construction; the eq table is accumulated
+        // per-claim through the split-eq factorization instead of a full
+        // 2^n scalar materialization.
+        let k_pack = log2_strict_usize(F::Packing::WIDTH);
+        let product = if num_variables >= k_pack {
+            let mut weights = Poly::<EF::ExtensionPacking>::zero(num_variables - k_pack);
+            for ((point, _), &coeff) in claims.iter().zip(&coeffs) {
+                SplitEq::new_packed(point, coeff)
+                    .accumulate_into_packed(weights.as_mut_slice(), None);
+            }
+            let evals = Poly::new(
+                F::Packing::pack_slice(prover_data.message.as_slice())
+                    .par_iter()
+                    .map(|&p| EF::ExtensionPacking::from(p))
+                    .collect(),
+            );
+            ProductPolynomial::new_packed(VariableOrder::Prefix, evals, weights)
+        } else {
+            let mut weights = Poly::<EF>::zero(num_variables);
+            for ((point, _), &coeff) in claims.iter().zip(&coeffs) {
+                SplitEq::new_unpacked(point, coeff).accumulate_into(weights.as_mut_slice(), None);
+            }
+            let evals = Poly::new(
+                prover_data
+                    .message
+                    .as_slice()
+                    .par_iter()
+                    .map(|&v| v.into())
+                    .collect(),
+            );
+            ProductPolynomial::new_unpacked(VariableOrder::Prefix, evals, weights)
+        };
         let sumcheck_prover = SumcheckProver::new(product, claim);
 
         // Initial masked sumcheck batch.

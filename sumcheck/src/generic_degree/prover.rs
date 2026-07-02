@@ -45,6 +45,15 @@ pub trait RoundProver<EF> {
     /// - The transcript record, which carries the claimed sum.
     /// - The vector of challenges sampled by the verifier.
     ///
+    /// # Transcript
+    ///
+    /// The caller must observe `claimed_sum` into the challenger before calling,
+    /// so that the round challenges depend on it. This method observes only the
+    /// round polynomials and any proof-of-work witnesses. The verifier observes
+    /// the claimed sum at the matching point in [`GenericDegreeProof::verify`],
+    /// so prover and verifier transcripts agree only when the caller mirrors that
+    /// observe here.
+    ///
     /// # Panics
     ///
     /// Panics if `degree` is zero.

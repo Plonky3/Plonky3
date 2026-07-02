@@ -18,12 +18,13 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
-use p3_sumcheck::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundProver};
+use p3_sumcheck::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundPolyInterpolator};
 use p3_util::log2_strict_usize;
 use thiserror::Error;
 
 use crate::folder::MultilinearFolder;
 use crate::opening::OpeningClaims;
+use crate::packed_ext::PackedExt;
 use crate::rounds::RoundStateBase;
 use crate::selectors::BoundaryEvals;
 
@@ -215,7 +216,14 @@ impl<'a, A> AirZerocheck<'a, A> {
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
             + for<'b> Air<MultilinearFolder<'b, F, F::Packing, EF::ExtensionPacking>>
             + for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + Air<SymbolicAirBuilder<F, EF>>,
+            + for<'b> Air<
+                MultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, EF::ExtensionPacking>,
+                    PackedExt<F, EF::ExtensionPacking>,
+                >,
+            > + Air<SymbolicAirBuilder<F, EF>>,
         EF::ExtensionPacking: From<EF> + From<F::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -227,20 +235,29 @@ impl<'a, A> AirZerocheck<'a, A> {
         // Per-round sumcheck degree from the symbolic constraint degree.
         let degree = self.sumcheck_degree::<F, EF>(layout);
 
+        // The optimized prover strips one degree from each round polynomial.
+        // That leaves one fewer internal evaluation, so the constraint must be at least degree one.
+        // A degree-zero constraint is constant and has no meaningful zerocheck.
+        assert!(
+            degree >= 2,
+            "zerocheck requires a constraint of per-variable degree at least one"
+        );
+
         // Bind the public values before any challenge depends on them.
         // The trace commitment must already be in the transcript.
         challenger.observe_algebra_slice(public_values);
 
         // Draw the batching scalar then the zerocheck point, in that fixed order.
         let (alpha, tau) = sample_zerocheck_challenges(challenger, log_height);
+        let tau = Point::new(tau);
 
         let state = RoundStateBase::<'_, _, F, EF>::new(
             self.air,
             public_values,
             alpha,
-            &Point::new(tau),
+            &tau,
             trace,
-            degree,
+            degree - 1,
         );
 
         // Bind the transcript to the claimed sum so the challenges depend on the statement.
@@ -252,9 +269,16 @@ impl<'a, A> AirZerocheck<'a, A> {
             pow_witnesses: Vec::with_capacity(if self.pow_bits > 0 { log_height } else { 0 }),
         };
         let mut challenges = Vec::with_capacity(log_height);
+        let mut eq_prefix = EF::ONE;
+        let mut claim = EF::ZERO;
+        let interpolator = RoundPolyInterpolator::new(degree - 1);
 
         let evals = state.round_poly();
-        challenger.observe_algebra_slice(&evals);
+
+        let (standard_evals, q_unweighted_sum) =
+            standard_round_from_q_evals(&interpolator, &evals, claim, eq_prefix, tau.as_slice()[0]);
+
+        challenger.observe_algebra_slice(&standard_evals);
 
         // Optional proof-of-work; raises the cost of grinding a favorable challenge.
         if self.pow_bits > 0 {
@@ -262,17 +286,36 @@ impl<'a, A> AirZerocheck<'a, A> {
         }
 
         let r: EF = challenger.sample_algebra_element();
+        claim = interpolator.eval(&evals, q_unweighted_sum, r);
+        eq_prefix *= Point::eval_eq(&[tau.as_slice()[0]], &[r]);
         let mut state = state.fold(r);
 
-        sumcheck.round_polys.push(evals);
+        sumcheck.round_polys.push(standard_evals);
         challenges.push(r);
 
-        let (proof_rest, point_rest) =
-            state.prove(challenger, log_height - 1, degree, self.pow_bits, EF::ZERO);
-        challenges.extend_from_slice(point_rest.as_slice());
+        for round in 1..log_height {
+            let evals = state.round_poly();
+            let (standard_evals, unweighted_sum) = standard_round_from_q_evals(
+                &interpolator,
+                &evals,
+                claim,
+                eq_prefix,
+                tau.as_slice()[round],
+            );
+            challenger.observe_algebra_slice(&standard_evals);
 
-        sumcheck.round_polys.extend(proof_rest.round_polys);
-        sumcheck.pow_witnesses.extend(proof_rest.pow_witnesses);
+            if self.pow_bits > 0 {
+                sumcheck.pow_witnesses.push(challenger.grind(self.pow_bits));
+            }
+
+            let r: EF = challenger.sample_algebra_element();
+            claim = interpolator.eval(&evals, unweighted_sum, r);
+            eq_prefix *= Point::eval_eq(&[tau.as_slice()[round]], &[r]);
+            state.fold(r);
+
+            sumcheck.round_polys.push(standard_evals);
+            challenges.push(r);
+        }
 
         let (local, next, _) = state.evals();
         let next = self
@@ -518,9 +561,91 @@ pub struct ZerocheckReduction<EF> {
     pub final_sum: EF,
 }
 
+/// Rebuild the verifier-facing round message from the prover's internal evaluations.
+///
+/// # Overview
+///
+/// The optimized prover evaluates an internal polynomial with the active equality
+/// factor stripped out, which lowers its degree by one:
+/// ```text
+/// q(X) = sum over x of eq(suffix, x) * g(prefix, X, x)
+/// ```
+///
+/// The verifier still expects the full weighted round polynomial:
+/// ```text
+/// s(X) = eq_prefix * eq(tau, X) * q(X)
+/// ```
+///
+/// This restores `s` from the transmitted internal evaluations.
+///
+/// # Why this lives here
+///
+/// The weighting and the inter-round claim relation are specific to this zerocheck.
+/// The generic interpolator stays unaware of equality factors, so this glue stays out of it.
+///
+/// Node one is dropped from the message because the verifier recovers it from the claim.
+///
+/// # Arguments
+///
+/// - `interpolator`: barycentric helper for the internal degree, reused across rounds.
+/// - `evals`: internal evaluations at nodes `0, 2, 3, ..., deg - 1`.
+/// - `claim`: previous round's reduced value, tying `q(0)` and `q(1)` together.
+/// - `eq_prefix`: product of equality factors at the already-bound challenges.
+/// - `tau`: this round's zerocheck point coordinate; must be nonzero.
+///
+/// # Returns
+///
+/// - the weighted evaluations `s(0), s(2), ..., s(deg)` sent to the verifier;
+/// - the unweighted sum `q(0) + q(1)` used to reduce the internal claim next round.
+///
+/// # Panics
+///
+/// Panics if `tau` is zero, since recovering `q(1)` divides by it.
+/// The caller samples `tau` from the nonzero elements, so this does not occur.
+fn standard_round_from_q_evals<EF>(
+    interpolator: &RoundPolyInterpolator<EF>,
+    evals: &[EF],
+    claim: EF,
+    eq_prefix: EF,
+    tau: EF,
+) -> (Vec<EF>, EF)
+where
+    EF: Field,
+{
+    // Recover the dropped node one from the inter-round relation.
+    //
+    //     claim = (1 - tau) * q(0) + tau * q(1)
+    //  => q(1)  = (claim - (1 - tau) * q(0)) / tau
+    //
+    // The unweighted sum q(0) + q(1) is what reduces the internal claim next round.
+    let unweighted_sum = evals[0] + (claim - (EF::ONE - tau) * evals[0]) * tau.inverse();
+
+    // The weighted message carries one extra degree from the equality factor.
+    // Extrapolate the internal polynomial to that top node.
+    let degree = evals.len() + 1;
+    let last = interpolator.eval(evals, unweighted_sum, EF::from_usize(degree));
+
+    // Weight every transmitted node, skipping node one as the verifier rebuilds it.
+    //
+    //     nodes : 0, 2, 3, ..., deg
+    //     values: q(0), q(2), ..., q(deg - 1), q(deg)
+    //     s(node) = eq_prefix * eq(tau, node) * q(node)
+    let standard_evals = (0..=degree)
+        .filter(|&node| node != 1)
+        .zip(evals.iter().copied().chain(core::iter::once(last)))
+        .map(|(node, q)| eq_prefix * Point::eval_eq(&[tau], &[EF::from_usize(node)]) * q)
+        .collect();
+
+    (standard_evals, unweighted_sum)
+}
+
 /// Draw the constraint-batching scalar and the zerocheck point, in that order.
 ///
 /// Prover and verifier call this identically so their transcripts stay in lockstep.
+///
+/// Each zerocheck point coordinate is drawn nonzero.
+/// The prover divides by a coordinate when rebuilding a round message, so a zero would divide by zero.
+/// Resampling on both sides keeps the transcripts aligned, and a zero draw has negligible probability.
 fn sample_zerocheck_challenges<F, EF, Challenger>(
     challenger: &mut Challenger,
     log_height: usize,
@@ -530,9 +655,18 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F>,
 {
+    // The batching scalar may take any value.
     let alpha = challenger.sample_algebra_element();
+
+    // Draw each point coordinate, resampling past a zero.
     let tau = (0..log_height)
-        .map(|_| challenger.sample_algebra_element())
+        .map(|_| {
+            let mut coord: EF = challenger.sample_algebra_element();
+            while coord.is_zero() {
+                coord = challenger.sample_algebra_element();
+            }
+            coord
+        })
         .collect();
     (alpha, tau)
 }
@@ -703,6 +837,39 @@ mod tests {
         for round in &proof.sumcheck.round_polys {
             assert_eq!(round.len(), degree);
         }
+    }
+
+    #[test]
+    fn zerocheck_round_trip_with_grinding() {
+        // The prover inlines its own grind / observe / sample loop per round.
+        // Every test above runs with pow_bits = 0, so the grinding branch is otherwise unexercised.
+        //
+        // Fixture state:
+        //
+        //     trace height : 8  -> log_height = 3 rounds
+        //     pow_bits     : 4  -> one witness ground per round
+        //
+        // Invariant:
+        //
+        //     a valid trace proves and verifies, and the proof carries one witness per round.
+        let n = 8;
+        let pow_bits = 4;
+        let trace = fib_trace(n);
+        let pis = fib_public_values(n);
+        let zerocheck = AirZerocheck::new(&FibAir, pow_bits);
+
+        // Prove with grinding enabled.
+        let mut prover_challenger = fresh_challenger();
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+
+        // Grinding emits exactly one witness per sumcheck round.
+        assert_eq!(proof.sumcheck.pow_witnesses.len(), log2_strict_usize(n));
+
+        // The verifier re-checks each round's witness while replaying the transcript.
+        let mut verifier_challenger = fresh_challenger();
+        zerocheck
+            .verify::<F, EF, _>(&proof, log2_strict_usize(n), &pis, &mut verifier_challenger)
+            .expect("valid trace must verify with grinding");
     }
 
     #[test]

@@ -11,6 +11,7 @@ use p3_util::log2_strict_usize;
 use crate::commit::commit_trace;
 use crate::config::{Commitment, MultiStarkConfig};
 use crate::folder::MultilinearFolder;
+use crate::packed_ext::PackedExt;
 use crate::proof::{MultiStarkProof, single_table_protocol};
 use crate::zerocheck::AirZerocheck;
 
@@ -64,7 +65,14 @@ where
                 <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking,
             >,
         > + for<'b> Air<MultilinearFolder<'b, C::Val, C::Challenge, C::Challenge>>
-        + Air<SymbolicAirBuilder<C::Val, C::Challenge>>
+        + for<'b> Air<
+            MultilinearFolder<
+                'b,
+                C::Val,
+                PackedExt<C::Val, <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking>,
+                PackedExt<C::Val, <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking>,
+            >,
+        > + Air<SymbolicAirBuilder<C::Val, C::Challenge>>
         + BaseAir<C::Val>,
     <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking:
         From<C::Challenge> + From<<C::Val as Field>::Packing>,

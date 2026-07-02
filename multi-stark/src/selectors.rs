@@ -2,7 +2,7 @@
 
 use core::ops::{AddAssign, Sub};
 
-use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
+use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 
 /// Boundary selectors evaluated at a sumcheck challenge.
 #[derive(Copy, Clone, Debug)]
@@ -234,6 +234,69 @@ impl<EF: Field> BoundaryEvals<EF> {
         (
             boundary,
             Self::new(
+                hi_boundary.first - boundary.first,
+                hi_boundary.last - boundary.last,
+                hi_boundary.transition - boundary.transition,
+            ),
+        )
+    }
+
+    /// The full selector values at a residual-cube row, combined with the
+    /// bound-coordinate prefix, spread across `WIDTH` SIMD lanes — one lane
+    /// per consecutive residual row starting at `row`.
+    ///
+    /// Same construction as [`Self::from_row_with_prefix`], but every
+    /// per-row indicator is built lane-by-lane via
+    /// [`PackedFieldExtension::from_ext_fn`] instead of once for a single row.
+    fn from_ext_packed_row_with_prefix<F>(
+        row: usize,
+        height: usize,
+        prefix: Self,
+    ) -> BoundaryEvals<EF::ExtensionPacking>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        BoundaryEvals::new(
+            EF::ExtensionPacking::from_ext_fn(|lane| prefix.first * EF::from_bool(row + lane == 0)),
+            EF::ExtensionPacking::from_ext_fn(|lane| {
+                prefix.last * EF::from_bool(row + lane + 1 == height)
+            }),
+            EF::ExtensionPacking::from_ext_fn(|lane| {
+                let suffix_last = EF::from_bool(row + lane + 1 == height);
+                EF::from_bool(row + lane + 1 < height) + suffix_last * prefix.transition
+            }),
+        )
+    }
+
+    /// Packed `(value, per-step difference)` pair for folding one variable,
+    /// with a bound-coordinate prefix — the SIMD-packed extension-field twin
+    /// of [`Self::row_pair_with_prefix`].
+    ///
+    /// # Arguments
+    ///
+    /// - `row`: index of the first low-half row in this packed block.
+    /// - `half`: distance from a low row to its matching high row.
+    /// - `height`: number of rows in the residual cube.
+    /// - `prefix`: partial products over the coordinates bound so far.
+    pub(super) fn row_pair_with_prefix_packed<F>(
+        row: usize,
+        half: usize,
+        height: usize,
+        prefix: Self,
+    ) -> (
+        BoundaryEvals<EF::ExtensionPacking>,
+        BoundaryEvals<EF::ExtensionPacking>,
+    )
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        let boundary = Self::from_ext_packed_row_with_prefix::<F>(row, height, prefix);
+        let hi_boundary = Self::from_ext_packed_row_with_prefix::<F>(row + half, height, prefix);
+        (
+            boundary,
+            BoundaryEvals::new(
                 hi_boundary.first - boundary.first,
                 hi_boundary.last - boundary.last,
                 hi_boundary.transition - boundary.transition,

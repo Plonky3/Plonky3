@@ -14,6 +14,7 @@ pub mod config;
 pub mod folder;
 pub mod metadata;
 pub mod opening;
+pub mod packed_ext;
 pub mod proof;
 pub mod prover;
 pub mod rounds;

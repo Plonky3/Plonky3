@@ -27,7 +27,7 @@ use p3_field::{
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::constraints::statement::EqStatement;
+use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
 use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::product_polynomial::ProductPolynomial;
@@ -414,6 +414,45 @@ where
     Constraint::new(rng.random(), k, vec![Statements::Eq(eq)])
 }
 
+/// Benches folding a large `SelectStatement` (STIR-query-shaped) into an
+/// unpacked weight accumulator, isolated from any round-folding cost.
+fn bench_combine<B: BenchField>(c: &mut Criterion)
+where
+    StandardUniform: Distribution<B::F> + Distribution<B::EF>,
+{
+    let mut group = c.benchmark_group(format!("sumcheck/{}/combine", B::NAME));
+    group.sample_size(10);
+
+    let k = 20;
+    let n = 80;
+    let mut rng = rng_for(0x000C, k);
+
+    let evals = rand_ext::<B>(&mut rng, k);
+    let weights = Poly::<B::EF>::new(vec![B::EF::ZERO; 1 << k]);
+    let poly =
+        ProductPolynomial::<B::F, B::EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
+
+    let mut statement = SelectStatement::<B::F, B::EF>::initialize(k);
+    for _ in 0..n {
+        statement.add_constraint(rng.random(), rng.random());
+    }
+    let constraint = Constraint::new(rng.random(), k, vec![Statements::Select(statement)]);
+
+    group.throughput(Throughput::Elements(1 << k));
+    group.bench_function("select", |b| {
+        b.iter_batched(
+            || (poly.clone(), B::EF::ZERO, constraint.clone()),
+            |(mut poly, mut sum, constraint)| {
+                poly.combine(&mut sum, &constraint);
+                black_box((poly, sum));
+            },
+            BatchSize::LargeInput,
+        );
+    });
+
+    group.finish();
+}
+
 /// Benches the multi-round driver folding every variable to a constant.
 ///
 /// Two arms isolate the cost of absorbing a constraint:
@@ -600,6 +639,12 @@ fn prover(c: &mut Criterion) {
     bench_prover::<KoalaBear4>(c);
 }
 
+/// Select-statement combine for every field.
+fn combine(c: &mut Criterion) {
+    bench_combine::<BabyBear4>(c);
+    bench_combine::<KoalaBear4>(c);
+}
+
 /// Stacked-layout handoff for every field.
 fn layout(c: &mut Criterion) {
     bench_layout::<BabyBear4>(c);
@@ -613,6 +658,7 @@ criterion_group!(
     dot_product,
     product_round,
     prover,
+    combine,
     layout,
 );
 criterion_main!(benches);
