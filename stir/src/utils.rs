@@ -140,8 +140,46 @@ pub fn degree_correction_poly<F: Field>(r_comb: F, gap: usize) -> Vec<F> {
 }
 
 /// Apply `DegCor(d*, r_comb, f, d)` with `gap = d* - d`.
+///
+/// Equivalent to `multiply_polys(poly, &degree_correction_poly(r_comb, gap))`, but computed in
+/// `O(poly.len() + gap)` instead of `O(poly.len() * gap)` by exploiting the multiplier's
+/// geometric-series structure: `1 + rX + ... + r^gap X^gap = (1 - r^{gap+1} X^{gap+1}) / (1 - rX)`.
+///
+/// Let `A(X) = poly(X) / (1 - rX)` as a power series, so `a_k = poly[k] + r * a_{k-1}`. Then
+/// `poly(X) * (1 + rX + ... + r^gap X^gap) = A(X) - r^{gap+1} X^{gap+1} A(X)`, i.e.
+/// `result[k] = a_k - r^{gap+1} * a_{k - gap - 1}`.
 pub fn degree_correct<F: Field>(poly: &[F], r_comb: F, gap: usize) -> Vec<F> {
-    multiply_polys(poly, &degree_correction_poly(r_comb, gap))
+    if poly.is_empty() {
+        return vec![];
+    }
+
+    let n = poly.len();
+    let len = n + gap;
+
+    let mut a = Vec::with_capacity(len);
+    let mut acc = F::ZERO;
+    for k in 0..len {
+        let p_k = poly.get(k).copied().unwrap_or(F::ZERO);
+        acc = p_k + r_comb * acc;
+        a.push(acc);
+    }
+
+    let r_pow = r_comb.exp_u64((gap + 1) as u64);
+    let mut result: Vec<F> = (0..len)
+        .map(|k| {
+            if k > gap {
+                a[k] - r_pow * a[k - gap - 1]
+            } else {
+                a[k]
+            }
+        })
+        .collect();
+
+    while result.last() == Some(&F::ZERO) && result.len() > 1 {
+        result.pop();
+    }
+
+    result
 }
 
 /// Evaluate the degree-correction factor at a point and multiply it into `value`.
@@ -436,11 +474,26 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
                 // Barycentric Lagrange eval: use precomputed weights (cancellation of g^{j*(k-1)})
                 // num = sum_l w_l * ys_j[l] / (beta - gj * xs_0[l])
                 // den = sum_l w_l / (beta - gj * xs_0[l])
+                //
+                // The `arity` denominators are batch-inverted via Montgomery's trick (one EF
+                // inversion plus O(arity) multiplications) instead of `arity` separate divisions.
+                let diffs: Vec<EF> = (0..arity)
+                    .map(|l| beta - EF::from(gj * xs_0[l]))
+                    .collect();
+                let mut prefix = Vec::with_capacity(arity);
+                let mut running = EF::ONE;
+                for &diff in &diffs {
+                    prefix.push(running);
+                    running *= diff;
+                }
+                let mut inv_running = running.inverse();
+
                 let mut num = EF::ZERO;
                 let mut den = EF::ZERO;
-                for l in 0..arity {
-                    let diff = beta - EF::from(gj * xs_0[l]);
-                    let term = EF::from(barycentric_weights[l]) / diff;
+                for l in (0..arity).rev() {
+                    let inv_diff = inv_running * prefix[l];
+                    inv_running *= diffs[l];
+                    let term = EF::from(barycentric_weights[l]) * inv_diff;
                     num += term * ys_j[l];
                     den += term;
                 }
@@ -641,5 +694,21 @@ mod tests {
         ];
         let result = lagrange_eval_at(&xs, &ys, EF::from(F::from_u64(4)));
         assert_eq!(result, EF::from(F::from_u64(16)));
+    }
+
+    #[test]
+    fn test_degree_correct_matches_naive_multiply() {
+        let r_comb = F::from_u64(7);
+        for poly_len in [0, 1, 2, 5, 8] {
+            for gap in [0, 1, 3, 6] {
+                let poly: Vec<F> = (0..poly_len).map(|i| F::from_u64(i as u64 + 1)).collect();
+                let expected = multiply_polys(&poly, &degree_correction_poly(r_comb, gap));
+                let actual = degree_correct(&poly, r_comb, gap);
+                assert_eq!(
+                    actual, expected,
+                    "mismatch for poly_len={poly_len}, gap={gap}"
+                );
+            }
+        }
     }
 }
