@@ -10,17 +10,22 @@ use crate::config::{Commitment, MultiStarkConfig, PcsProof};
 
 /// A complete multilinear AIR proof.
 ///
-/// The three parts are checked in order against one shared transcript:
-/// - the commitment binds the trace columns.
+/// The parts are checked in order against one shared transcript:
+/// - the commitment binds the main trace columns.
 /// - the sumcheck reduces the AIR constraint to one bound-point claim.
-/// - the opening proves the trace columns at that point.
+/// - the main opening proves the main trace columns at that point.
+/// - the preprocessed opening, when present, proves the preprocessed columns at the same point.
 pub struct MultiStarkProof<C: MultiStarkConfig> {
-    /// Commitment to the trace columns.
+    /// Commitment to the main trace columns.
     pub commitment: Commitment<C>,
     /// Zerocheck sumcheck transcript for the alpha-batched constraint.
     pub sumcheck: GenericDegreeProof<C::Val, C::Challenge>,
-    /// Commitment opening at the bound sumcheck point.
+    /// Main-trace commitment opening at the bound sumcheck point.
     pub opening: PcsProof<C>,
+    /// Preprocessed-trace commitment opening at the same point.
+    ///
+    /// `None` when the AIR declares no preprocessed columns.
+    pub preprocessed_opening: Option<PcsProof<C>>,
 }
 
 /// Build the single-table opening protocol shared by the prover and verifier.

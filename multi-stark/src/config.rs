@@ -26,8 +26,25 @@ pub trait MultiStarkConfig {
     /// Multilinear commitment scheme over the base field.
     type Pcs: MultilinearPcs<Self::Challenge, Self::Challenger, Val = Self::Val>;
 
-    /// Borrow the commitment scheme.
+    /// Borrow the commitment scheme for the main trace.
     fn pcs(&self) -> &Self::Pcs;
+
+    /// Borrow the commitment scheme for the preprocessed trace.
+    ///
+    /// The preprocessed trace stacks a different column count than the main trace.
+    /// Its stacked polynomial therefore has a different arity.
+    /// That arity needs its own scheme instance.
+    ///
+    /// Called only during setup, and only when the AIR declares preprocessed columns.
+    /// Configurations for AIRs without a preprocessed trace need not override it.
+    ///
+    /// # Panics
+    ///
+    /// The default panics.
+    /// A configuration proving an AIR with preprocessed columns must override it.
+    fn preprocessed_pcs(&self) -> &Self::Pcs {
+        unimplemented!("this configuration does not provide a preprocessed commitment scheme")
+    }
 
     /// Smallest table arity the commitment scheme accepts without padding.
     ///
