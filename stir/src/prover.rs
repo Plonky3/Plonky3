@@ -13,6 +13,7 @@ use p3_commit::{BatchOpening, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{BasedVectorSpace, ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
 use crate::config::StirConfig;
@@ -351,11 +352,14 @@ fn commit_as_fiber_matrix<EF: Field, M: Mmcs<EF>>(
     let arity = 1 << log_arity;
     let new_height = codeword.len() / arity;
     let mut matrix = vec![EF::ZERO; codeword.len()];
-    for j in 0..new_height {
-        for k in 0..arity {
-            matrix[j * arity + k] = codeword[j + k * new_height];
-        }
-    }
+    matrix
+        .par_chunks_mut(arity)
+        .enumerate()
+        .for_each(|(j, row)| {
+            for (k, slot) in row.iter_mut().enumerate() {
+                *slot = codeword[j + k * new_height];
+            }
+        });
     mmcs.commit_matrix(RowMajorMatrix::new(matrix, arity))
 }
 

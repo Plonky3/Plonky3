@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 use p3_field::{
     ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
 };
+use p3_maybe_rayon::prelude::*;
 
 /// Evaluate a polynomial at a point using Horner's method.
 ///
@@ -357,6 +358,7 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
             .collect();
 
         (0..new_height)
+            .into_par_iter()
             .map(|j| {
                 let lo = codeword[j];
                 let hi = codeword[j + new_height];
@@ -418,6 +420,7 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
         };
 
         (0..new_height)
+            .into_par_iter()
             .map(|j| {
                 let gj = g_powers[j];
                 // xs_j[l] = gj * xs_0[l]
