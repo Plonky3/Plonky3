@@ -14,6 +14,7 @@ pub use mds::*;
 pub use poseidon2::*;
 
 pub mod poseidon1;
+pub mod poseidon2_batched;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 mod aarch64_neon;
