@@ -137,6 +137,48 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     where
         Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
     {
+        // Draw the local-frame opening point as powers of one challenge.
+        // This is the standalone-PCS convention: the verifier picks the evaluation point.
+        let point = Point::expand_from_univariate(
+            challenger.sample_algebra_element(),
+            self.num_variables_table(table_idx),
+        );
+        self.add_claim_at(table_idx, batch, &point, evals, challenger)
+    }
+
+    /// Records an opening claim at a prescribed point.
+    ///
+    /// The caller supplies the local-frame opening point instead of sampling it.
+    /// An outer protocol that fixes the point opens its columns through this entry.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point.
+    /// - Claimed evaluations matching the batch shape.
+    /// - Fiat-Shamir transcript.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error when the evaluations do not match the requested shape.
+    ///
+    /// # Panics
+    ///
+    /// - At least one current or next column must be requested.
+    /// - Every column index must be in range for this table.
+    /// - The point must carry one coordinate per table variable.
+    pub fn add_claim_at<Ch>(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+        challenger: &mut Ch,
+    ) -> Result<(), SumcheckError>
+    where
+        Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+    {
         let placement = self.placement(table_idx);
         // Split the request into its two column groups.
         let current = batch.current();
@@ -147,6 +189,9 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
             !batch.is_empty(),
             "opening schedule must name at least one column"
         );
+        // The point lives in the table's local frame.
+        // It carries one coordinate per variable.
+        assert_eq!(point.num_variables(), self.num_variables_table(table_idx));
         // The evaluations come from the proof, so a shape mismatch is a malformed
         // proof and must be rejected rather than aborting the verifier.
         if !batch.has_same_shape(evals) {
@@ -167,12 +212,6 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         assert!(
             next.iter()
                 .all(|&poly_idx| poly_idx < placement.num_polys())
-        );
-
-        // Sample the local-frame opening point from the transcript.
-        let point = Point::expand_from_univariate(
-            challenger.sample_algebra_element(),
-            self.num_variables_table(table_idx),
         );
 
         // Absorb the evals in the same current-then-next order as the prover.
@@ -196,7 +235,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
 
         // Store the batch under this table's claim list.
         self.claim_map[table_idx].push(VerifierMultiClaim::new(
-            point,
+            point.clone(),
             current_openings,
             next_openings,
         ));

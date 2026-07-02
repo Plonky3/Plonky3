@@ -33,7 +33,11 @@ tracing.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
+p3-dft.workspace = true
+p3-merkle-tree.workspace = true
 p3-poseidon2-air.workspace = true
+p3-symmetric.workspace = true
+p3-whir.workspace = true
 rand = { workspace = true }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }

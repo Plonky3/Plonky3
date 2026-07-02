@@ -398,12 +398,66 @@ impl<'a, A> AirZerocheck<'a, A> {
             });
         }
 
+        // Verify the sumcheck reduction, then close on the proof's own opened values.
+        let reduction = self.verify_reduction::<F, EF, _>(
+            &proof.sumcheck,
+            log_height,
+            public_values,
+            challenger,
+        )?;
+        self.check_constraint::<F, EF>(
+            &reduction,
+            &proof.local,
+            &next_columns,
+            &proof.next,
+            public_values,
+        )?;
+        Ok(reduction.point)
+    }
+
+    /// Verify the zerocheck sumcheck and return the data the final check needs.
+    ///
+    /// This stops short of recomputing the constraint.
+    /// The opened column values are not yet known.
+    /// The committed verifier opens them through a commitment scheme.
+    ///
+    /// The caller must observe the trace commitment into the challenger before this call.
+    /// The public values are observed here.
+    /// The caller therefore does not observe them separately.
+    ///
+    /// # Arguments
+    ///
+    /// - Zerocheck sumcheck transcript.
+    /// - Base-two logarithm of the trace height.
+    /// - Public inputs forwarded to the AIR.
+    /// - Fiat-Shamir transcript.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the claimed sum is nonzero.
+    /// Returns an error when the sumcheck transcript fails to verify.
+    pub fn verify_reduction<F, EF, Challenger>(
+        &self,
+        sumcheck: &GenericDegreeProof<F, EF>,
+        log_height: usize,
+        public_values: &[F],
+        challenger: &mut Challenger,
+    ) -> Result<ZerocheckReduction<EF>, ZerocheckError>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        A: Air<SymbolicAirBuilder<F, EF>> + BaseAir<F>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
         // A zerocheck always claims the sum is zero.
         // A nonzero claim is a forgery vector: it would let an unsatisfied trace pass.
-        if proof.sumcheck.claimed_sum != EF::ZERO {
+        if sumcheck.claimed_sum != EF::ZERO {
             return Err(ZerocheckError::NonZeroClaimedSum);
         }
 
+        // Reject column kinds this version cannot prove.
+        // Size the symbolic pass from the AIR layout.
+        let layout = self.layout::<F>();
         let degree = self.sumcheck_degree::<F, EF>(layout);
 
         // Bind the public values before any challenge depends on them.
@@ -413,27 +467,98 @@ impl<'a, A> AirZerocheck<'a, A> {
         // Draw the same batching scalar and zerocheck point the prover drew.
         let (alpha, tau) = sample_zerocheck_challenges(challenger, log_height);
 
-        let (point, final_sum) = proof
-            .sumcheck
+        let (point, final_sum) = sumcheck
             .verify(challenger, log_height, degree, self.pow_bits)
             .map_err(ZerocheckError::Sumcheck)?;
 
-        // Reduce the proof to opening claims at the bound point.
-        let claims = OpeningClaims::new(point, proof.local.clone(), &next_columns, &proof.next);
+        Ok(ZerocheckReduction {
+            alpha,
+            tau,
+            point,
+            final_sum,
+        })
+    }
+
+    /// Close the zerocheck: recompute the alpha-batched constraint and match the reduced sum.
+    ///
+    /// The opened values may come from the proof itself.
+    /// The opened values may instead come from a commitment opening.
+    /// Either way the final identity is the same.
+    ///
+    /// # Arguments
+    ///
+    /// - Verified sumcheck reduction data.
+    /// - Current-row value of each main column.
+    /// - Column indices read on the next row.
+    /// - Successor values aligned with those column indices.
+    /// - Public inputs forwarded to the AIR.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the reduced sum does not match the constraint.
+    /// The constraint is evaluated at the bound point.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the successor column list and value list have different lengths.
+    pub fn check_constraint<F, EF>(
+        &self,
+        reduction: &ZerocheckReduction<EF>,
+        local: &[EF],
+        next_columns: &[usize],
+        next_values: &[EF],
+        public_values: &[F],
+    ) -> Result<(), ZerocheckError>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
+    {
+        let width = local.len();
+
+        // Reduce to opening claims at the bound point.
+        let claims = OpeningClaims::new(
+            reduction.point.clone(),
+            local.to_vec(),
+            next_columns,
+            next_values,
+        );
 
         // Reconstruct the rows the folder reads, then recompute the alpha-batched constraint.
         let next_row = claims.next_row(width);
         let boundary = BoundaryEvals::at(claims.point.as_slice());
-        let g = MultilinearFolder::new(&claims.local, &next_row, boundary, public_values, alpha)
-            .eval_air(self.air);
-        let eq_at_point = Point::eval_eq(&tau, claims.point.as_slice());
+        let g = MultilinearFolder::new(
+            &claims.local,
+            &next_row,
+            boundary,
+            public_values,
+            reduction.alpha,
+        )
+        .eval_air(self.air);
+        let eq_at_point = Point::eval_eq(&reduction.tau, claims.point.as_slice());
 
         // Close the protocol: the reduced sum must equal the integrand at the point.
-        if final_sum != eq_at_point * g {
+        if reduction.final_sum != eq_at_point * g {
             return Err(ZerocheckError::FinalSumMismatch);
         }
-        Ok(claims.point)
+        Ok(())
     }
+}
+
+/// Data yielded before the opened values are known.
+///
+/// The reduction verifier produces it from the sumcheck transcript.
+/// The closing check consumes it together with the opened column values.
+#[derive(Clone, Debug)]
+pub struct ZerocheckReduction<EF> {
+    /// Random scalar batching the AIR constraints.
+    pub alpha: EF,
+    /// Zerocheck point sampled before the sumcheck.
+    pub tau: Vec<EF>,
+    /// Bound sumcheck point with every variable fixed to one challenge.
+    pub point: Point<EF>,
+    /// Reduced sum bound by the sumcheck.
+    pub final_sum: EF,
 }
 
 /// Rebuild the verifier-facing round message from the prover's internal evaluations.

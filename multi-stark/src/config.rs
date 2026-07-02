@@ -29,6 +29,19 @@ pub trait MultiStarkConfig {
     /// Borrow the commitment scheme.
     fn pcs(&self) -> &Self::Pcs;
 
+    /// Smallest table arity the commitment scheme accepts without padding.
+    ///
+    /// A table below this floor is zero-padded before commitment, which breaks the successor view:
+    /// - padding moves the repeated boundary row into the pad,
+    /// - so the repeat-last successor view no longer reads itself,
+    /// - which disagrees with the zerocheck successor convention.
+    ///
+    /// The committed prover therefore requires the trace arity to meet this floor.
+    /// The opening point and the committed table then share one frame.
+    ///
+    /// For a WHIR-backed config this is the first-round folding factor.
+    fn min_num_variables(&self) -> usize;
+
     /// Pack committed column polynomials into the commitment scheme's witness form.
     ///
     /// The witness representation is private to the commitment scheme:
@@ -59,3 +72,15 @@ pub type ProverData<C> = <Pcs<C> as MultilinearPcs<
     <C as MultiStarkConfig>::Challenge,
     <C as MultiStarkConfig>::Challenger,
 >>::ProverData;
+
+/// Opening proof produced by a configuration's commitment scheme.
+pub type PcsProof<C> = <Pcs<C> as MultilinearPcs<
+    <C as MultiStarkConfig>::Challenge,
+    <C as MultiStarkConfig>::Challenger,
+>>::Proof;
+
+/// Opening-verification error produced by a configuration's commitment scheme.
+pub type PcsError<C> = <Pcs<C> as MultilinearPcs<
+    <C as MultiStarkConfig>::Challenge,
+    <C as MultiStarkConfig>::Challenger,
+>>::Error;
