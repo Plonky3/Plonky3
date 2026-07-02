@@ -549,7 +549,28 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
                 constraint.combine_packed(weights, sum);
             }
             MaybePacked::Unpacked { weights, .. } => {
-                constraint.combine(weights, sum);
+                // The scalar `Constraint::combine` builds an explicit `2^k` weight
+                // table via a full select-matrix construction. `combine_packed`
+                // computes the same table with O(sqrt(2^k)) working memory via a
+                // split-and-dot construction; route through it whenever there are
+                // enough variables to pack, then unpack-add the packed delta into
+                // the scalar accumulator.
+                let k_pack = log2_strict_usize(F::Packing::WIDTH);
+                if weights.num_variables() >= k_pack {
+                    let mut packed_delta = Poly::zero(weights.num_variables() - k_pack);
+                    let mut packed_sum = EF::ZERO;
+                    constraint.combine_packed(&mut packed_delta, &mut packed_sum);
+                    *sum += packed_sum;
+                    weights
+                        .as_mut_slice()
+                        .iter_mut()
+                        .zip(EF::ExtensionPacking::to_ext_iter(
+                            packed_delta.iter().copied(),
+                        ))
+                        .for_each(|(out, delta)| *out += delta);
+                } else {
+                    constraint.combine(weights, sum);
+                }
             }
         }
     }
