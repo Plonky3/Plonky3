@@ -356,10 +356,11 @@ fn prescribed_point_verify_rejects_tampered_eval() {
     .unwrap_err();
     match err {
         VerifierError::MerkleProofInvalid { position, reason } => {
-            // The tampered eval is absorbed, so the verifier derives different query
-            // positions than the prover authenticated, and opens an unauthenticated one.
-            assert_eq!(position, 9);
-            assert_eq!(reason, "Base field Merkle proof verification failed");
+            // Why: the tampered eval desyncs the sampled positions from the authenticated set.
+            //   the round verifies as one pruned multiproof
+            //   -> failure reports a batched placeholder position, not a per-query index.
+            assert_eq!(position, 0);
+            assert_eq!(reason, "Base field Merkle multiproof verification failed");
         }
         other => panic!("expected a Merkle opening rejection, got {other:?}"),
     }
