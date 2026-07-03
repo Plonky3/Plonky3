@@ -428,6 +428,19 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
+        // Below this height, the rayon fork-join and SIMD-packing machinery costs more than
+        // the dot product itself; fall back to a plain scalar accumulation.
+        const SMALL_HEIGHT: usize = 16;
+        if self.height() <= SMALL_HEIGHT {
+            let mut acc = EF::zero_vec(self.width());
+            for (row, &scale) in self.rows().zip(v) {
+                for (l, r) in acc.iter_mut().zip(row) {
+                    *l += scale * r;
+                }
+            }
+            return acc;
+        }
+
         let packed_width = self.width().div_ceil(T::Packing::WIDTH);
 
         let packed_result = self
@@ -582,6 +595,29 @@ mod tests {
         }
 
         assert_eq!(m.columnwise_dot_product(&v), expected);
+    }
+
+    #[test]
+    fn test_columnwise_dot_product_small_height() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<BabyBear, 4>;
+
+        let mut rng = SmallRng::seed_from_u64(2);
+
+        // Cover heights below, at, and just above the small-height serial threshold.
+        for height in [0, 1, 3, 16, 17] {
+            let m = RowMajorMatrix::<F>::rand(&mut rng, height, 1 << 4);
+            let v = RowMajorMatrix::<EF>::rand(&mut rng, height, 1).values;
+
+            let mut expected = EF::zero_vec(m.width());
+            for (row, &scale) in izip!(m.rows(), &v) {
+                for (l, r) in izip!(&mut expected, row) {
+                    *l += scale * r;
+                }
+            }
+
+            assert_eq!(m.columnwise_dot_product(&v), expected, "height = {height}");
+        }
     }
 
     #[test]
