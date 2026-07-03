@@ -4,6 +4,7 @@ use p3_field::{
     ExtensionField, Field, PackedFieldExtension, PackedValue, add_scaled_slice_in_place,
     dot_product,
 };
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
@@ -340,13 +341,14 @@ impl<F: Field> NextConstraint<F> {
     ///
     /// # Overview
     ///
-    /// The scalar dense table is built first, then folded into packed elements.
-    /// Each packed element covers one group of consecutive hypercube entries.
+    /// Each packed output element is built directly from the selector and successor
+    /// tables, one packed lane group at a time, without ever materializing the full
+    /// `2^total_vars` scalar weight table.
     ///
     /// # Arguments
     ///
     /// - `out`: packed buffer over the hypercube, added to in place.
-    /// - `scale`: batching weight folded into the dense table.
+    /// - `scale`: batching weight folded into the selector table.
     ///
     /// # Panics
     ///
@@ -363,19 +365,56 @@ impl<F: Field> NextConstraint<F> {
         // The packed buffer plus the lane count must span the whole hypercube.
         assert_eq!(log2_strict_usize(out.len()) + k_pack, total_vars);
 
-        // Build the full scalar weight table for this constraint.
-        let mut dense = F::zero_vec(1 << total_vars);
-        self.accumulate(&mut dense, scale);
+        // Local axis: successor weights of the local point over its own hypercube.
+        let local_next = Poly::new_next_from_point(self.point.as_slice());
+        let local_next = local_next.as_slice();
+        // Slot axis: selector equality table, premultiplied by the batching scale.
+        let selector_eq = Poly::new_from_point(self.selector.as_slice(), scale);
+        let selector_eq = selector_eq.as_slice();
 
-        // Fold each consecutive run of scalar entries into one packed element.
-        //
-        //     dense: [ e0 e1 e2 e3 | e4 e5 e6 e7 | ... ]
-        //     out:   [   packed_0   |   packed_1   | ... ]
-        out.iter_mut()
-            .zip(dense.chunks(Base::Packing::WIDTH))
-            .for_each(|(out, chunk)| {
-                *out += F::ExtensionPacking::from_ext_slice(chunk);
-            });
+        // Both axis lengths are powers of two; splitting the global index via a shift
+        // and a mask (instead of `/` and `%`) keeps the per-lane hot line free of
+        // runtime `udiv`/`urem`, since LLVM cannot prove the power-of-two bound on
+        // values that live behind the `Base` type parameter.
+        let log_local = log2_strict_usize(local_next.len());
+        let mask_local = local_next.len() - 1;
+        let log_selector = log2_strict_usize(selector_eq.len());
+        let mask_selector = selector_eq.len() - 1;
+        let width = Base::Packing::WIDTH;
+
+        // Widest packing width in this codebase (AVX-512); see e.g.
+        // `monty-31/src/dft/{forward,backward}.rs`.
+        const MAX_W: usize = 16;
+        debug_assert!(width <= MAX_W);
+
+        // Every scalar entry of the dense table is `selector_eq[slot] * local_next[local]`,
+        // where `(slot, local)` is recovered from the global hypercube index by the same
+        // block layout `accumulate` uses. Each lane product is computed once into a small
+        // scratch buffer, then packed via `from_ext_slice` (which only indexes into it).
+        // `from_ext_fn` would instead re-run the closure once per basis coefficient,
+        // recomputing the same extension multiply `D` times per lane.
+        match self.var_order {
+            VariableOrder::Prefix => {
+                out.par_iter_mut().enumerate().for_each(|(i, out)| {
+                    let mut lanes = [F::ZERO; MAX_W];
+                    for (lane, slot) in lanes[..width].iter_mut().enumerate() {
+                        let g = i * width + lane;
+                        *slot = selector_eq[g >> log_local] * local_next[g & mask_local];
+                    }
+                    *out += F::ExtensionPacking::from_ext_slice(&lanes[..width]);
+                });
+            }
+            VariableOrder::Suffix => {
+                out.par_iter_mut().enumerate().for_each(|(i, out)| {
+                    let mut lanes = [F::ZERO; MAX_W];
+                    for (lane, slot) in lanes[..width].iter_mut().enumerate() {
+                        let g = i * width + lane;
+                        *slot = local_next[g >> log_selector] * selector_eq[g & mask_selector];
+                    }
+                    *out += F::ExtensionPacking::from_ext_slice(&lanes[..width]);
+                });
+            }
+        }
     }
 }
 
@@ -387,8 +426,9 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use rand::SeedableRng;
+    use proptest::prelude::*;
     use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
@@ -560,5 +600,95 @@ mod tests {
         .collect::<Vec<_>>();
         assert_eq!(scalar.as_slice(), &unpacked[..]);
         assert_eq!(packed_sum, scalar_sum);
+    }
+
+    #[test]
+    fn combine_packed_agrees_with_combine_on_empty_local_point() {
+        // Boundary: `sel == k` (an empty local point, so `local_rows == 1`). The
+        // proptest's `sel in 0..5` range with `k in 4..9` rarely lands exactly on
+        // this case, so pin it here explicitly for both variable orders.
+        let mut rng = SmallRng::seed_from_u64(7);
+        let k = 5;
+        let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
+
+        for var_order in [VariableOrder::Prefix, VariableOrder::Suffix] {
+            let selector = Point::<EF>::rand(&mut rng, k);
+            let eval: EF = rng.random();
+
+            let mut statement = NextStatement::<EF>::initialize(k);
+            statement.add_evaluated_constraint(selector, Point::new(Vec::new()), eval, var_order);
+
+            let alpha: EF = rng.random();
+            let mut scalar = Poly::<EF>::zero(k);
+            let mut scalar_sum = EF::ZERO;
+            statement.combine(&mut scalar, &mut scalar_sum, alpha, 0);
+
+            let mut packed = Poly::<<EF as ExtensionField<F>>::ExtensionPacking>::zero(k - k_pack);
+            let mut packed_sum = EF::ZERO;
+            statement.combine_packed::<F>(&mut packed, &mut packed_sum, alpha, 0);
+
+            let unpacked = <<EF as ExtensionField<F>>::ExtensionPacking as PackedFieldExtension<
+                F,
+                EF,
+            >>::to_ext_iter(packed.as_slice().iter().copied())
+            .collect::<Vec<_>>();
+            assert_eq!(scalar.as_slice(), &unpacked[..]);
+            assert_eq!(packed_sum, scalar_sum);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_combine_packed_agrees_with_combine(
+            // Total variable count (wide enough to exercise multiple packed chunks).
+            k in 4usize..9,
+            // Selector variable count; the remainder goes to the local point.
+            sel in 0usize..5,
+            // Whether the selector leads (`Prefix`) or trails (`Suffix`) the local point.
+            suffix in any::<bool>(),
+            // Number of constraints, to exercise accumulation across constraints.
+            n in 1usize..4,
+            // RNG seed for reproducible randomness.
+            seed in 0u64..50,
+        ) {
+            let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
+            if k < k_pack || sel > k {
+                return Ok(());
+            }
+            let loc = k - sel;
+            let var_order = if suffix {
+                VariableOrder::Suffix
+            } else {
+                VariableOrder::Prefix
+            };
+
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let mut statement = NextStatement::<EF>::initialize(k);
+            for _ in 0..n {
+                let selector = Point::<EF>::rand(&mut rng, sel);
+                let point = Point::<EF>::rand(&mut rng, loc);
+                let eval: EF = rng.random();
+                statement.add_evaluated_constraint(selector, point, eval, var_order);
+            }
+
+            let alpha: EF = rng.random();
+            let shift = 3;
+
+            let mut scalar = Poly::<EF>::zero(k);
+            let mut scalar_sum = EF::ZERO;
+            statement.combine(&mut scalar, &mut scalar_sum, alpha, shift);
+
+            let mut packed = Poly::<<EF as ExtensionField<F>>::ExtensionPacking>::zero(k - k_pack);
+            let mut packed_sum = EF::ZERO;
+            statement.combine_packed::<F>(&mut packed, &mut packed_sum, alpha, shift);
+
+            let unpacked = <<EF as ExtensionField<F>>::ExtensionPacking as PackedFieldExtension<
+                F,
+                EF,
+            >>::to_ext_iter(packed.as_slice().iter().copied())
+            .collect::<Vec<_>>();
+            prop_assert_eq!(scalar.as_slice(), &unpacked[..]);
+            prop_assert_eq!(scalar_sum, packed_sum);
+        }
     }
 }
