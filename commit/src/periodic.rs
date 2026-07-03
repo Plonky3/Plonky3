@@ -73,6 +73,10 @@ pub struct PeriodicLdeTable<F> {
     /// Values in row-major form: height = extended_height, width = num_columns.
     /// Empty if there are no periodic columns.
     values: RowMajorMatrix<F>,
+    /// Cached `values.values.len() / values.width` (`0` if `values.width == 0`).
+    /// Guaranteed to be a power of two, so `get` can index with `& (height - 1)`
+    /// instead of `%`.
+    height: usize,
 }
 
 impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
@@ -80,13 +84,18 @@ impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
     ///
     /// The matrix should have height = `max_period × blowup` and width = `num_periodic_columns`.
     pub const fn new(values: RowMajorMatrix<F>) -> Self {
-        Self { values }
+        let height = match values.values.len().checked_div(values.width) {
+            Some(h) => h,
+            None => 0,
+        };
+        Self { values, height }
     }
 
     /// Create an empty table (for AIRs without periodic columns).
     pub fn empty() -> Self {
         Self {
             values: RowMajorMatrix::new(Vec::new(), 0),
+            height: 0,
         }
     }
 
@@ -102,31 +111,15 @@ impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
 
     /// Height of the compact table (max_period × blowup).
     pub const fn height(&self) -> usize {
-        match self.values.values.len().checked_div(self.values.width) {
-            Some(h) => h,
-            None => 0,
-        }
-    }
-
-    /// Get all periodic column values for a given LDE index using modular indexing.
-    ///
-    /// Returns a slice of length `width()` containing the value of each periodic column.
-    #[inline]
-    pub fn get_row(&self, lde_idx: usize) -> &[F] {
-        let height = self.height();
-        debug_assert!(height > 0, "cannot index into empty periodic table");
-        let row_idx = lde_idx % height;
-        let start = row_idx * self.values.width;
-        let end = start + self.values.width;
-        &self.values.values[start..end]
+        self.height
     }
 
     /// Get a specific periodic column value for a given LDE index.
     #[inline]
     pub fn get(&self, lde_idx: usize, col_idx: usize) -> &F {
-        let height = self.height();
+        let height = self.height;
         debug_assert!(height > 0, "cannot index into empty periodic table");
-        let row_idx = lde_idx % height;
+        let row_idx = lde_idx & (height - 1);
         &self.values.values[row_idx * self.values.width + col_idx]
     }
 }
