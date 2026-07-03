@@ -167,7 +167,7 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for InteractionSymbolic
 
     fn push_local_interaction(
         &mut self,
-        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
     ) {
         // One call → one grouped record, not N separate ones.
         //

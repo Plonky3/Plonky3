@@ -17,7 +17,7 @@ mod tests;
 pub mod traits;
 mod types;
 
-pub use builder::{InteractionBuilder, SymbolicInteraction, SymbolicLocalInteraction};
+pub use builder::{InteractionBuilder, LocalTuple, SymbolicInteraction, SymbolicLocalInteraction};
 pub use bus::{LookupBus, PermutationCheckBus};
 pub use challenges::Challenges;
 pub use count::Count;

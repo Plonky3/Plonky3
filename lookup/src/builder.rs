@@ -40,18 +40,21 @@ pub struct SymbolicInteraction<F> {
     pub count_weight: u32,
 }
 
+/// One `(message_fields, count)` pair of a local lookup.
+pub type LocalTuple<F> = (Vec<SymbolicExpression<F>>, Count<SymbolicExpression<F>>);
+
 /// One intra-AIR lookup recorded during symbolic evaluation.
 ///
 /// Several `(fields, count)` pairs are bundled into a single running sum
 /// that must return to zero over the trace. No cross-AIR communication.
 ///
 /// ```text
-///     tuples = [(query_fields, +1), (table_fields, -mult)]
+///     tuples = [(query_fields, Count::bounded(+1, 1)), (table_fields, Count::provided(-mult))]
 /// ```
 #[derive(Clone, Debug)]
 pub struct SymbolicLocalInteraction<F> {
-    /// Pairs of message expressions and their signed multiplicities.
-    pub tuples: Vec<(Vec<SymbolicExpression<F>>, SymbolicExpression<F>)>,
+    /// Pairs of message expressions and their signed, weight-bounded multiplicities.
+    pub tuples: Vec<LocalTuple<F>>,
 }
 
 /// Opt-in extension to the AIR builder for AIRs that speak on buses.
@@ -80,11 +83,18 @@ pub trait InteractionBuilder: AirBuilder {
 
     /// Record one intra-AIR lookup, both sides in one call.
     ///
-    /// Each tuple is `(message_fields, signed_count)`. All tuples collapse
-    /// into a single running sum that must return to zero over the trace.
+    /// Each tuple is `(message_fields, count)`. All tuples collapse into a
+    /// single running sum that must return to zero over the trace.
+    ///
+    /// # Soundness
+    ///
+    /// - A constant count fixes its bound automatically.
+    /// - A variable count must declare a bound the AIR constrains it to respect.
+    /// - The provided (table) side of a query should use `Count::provided`, keeping
+    ///   it out of the multiplicity height-bound check.
     fn push_local_interaction(
         &mut self,
-        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
     );
 
     /// Global interactions pushed so far.
@@ -113,7 +123,7 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for DebugConstraintBuil
 
     fn push_local_interaction(
         &mut self,
-        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
     ) {
         // Same rationale as the global path:
         //

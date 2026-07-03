@@ -237,7 +237,7 @@ mod tests {
 
         fn push_local_interaction(
             &mut self,
-            tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+            tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
         ) {
             tuples.into_iter().for_each(drop);
         }
