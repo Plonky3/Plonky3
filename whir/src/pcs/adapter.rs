@@ -184,7 +184,7 @@ where
     F: TwoAdicField + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>
@@ -207,8 +207,7 @@ where
         assert_eq!(protocol.num_openings(), points.len());
 
         let mut prover_data = prover_data;
-        let mut whir_proof = self.config.empty_proof();
-        whir_proof.initial_ood_answers = (0..self.commitment_ood_samples)
+        let initial_ood_answers = (0..self.commitment_ood_samples)
             .map(|_| prover_data.layout.add_virtual_eval(challenger))
             .collect::<Vec<_>>();
 
@@ -223,17 +222,14 @@ where
             })
             .collect::<Vec<_>>();
 
-        self.prove(
-            &mut whir_proof,
+        let whir = self.prove(
+            initial_ood_answers,
             challenger,
             prover_data.layout,
             prover_data.merkle_data,
         );
 
-        PcsProof {
-            whir: whir_proof,
-            evals,
-        }
+        PcsProof { whir, evals }
     }
 
     /// Verify each batch at its supplied point.
