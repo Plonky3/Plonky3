@@ -24,6 +24,7 @@ use rand::{RngExt, SeedableRng};
 
 use crate::Lookups;
 use crate::builder::InteractionBuilder;
+use crate::count::Count;
 use crate::logup::LogUpGadget;
 use crate::protocol::LookupProtocol;
 use crate::types::{Kind, Lookup, LookupError, LookupTerminal};
@@ -214,8 +215,8 @@ where
             let mult = local[offset + 2]; // multiplicity
 
             builder.push_local_interaction(vec![
-                (vec![val.into()], AB::Expr::ONE),        // query side
-                (vec![table_val.into()], -(mult.into())), // table side (negated)
+                (vec![val.into()], Count::bounded(AB::Expr::ONE, 1)), // query side
+                (vec![table_val.into()], Count::provided(-(mult.into()))), // table side (negated)
             ]);
         }
     }
@@ -1061,11 +1062,14 @@ where
 
         builder.push_local_interaction(vec![
             // Read side: (in1, in2, sum) with multiplicity +1.
-            (vec![in1.into(), in2.into(), sum.into()], AB::Expr::ONE),
+            (
+                vec![in1.into(), in2.into(), sum.into()],
+                Count::bounded(AB::Expr::ONE, 1),
+            ),
             // Table side: (t_in1, t_in2, t_sum) with multiplicity -mult.
             (
                 vec![t_in1.into(), t_in2.into(), t_sum.into()],
-                -(mult.into()),
+                Count::provided(-(mult.into())),
             ),
         ]);
     }

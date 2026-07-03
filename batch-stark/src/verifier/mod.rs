@@ -573,10 +573,8 @@ where
         let periodic_columns = air.periodic_columns();
         check_periodic_column_lengths(&periodic_columns, trace_domains[i].size())?;
 
-        let periodic_values: Vec<Challenge<SC>> = periodic_columns
-            .iter()
-            .map(|col| trace_domains[i].evaluate_periodic_column_at(col, zeta))
-            .collect();
+        let periodic_values: Vec<Challenge<SC>> =
+            trace_domains[i].evaluate_periodic_columns_at(&periodic_columns, zeta);
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
             trace_next: trace_next_ref,

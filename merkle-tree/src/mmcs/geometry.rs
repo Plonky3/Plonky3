@@ -13,16 +13,17 @@ use crate::MerkleTreeError::{EmptyBatch, IncompatibleHeights, WrongWidth};
 ///
 /// The leaf hash flattens all rows at one height into a single element stream,
 /// so a digest match alone does not pin where one row ends and the next begins.
-pub(crate) fn check_widths<T>(
+pub(crate) fn check_widths<T, R: AsRef<[T]>>(
     dimensions: &[Dimensions],
-    opened_values: &[Vec<T>],
+    opened_values: &[R],
 ) -> Result<(), MerkleTreeError> {
     for (matrix, (dims, row)) in dimensions.iter().zip(opened_values).enumerate() {
-        if row.len() != dims.width {
+        let width = row.as_ref().len();
+        if width != dims.width {
             return Err(WrongWidth {
                 matrix,
                 expected: dims.width,
-                got: row.len(),
+                got: width,
             });
         }
     }

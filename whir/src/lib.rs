@@ -14,7 +14,7 @@ pub use parameters::{
     SecurityAssumption, WhirConfig, WhirConfigError,
 };
 pub use pcs::WhirProverData;
-pub use pcs::proof::{PcsProof, QueryOpening, WhirProof, WhirRoundProof};
+pub use pcs::proof::{PcsProof, QueryOpenings, SharedProofOpening, WhirProof, WhirRoundProof};
 pub use pcs::prover::WhirProver;
 pub use pcs::verifier::WhirVerifier;
 pub use pcs::verifier::errors::VerifierError;
