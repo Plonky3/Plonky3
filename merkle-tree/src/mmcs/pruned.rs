@@ -106,7 +106,13 @@ mod tests {
         }
 
         // Verify pruned opening (consumed by value — zero deep-clone).
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(result.is_ok(), "pruned verification should succeed");
     }
 
@@ -123,7 +129,13 @@ mod tests {
         let indices: Vec<usize> = vec![0, 1, 10, 20, 30, 40, 50, 63];
         let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(result.is_ok(), "4-ary pruned verification should succeed");
     }
 
@@ -147,8 +159,76 @@ mod tests {
             sibling[0] = F::from_u32(999999);
         }
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(result.is_err(), "tampered proof should fail verification");
+    }
+
+    #[test]
+    fn pruned_opening_rejects_substituted_index() {
+        // The proof authenticates the prover's leaf indices.
+        // Verification must bind them to the verifier's (transcript-derived) indices,
+        // or a prover could open leaf 15 against a query for leaf 14.
+        let seed = 31u64;
+        let mmcs = make_binary_mmcs(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 16, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Prover opens leaves [0, 3, 7, 15].
+        let indices: Vec<usize> = vec![0, 3, 7, 15];
+        let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        // Verifier expected leaf 14 in the last slot.
+        let expected_indices: Vec<usize> = vec![0, 3, 7, 14];
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &expected_indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(MerkleTreeError::MalformedPrunedProof(
+                    PrunedProofError::IndexMismatch {
+                        query: 3,
+                        expected: 14,
+                        got: 15
+                    }
+                ))
+            ),
+            "an opening for a substituted leaf index should be rejected, got {result:?}"
+        );
+
+        // Verifier expected fewer indices than the proof carries.
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices[..3],
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(MerkleTreeError::MalformedPrunedProof(
+                    PrunedProofError::IndexCountMismatch {
+                        num_indices: 3,
+                        num_queries: 4
+                    }
+                ))
+            ),
+            "an index/opening count mismatch should be rejected, got {result:?}"
+        );
     }
 
     #[test]
@@ -174,7 +254,13 @@ mod tests {
             pruned_opening.pruned_proof.paths.push(filler.clone());
         }
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(
             matches!(
                 result,
@@ -243,7 +329,14 @@ mod tests {
         }
 
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -262,7 +355,14 @@ mod tests {
 
         let indices: Vec<usize> = vec![0, 1, 2, 3, 32, 33, 34, 35];
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -279,7 +379,14 @@ mod tests {
 
         let indices: Vec<usize> = (0..8).collect();
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -303,7 +410,13 @@ mod tests {
         pruned.opened_values[2] = different.opened_values;
 
         let err = mmcs
-            .verify_batch_pruned(&commit, &dims, pruned)
+            .verify_batch_pruned(
+                &commit,
+                &dims,
+                &indices,
+                &pruned.opened_values,
+                &pruned.pruned_proof,
+            )
             .expect_err("mismatched duplicate openings must be rejected");
         // The duplicate is leaf index 3, which sorts to unique-path slot 0.
         assert!(matches!(
@@ -348,7 +461,14 @@ mod tests {
         let indices: Vec<usize> = vec![3, 7, 15, 23, 31, 47, 55, 63];
 
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -382,7 +502,14 @@ mod tests {
         let indices: Vec<usize> = vec![0, 7, 15, 31];
 
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -420,7 +547,14 @@ mod tests {
         let indices: Vec<usize> = vec![1, 5, 17, 33, 50, 63];
 
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -485,13 +619,19 @@ mod tests {
                     // Subject: amortized verifier on the same set.
                     // Must accept (oracle just did).
                     let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-                    mmcs.verify_batch_pruned(&commit, &dims, pruned)
-                        .unwrap_or_else(|e| {
-                            panic!(
-                                "amortized pruned verifier failed: \
+                    mmcs.verify_batch_pruned(
+                        &commit,
+                        &dims,
+                        &indices,
+                        &pruned.opened_values,
+                        &pruned.pruned_proof,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "amortized pruned verifier failed: \
                              height={height} cap={cap_height} trial={trial}: {e:?}"
-                            )
-                        });
+                        )
+                    });
                 }
             }
         }
@@ -518,7 +658,13 @@ mod tests {
             "duplicate queries should have identical values"
         );
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(result.is_ok());
     }
 
@@ -536,7 +682,13 @@ mod tests {
         let indices: Vec<usize> = vec![0, 7, 15, 31];
         let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(
             result.is_ok(),
             "mixed-height pruned verification should succeed"
@@ -559,7 +711,13 @@ mod tests {
         let indices: Vec<usize> = vec![0, 5, 17, 33, 50, 63];
         let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(
             result.is_ok(),
             "4-ary mixed-height pruned verification should succeed"
@@ -613,7 +771,7 @@ mod tests {
             }
 
             // Check: the pruned proof must verify against the commitment.
-            mmcs.verify_batch_pruned(&commit, &dims, pruned_opening)
+            mmcs.verify_batch_pruned(&commit, &dims, &indices, &pruned_opening.opened_values, &pruned_opening.pruned_proof)
                 .map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
         }
 
@@ -656,7 +814,7 @@ mod tests {
             }
 
             // Check: pruned proof verifies.
-            mmcs.verify_batch_pruned(&commit, &dims, pruned_opening)
+            mmcs.verify_batch_pruned(&commit, &dims, &indices, &pruned_opening.opened_values, &pruned_opening.pruned_proof)
                 .map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
         }
 

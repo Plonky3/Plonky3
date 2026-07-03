@@ -20,7 +20,13 @@ use p3_field::Field;
 ///
 /// - Payload terms occupy `beta^0 .. beta^(W-1)`.
 /// - The bus offset sits at `beta^W`, one power above every payload term.
-/// - So two messages collide only when both bus and payload agree.
+/// - So two messages on different buses never collide.
+/// - Within one bus, the payload combiner is Horner's rule aligned to each
+///   tuple's own length: the last element always lands on `beta^0`. That
+///   makes the fingerprint injective only across tuples of equal declared
+///   width — a shorter tuple is equivalent to a longer one left-padded with
+///   zeros, so e.g. `[x]` and `[0, x]` fingerprint identically on one bus.
+///   Callers must keep every tuple on a given bus at a fixed width.
 ///
 /// # Soundness
 ///
