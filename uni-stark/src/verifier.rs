@@ -444,10 +444,8 @@ where
     let periodic_columns = air.periodic_columns();
     check_periodic_column_lengths(&periodic_columns, init_trace_domain.size())?;
 
-    let periodic_values: Vec<SC::Challenge> = periodic_columns
-        .iter()
-        .map(|periodic_col| init_trace_domain.evaluate_periodic_column_at(periodic_col, zeta))
-        .collect();
+    let periodic_values: Vec<SC::Challenge> =
+        init_trace_domain.evaluate_periodic_columns_at(&periodic_columns, zeta);
 
     let zeta_next = init_trace_domain
         .next_point(zeta)
