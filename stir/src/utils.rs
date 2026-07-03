@@ -477,9 +477,7 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
                 //
                 // The `arity` denominators are batch-inverted via Montgomery's trick (one EF
                 // inversion plus O(arity) multiplications) instead of `arity` separate divisions.
-                let diffs: Vec<EF> = (0..arity)
-                    .map(|l| beta - EF::from(gj * xs_0[l]))
-                    .collect();
+                let diffs: Vec<EF> = (0..arity).map(|l| beta - EF::from(gj * xs_0[l])).collect();
                 let mut prefix = Vec::with_capacity(arity);
                 let mut running = EF::ONE;
                 for &diff in &diffs {
