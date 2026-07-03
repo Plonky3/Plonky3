@@ -88,6 +88,10 @@ impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
             Some(h) => h,
             None => 0,
         };
+        debug_assert!(
+            height == 0 || height.is_power_of_two(),
+            "PeriodicLdeTable height must be a power of two for bitmask indexing"
+        );
         Self { values, height }
     }
 
@@ -213,5 +217,24 @@ impl<F: Field, D: PolynomialSpace<Val = F>> PeriodicEvaluator<F, D> for () {
              or CirclePeriodicEvaluator."
         );
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::*;
+
+    type F = BabyBear;
+
+    #[test]
+    #[should_panic(expected = "PeriodicLdeTable height must be a power of two")]
+    fn new_panics_on_non_power_of_two_height() {
+        let (a, b, c) = (F::ONE, F::TWO, F::from_u8(3));
+        let _ = PeriodicLdeTable::new(RowMajorMatrix::new(vec![a, b, c], 1));
     }
 }

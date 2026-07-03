@@ -1,5 +1,4 @@
 use alloc::collections::BTreeMap;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -364,7 +363,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
             cols_by_period.entry(col.len()).or_default().push(i);
         }
 
-        let mut result = vec![Ext::ZERO; periodic_columns.len()];
+        let mut result = Ext::zero_vec(periodic_columns.len());
         for (period, indices) in cols_by_period {
             let log_period = log2_strict_usize(period);
             let folds = self.log_size() - log_period;
