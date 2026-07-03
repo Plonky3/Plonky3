@@ -41,11 +41,11 @@ pub enum BaseCaseZkError {
     #[error("mask group {group} spot check failed at position {position}")]
     MaskSpotCheckFailed { group: usize, position: usize },
 
-    /// A Merkle opening failed to verify.
-    #[error("merkle verification failed for {kind} at position {position}")]
-    MerkleVerificationFailed { kind: &'static str, position: usize },
+    /// A Merkle multi-opening failed to verify.
+    #[error("merkle verification failed for {kind}")]
+    MerkleVerificationFailed { kind: &'static str },
 
-    /// A source opening could not be resolved by the caller.
-    #[error("source opening at position {position} rejected")]
-    SourceOpeningRejected { position: usize },
+    /// The source openings could not be resolved by the caller.
+    #[error("source openings rejected")]
+    SourceOpeningsRejected,
 }

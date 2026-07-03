@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, MultilinearPcs};
+use p3_commit::{Mmcs, MultiOpeningMmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
@@ -45,7 +45,7 @@ where
     F: TwoAdicField + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>
@@ -94,11 +94,10 @@ where
         protocol: Self::OpeningProtocol,
         challenger: &mut Challenger,
     ) -> Self::Proof {
-        let mut whir_proof = self.config.empty_proof();
-        tracing::info_span!("ood claims").in_scope(|| {
-            whir_proof.initial_ood_answers = (0..self.commitment_ood_samples)
+        let initial_ood_answers = tracing::info_span!("ood claims").in_scope(|| {
+            (0..self.commitment_ood_samples)
                 .map(|_| prover_data.layout.add_virtual_eval(challenger))
-                .collect::<Vec<_>>();
+                .collect::<Vec<_>>()
         });
 
         let evals = protocol
@@ -106,17 +105,14 @@ where
             .map(|(table_idx, batch)| prover_data.layout.eval(table_idx, batch, challenger))
             .collect::<Vec<_>>();
 
-        self.prove(
-            &mut whir_proof,
+        let whir = self.prove(
+            initial_ood_answers,
             challenger,
             prover_data.layout,
             prover_data.merkle_data,
         );
 
-        PcsProof {
-            whir: whir_proof,
-            evals,
-        }
+        PcsProof { whir, evals }
     }
 
     fn verify(

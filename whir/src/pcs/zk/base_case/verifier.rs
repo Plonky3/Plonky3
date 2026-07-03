@@ -3,17 +3,16 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::repeat_n;
-use core::slice::from_ref;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpeningRef, ExtensionMmcs, Mmcs};
+use p3_commit::{ExtensionMmcs, Mmcs, MultiOpeningMmcs};
 use p3_field::{ExtensionField, TwoAdicField, dot_product};
 use p3_matrix::Dimensions;
 use p3_util::log2_strict_usize;
 
 use super::config::BaseCaseZkConfig;
 use super::error::BaseCaseZkError;
-use crate::pcs::proof::QueryOpening;
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::proof::BaseCaseZkProof;
 use crate::utils::padded_ood_t1;
@@ -35,7 +34,7 @@ impl<F, EF, MT> BaseCaseZkVerifier<'_, F, EF, MT>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
 {
     /// Replays Construction 7.2 against the carried claim.
     ///
@@ -53,7 +52,7 @@ where
     /// # Arguments
     ///
     /// - `mask_covectors`: flat in chronological mask order, tiled by the groups.
-    /// - `verify_source`: authenticates one source opening, returns its folded value.
+    /// - `verify_source`: authenticates the source openings, returns their folded values.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub fn verify<Challenger>(
         &self,
@@ -62,10 +61,10 @@ where
         mask_covectors: &[Vec<EF>],
         mask_commitments: &[MT::Commitment],
         target: EF,
-        mut verify_source: impl FnMut(
-            usize,
-            &QueryOpening<F, EF, MT::Proof>,
-        ) -> Result<EF, BaseCaseZkError>,
+        verify_source: impl FnOnce(
+            &[usize],
+            &QueryOpenings<F, EF, MT::MultiProof>,
+        ) -> Result<Vec<EF>, BaseCaseZkError>,
         challenger: &mut Challenger,
     ) -> Result<(), BaseCaseZkError>
     where
@@ -199,7 +198,7 @@ where
             self.config.num_queries,
             challenger,
         );
-        // One opening per sampled position, for the source and the fresh mask.
+        // One opened row per sampled position, for the source and the fresh mask.
         let openings = |kind, actual: usize, expected: usize| {
             if actual == expected {
                 Ok(())
@@ -211,36 +210,29 @@ where
                 })
             }
         };
-        openings("source", proof.source_queries.len(), positions.len())?;
-        openings(
-            "fresh main",
-            proof.fresh_main_queries.len(),
-            positions.len(),
-        )?;
+        // f(z): authenticate the last oracle's leaves and fold them.
+        let source_values = verify_source(&positions, &proof.source_openings)?;
+        openings("source", source_values.len(), positions.len())?;
+        // g(z): authenticate the fresh main mask openings.
         let fresh_main_dims = vec![Dimensions {
             height: code.domain_size,
             width: 1,
         }];
-        for ((&position, source_opening), fresh_opening) in positions
-            .iter()
-            .zip(&proof.source_queries)
-            .zip(&proof.fresh_main_queries)
+        let fresh_rows = self.verify_rows(
+            fresh_main_commitment,
+            &fresh_main_dims,
+            &positions,
+            &proof.fresh_main_openings,
+            1,
+            "fresh main",
+        )?;
+        for ((&position, source_value), fresh_row) in
+            positions.iter().zip(&source_values).zip(fresh_rows)
         {
-            // f(z): authenticate a leaf of the last oracle and fold it.
-            let source_value = verify_source(position, source_opening)?;
-            // g(z): authenticate the fresh main mask opening.
-            let fresh_row = self.verify_row(
-                fresh_main_commitment,
-                &fresh_main_dims,
-                position,
-                fresh_opening,
-                1,
-                "fresh main",
-            )?;
             // Enc(f*, r*)(z): re-encode the reveal at this position.
             let blinded_value =
                 code.evaluate_at(position, &proof.blinded_message, &proof.blinded_randomness);
-            if blinded_value != fresh_row[0] + gamma * source_value {
+            if blinded_value != fresh_row[0] + gamma * *source_value {
                 return Err(BaseCaseZkError::SourceSpotCheckFailed { position });
             }
         }
@@ -253,13 +245,13 @@ where
         //
         // Positions are shared across a group: one opened row of each
         // oracle serves every member.
-        openings("mask", proof.mask_queries.len(), num_groups)?;
+        openings("mask", proof.mask_openings.len(), num_groups)?;
         let mut mask_offset = 0;
-        for (group_index, (group, pairs)) in self
+        for (group_index, (group, pair)) in self
             .config
             .mask_groups
             .iter()
-            .zip(&proof.mask_queries)
+            .zip(&proof.mask_openings)
             .enumerate()
         {
             let positions = get_challenge_stir_queries::<Challenger, F>(
@@ -268,37 +260,37 @@ where
                 self.config.mask_queries,
                 challenger,
             );
-            openings("mask", pairs.len(), positions.len())?;
             let dims = vec![Dimensions {
                 height: group.shape.domain_size,
                 width: group.width,
             }];
+            // xi_i(y) for every member i: rows of the carried oracle.
+            let carried_rows = self.verify_rows(
+                &mask_commitments[group_index],
+                &dims,
+                &positions,
+                &pair.carried,
+                group.width,
+                "carried mask",
+            )?;
+            // s'_i(y) for every member i: rows of the fresh blind.
+            let fresh_rows = self.verify_rows(
+                &proof.fresh_mask_commitments[group_index],
+                &dims,
+                &positions,
+                &pair.fresh,
+                group.width,
+                "fresh mask",
+            )?;
             // Evaluation domain of the mask code over the extension field.
             let mask_gen = EF::two_adic_generator(log2_strict_usize(group.shape.domain_size));
             let blinded = &proof.blinded_masks[mask_offset..mask_offset + group.width];
-            for (&position, pair) in positions.iter().zip(pairs) {
-                // xi_i(y) for every member i: one row of the carried oracle.
-                let carried_row = self.verify_row(
-                    &mask_commitments[group_index],
-                    &dims,
-                    position,
-                    &pair.carried,
-                    group.width,
-                    "carried mask",
-                )?;
-                // s'_i(y) for every member i: one row of the fresh blind.
-                let fresh_row = self.verify_row(
-                    &proof.fresh_mask_commitments[group_index],
-                    &dims,
-                    position,
-                    &pair.fresh,
-                    group.width,
-                    "fresh mask",
-                )?;
+            for ((&position, carried_row), fresh_row) in
+                positions.iter().zip(carried_rows).zip(fresh_rows)
+            {
                 // The field point behind position y.
                 let point = mask_gen.exp_u64(position as u64);
-                for ((blinded, &carried), &fresh) in
-                    blinded.iter().zip(&carried_row).zip(&fresh_row)
+                for ((blinded, &carried), &fresh) in blinded.iter().zip(carried_row).zip(fresh_row)
                 {
                     // Enc(xi*_i, r*_i)(y): re-encode member i's reveal.
                     let blinded_value = padded_ood_t1(point, &blinded.message, &blinded.randomness);
@@ -316,35 +308,33 @@ where
         Ok(())
     }
 
-    /// Verifies one extension opening of the expected width and returns its row.
-    fn verify_row(
+    /// Verifies one extension multi-opening of the expected row width.
+    ///
+    /// Returns the opened rows, one per position.
+    fn verify_rows<'p>(
         &self,
         commitment: &MT::Commitment,
         dims: &[Dimensions],
-        position: usize,
-        opening: &QueryOpening<F, EF, MT::Proof>,
+        positions: &[usize],
+        opening: &'p SharedProofOpening<EF, MT::MultiProof>,
         width: usize,
         kind: &'static str,
-    ) -> Result<Vec<EF>, BaseCaseZkError> {
-        // Mask oracles are extension-valued; any other variant is malformed.
-        let QueryOpening::Extension { values, proof } = opening else {
-            return Err(BaseCaseZkError::MerkleVerificationFailed { kind, position });
-        };
-        // Pin the row width locally before any caller indexes into it.
-        if values.len() != width {
-            return Err(BaseCaseZkError::MerkleVerificationFailed { kind, position });
+    ) -> Result<&'p [Vec<EF>], BaseCaseZkError> {
+        // One opened row per position; the multiproof binds rows to positions.
+        if opening.rows.len() != positions.len() {
+            return Err(BaseCaseZkError::OpeningCountMismatch {
+                kind,
+                expected: positions.len(),
+                actual: opening.rows.len(),
+            });
         }
-        self.extension_mmcs
-            .verify_batch(
-                commitment,
-                dims,
-                position,
-                BatchOpeningRef {
-                    opened_values: from_ref(values),
-                    opening_proof: proof,
-                },
-            )
-            .map_err(|_| BaseCaseZkError::MerkleVerificationFailed { kind, position })?;
-        Ok(values.clone())
+        // Pin every row width locally before any caller indexes into it.
+        if opening.rows.iter().any(|row| row.len() != width) {
+            return Err(BaseCaseZkError::MerkleVerificationFailed { kind });
+        }
+        opening
+            .verify(self.extension_mmcs, commitment, dims, positions)
+            .map_err(|_| BaseCaseZkError::MerkleVerificationFailed { kind })?;
+        Ok(&opening.rows)
     }
 }

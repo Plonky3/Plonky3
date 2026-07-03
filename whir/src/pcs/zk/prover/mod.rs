@@ -14,7 +14,7 @@ pub use data::HidingWhirProverData;
 use data::ZkRoundData;
 use masks::{ProverMasks, fold_limb_chunks};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{ExtensionMmcs, Mmcs};
+use p3_commit::{ExtensionMmcs, Mmcs, MultiOpeningMmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, PackedValue, PrimeCharacteristicRing, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
@@ -32,7 +32,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use tracing::instrument;
 
-use crate::pcs::proof::QueryOpening;
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::base_case::{BaseCaseZkConfig, BaseCaseZkProver, MaskGroupWitness};
 use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
@@ -64,7 +64,7 @@ where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>
@@ -290,17 +290,14 @@ where
                 challenger,
             );
 
-            // Open the previous oracle and fold each leaf at the batch
-            // randomness; the verifier recomputes the same folds.
-            let mut queries = Vec::with_capacity(stir_indexes.len());
-            let mut folded_values = Vec::with_capacity(stir_indexes.len());
-            let mut query_vars = Vec::with_capacity(stir_indexes.len());
-            for &index in &stir_indexes {
-                let (opening, folded) = self.open_and_fold(&round_data, index, &batch.randomness);
-                queries.push(opening);
-                folded_values.push(folded);
-                query_vars.push(round_params.folded_domain_gen.exp_u64(index as u64));
-            }
+            // Open the previous oracle in one multiproof and fold each leaf
+            // at the batch randomness; the verifier recomputes the same folds.
+            let (openings, folded_values) =
+                self.open_and_fold(&round_data, &stir_indexes, &batch.randomness);
+            let query_vars: Vec<F> = stir_indexes
+                .iter()
+                .map(|&index| round_params.folded_domain_gen.exp_u64(index as u64))
+                .collect();
             let query_points: Vec<EF> = query_vars.iter().map(|&x| EF::from(x)).collect();
 
             // Batch the carried claim with the fresh constraints.
@@ -430,7 +427,7 @@ where
                 mask_commitment,
                 ood_answers,
                 pow_witness,
-                queries,
+                openings,
             });
 
             // Next masked sumcheck batch over the new oracle.
@@ -505,8 +502,8 @@ where
             &oracle_randomness,
             source_covector.as_slice(),
             &mask_witnesses,
-            |position| {
-                self.open_and_fold(&round_data, position, &batch.randomness)
+            |positions| {
+                self.open_and_fold(&round_data, positions, &batch.randomness)
                     .0
             },
             challenger,
@@ -522,37 +519,32 @@ where
         }
     }
 
-    /// Opens one leaf of the active oracle and folds it at the randomness.
+    /// Opens the active oracle at every index in one multiproof and folds
+    /// each opened leaf at the randomness.
     fn open_and_fold(
         &self,
         round_data: &ZkRoundData<F, EF, MT>,
-        index: usize,
+        indices: &[usize],
         randomness: &Point<EF>,
-    ) -> (QueryOpening<F, EF, MT::Proof>, EF) {
+    ) -> (QueryOpenings<F, EF, MT::MultiProof>, Vec<EF>) {
         match round_data {
             ZkRoundData::Base(data) => {
-                let opening = self.mmcs.open_batch(index, data);
-                let values = opening.opened_values.into_iter().next().unwrap();
-                let folded = Poly::new(values.clone()).eval_base(randomness);
-                (
-                    QueryOpening::Base {
-                        values,
-                        proof: opening.opening_proof,
-                    },
-                    folded,
-                )
+                let opening = SharedProofOpening::open(self.mmcs, indices, data);
+                let folded = opening
+                    .rows
+                    .iter()
+                    .map(|row| Poly::new(row.clone()).eval_base(randomness))
+                    .collect();
+                (QueryOpenings::Base(opening), folded)
             }
             ZkRoundData::Ext(data) => {
-                let opening = self.extension_mmcs.open_batch(index, data);
-                let values = opening.opened_values.into_iter().next().unwrap();
-                let folded = Poly::new(values.clone()).eval_ext::<F>(randomness);
-                (
-                    QueryOpening::Extension {
-                        values,
-                        proof: opening.opening_proof,
-                    },
-                    folded,
-                )
+                let opening = SharedProofOpening::open(&self.extension_mmcs, indices, data);
+                let folded = opening
+                    .rows
+                    .iter()
+                    .map(|row| Poly::new(row.clone()).eval_ext::<F>(randomness))
+                    .collect();
+                (QueryOpenings::Extension(opening), folded)
             }
         }
     }
