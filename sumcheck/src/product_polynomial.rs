@@ -21,6 +21,7 @@
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
@@ -554,20 +555,21 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
                 // computes the same table with O(sqrt(2^k)) working memory via a
                 // split-and-dot construction; route through it whenever there are
                 // enough variables to pack, then unpack-add the packed delta into
-                // the scalar accumulator.
+                // the scalar accumulator in parallel, one packed lane group per chunk.
                 let k_pack = log2_strict_usize(F::Packing::WIDTH);
                 if weights.num_variables() >= k_pack {
-                    let mut packed_delta = Poly::zero(weights.num_variables() - k_pack);
-                    let mut packed_sum = EF::ZERO;
-                    constraint.combine_packed(&mut packed_delta, &mut packed_sum);
+                    assert_eq!(constraint.num_variables(), weights.num_variables());
+                    let (packed_delta, packed_sum) = constraint.combine_new_packed();
                     *sum += packed_sum;
                     weights
                         .as_mut_slice()
-                        .iter_mut()
-                        .zip(EF::ExtensionPacking::to_ext_iter(
-                            packed_delta.iter().copied(),
-                        ))
-                        .for_each(|(out, delta)| *out += delta);
+                        .par_chunks_mut(F::Packing::WIDTH)
+                        .zip(packed_delta.as_slice().par_iter())
+                        .for_each(|(out, delta)| {
+                            out.iter_mut()
+                                .enumerate()
+                                .for_each(|(lane, o)| *o += delta.extract(lane));
+                        });
                 } else {
                     constraint.combine(weights, sum);
                 }
