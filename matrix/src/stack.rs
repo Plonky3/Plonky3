@@ -1,4 +1,7 @@
+use alloc::vec::Vec;
 use core::ops::Deref;
+
+use p3_field::PackedValue;
 
 use crate::Matrix;
 use crate::bitrev::BitReversibleMatrix;
@@ -209,6 +212,28 @@ impl<T: Send + Sync + Clone, Left: Matrix<T>, Right: Matrix<T>> Matrix<T>
                 .chain(self.right.row_unchecked(r))
         }
     }
+
+    #[inline]
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        self.left
+            .vertically_packed_row::<P>(r)
+            .chain(self.right.vertically_packed_row::<P>(r))
+    }
+
+    #[inline]
+    fn vertically_packed_row_pair<P>(&self, r: usize, step: usize) -> Vec<P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        self.vertically_packed_row::<P>(r)
+            .chain(self.vertically_packed_row::<P>(r + step))
+            .collect()
+    }
 }
 
 /// We use this to wrap both the row iterator and the row slice.
@@ -403,5 +428,59 @@ mod tests {
         let a = RowMajorMatrix::new(vec![1, 2, 3], 3); // 1x3
         let b = RowMajorMatrix::new(vec![4, 5], 1); // 2x1
         let _ = HorizontalPair::new::<i32>(a, b);
+    }
+
+    #[test]
+    fn test_horizontal_pair_vertically_packed_row_scalar_width_1() {
+        use p3_baby_bear::BabyBear;
+
+        type Packed = BabyBear;
+
+        // Full matrix (4x4), split into two 4x2 halves:
+        // [  1   2 |  3   4  ]  <-- Row 0
+        // [  5   6 |  7   8  ]  <-- Row 1
+        // [  9  10 | 11  12  ]  <-- Row 2
+        // [ 13  14 | 15  16  ]  <-- Row 3
+        let left = RowMajorMatrix::new([1, 2, 5, 6, 9, 10, 13, 14].map(BabyBear::new).to_vec(), 2);
+        let right =
+            RowMajorMatrix::new([3, 4, 7, 8, 11, 12, 15, 16].map(BabyBear::new).to_vec(), 2);
+        let horizontal = HorizontalPair::new::<BabyBear>(left, right);
+
+        let packed = horizontal
+            .vertically_packed_row::<Packed>(2)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            packed,
+            vec![
+                BabyBear::new(9),
+                BabyBear::new(10),
+                BabyBear::new(11),
+                BabyBear::new(12),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_horizontal_pair_vertically_packed_row_pair() {
+        use p3_baby_bear::BabyBear;
+        use p3_field::FieldArray;
+
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let left = RowMajorMatrix::new([1, 2, 5, 6, 9, 10, 13, 14].map(BabyBear::new).to_vec(), 2);
+        let right =
+            RowMajorMatrix::new([3, 4, 7, 8, 11, 12, 15, 16].map(BabyBear::new).to_vec(), 2);
+        let horizontal = HorizontalPair::new::<BabyBear>(left, right);
+
+        let packed = horizontal.vertically_packed_row_pair::<Packed>(0, 2);
+
+        assert_eq!(
+            packed,
+            (1..5)
+                .chain(9..13)
+                .map(|i| [BabyBear::new(i), BabyBear::new(i + 4)].into())
+                .collect::<Vec<_>>(),
+        );
     }
 }

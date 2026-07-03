@@ -656,15 +656,21 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
         let new_values = T::zero_vec(new_w * self.height());
         let mut result = Self::new(new_values, new_w);
 
-        // - Copy original data into the left portion of each row,
-        // - Then fill the right portion with independent random samples.
+        // Copy original data into the left portion of each row in parallel; this is a plain
+        // memcpy per row with no dependency on the (necessarily serial) RNG stream below.
         result
-            .rows_mut()
-            .zip(self.row_slices())
+            .par_rows_mut()
+            .zip(self.par_row_slices())
             .for_each(|(new_row, old_row)| {
                 new_row[..old_w].copy_from_slice(old_row);
-                new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
             });
+
+        // Fill the trailing random columns as a separate serial pass, since `rng` is a single
+        // sequential stream.
+        result.rows_mut().for_each(|new_row| {
+            new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
+        });
+
         result
     }
 
