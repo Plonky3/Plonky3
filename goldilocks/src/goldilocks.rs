@@ -216,7 +216,7 @@ impl Distribution<Goldilocks> for StandardUniform {
 }
 
 impl UniformSamplingField for Goldilocks {
-    const MAX_SINGLE_SAMPLE_BITS: usize = 24;
+    const MAX_SINGLE_SAMPLE_BITS: usize = 32;
     const SAMPLING_BITS_M: [u64; 64] = {
         let prime: u64 = P;
         let mut a = [0u64; 64];
