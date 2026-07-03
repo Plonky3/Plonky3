@@ -73,6 +73,10 @@ pub struct PeriodicLdeTable<F> {
     /// Values in row-major form: height = extended_height, width = num_columns.
     /// Empty if there are no periodic columns.
     values: RowMajorMatrix<F>,
+    /// Cached `values.values.len() / values.width` (`0` if `values.width == 0`).
+    /// Guaranteed to be a power of two, so `get` can index with `& (height - 1)`
+    /// instead of `%`.
+    height: usize,
 }
 
 impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
@@ -80,13 +84,22 @@ impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
     ///
     /// The matrix should have height = `max_period × blowup` and width = `num_periodic_columns`.
     pub const fn new(values: RowMajorMatrix<F>) -> Self {
-        Self { values }
+        let height = match values.values.len().checked_div(values.width) {
+            Some(h) => h,
+            None => 0,
+        };
+        debug_assert!(
+            height == 0 || height.is_power_of_two(),
+            "PeriodicLdeTable height must be a power of two for bitmask indexing"
+        );
+        Self { values, height }
     }
 
     /// Create an empty table (for AIRs without periodic columns).
     pub fn empty() -> Self {
         Self {
             values: RowMajorMatrix::new(Vec::new(), 0),
+            height: 0,
         }
     }
 
@@ -102,31 +115,15 @@ impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
 
     /// Height of the compact table (max_period × blowup).
     pub const fn height(&self) -> usize {
-        match self.values.values.len().checked_div(self.values.width) {
-            Some(h) => h,
-            None => 0,
-        }
-    }
-
-    /// Get all periodic column values for a given LDE index using modular indexing.
-    ///
-    /// Returns a slice of length `width()` containing the value of each periodic column.
-    #[inline]
-    pub fn get_row(&self, lde_idx: usize) -> &[F] {
-        let height = self.height();
-        debug_assert!(height > 0, "cannot index into empty periodic table");
-        let row_idx = lde_idx % height;
-        let start = row_idx * self.values.width;
-        let end = start + self.values.width;
-        &self.values.values[start..end]
+        self.height
     }
 
     /// Get a specific periodic column value for a given LDE index.
     #[inline]
     pub fn get(&self, lde_idx: usize, col_idx: usize) -> &F {
-        let height = self.height();
+        let height = self.height;
         debug_assert!(height > 0, "cannot index into empty periodic table");
-        let row_idx = lde_idx % height;
+        let row_idx = lde_idx & (height - 1);
         &self.values.values[row_idx * self.values.width + col_idx]
     }
 }
@@ -220,5 +217,24 @@ impl<F: Field, D: PolynomialSpace<Val = F>> PeriodicEvaluator<F, D> for () {
              or CirclePeriodicEvaluator."
         );
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::*;
+
+    type F = BabyBear;
+
+    #[test]
+    #[should_panic(expected = "PeriodicLdeTable height must be a power of two")]
+    fn new_panics_on_non_power_of_two_height() {
+        let (a, b, c) = (F::ONE, F::TWO, F::from_u8(3));
+        let _ = PeriodicLdeTable::new(RowMajorMatrix::new(vec![a, b, c], 1));
     }
 }

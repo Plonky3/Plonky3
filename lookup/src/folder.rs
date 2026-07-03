@@ -214,7 +214,7 @@ impl<SC: StarkGenericConfig> InteractionBuilder for ProverConstraintFolderWithLo
 
     fn push_local_interaction(
         &mut self,
-        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
     ) {
         // Same rationale as the global path: keep iterator consumption observable.
         tuples.into_iter().for_each(drop);
@@ -234,7 +234,7 @@ impl<SC: StarkGenericConfig> InteractionBuilder for VerifierConstraintFolderWith
 
     fn push_local_interaction(
         &mut self,
-        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
     ) {
         // Same rationale as the global path.
         tuples.into_iter().for_each(drop);

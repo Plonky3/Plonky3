@@ -132,4 +132,24 @@ pub enum PrunedProofError {
         /// Number of original queries.
         num_queries: usize,
     },
+
+    /// The number of verifier-supplied indices differs from the number of openings.
+    #[error("index count mismatch: {num_indices} indices but {num_queries} openings")]
+    IndexCountMismatch {
+        /// Number of indices supplied by the verifier.
+        num_indices: usize,
+        /// Number of openings carried by the proof.
+        num_queries: usize,
+    },
+
+    /// An opening's leaf index disagrees with the verifier-supplied index.
+    #[error("query {query}: proof opens leaf {got}, verifier expected {expected}")]
+    IndexMismatch {
+        /// Position of the query in the verifier's index list.
+        query: usize,
+        /// Leaf index the verifier derived (e.g. from the transcript).
+        expected: usize,
+        /// Leaf index the proof actually opens for this query.
+        got: usize,
+    },
 }
