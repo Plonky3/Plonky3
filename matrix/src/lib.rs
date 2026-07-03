@@ -428,10 +428,12 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
-        // Below this height, the rayon fork-join and SIMD-packing machinery costs more than
-        // the dot product itself; fall back to a plain scalar accumulation.
-        const SMALL_HEIGHT: usize = 16;
-        if self.height() <= SMALL_HEIGHT {
+        // Below this many total elements, the rayon fork-join and SIMD-packing machinery
+        // costs more than the dot product itself; fall back to a plain scalar accumulation.
+        // Gating on total elements (rather than height alone) also covers wide-but-short
+        // matrices, where a per-row cost proportional to width still adds up.
+        const SMALL_ELEMS: usize = 256;
+        if self.height().saturating_mul(self.width()) <= SMALL_ELEMS {
             let mut acc = EF::zero_vec(self.width());
             for (row, &scale) in self.rows().zip(v) {
                 for (l, r) in acc.iter_mut().zip(row) {
