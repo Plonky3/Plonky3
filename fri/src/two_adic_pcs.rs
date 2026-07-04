@@ -20,7 +20,7 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PeriodicLdeTable};
+use p3_commit::{Mmcs, OpenedValues, Pcs, PeriodicLdeTable};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
@@ -37,7 +37,7 @@ use tracing::{debug_span, instrument};
 
 use crate::periodic::build_periodic_lde_table_two_adic;
 use crate::verifier::{self, FriError};
-use crate::{FriFoldingStrategy, FriParameters, FriProof, prover};
+use crate::{BatchMultiOpening, FriFoldingStrategy, FriParameters, FriProof, prover};
 
 /// A polynomial commitment scheme using FRI to generate opening proofs.
 ///
@@ -93,7 +93,7 @@ pub type CommitmentWithOpeningPoints<Challenge, Commitment, Domain> = (
 pub struct TwoAdicFriFolding<InputProof, InputError>(pub PhantomData<(InputProof, InputError)>);
 
 pub type TwoAdicFriFoldingForMmcs<F, M> =
-    TwoAdicFriFolding<Vec<BatchOpening<F, M>>, <M as Mmcs<F>>::Error>;
+    TwoAdicFriFolding<Vec<BatchMultiOpening<F, M>>, <M as Mmcs<F>>::Error>;
 
 impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionField<F>>
     FriFoldingStrategy<F, EF> for TwoAdicFriFolding<InputProof, InputError>
@@ -263,7 +263,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challen
 where
     Val: TwoAdicField,
     Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: Mmcs<Val, Proof: Sync, Error: Sync>,
+    InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: ExtensionField<Val>,
     Challenger:
@@ -273,7 +273,7 @@ where
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
-    type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
+    type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchMultiOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
     const ZK: bool = false;
 
