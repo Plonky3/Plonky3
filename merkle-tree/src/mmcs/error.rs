@@ -74,82 +74,22 @@ pub enum MerkleTreeError {
 /// Each variant pins one failure mode with its diagnostic fields.
 #[derive(Debug, Error)]
 pub enum PrunedProofError {
-    /// More unique paths than the tree can hold.
-    #[error("too many unique paths: {got} exceeds tree height {max_height}")]
-    TooManyUniquePaths {
-        /// Number of unique paths claimed by the proof.
-        got: usize,
-        /// Maximum admissible height (the tallest committed matrix).
-        max_height: usize,
-    },
-
-    /// A restored path has the wrong number of siblings for the tree geometry.
-    #[error("restored path has {got} siblings, expected {expected}")]
+    /// The flat sibling list does not match the frontier the query set implies.
+    ///
+    /// The verifier's query set fixes an exact boundary-digest count.
+    /// A proof carrying too few or too many digests lands here.
+    #[error("wrong pruned sibling count: expected {expected}, got {got}")]
     SiblingCountMismatch {
-        /// Sibling count implied by the verifier-known arity schedule.
+        /// Digest count the verifier-derived frontier requires.
         expected: usize,
-        /// Sibling count produced while restoring the path.
+        /// Digest count the proof actually carried.
         got: usize,
     },
 
-    /// An `original_order` entry references a unique-path slot that does not exist.
-    #[error("original-order references missing path slot {slot} of {num_paths}")]
-    OriginalOrderOutOfRange {
-        /// Slot index referenced by the entry.
-        slot: usize,
-        /// Number of unique paths actually present.
-        num_paths: usize,
-    },
-
-    /// Two queries map to one path but disagree on opened values.
+    /// Two queries map to one leaf but disagree on opened values.
     #[error("duplicate queries for path slot {slot} disagree on opened values")]
     InconsistentDuplicateOpenings {
-        /// Unique-path slot the conflicting queries map to.
+        /// Unique-leaf slot the conflicting queries map to.
         slot: usize,
-    },
-
-    /// A unique path is never referenced by any query.
-    #[error("unique path slot {slot} is never referenced by a query")]
-    UnreferencedPath {
-        /// Slot that no `original_order` entry points to.
-        slot: usize,
-    },
-
-    /// Sorted leaf indices are not strictly ascending.
-    #[error("leaf indices not strictly ascending at position {position}: index {index}")]
-    NonAscendingLeaves {
-        /// Position of the offending path in the sorted list.
-        position: usize,
-        /// Leaf index that fails to exceed its predecessor.
-        index: usize,
-    },
-
-    /// The path and query counts are inconsistent (e.g. queries present but no paths).
-    #[error("path/query count mismatch: {num_paths} paths but {num_queries} queries")]
-    PathQueryCountMismatch {
-        /// Number of unique paths.
-        num_paths: usize,
-        /// Number of original queries.
-        num_queries: usize,
-    },
-
-    /// The number of verifier-supplied indices differs from the number of openings.
-    #[error("index count mismatch: {num_indices} indices but {num_queries} openings")]
-    IndexCountMismatch {
-        /// Number of indices supplied by the verifier.
-        num_indices: usize,
-        /// Number of openings carried by the proof.
-        num_queries: usize,
-    },
-
-    /// An opening's leaf index disagrees with the verifier-supplied index.
-    #[error("query {query}: proof opens leaf {got}, verifier expected {expected}")]
-    IndexMismatch {
-        /// Position of the query in the verifier's index list.
-        query: usize,
-        /// Leaf index the verifier derived (e.g. from the transcript).
-        expected: usize,
-        /// Leaf index the proof actually opens for this query.
-        got: usize,
     },
 }

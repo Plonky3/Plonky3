@@ -18,9 +18,7 @@ use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
-use p3_whir::parameters::{
-    DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
-};
+use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::proof::{PcsProof, QueryOpenings};
 use p3_whir::pcs::prover::WhirProver;
 use rand::SeedableRng;
@@ -120,24 +118,8 @@ struct ProofStats {
     stir_queries: usize,
     /// Merkle sibling digests actually shipped, summed over every round.
     ///
-    /// This is what the pruned multiproof sends: shared siblings travel once.
+    /// This is the frontier proof: each boundary digest travels once.
     pruned_digests: usize,
-    /// Merkle sibling digests a per-query (unpruned) proof would have shipped.
-    ///
-    /// One full root-to-leaf path per query, with no sharing.
-    full_digests: usize,
-}
-
-impl ProofStats {
-    /// Percent of Merkle sibling digests removed by pruning.
-    ///
-    ///     saved = (full - pruned) / full
-    const fn merkle_saved_percent(&self) -> usize {
-        match ((self.full_digests - self.pruned_digests) * 100).checked_div(self.full_digests) {
-            Some(percent) => percent,
-            None => 0,
-        }
-    }
 }
 
 /// Pre-built benchmark fixture parameterized by the sumcheck layout mode.
@@ -175,7 +157,7 @@ impl<L: Layout<F, EF>> Bench<L> {
         let folding_factor = FoldingFactor::Constant(opts.folding);
         let params = ProtocolParameters {
             security_level: SECURITY_LEVEL,
-            pow_bits: DEFAULT_MAX_POW,
+            pow_bits: 20,
             round_log_inv_rates: default_round_log_inv_rates(opts.num_variables, &folding_factor),
             folding_factor,
             soundness_type: opts.soundness,
@@ -325,31 +307,26 @@ impl<L: Layout<F, EF>> Bench<L> {
             .expect("proof serializes")
             .len();
 
-        // The first sorted path shares nothing above it, so it keeps every sibling.
-        //   paths[0].siblings.len() = full root-to-leaf path length
-        //   full   = queries * that length   (the unpruned per-query cost)
-        //   pruned = sum over paths of siblings.len()
+        // The frontier proof carries no indices, so the query count comes from the opened rows.
+        // The pruned digest count is the length of the flat boundary-sibling list.
+        //   queries = rows.len()   (one opened row per STIR query)
+        //   pruned  = sibling_hashes.len()   (boundary digests, shared once)
         let round_stats =
             |openings: &QueryOpenings<F, EF, <Mmcs as MultiOpeningMmcs<F>>::MultiProof>| {
-                let paths = match openings {
-                    QueryOpenings::Base(opening) => &opening.proof,
-                    QueryOpenings::Extension(opening) => &opening.proof,
+                let (queries, proof) = match openings {
+                    QueryOpenings::Base(opening) => (opening.rows.len(), &opening.proof),
+                    QueryOpenings::Extension(opening) => (opening.rows.len(), &opening.proof),
                 };
-                let queries = paths.original_order.len();
-                let pruned: usize = paths.paths.iter().map(|p| p.siblings.len()).sum();
-                let full_path_len = paths.paths.first().map_or(0, |p| p.siblings.len());
-                (queries, pruned, queries * full_path_len)
+                (queries, proof.sibling_hashes.len())
             };
 
         let mut stir_queries = 0;
         let mut pruned_digests = 0;
-        let mut full_digests = 0;
         let mut accumulate =
             |o: &QueryOpenings<F, EF, <Mmcs as MultiOpeningMmcs<F>>::MultiProof>| {
-                let (q, pruned, full) = round_stats(o);
+                let (q, pruned) = round_stats(o);
                 stir_queries += q;
                 pruned_digests += pruned;
-                full_digests += full;
             };
         for round in &proof.whir.rounds {
             accumulate(&round.openings);
@@ -360,7 +337,6 @@ impl<L: Layout<F, EF>> Bench<L> {
             proof_bytes,
             stir_queries,
             pruned_digests,
-            full_digests,
         }
     }
 }
@@ -469,20 +445,14 @@ fn report_proof_size(_c: &mut Criterion) {
          folding={FOLDING}, starting_log_inv_rate={LOG_INV_RATE}, evals={NUM_EVALUATIONS})"
     );
     eprintln!(
-        "{:<8} {:>5} {:>14} {:>9} {:>16} {:>14} {:>9}",
-        "case", "vars", "proof_bytes", "queries", "merkle_digests", "full_digests", "saved",
+        "{:<8} {:>5} {:>14} {:>9} {:>16}",
+        "case", "vars", "proof_bytes", "queries", "merkle_digests",
     );
     for (label, num_variables) in cases {
         let stats = Bench::<L>::new(Options::sized(num_variables)).stats();
         eprintln!(
-            "{:<8} {:>5} {:>14} {:>9} {:>16} {:>14} {:>8}%",
-            label,
-            num_variables,
-            stats.proof_bytes,
-            stats.stir_queries,
-            stats.pruned_digests,
-            stats.full_digests,
-            stats.merkle_saved_percent(),
+            "{:<8} {:>5} {:>14} {:>9} {:>16}",
+            label, num_variables, stats.proof_bytes, stats.stir_queries, stats.pruned_digests,
         );
     }
     eprintln!();
