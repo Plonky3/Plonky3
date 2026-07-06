@@ -85,7 +85,12 @@ impl<
         }
     }
 
-    pub fn generate_trace_rows(
+    /// Generate a trace over `num_hashes` fixed-seed random permutation inputs.
+    ///
+    /// This is for benches/examples only — it does not let callers supply the actual
+    /// inputs being hashed. Use the free [`generate_trace_rows`] function directly to
+    /// prove specific inputs.
+    pub fn generate_random_trace_rows(
         &self,
         num_hashes: usize,
         extra_capacity_bits: usize,
@@ -276,7 +281,7 @@ fn eval_partial_round<
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [AB::Expr; WIDTH],
-    partial_round: &PartialRound<AB::Var, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
+    partial_round: &PartialRound<AB::Var, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constant: &AB::F,
     builder: &mut AB,
 ) {
