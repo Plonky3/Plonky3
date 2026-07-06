@@ -6,8 +6,7 @@ use core::marker::PhantomData;
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{
-    BatchOpening, BatchOpeningRef, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs,
-    PeriodicLdeTable, PolynomialSpace,
+    BatchOpening, BatchOpeningRef, Mmcs, OpenedValues, Pcs, PeriodicLdeTable, PolynomialSpace,
 };
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field, dot_product};
@@ -767,26 +766,14 @@ where
             },
         )
     }
-}
 
-impl<Val, InputMmcs, FriMmcs> BuildPeriodicLdeTableFast for CirclePcs<Val, InputMmcs, FriMmcs>
-where
-    Val: ComplexExtendable,
-    InputMmcs: Mmcs<Val>,
-{
-    type PeriodicDomain = CircleDomain<Val>;
-
-    fn maybe_build_periodic_lde_table_fast(
+    fn build_periodic_lde_table(
         &self,
-        periodic_cols: &[Vec<p3_commit::Val<Self::PeriodicDomain>>],
-        trace_domain: Self::PeriodicDomain,
-        quotient_domain: Self::PeriodicDomain,
-    ) -> Option<PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>>
-    where
-        p3_commit::Val<Self::PeriodicDomain>: Clone,
-    {
-        let table = build_periodic_lde_table_circle(periodic_cols, &trace_domain, &quotient_domain);
-        Some(table)
+        periodic_cols: &[Vec<Val>],
+        trace_domain: Self::Domain,
+        quotient_domain: Self::Domain,
+    ) -> PeriodicLdeTable<Val> {
+        build_periodic_lde_table_circle(periodic_cols, &trace_domain, &quotient_domain)
     }
 }
 
