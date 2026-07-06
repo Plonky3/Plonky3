@@ -1276,6 +1276,7 @@ unsafe fn mds_light_neon<const WIDTH: usize>(state: &mut [uint64x2_t; WIDTH]) {
 }
 
 /// Convert separate lane arrays into NEON vector array.
+#[cfg(test)]
 #[inline]
 pub fn lanes_to_neon<const WIDTH: usize>(
     lane0: &[u64; WIDTH],
@@ -1289,6 +1290,7 @@ pub fn lanes_to_neon<const WIDTH: usize>(
 }
 
 /// Convert NEON vector array back to separate lane arrays.
+#[cfg(test)]
 #[inline]
 pub fn neon_to_lanes<const WIDTH: usize>(
     state_v: &[uint64x2_t; WIDTH],
