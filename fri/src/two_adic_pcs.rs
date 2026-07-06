@@ -719,11 +719,7 @@ where
         trace_domain: Self::Domain,
         quotient_domain: Self::Domain,
     ) -> PeriodicLdeTable<Val> {
-        build_periodic_lde_table_two_adic::<Val, Dft>(
-            periodic_cols,
-            &trace_domain,
-            &quotient_domain,
-        )
+        build_periodic_lde_table_two_adic(&self.dft, periodic_cols, &trace_domain, &quotient_domain)
     }
 }
 
