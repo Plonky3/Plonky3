@@ -361,7 +361,7 @@ where
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
         assert!(bits < (usize::BITS as usize));
-        assert!((1u64 << bits) <= F::ORDER_U64);
+        assert!((1u64 << bits) < F::ORDER_U64);
         let rand_u64 = u64::from_le_bytes(self.inner.sample_array());
         (rand_u64 & ((1u64 << bits) - 1)) as usize
     }

@@ -355,7 +355,7 @@ where
         })?;
     let quotient_domain = trace_domain
         .try_create_disjoint_domain(quotient_domain_size)
-        .ok_or(InvalidProofShapeError::QuotientDomainTooLarge {
+        .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
             maximum: pcs.log_max_lde_height(),
             got: quotient_domain_log_size,

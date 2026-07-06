@@ -139,6 +139,8 @@ impl<T: Send> ParallelSliceMut<T> for [T] {
 }
 
 pub trait ParIterExt: Iterator {
+    /// Serially, this returns the first matching item, unlike rayon's `find_any`, which may
+    /// return any matching item found by any thread.
     fn find_any<P>(self, predicate: P) -> Option<Self::Item>
     where
         P: Fn(&Self::Item) -> bool + Sync + Send;
@@ -153,6 +155,8 @@ pub trait ParIterExt: Iterator {
         U: IntoIterator,
         F: Fn(Self::Item) -> U;
 
+    /// Serially, `init` is called once and the single state is reused across every item,
+    /// unlike rayon's `for_each_init`, which calls `init` once per split.
     fn for_each_init<OP, INIT, T>(self, init: INIT, op: OP)
     where
         Self: Sized,
@@ -195,6 +199,8 @@ impl<I: Iterator> ParIterExt for I {
     }
 }
 
+/// Runs `oper_a` then `oper_b` in sequence, unlike rayon's `join`, which may run them
+/// concurrently on separate threads.
 pub fn join<A, B, RA, RB>(oper_a: A, oper_b: B) -> (RA, RB)
 where
     A: FnOnce() -> RA,
@@ -205,6 +211,7 @@ where
     (result_a, result_b)
 }
 
-pub fn current_num_threads() -> usize {
+/// Always 1: there is only one thread of execution in a serial build.
+pub const fn current_num_threads() -> usize {
     1
 }
