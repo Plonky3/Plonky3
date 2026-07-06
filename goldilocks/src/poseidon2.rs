@@ -49,6 +49,16 @@ pub const GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_16: usize = 22;
 /// An implementation of the Poseidon2 hash function for the Goldilocks field.
 ///
 /// It acts on arrays of the form `[Goldilocks; WIDTH]`.
+///
+/// On this platform this alias resolves to [`crate::Poseidon2GoldilocksFused`], a
+/// concrete, non-generic type: it only implements `Permutation` for `[Goldilocks; WIDTH]`
+/// and `[PackedGoldilocksNeon; WIDTH]` (not the generic `Algebra<Goldilocks>` state that
+/// the fallback `p3_poseidon2::Poseidon2` type below supports), and its constructor takes
+/// its round constants by reference rather than by value. Code that needs to build against
+/// both platforms should go through [`default_goldilocks_poseidon2_8`],
+/// [`default_goldilocks_poseidon2_12`], [`default_goldilocks_poseidon2_16`], or
+/// `new_from_rng`/`new_from_rng_128` (which have matching signatures on both platforms),
+/// rather than calling `new` directly.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub type Poseidon2Goldilocks<const WIDTH: usize> = crate::Poseidon2GoldilocksFused<WIDTH>;
 

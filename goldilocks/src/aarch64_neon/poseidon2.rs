@@ -312,6 +312,9 @@ const fn to_canonical_u64(v: u64) -> u64 {
 }
 
 impl<const WIDTH: usize> Poseidon2GoldilocksFused<WIDTH> {
+    /// Unlike the generic `Poseidon2::new`, this only reads the round constants (to derive
+    /// the fused ASM constant tables) rather than storing them, so it takes them by
+    /// reference instead of by value.
     pub fn new(
         external_constants: &ExternalLayerConstants<Goldilocks, WIDTH>,
         internal_constants: &[Goldilocks],
