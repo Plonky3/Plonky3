@@ -42,7 +42,7 @@ fn build_monolith_air_m31() -> (
     MonolithBarsM31,
 ) {
     let bars = MonolithBarsM31;
-    let mds = MonolithMdsMatrixMersenne31::<6>;
+    let mds = MonolithMdsMatrixMersenne31::<5>;
     let mds_matrix = MonolithAir::<
         M31Val,
         M31_WIDTH,

@@ -12,8 +12,12 @@ use shake::{Shake128, Shake128Reader};
 use crate::util::get_random_u32;
 
 /// MDS matrix implementation for the Monolith-31 Concrete layer.
+///
+/// `NUM_FULL_ROUNDS` must match the [`Monolith`](crate::Monolith) instance this MDS matrix
+/// is plugged into, so that the SHAKE domain separator for non-standard widths binds to the
+/// actual round count (`NUM_FULL_ROUNDS + 1` total rounds) rather than a caller-recomputed copy.
 #[derive(Clone, Debug)]
-pub struct MonolithMdsMatrixMersenne31<const NUM_ROUNDS: usize>;
+pub struct MonolithMdsMatrixMersenne31<const NUM_FULL_ROUNDS: usize>;
 
 /// Precomputed first row of the 16x16 circulant MDS matrix for Mersenne31.
 ///
@@ -58,10 +62,11 @@ impl Convolve<Mersenne31, i64, i64> for MonolithConvolveMersenne31 {
     }
 }
 
-impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH]>
-    for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
+impl<const WIDTH: usize, const NUM_FULL_ROUNDS: usize> Permutation<[Mersenne31; WIDTH]>
+    for MonolithMdsMatrixMersenne31<NUM_FULL_ROUNDS>
 {
     fn permute(&self, input: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
+        const { assert!(WIDTH <= u8::MAX as usize) };
         if WIDTH == 16 {
             const COL: [i64; 16] =
                 first_row_to_first_col(&MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH_ROW);
@@ -77,7 +82,7 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
             // For non-standard widths, derive a Cauchy MDS matrix from SHAKE-128.
             let mut shake = Shake128::default();
             shake.update(b"Monolith");
-            shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
+            shake.update(&[WIDTH as u8, (NUM_FULL_ROUNDS + 1) as u8]);
             shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
             // The [16, 15] encodes the bit parameters for the Cauchy construction.
             shake.update(&[16, 15]);
@@ -88,8 +93,8 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
     }
 }
 
-impl<const WIDTH: usize, const NUM_ROUNDS: usize> MdsPermutation<Mersenne31, WIDTH>
-    for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
+impl<const WIDTH: usize, const NUM_FULL_ROUNDS: usize> MdsPermutation<Mersenne31, WIDTH>
+    for MonolithMdsMatrixMersenne31<NUM_FULL_ROUNDS>
 {
 }
 
