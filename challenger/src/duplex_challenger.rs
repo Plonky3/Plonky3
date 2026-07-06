@@ -128,7 +128,7 @@ where
     ///
     /// - The tag distinguishes at most 256 absorb lengths.
     /// - Callers must keep logical lengths at most 255, or lengths differing by 256 collide.
-    pub fn absorb_rate_padded_with_tag(&mut self, values: &[F], length_tag: u8) {
+    pub(crate) fn absorb_rate_padded_with_tag(&mut self, values: &[F], length_tag: u8) {
         const {
             assert!(
                 RATE < WIDTH,
