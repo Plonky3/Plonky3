@@ -17,7 +17,12 @@ use crate::{BITS_PER_LIMB, NUM_ROUNDS_MIN_1, U64_LIMBS, generate_trace_rows};
 pub struct KeccakAir {}
 
 impl KeccakAir {
-    pub fn generate_trace_rows<F: PrimeField64>(
+    /// Generate a trace over `num_hashes` fixed-seed random permutation inputs.
+    ///
+    /// This is for benches/examples only — it does not let callers supply the actual
+    /// inputs being hashed. Use the free [`generate_trace_rows`] function directly to
+    /// prove specific inputs.
+    pub fn generate_random_trace_rows<F: PrimeField64>(
         &self,
         num_hashes: usize,
         extra_capacity_bits: usize,

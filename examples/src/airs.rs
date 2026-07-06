@@ -173,14 +173,18 @@ impl<
         StandardUniform: Distribution<F>,
     {
         match self {
-            Self::Blake3(b3_air) => b3_air.generate_trace_rows(num_hashes, extra_capacity_bits),
+            Self::Blake3(b3_air) => {
+                b3_air.generate_random_trace_rows(num_hashes, extra_capacity_bits)
+            }
             Self::Poseidon1(p1_air) => {
                 p1_air.generate_vectorized_trace_rows(num_hashes, extra_capacity_bits)
             }
             Self::Poseidon2(p2_air) => {
                 p2_air.generate_vectorized_trace_rows(num_hashes, extra_capacity_bits)
             }
-            Self::Keccak(k_air) => k_air.generate_trace_rows(num_hashes, extra_capacity_bits),
+            Self::Keccak(k_air) => {
+                k_air.generate_random_trace_rows(num_hashes, extra_capacity_bits)
+            }
         }
     }
 }
@@ -203,7 +207,7 @@ impl<
     where
         StandardUniform: Distribution<F>,
     {
-        self.generate_trace_rows(num_hashes, extra_capacity_bits)
+        self.generate_random_trace_rows(num_hashes, extra_capacity_bits)
     }
 }
 
@@ -225,7 +229,7 @@ impl<
     where
         StandardUniform: Distribution<F>,
     {
-        self.generate_trace_rows(num_hashes, extra_capacity_bits)
+        self.generate_random_trace_rows(num_hashes, extra_capacity_bits)
     }
 }
 
@@ -301,6 +305,6 @@ impl<
     where
         StandardUniform: Distribution<F>,
     {
-        self.generate_trace_rows(num_hashes, extra_capacity_bits)
+        self.generate_random_trace_rows(num_hashes, extra_capacity_bits)
     }
 }
