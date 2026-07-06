@@ -13,9 +13,11 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, instrument};
 
+#[cfg(test)]
+use crate::cfft_permute_index;
 use crate::domain::CircleDomain;
 use crate::point::{Point, compute_lagrange_den_batched};
-use crate::{CfftPermutable, CfftView, cfft_permute_index, cfft_permute_slice};
+use crate::{CfftPermutable, CfftView, cfft_permute_slice};
 
 #[derive(Clone)]
 pub struct CircleEvaluations<F, M = RowMajorMatrix<F>> {
@@ -514,6 +516,9 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         reverse_slice_index_bits(&mut ys);
         ys
     }
+    /// Used only by [`crate::folding::fold_y_row`], the test-only reference implementation
+    /// of [`crate::folding::fold_y`]; see that function's doc comment.
+    #[cfg(test)]
     pub(crate) fn nth_y_twiddle(&self, index: usize) -> F {
         self.nth_point(cfft_permute_index(index << 1, self.log_n)).y
     }
