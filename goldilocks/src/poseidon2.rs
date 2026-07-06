@@ -682,6 +682,9 @@ pub const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] = Goldilocks::new_array([
     0xfffffffe00000002, // 1/2^32
 ]);
 
+// Unlike the width-8/12/16 diagonals above (small values with a documented
+// `-2, 1, 2, 1/2, ...` structure), these are opaque full field elements with no
+// derivation recorded in this crate and no width-20 KAT to cross-check them against.
 pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = Goldilocks::new_array([
     0x95c381fda3b1fa57,
     0xf36fe9eb1288f42c,

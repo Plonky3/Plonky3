@@ -80,9 +80,7 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
     ///
     /// Convenience wrapper that uses shift = 1.
     ///
-    /// # Safety
-    ///
-    /// The evaluation point must not lie in the subgroup.
+    /// If the point lies in the subgroup, returns the matching row directly.
     fn interpolate_subgroup<EF: ExtensionField<F>>(&self, point: EF) -> Vec<EF> {
         // Canonical subgroup has unit shift.
         self.interpolate_coset(F::ONE, point)
@@ -95,9 +93,7 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
     ///
     /// Evaluations must be in standard (not bit-reversed) order.
     ///
-    /// # Safety
-    ///
-    /// The evaluation point must not lie in the coset.
+    /// If the point lies on the coset, returns the matching row directly.
     fn interpolate_coset<EF: ExtensionField<F>>(&self, shift: F, point: EF) -> Vec<EF> {
         let log_height = log2_strict_usize(self.height());
 
@@ -150,7 +146,7 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
     /// The inner sum is a single SIMD-optimized column-wise dot product.
     /// The outer scalar is computed with one base-field inversion.
     ///
-    /// # Safety
+    /// # Correctness requirements
     ///
     /// - The evaluation point must not lie in the coset.
     /// - Each weight must equal 1/(z - x_i) - 1/z for the corresponding coset element.
@@ -290,7 +286,7 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
     ///
     /// Hot path: O(n * width) per call when weights are reused across targets.
     ///
-    /// # Safety
+    /// # Correctness requirements
     ///
     /// - The evaluation point `z` must not equal any domain point `x_i`.
     /// - `weights[i]` must be the barycentric weight for `x_i`,

@@ -53,7 +53,7 @@ impl Selector {
         self.index
     }
 
-    /// Returns this selector with its bitstring reversed.
+    /// Reverses this selector's bitstring in place.
     #[inline(always)]
     pub const fn reverse(&mut self) {
         self.index = reverse_bits_len(self.index, self.num_variables);

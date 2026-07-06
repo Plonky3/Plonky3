@@ -2,8 +2,8 @@
 //!
 //! # Modules
 //!
-//! - Prefix prover: SIMD-packed first round.
-//! - Suffix prover: SVO-accumulator preprocessing.
+//! - Prefix prover: SVO-accumulator preprocessing, packed handoff.
+//! - Suffix prover: SVO-accumulator preprocessing, unpacked handoff.
 
 mod prefix;
 mod suffix;

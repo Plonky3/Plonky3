@@ -23,7 +23,8 @@ use crate::util::{coset_shift_cols, divide_by_height};
 /// is a matrix and we is a want to perform the same operation on every column. Note that
 /// depending on the width and height of the matrix (as well as whether or not you are using the
 /// parallel feature) different implementation may be faster. Hence depending on your use case
-/// you may want to be using `Radix2Dit, Radix2DitParallel, RecursiveDft` or `Radix2Bowers`.
+/// you may want to be using `Radix2Dit`, `Radix2DitParallel`, `Radix2DFTSmallBatch` or
+/// `Radix2Bowers` (or, for `MontyField31` fields, `p3_monty_31::RecursiveDft`).
 pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
     /// The matrix type used to store the result of a batched DFT operation.
     ///

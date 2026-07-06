@@ -80,7 +80,7 @@ where
         let len = end - start;
         let inner_start = start / EF::DIMENSION;
         unsafe {
-            // Safety: The caller must ensure that r < self.height(), start <= end and end < self.width().
+            // Safety: The caller must ensure that r < self.height() and start <= end <= self.width().
             FlatIter {
                 inner: self
                     .0

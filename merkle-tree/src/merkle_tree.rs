@@ -424,8 +424,10 @@ where
             }
         });
         let digest = c.compress(children);
-        let rows_digest =
-            unsafe { h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row_unchecked(i))) };
+        let rows_digest = unsafe {
+            // Safety: i < next_len == matrices_to_inject height.
+            h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row_unchecked(i)))
+        };
         let inject_inputs: [_; N] = array::from_fn(|n| {
             if n == 0 {
                 digest
