@@ -152,10 +152,8 @@ mod tests {
         let indices: Vec<usize> = vec![0, 3, 7, 15];
         let mut pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
 
-        // Tamper with a sibling digest in the first path.
-        if let Some(first_path) = pruned_opening.pruned_proof.paths.first_mut()
-            && let Some(sibling) = first_path.siblings.first_mut()
-        {
+        // Tamper with the first boundary sibling digest in the frontier.
+        if let Some(sibling) = pruned_opening.pruned_proof.sibling_hashes.first_mut() {
             sibling[0] = F::from_u32(999999);
         }
 
@@ -171,9 +169,9 @@ mod tests {
 
     #[test]
     fn pruned_opening_rejects_substituted_index() {
-        // The proof authenticates the prover's leaf indices.
-        // Verification must bind them to the verifier's (transcript-derived) indices,
-        // or a prover could open leaf 15 against a query for leaf 14.
+        // The frontier is pinned to the verifier's indices, not the proof.
+        // Verifying against a different index set than was proven must fail.
+        // The reconstructed tree no longer matches the committed cap.
         let seed = 31u64;
         let mmcs = make_binary_mmcs(seed);
 
@@ -186,30 +184,22 @@ mod tests {
         let indices: Vec<usize> = vec![0, 3, 7, 15];
         let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
 
-        // Verifier expected leaf 14 in the last slot.
-        let expected_indices: Vec<usize> = vec![0, 3, 7, 14];
+        // Verifier substitutes leaf 14 for leaf 15 in the last slot.
+        // The opened row still belongs to leaf 15, so authentication fails.
+        let substituted: Vec<usize> = vec![0, 3, 7, 14];
         let result = mmcs.verify_batch_pruned(
             &commit,
             &dims,
-            &expected_indices,
+            &substituted,
             &pruned_opening.opened_values,
             &pruned_opening.pruned_proof,
         );
         assert!(
-            matches!(
-                result,
-                Err(MerkleTreeError::MalformedPrunedProof(
-                    PrunedProofError::IndexMismatch {
-                        query: 3,
-                        expected: 14,
-                        got: 15
-                    }
-                ))
-            ),
-            "an opening for a substituted leaf index should be rejected, got {result:?}"
+            result.is_err(),
+            "verifying against a substituted index must be rejected, got {result:?}"
         );
 
-        // Verifier expected fewer indices than the proof carries.
+        // Fewer indices than opened rows is a shape mismatch.
         let result = mmcs.verify_batch_pruned(
             &commit,
             &dims,
@@ -218,29 +208,19 @@ mod tests {
             &pruned_opening.pruned_proof,
         );
         assert!(
-            matches!(
-                result,
-                Err(MerkleTreeError::MalformedPrunedProof(
-                    PrunedProofError::IndexCountMismatch {
-                        num_indices: 3,
-                        num_queries: 4
-                    }
-                ))
-            ),
+            matches!(result, Err(MerkleTreeError::WrongBatchSize)),
             "an index/opening count mismatch should be rejected, got {result:?}"
         );
     }
 
     #[test]
-    fn pruned_opening_rejects_more_paths_than_tree_height() {
-        // A valid proof holds at most `max_height` unique paths:
-        //   leaf indices are strictly ascending and distinct in `[0, max_height)`.
-        // Claiming more is rejected before any per-path scratch is allocated.
+    fn pruned_opening_rejects_extra_siblings() {
+        // The verifier's indices fix an exact boundary-digest count.
+        // A proof padded with extra siblings must be rejected.
         let seed = 123u64;
         let mmcs = make_binary_mmcs(seed);
 
         let mut rng = SmallRng::seed_from_u64(seed);
-        // Height 8 -> max_height = 8.
         let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
         let dims = vec![mat.dimensions()];
         let (commit, prover_data) = mmcs.commit(vec![mat]);
@@ -248,11 +228,12 @@ mod tests {
         let indices: Vec<usize> = vec![0, 1, 2];
         let mut pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
 
-        // Inflate the unique-path count past the tree height by repeating a path.
-        let filler = pruned_opening.pruned_proof.paths[0].clone();
-        while pruned_opening.pruned_proof.paths.len() <= 8 {
-            pruned_opening.pruned_proof.paths.push(filler.clone());
-        }
+        // Append a bogus boundary digest the frontier never asked for.
+        let honest = pruned_opening.pruned_proof.sibling_hashes.len();
+        pruned_opening
+            .pruned_proof
+            .sibling_hashes
+            .push([F::from_u32(7); 8]);
 
         let result = mmcs.verify_batch_pruned(
             &commit,
@@ -265,13 +246,10 @@ mod tests {
             matches!(
                 result,
                 Err(MerkleTreeError::MalformedPrunedProof(
-                    PrunedProofError::TooManyUniquePaths {
-                        got: 9,
-                        max_height: 8
-                    }
-                ))
+                    PrunedProofError::SiblingCountMismatch { expected, got }
+                )) if expected == honest && got == honest + 1
             ),
-            "a proof with more unique paths than leaves should be rejected, got {result:?}"
+            "a proof carrying extra siblings should be rejected, got {result:?}"
         );
     }
 
@@ -294,12 +272,7 @@ mod tests {
 
         // Count total siblings in pruned proof.
         let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
-        let pruned_total: usize = pruned_opening
-            .pruned_proof
-            .paths
-            .iter()
-            .map(|p| p.siblings.len())
-            .sum();
+        let pruned_total: usize = pruned_opening.pruned_proof.sibling_hashes.len();
 
         assert!(
             pruned_total < individual_total,
@@ -884,12 +857,7 @@ mod tests {
 
             // Pruned proof total.
             let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
-            let pruned_total: usize = pruned_opening
-                .pruned_proof
-                .paths
-                .iter()
-                .map(|p| p.siblings.len())
-                .sum();
+            let pruned_total: usize = pruned_opening.pruned_proof.sibling_hashes.len();
 
             prop_assert!(
                 pruned_total <= individual_total,

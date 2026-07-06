@@ -315,16 +315,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // row index is the global index right-shifted by the height difference.
         let log_max_height = log2_ceil_usize(max_height);
 
-        // Phase 2: Build the shift schedule for the pruning algorithm.
-        //
-        // The arity schedule stores the branching factor at each level
-        // (2 for binary, 4 for quad, etc.). The pruning LCA computation
-        // needs log_2(arity) at each level so it can use bit-shifts instead
-        // of integer division. trailing_zeros gives log_2 for powers of two.
-        let shift_schedule: Vec<u32> = prover_data.arity_schedule[..proof_levels]
-            .iter()
-            .map(|&step| step.trailing_zeros())
-            .collect();
+        // Phase 2: The frontier reads the per-level branching factor from the arity schedule.
+        //   (2 for binary, 4 for quad, and so on.)
 
         // Pre-compute the exact total number of sibling digests in a full
         // (unpruned) proof. At each level, the sibling count is arity - 1
@@ -424,11 +416,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
         // Phase 4: Prune the authentication paths.
         //
-        // This sorts paths by leaf index, deduplicates, computes the LCA
-        // between each consecutive pair, and strips the shared upper siblings.
-        // The result is a compact proof that can be restored on the verifier
-        // side with zero information loss.
-        let pruned = prune_paths(proof_levels, &shift_schedule, &auth_paths);
+        // Fold the frontier up the tree, keeping only boundary siblings.
+        // A boundary sibling is one covering no queried leaf.
+        // The verifier restores the rest from its own indices, with no information lost.
+        let pruned = prune_paths(&prover_data.arity_schedule[..proof_levels], &auth_paths);
 
         PrunedBatchOpening {
             opened_values: all_opened_values,
@@ -477,140 +468,98 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         PW::Value: Eq + Clone,
         [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
     {
-        // Phase 1: Derive the verifier-known arity schedule and the expected
-        // full-path sibling count.
+        // Phase 1: Derive the verifier-known arity schedule and full-path sibling count.
         //
-        // Each schedule entry contributes `step - 1` siblings: one of the
-        // step children is the queried node itself, the rest are siblings.
+        // A level of arity `a` contributes `a - 1` siblings: every child but the queried one.
         //
         //   schedule = [4, 2]   → 3 + 1 = 4 expected siblings
         //   schedule = [2, 2, 2] → 1 + 1 + 1 = 3 expected siblings
         //
-        // The geometry gate also returns the tallest height,
-        // which bounds the leaf indices and seeds the walk in phase 5.
+        // The geometry gate also returns the tallest height.
+        // That height bounds the leaf indices and seeds the amortized walk below.
         let max_height =
             validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
         let arity_schedule = self.proof_arity_schedule(dimensions)?;
         let full_sibling_count: usize = arity_schedule.iter().map(|step| step - 1).sum();
 
-        // Invariant: leaf indices are strictly ascending and distinct in `[0, max_height)`.
-        //   => a valid proof has at most `max_height` unique paths.
-        // Reject an oversized count here, using verifier-known `max_height`.
-        // Otherwise `restore_paths` expands `n_unique * full_sibling_count` digests first.
-        if proof.paths.len() > max_height {
-            return Err(PrunedProofError::TooManyUniquePaths {
-                got: proof.paths.len(),
-                max_height,
-            }
-            .into());
-        }
-
-        let original_order = &proof.original_order;
-        let sorted_paths = &proof.paths;
-        let n_originals = original_order.len();
-        let n_unique = sorted_paths.len();
-
-        // Phase 2: Length gates, checked before the costly path expansion.
-
-        // One opened row set per original query.
+        // Phase 2: Length gate. One opened row set per query.
+        let n_originals = indices.len();
         if opened_values.len() != n_originals {
             return Err(WrongBatchSize);
         }
 
-        // One verifier-supplied index per opening, in query order.
-        if indices.len() != n_originals {
-            return Err(PrunedProofError::IndexCountMismatch {
-                num_indices: indices.len(),
-                num_queries: n_originals,
-            }
-            .into());
-        }
-
-        // Phase 3: Restore the full (unpruned) authentication paths.
-        //
-        // - The pruned form stores each shared sibling once.
-        // - The amortized walk reads siblings level by level.
-        // - Materialize each per-path buffer once, then borrow throughout.
-        // - The expansion yields exactly one entry per original query.
-        let restored = restore_paths(proof, full_sibling_count)?;
-
-        // Empty proof is valid only when no queries were submitted.
-        if n_unique == 0 {
-            return if n_originals == 0 {
+        // Empty query set: there is nothing to authenticate.
+        // A proof carrying any sibling for it is malformed.
+        if n_originals == 0 {
+            return if proof.sibling_hashes.is_empty() {
                 Ok(())
             } else {
-                Err(PrunedProofError::PathQueryCountMismatch {
-                    num_paths: 0,
-                    num_queries: n_originals,
+                Err(PrunedProofError::SiblingCountMismatch {
+                    expected: 0,
+                    got: proof.sibling_hashes.len(),
                 }
                 .into())
             };
         }
 
-        // Phase 4: Pick a representative original query for each unique path.
+        // Phase 3: Derive the sorted-unique query set from the verifier's own indices.
+        // The proof stores no indices, so there is none a forger could substitute.
+        // The frontier is pinned entirely to what the verifier asked for.
         //
-        // Each guard blocks one forgery:
-        //   - slot in range            -> no out-of-bounds path reference
-        //   - leaf_index == indices[i] -> opens the index the verifier asked for
-        //   - duplicates agree         -> two openings can't collapse into one slot
+        //   sorted_unique : ascending distinct leaves (the frontier's leaf layer)
+        let mut sorted_unique: Vec<usize> = indices.to_vec();
+        sorted_unique.sort_unstable();
+        sorted_unique.dedup();
+        let n_unique = sorted_unique.len();
+
+        // Every queried leaf must live in the tree.
+        let &highest = sorted_unique.last().expect("nonempty query set");
+        if highest >= max_height {
+            return Err(IndexOutOfBounds {
+                max_height,
+                index: highest,
+            });
+        }
+
+        // Phase 4: Pick one representative query per unique slot.
+        //   - The representative supplies the opened rows for leaf hashing and injection.
+        //   - Duplicate queries on one leaf must agree on their opened rows.
+        //   - Otherwise deduplication would silently erase the disagreement.
         let mut reps: Vec<Option<usize>> = vec![None; n_unique];
-        for (orig_idx, &sorted_idx) in original_order.iter().enumerate() {
-            let sorted_idx = sorted_idx as usize;
-            if sorted_idx >= n_unique {
-                return Err(PrunedProofError::OriginalOrderOutOfRange {
-                    slot: sorted_idx,
-                    num_paths: n_unique,
-                }
-                .into());
-            }
-            // Index binding: the proof must open the index the verifier asked for.
-            if sorted_paths[sorted_idx].leaf_index != indices[orig_idx] {
-                return Err(PrunedProofError::IndexMismatch {
-                    query: orig_idx,
-                    expected: indices[orig_idx],
-                    got: sorted_paths[sorted_idx].leaf_index,
-                }
-                .into());
-            }
-            match reps[sorted_idx] {
-                None => reps[sorted_idx] = Some(orig_idx),
+        for (orig_idx, &leaf) in indices.iter().enumerate() {
+            let slot = sorted_unique
+                .binary_search(&leaf)
+                .expect("leaf came from the query set");
+            match reps[slot] {
+                None => reps[slot] = Some(orig_idx),
                 Some(rep_idx) => {
                     if opened_values[rep_idx] != opened_values[orig_idx] {
-                        return Err(PrunedProofError::InconsistentDuplicateOpenings {
-                            slot: sorted_idx,
-                        }
-                        .into());
+                        return Err(PrunedProofError::InconsistentDuplicateOpenings { slot }.into());
                     }
                 }
             }
         }
-        // Every unique sorted slot must be reached by at least one original.
+        // Each slot is reached by the query it came from, so none is missing.
         let reps: Vec<usize> = reps
             .into_iter()
-            .enumerate()
-            .map(|(slot, r)| r.ok_or(PrunedProofError::UnreferencedPath { slot }))
-            .collect::<Result<Vec<usize>, PrunedProofError>>()?;
+            .map(|r| r.expect("every unique slot is one of the queries"))
+            .collect();
 
-        // Phase 5: Shape and ordering invariants for the unique paths.
-        // - Each opening's per-matrix count must match `dimensions`.
-        // - Sorted leaf indices must be strictly ascending (the pruning
-        //   contract). A malformed proof reaching this point would otherwise
-        //   produce silently wrong groupings later.
+        // Phase 5: Restore the full authentication paths (sorted-unique order).
+        //
+        // - Scatters the flat boundary digests into each lead path's buffer.
+        // - Rejects a proof whose digest count differs from the frontier.
+        // - No hashing here: the amortized walk recomputes every inner node.
+        let restored = restore_paths(proof, &sorted_unique, &arity_schedule, full_sibling_count)?;
+
+        // Every representative opening must expose one row per committed matrix.
+        // Ascending, distinct leaf order already holds by construction.
         for &rep in &reps {
             if opened_values[rep].len() != dimensions.len() {
                 return Err(WrongBatchSize);
             }
             // Row boundaries within a flattened leaf hash are only pinned by the widths.
             check_widths(dimensions, &opened_values[rep])?;
-        }
-        for (position, window) in sorted_paths.windows(2).enumerate() {
-            if window[0].leaf_index >= window[1].leaf_index {
-                return Err(PrunedProofError::NonAscendingLeaves {
-                    position: position + 1,
-                    index: window[1].leaf_index,
-                }
-                .into());
-            }
         }
 
         // Phase 6: Set up the tallest-first matrix iterator. The amortized
@@ -625,15 +574,6 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
         // Leaf layer width before the walk starts, padded to a full N-ary group.
         let mut curr_height_padded = padded_len(max_height, N);
-
-        for path in sorted_paths {
-            if path.leaf_index >= max_height {
-                return Err(IndexOutOfBounds {
-                    max_height,
-                    index: path.leaf_index,
-                });
-            }
-        }
 
         let leaf_height_npt = max_height.next_power_of_two();
 
@@ -664,7 +604,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // - `lead[g]`         : sorted path whose siblings buffer we read from
         //                       (any path in the group works; we keep the first)
         // - `sibling_cursor`  : how many sibling slots of `lead[g]` we've used
-        let mut node_indices: Vec<usize> = sorted_paths.iter().map(|p| p.leaf_index).collect();
+        let mut node_indices: Vec<usize> = sorted_unique.clone();
         let mut lead: Vec<usize> = (0..n_unique).collect();
         let mut sibling_cursor: Vec<usize> = vec![0usize; n_unique];
 
@@ -712,11 +652,9 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
                 let lead_path = lead[i];
                 let lead_pos = node_indices[i] - group_start;
-                // `restored` is indexed by ORIGINAL query, not sorted slot — map
-                // through `reps` to find any original mapping to this sorted path.
-                // Both originals (when duplicates exist) have identical buffers,
-                // so the first representative is canonical.
-                let lead_siblings = &restored[reps[lead_path]].siblings;
+                // Restored paths are indexed by sorted-unique slot.
+                // The lead of the group is exactly one such slot, and owns its siblings.
+                let lead_siblings = &restored[lead_path].siblings;
                 let cursor_start = sibling_cursor[i];
 
                 // Build the N-ary input array:
