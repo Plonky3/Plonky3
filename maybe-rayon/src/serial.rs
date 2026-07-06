@@ -162,6 +162,26 @@ pub trait ParIterExt: Iterator {
         Self: Sized,
         OP: Fn(&mut T, Self::Item) + Sync + Send,
         INIT: Fn() -> T + Sync + Send;
+
+    /// No-op: there is only one split in a serial build, so a minimum split length has
+    /// nothing to constrain.
+    fn with_min_len(self, min_len: usize) -> Self
+    where
+        Self: Sized,
+    {
+        let _ = min_len;
+        self
+    }
+
+    /// No-op: there is only one split in a serial build, so a maximum split length has
+    /// nothing to constrain.
+    fn with_max_len(self, max_len: usize) -> Self
+    where
+        Self: Sized,
+    {
+        let _ = max_len;
+        self
+    }
 }
 
 impl<I: Iterator> ParIterExt for I {
