@@ -27,6 +27,7 @@ num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
+spin.workspace = true
 
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }
