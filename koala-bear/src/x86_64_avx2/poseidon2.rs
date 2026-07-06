@@ -133,7 +133,7 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 16> for KoalaBearInternalL
 impl InternalLayerParametersAVX2<KoalaBearParameters, 24> for KoalaBearInternalLayerParameters {
     type ArrayLike = [__m256i; 23];
 
-    /// For the KoalaBear field and width 1246 we multiply by the diagonal matrix:
+    /// For the KoalaBear field and width 24 we multiply by the diagonal matrix:
     ///
     /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^24, -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^24]
     /// The first 9 entries are handled elsewhere, this function handles all the positive/negative inverse powers of two.

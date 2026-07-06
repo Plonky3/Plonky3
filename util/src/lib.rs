@@ -228,9 +228,9 @@ const BIT_REVERSE_6BIT: &[u8] = &[
     0o07, 0o47, 0o27, 0o67, 0o17, 0o57, 0o37, 0o77,
 ];
 
-// Ensure that SMALL_ARR_SIZE >= 4 * BIG_T_SIZE.
 const BIG_T_SIZE: usize = 1 << 14;
 const SMALL_ARR_SIZE: usize = 1 << 16;
+const _: () = assert!(SMALL_ARR_SIZE >= 4 * BIG_T_SIZE);
 
 /// Permutes `arr` such that each index is mapped to its reverse in binary.
 ///
@@ -455,7 +455,7 @@ where
 pub fn apply_to_chunks<const BUFLEN: usize, I, H>(input: I, mut func: H)
 where
     I: IntoIterator<Item = u8>,
-    H: FnMut(&[I::Item]),
+    H: FnMut(&[u8]),
 {
     let mut iter = input.into_iter();
     loop {
@@ -492,7 +492,7 @@ fn iter_next_chunk_padded<T: Copy, const N: usize>(
 /// Returns an iterator over `N` elements of the iterator at a time.
 ///
 /// The chunks do not overlap. If `N` does not divide the length of the
-/// iterator, then the last `N-1` elements will be padded with the given default value.
+/// iterator, then the last chunk is padded with up to `N-1` copies of the given default value.
 ///
 /// This is essentially a copy pasted version of the nightly `array_chunks` function.
 /// <https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.array_chunks>

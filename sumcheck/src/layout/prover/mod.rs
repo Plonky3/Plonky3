@@ -2,8 +2,8 @@
 //!
 //! # Modules
 //!
-//! - Prefix prover: SIMD-packed first round.
-//! - Suffix prover: SVO-accumulator preprocessing.
+//! - Prefix prover: SVO-accumulator preprocessing, packed handoff.
+//! - Suffix prover: SVO-accumulator preprocessing, unpacked handoff.
 
 mod claims;
 mod prefix;
@@ -133,6 +133,10 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
     ///
     /// The caller supplies the local-frame opening point instead of sampling it.
     /// An outer protocol that fixes the point opens its columns here.
+    ///
+    /// Soundness requires `point` to be sampled from, or bound to, the same `challenger`
+    /// before this call (see `PrescribedPointPcs`'s Fiat-Shamir/Soundness doc) — this
+    /// method absorbs the evaluations but not the point itself.
     ///
     /// - Current openings evaluate a column at the supplied point.
     /// - Next openings evaluate the repeat-last successor view at the same point.
