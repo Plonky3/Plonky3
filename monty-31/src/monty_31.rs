@@ -16,7 +16,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField,
+    PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField, UniformSamplingField,
     impl_raw_serializable_primefield32, quotient_map_small_int, tonelli_shanks_two_adic,
 };
 use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
@@ -184,6 +184,17 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
 }
 
 impl<MP: MontyParameters> Packable for MontyField31<MP> {}
+
+// Provide a blanket implementation for Monty31 fields here, which forwards the
+// implementation of the variables to the generic argument `<Field>Parameter`,
+// for which we implement the trait (KoalaBear, BabyBear).
+impl<MP> UniformSamplingField for MontyField31<MP>
+where
+    MP: UniformSamplingField + MontyParameters,
+{
+    const MAX_SINGLE_SAMPLE_BITS: usize = MP::MAX_SINGLE_SAMPLE_BITS;
+    const SAMPLING_BITS_M: [u64; 64] = MP::SAMPLING_BITS_M;
+}
 
 impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
     type PrimeSubfield = Self;
