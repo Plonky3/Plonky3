@@ -97,8 +97,13 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
 
-    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
-        &fri_params,
+    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+        fri_params.log_blowup,
+        fri_params.log_final_poly_len,
+        fri_params.max_log_arity,
+        fri_params.num_queries,
+        fri_params.commit_proof_of_work_bits,
+        fri_params.query_proof_of_work_bits,
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
@@ -151,8 +156,13 @@ where
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
-    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
-        &fri_params,
+    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+        fri_params.log_blowup,
+        fri_params.log_final_poly_len,
+        fri_params.max_log_arity,
+        fri_params.num_queries,
+        fri_params.commit_proof_of_work_bits,
+        fri_params.query_proof_of_work_bits,
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
@@ -197,8 +207,13 @@ pub fn prove_m31_keccak<
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = FriParameters::new_benchmark(challenge_mmcs);
-    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
-        &fri_params,
+    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+        fri_params.log_blowup,
+        fri_params.log_final_poly_len,
+        fri_params.max_log_arity,
+        fri_params.num_queries,
+        fri_params.commit_proof_of_work_bits,
+        fri_params.query_proof_of_work_bits,
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
@@ -250,8 +265,13 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = FriParameters::new_benchmark(challenge_mmcs);
-    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
-        &fri_params,
+    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+        fri_params.log_blowup,
+        fri_params.log_final_poly_len,
+        fri_params.max_log_arity,
+        fri_params.num_queries,
+        fri_params.commit_proof_of_work_bits,
+        fri_params.query_proof_of_work_bits,
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
