@@ -539,79 +539,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_symmetric::PseudoCompressionFunction;
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_field::Field;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_symmetric::{PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
 
-    #[test]
-    #[should_panic(expected = "matrix height 4 incompatible with tallest height 6")]
-    fn new_rejects_heights_off_ladder() {
-        // `MerkleTree::new` is a public constructor that bypasses `Mmcs::commit`'s
-        // geometry gate. Heights 6 and 4 pass the weaker "equal within the same
-        // power-of-two bucket" rule (next_power_of_two(6) = 8, next_power_of_two(4) = 4
-        // — different buckets), but 4 is off the ceil(6 / 2^k) ladder: at k = 1 the
-        // only admissible height is ceil(6 / 2) = 3. Building a tree from these would
-        // panic later, out of bounds, inside a rayon closure — the constructor must
-        // reject it up front instead.
-        use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-        use p3_field::Field;
-        use p3_matrix::dense::RowMajorMatrix;
-        use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-        use rand::SeedableRng;
-        use rand::rngs::SmallRng;
-
-        type F = BabyBear;
-        type Perm = Poseidon2BabyBear<16>;
-        type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
-        type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-
-        let mut rng = SmallRng::seed_from_u64(0);
-        let perm = Perm::new_from_rng_128(&mut rng);
-        let hash = MyHash::new(perm.clone());
-        let compress = MyCompress::new(perm);
-
-        let mat6 = RowMajorMatrix::<F>::rand(&mut rng, 6, 1);
-        let mat4 = RowMajorMatrix::<F>::rand(&mut rng, 4, 1);
-
-        let _ = MerkleTree::new::<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress>(
-            &hash,
-            &compress,
-            vec![mat6, mat4],
-        );
-    }
-
-    #[test]
-    #[should_panic]
-    fn new_rejects_single_zero_height_matrix() {
-        // A single height-0 matrix used to build `digest_layers == [[]]`,
-        // and `root()` would panic later. The constructor must reject it directly.
-        use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-        use p3_field::Field;
-        use p3_matrix::dense::RowMajorMatrix;
-        use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-        use rand::SeedableRng;
-        use rand::rngs::SmallRng;
-
-        type F = BabyBear;
-        type Perm = Poseidon2BabyBear<16>;
-        type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
-        type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-
-        let mut rng = SmallRng::seed_from_u64(0);
-        let perm = Perm::new_from_rng_128(&mut rng);
-        let hash = MyHash::new(perm.clone());
-        let compress = MyCompress::new(perm);
-
-        let empty_mat = RowMajorMatrix::<F>::new(Vec::new(), 1);
-
-        let _ = MerkleTree::new::<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress>(
-            &hash,
-            &compress,
-            vec![empty_mat],
-        );
-    }
+    type F = BabyBear;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 
     #[derive(Clone, Copy)]
     struct DummyCompressionFunction;
@@ -766,5 +706,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "matrix height 4 incompatible with tallest height 6")]
+    fn new_rejects_heights_off_ladder() {
+        // `MerkleTree::new` is a public constructor that bypasses `Mmcs::commit`'s
+        // geometry gate. Heights 6 and 4 pass the weaker "equal within the same
+        // power-of-two bucket" rule (next_power_of_two(6) = 8, next_power_of_two(4) = 4
+        // — different buckets), but 4 is off the ceil(6 / 2^k) ladder: at k = 1 the
+        // only admissible height is ceil(6 / 2) = 3. Building a tree from these would
+        // panic later, out of bounds, inside a rayon closure — the constructor must
+        // reject it up front instead.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        let mat6 = RowMajorMatrix::<F>::rand(&mut rng, 6, 1);
+        let mat4 = RowMajorMatrix::<F>::rand(&mut rng, 4, 1);
+
+        let _ = MerkleTree::new::<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress>(
+            &hash,
+            &compress,
+            vec![mat6, mat4],
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn new_rejects_single_zero_height_matrix() {
+        // A single height-0 matrix used to build `digest_layers == [[]]`,
+        // and `root()` would panic later. The constructor must reject it directly.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        let empty_mat = RowMajorMatrix::<F>::new(Vec::new(), 1);
+
+        let _ = MerkleTree::new::<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress>(
+            &hash,
+            &compress,
+            vec![empty_mat],
+        );
     }
 }
