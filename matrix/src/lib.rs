@@ -1,5 +1,4 @@
-//! Matrix library.
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 extern crate alloc;
@@ -10,8 +9,8 @@ use core::ops::Deref;
 
 use itertools::Itertools;
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing,
+    BasedVectorSpace, ExtensionField, Field, FieldArray, PackedField, PackedFieldExtension,
+    PackedValue, PrimeCharacteristicRing,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -429,6 +428,23 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
+        assert_eq!(v.len(), self.height());
+
+        // Below this many total elements, the rayon fork-join and SIMD-packing machinery
+        // costs more than the dot product itself; fall back to a plain scalar accumulation.
+        // Gating on total elements (rather than height alone) also covers wide-but-short
+        // matrices, where a per-row cost proportional to width still adds up.
+        const SMALL_ELEMS: usize = 256;
+        if self.height().saturating_mul(self.width()) <= SMALL_ELEMS {
+            let mut acc = EF::zero_vec(self.width());
+            for (row, &scale) in self.rows().zip(v) {
+                for (l, r) in acc.iter_mut().zip(row) {
+                    *l += scale * r;
+                }
+            }
+            return acc;
+        }
+
         let packed_width = self.width().div_ceil(T::Packing::WIDTH);
 
         let packed_result = self
@@ -467,24 +483,31 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
+        assert_eq!(vs.len(), self.height());
+
         let packed_width = self.width().div_ceil(T::Packing::WIDTH);
+        let height = self.height();
 
-        let packed_results: Vec<EF::ExtensionPacking> = self
-            .par_padded_horizontally_packed_rows::<T::Packing>()
-            .zip(vs)
-            .par_fold_reduce(
+        // Split the rows into a bounded number of contiguous chunks; each task runs the
+        // field's columnwise kernel serially over its chunk (letting it defer modular
+        // reductions across rows) and the per-task accumulators are summed at the end.
+        let num_chunks = (4 * current_num_threads()).clamp(1, height.max(1));
+        let chunk_rows = height.div_ceil(num_chunks);
+
+        let packed_results: Vec<EF::ExtensionPacking> =
+            (0..num_chunks).into_par_iter().par_fold_reduce(
                 || EF::ExtensionPacking::zero_vec(packed_width * N),
-                |mut acc, (packed_row, scales)| {
-                    // Broadcast each scalar scale to all SIMD lanes
-                    let packed_scales: [EF::ExtensionPacking; N] =
-                        scales.map_into_array(EF::ExtensionPacking::from);
-
-                    // acc[c][j] += scales[j] · row[c] for column batch c, point j
-                    for (acc_c, row_c) in acc.chunks_exact_mut(N).zip(packed_row) {
-                        for j in 0..N {
-                            acc_c[j] += packed_scales[j] * row_c;
-                        }
-                    }
+                |mut acc, chunk| {
+                    let rows = chunk * chunk_rows..((chunk + 1) * chunk_rows).min(height);
+                    T::batched_columnwise_dot_product::<EF, _, _, N>(
+                        &mut acc,
+                        rows.map(|r| {
+                            (
+                                self.padded_horizontally_packed_row::<T::Packing>(r),
+                                vs[r].0,
+                            )
+                        }),
+                    );
                     acc
                 },
                 |mut acc_l, acc_r| {
@@ -531,18 +554,13 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                 // Get the extension dimension from the first vec element's coefficients
                 let d = <EF::ExtensionPacking as BasedVectorSpace<T::Packing>>::DIMENSION;
 
-                // Initialize D accumulators for each coefficient of the extension
-                // In practice, we set D to 8, which is the maximum degree of the extension field supported.
-                let mut coeff_accs: [T::Packing; 8] = [T::Packing::ZERO; 8];
-                debug_assert!(d <= 8, "Extension degree > 8 not supported");
-
                 // Accumulate coefficient-wise: for each (v, r) pair, acc[i] += v.coefficient(i) * r
-                for (v, r) in vec.iter().zip(row_packed) {
-                    let v_coeffs = v.as_basis_coefficients_slice();
-                    for (acc, &v_coeff) in coeff_accs[..d].iter_mut().zip(v_coeffs) {
-                        *acc += v_coeff * r;
-                    }
-                }
+                let coeff_accs = T::Packing::coeffwise_dot_product(
+                    d,
+                    vec.iter()
+                        .zip(row_packed)
+                        .map(|(v, r)| (v.as_basis_coefficients_slice(), r)),
+                );
 
                 // Construct the result ExtPacking from the accumulators and sum the coefficients.
                 let packed_result =
@@ -583,6 +601,29 @@ mod tests {
         }
 
         assert_eq!(m.columnwise_dot_product(&v), expected);
+    }
+
+    #[test]
+    fn test_columnwise_dot_product_small_height() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<BabyBear, 4>;
+
+        let mut rng = SmallRng::seed_from_u64(2);
+
+        // Cover heights below, at, and just above the small-height serial threshold.
+        for height in [0, 1, 3, 16, 17] {
+            let m = RowMajorMatrix::<F>::rand(&mut rng, height, 1 << 4);
+            let v = RowMajorMatrix::<EF>::rand(&mut rng, height, 1).values;
+
+            let mut expected = EF::zero_vec(m.width());
+            for (row, &scale) in izip!(m.rows(), &v) {
+                for (l, r) in izip!(&mut expected, row) {
+                    *l += scale * r;
+                }
+            }
+
+            assert_eq!(m.columnwise_dot_product(&v), expected, "height = {height}");
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["test-utils"]
+default = []
 test-utils = ["p3-challenger", "p3-dft"]
 
 [dependencies]
@@ -27,6 +27,7 @@ p3-challenger = { workspace = true, optional = true }
 p3-dft = { workspace = true, optional = true }
 
 [dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
 p3-challenger = { path = "../challenger" }
 p3-dft = { path = "../dft" }
 

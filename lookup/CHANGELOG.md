@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Fix(batch-stark): validate per-instance global lookup data count (#1458)
+- Logup: better memory allocation (#1455)
+- Perf: abstract away Copy vs Clone (#1463)
+- Feat: add support for Periodic Columns at runtime (#1462)
+- Harden verifier shape checks (#1469)
+- Feat: bus-based cross-AIR interactions and lookup crate redesign (#1566)
+- Refactor(air): merge PeriodicAirBuilder into AirBuilder (#1611)
+- Chore: use T::zero_vec(n) instead of vec![T::ZERO; n] (#1633)
+- Fix: local refs for dev-deps (#1663)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Feat: add a `HornerIter` supertrait on `DoubleEndedIterator` (#1692)
+- Chore: HornerIter follow-ups from #1692 review (#1693)
+- Refactor: remove duplication around AirBuilder `_named` methods (#1724)
+- Feat(lookup): single-terminal LogUp aux trace (#1628)
+- Fix(lookup): enforce the LogUp multiplicity height-bound (#1748)
+- Feat(lookup): bind multiplicity weight to its count (#1771)
+- Feat(lookup): single sampled challenge pair with per-bus domain separation (#1736)
+- Chore: update CHANGELOGs (#1785)
+- Doc: add basic READMEs in main crates (#1786)
+- Feat!(lookup): degree-budget-aware same-bus column packing (#1799)
+
+## [0.5.3] - 2026-05-15
+## [0.5.2] - 2026-03-27
+### Merged PRs
+- Logup: better memory allocation (#1455)
+- Perf: abstract away Copy vs Clone (#1463)
+
 ## [0.5.1] - 2026-03-16
 ### Merged PRs
 - Clarify selector semantics (#1412)

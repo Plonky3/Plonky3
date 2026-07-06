@@ -189,6 +189,28 @@ mod tests {
         test_field_json_serialization(&[f, f_1, f_2, f_p_minus_1, f_p_minus_2, m1, m2]);
     }
 
+    #[test]
+    fn test_koala_bear_inherent_sqrt() {
+        // Exercises the inherent (two-adic) `try_sqrt` which shadows
+        // `Field::try_sqrt` for the concrete `KoalaBear` type.
+        let mut residues = 0;
+        let mut non_residues = 0;
+        for i in 0..2000u32 {
+            let x = F::from_u32(i);
+            // The square of any element is a quadratic residue.
+            let square = x.square();
+            assert_eq!(square.try_sqrt().map(|r| r.square()), Some(square));
+            match x.try_sqrt() {
+                Some(r) => {
+                    assert_eq!(r.square(), x);
+                    residues += 1;
+                }
+                None => non_residues += 1,
+            }
+        }
+        assert!(residues > 0 && non_residues > 0);
+    }
+
     // MontyField31's have no redundant representations.
     const ZEROS: [KoalaBear; 1] = [KoalaBear::ZERO];
     const ONES: [KoalaBear; 1] = [KoalaBear::ONE];

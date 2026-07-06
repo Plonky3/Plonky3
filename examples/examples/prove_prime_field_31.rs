@@ -1,7 +1,9 @@
 use clap::Parser;
 use p3_baby_bear::{
-    BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
-    BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear,
+    BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16,
+    BABYBEAR_POSEIDON1_RC_16, BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS,
+    BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16, BABYBEAR_S_BOX_DEGREE, BabyBear,
+    GenericPoseidon2LinearLayersBabyBear, MDSBabyBearData, Poseidon2BabyBear,
 };
 use p3_blake3_air::Blake3Air;
 use p3_dft::Radix2DitParallel;
@@ -15,15 +17,22 @@ use p3_examples::proofs::{
 use p3_field::extension::BinomialExtensionField;
 use p3_keccak_air::KeccakAir;
 use p3_koala_bear::{
-    GenericPoseidon2LinearLayersKoalaBear, KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS,
-    KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16, KOALABEAR_S_BOX_DEGREE, KoalaBear, Poseidon2KoalaBear,
+    GenericPoseidon2LinearLayersKoalaBear, KOALABEAR_POSEIDON_HALF_FULL_ROUNDS,
+    KOALABEAR_POSEIDON_PARTIAL_ROUNDS_16, KOALABEAR_POSEIDON1_RC_16,
+    KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS, KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16,
+    KOALABEAR_S_BOX_DEGREE, KoalaBear, MDSKoalaBearData, Poseidon2KoalaBear,
 };
 use p3_mersenne_31::{
-    GenericPoseidon2LinearLayersMersenne31, MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS,
-    MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16, MERSENNE31_S_BOX_DEGREE, Mersenne31,
-    Poseidon2Mersenne31,
+    GenericPoseidon2LinearLayersMersenne31, MERSENNE31_POSEIDON1_HALF_FULL_ROUNDS,
+    MERSENNE31_POSEIDON1_MDS_CIRC_COL_16, MERSENNE31_POSEIDON1_PARTIAL_ROUNDS_16,
+    MERSENNE31_POSEIDON1_RC_16, MERSENNE31_POSEIDON1_S_BOX_DEGREE,
+    MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS, MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16,
+    MERSENNE31_S_BOX_DEGREE, Mersenne31, Poseidon2Mersenne31, QM31,
 };
+use p3_monty_31::MDSUtils;
 use p3_monty_31::dft::RecursiveDft;
+use p3_poseidon1::Poseidon1Constants;
+use p3_poseidon1_air::VectorizedPoseidon1Air;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -83,6 +92,12 @@ fn main() {
             });
             trace_height
         }
+        ProofOptions::Poseidon1Permutations => {
+            println!("Proving 2^{} native Poseidon1 permutations", {
+                args.log_trace_length + P2_LOG_VECTOR_LEN
+            });
+            trace_height << P2_LOG_VECTOR_LEN
+        }
         ProofOptions::Poseidon2Permutations => {
             println!("Proving 2^{} native Poseidon2 permutations", {
                 args.log_trace_length + P2_LOG_VECTOR_LEN
@@ -106,6 +121,31 @@ fn main() {
             let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
+                ProofOptions::Poseidon1Permutations => {
+                    // Field specific constants for constructing the Poseidon1 AIR.
+                    const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
+                    const SBOX_REGISTERS: usize = 0;
+                    const PARTIAL_ROUNDS: usize = KOALABEAR_POSEIDON_PARTIAL_ROUNDS_16;
+
+                    let constants = Poseidon1Constants {
+                        rounds_f: 2 * KOALABEAR_POSEIDON_HALF_FULL_ROUNDS,
+                        rounds_p: PARTIAL_ROUNDS,
+                        mds_circ_col: MDSKoalaBearData::MATRIX_CIRC_MDS_16_COL,
+                        round_constants: KOALABEAR_POSEIDON1_RC_16.to_vec(),
+                    };
+                    let (full, partial) = constants.to_optimized();
+
+                    let p1_air: VectorizedPoseidon1Air<
+                        KoalaBear,
+                        P2_WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        { KOALABEAR_POSEIDON_HALF_FULL_ROUNDS },
+                        PARTIAL_ROUNDS,
+                        P2_VECTOR_LEN,
+                    > = VectorizedPoseidon1Air::new(full, partial);
+                    ProofObjective::Poseidon1(p1_air)
+                }
                 ProofOptions::Poseidon2Permutations => {
                     let constants = RoundConstants::from_rng(&mut rng);
 
@@ -166,6 +206,31 @@ fn main() {
             let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
+                ProofOptions::Poseidon1Permutations => {
+                    // Field specific constants for constructing the Poseidon1 AIR.
+                    const SBOX_DEGREE: u64 = BABYBEAR_S_BOX_DEGREE;
+                    const SBOX_REGISTERS: usize = 1;
+                    const PARTIAL_ROUNDS: usize = BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16;
+
+                    let constants = Poseidon1Constants {
+                        rounds_f: 2 * BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS,
+                        rounds_p: PARTIAL_ROUNDS,
+                        mds_circ_col: MDSBabyBearData::MATRIX_CIRC_MDS_16_COL,
+                        round_constants: BABYBEAR_POSEIDON1_RC_16.to_vec(),
+                    };
+                    let (full, partial) = constants.to_optimized();
+
+                    let p1_air: VectorizedPoseidon1Air<
+                        BabyBear,
+                        P2_WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        { BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS },
+                        PARTIAL_ROUNDS,
+                        P2_VECTOR_LEN,
+                    > = VectorizedPoseidon1Air::new(full, partial);
+                    ProofObjective::Poseidon1(p1_air)
+                }
                 ProofOptions::Poseidon2Permutations => {
                     let constants = RoundConstants::from_rng(&mut rng);
 
@@ -221,11 +286,36 @@ fn main() {
             };
         }
         FieldOptions::Mersenne31 => {
-            type EF = BinomialExtensionField<Mersenne31, 3>;
+            type EF = QM31;
 
             let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
                 ProofOptions::KeccakFPermutations => ProofObjective::Keccak(KeccakAir {}),
+                ProofOptions::Poseidon1Permutations => {
+                    // Field specific constants for constructing the Poseidon1 AIR.
+                    const SBOX_DEGREE: u64 = MERSENNE31_POSEIDON1_S_BOX_DEGREE;
+                    const SBOX_REGISTERS: usize = 1;
+                    const PARTIAL_ROUNDS: usize = MERSENNE31_POSEIDON1_PARTIAL_ROUNDS_16;
+
+                    let constants = Poseidon1Constants {
+                        rounds_f: 2 * MERSENNE31_POSEIDON1_HALF_FULL_ROUNDS,
+                        rounds_p: PARTIAL_ROUNDS,
+                        mds_circ_col: MERSENNE31_POSEIDON1_MDS_CIRC_COL_16,
+                        round_constants: MERSENNE31_POSEIDON1_RC_16.to_vec(),
+                    };
+                    let (full, partial) = constants.to_optimized();
+
+                    let p1_air: VectorizedPoseidon1Air<
+                        Mersenne31,
+                        P2_WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        { MERSENNE31_POSEIDON1_HALF_FULL_ROUNDS },
+                        PARTIAL_ROUNDS,
+                        P2_VECTOR_LEN,
+                    > = VectorizedPoseidon1Air::new(full, partial);
+                    ProofObjective::Poseidon1(p1_air)
+                }
                 ProofOptions::Poseidon2Permutations => {
                     let constants = RoundConstants::from_rng(&mut rng);
 

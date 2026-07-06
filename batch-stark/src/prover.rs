@@ -11,16 +11,19 @@ use p3_air::{Air, RowWindow};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{
     Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    PrimeField,
 };
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookup, LookupData, LookupProtocol};
+use p3_lookup::{
+    InteractionSymbolicBuilder, Lookup, LookupProtocol, LookupTerminal,
+    check_multiplicity_height_bound,
+};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_maybe_rayon::DisjointMutPtr;
 use p3_maybe_rayon::prelude::*;
 use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder};
-use p3_util::log2_strict_usize;
+use p3_util::{DisjointMutPtr, log2_strict_usize};
 use tracing::{debug_span, info_span, instrument};
 
 use crate::common::ProverData;
@@ -30,6 +33,9 @@ use crate::symbolic::{
     get_constraint_layout, get_log_num_quotient_chunks, get_symbolic_constraints,
 };
 use crate::transcript::BatchTranscript;
+
+/// Per-instance quotient output: the chunk domains and their committed LDE matrices.
+type InstanceQuotient<SC> = (Vec<Domain<SC>>, Vec<RowMajorMatrix<Val<SC>>>);
 
 /// A single AIR instance bundled with its execution trace, public inputs,
 /// and lookup declarations.
@@ -101,7 +107,12 @@ pub fn prove_batch<
 ) -> BatchProof<SC>
 where
     SC: SGC,
+    Val<SC>: PrimeField,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
+    Domain<SC>: Send + Sync,
+    SC::Pcs: Sync,
+    <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::ProverData: Sync,
+    <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Commitment: Sync,
 {
     let common = &prover_data.common;
     // TODO: Extend if additional lookup gadgets are added.
@@ -116,25 +127,16 @@ where
     // Extended degree accounts for the ZK blinding factor (2x when ZK is enabled).
     let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + config.is_zk()).collect();
 
+    // Fail fast: a wrapped multiplicity makes this proof unverifiable.
+    // The verifier enforces the same bound.
+    check_multiplicity_height_bound(&common.lookups, &degrees)
+        .expect("LogUp multiplicity height-bound violated");
+
     // Read lookups from the keygen-cached CommonData (not from instances).
     let all_lookups: Vec<&[Lookup<Val<SC>>]> = common.lookups.iter().map(|l| &**l).collect();
-    let mut lookup_data: Vec<Vec<_>> = all_lookups
-        .iter()
-        .map(|lookups| {
-            // Only global lookups produce cumulated values that enter the transcript.
-            lookups
-                .iter()
-                .filter_map(|lookup| match &lookup.kind {
-                    Kind::Global(name) => Some(LookupData {
-                        name: name.clone(),
-                        aux_column: lookup.column,
-                        cumulative_sum: SC::Challenge::ZERO,
-                    }),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    // Per-AIR lookup terminal: `Some(terminal)` once filled, `None` for AIRs with no lookups.
+    let mut lookup_terminals: Vec<Option<LookupTerminal<SC::Challenge>>> =
+        all_lookups.iter().map(|_| None).collect();
 
     // Base and extended domains for every instance.
     let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = degrees
@@ -183,6 +185,7 @@ where
                     get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                         air,
                         layout,
+                        degrees[i],
                         all_lookups[i],
                         config.is_zk(),
                         &lookup_gadget,
@@ -234,15 +237,17 @@ where
         .zip(ext_trace_domains.iter().cloned())
         .for_each(|((i, inst), ext_domain)| {
             if !all_lookups[i].is_empty() {
-                // Compute the permutation argument trace from lookups and challenges.
-                let generated_perm = lookup_gadget.generate_permutation::<SC>(
+                // Compute the permutation argument trace and the AIR's single terminal.
+                let (generated_perm, terminal) = lookup_gadget.generate_permutation::<SC>(
                     inst.trace,
                     &inst.air.preprocessed_trace(),
                     &inst.public_values,
                     all_lookups[i],
-                    &mut lookup_data[i],
                     &challenges_per_instance[i],
                 );
+
+                // Record the AIR's terminal for transcript observation and proof emission.
+                lookup_terminals[i] = terminal;
 
                 #[cfg(debug_assertions)]
                 {
@@ -250,8 +255,7 @@ where
 
                     let preprocessed_trace = inst.air.preprocessed_trace();
 
-                    let perm_vals: Vec<SC::Challenge> =
-                        lookup_data[i].iter().map(|ld| ld.cumulative_sum).collect();
+                    let perm_vals: Vec<SC::Challenge> = terminal.iter().map(|t| t.0).collect();
                     let lookup_constraints_inputs = (all_lookups[i], &lookup_gadget);
                     check_constraints(
                         inst.air,
@@ -301,114 +305,141 @@ where
         None
     };
 
-    // Transcript: observe permutation commitment + lookup data, sample alpha.
+    // Transcript: observe permutation commitment + per-AIR terminals, sample alpha.
     let alpha: Challenge<SC> = transcript.observe_perm_and_sample_alpha(
         permutation_commit_and_data.as_ref().map(|(c, _)| c),
-        &lookup_data,
+        &lookup_terminals,
     );
 
-    // Accumulators for quotient chunk domains / matrices / per-instance ranges.
+    // Capture only the permutation prover data;
+    //
+    // The commitment isn't read in the parallel closure below.
+    let permutation_data = permutation_commit_and_data.as_ref().map(|(_, data)| data);
+
+    // Permutation-matrix index per instance: the prefix count of prior instances
+    // that contribute a permutation trace. Precomputing this removes the only
+    // cross-iteration dependency, so each instance's quotient is independent.
+    let perm_indices: Vec<usize> = all_lookups
+        .iter()
+        .scan(0usize, |next, lookups| {
+            let idx = *next;
+            if !lookups.is_empty() {
+                *next += 1;
+            }
+            Some(idx)
+        })
+        .collect();
+
+    // Each instance's quotient chunks are independent, so compute them in
+    // parallel. `quotient_values` already parallelises over rows; with many
+    // instances this fills the cores that a single instance leaves idle.
+    let per_instance: Vec<InstanceQuotient<SC>> = (0..n_instances)
+        .into_par_iter()
+        .map(|i| {
+            let _air_span = info_span!("compute quotient", air_idx = i).entered();
+
+            let log_chunks = log_num_quotient_chunks[i];
+            let n_chunks = num_quotient_chunks[i];
+            // Build the quotient domain: disjoint from the trace domain,
+            // with size = ext_degree * num_quotient_chunks.
+            let quotient_domain =
+                ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
+
+            let sym_layout = AirLayout {
+                preprocessed_width: preprocessed_widths[i],
+                main_width: airs[i].width(),
+                num_public_values: airs[i].num_public_values(),
+                num_periodic_columns: airs[i].num_periodic_columns(),
+                ..Default::default()
+            };
+
+            // Debug-only: verify the static constraint-count hint matches symbolic analysis.
+            debug_assert!(
+                airs[i].num_constraints().is_none_or(|n| {
+                    n == get_symbolic_constraints(
+                        airs[i],
+                        sym_layout,
+                        all_lookups[i],
+                        &lookup_gadget,
+                    )
+                    .0
+                    .len()
+                }),
+                "num_constraints() = {} but symbolic evaluation found {} base constraints",
+                airs[i].num_constraints().unwrap(),
+                get_symbolic_constraints(airs[i], sym_layout, all_lookups[i], &lookup_gadget,)
+                    .0
+                    .len(),
+            );
+
+            // Evaluate the committed main trace on the quotient domain via LDE.
+            let trace_on_quotient_domain =
+                pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
+
+            // Evaluate the permutation trace on the quotient domain (if lookups exist).
+            let permutation_on_quotient_domain = permutation_data
+                .filter(|_| !all_lookups[i].is_empty())
+                .map(|perm_data| {
+                    pcs.get_evaluations_on_domain(perm_data, perm_indices[i], quotient_domain)
+                });
+
+            // Evaluate preprocessed columns on the quotient domain (if present).
+            let preprocessed_on_quotient_domain = common
+                .preprocessed
+                .as_ref()
+                .and_then(|g| g.instances[i].as_ref())
+                .map(|meta| {
+                    let preprocessed_prover_data = prover_data
+                        .prover_only
+                        .preprocessed_prover_data
+                        .as_ref()
+                        .expect(
+                            "preprocessed_prover_data must exist when preprocessed columns exist",
+                        );
+                    pcs.get_evaluations_on_domain_no_random(
+                        preprocessed_prover_data,
+                        meta.matrix_index,
+                        quotient_domain,
+                    )
+                });
+
+            // Compute quotient(x) = constraints(x) / Z_H(x) on the quotient domain.
+            let perm_vals: Vec<_> = lookup_terminals[i].iter().map(|t| t.0).collect();
+            let q_values = quotient_values(
+                pcs,
+                airs[i],
+                pub_vals[i],
+                sym_layout,
+                trace_domains[i],
+                quotient_domain,
+                &trace_on_quotient_domain,
+                permutation_on_quotient_domain.as_ref(),
+                all_lookups[i],
+                &perm_vals,
+                &lookup_gadget,
+                &challenges_per_instance[i],
+                preprocessed_on_quotient_domain.as_ref(),
+                alpha,
+            );
+
+            // Flatten extension values to base field and split into degree-bounded chunks.
+            let q_flat = RowMajorMatrix::new_col(q_values).flatten_to_base();
+            let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
+            let chunk_domains = quotient_domain.split_domains(n_chunks);
+
+            // Compute low-degree extensions of each chunk for commitment.
+            let evals = chunk_domains.iter().zip(chunk_mats).map(|(d, m)| (*d, m));
+            let ldes = pcs.get_quotient_ldes(evals, n_chunks);
+
+            (chunk_domains, ldes)
+        })
+        .collect();
+
+    // Concatenate in instance order so the commit layout stays deterministic.
     let mut quotient_chunk_domains = Vec::new();
     let mut quotient_chunk_mats = Vec::new();
     let mut quotient_chunk_ranges = Vec::with_capacity(n_instances);
-
-    // Tracks which permutation matrix index corresponds to each instance.
-    let mut perm_counter = 0;
-
-    // TODO: Parallelize this loop for better performance with many instances.
-    for (i, trace_domain) in trace_domains.iter().enumerate() {
-        let _air_span = info_span!("compute quotient", air_idx = i).entered();
-
-        let log_chunks = log_num_quotient_chunks[i];
-        let n_chunks = num_quotient_chunks[i];
-        // Build the quotient domain: disjoint from the trace domain,
-        // with size = ext_degree * num_quotient_chunks.
-        let quotient_domain =
-            ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
-
-        let sym_layout = AirLayout {
-            preprocessed_width: preprocessed_widths[i],
-            main_width: airs[i].width(),
-            num_public_values: airs[i].num_public_values(),
-            num_periodic_columns: airs[i].num_periodic_columns(),
-            ..Default::default()
-        };
-
-        // Debug-only: verify the static constraint-count hint matches symbolic analysis.
-        debug_assert!(
-            airs[i].num_constraints().is_none_or(|n| {
-                n == get_symbolic_constraints(airs[i], sym_layout, all_lookups[i], &lookup_gadget)
-                    .0
-                    .len()
-            }),
-            "num_constraints() = {} but symbolic evaluation found {} base constraints",
-            airs[i].num_constraints().unwrap(),
-            get_symbolic_constraints(airs[i], sym_layout, all_lookups[i], &lookup_gadget,)
-                .0
-                .len(),
-        );
-
-        // Evaluate the committed main trace on the quotient domain via LDE.
-        let trace_on_quotient_domain =
-            pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
-
-        // Evaluate the permutation trace on the quotient domain (if lookups exist).
-        let permutation_on_quotient_domain = permutation_commit_and_data
-            .as_ref()
-            .filter(|_| !all_lookups[i].is_empty())
-            .map(|(_, perm_data)| {
-                let evals = pcs.get_evaluations_on_domain(perm_data, perm_counter, quotient_domain);
-                perm_counter += 1;
-                evals
-            });
-
-        // Evaluate preprocessed columns on the quotient domain (if present).
-        let preprocessed_on_quotient_domain = common
-            .preprocessed
-            .as_ref()
-            .and_then(|g| g.instances[i].as_ref())
-            .map(|meta| {
-                let preprocessed_prover_data = prover_data
-                    .prover_only
-                    .preprocessed_prover_data
-                    .as_ref()
-                    .expect("preprocessed_prover_data must exist when preprocessed columns exist");
-                pcs.get_evaluations_on_domain_no_random(
-                    preprocessed_prover_data,
-                    meta.matrix_index,
-                    quotient_domain,
-                )
-            });
-
-        // Compute quotient(x) = constraints(x) / Z_H(x) on the quotient domain.
-        let perm_vals: Vec<_> = lookup_data[i].iter().map(|ld| ld.cumulative_sum).collect();
-        let q_values = quotient_values(
-            pcs,
-            airs[i],
-            pub_vals[i],
-            sym_layout,
-            *trace_domain,
-            quotient_domain,
-            &trace_on_quotient_domain,
-            permutation_on_quotient_domain.as_ref(),
-            all_lookups[i],
-            &perm_vals,
-            &lookup_gadget,
-            &challenges_per_instance[i],
-            preprocessed_on_quotient_domain.as_ref(),
-            alpha,
-        );
-
-        // Flatten extension values to base field and split into degree-bounded chunks.
-        let q_flat = RowMajorMatrix::new_col(q_values).flatten_to_base();
-        let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
-        let chunk_domains = quotient_domain.split_domains(n_chunks);
-
-        // Compute low-degree extensions of each chunk for commitment.
-        let evals = chunk_domains.iter().zip(chunk_mats).map(|(d, m)| (*d, m));
-        let ldes = pcs.get_quotient_ldes(evals, n_chunks);
-
-        // Record the range of chunks belonging to this instance.
+    for (chunk_domains, ldes) in per_instance {
         let start = quotient_chunk_domains.len();
         quotient_chunk_domains.extend(chunk_domains);
         quotient_chunk_mats.extend(ldes);
@@ -664,7 +695,7 @@ where
             instances: per_instance,
         },
         opening_proof,
-        global_lookup_data: lookup_data,
+        lookup_terminals,
         degree_bits: log_ext_degrees,
     }
 }
@@ -805,16 +836,21 @@ where
         .into_par_iter()
         .step_by(pack_width)
         .for_each_init(
-            // Per-task initialization: allocate constraint and permutation buffers once.
-            // These are cleared (without deallocating) and reused on every iteration.
+            // Per-task initialization: allocate constraint, permutation and
+            // packed-row buffers once. These are cleared (without
+            // deallocating) and reused on every iteration.
             || {
                 (
                     Vec::with_capacity(n_base),
                     Vec::with_capacity(n_ext),
                     Vec::with_capacity(2 * perm_cols),
+                    Vec::with_capacity(2 * main_width),
+                    Vec::with_capacity(
+                        2 * preprocessed_on_quotient_domain.map_or(0, |p| p.width()),
+                    ),
                 )
             },
-            |(base_buf, ext_buf, perm_buf), i_start| {
+            |(base_buf, ext_buf, perm_buf, main_buf, prep_buf), i_start| {
                 let chunk_emit = pack_width.min(quotient_size - i_start);
                 // Load SIMD-packed selector values for this chunk.
                 let i_range = i_start..i_start + pack_width;
@@ -826,19 +862,30 @@ where
                 let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
 
                 // Pack the main trace rows (current + next) for this chunk.
-                let main = RowMajorMatrix::new(
-                    trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
-                    main_width,
+                main_buf.clear();
+                main_buf.extend(
+                    trace_on_quotient_domain.vertically_packed_row::<PackedVal<SC>>(i_start),
                 );
+                main_buf.extend(
+                    trace_on_quotient_domain
+                        .vertically_packed_row::<PackedVal<SC>>(i_start + next_step),
+                );
+                let main = RowMajorMatrixView::new(main_buf.as_slice(), main_width);
 
                 // Pack preprocessed rows if the AIR has preprocessed columns.
-                let preprocessed = preprocessed_on_quotient_domain.map(|preprocessed| {
-                    let preprocessed_width = preprocessed.width();
-                    RowMajorMatrix::new(
-                        preprocessed.vertically_packed_row_pair(i_start, next_step),
-                        preprocessed_width,
-                    )
-                });
+                let preprocessed_view = preprocessed_on_quotient_domain.map_or_else(
+                    || RowMajorMatrixView::new(&[], 0),
+                    |preprocessed| {
+                        prep_buf.clear();
+                        prep_buf
+                            .extend(preprocessed.vertically_packed_row::<PackedVal<SC>>(i_start));
+                        prep_buf.extend(
+                            preprocessed
+                                .vertically_packed_row::<PackedVal<SC>>(i_start + next_step),
+                        );
+                        RowMajorMatrixView::new(prep_buf.as_slice(), preprocessed.width())
+                    },
+                );
 
                 // Build a packed permutation matrix from element-wise reads.
                 // The buffer is cleared and refilled each iteration without reallocating.
@@ -869,10 +916,6 @@ where
                 }
                 let permutation = RowMajorMatrixView::new(perm_buf.as_slice(), perm_cols);
 
-                let preprocessed_view = preprocessed
-                    .as_ref()
-                    .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
-
                 // Swap in the reusable constraint buffers (already cleared).
                 base_buf.clear();
                 ext_buf.clear();
@@ -882,7 +925,7 @@ where
                     &periodic_packed[i_start / pack_width]
                 };
                 let inner_folder = ProverConstraintFolder {
-                    main: main.as_view(),
+                    main,
                     preprocessed: preprocessed_view,
                     preprocessed_window: RowWindow::from_view(&preprocessed_view),
                     periodic_values,

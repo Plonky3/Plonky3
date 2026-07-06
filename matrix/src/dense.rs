@@ -519,6 +519,76 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
             (!sfx.is_empty()).then(|| P::from_fn(|i| sfx.get(i).cloned().unwrap_or_default())),
         )
     }
+
+    #[inline]
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        let values = self.values.borrow();
+        let width = self.width;
+        let height = self.height();
+        let row = r % height;
+        let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
+        let rows = (!no_wrap && P::WIDTH != 1).then(|| self.wrapping_row_slices(r, P::WIDTH));
+
+        (0..width).map(move |c| {
+            if P::WIDTH == 1 {
+                // SAFETY: row < height (from the `%` above) and c < width (loop bound).
+                unsafe { P::broadcast(*values.get_unchecked(row * width + c)) }
+            } else if no_wrap {
+                // SAFETY: for i in 0..P::WIDTH, r + i < height (fast-path guard) and c < width.
+                P::from_fn(|i| unsafe { *values.get_unchecked((r + i) * width + c) })
+            } else {
+                let rows = rows.as_ref().unwrap();
+                P::from_fn(|i| rows[i][c])
+            }
+        })
+    }
+
+    #[inline]
+    fn vertically_packed_row_pair<P>(&self, r: usize, step: usize) -> Vec<P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        let values = self.values.borrow();
+        let width = self.width;
+        let height = self.height();
+
+        if P::WIDTH == 1 {
+            let row = r % height;
+            let next_row = (r + step) % height;
+            let mut out = Vec::with_capacity(width * 2);
+            out.extend(
+                // SAFETY: row < height and c < width (loop bound).
+                (0..width).map(|c| unsafe { P::broadcast(*values.get_unchecked(row * width + c)) }),
+            );
+            out.extend(
+                // SAFETY: next_row < height and c < width.
+                (0..width)
+                    .map(|c| unsafe { P::broadcast(*values.get_unchecked(next_row * width + c)) }),
+            );
+            out
+        } else if r + P::WIDTH <= height && r + step + P::WIDTH <= height {
+            // SAFETY: for i in 0..P::WIDTH, both r+i < height and r+step+i < height (fast-path
+            // guard), and c < width (loop bound).
+            (0..width)
+                .map(|c| P::from_fn(|i| unsafe { *values.get_unchecked((r + i) * width + c) }))
+                .chain((0..width).map(|c| {
+                    P::from_fn(|i| unsafe { *values.get_unchecked((r + step + i) * width + c) })
+                }))
+                .collect::<Vec<_>>()
+        } else {
+            let rows = self.wrapping_row_slices(r, P::WIDTH);
+            let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
+            (0..width)
+                .map(|c| P::from_fn(|i| rows[i][c]))
+                .chain((0..width).map(|c| P::from_fn(|i| next_rows[i][c])))
+                .collect::<Vec<_>>()
+        }
+    }
 }
 
 impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
@@ -586,15 +656,21 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
         let new_values = T::zero_vec(new_w * self.height());
         let mut result = Self::new(new_values, new_w);
 
-        // - Copy original data into the left portion of each row,
-        // - Then fill the right portion with independent random samples.
+        // Copy original data into the left portion of each row in parallel; this is a plain
+        // memcpy per row with no dependency on the (necessarily serial) RNG stream below.
         result
-            .rows_mut()
-            .zip(self.row_slices())
+            .par_rows_mut()
+            .zip(self.par_row_slices())
             .for_each(|(new_row, old_row)| {
                 new_row[..old_w].copy_from_slice(old_row);
-                new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
             });
+
+        // Fill the trailing random columns as a separate serial pass, since `rng` is a single
+        // sequential stream.
+        result.rows_mut().for_each(|new_row| {
+            new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
+        });
+
         result
     }
 
@@ -1711,6 +1787,26 @@ mod tests {
     }
 
     #[test]
+    fn test_vertically_packed_row_scalar_width_1() {
+        type Packed = BabyBear;
+
+        let matrix = RowMajorMatrix::new((1..17).map(BabyBear::new).collect::<Vec<_>>(), 4);
+        let packed = matrix
+            .vertically_packed_row::<Packed>(2)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            packed,
+            vec![
+                BabyBear::new(9),
+                BabyBear::new(10),
+                BabyBear::new(11),
+                BabyBear::new(12),
+            ]
+        );
+    }
+
+    #[test]
     fn test_vertically_packed_row_pair() {
         type Packed = FieldArray<BabyBear, 2>;
 
@@ -1740,6 +1836,28 @@ mod tests {
                 .chain(9..13)
                 .map(|i| [BabyBear::new(i), BabyBear::new(i + 4)].into())
                 .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_vertically_packed_row_pair_scalar_width_1() {
+        type Packed = BabyBear;
+
+        let matrix = RowMajorMatrix::new((1..17).map(BabyBear::new).collect::<Vec<_>>(), 4);
+        let packed = matrix.vertically_packed_row_pair::<Packed>(1, 2);
+
+        assert_eq!(
+            packed,
+            vec![
+                BabyBear::new(5),
+                BabyBear::new(6),
+                BabyBear::new(7),
+                BabyBear::new(8),
+                BabyBear::new(13),
+                BabyBear::new(14),
+                BabyBear::new(15),
+                BabyBear::new(16),
+            ]
         );
     }
 

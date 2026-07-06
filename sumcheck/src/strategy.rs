@@ -7,14 +7,14 @@
 //! - `SumcheckProver`: drives rounds over a paired product polynomial.
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
-use crate::SumcheckData;
-use crate::constraints::Constraint;
-use crate::product_polynomial::ProductPolynomial;
+use crate::constraints::{Constraint, Statements};
+use crate::product_polynomial::{PolyView, ProductPolynomial};
+use crate::{SumcheckData, extrapolate_01inf};
 
 /// Input size at which the round-coefficient routines switch from serial to parallel execution.
 ///
@@ -326,17 +326,51 @@ impl VariableOrder {
                     Self::Suffix => reversed.get_subpoint_over_range(..constraint.num_variables()),
                 };
 
-                // Equality term: sum_{(z, c)} c * eq(z, local_challenge).
-                let eq_contrib = constraint
-                    .iter_eqs()
-                    .map(|(point, coeff)| coeff * point.eq_poly(&local_challenge))
-                    .sum::<EF>();
-                // Selector term: sum_{(var, c)} c * select(local_challenge, var).
-                let sel_contrib = constraint
-                    .iter_sels()
-                    .map(|(&var, coeff)| coeff * local_challenge.select_poly(var))
-                    .sum::<EF>();
-                eq_contrib + sel_contrib
+                // The batched weight polynomial is one big random combination
+                // of all statement weights against successive challenge powers.
+                //
+                //     value = sum_g sum_i weight_{g,i} * chi^{shift_g + i}
+                //
+                // Each statement group contributes a contiguous block of powers.
+                // The running shift is where the next group's powers begin.
+                //
+                //     group 0: chi^0       chi^1   ... chi^{l_0 - 1}
+                //     group 1: chi^{l_0}   ...         chi^{l_0 + l_1 - 1}
+                //     ...
+                let mut shift = 0;
+                let mut acc = EF::ZERO;
+                // Each statement group exposes its weights evaluated at the
+                // local challenge; the kinds differ only in how weights are formed.
+                for statement in constraint.statements() {
+                    match statement {
+                        // Equality weights: one term per recorded equality point.
+                        Statements::Eq(eq_statement) => {
+                            // Pair this group's weights with powers starting at the shift.
+                            acc += dot_product::<EF, _, _>(
+                                eq_statement.weights_at(&local_challenge),
+                                constraint.challenge_powers(shift),
+                            );
+                        }
+                        // Successor-view weights: equality through the repeat-last view.
+                        Statements::Next(next_statement) => {
+                            acc += dot_product::<EF, _, _>(
+                                next_statement.weights_at(&local_challenge),
+                                constraint.challenge_powers(shift),
+                            );
+                        }
+                        // Selector weights: one term per single-variable selector.
+                        Statements::Select(sel_statement) => {
+                            acc += dot_product::<EF, _, _>(
+                                sel_statement.weights_at(&local_challenge),
+                                constraint.challenge_powers(shift),
+                            );
+                        }
+                    }
+                    // Advance past this group's block so the next group's powers
+                    // begin one beyond the last power consumed here.
+                    shift += statement.len();
+                }
+                acc
             })
             .sum()
     }
@@ -370,6 +404,11 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         Self { poly, sum }
     }
 
+    /// Returns the current claimed sum over the remaining unbound variables.
+    pub const fn claimed_sum(&self) -> EF {
+        self.sum
+    }
+
     /// Returns the number of remaining (unbound) variables.
     pub fn num_variables(&self) -> usize {
         self.poly.num_variables()
@@ -381,9 +420,56 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         self.poly.evals()
     }
 
+    /// Borrows the current evaluation polynomial in its live representation.
+    ///
+    /// No unpacking or copying takes place.
+    pub const fn evals_view(&self) -> PolyView<'_, F, EF> {
+        self.poly.evals_view()
+    }
+
     /// Evaluates `f` at a given multilinear point via interpolation.
     pub fn eval(&self, point: &Point<EF>) -> EF {
         self.poly.eval(point)
+    }
+
+    /// Computes the current round's plain quadratic coefficients without
+    /// touching the transcript or folding the polynomial.
+    pub(crate) fn round_coefficients(&self) -> (EF, EF) {
+        self.poly.round_coefficients()
+    }
+
+    /// Folds the residual product polynomial by one challenge and updates the
+    /// claimed sum with the same quadratic extrapolation as the plain path.
+    pub(crate) fn fold_round_with_coefficients(&mut self, c0: EF, c_inf: EF, gamma: EF) {
+        self.sum = extrapolate_01inf(c0, self.sum - c0, c_inf, gamma);
+        self.poly.fold_round(gamma);
+        debug_assert_eq!(self.sum, self.poly.dot_product());
+    }
+
+    /// Applies a scalar to the weight side and the matching residual claim.
+    ///
+    /// Leaves the evaluation side untouched, so downstream reductions can
+    /// reuse it as the honest folded message.
+    pub(crate) fn scale_weights_and_claim(&mut self, scale: EF) {
+        self.poly.scale_weights(scale);
+        self.sum *= scale;
+    }
+
+    /// Extracts the current weight polynomial as scalar extension-field elements.
+    pub fn weights(&self) -> Poly<EF> {
+        self.poly.weights()
+    }
+
+    /// Folds a dense weight increment and its claim contribution into the prover.
+    ///
+    /// # Invariant
+    ///
+    /// The caller guarantees `sum_delta == <evals, weights_delta>`, restoring
+    /// the running invariant `sum == dot_product` after the update.
+    pub fn accumulate_claim(&mut self, weights_delta: &[EF], sum_delta: EF) {
+        self.poly.accumulate_weights(weights_delta);
+        self.sum += sum_delta;
+        debug_assert_eq!(self.sum, self.poly.dot_product());
     }
 
     /// Runs additional sumcheck rounds, optionally incorporating a new constraint.
@@ -433,6 +519,7 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
@@ -445,8 +532,8 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::VariableOrder;
-    use crate::constraints::Constraint;
-    use crate::constraints::statement::{EqStatement, SelectStatement};
+    use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement};
+    use crate::constraints::{Constraint, Statements};
 
     type F = BabyBear;
     type EF = BinomialExtensionField<BabyBear, 4>;
@@ -505,7 +592,30 @@ mod tests {
                 (0..rng.random_range(0..=3))
                     .for_each(|_| sel_statement.add_constraint(rng.random(), rng.random()));
 
-                Constraint::new(gamma, eq_statement, sel_statement)
+                // Up to 3 successor-view equality constraints at random points.
+                // The empty prefix point means each one spans the full space.
+                let mut next_statement = NextStatement::initialize(num_variables);
+                (0..rng.random_range(0..=3)).for_each(|_| {
+                    next_statement.add_evaluated_constraint(
+                        Point::new(Vec::new()),
+                        Point::rand(rng, num_variables),
+                        rng.random(),
+                        VariableOrder::Prefix,
+                    );
+                });
+
+                // Bundle the three statement groups into one constraint.
+                // Order fixes the challenge-power layout: equality, then
+                // successor-view, then selector blocks.
+                Constraint::new(
+                    gamma,
+                    num_variables,
+                    vec![
+                        Statements::Eq(eq_statement),
+                        Statements::Next(next_statement),
+                        Statements::Select(sel_statement),
+                    ],
+                )
             })
             .collect()
     }

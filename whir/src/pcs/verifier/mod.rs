@@ -2,26 +2,25 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::fmt::Debug;
 use core::ops::Deref;
-use core::slice::from_ref;
 
 use errors::VerifierError;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpeningRef, ExtensionMmcs, Mmcs};
+use p3_commit::{ExtensionMmcs, MultiOpeningMmcs};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::constraints::statement::SelectStatement;
+use p3_sumcheck::constraints::{Constraint, Statements};
+use p3_sumcheck::strategy::VariableOrder;
+use p3_sumcheck::verify_final_sumcheck_rounds;
 use tracing::instrument;
 
 use super::committer::reader::ParsedCommitment;
 use super::utils::get_challenge_stir_queries;
 use crate::alloc::string::ToString;
-use crate::constraints::Constraint;
-use crate::constraints::statement::SelectStatement;
 use crate::parameters::{RoundConfig, WhirConfig};
-use crate::pcs::proof::{QueryOpening, WhirProof};
-use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::{SumcheckError, verify_final_sumcheck_rounds};
+use crate::pcs::proof::{QueryOpenings, WhirProof};
 
 pub mod errors;
 
@@ -48,7 +47,7 @@ pub struct WhirVerifier<'a, EF, F, MT, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
 {
     /// Derived per-protocol parameters and per-round configuration.
     pub(crate) config: &'a WhirConfig<EF, F, Challenger>,
@@ -62,7 +61,7 @@ impl<'a, EF, F, MT, Challenger> WhirVerifier<'a, EF, F, MT, Challenger>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
 {
     /// Wraps the verifier-side dependencies into a single replay context.
@@ -118,17 +117,11 @@ where
         constraints.push(initial_constraint);
 
         // Initial sumcheck rounds == first-round folding factor.
-        let expected_initial_rounds = self.folding_factor(0);
-        let actual_initial_rounds = proof.initial_sumcheck.polynomial_evaluations().len();
-        if actual_initial_rounds != expected_initial_rounds {
-            return Err(VerifierError::Sumcheck(SumcheckError::RoundCountMismatch {
-                expected: expected_initial_rounds,
-                actual: actual_initial_rounds,
-            }));
-        }
+        // `verify_rounds` rejects a proof that carries the wrong number of rounds.
         let folding_randomness = proof.initial_sumcheck.verify_rounds(
             challenger,
             &mut claimed_eval,
+            self.round_folding_factor(0),
             self.starting_folding_pow_bits,
         )?;
         round_folding_randomness.push(folding_randomness);
@@ -160,17 +153,28 @@ where
                 round_index,
             )?;
 
+            // Rebuild the same batched constraint the prover formed for this round.
+            // The out-of-domain claims form the equality group.
+            // The query openings form the selection group.
+            // The challenge sampled here matches the prover's, weighting the groups
+            // by its successive powers so both sides combine the claims identically.
             let constraint = Constraint::new(
                 challenger.sample_algebra_element(),
-                new_commitment.ood_statement.clone(),
-                stir_statement,
+                new_commitment.ood_statement.num_variables(),
+                vec![
+                    Statements::Eq(new_commitment.ood_statement.clone()),
+                    Statements::Select(stir_statement),
+                ],
             );
             constraint.combine_evals(&mut claimed_eval);
             constraints.push(constraint);
 
+            // Intermediate-round sumcheck rounds == next-round folding factor.
+            // `verify_rounds` rejects a wrong count instead of desyncing Fiat-Shamir.
             let folding_randomness = proof.rounds[round_index].sumcheck.verify_rounds(
                 challenger,
                 &mut claimed_eval,
+                self.round_folding_factor(round_index + 1),
                 round_params.folding_pow_bits,
             )?;
             round_folding_randomness.push(folding_randomness);
@@ -181,7 +185,7 @@ where
         // Final round: receive the polynomial in the clear.
         let final_evaluations = proof
             .final_poly
-            .clone()
+            .as_ref()
             .ok_or(VerifierError::MissingFinalPoly)?;
         let final_round_config = self.final_round_config();
         let expected_final_poly_len = 1usize << final_round_config.num_variables;
@@ -210,7 +214,7 @@ where
         )?;
 
         stir_statement
-            .verify(&final_evaluations)
+            .verify(final_evaluations)
             .then_some(())
             .ok_or_else(|| VerifierError::StirChallengeFailed {
                 challenge_id: 0,
@@ -261,7 +265,7 @@ where
     ///
     /// Checks PoW witness, generates query indices, verifies Merkle proofs,
     /// and evaluates folded polynomials at the queried positions.
-    pub fn verify_stir_challenges(
+    fn verify_stir_challenges(
         &self,
         proof: &WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
@@ -288,7 +292,7 @@ where
         }
 
         // Sample STIR query positions.
-        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F, EF>(
+        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F>(
             params.domain_size,
             params.folding_factor,
             params.num_queries,
@@ -329,8 +333,10 @@ where
         ))
     }
 
-    /// Verify Merkle multi-opening proofs at the given indices.
-    pub fn verify_merkle_proof(
+    /// Verify the Merkle multi-opening of one round at the given indices.
+    ///
+    /// Returns the opened rows lifted to the extension field.
+    fn verify_merkle_proof(
         &self,
         proof: &WhirProof<F, EF, MT>,
         root: &MT::Commitment,
@@ -338,75 +344,64 @@ where
         dimensions: &[Dimensions],
         round_index: usize,
     ) -> Result<Vec<Vec<EF>>, VerifierError> {
-        let extension_mmcs = ExtensionMmcs::new((*self.mmcs).clone());
-
-        let queries = if round_index == self.n_rounds() {
-            &proof.final_queries
+        let openings = if round_index == self.n_rounds() {
+            &proof.final_openings
         } else {
+            // `verify` pins `proof.rounds.len() == n_rounds` at entry and only
+            // ever calls this with `round_index < n_rounds`, so this is always in bounds.
             &proof
                 .rounds
                 .get(round_index)
-                .ok_or_else(|| VerifierError::MerkleProofInvalid {
-                    position: 0,
-                    reason: format!("Round {round_index} not found in proof"),
-                })?
-                .queries
+                .expect("round_index is in bounds: verify() pins proof.rounds.len() == n_rounds")
+                .openings
         };
 
-        if queries.len() != indices.len() {
-            return Err(VerifierError::StirQueryCountMismatch {
-                round_index,
-                expected: indices.len(),
-                actual: queries.len(),
-            });
-        }
-
-        let mut results = Vec::with_capacity(indices.len());
-
-        for (&index, query) in indices.iter().zip(queries.iter()) {
-            let values_ef = match query {
-                QueryOpening::Base { values, proof } => {
-                    self.mmcs
-                        .verify_batch(
-                            root,
-                            dimensions,
-                            index,
-                            BatchOpeningRef {
-                                opened_values: from_ref(values),
-                                opening_proof: proof,
-                            },
-                        )
-                        .map_err(|_| VerifierError::MerkleProofInvalid {
-                            position: index,
-                            reason: "Base field Merkle proof verification failed".to_string(),
-                        })?;
-
-                    values.iter().map(|&f| f.into()).collect()
+        // Round 0 queries the base-field initial commitment.
+        // Every later round queries a folded extension-field commitment.
+        // A variant that disagrees with the round is malformed.
+        match (openings, round_index == 0) {
+            (QueryOpenings::Base(opening), true) => {
+                if opening.rows.len() != indices.len() {
+                    return Err(VerifierError::StirQueryCountMismatch {
+                        round_index,
+                        expected: indices.len(),
+                        actual: opening.rows.len(),
+                    });
                 }
-                QueryOpening::Extension { values, proof } => {
-                    extension_mmcs
-                        .verify_batch(
-                            root,
-                            dimensions,
-                            index,
-                            BatchOpeningRef {
-                                opened_values: from_ref(values),
-                                opening_proof: proof,
-                            },
-                        )
-                        .map_err(|_| VerifierError::MerkleProofInvalid {
-                            position: index,
-                            reason: "Extension field Merkle proof verification failed".to_string(),
-                        })?;
-
-                    values.clone()
+                opening
+                    .verify(self.mmcs, root, dimensions, indices)
+                    .map_err(|_| VerifierError::MerkleProofInvalid {
+                        position: 0,
+                        reason: "Base field Merkle multiproof verification failed".to_string(),
+                    })?;
+                Ok(opening
+                    .rows
+                    .iter()
+                    .map(|row| row.iter().map(|&f| f.into()).collect())
+                    .collect())
+            }
+            (QueryOpenings::Extension(opening), false) => {
+                if opening.rows.len() != indices.len() {
+                    return Err(VerifierError::StirQueryCountMismatch {
+                        round_index,
+                        expected: indices.len(),
+                        actual: opening.rows.len(),
+                    });
                 }
-            };
-
-            results.push(values_ef);
+                let extension_mmcs = ExtensionMmcs::new(self.mmcs);
+                opening
+                    .verify(&extension_mmcs, root, dimensions, indices)
+                    .map_err(|_| VerifierError::MerkleProofInvalid {
+                        position: 0,
+                        reason: "Extension field Merkle multiproof verification failed".to_string(),
+                    })?;
+                Ok(opening.rows.clone())
+            }
+            _ => Err(VerifierError::MerkleProofInvalid {
+                position: 0,
+                reason: format!("Query openings field does not match round {round_index}"),
+            }),
         }
-
-        Ok(results)
     }
 }
 
@@ -414,7 +409,7 @@ impl<EF, F, MT, Challenger> Deref for WhirVerifier<'_, EF, F, MT, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
 {
     type Target = WhirConfig<EF, F, Challenger>;
 

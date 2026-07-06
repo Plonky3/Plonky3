@@ -22,6 +22,15 @@ pub mod prelude {
     pub use super::serial::*;
 
     pub trait SharedExt: ParallelIterator {
+        /// Folds each split of the iterator with `fold_op` (seeded by `identity`), then
+        /// combines the per-split accumulators with `reduce_op`.
+        ///
+        /// `identity()` must be neutral for `reduce_op`, and `fold_op`/`reduce_op` must be
+        /// mutually associative so that regrouping splits doesn't change the result — under
+        /// the `parallel` feature the split count (and thus how many times `reduce_op` runs)
+        /// depends on the thread pool. **The serial fallback never calls `reduce_op`** (there
+        /// is only one split), so an inconsistent `reduce_op` yields results that diverge
+        /// between `cargo test` and `cargo test --features parallel`.
         fn par_fold_reduce<Acc, Id, F, R>(self, identity: Id, fold_op: F, reduce_op: R) -> Acc
         where
             Acc: Send,
@@ -59,40 +68,4 @@ pub mod iter {
 
     #[cfg(feature = "parallel")]
     pub use rayon::iter::{repeat, repeat_n};
-}
-
-/// A raw mutable pointer wrapper that implements [`Send`] and [`Sync`].
-///
-/// Used to enable parallel writes to disjoint slices of a pre-allocated buffer
-/// from within closures that require `Send + Sync` (e.g. `rayon::ParallelIterator::for_each_init`).
-///
-/// # Safety
-///
-/// The caller must ensure that concurrent accesses through this pointer always
-/// target **non-overlapping** memory regions.
-#[derive(Clone, Copy)]
-pub struct DisjointMutPtr<T>(*mut T);
-
-// SAFETY: The contract of DisjointMutPtr guarantees that each thread writes to
-// a disjoint region, so sharing the pointer across threads is safe.
-unsafe impl<T> Send for DisjointMutPtr<T> {}
-unsafe impl<T> Sync for DisjointMutPtr<T> {}
-
-impl<T> DisjointMutPtr<T> {
-    /// Create a new `DisjointMutPtr` from a mutable slice.
-    #[inline]
-    pub const fn new(slice: &mut [T]) -> Self {
-        Self(slice.as_mut_ptr())
-    }
-
-    /// Get a mutable slice starting at `offset` with `len` elements.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure the range `[offset, offset+len)` is within bounds
-    /// and does not overlap with any other concurrent access.
-    #[inline]
-    pub const unsafe fn slice_mut(self, offset: usize, len: usize) -> &'static mut [T] {
-        unsafe { core::slice::from_raw_parts_mut(self.0.add(offset), len) }
-    }
 }

@@ -28,6 +28,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 const P: u32 = (1 << 31) - 1;
 
 /// The prime field `F_p` where `p = 2^31 - 1`.
+///
+/// The serde encoding is canonical: every field element has exactly one valid byte representation.
 #[derive(Copy, Clone, Default)]
 #[repr(transparent)] // Important for reasoning about memory layout.
 #[must_use]
@@ -177,16 +179,17 @@ impl Distribution<Mersenne31> for StandardUniform {
 
 impl Serialize for Mersenne31 {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // No need to convert to canonical.
-        serializer.serialize_u32(self.value)
+        // Emit the canonical representative so every field element has one encoding.
+        serializer.serialize_u32(self.as_canonical_u32())
     }
 }
 
 impl<'a> Deserialize<'a> for Mersenne31 {
     fn deserialize<D: Deserializer<'a>>(d: D) -> Result<Self, D::Error> {
         let val = u32::deserialize(d)?;
-        // Ensure that `val` satisfies our invariant. i.e. Not necessarily canonical, but must fit in 31 bits.
-        if val <= P {
+        // Reject non-canonical encodings so a proof cannot be re-encoded without the witness.
+        // `val == P` is field-equal to 0, so only `[0, P)` is canonical.
+        if val < P {
             Ok(Self::new_reduced(val))
         } else {
             Err(D::Error::custom("Value is out of range"))
@@ -383,6 +386,27 @@ impl Field for Mersenne31 {
     #[inline]
     fn order() -> BigUint {
         P.into()
+    }
+
+    #[inline]
+    fn try_sqrt(&self) -> Option<Self> {
+        // Mersenne31 has `p = 2^31 - 1 ≡ 3 (mod 4)`, so `a^((p+1)/4)` is a square
+        // root of `a` whenever one exists. Here `(p + 1)/4 = 2^29`.
+        let candidate = self.exp_power_of_2(29);
+        (candidate.square() == *self).then_some(candidate)
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    #[inline]
+    fn batched_columnwise_dot_product<EF, R, I, const N: usize>(
+        acc: &mut [EF::ExtensionPacking],
+        items: I,
+    ) where
+        EF: p3_field::ExtensionField<Self>,
+        R: Iterator<Item = Self::Packing>,
+        I: Iterator<Item = (R, [EF; N])>,
+    {
+        crate::aarch64_neon::batched_columnwise_dot_product::<EF, R, I, N>(acc, items);
     }
 }
 
@@ -668,6 +692,31 @@ mod tests {
         assert_eq!(m1.injective_exp_n().injective_exp_root_n(), m1);
         assert_eq!(m2.injective_exp_n().injective_exp_root_n(), m2);
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
+    }
+
+    #[test]
+    fn serialize_is_canonical() {
+        // `P` is the redundant in-memory representation of zero.
+        // `new_reduced` preserves it; `new` would collapse it to 0.
+        let redundant_zero = F::new_reduced((1 << 31) - 1);
+        assert_eq!(redundant_zero, F::ZERO);
+
+        // Both representations serialize to the single canonical encoding.
+        assert_eq!(serde_json::to_string(&redundant_zero).unwrap(), "0");
+        assert_eq!(serde_json::to_string(&F::ZERO).unwrap(), "0");
+    }
+
+    #[test]
+    fn deserialize_rejects_non_canonical_encodings() {
+        // `P` is field-equal to 0, so its encoding is non-canonical and must be rejected.
+        // This blocks re-encoding a proof as `P` without the witness.
+        let p_json = serde_json::to_string(&((1u32 << 31) - 1)).unwrap();
+        assert!(serde_json::from_str::<F>(&p_json).is_err());
+
+        // The largest canonical value, p - 1, still deserializes.
+        let max_canonical_json = serde_json::to_string(&((1u32 << 31) - 2)).unwrap();
+        let max_canonical: F = serde_json::from_str(&max_canonical_json).unwrap();
+        assert_eq!(max_canonical, F::new((1 << 31) - 2));
     }
 
     // Mersenne31 has a redundant representation of Zero but no redundant representation of One.

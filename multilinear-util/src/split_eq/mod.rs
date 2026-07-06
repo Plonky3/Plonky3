@@ -128,7 +128,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             // Parallel: same logic with parallel iterators.
             poly.0
                 .par_chunks(cs)
-                .zip_eq(self.eq0.0.par_iter())
+                .zip_eq(self.eq0.as_slice().par_iter())
                 .map(|(chunk, &w0)| self.eq1.dot_with_base(chunk) * w0)
                 .sum::<EF>()
         }
@@ -164,7 +164,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             // Parallel path.
             poly.0
                 .par_chunks(cs)
-                .zip_eq(self.eq0.0.par_iter())
+                .zip_eq(self.eq0.as_slice().par_iter())
                 .map(|(chunk, &w0)| self.eq1.dot_with_ext(chunk) * w0)
                 .sum::<EF>()
         }
@@ -202,7 +202,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
                 } else {
                     poly.0
                         .par_chunks(cs)
-                        .zip_eq(self.eq0.0.par_iter())
+                        .zip_eq(self.eq0.as_slice().par_iter())
                         .map(|(chunk, &w0)| self.eq1.dot_with_ext_packed(chunk) * w0)
                         .sum::<EF>()
                 }
@@ -242,7 +242,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         } else {
             // Parallel: same with parallel chunk iteration.
             out.par_chunks_mut(cs)
-                .zip(self.eq0.0.par_iter())
+                .zip(self.eq0.as_slice().par_iter())
                 .for_each(|(chunk, &w0)| {
                     self.eq1.accumulate_scalar_into(chunk, w0 * w_scale);
                 });
@@ -288,7 +288,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
                     });
             } else {
                 out.par_chunks_mut(cs)
-                    .zip(self.eq0.0.par_iter())
+                    .zip(self.eq0.as_slice().par_iter())
                     .for_each(|(chunk, &w0)| {
                         self.eq1.accumulate_packed_into(chunk, w0 * w_scale);
                     });
@@ -331,7 +331,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             // Parallel: each thread accumulates into a local buffer, then reduce.
             poly.0
                 .par_chunks(size_outer)
-                .zip_eq(self.eq0.0.par_iter())
+                .zip_eq(self.eq0.as_slice().par_iter())
                 .par_fold_reduce(
                     || Poly::<EF>::zero(k_inner),
                     |mut acc, (chunk, &w0)| {
@@ -382,7 +382,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         } else {
             poly.0
                 .par_chunks(size_outer)
-                .zip_eq(self.eq0.0.par_iter())
+                .zip_eq(self.eq0.as_slice().par_iter())
                 .par_fold_reduce(
                     || Poly::zero(k_inner),
                     |mut acc, (chunk, &w0)| {
@@ -447,6 +447,226 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
                     *out = self.eq1.compress_suffix_dot(chunk, &self.eq0);
                 });
         }
+    }
+
+    /// Evaluates a base-field polynomial against the repeat-last successor weights.
+    ///
+    /// Each hypercube row is read at its successor, with the maximal row repeating itself:
+    /// ```text
+    /// sum_{x in {0,1}^k} eq(point, x) * poly(succ_repeat_last(x))
+    /// ```
+    ///
+    /// The factored equality table is contracted directly, so the shifted
+    /// polynomial is never materialized.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial and the equality table have different numbers of variables.
+    pub fn eval_next_base(&self, poly: &Poly<F>) -> EF {
+        // The contraction pairs one polynomial row with one equality weight.
+        assert_eq!(poly.num_variables(), self.num_variables());
+
+        // A constant table has a single row, and its successor is itself, so the
+        // shift leaves the value unchanged.
+        if let Some(constant) = poly.as_constant() {
+            return constant.into();
+        }
+
+        // With a single variable the successor of row 0 is row 1, and row 1 repeats.
+        // Both successor reads land on row 1, so the value is just that entry.
+        if poly.num_variables() == 1 {
+            return poly.as_slice()[1].into();
+        }
+
+        let evals = poly.as_slice();
+        // The maximal row repeats instead of wrapping, so handle it separately below.
+        let last = *evals.last().unwrap();
+        // Each prefix weight pairs with one contiguous suffix block of this length.
+        let cs = self.eq1.scalar_chunk_size();
+        // Successor shift: dropping the first eval aligns row x with successor x + 1.
+        //
+        //     evals     : [ e0, e1, e2, ..., e_{last} ]
+        //     evals[1..]: [     e1, e2, ..., e_{last} ]
+        //
+        // Each outer (prefix) weight then dots its suffix block against the
+        // suffix-half equality table starting one row early.
+        let mut sum = if poly.num_evals() < PARALLEL_THRESHOLD {
+            self.eq0
+                .iter()
+                .zip_eq(evals[1..].chunks(cs))
+                .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
+                .sum::<EF>()
+        } else {
+            // Same contraction, distributed across threads for large tables.
+            self.eq0
+                .0
+                .par_iter()
+                .zip_eq(evals[1..].par_chunks(cs))
+                .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
+                .sum::<EF>()
+        };
+
+        // Boundary term: the all-ones equality weight times the repeated maximal row.
+        sum += *self.eq0.as_slice().last().unwrap() * self.eq1.last_scalar() * last;
+        sum
+    }
+
+    /// Fixes the prefix variables against the shifted equality table.
+    ///
+    /// The shifted table reads each prefix row at its predecessor:
+    /// ```text
+    /// T = [0, eq[0], ..., eq[last - 1]]
+    /// ```
+    ///
+    /// The result is a polynomial over the remaining inner variables:
+    /// ```text
+    /// out(x_suffix) = sum_{y_prefix != 0}
+    ///     eq(point, y_prefix - 1) * poly(y_prefix, x_suffix)
+    /// ```
+    pub fn compress_prefix_shifted(&self, poly: &Poly<F>) -> Poly<EF> {
+        // The prefix variables fixed here must be a subset of the polynomial's variables.
+        assert!(self.num_variables() <= poly.num_variables());
+
+        // Inner variables are the ones left free after fixing the prefix.
+        let k_inner = poly.num_variables() - self.num_variables();
+        let inner_size = 1 << k_inner;
+        // One outer chunk per prefix row; each spans all suffix-times-inner evals.
+        let size_outer = poly.num_evals() / self.eq0.num_evals();
+        let mut out = Poly::<EF>::zero(k_inner);
+
+        // No prefix variables means nothing to fix, so the shifted sum is empty.
+        if self.num_variables() == 0 {
+            return out;
+        }
+
+        if (1 << poly.num_variables()) < PARALLEL_THRESHOLD {
+            // Sequential pass threads a carry across outer chunks.
+            // The shift means each prefix row also receives its predecessor's
+            // last suffix weight, which lives in the previous chunk.
+            let mut prev_last = EF::ZERO;
+            let eq1_last = self.eq1.last_scalar();
+            poly.as_slice()
+                .chunks(size_outer)
+                .zip_eq(self.eq0.iter())
+                .for_each(|(chunk, &w0)| {
+                    // Boundary contribution from the previous chunk's last suffix row.
+                    out.as_mut_slice()
+                        .iter_mut()
+                        .zip_eq(chunk[..inner_size].iter())
+                        .for_each(|(out, &value)| *out += prev_last * value);
+                    // Add this chunk's interior shifted-suffix contributions.
+                    self.eq1
+                        .compress_prefix_shifted_into(out.as_mut_slice(), chunk, w0);
+                    // Carry this prefix weight times the last suffix weight to the next chunk.
+                    prev_last = w0 * eq1_last;
+                });
+            out
+        } else {
+            // Parallel pass: each chunk reconstructs its own boundary from its
+            // index, since threads cannot share the sequential carry.
+            let eq0 = self.eq0.as_slice();
+            let eq1_last = self.eq1.last_scalar();
+            poly.as_slice()
+                .par_chunks(size_outer)
+                .enumerate()
+                .zip_eq(eq0.par_iter())
+                .par_fold_reduce(
+                    // Per-thread accumulator over the inner variables.
+                    || Poly::<EF>::zero(k_inner),
+                    |mut acc, ((idx, chunk), &w0)| {
+                        // Reconstruct the cross-chunk boundary from the predecessor
+                        // prefix weight, except for the very first chunk which has none.
+                        if idx > 0 {
+                            let boundary = eq0[idx - 1] * eq1_last;
+                            acc.as_mut_slice()
+                                .iter_mut()
+                                .zip_eq(chunk[..inner_size].iter())
+                                .for_each(|(out, &value)| *out += boundary * value);
+                        }
+                        // Add this chunk's interior shifted-suffix contributions.
+                        self.eq1
+                            .compress_prefix_shifted_into(acc.as_mut_slice(), chunk, w0);
+                        acc
+                    },
+                    // Merge two partial accumulators element-wise.
+                    |mut acc, part| {
+                        acc.as_mut_slice()
+                            .iter_mut()
+                            .zip_eq(part.iter())
+                            .for_each(|(acc, &part)| *acc += part);
+                        acc
+                    },
+                )
+        }
+    }
+
+    /// Fixes the suffix variables against the shifted equality table.
+    ///
+    /// The shifted table reads each suffix row at its predecessor:
+    /// ```text
+    /// T = [0, eq[0], ..., eq[last - 1]]
+    /// ```
+    ///
+    /// The result is a polynomial over the remaining prefix variables:
+    /// ```text
+    /// out(x_prefix) = sum_{y_suffix != 0}
+    ///     eq(point, y_suffix - 1) * poly(x_prefix, y_suffix)
+    /// ```
+    pub fn compress_suffix_shifted(&self, poly: &Poly<F>) -> Poly<EF> {
+        // The suffix variables fixed here must be a subset of the polynomial's variables.
+        assert!(self.num_variables() <= poly.num_variables());
+
+        // One contiguous block of suffix rows per prefix row.
+        let suffix_rows = 1 << self.num_variables();
+        let out_len = poly.num_evals() >> self.num_variables();
+        let mut out = EF::zero_vec(out_len);
+        // Each prefix-half weight pairs with one suffix block of this length.
+        let cs = self.eq1.scalar_chunk_size();
+
+        // No suffix variables means nothing to fix, so the shifted sum is empty.
+        if self.num_variables() == 0 {
+            return Poly::new(out);
+        }
+
+        if poly.num_evals() < PARALLEL_THRESHOLD {
+            // For each prefix row, contract its suffix block against the shifted table.
+            out.iter_mut()
+                .zip_eq(poly.as_slice().chunks(suffix_rows))
+                .for_each(|(out, chunk)| {
+                    // Drop the first suffix row so row y reads its predecessor y - 1,
+                    // then split the prefix-half weights across the suffix sub-blocks.
+                    *out = self
+                        .eq0
+                        .iter()
+                        .zip_eq(chunk[1..].chunks(cs))
+                        .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
+                        .sum();
+                });
+        } else {
+            // Same per-prefix-row contraction, distributed across threads.
+            out.par_iter_mut()
+                .zip_eq(poly.as_slice().par_chunks(suffix_rows))
+                .for_each(|(out, chunk)| {
+                    *out = self
+                        .eq0
+                        .iter()
+                        .zip_eq(chunk[1..].chunks(cs))
+                        .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
+                        .sum();
+                });
+        }
+
+        Poly::new(out)
+    }
+
+    /// Returns the all-ones entry of the factored equality table.
+    ///
+    /// With unit scale this equals the product of the point coordinates.
+    /// It is the boundary weight that the repeated maximal row carries in the successor decomposition.
+    pub fn last_scalar(&self) -> EF {
+        // The factored table stores eq as a product of a prefix half and a suffix
+        // half, so the all-ones entry is the product of each half's last entry.
+        *self.eq0.as_slice().last().unwrap() * self.eq1.last_scalar()
     }
 }
 
@@ -728,6 +948,154 @@ mod tests {
         // Each element should equal its base-field counterpart promoted to the extension.
         for (c, &p) in compressed.iter().zip(poly.iter()) {
             assert_eq!(*c, EF::from(p));
+        }
+    }
+
+    // Dense reference: fix the prefix variables with the shifted weight table
+    // T = [0, eq[0], ..., eq[last - 1]] built from the trusted equality table.
+    fn compress_prefix_shifted_poly_reference<F: Field, EF: ExtensionField<F>>(
+        poly: &Poly<F>,
+        point: &Point<EF>,
+    ) -> Poly<EF> {
+        assert!(point.num_variables() <= poly.num_variables());
+        let inner_rows = 1 << (poly.num_variables() - point.num_variables());
+        let split_rows = 1 << point.num_variables();
+
+        // Shift the equality table down one row, leading with a zero, so prefix
+        // row y carries the weight of its predecessor row y - 1.
+        let eq = Poly::new_from_point(point.as_slice(), EF::ONE);
+        let mut weights = vec![EF::ZERO; split_rows];
+        weights[1..].copy_from_slice(&eq.as_slice()[..split_rows - 1]);
+
+        // Weighted sum of each prefix block into the inner-variable output.
+        let mut out = Poly::<EF>::zero(poly.num_variables() - point.num_variables());
+        for (y, &weight) in weights.iter().enumerate() {
+            let block = &poly.as_slice()[y * inner_rows..(y + 1) * inner_rows];
+            for (out, &value) in out.as_mut_slice().iter_mut().zip(block.iter()) {
+                *out += weight * value;
+            }
+        }
+        out
+    }
+
+    // Dense reference: fix the suffix variables with the shifted weight table
+    // T = [0, eq[0], ..., eq[last - 1]] built from the trusted equality table.
+    fn compress_suffix_shifted_reference<F: Field, EF: ExtensionField<F>>(
+        poly: &Poly<F>,
+        point: &Point<EF>,
+    ) -> Poly<EF> {
+        assert!(point.num_variables() <= poly.num_variables());
+        let suffix_vars = point.num_variables();
+        let suffix_rows = 1 << suffix_vars;
+        let prefix_rows = poly.num_evals() >> suffix_vars;
+
+        // Shift the equality table down one row so each suffix row carries the
+        // weight of its predecessor; the leading row has none.
+        let eq = Poly::new_from_point(point.as_slice(), EF::ONE);
+        let mut weights = vec![EF::ZERO; suffix_rows];
+        weights[1..].copy_from_slice(&eq.as_slice()[..suffix_rows - 1]);
+
+        // Weighted sum within each prefix block.
+        let mut out = Poly::<EF>::zero(poly.num_variables() - suffix_vars);
+        for prefix_idx in 0..prefix_rows {
+            for (suffix_idx, &weight) in weights.iter().enumerate() {
+                let value = poly.as_slice()[(prefix_idx << suffix_vars) | suffix_idx];
+                out.as_mut_slice()[prefix_idx] += weight * value;
+            }
+        }
+        out
+    }
+
+    proptest! {
+        #[test]
+        fn prop_eval_next_base_matches_shifted_poly_reference(k in 0usize..=14, seed in any::<u64>()) {
+            // Invariant: the split-form successor evaluation equals the dense
+            // shifted-table reference, for both scalar and packed storage.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let point = Point::<EF>::rand(&mut rng, k);
+            // Golden value: read each row at its successor, repeat the
+            // maximal row, then evaluate the rebuilt table the plain way.
+            let mut shifted = poly.as_slice().to_vec();
+            let last = *shifted.last().unwrap();
+            shifted.rotate_left(1);
+            *shifted.last_mut().unwrap() = last;
+            let expected = eval_reference(&shifted, point.as_slice());
+
+            // Scalar storage must match the golden value.
+            prop_assert_eq!(
+                expected,
+                SplitEq::<F, EF>::new_unpacked(&point, EF::ONE).eval_next_base(&poly),
+            );
+            // Packed storage must match the golden value.
+            prop_assert_eq!(
+                expected,
+                SplitEq::<F, EF>::new_packed(&point, EF::ONE).eval_next_base(&poly),
+            );
+        }
+
+        #[test]
+        fn prop_compress_prefix_shifted_matches_reference(
+            split_vars in 0usize..=8,
+            inner_vars in 0usize..=6,
+            seed in any::<u64>(),
+        ) {
+            // Invariant: prefix compression with shifted weights matches the
+            // dense reference, for both base-field and extension-field polynomials.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            // Total variables = fixed prefix variables + remaining inner variables.
+            let total_vars = split_vars + inner_vars;
+            let point = Point::<EF>::rand(&mut rng, split_vars);
+
+            // Base-field input: coefficients in the base field.
+            let base_poly = Poly::<F>::rand(&mut rng, total_vars);
+            let expected = compress_prefix_shifted_poly_reference(&base_poly, &point);
+            prop_assert_eq!(
+                expected,
+                SplitEq::<F, EF>::new_packed(&point, EF::ONE)
+                    .compress_prefix_shifted(&base_poly),
+            );
+
+            // Extension-field input: exercises the all-extension storage path.
+            let ext_poly = Poly::<EF>::rand(&mut rng, total_vars);
+            let expected = compress_prefix_shifted_poly_reference(&ext_poly, &point);
+            prop_assert_eq!(
+                expected,
+                SplitEq::<EF, EF>::new_packed(&point, EF::ONE)
+                    .compress_prefix_shifted(&ext_poly),
+            );
+        }
+
+        #[test]
+        fn prop_compress_suffix_shifted_matches_reference(
+            suffix_vars in 0usize..=8,
+            prefix_vars in 0usize..=6,
+            seed in any::<u64>(),
+        ) {
+            // Invariant: suffix compression with shifted weights matches the
+            // dense reference, for both base-field and extension-field polynomials.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            // Total variables = fixed suffix variables + remaining prefix variables.
+            let total_vars = suffix_vars + prefix_vars;
+            let point = Point::<EF>::rand(&mut rng, suffix_vars);
+
+            // Base-field input: coefficients in the base field.
+            let base_poly = Poly::<F>::rand(&mut rng, total_vars);
+            let expected = compress_suffix_shifted_reference(&base_poly, &point);
+            prop_assert_eq!(
+                expected,
+                SplitEq::<F, EF>::new_packed(&point, EF::ONE)
+                    .compress_suffix_shifted(&base_poly),
+            );
+
+            // Extension-field input: exercises the all-extension storage path.
+            let ext_poly = Poly::<EF>::rand(&mut rng, total_vars);
+            let expected = compress_suffix_shifted_reference(&ext_poly, &point);
+            prop_assert_eq!(
+                expected,
+                SplitEq::<EF, EF>::new_packed(&point, EF::ONE)
+                    .compress_suffix_shifted(&ext_poly),
+            );
         }
     }
 }

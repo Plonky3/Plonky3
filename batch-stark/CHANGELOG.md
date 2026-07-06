@@ -6,6 +6,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Uni-stark: richer verification errors (#1453)
+- Fix(batch-stark): validate per-instance global lookup data count (#1458)
+- Fix(verifier): tighten input shape validation (#1464)
+- Perf(batch-stark): avoid cloning generated_perm (#1473)
+- Batch-stark: more efficient prover (#1470)
+- Batch stark: separate Fiat Shamir transcript (#1475)
+- Perf(batch-stark): borrow lookups/public_values in prover (#1474)
+- Feat: add support for Periodic Columns at runtime (#1462)
+- Chore: visibility change for BatchTranscript (#1479)
+- Batch stark: create a verifier module (#1481)
+- Fix(p3-batch-stark): correct selector padding and tail chunk length (#1485)
+- Fix: periodic columns + zk (#1510)
+- Fix(batch-stark): correct misleading degree_bits documentation (#1437)
+- Refactor(fri): move FRI parameter constructors to associated methods (#1530)
+- Guard verifier degree_bits (#1535)
+- Harden verifier shape checks (#1469)
+- Add debug shape checks (#1568)
+- Air,batch-stark: show labels in constraint panic output (#1570)
+- Feat: bus-based cross-AIR interactions and lookup crate redesign (#1566)
+- Refactor(air): merge PeriodicAirBuilder into AirBuilder (#1611)
+- Field: expand packed-extension API; fix unsound PackedValue impls (#1620)
+- Chore: use T::zero_vec(n) instead of vec![T::ZERO; n] (#1633)
+- Fix(merkle-tree): make MerkleTreeHidingMmcs Sync (#1559)
+- Fix: local refs for dev-deps (#1663)
+- Verifier: add a couple strengthening checks (#1666)
+- Perf(batch-stark): borrow permutation buffer in prover (#1671)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Perf(batch-stark): parallelize per-instance quotient computation (#1716)
+- Refactor: move DisjointMutPtr to p3-util (#1720)
+- Fix: add PoW check in Circle STARK's commit phase (#1723)
+- Feat(lookup): single-terminal LogUp aux trace (#1628)
+- Minor (#1739)
+- Refactor(batch-stark): drop redundant quotient-chunk count check (#1754)
+- Fix(challenger): make duplex sponge absorbs length-binding (#1769)
+- Fix(lookup): enforce the LogUp multiplicity height-bound (#1748)
+- Fix(uni-stark, batch-stark): reject malformed periodic column lengths (#1761)
+- Fix(mersenne-31): make serde encoding canonical (#1773)
+- Feat(lookup): bind multiplicity weight to its count (#1771)
+- Feat(lookup): single sampled challenge pair with per-bus domain separation (#1736)
+- Chore: update CHANGELOGs (#1785)
+- Doc: add basic READMEs in main crates (#1786)
+- Fix(batch-stark): reject out-of-domain point inside the trace domain (#1791)
+- Bench(lookup): end-to-end batch-STARK lookup benchmark harness (#1779)
+- Feat!(lookup): degree-budget-aware same-bus column packing (#1799)
+
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Fix(batch-stark): correct misleading degree_bits documentation (#1437)
+
+## [0.5.2] - 2026-03-27
+### Merged PRs
+- Perf(batch-stark): avoid cloning generated_perm (#1473)
+
 ## [0.5.1] - 2026-03-16
 ### Merged PRs
 - Clarify selector semantics (#1412)

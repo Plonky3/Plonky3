@@ -1,38 +1,9 @@
 use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder, RowWindow};
-use p3_field::{Field, PrimeCharacteristicRing};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_field::PrimeCharacteristicRing;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{StarkGenericConfig, Val};
 
-pub use crate::types::{Kind, Lookup, LookupData, LookupError};
-
-/// A trait for lookup argument.
-pub trait LookupGadget {
-    /// Generates the permutation matrix for the lookup argument.
-    fn generate_permutation<SC: StarkGenericConfig>(
-        &self,
-        main: &RowMajorMatrix<Val<SC>>,
-        preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
-        public_values: &[Val<SC>],
-        lookups: &[Lookup<Val<SC>>],
-        lookup_data: &mut [LookupData<SC::Challenge>],
-        permutation_challenges: &[SC::Challenge],
-    ) -> RowMajorMatrix<SC::Challenge>;
-
-    /// Evaluates the final cumulated value over all AIRs involved in the interaction,
-    /// and checks that it is equal to the expected final value.
-    ///
-    /// For example, in LogUp:
-    /// - it sums all expected cumulated values provided by each AIR within one interaction,
-    /// - checks that the sum is equal to 0.
-    fn verify_global_final_value<EF: Field>(
-        &self,
-        all_expected_cumulated: &[EF],
-    ) -> Result<(), LookupError>;
-
-    /// Computes the polynomial degree of a lookup transition constraint.
-    fn constraint_degree<F: Field>(&self, context: &Lookup<F>) -> usize;
-}
+pub use crate::types::{Kind, Lookup, LookupError, LookupTerminal};
 
 /// A builder to generate the lookup traces, given the main trace, public values and permutation challenges.
 pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
@@ -96,8 +67,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
     }
 
     #[inline]
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        assert!(size <= 2, "only two-row windows are supported, got {size}");
+    fn is_transition(&self) -> Self::Expr {
         Self::F::from_bool(self.row + 1 < self.height)
     }
 

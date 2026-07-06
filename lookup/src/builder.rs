@@ -6,6 +6,8 @@ use alloc::vec::Vec;
 use p3_air::{AirBuilder, DebugConstraintBuilder, SymbolicExpression};
 use p3_field::{ExtensionField, Field};
 
+use crate::count::Count;
+
 /// One message sent on a named bus during symbolic evaluation.
 ///
 /// Rendered per trace row as a tuple of field expressions plus a signed
@@ -30,13 +32,16 @@ pub struct SymbolicInteraction<F> {
     /// Signed multiplicity: positive for a send, negative for a receive.
     pub count: SymbolicExpression<F>,
 
-    /// Weight used in the height-bound soundness constraint
-    /// `sum_i weight_i * height_i < p`.
+    /// Per-row upper bound on the count's magnitude.
     ///
-    /// - `1` for queries that must hit a real entry.
-    /// - `0` for table entries being provided.
+    /// - Feeds the height check `sum_i weight_i * height_i < p`.
+    /// - Sound only if the AIR constrains the count to respect it on every row.
+    /// - `1` for a unit query, `0` for a provided table entry.
     pub count_weight: u32,
 }
+
+/// One `(message_fields, count)` pair of a local lookup.
+pub type LocalTuple<F> = (Vec<SymbolicExpression<F>>, Count<SymbolicExpression<F>>);
 
 /// One intra-AIR lookup recorded during symbolic evaluation.
 ///
@@ -44,12 +49,12 @@ pub struct SymbolicInteraction<F> {
 /// that must return to zero over the trace. No cross-AIR communication.
 ///
 /// ```text
-///     tuples = [(query_fields, +1), (table_fields, -mult)]
+///     tuples = [(query_fields, Count::bounded(+1, 1)), (table_fields, Count::provided(-mult))]
 /// ```
 #[derive(Clone, Debug)]
 pub struct SymbolicLocalInteraction<F> {
-    /// Pairs of message expressions and their signed multiplicities.
-    pub tuples: Vec<(Vec<SymbolicExpression<F>>, SymbolicExpression<F>)>,
+    /// Pairs of message expressions and their signed, weight-bounded multiplicities.
+    pub tuples: Vec<LocalTuple<F>>,
 }
 
 /// Opt-in extension to the AIR builder for AIRs that speak on buses.
@@ -63,23 +68,33 @@ pub trait InteractionBuilder: AirBuilder {
     ///
     /// - `bus_name` — shared identifier linking all AIRs on the same bus.
     /// - `fields` — message payload.
-    /// - `count` — signed multiplicity. Positive is a send, negative a receive.
-    /// - `count_weight` — soundness weight. Use `1` for queries, `0` for table entries.
+    /// - `count` — signed multiplicity carrying its own per-row magnitude bound.
+    ///
+    /// # Soundness
+    ///
+    /// - A constant count fixes its bound automatically.
+    /// - A variable count must declare a bound the AIR constrains it to respect.
     fn push_interaction<E: Into<Self::Expr>>(
         &mut self,
         bus_name: &str,
         fields: impl IntoIterator<Item = E>,
-        count: impl Into<Self::Expr>,
-        count_weight: u32,
+        count: impl Into<Count<Self::Expr>>,
     );
 
     /// Record one intra-AIR lookup, both sides in one call.
     ///
-    /// Each tuple is `(message_fields, signed_count)`. All tuples collapse
-    /// into a single running sum that must return to zero over the trace.
+    /// Each tuple is `(message_fields, count)`. All tuples collapse into a
+    /// single running sum that must return to zero over the trace.
+    ///
+    /// # Soundness
+    ///
+    /// - A constant count fixes its bound automatically.
+    /// - A variable count must declare a bound the AIR constrains it to respect.
+    /// - The provided (table) side of a query should use `Count::provided`, keeping
+    ///   it out of the multiplicity height-bound check.
     fn push_local_interaction(
         &mut self,
-        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
     );
 
     /// Global interactions pushed so far.
@@ -98,8 +113,7 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for DebugConstraintBuil
         &mut self,
         _bus_name: &str,
         fields: impl IntoIterator<Item = E>,
-        _count: impl Into<Self::Expr>,
-        _count_weight: u32,
+        _count: impl Into<Count<Self::Expr>>,
     ) {
         // Drain the iterator so any side effects inside a wrapping adapter still fire.
         //
@@ -109,7 +123,7 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for DebugConstraintBuil
 
     fn push_local_interaction(
         &mut self,
-        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
     ) {
         // Same rationale as the global path:
         //

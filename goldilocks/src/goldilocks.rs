@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
+use core::hint::assert_unchecked;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, fmt};
@@ -17,24 +18,45 @@ use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField64, RawDataSerializable, TwoAdicField, impl_raw_serializable_primefield64,
     quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
+    tonelli_shanks_two_adic,
 };
-use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
+use p3_util::{branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The Goldilocks prime
 pub(crate) const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 ///
-/// Note that the safety of deriving `Serialize` and `Deserialize` relies on the fact that the internal value can be any u64.
-#[derive(Copy, Clone, Default, Serialize, Deserialize)]
+/// The serde encoding is canonical: every field element has exactly one valid byte representation.
+#[derive(Copy, Clone, Default)]
 #[repr(transparent)] // Important for reasoning about memory layout
 #[must_use]
 pub struct Goldilocks {
     /// Not necessarily canonical.
     pub(crate) value: u64,
+}
+
+impl Serialize for Goldilocks {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Emit the canonical representative so every field element has one encoding.
+        serializer.serialize_u64(self.as_canonical_u64())
+    }
+}
+
+impl<'de> Deserialize<'de> for Goldilocks {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let val = u64::deserialize(d)?;
+        // Reject non-canonical encodings so a proof cannot be re-encoded without the witness.
+        if val < P {
+            Ok(Self::new(val))
+        } else {
+            Err(D::Error::custom("Goldilocks value is out of range"))
+        }
+    }
 }
 
 impl Goldilocks {
@@ -194,7 +216,7 @@ impl Distribution<Goldilocks> for StandardUniform {
 }
 
 impl UniformSamplingField for Goldilocks {
-    const MAX_SINGLE_SAMPLE_BITS: usize = 24;
+    const MAX_SINGLE_SAMPLE_BITS: usize = 32;
     const SAMPLING_BITS_M: [u64; 64] = {
         let prime: u64 = P;
         let mut a = [0u64; 64];
@@ -391,7 +413,7 @@ impl Field for Goldilocks {
             not(target_feature = "avx512f")
         ),
         all(target_arch = "x86_64", target_feature = "avx512f"),
-        target_arch = "aarch64",
+        all(target_arch = "aarch64", target_feature = "neon"),
         all(target_arch = "wasm32", target_feature = "simd128"),
     )))]
     type Packing = Self;
@@ -414,6 +436,11 @@ impl Field for Goldilocks {
     #[inline]
     fn order() -> BigUint {
         P.into()
+    }
+
+    #[inline]
+    fn try_sqrt(&self) -> Option<Self> {
+        tonelli_shanks_two_adic(*self)
     }
 }
 
@@ -556,13 +583,13 @@ impl Add for Goldilocks {
         if over {
             // NB: self.value > Self::ORDER && rhs.value > Self::ORDER is necessary but not
             // sufficient for double-overflow.
-            // This assume does two things:
+            // This hint does two things:
             //  1. If compiler knows that either self.value or rhs.value <= ORDER, then it can skip
             //     this check.
             //  2. Hints to the compiler how rare this double-overflow is (thus handled better with
             //     a branch).
             unsafe {
-                assume(self.value > Self::ORDER_U64 && rhs.value > Self::ORDER_U64);
+                assert_unchecked(self.value > Self::ORDER_U64 && rhs.value > Self::ORDER_U64);
             }
             branch_hint();
             sum += Self::NEG_ORDER; // Cannot overflow.
@@ -581,13 +608,13 @@ impl Sub for Goldilocks {
         if under {
             // NB: self.value < NEG_ORDER - 1 && rhs.value > ORDER is necessary but not
             // sufficient for double-underflow.
-            // This assume does two things:
+            // This hint does two things:
             //  1. If compiler knows that either self.value >= NEG_ORDER - 1 or rhs.value <= ORDER,
             //     then it can skip this check.
             //  2. Hints to the compiler how rare this double-underflow is (thus handled better
             //     with a branch).
             unsafe {
-                assume(self.value < Self::NEG_ORDER - 1 && rhs.value > Self::ORDER_U64);
+                assert_unchecked(self.value < Self::NEG_ORDER - 1 && rhs.value > Self::ORDER_U64);
             }
             branch_hint();
             diff -= Self::NEG_ORDER; // Cannot underflow.
@@ -679,8 +706,8 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
             inlateout(reg) y => adjustment,
             options(pure, nomem, nostack),
         );
-        assume(x != 0 || (res_wrapped == y && adjustment == 0));
-        assume(y != 0 || (res_wrapped == x && adjustment == 0));
+        assert_unchecked(x != 0 || (res_wrapped == y && adjustment == 0));
+        assert_unchecked(y != 0 || (res_wrapped == x && adjustment == 0));
         // Add NEG_ORDER == subtract ORDER.
         // Cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
         res_wrapped + adjustment
@@ -750,6 +777,36 @@ mod tests {
 
     type F = Goldilocks;
     type EF = BinomialExtensionField<F, 5>;
+
+    #[test]
+    fn deserialize_rejects_non_canonical_encodings() {
+        // p, p + i, and u64::MAX are all field-equal to canonical values.
+        // Only the canonical encoding may deserialize.
+        // This blocks re-encoding a proof as p + i without the witness.
+        for non_canonical in [P, P + 5, u64::MAX] {
+            let json = serde_json::to_string(&non_canonical).unwrap();
+            assert!(serde_json::from_str::<F>(&json).is_err());
+        }
+
+        // The largest canonical value, p - 1, still deserializes.
+        let max_canonical_json = serde_json::to_string(&(P - 1)).unwrap();
+        let max_canonical: F = serde_json::from_str(&max_canonical_json).unwrap();
+        assert_eq!(max_canonical.as_canonical_u64(), P - 1);
+    }
+
+    #[test]
+    fn serialize_is_canonical() {
+        // A non-canonical in-memory value serializes to its canonical representative.
+        //     in memory : p + 5
+        //     canonical : 5
+        let non_canonical = F::new(P + 5);
+        let json = serde_json::to_string(&non_canonical).unwrap();
+        assert_eq!(json, "5");
+
+        // The canonical encoding round-trips back to the same field element.
+        let roundtrip: F = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, non_canonical);
+    }
 
     #[test]
     fn test_goldilocks() {

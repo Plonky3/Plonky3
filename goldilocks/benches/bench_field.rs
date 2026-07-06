@@ -6,7 +6,8 @@ use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_chunked_linear_combination,
     benchmark_div_2exp, benchmark_double_latency, benchmark_double_throughput, benchmark_halve,
     benchmark_inv, benchmark_iter_sum, benchmark_mul_2exp, benchmark_neg_latency,
-    benchmark_neg_throughput, benchmark_square, benchmark_sub_latency, benchmark_sub_throughput,
+    benchmark_neg_throughput, benchmark_sqrt, benchmark_square, benchmark_sub_latency,
+    benchmark_sub_throughput,
 };
 use p3_field_testing::{
     benchmark_dot_array, benchmark_mixed_dot_array, benchmark_mul_latency,
@@ -25,6 +26,7 @@ fn bench_field(c: &mut Criterion) {
     benchmark_mul_throughput::<F, 25>(c, name);
     benchmark_square::<F>(c, name);
     benchmark_inv::<F>(c, name);
+    benchmark_sqrt::<F>(c, name);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
 
     benchmark_sum_array::<F, 4, REPS>(c, name);

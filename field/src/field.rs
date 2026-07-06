@@ -1013,6 +1013,20 @@ pub trait Field:
         self.try_inverse().expect("Tried to invert zero")
     }
 
+    /// A square root of this field element, if one exists.
+    ///
+    /// Returns `Some(r)` with `r * r == *self` when this element is a quadratic
+    /// residue, and `None` when it is a quadratic non-residue. `ZERO` returns
+    /// `Some(ZERO)`. When two square roots exist, which one is returned is
+    /// unspecified.
+    ///
+    /// The default implementation uses the Tonelli–Shanks algorithm. Fields with
+    /// a more direct formula (e.g. those with `|F| ≡ 3 mod 4`) may override it.
+    #[must_use]
+    fn try_sqrt(&self) -> Option<Self> {
+        crate::sqrt::tonelli_shanks(*self)
+    }
+
     /// Add two slices of field elements together, returning the result in the first slice.
     ///
     /// Makes use of packing to speed up the addition.
@@ -1040,6 +1054,25 @@ pub trait Field:
         }
     }
 
+    /// Accumulate `acc[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
+    ///
+    /// Each item provides one matrix row as `acc.len() / N` packed base-field words,
+    /// together with the row's `N` extension-field weights. `acc` is laid out with the
+    /// `N` weights of each word group adjacent, and its length must be a multiple of `N`.
+    ///
+    /// This is the inner kernel of batched columnwise (weighted-sum-of-rows) dot
+    /// products. Fields may override it to defer modular reductions across rows.
+    fn batched_columnwise_dot_product<EF, R, I, const N: usize>(
+        acc: &mut [EF::ExtensionPacking],
+        items: I,
+    ) where
+        EF: ExtensionField<Self>,
+        R: Iterator<Item = Self::Packing>,
+        I: Iterator<Item = (R, [EF; N])>,
+    {
+        generic_batched_columnwise_dot_product::<Self, EF, R, I, N>(acc, items);
+    }
+
     /// The number of elements in the field.
     ///
     /// This will either be prime if the field is a PrimeField or a power of a
@@ -1055,6 +1088,30 @@ pub trait Field:
     #[inline]
     fn bits() -> usize {
         Self::order().bits() as usize
+    }
+}
+
+/// The generic accumulation behind [`Field::batched_columnwise_dot_product`]:
+/// `acc[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
+///
+/// Kept as a free function so that specialized `Field` implementations can fall back
+/// to it for extension degrees their kernels do not cover.
+pub fn generic_batched_columnwise_dot_product<F, EF, R, I, const N: usize>(
+    acc: &mut [EF::ExtensionPacking],
+    items: I,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+    R: Iterator<Item = F::Packing>,
+    I: Iterator<Item = (R, [EF; N])>,
+{
+    for (row, scales) in items {
+        let packed_scales = scales.map(EF::ExtensionPacking::from);
+        for (acc_c, r) in acc.chunks_exact_mut(N).zip(row) {
+            for (a, &s) in acc_c.iter_mut().zip(&packed_scales) {
+                *a += s * r;
+            }
+        }
     }
 }
 
@@ -1254,13 +1311,17 @@ impl<F: Field> BoundedPowers<F> {
     /// # Details
     ///
     /// The computation is split evenly amongst available threads, and each chunk is computed
-    /// using packed fields.
+    /// using packed fields. Small requests are computed on the current thread, as a parallel
+    /// dispatch would cost more than the fill itself.
     ///
     /// # Performance
     ///
     /// Enable the `parallel` feature to enable parallelization.
     #[must_use]
     pub fn collect(self) -> Vec<F> {
+        // Below this many scalars, a parallel dispatch costs more than the packed fill itself.
+        const PARALLEL_THRESHOLD: usize = 1 << 10;
+
         let num_powers = self.n;
 
         // When num_powers is small, fallback to serial computation
@@ -1273,25 +1334,30 @@ impl<F: Field> BoundedPowers<F> {
         let num_packed = num_powers.div_ceil(width);
         let mut points_packed = F::Packing::zero_vec(num_packed);
 
-        // Split computation evenly among threads
-        let num_threads = current_num_threads().max(1);
-        let chunk_size = num_packed.div_ceil(num_threads);
-
-        // Precompute base for each chunk.
         let base = self.iter.base;
-        let chunk_base = base.exp_u64((chunk_size * width) as u64);
         let shift = self.iter.current;
 
-        points_packed
-            .par_chunks_mut(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_idx, chunk_slice)| {
-                // First power in this chunk
-                let chunk_start = shift * chunk_base.exp_u64(chunk_idx as u64);
+        if num_powers < PARALLEL_THRESHOLD {
+            F::Packing::packed_shifted_powers(base, shift).fill(&mut points_packed);
+        } else {
+            // Split computation evenly among threads
+            let num_threads = current_num_threads().max(1);
+            let chunk_size = num_packed.div_ceil(num_threads);
 
-                // Fill the chunk with packed powers.
-                F::Packing::packed_shifted_powers(base, chunk_start).fill(chunk_slice);
-            });
+            // Precompute base for each chunk.
+            let chunk_base = base.exp_u64((chunk_size * width) as u64);
+
+            points_packed
+                .par_chunks_mut(chunk_size)
+                .enumerate()
+                .for_each(|(chunk_idx, chunk_slice)| {
+                    // First power in this chunk
+                    let chunk_start = shift * chunk_base.exp_u64(chunk_idx as u64);
+
+                    // Fill the chunk with packed powers.
+                    F::Packing::packed_shifted_powers(base, chunk_start).fill(chunk_slice);
+                });
+        }
 
         // return the number of requested points, discarding the unused packed powers
         // SAFETY: size_of::<F::Packing> always divides size_of::<F::Packing>.
@@ -1316,5 +1382,17 @@ impl<R: PrimeCharacteristicRing> Iterator for BoundedPowers<R> {
             self.n -= 1;
             self.iter.next().unwrap()
         })
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.n, Some(self.n))
+    }
+}
+
+impl<R: PrimeCharacteristicRing> ExactSizeIterator for BoundedPowers<R> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.n
     }
 }

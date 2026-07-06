@@ -349,6 +349,53 @@ where
     }
 }
 
+/// Test that [`Field::try_sqrt`] agrees with squaring.
+///
+/// Assumes the field has characteristic `!= 2`, so that roughly half of all
+/// elements are quadratic non-residues.
+pub fn test_sqrt<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    // `0` is its own square root and `1` is always a square.
+    assert_eq!(F::ZERO.try_sqrt(), Some(F::ZERO));
+    assert_eq!(
+        F::ONE.try_sqrt().map(|r| r.square()),
+        Some(F::ONE),
+        "1 must be a square"
+    );
+
+    let mut rng = SmallRng::seed_from_u64(0x59A7);
+    let mut residues = 0;
+    let mut non_residues = 0;
+    for _ in 0..1000 {
+        let x = rng.random::<F>();
+
+        // The square of any element is a quadratic residue, and any returned
+        // root must square back to it.
+        let square = x.square();
+        let root = square.try_sqrt().expect("x^2 is always a square");
+        assert_eq!(root.square(), square, "sqrt(x^2)^2 == x^2");
+
+        // A random element is a residue iff `try_sqrt` succeeds; when it does,
+        // the result must be a genuine square root.
+        match x.try_sqrt() {
+            Some(r) => {
+                assert_eq!(r.square(), x, "try_sqrt(x)^2 == x");
+                residues += 1;
+            }
+            None => non_residues += 1,
+        }
+    }
+
+    // With 1000 samples both branches are hit with overwhelming probability.
+    assert!(residues > 0, "expected to sample a quadratic residue");
+    assert!(
+        non_residues > 0,
+        "expected to sample a quadratic non-residue"
+    );
+}
+
 /// Verify [`batch_multiplicative_inverse`] against the naive per-element inverse
 /// across a range of input lengths.
 ///
@@ -431,9 +478,8 @@ where
 
 /// Test JSON deserialization boundary behavior for 32-bit prime fields.
 ///
-/// Most fields only accept values in `[0, ORDER_U32)`, while some fields (e.g. Mersenne31)
-/// have a redundant representation of zero and also accept `ORDER_U32`.
-pub fn test_prime_field_32_json_deserialization_boundaries<F>(accepts_order_repr: bool)
+/// The serde encoding is canonical: only values in `[0, ORDER_U32)` deserialize.
+pub fn test_prime_field_32_json_deserialization_boundaries<F>()
 where
     F: PrimeField32 + Serialize + DeserializeOwned + Eq,
 {
@@ -449,11 +495,7 @@ where
         "Round-trip serialization should preserve the value"
     );
 
-    let max_valid = if accepts_order_repr {
-        F::ORDER_U32
-    } else {
-        F::ORDER_U32 - 1
-    };
+    let max_valid = F::ORDER_U32 - 1;
     let max_valid_json = serde_json::to_string(&max_valid).expect("Failed to encode max valid u32");
     let max_valid_result: Result<F, _> = serde_json::from_str(&max_valid_json);
     assert!(
@@ -1061,6 +1103,10 @@ macro_rules! test_field {
                 $crate::test_batch_multiplicative_inverse::<$field>();
             }
             #[test]
+            fn test_sqrt() {
+                $crate::test_sqrt::<$field>();
+            }
+            #[test]
             fn test_generator() {
                 $crate::test_generator::<$field>($factors);
             }
@@ -1282,10 +1328,7 @@ macro_rules! test_prime_field_32 {
 
             #[test]
             fn test_json_deserialization_boundaries() {
-                let accepts_order_repr = $zeros.len() > 1;
-                $crate::test_prime_field_32_json_deserialization_boundaries::<$field>(
-                    accepts_order_repr,
-                );
+                $crate::test_prime_field_32_json_deserialization_boundaries::<$field>();
             }
         }
     };

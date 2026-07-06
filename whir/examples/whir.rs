@@ -16,14 +16,14 @@ use p3_field::extension::BinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::layout::{Layout as _, SuffixProver, Table};
+use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{
     DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
 };
 use p3_whir::pcs::prover::WhirProver;
-use p3_whir::sumcheck::layout::{Layout as _, SuffixProver, Table};
-use p3_whir::sumcheck::{OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use tracing::{info, warn};
@@ -138,7 +138,9 @@ fn main() {
     let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
 
     let round_log_inv_rates = if args.round_log_inv_rates.is_empty() {
-        let (num_rounds, _) = folding_factor.compute_number_of_rounds(num_variables);
+        let (num_rounds, _) = folding_factor
+            .compute_number_of_rounds(num_variables)
+            .expect("valid folding schedule");
         let mut rates = Vec::with_capacity(num_rounds);
         let mut rate = starting_rate;
         for round in 0..num_rounds {
@@ -175,7 +177,9 @@ fn main() {
     let table = Table::new(vec![polynomial]);
     let witness = Layout::new_witness(vec![table], folding_factor.at_round(0));
 
-    let point_schedule: PointSchedule = (0..num_evaluations).map(|_| vec![0]).collect();
+    let point_schedule: PointSchedule = (0..num_evaluations)
+        .map(|_| OpeningBatch::new(vec![0], Vec::new()))
+        .collect();
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(num_variables, 1),
         point_schedule,
@@ -184,7 +188,8 @@ fn main() {
     assert_eq!(witness.table_shapes(), protocol.table_shapes());
 
     // Derive the full round-by-round configuration from the committed witness.
-    let config = WhirConfig::<EF, F, MyChallenger>::new(witness.num_variables(), whir_params);
+    let config =
+        WhirConfig::<EF, F, MyChallenger>::new(witness.num_variables(), whir_params).unwrap();
     if !config.check_pow_bits() {
         warn!("more PoW bits required than what was specified");
     }
@@ -215,6 +220,14 @@ fn main() {
         &mut prover_challenger,
     );
     let opening_time = time.elapsed();
+    // Why this is an upper bound, not the optimal wire size:
+    //   - Postcard encodes integers as LEB128 varints.
+    //   - A field element near 2^31 takes 5 bytes on the wire.
+    //   - A fixed-int encoder would emit 4 bytes for the same value.
+    let proof_size_kib = postcard::to_allocvec(&proof)
+        .expect("proof serialization failed")
+        .len() as f64
+        / 1024.0;
 
     // Verifier: independent transcript from the same domain separator.
     let mut verifier_challenger = challenger;
@@ -241,6 +254,7 @@ fn main() {
         commit_ms = commit_time.as_millis(),
         opening_ms = opening_time.as_millis(),
         verification_us = verify_time.as_micros(),
+        proof_size_kib,
         "done"
     );
 }

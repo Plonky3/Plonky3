@@ -1,3 +1,5 @@
+use std::hint::black_box;
+
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
@@ -18,6 +20,16 @@ fn bench_field(c: &mut Criterion) {
     let name = "KoalaBear";
     const REPS: usize = 500;
     benchmark_inv::<F>(c, name);
+    // `KoalaBear::try_sqrt` is an inherent method (the two-adic specialization), so
+    // it must be benchmarked through the concrete type rather than the generic
+    // `benchmark_sqrt` helper, which would resolve to the slower trait default.
+    {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let x = rng.random::<F>().square();
+        c.bench_function("KoalaBear sqrt", |b| {
+            b.iter(|| black_box(black_box(x).try_sqrt()));
+        });
+    }
     benchmark_mul_2exp::<F, 100>(c, name, 16);
     benchmark_mul_2exp::<F, 100>(c, name, 64);
     benchmark_mul_2exp::<F, 100>(c, name, (1 << 63) - 1);

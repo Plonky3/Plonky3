@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_symmetric::CryptographicHasher;
+use p3_symmetric::{CryptographicHasher, Hash, MerkleCap};
 
 use crate::{CanFinalizeDigest, CanObserve, CanSample};
 
@@ -65,6 +65,60 @@ where
     fn observe(&mut self, values: [T; N]) {
         self.output_buffer.clear();
         self.input_buffer.extend(values);
+    }
+}
+
+impl<F, T, H, const N: usize, const OUT_LEN: usize> CanObserve<Hash<F, T, N>>
+    for HashChallenger<T, H, OUT_LEN>
+where
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
+{
+    fn observe(&mut self, values: Hash<F, T, N>) {
+        for value in values {
+            self.observe(value);
+        }
+    }
+}
+
+impl<F, T, H, const N: usize, const OUT_LEN: usize> CanObserve<&MerkleCap<F, [T; N]>>
+    for HashChallenger<T, H, OUT_LEN>
+where
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
+{
+    fn observe(&mut self, cap: &MerkleCap<F, [T; N]>) {
+        for digest in cap.roots() {
+            for value in digest {
+                self.observe(value.clone());
+            }
+        }
+    }
+}
+
+impl<F, T, H, const N: usize, const OUT_LEN: usize> CanObserve<MerkleCap<F, [T; N]>>
+    for HashChallenger<T, H, OUT_LEN>
+where
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
+{
+    fn observe(&mut self, cap: MerkleCap<F, [T; N]>) {
+        self.observe(&cap);
+    }
+}
+
+// for TrivialPcs
+impl<T, H, const OUT_LEN: usize> CanObserve<Vec<Vec<T>>> for HashChallenger<T, H, OUT_LEN>
+where
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
+{
+    fn observe(&mut self, valuess: Vec<Vec<T>>) {
+        for values in valuess {
+            for value in values {
+                self.observe(value);
+            }
+        }
     }
 }
 
@@ -246,6 +300,49 @@ mod tests {
         );
         // Check that the output buffer is empty (clears after observation)
         assert!(hash_challenger.output_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_observe_hash_cap_and_nested_vec() {
+        let test_hasher = TestHasher {};
+
+        // Observing a Hash absorbs its digest words in order.
+        let mut from_hash = HashChallenger::new(vec![], test_hasher.clone());
+        from_hash.observe(Hash::<F, F, 3>::from([
+            F::from_u8(1),
+            F::from_u8(2),
+            F::from_u8(3),
+        ]));
+
+        let mut from_array = HashChallenger::new(vec![], test_hasher.clone());
+        from_array.observe([F::from_u8(1), F::from_u8(2), F::from_u8(3)]);
+        assert_eq!(from_hash.input_buffer, from_array.input_buffer);
+
+        // A MerkleCap absorbs every word of every root, by value and by reference.
+        let cap = MerkleCap::<F, [F; 2]>::new(vec![
+            [F::from_u8(4), F::from_u8(5)],
+            [F::from_u8(6), F::from_u8(7)],
+        ]);
+        let flat = vec![F::from_u8(4), F::from_u8(5), F::from_u8(6), F::from_u8(7)];
+
+        let mut from_cap_ref = HashChallenger::new(vec![], test_hasher.clone());
+        from_cap_ref.observe(&cap);
+        assert_eq!(from_cap_ref.input_buffer, flat);
+
+        let mut from_cap_owned = HashChallenger::new(vec![], test_hasher.clone());
+        from_cap_owned.observe(cap);
+        assert_eq!(from_cap_owned.input_buffer, flat);
+
+        // Vec<Vec<T>> is flattened in order.
+        let mut from_nested = HashChallenger::new(vec![], test_hasher);
+        from_nested.observe(vec![
+            vec![F::from_u8(8), F::from_u8(9)],
+            vec![F::from_u8(10)],
+        ]);
+        assert_eq!(
+            from_nested.input_buffer,
+            vec![F::from_u8(8), F::from_u8(9), F::from_u8(10)]
+        );
     }
 
     #[test]

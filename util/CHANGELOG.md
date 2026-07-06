@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Utils: add `log3_strict_usize` (#1444)
+- Guard verifier degree_bits (#1535)
+- Chore: use T::zero_vec(n) instead of vec![T::ZERO; n] (#1633)
+- Chore: remove needless_range_loop allows across the workspace (#1632)
+- Fix(merkle-tree): make MerkleTreeHidingMmcs Sync (#1559)
+- Fix: local refs for dev-deps (#1663)
+- Feat: add security estimation (#1329)
+- Couple fixes (#1688)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Isolate bit_reverse benchmark from clone overhead (#1703)
+- Refactor: move DisjointMutPtr to p3-util (#1720)
+- Couple miscellaneous tweaks (#1731)
+- Fix(util): guard reverse_bits_len against oversized bit_len (#1752)
+- Chore: update CHANGELOGs (#1785)
+
+## [0.5.3] - 2026-05-15
+## [0.5.2] - 2026-03-27
 ## [0.5.1] - 2026-03-16
 ## [0.5.0] - 2026-03-10
 ### Merged PRs

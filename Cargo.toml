@@ -28,6 +28,7 @@ members = [
     "monolith",
     "monolith-air",
     "monty-31",
+    "multi-stark",
     "multilinear-util",
     "poseidon1",
     "poseidon1-air",
@@ -68,83 +69,82 @@ cognitive_complexity = "allow"
 
 [workspace.dependencies]
 blake3 = { version = "1.8", default-features = false }
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 criterion = "0.8"
-hashbrown = "0.17.0"
+hashbrown = "0.17.1"
 hex-literal = "1.1.0"
-itertools = { version = "0.14.0", default-features = false, features = [
+itertools = { version = "0.15.0", default-features = false, features = [
     "use_alloc",
 ] }
 libm = "0.2"
 num-bigint = { version = "0.4.6", default-features = false }
 paste = "1.0.15"
 postcard = { version = "1.1.3", default-features = false }
-proptest = { version = "1.10", default-features = false, features = ["std"] }
-rand = { version = "0.10.0", default-features = false }
-rand_xoshiro = "0.8.0"
-rayon = "1.11.0"
+proptest = { version = "1.11", default-features = false, features = ["std"] }
+rand = { version = "0.10.1", default-features = false }
+rand_xoshiro = "0.8.1"
+rayon = "1.12.0"
 serde = { version = "1.0", default-features = false }
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 sha2 = { version = "0.11.0", default-features = false }
 shake = { version = "0.1.0", default-features = false }
-spin = "0.11.0"
+spin = "0.12.0"
 thiserror = { version = "2.0", default-features = false }
 tiny-keccak = "2.0.2"
 tracing = { version = "0.1.44", default-features = false, features = [
     "attributes",
 ] }
 tracing-forest = "0.3.1"
-tracing-subscriber = { version = "0.3.22", default-features = false, features = [
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
     "alloc",
 ] }
-transpose = "0.2.3"
 
 # Local dependencies
-p3-air = { path = "air", version = "0.5.1" }
-p3-baby-bear = { path = "baby-bear", version = "0.5.1" }
-p3-blake3 = { path = "blake3", version = "0.5.1" }
-p3-blake3-air = { path = "blake3-air", version = "0.5.1" }
-p3-bn254 = { path = "bn254", version = "0.5.1" }
-p3-challenger = { path = "challenger", version = "0.5.1" }
-p3-circle = { path = "circle", version = "0.5.1" }
-p3-commit = { path = "commit", version = "0.5.1" }
-p3-dft = { path = "dft", version = "0.5.1" }
+p3-air = { path = "air", version = "0.6.0" }
+p3-baby-bear = { path = "baby-bear", version = "0.6.0" }
+p3-blake3 = { path = "blake3", version = "0.6.0" }
+p3-blake3-air = { path = "blake3-air", version = "0.6.0" }
+p3-bn254 = { path = "bn254", version = "0.6.0" }
+p3-challenger = { path = "challenger", version = "0.6.0" }
+p3-circle = { path = "circle", version = "0.6.0" }
+p3-commit = { path = "commit", version = "0.6.0" }
+p3-dft = { path = "dft", version = "0.6.0" }
 p3-examples = { path = "examples", version = "0.3.0" }
-p3-field = { path = "field", version = "0.5.1" }
-p3-field-testing = { path = "field-testing", version = "0.5.1" }
-p3-fri = { path = "fri", version = "0.5.1" }
-p3-goldilocks = { path = "goldilocks", version = "0.5.1" }
-p3-keccak = { path = "keccak", version = "0.5.1" }
-p3-keccak-air = { path = "keccak-air", version = "0.5.1" }
-p3-koala-bear = { path = "koala-bear", version = "0.5.1" }
-p3-lookup = { path = "lookup", version = "0.5.1" }
-p3-matrix = { path = "matrix", version = "0.5.1" }
-p3-maybe-rayon = { path = "maybe-rayon", version = "0.5.1" }
-p3-mds = { path = "mds", version = "0.5.1" }
-p3-merkle-tree = { path = "merkle-tree", version = "0.5.1" }
-p3-mersenne-31 = { path = "mersenne-31", version = "0.5.1" }
-p3-monolith = { path = "monolith", version = "0.5.1" }
-p3-monolith-air = { path = "monolith-air", version = "0.5.1" }
-p3-monty-31 = { path = "monty-31", version = "0.5.1" }
-p3-multilinear-util = { path = "multilinear-util", version = "0.5.1" }
-p3-poseidon1 = { path = "poseidon1", version = "0.5.1" }
-p3-poseidon1-air = { path = "poseidon1-air", version = "0.5.1" }
-p3-poseidon2 = { path = "poseidon2", version = "0.5.1" }
-p3-poseidon2-air = { path = "poseidon2-air", version = "0.5.1" }
-p3-rescue = { path = "rescue", version = "0.5.1" }
-p3-security = { path = "security", version = "0.5.1" }
-p3-sha256 = { path = "sha256", version = "0.5.1" }
-p3-sumcheck = { path = "sumcheck", version = "0.5.1" }
-p3-symmetric = { path = "symmetric", version = "0.5.1" }
-p3-uni-stark = { path = "uni-stark", version = "0.5.1" }
-p3-util = { path = "util", version = "0.5.1" }
-p3-whir = { path = "whir", version = "0.5.1" }
-p3-zk-codes = { path = "zk-codes", version = "0.5.1" }
+p3-field = { path = "field", version = "0.6.0" }
+p3-field-testing = { path = "field-testing", version = "0.6.0" }
+p3-fri = { path = "fri", version = "0.6.0" }
+p3-goldilocks = { path = "goldilocks", version = "0.6.0" }
+p3-keccak = { path = "keccak", version = "0.6.0" }
+p3-keccak-air = { path = "keccak-air", version = "0.6.0" }
+p3-koala-bear = { path = "koala-bear", version = "0.6.0" }
+p3-lookup = { path = "lookup", version = "0.6.0" }
+p3-matrix = { path = "matrix", version = "0.6.0" }
+p3-maybe-rayon = { path = "maybe-rayon", version = "0.6.0" }
+p3-mds = { path = "mds", version = "0.6.0" }
+p3-merkle-tree = { path = "merkle-tree", version = "0.6.0" }
+p3-mersenne-31 = { path = "mersenne-31", version = "0.6.0" }
+p3-monolith = { path = "monolith", version = "0.6.0" }
+p3-monolith-air = { path = "monolith-air", version = "0.6.0" }
+p3-monty-31 = { path = "monty-31", version = "0.6.0" }
+p3-multilinear-util = { path = "multilinear-util", version = "0.6.0" }
+p3-poseidon1 = { path = "poseidon1", version = "0.6.0" }
+p3-poseidon1-air = { path = "poseidon1-air", version = "0.6.0" }
+p3-poseidon2 = { path = "poseidon2", version = "0.6.0" }
+p3-poseidon2-air = { path = "poseidon2-air", version = "0.6.0" }
+p3-rescue = { path = "rescue", version = "0.6.0" }
+p3-security = { path = "security", version = "0.6.0" }
+p3-sha256 = { path = "sha256", version = "0.6.0" }
+p3-sumcheck = { path = "sumcheck", version = "0.6.0" }
+p3-symmetric = { path = "symmetric", version = "0.6.0" }
+p3-uni-stark = { path = "uni-stark", version = "0.6.0" }
+p3-util = { path = "util", version = "0.6.0" }
+p3-whir = { path = "whir", version = "0.6.0" }
+p3-zk-codes = { path = "zk-codes", version = "0.6.0" }
 
 [workspace.package]
 # General description field used for the sub-crates that are currently missing a description.
 description = "Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs."
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Plonky3/Plonky3"
@@ -155,3 +155,9 @@ categories = ["cryptography::cryptocurrencies"]
 [profile.profiling]
 inherits = "release"
 debug = true
+
+[profile.optimized]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+opt-level = 3

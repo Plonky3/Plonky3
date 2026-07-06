@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Uni-stark: richer verification errors (#1453)
+- Fix(batch-stark): validate per-instance global lookup data count (#1458)
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Field: rm unused packed_linear_combination (#1460)
+- Fix(verifier): tighten input shape validation (#1464)
+- Uni stark: rm useless `check_constraints.rs` file (#1471)
+- Feat: add support for Periodic Columns at runtime (#1462)
+- Feat: add `assert_zeros_ext()` method to `ExtensionBuilder` (#1493)
+- Uni stark: rely on default assert_zeros_ext for ProverConstraintFolder (#1498)
+- Fix: periodic columns + zk (#1510)
+- Refactor(fri): move FRI parameter constructors to associated methods (#1530)
+- Guard verifier degree_bits (#1535)
+- Harden verifier shape checks (#1469)
+- Feat: bus-based cross-AIR interactions and lookup crate redesign (#1566)
+- Refactor(air): merge PeriodicAirBuilder into AirBuilder (#1611)
+- Field: expand packed-extension API; fix unsound PackedValue impls (#1620)
+- Chore: use T::zero_vec(n) instead of vec![T::ZERO; n] (#1633)
+- Fix(merkle-tree): make MerkleTreeHidingMmcs Sync (#1559)
+- Feat: add security estimation (#1329)
+- Verifier: add a couple strengthening checks (#1666)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Refactor: remove duplication around AirBuilder `_named` methods (#1724)
+- Fix: add PoW check in Circle STARK's commit phase (#1723)
+- Feat(lookup): single-terminal LogUp aux trace (#1628)
+- Fix(challenger): make duplex sponge absorbs length-binding (#1769)
+- Fix(uni-stark): reject out-of-domain point inside the trace domain (#1760)
+- Fix(uni-stark, batch-stark): reject malformed periodic column lengths (#1761)
+- Fix(mersenne-31): make serde encoding canonical (#1773)
+- Chore: update CHANGELOGs (#1785)
+- Doc: add basic READMEs in main crates (#1786)
+
+## [0.5.3] - 2026-05-15
+## [0.5.2] - 2026-03-27
+### Merged PRs
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Uni stark: rm useless `check_constraints.rs` file (#1471)
+
 ## [0.5.1] - 2026-03-16
 ### Merged PRs
 - Clarify selector semantics (#1412)

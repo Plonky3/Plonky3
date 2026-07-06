@@ -2,9 +2,8 @@
 
 use alloc::string::String;
 
+use p3_sumcheck::SumcheckError;
 use thiserror::Error;
-
-use crate::sumcheck::SumcheckError;
 
 /// Errors during WHIR proof verification.
 #[derive(Error, Debug)]
@@ -75,6 +74,13 @@ pub enum VerifierError {
         expected: usize,
         actual: usize,
     },
+
+    /// Initial OOD answers do not match the verifier's expected count.
+    ///
+    /// - The commitment fixes how many out-of-domain answers must be absorbed.
+    /// - A wrong count would desync the transcript instead of failing cleanly.
+    #[error("Initial OOD answer count mismatch: expected {expected}, got {actual}")]
+    InitialOodAnswerCountMismatch { expected: usize, actual: usize },
 
     /// Folding randomness is unexpectedly absent before a STIR check.
     #[error("Missing folding randomness before STIR verification at round {round}")]

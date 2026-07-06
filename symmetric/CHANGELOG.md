@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Core: couple more compile time assertions (#1525)
+- Symmetric: assert Pad10 sponge const parameters (#1629)
+- Symmetric: assert MultiField32Pad10 const parameters (#1638)
+- Symmetric: move PaddingFreeSponge assertions into new (#1653)
+- Symmetric: move TruncatedPermutation assertions into new (#1655)
+- Fix: local refs for dev-deps (#1663)
+- Couple fixes (#1688)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Chore: update CHANGELOGs (#1785)
+
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Core: couple more compile time assertions (#1525)
+- Add carry-critical NEON dot product regression tests (#1600)
+
+## [0.5.2] - 2026-03-27
 ## [0.5.1] - 2026-03-16
 ## [0.5.0] - 2026-03-10
 ### Merged PRs

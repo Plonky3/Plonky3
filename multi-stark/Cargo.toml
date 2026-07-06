@@ -1,0 +1,54 @@
+[package]
+name = "p3-multi-stark"
+description = "Multilinear (SuperSpartan-style) STARK prover for AIRs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+parallel = [
+    "p3-maybe-rayon/parallel",
+    "p3-multilinear-util/parallel",
+    "p3-sumcheck/parallel",
+]
+
+[dependencies]
+p3-air.workspace = true
+p3-challenger.workspace = true
+p3-commit.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+p3-multilinear-util.workspace = true
+p3-sumcheck.workspace = true
+p3-util.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+
+[dev-dependencies]
+criterion.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-dft.workspace = true
+p3-merkle-tree.workspace = true
+p3-poseidon2-air.workspace = true
+p3-symmetric.workspace = true
+p3-whir.workspace = true
+rand = { workspace = true }
+tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+
+[[bench]]
+name = "poseidon2"
+harness = false
+
+[[bench]]
+name = "zerocheck"
+harness = false
+
+[lints]
+workspace = true

@@ -8,7 +8,7 @@ use alloc::slice;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
-use core::hint::unreachable_unchecked;
+use core::hint::assert_unchecked;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::{iter, mem};
 
@@ -81,7 +81,7 @@ pub const fn log2_strict_usize(n: usize) -> usize {
     // Tell the optimizer about the semantics of `log2_strict`. i.e. it can replace `n` with
     // `1 << res` and vice versa.
     unsafe {
-        assume(n == 1 << res);
+        assert_unchecked(n == 1 << res);
     }
     res as usize
 }
@@ -201,6 +201,9 @@ pub const fn reverse_bits(x: usize, n: usize) -> usize {
 
 #[inline]
 pub const fn reverse_bits_len(x: usize, bit_len: usize) -> usize {
+    // A `bit_len` wider than the word would underflow the shift below.
+    // That yields a wrong, non-panicking permutation in release, so reject it up front.
+    debug_assert!(bit_len <= usize::BITS as usize);
     // NB: The only reason we need overflowing_shr() here as opposed
     // to plain '>>' is to accommodate the case n == num_bits == 0,
     // which would become `0 >> 64`. Rust thinks that any shift of 64
@@ -212,7 +215,7 @@ pub const fn reverse_bits_len(x: usize, bit_len: usize) -> usize {
 
 // Lookup table of 6-bit reverses.
 // NB: 2^6=64 bytes is a cache line. A smaller table wastes cache space.
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 #[rustfmt::skip]
 const BIT_REVERSE_6BIT: &[u8] = &[
     0o00, 0o40, 0o20, 0o60, 0o10, 0o50, 0o30, 0o70,
@@ -225,9 +228,9 @@ const BIT_REVERSE_6BIT: &[u8] = &[
     0o07, 0o47, 0o27, 0o67, 0o17, 0o57, 0o37, 0o77,
 ];
 
-// Ensure that SMALL_ARR_SIZE >= 4 * BIG_T_SIZE.
 const BIG_T_SIZE: usize = 1 << 14;
 const SMALL_ARR_SIZE: usize = 1 << 16;
+const _: () = assert!(SMALL_ARR_SIZE >= 4 * BIG_T_SIZE);
 
 /// Permutes `arr` such that each index is mapped to its reverse in binary.
 ///
@@ -298,7 +301,7 @@ where
 // where reverse_bits(i, n_power) computes the n_power-bit reverse. The complications are there
 // to guide the compiler to generate optimal assembly.
 
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     if lb_n <= 6 {
         // BIT_REVERSE_6BIT holds 6-bit reverses. This shift makes them lb_n-bit reverses.
@@ -333,7 +336,6 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 const fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     // Aarch64 can reverse bits in one instruction, so the trivial version works best.
-    // use manual `while` loop to enable `const`
     let mut src = 0;
     while src < vals.len() {
         let dst = src.reverse_bits().wrapping_shr(usize::BITS - lb_n as u32);
@@ -366,21 +368,6 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
                     1 << lb_chunk_size,
                 );
             }
-        }
-    }
-}
-
-/// Allow the compiler to assume that the given predicate `p` is always `true`.
-///
-/// # Safety
-///
-/// Callers must ensure that `p` is true. If this is not the case, the behavior is undefined.
-#[inline(always)]
-pub const unsafe fn assume(p: bool) {
-    debug_assert!(p);
-    if !p {
-        unsafe {
-            unreachable_unchecked();
         }
     }
 }
@@ -457,26 +444,6 @@ where
     (buf, i)
 }
 
-/// Gets a shared reference to the contained value.
-///
-/// # Safety
-///
-/// Calling this when the content is not yet fully initialized causes undefined
-/// behavior: it is up to the caller to guarantee that every `MaybeUninit<T>` in
-/// the slice really is in an initialized state.
-///
-/// Copied from:
-/// <https://doc.rust-lang.org/std/primitive.slice.html#method.assume_init_ref>
-/// Once that is stabilized, this should be removed.
-#[inline(always)]
-pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
-    // SAFETY: casting `slice` to a `*const [T]` is safe since the caller guarantees that
-    // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
-    // The pointer obtained is valid since it refers to memory owned by `slice` which is a
-    // reference and thus guaranteed to be valid for reads.
-    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
-}
-
 /// Split an iterator into small arrays and apply `func` to each.
 ///
 /// Repeatedly read `BUFLEN` elements from `input` into an array and
@@ -487,7 +454,7 @@ pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
 pub fn apply_to_chunks<const BUFLEN: usize, I, H>(input: I, mut func: H)
 where
     I: IntoIterator<Item = u8>,
-    H: FnMut(&[I::Item]),
+    H: FnMut(&[u8]),
 {
     let mut iter = input.into_iter();
     loop {
@@ -495,7 +462,7 @@ where
         if n == 0 {
             break;
         }
-        func(unsafe { assume_init_ref(buf.get_unchecked(..n)) });
+        func(unsafe { buf.get_unchecked(..n).assume_init_ref() });
     }
 }
 
@@ -524,7 +491,7 @@ fn iter_next_chunk_padded<T: Copy, const N: usize>(
 /// Returns an iterator over `N` elements of the iterator at a time.
 ///
 /// The chunks do not overlap. If `N` does not divide the length of the
-/// iterator, then the last `N-1` elements will be padded with the given default value.
+/// iterator, then the last chunk is padded with up to `N-1` copies of the given default value.
 ///
 /// This is essentially a copy pasted version of the nightly `array_chunks` function.
 /// <https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.array_chunks>
@@ -894,6 +861,43 @@ pub const fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut
     v
 }
 
+/// A raw mutable pointer wrapper that implements [`Send`] and [`Sync`].
+///
+/// Used to enable parallel writes to disjoint slices of a pre-allocated buffer
+/// from within closures that require `Send + Sync` (e.g. `rayon::ParallelIterator::for_each_init`).
+///
+/// # Safety
+///
+/// The caller must ensure that concurrent accesses through this pointer always
+/// target **non-overlapping** memory regions.
+#[derive(Clone, Copy)]
+pub struct DisjointMutPtr<T>(*mut T);
+
+// SAFETY: The contract of DisjointMutPtr guarantees that each thread writes to
+// a disjoint region, so sharing the pointer across threads is safe.
+unsafe impl<T> Send for DisjointMutPtr<T> {}
+unsafe impl<T> Sync for DisjointMutPtr<T> {}
+
+impl<T> DisjointMutPtr<T> {
+    /// Create a new `DisjointMutPtr` from a mutable slice.
+    #[inline]
+    pub const fn new(slice: &mut [T]) -> Self {
+        Self(slice.as_mut_ptr())
+    }
+
+    /// Get a mutable slice starting at `offset` with `len` elements.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the range `[offset, offset+len)` is within bounds
+    /// and does not overlap with any other concurrent access. The returned
+    /// slice must not outlive the buffer passed to [`Self::new`].
+    #[inline]
+    pub const unsafe fn slice_mut<'a>(self, offset: usize, len: usize) -> &'a mut [T] {
+        unsafe { core::slice::from_raw_parts_mut(self.0.add(offset), len) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -912,6 +916,23 @@ mod tests {
         assert_eq!(reverse_bits_len(0b1000000000, 10), 0b0000000001);
         assert_eq!(reverse_bits_len(0b00000, 5), 0b00000);
         assert_eq!(reverse_bits_len(0b01011, 5), 0b11010);
+    }
+
+    #[test]
+    fn test_reverse_bits_len_full_width() {
+        // A full-width reversal is the largest valid bit length and must reverse every bit.
+        let bits = usize::BITS as usize;
+        assert_eq!(reverse_bits_len(1, bits), 1 << (bits - 1));
+        assert_eq!(reverse_bits_len(1 << (bits - 1), bits), 1);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "bit_len <= usize::BITS")]
+    fn test_reverse_bits_len_rejects_oversized_bit_len() {
+        // One bit past the word width: the shift would underflow into a wrong permutation.
+        // The expected message pins the guard, not the incidental subtraction-overflow panic.
+        let _ = reverse_bits_len(0, usize::BITS as usize + 1);
     }
 
     #[test]

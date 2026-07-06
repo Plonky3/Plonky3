@@ -18,13 +18,13 @@ use tracing::instrument;
 /// # Input
 ///
 /// A `k × n` matrix where column `j` holds the squared powers of
-/// variable `v_j` in descending exponent order:
+/// variable `v_j` in ascending exponent order:
 ///
 /// ```text
-/// row 0: [v_1^{2^{k-1}}, v_2^{2^{k-1}}, …, v_n^{2^{k-1}}]
-/// row 1: [v_1^{2^{k-2}}, v_2^{2^{k-2}}, …, v_n^{2^{k-2}}]
+/// row 0:   [v_1^{2^0},     v_2^{2^0},     …, v_n^{2^0}    ]
+/// row 1:   [v_1^{2^1},     v_2^{2^1},     …, v_n^{2^1}    ]
 ///   ⋮
-/// row k-1: [v_1^1,         v_2^1,         …, v_n^1        ]
+/// row k-1: [v_1^{2^{k-1}}, v_2^{2^{k-1}}, …, v_n^{2^{k-1}}]
 /// ```
 ///
 /// # Output
@@ -224,7 +224,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     ///
     /// # Panics
     ///
-    /// Panics if the nu
+    /// Panics if the number of `vars` differs from the number of `evaluations`.
     #[must_use]
     pub const fn new(num_variables: usize, vars: Vec<F>, evaluations: Vec<EF>) -> Self {
         assert!(vars.len() == evaluations.len());
@@ -263,6 +263,24 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     pub const fn len(&self) -> usize {
         debug_assert!(self.vars.len() == self.evaluations.len());
         self.vars.len()
+    }
+
+    /// Streams one weight per stored constraint, each evaluated at a single point.
+    ///
+    /// # Overview
+    ///
+    /// A selection constraint stores a univariate point whose power-map expansion is a selector polynomial.
+    /// This yields that selector's value at the supplied point, one entry per constraint, in stored order.
+    ///
+    /// # Arguments
+    ///
+    /// - `row`: the point at which every constraint weight is evaluated.
+    pub fn weights_at<'a>(&'a self, row: &'a Point<EF>) -> impl Iterator<Item = EF> + 'a {
+        // Walk the stored univariate selection points in order.
+        self.vars
+            .iter()
+            // Expand each one through the power map and read off its value at the query point.
+            .map(|&var| Point::eval_select(var, row.as_slice()))
     }
 
     /// Verifies that a given polynomial satisfies all constraints in the statement.
@@ -339,7 +357,6 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     ///
     /// - `shift`: Power offset for challenge. Constraint `i` uses weight `γ^{i+shift}`.
     ///   Allows multiple statement types to use non-overlapping challenge powers.
-    /// Batches all constraints into a single weighted polynomial and target sum for sumcheck.
     ///
     /// # Algorithm
     ///
@@ -369,6 +386,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         if self.vars.is_empty() {
             return;
         }
+
+        // Invariant: the scalar accumulator spans the full hypercube of this statement.
+        assert_eq!(acc_weights.num_variables(), self.num_variables());
 
         // Extract dimensions for clarity.
         //
@@ -1222,5 +1242,47 @@ mod tests {
             prop_assert_eq!(s_wt.as_slice(), &unpacked[..]);
             prop_assert_eq!(s_sum, p_sum);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn combine_rejects_mis_sized_accumulator() {
+        // Fixture state: a 2-variable statement carrying one constraint.
+        let mut statement = SelectStatement::<F, F>::initialize(2);
+        statement.add_constraint(F::from_u64(5), F::from_u64(100));
+
+        // Fixture state: accumulator over 3 variables, not the required 2.
+        let mut acc_weights = Poly::zero(3);
+        let mut acc_sum = F::ZERO;
+
+        // Invariant: the accumulator must span the statement's hypercube, so this panics.
+        statement.combine(&mut acc_weights, &mut acc_sum, F::from_u64(2), 0);
+    }
+
+    #[test]
+    fn weights_at_yields_one_selector_value_per_variable() {
+        // weights_at streams one weight per stored univariate point, in order.
+        //
+        // Independent reference: the selection polynomial select(pow(var), .) is
+        // the multilinear extension whose value at Boolean vertex b is var^b.
+        // Build that integer-power truth table and interpolate it at the query
+        // point through the unrelated multilinear-evaluation routine, so the
+        // check never calls the selection routine under test.
+        let vars = vec![F::from_u64(5), F::from_u64(7)];
+        let statement = SelectStatement::<F, EF>::new(2, vars.clone(), vec![EF::ZERO, EF::ZERO]);
+
+        let row = Point::new(vec![EF::from_u64(3), EF::from_u64(9)]);
+        let num_rows = 1u64 << row.num_variables();
+        let expected = vars
+            .iter()
+            .map(|&var| {
+                // Truth table over {0,1}^n: vertex b carries var^b.
+                let table = (0..num_rows).map(|b| var.exp_u64(b)).collect::<Vec<F>>();
+                // Interpolate the table at the query point.
+                Poly::new(table).eval_base(&row)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(statement.weights_at(&row).collect::<Vec<_>>(), expected);
     }
 }

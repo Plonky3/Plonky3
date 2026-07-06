@@ -21,8 +21,9 @@ use tracing::instrument;
 /// * `DIGEST_ELEMS` – number of `W` words in one digest.
 ///
 /// The tree is **balanced only at the digest layer**.
-/// Leaf matrices may have arbitrary heights as long as any two heights
-/// that round **up** to the same power-of-two are equal.
+/// Leaf matrices may have arbitrary heights, but every height must sit on the
+/// `ceil(max_height / 2^k)` ladder anchored at the tallest matrix — the same
+/// requirement `Mmcs::commit` enforces before building a tree.
 ///
 /// Use [`Self::root`] to fetch the final digest once the tree is built.
 ///
@@ -76,18 +77,19 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
     /// * `c` – N-to-1 compression function used on digests.
     /// * `leaves` – matrices to commit to. Must be non-empty.
     ///
-    /// Matrices do **not** need to have power-of-two heights. However, any two matrices
-    /// whose heights **round up** to the same power-of-two must have **equal actual height**.
-    /// This ensures proper balancing when folding digests layer-by-layer.
+    /// Matrices do **not** need to have power-of-two heights. However, every height must sit
+    /// on the `ceil(max_height / 2^k)` ladder anchored at the tallest matrix — i.e. at `k`
+    /// halvings above the leaves, the only admissible height is `ceil(max_height / 2^k)`. This
+    /// ensures proper balancing when folding digests layer-by-layer, and that every global leaf
+    /// index maps to a row in every committed matrix.
     ///
     /// All matrices are hashed row-by-row with `h`. The resulting digests are
     /// then folded upwards with `c` until a single root remains.
     ///
     /// # Panics
-    /// * If `leaves` is empty.
+    /// * If `leaves` is empty, or every leaf has height 0.
     /// * If the packing widths of `P` and `PW` differ.
-    /// * If two leaf heights *round up* to the same power-of-two but are not
-    ///   equal (violates balancing rule).
+    /// * If any leaf height is off the `ceil(max_height / 2^k)` ladder.
     #[instrument(name = "build merkle tree", level = "debug", skip_all,
                  fields(dimensions = alloc::format!("{:?}", leaves.iter().map(|l| l.dimensions()).collect::<Vec<_>>())))]
     pub fn new<P, PW, H, C>(h: &H, c: &C, leaves: Vec<M>) -> Self
@@ -108,21 +110,21 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
             assert!(P::WIDTH == PW::WIDTH, "Packing widths must match");
         }
 
+        // Geometry gate: every height must sit on the `ceil(max_height / 2^k)`
+        // ladder anchored at the tallest matrix, or no tree can be built from
+        // them. `Mmcs::commit` enforces the same gate; this constructor is
+        // public, so it must enforce it too rather than fail later with an
+        // out-of-bounds panic deep inside layer construction.
+        if let Err(err) =
+            crate::mmcs::validate_commit_reachable_heights(leaves.iter().map(|l| l.height()))
+        {
+            panic!("{err}");
+        }
+
         let mut leaves_largest_first = leaves
             .iter()
             .sorted_by_key(|l| Reverse(l.height()))
             .peekable();
-
-        // check height property
-        assert!(
-            leaves_largest_first
-                .clone()
-                .map(|m| m.height())
-                .tuple_windows()
-                .all(|(curr, next)| curr == next
-                    || curr.next_power_of_two() != next.next_power_of_two()),
-            "matrix heights that round up to the same power of two must be equal"
-        );
 
         let max_height = leaves_largest_first.peek().unwrap().height();
         let leaf_height_npt = max_height.next_power_of_two();
@@ -299,11 +301,20 @@ where
 
             // Collect all vertically packed rows from each matrix at `first_row`.
             // These packed rows are then hashed together using `h`.
-            let packed_digest: [PW; DIGEST_ELEMS] = h.hash_iter(
-                tallest_matrices
-                    .iter()
-                    .flat_map(|m| m.vertically_packed_row(first_row)),
-            );
+            //
+            // The single-matrix case feeds `h` the row iterator directly: going
+            // through `flat_map` hands the hasher a compound iterator whose
+            // `next()` defeats the optimizer's vectorization of the absorb loop,
+            // which is worth ~40% of the leaf-hashing time on wide matrices.
+            let packed_digest: [PW; DIGEST_ELEMS] = if let [m] = tallest_matrices {
+                h.hash_iter(m.vertically_packed_row(first_row))
+            } else {
+                h.hash_iter(
+                    tallest_matrices
+                        .iter()
+                        .flat_map(|m| m.vertically_packed_row(first_row)),
+                )
+            };
 
             // Unpack the resulting packed digest into individual scalar digests.
             PW::unpack_into(&packed_digest, digests_chunk);
@@ -364,14 +375,14 @@ where
     let default_digest = [PW::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
 
+    let default_packed: [PW; DIGEST_ELEMS] =
+        array::from_fn(|_| PW::broadcast(PW::Value::default()));
+
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
         .enumerate()
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
-            let default_packed: [PW; DIGEST_ELEMS] =
-                array::from_fn(|_| PW::broadcast(PW::Value::default()));
-
             let children: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n < step {
                     PW::pack_columns_fn(|lane| prev_layer[step * (first_row + lane) + n])
@@ -381,11 +392,18 @@ where
             });
             let mut packed_digest = c.compress(children);
 
-            let tallest_digest = h.hash_iter(
-                matrices_to_inject
-                    .iter()
-                    .flat_map(|m| m.vertically_packed_row(first_row)),
-            );
+            // As in `first_digest_layer`, the single-matrix case feeds `h` the
+            // row iterator directly: a `flat_map` compound iterator defeats the
+            // optimizer's vectorization of the absorb loop.
+            let tallest_digest: [PW; DIGEST_ELEMS] = if let [m] = matrices_to_inject {
+                h.hash_iter(m.vertically_packed_row(first_row))
+            } else {
+                h.hash_iter(
+                    matrices_to_inject
+                        .iter()
+                        .flat_map(|m| m.vertically_packed_row(first_row)),
+                )
+            };
             let inject_inputs: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n == 0 {
                     packed_digest
@@ -408,8 +426,10 @@ where
             }
         });
         let digest = c.compress(children);
-        let rows_digest =
-            unsafe { h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row_unchecked(i))) };
+        let rows_digest = unsafe {
+            // Safety: i < next_len == matrices_to_inject height.
+            h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row_unchecked(i)))
+        };
         let inject_inputs: [_; N] = array::from_fn(|n| {
             if n == 0 {
                 digest
@@ -485,13 +505,13 @@ where
     let default_digest = [P::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
 
+    let default_packed: [P; DIGEST_ELEMS] = array::from_fn(|_| P::broadcast(P::Value::default()));
+
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
         .enumerate()
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
-            let default_packed: [P; DIGEST_ELEMS] =
-                array::from_fn(|_| P::broadcast(P::Value::default()));
             let children: [[P; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n < step {
                     P::pack_columns_fn(|lane| prev_layer[step * (first_row + lane) + n])
@@ -519,11 +539,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_symmetric::PseudoCompressionFunction;
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_field::Field;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_symmetric::{PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+
+    type F = BabyBear;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 
     #[derive(Clone, Copy)]
     struct DummyCompressionFunction;
@@ -678,5 +706,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "matrix height 4 incompatible with tallest height 6")]
+    fn new_rejects_heights_off_ladder() {
+        // `MerkleTree::new` is a public constructor that bypasses `Mmcs::commit`'s
+        // geometry gate. Heights 6 and 4 pass the weaker "equal within the same
+        // power-of-two bucket" rule (next_power_of_two(6) = 8, next_power_of_two(4) = 4
+        // — different buckets), but 4 is off the ceil(6 / 2^k) ladder: at k = 1 the
+        // only admissible height is ceil(6 / 2) = 3. Building a tree from these would
+        // panic later, out of bounds, inside a rayon closure — the constructor must
+        // reject it up front instead.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        let mat6 = RowMajorMatrix::<F>::rand(&mut rng, 6, 1);
+        let mat4 = RowMajorMatrix::<F>::rand(&mut rng, 4, 1);
+
+        let _ = MerkleTree::new::<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress>(
+            &hash,
+            &compress,
+            vec![mat6, mat4],
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn new_rejects_single_zero_height_matrix() {
+        // A single height-0 matrix used to build `digest_layers == [[]]`,
+        // and `root()` would panic later. The constructor must reject it directly.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        let empty_mat = RowMajorMatrix::<F>::new(Vec::new(), 1);
+
+        let _ = MerkleTree::new::<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress>(
+            &hash,
+            &compress,
+            vec![empty_mat],
+        );
     }
 }

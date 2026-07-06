@@ -32,6 +32,12 @@ impl SecurityAssumption {
 
     /// Smallest number of OOD samples (from the extension field) needed
     /// for [`Self::ood_error`] to clear `security_level` bits.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(0)` for unique decoding, which uses no OOD samples.
+    /// - `Some(n)` for the smallest count reaching the security level.
+    /// - `None` when no count in range suffices, i.e. the field is too small.
     #[must_use]
     pub fn determine_ood_samples(
         &self,
@@ -39,20 +45,17 @@ impl SecurityAssumption {
         log_degree: usize,
         log_inv_rate: usize,
         field_size_bits: usize,
-    ) -> usize {
+    ) -> Option<usize> {
         if matches!(self, Self::UniqueDecoding) {
-            return 0;
+            return Some(0);
         }
 
-        for ood_samples in 1..64 {
-            if self.ood_error(log_degree, log_inv_rate, field_size_bits, ood_samples)
+        // Each extra OOD sample adds roughly `field_size_bits - log_degree` bits.
+        // When the field is too small that term never reaches the target.
+        (1..64).find(|&ood_samples| {
+            self.ood_error(log_degree, log_inv_rate, field_size_bits, ood_samples)
                 >= security_level as f64
-            {
-                return ood_samples;
-            }
-        }
-
-        panic!("Could not find an appropriate number of OOD samples");
+        })
     }
 
     /// Sumcheck soundness term for the fold step (bits).
@@ -180,6 +183,25 @@ mod tests {
     }
 
     #[test]
+    fn determine_ood_samples_reports_infeasibility() {
+        let jb = SecurityAssumption::JohnsonBound;
+
+        // A 10-bit field cannot reach 100-bit security at log-degree 20.
+        // Each OOD sample adds at most ~ (10 - 20) < 0 bits, so the loop never
+        // hits the target and the search yields nothing.
+        assert_eq!(jb.determine_ood_samples(100, 20, 2, 10), None);
+
+        // A large field reaches the target with a small sample count.
+        assert!(jb.determine_ood_samples(100, 20, 2, 128).is_some());
+
+        // Unique decoding never needs OOD samples.
+        assert_eq!(
+            SecurityAssumption::UniqueDecoding.determine_ood_samples(100, 20, 2, 10),
+            Some(0)
+        );
+    }
+
+    #[test]
     fn jb_full_security_budget_reaches_128_bits() {
         // Full WHIR soundness budget reaches `security_level` at a
         // representative configuration.
@@ -196,12 +218,14 @@ mod tests {
         let log_inv_rate = 2;
 
         let num_queries = jb.queries(security_level, log_inv_rate);
-        let ood_samples = jb.determine_ood_samples(
-            security_level,
-            log_degree,
-            log_inv_rate,
-            KOALABEAR_QUINTIC_BITS,
-        );
+        let ood_samples = jb
+            .determine_ood_samples(
+                security_level,
+                log_degree,
+                log_inv_rate,
+                KOALABEAR_QUINTIC_BITS,
+            )
+            .expect("quintic field is large enough for these parameters");
 
         let prox_gap = jb.prox_gaps_error(log_degree, log_inv_rate, KOALABEAR_QUINTIC_BITS, 2);
         let sumcheck = jb.fold_sumcheck_error(KOALABEAR_QUINTIC_BITS, log_degree, log_inv_rate);
