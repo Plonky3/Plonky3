@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
+use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Dimensions;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 use thiserror::Error;
@@ -400,10 +400,7 @@ where
         // matches the evaluation of the final polynomial sent by the prover.
 
         // Evaluate the final polynomial at x.
-        let mut eval = Challenge::ZERO;
-        for &coeff in proof.final_poly.iter().rev() {
-            eval = eval * x + coeff;
-        }
+        let eval: Challenge = proof.final_poly.iter().copied().horner(x);
 
         if eval != folded_eval {
             return Err(FriError::FinalPolyMismatch);

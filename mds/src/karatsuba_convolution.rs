@@ -81,10 +81,11 @@ impl<T> ConvolutionRhs for T where T: Add<Output = T> + Copy + Neg<Output = T> +
 ///
 /// # Overflow contract
 ///
-/// For a convolution of size N, it must be possible to add N elements
-/// of type T without overflow, and similarly for U.
-/// The product of one T and one U element must not overflow T after
-/// about N further additions.
+/// The recursive Karatsuba decomposition forms sums/differences of operands *before*
+/// multiplying, so by the time an operand reaches the base-case dot product it may already
+/// be scaled by a factor of about N (the convolution size): the resulting product can be as
+/// large as `N^2 * |T| * |U|`, not just `|T| * |U|`. Implementors must choose `T`/`U` wide
+/// enough (and pick a reduction point) to absorb this `N^2` growth, not just a single product.
 ///
 /// # Performance notes
 ///

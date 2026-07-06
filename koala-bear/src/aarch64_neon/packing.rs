@@ -8,8 +8,10 @@ use crate::KoalaBearParameters;
 const WIDTH: usize = 4;
 
 impl MontyParametersNeon for KoalaBearParameters {
+    // SAFETY: This is a valid packed representation of P.
     const PACKED_P: uint32x4_t = unsafe { transmute::<[u32; WIDTH], _>([0x7f000001; WIDTH]) };
-    // This MU is the same 0x88000001 as elsewhere, just interpreted as an `i32`.
+    // This MU is the same 0x81000001 as elsewhere, just interpreted as an `i32`.
+    // SAFETY: This is a valid packed representation of MU.
     const PACKED_MU: int32x4_t = unsafe { transmute::<[i32; WIDTH], _>([-0x7effffff; WIDTH]) };
 }
 

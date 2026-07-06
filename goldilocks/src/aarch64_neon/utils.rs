@@ -240,8 +240,9 @@ pub(super) fn unpack_lanes<const WIDTH: usize>(
 
 /// Pack two raw `u64` lane arrays back into a packed NEON state.
 ///
-/// Each raw value is wrapped into a Goldilocks field element (with
-/// reduction modulo P) and paired into a packed slot.
+/// Each raw value is wrapped into a Goldilocks field element with no reduction performed
+/// (Goldilocks accepts any `u64` as a non-canonical internal representation) and paired
+/// into a packed slot.
 ///
 /// # Layout
 ///
