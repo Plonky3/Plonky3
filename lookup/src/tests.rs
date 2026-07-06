@@ -120,15 +120,15 @@ fn compute_combined_sum_terms_matches_definition() {
     let gadget = LogUpGadget::new();
     let alpha = EF::from_u32(17);
     let beta = EF::from_u32(2);
-    let elements = vec![vec![EF::from_u32(5)]];
-    let multiplicities = vec![EF::from_u32(3)];
-    let (num, den) = gadget.compute_combined_sum_terms::<MockAirBuilder, EF, EF>(
+    let elements = vec![vec![F::from_u32(5)]];
+    let multiplicities = vec![F::from_u32(3)];
+    let (num, den) = gadget.compute_combined_sum_terms::<MockAirBuilder>(
         &elements,
         &multiplicities,
         &alpha,
         &beta,
     );
-    assert_eq!(num, multiplicities[0]);
+    assert_eq!(num, EF::from(multiplicities[0]));
     assert_eq!(den, alpha - elements[0][0]);
 }
 
@@ -136,7 +136,7 @@ fn compute_combined_sum_terms_matches_definition() {
 fn compute_combined_sum_terms_empty_returns_zero_over_one() {
     let gadget = LogUpGadget::new();
     let (num, den) =
-        gadget.compute_combined_sum_terms::<MockAirBuilder, EF, EF>(&[], &[], &EF::ONE, &EF::ONE);
+        gadget.compute_combined_sum_terms::<MockAirBuilder>(&[], &[], &EF::ONE, &EF::ONE);
     assert_eq!(num, EF::ZERO);
     assert_eq!(den, EF::ONE);
 }

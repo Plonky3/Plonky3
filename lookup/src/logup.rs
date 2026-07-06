@@ -17,7 +17,6 @@
 //! - `m_i, m'_j` are multiplicities (how many times each element appears)
 //! - The transformation eliminates expensive exponentiation operations
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{ExtensionBuilder, PermutationAirBuilder, WindowAccess};
@@ -73,80 +72,82 @@ impl LogUpGadget {
         Self {}
     }
 
-    /// Computes the combined elements for each tuple using the challenge `beta`:
-    /// `combined_elements[i] = ∑_j elements[i][j] * β^(k-1-j), for a tuple of width k`
-    fn combine_elements<AB, E>(
-        &self,
-        elements: &[Vec<E>],
-        alpha: &AB::ExprEF,
-        beta: &AB::ExprEF,
-    ) -> Vec<AB::ExprEF>
+    /// Computes `β^0, β^1, ..., β^(max_width-1)` once per lookup so every
+    /// tuple combine below multiplies extension-by-base against a hoisted
+    /// power instead of re-deriving each power via extension-by-extension
+    /// Horner steps.
+    fn beta_powers<AB>(beta: &AB::ExprEF, max_width: usize) -> Vec<AB::ExprEF>
     where
         AB: PermutationAirBuilder,
-        E: Into<AB::ExprEF> + Clone,
     {
-        elements
-            .iter()
-            .map(|elts| {
-                // Combine the elements in the tuple using beta.
-                let combined_elt = elts.iter().fold(AB::ExprEF::ZERO, |acc, elt| {
-                    elt.clone().into() + acc * beta.clone()
-                });
+        let mut powers = Vec::with_capacity(max_width);
+        let mut power = AB::ExprEF::ONE;
+        for _ in 0..max_width {
+            powers.push(power.clone());
+            power *= beta.clone();
+        }
+        powers
+    }
 
-                // Compute (α - combined_elt)
-                alpha.clone() - combined_elt
-            })
-            .collect()
+    /// Combines one tuple's elements into `∑_j elts[j] * β^(k-1-j)` using the
+    /// hoisted beta powers.
+    ///
+    /// The last element carries `β^0` and is lifted directly with no
+    /// multiply; every other element multiplies its hoisted power, an
+    /// extension * base product rather than extension * extension.
+    fn combine_tuple<AB>(elts: &[AB::Expr], beta_powers: &[AB::ExprEF]) -> AB::ExprEF
+    where
+        AB: PermutationAirBuilder,
+    {
+        match elts.split_last() {
+            None => AB::ExprEF::ZERO,
+            Some((last, leading)) => {
+                let lifted_last: AB::ExprEF = last.clone().into();
+                leading
+                    .iter()
+                    .zip(beta_powers[1..elts.len()].iter().rev())
+                    .fold(lifted_last, |acc, (elt, power)| {
+                        acc + power.clone() * elt.clone()
+                    })
+            }
+        }
     }
 
     /// Computes the numerator and denominator of the fraction:
     /// `∑(m_i / (α - combined_elements[i]))`, where
     /// `combined_elements[i] = ∑_j elements[i][j] * β^(k-1-j), for a tuple of width k`
-    pub(crate) fn compute_combined_sum_terms<AB, E, M>(
+    ///
+    /// Streams a single pass over the tuples instead of building prefix and
+    /// suffix product arrays. For tuple `k` with denominator `d_k` and
+    /// multiplicity `m_k`, updating `N ← N·d_k + m_k·P` then `P ← P·d_k`
+    /// reproduces the same numerator and common denominator with no heap
+    /// allocation.
+    pub(crate) fn compute_combined_sum_terms<AB>(
         &self,
-        elements: &[Vec<E>],
-        multiplicities: &[M],
+        elements: &[Vec<AB::Expr>],
+        multiplicities: &[AB::Expr],
         alpha: &AB::ExprEF,
         beta: &AB::ExprEF,
     ) -> (AB::ExprEF, AB::ExprEF)
     where
         AB: PermutationAirBuilder,
-        E: Into<AB::ExprEF> + Clone,
-        M: Into<AB::ExprEF> + Clone,
     {
         if elements.is_empty() {
             return (AB::ExprEF::ZERO, AB::ExprEF::ONE);
         }
 
-        let n = elements.len();
+        let max_width = elements.iter().map(Vec::len).max().unwrap_or(0);
+        let beta_powers = Self::beta_powers::<AB>(beta, max_width);
 
-        // Precompute all (α - ∑e_{i, j} β^j) terms
-        let terms = self.combine_elements::<AB, E>(elements, alpha, beta);
-
-        // Build prefix products: pref[i] = ∏_{j=0}^{i-1}(α - e_j)
-        let mut pref = Vec::with_capacity(n + 1);
-        pref.push(AB::ExprEF::ONE);
-        for t in &terms {
-            pref.push(pref.last().unwrap().clone() * t.clone());
+        let mut numerator = AB::ExprEF::ZERO;
+        let mut denominator = AB::ExprEF::ONE;
+        for (elts, mult) in elements.iter().zip(multiplicities.iter()) {
+            let d = alpha.clone() - Self::combine_tuple::<AB>(elts, &beta_powers);
+            numerator = numerator * d.clone() + denominator.clone() * mult.clone();
+            denominator *= d;
         }
 
-        // Build suffix products: suff[i] = ∏_{j=i}^{n-1}(α - e_j)
-        let mut suff = vec![AB::ExprEF::ONE; n + 1];
-        for i in (0..n).rev() {
-            suff[i] = suff[i + 1].clone() * terms[i].clone();
-        }
-
-        // Common denominator is the product of all terms
-        let common_denominator = pref[n].clone();
-
-        // Compute numerator: ∑(m_i * ∏_{j≠i}(α - e_j))
-        //
-        // The product without i is: pref[i] * suff[i+1]
-        let numerator = (0..n).fold(AB::ExprEF::ZERO, |acc, i| {
-            acc + multiplicities[i].clone().into() * pref[i].clone() * suff[i + 1].clone()
-        });
-
-        (numerator, common_denominator)
+        (numerator, denominator)
     }
 }
 
@@ -193,19 +194,22 @@ impl LookupProtocol for LogUpGadget {
         let column = *column;
 
         // First, turn the symbolic expressions into builder expressions, for elements and multiplicities.
+        //
+        // Kept as `AB::Expr` rather than lifted to `AB::ExprEF`: the combine
+        // below multiplies extension-by-base throughout via `ExprEF: Algebra<Expr>`.
         let elements = elements
             .iter()
             .map(|exprs| {
                 exprs
                     .iter()
-                    .map(|expr| expr.resolve(builder).into())
+                    .map(|expr| expr.resolve(builder))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
         let multiplicities = multiplicities
             .iter()
-            .map(|expr| expr.resolve(builder).into())
+            .map(|expr| expr.resolve(builder))
             .collect::<Vec<_>>();
 
         // Access the permutation (aux) table and the per-lookup challenges.
@@ -229,13 +233,12 @@ impl LookupProtocol for LogUpGadget {
         let frac_local: AB::ExprEF = permutation.current(column + 1).unwrap().into();
 
         // Build the fraction:  ∑ m_i/(α - combined_elements[i])  =  numerator / denominator .
-        let (numerator, common_denominator) = self
-            .compute_combined_sum_terms::<AB, AB::ExprEF, AB::ExprEF>(
-                &elements,
-                &multiplicities,
-                &alpha.into(),
-                &beta.into(),
-            );
+        let (numerator, common_denominator) = self.compute_combined_sum_terms::<AB>(
+            &elements,
+            &multiplicities,
+            &alpha.into(),
+            &beta.into(),
+        );
 
         // Pin the fraction column to V / U on every row.
         //
