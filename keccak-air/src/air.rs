@@ -46,6 +46,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         let first_step = local.step_flags[0];
         let final_step = local.step_flags[NUM_ROUNDS_MIN_1];
         let not_final_step = AB::Expr::ONE - final_step;
+        let transition_and_not_final = builder.is_transition() * not_final_step.clone();
 
         // If this is the first step, the input A must match the preimage.
         for y in 0..5 {
@@ -62,8 +63,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for y in 0..5 {
             for x in 0..5 {
                 builder
-                    .when(not_final_step.clone())
-                    .when_transition()
+                    .when(transition_and_not_final.clone())
                     .assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
                         local.preimage[y][x][limb] - next.preimage[y][x][limb]
                     }));
@@ -74,9 +74,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         builder.assert_bool(local.export);
 
         // If this is not the final step, the export flag must be off.
-        builder
-            .when(not_final_step.clone())
-            .assert_zero(local.export);
+        builder.when(not_final_step).assert_zero(local.export);
 
         // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
         // Note that if all entries of C are boolean, the arithmetic generalization
@@ -101,13 +99,12 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         // It isn't required, but makes this check a bit cleaner.
         // We also check that all entries of A' are bools.
         // This has the side effect of also range checking the limbs of A.
-        for y in 0..5 {
-            for x in 0..5 {
-                let get_bit = |z: usize| {
-                    local.a_prime[y][x][z]
-                        .into()
-                        .xor3(&local.c[x][z].into(), &local.c_prime[x][z].into())
-                };
+        for x in 0..5 {
+            let c_xor_c_prime: [AB::Expr; 64] =
+                array::from_fn(|z| local.c[x][z].into().xor(&local.c_prime[x][z].into()));
+
+            for y in 0..5 {
+                let get_bit = |z: usize| local.a_prime[y][x][z].into().xor(&c_xor_c_prime[z]);
 
                 // Check that all entries of A'[y][x] are boolean.
                 builder.assert_bools(local.a_prime[y][x]);
@@ -171,11 +168,13 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         }));
 
         let get_xored_bit = |i| {
-            let mut rc_bit_i = AB::Expr::ZERO;
-            for (rc_bits_r, &step_flag) in RC_BITS.iter().zip(local.step_flags.iter()) {
-                let this_round_constant = AB::Expr::from_bool(rc_bits_r[i] != 0);
-                rc_bit_i += step_flag * this_round_constant;
-            }
+            let rc_bit_i: AB::Expr = local
+                .step_flags
+                .iter()
+                .zip(RC_BITS.iter())
+                .filter(|(_, rc_bits_r)| rc_bits_r[i] != 0)
+                .map(|(&step_flag, _)| step_flag.into())
+                .sum();
 
             rc_bit_i.xor(&AB::Expr::from(local.a_prime_prime_0_0_bits[i]))
         };
@@ -192,8 +191,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for x in 0..5 {
             for y in 0..5 {
                 builder
-                    .when_transition()
-                    .when(not_final_step.clone())
+                    .when(transition_and_not_final.clone())
                     .assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
                         local.a_prime_prime_prime(y, x, limb) - next.a[y][x][limb]
                     }));
