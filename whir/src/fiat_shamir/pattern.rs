@@ -1,7 +1,5 @@
 //! Transcript pattern labels for the Fiat-Shamir domain separator.
 
-use p3_field::Field;
-
 /// Top-level classification of a transcript operation.
 ///
 /// Each step in the protocol transcript is one of three kinds:
@@ -21,14 +19,6 @@ pub enum Pattern {
     Hint,
 }
 
-impl Pattern {
-    /// Convert to a field element using the enum discriminant.
-    #[must_use]
-    pub fn as_field_element<F: Field>(self) -> F {
-        F::from_u8(self as u8)
-    }
-}
-
 /// Sub-labels for sampled (verifier-drawn) transcript items.
 ///
 /// Each variant identifies the semantic role of a challenge or
@@ -41,11 +31,23 @@ pub enum Sample {
     FoldingRandomness,
     /// Randomness for combining quotient polynomials after each round.
     CombinationRandomness,
-    /// Byte-encoded query positions for STIR proximity tests.
+    /// Query positions for STIR proximity tests.
+    ///
+    /// The accompanying count is a shape descriptor (query count times the
+    /// domain's bit-length in bytes), sized only to vary with the query
+    /// geometry for domain separation. It does not equal the number of
+    /// field elements the challenger actually draws (queries are sampled
+    /// via `sample_uniform_bits`, one to two field samples per index).
     StirQueries,
-    /// Byte-encoded query positions for the final proximity test.
+    /// Query positions for the final proximity test.
+    ///
+    /// See [`Self::StirQueries`]: the count is a shape descriptor, not a
+    /// literal field-sample count.
     FinalQueries,
-    /// Challenge bytes for proof-of-work grinding.
+    /// Proof-of-work grinding challenge.
+    ///
+    /// The accompanying count is a shape descriptor, not the literal number
+    /// of field elements sampled by `grind`.
     PowQueries,
     /// Out-of-domain evaluation point.
     OodQuery,
@@ -57,14 +59,6 @@ pub enum Sample {
     TranscriptCheckpoint,
     /// Combining challenge `eps` in the HVZK sumcheck overlay.
     ZkSumcheckCombinationRandomness,
-}
-
-impl Sample {
-    /// Convert to a field element using the enum discriminant.
-    #[must_use]
-    pub fn as_field_element<F: Field>(self) -> F {
-        F::from_u8(self as u8)
-    }
 }
 
 /// Sub-labels for observed (prover-absorbed) transcript items.
@@ -107,14 +101,6 @@ pub enum Observe {
     ZkBaseCaseReveal,
 }
 
-impl Observe {
-    /// Convert to a field element using the enum discriminant.
-    #[must_use]
-    pub fn as_field_element<F: Field>(self) -> F {
-        F::from_u8(self as u8)
-    }
-}
-
 /// Sub-labels for hint (non-binding auxiliary) transcript items.
 ///
 /// Hints are data the prover sends to help the verifier reconstruct
@@ -130,12 +116,4 @@ pub enum Hint {
     MerkleProof,
     /// Precomputed weight evaluations deferred from earlier rounds.
     DeferredWeightEvaluations,
-}
-
-impl Hint {
-    /// Convert to a field element using the enum discriminant.
-    #[must_use]
-    pub fn as_field_element<F: Field>(self) -> F {
-        F::from_u8(self as u8)
-    }
 }

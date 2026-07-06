@@ -34,7 +34,7 @@ pub struct NextStatement<F> {
     /// The slot-local successor constraints in their stored order.
     constraints: Vec<NextConstraint<F>>,
     /// Claimed successor evaluation of each constraint, aligned with the constraints above.
-    pub evaluations: Vec<F>,
+    evaluations: Vec<F>,
 }
 
 impl<F: Field> NextStatement<F> {

@@ -132,73 +132,34 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         PW: PackedValue,
     {
         // Geometry gate: the claimed heights must form a tree the commitment can build.
-        // The tallest height anchors the index bound and the leaf layer width below.
+        // The tallest height bounds the index below.
         let max_height =
             validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
-
-        let mut heights_tallest_first = dimensions
-            .iter()
-            .enumerate()
-            .sorted_by_key(|(_, dims)| Reverse(dims.height))
-            .peekable();
-
-        // Leaf layer width before the walk starts, padded to a full N-ary group.
-        let mut curr_height_padded = padded_len(max_height, N);
 
         if index >= max_height {
             return Err(IndexOutOfBounds { max_height, index });
         }
 
-        let leaf_height_npt = max_height.next_power_of_two();
+        // The authoritative schedule, derived the same way `verify_batch` derives
+        // it: it already stops at the root and excludes cap layers, so there is
+        // no level left to fabricate once it is exhausted.
+        let arity_schedule = self.proof_arity_schedule(dimensions)?;
+        let expected_proof_len: usize = arity_schedule.iter().map(|step| step - 1).sum();
+        if num_opening_proofs != expected_proof_len {
+            return Err(WrongHeight {
+                expected_proof_len,
+                num_siblings: num_opening_proofs,
+            });
+        }
 
-        // Consume tallest matrices (mirrors verify_batch's initial hash step).
-        heights_tallest_first
-            .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == leaf_height_npt)
-            .for_each(|_| {});
-
-        let mut proof_pos: usize = 0;
-        let mut steps = Vec::new();
-        let mut positions = Vec::new();
-
-        while proof_pos < num_opening_proofs {
-            let step = select_arity_step::<N>(
-                curr_height_padded,
-                leaf_height_npt,
-                heights_tallest_first.clone().map(|(_, dims)| dims.height),
-            );
-
-            let num_siblings = step - 1;
-            if proof_pos + num_siblings > num_opening_proofs {
-                return Err(WrongHeight {
-                    expected_proof_len: proof_pos + num_siblings,
-                    num_siblings: num_opening_proofs,
-                });
-            }
-            proof_pos += num_siblings;
-
-            let pos_in_group = index % step;
-            steps.push(step);
-            positions.push(pos_in_group);
-
+        let mut positions = Vec::with_capacity(arity_schedule.len());
+        for &step in &arity_schedule {
+            positions.push(index % step);
             index /= step;
-            let logical_next = curr_height_padded / step;
-            curr_height_padded = padded_len(logical_next, N);
-
-            // Mimic `verify_batch` but skip hashing values
-            let logical_next_npt = logical_next.next_power_of_two();
-            let next_height = heights_tallest_first
-                .peek()
-                .map(|(_, dims)| dims.height)
-                .filter(|h| h.next_power_of_two() == logical_next_npt);
-            if let Some(next_height) = next_height {
-                heights_tallest_first
-                    .peeking_take_while(|(_, dims)| dims.height == next_height)
-                    .for_each(|_| {});
-            }
         }
 
         Ok(ArityAndPositions {
-            arity_schedule: steps,
+            arity_schedule,
             query_positions: positions,
         })
     }
@@ -647,6 +608,13 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         let mut lead: Vec<usize> = (0..n_unique).collect();
         let mut sibling_cursor: Vec<usize> = vec![0usize; n_unique];
 
+        // Sorted-path-slot range `[group_lo[g], group_hi[g])` merged into
+        // group `g` so far. Sorted paths only ever merge with contiguous
+        // neighbors, so a group's original members always form a contiguous
+        // slot range — no need to track a full member list.
+        let mut group_lo: Vec<usize> = (0..n_unique).collect();
+        let mut group_hi: Vec<usize> = (1..=n_unique).collect();
+
         let default_digest = [PW::Value::default(); DIGEST_ELEMS];
 
         // Reusable scratch — refilled inside the inner loop, never read across iterations.
@@ -654,6 +622,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         let mut new_indices: Vec<usize> = Vec::with_capacity(n_unique);
         let mut new_lead: Vec<usize> = Vec::with_capacity(n_unique);
         let mut new_cursor: Vec<usize> = Vec::with_capacity(n_unique);
+        let mut new_group_lo: Vec<usize> = Vec::with_capacity(n_unique);
+        let mut new_group_hi: Vec<usize> = Vec::with_capacity(n_unique);
 
         // Phase 8: Walk up the tree. At each layer we collapse contiguous
         // groups of unique paths that share a parent, replacing each group
@@ -665,6 +635,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             new_indices.clear();
             new_lead.clear();
             new_cursor.clear();
+            new_group_lo.clear();
+            new_group_hi.clear();
 
             let mut i = 0;
             while i < digests.len() {
@@ -716,6 +688,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                 new_indices.push(parent_idx);
                 new_lead.push(lead_path);
                 new_cursor.push(cursor_start + num_siblings_per_path);
+                new_group_lo.push(group_lo[i]);
+                new_group_hi.push(group_hi[j - 1]);
 
                 i = j;
             }
@@ -724,6 +698,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             core::mem::swap(&mut node_indices, &mut new_indices);
             core::mem::swap(&mut lead, &mut new_lead);
             core::mem::swap(&mut sibling_cursor, &mut new_cursor);
+            core::mem::swap(&mut group_lo, &mut new_group_lo);
+            core::mem::swap(&mut group_hi, &mut new_group_hi);
 
             // Layer geometry update mirrors `verify_batch`.
             let logical_next = curr_height_padded / step;
@@ -745,6 +721,29 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
                 for g in 0..digests.len() {
                     let rep_orig = reps[lead[g]];
+
+                    // Every sorted-path slot merged into this group shares the
+                    // same reduced row index into the injected matrices, so an
+                    // honest prover reports the same row for all of them. Only
+                    // the lead's row is hashed below, so every other member
+                    // must be checked explicitly against it here.
+                    for (slot, &member_orig) in
+                        reps.iter().enumerate().take(group_hi[g]).skip(group_lo[g])
+                    {
+                        if slot == lead[g] {
+                            continue;
+                        }
+                        for &mi in &inject_matrix_indices {
+                            if opened_values[member_orig][mi] != opened_values[rep_orig][mi] {
+                                return Err(PrunedProofError::InconsistentGroupOpening {
+                                    slot,
+                                    matrix: mi,
+                                }
+                                .into());
+                            }
+                        }
+                    }
+
                     let next_height_digest = self.hash.hash_iter_slices(
                         inject_matrix_indices
                             .iter()

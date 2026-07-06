@@ -428,6 +428,8 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
+        assert_eq!(v.len(), self.height());
+
         // Below this many total elements, the rayon fork-join and SIMD-packing machinery
         // costs more than the dot product itself; fall back to a plain scalar accumulation.
         // Gating on total elements (rather than height alone) also covers wide-but-short
@@ -481,8 +483,10 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
+        assert_eq!(vs.len(), self.height());
+
         let packed_width = self.width().div_ceil(T::Packing::WIDTH);
-        let height = self.height().min(vs.len());
+        let height = self.height();
 
         // Split the rows into a bounded number of contiguous chunks; each task runs the
         // field's columnwise kernel serially over its chunk (letting it defer modular

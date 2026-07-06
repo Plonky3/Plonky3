@@ -229,7 +229,10 @@ impl<F: Field> Lookups<F> {
                         if gadget.constraint_degree(&cur) <= max_degree {
                             // Within budget: keep the merge.
                             // Each tuple holds its own per-row query bound, so the bounds add.
-                            cur.count_weight = cur.count_weight.saturating_add(member.count_weight);
+                            cur.count_weight = cur
+                                .count_weight
+                                .checked_add(member.count_weight)
+                                .expect("count_weight overflow: aggregate lookup weight exceeds u32::MAX");
                             current = Some(cur);
                         } else {
                             // Over budget: undo the trial, seal the column, start a new one.
@@ -298,15 +301,18 @@ pub fn check_multiplicity_height_bound<F: PrimeField>(
         "lookups and heights must be aligned per AIR"
     );
 
-    // Accumulate `sum_i w_i * h_i` in 128 bits.
-    // A saturating add only caps far past any field size, where the bound already fails.
-    let weighted_height_sum = lookups.iter().zip(heights).fold(0u128, |acc, (air, &h)| {
-        let term = u128::from(air.total_count_weight()).saturating_mul(h as u128);
-        acc.saturating_add(term)
-    });
+    // Accumulate `sum_i w_i * h_i` exactly via `BigUint`, since this sum
+    // feeds the soundness comparison below and must stay exact for every
+    // supported field, including large ones like BN254 (`p ~ 2^254`).
+    let weighted_height_sum = lookups
+        .iter()
+        .zip(heights)
+        .fold(BigUint::ZERO, |acc, (air, &h)| {
+            acc + BigUint::from(air.total_count_weight()) * BigUint::from(h)
+        });
 
     // Compare against the exact characteristic `p`, valid for any prime size.
-    if BigUint::from(weighted_height_sum) >= F::order() {
+    if weighted_height_sum >= F::order() {
         return Err(LookupError::MultiplicityHeightBoundExceeded {
             weighted_height_sum,
             field_bits: F::bits(),
@@ -386,7 +392,7 @@ pub enum LookupError {
         "LogUp multiplicity height-bound exceeded: weighted height sum {weighted_height_sum} reaches the ~2^{field_bits} field characteristic"
     )]
     MultiplicityHeightBoundExceeded {
-        weighted_height_sum: u128,
+        weighted_height_sum: BigUint,
         field_bits: usize,
     },
 }
@@ -578,7 +584,7 @@ mod tests {
                 weighted_height_sum,
                 field_bits,
             } => {
-                assert_eq!(weighted_height_sum, 1u128 << 31);
+                assert_eq!(weighted_height_sum, BigUint::from(1u128 << 31));
                 assert_eq!(field_bits, F::bits());
             }
             other => panic!("wrong error variant: {other:?}"),

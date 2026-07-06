@@ -252,14 +252,9 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         let mut coeffs = self.idft_batch(mat);
         transform(&mut coeffs.as_view_mut(), Layout::Natural);
         // PANICS: possible panic if the new resized length overflows
-        coeffs.values.resize(
-            coeffs
-                .values
-                .len()
-                .checked_shl(added_bits.try_into().unwrap())
-                .unwrap(),
-            F::ZERO,
-        );
+        let scale = 1usize.checked_shl(added_bits.try_into().unwrap()).unwrap();
+        let new_len = coeffs.values.len().checked_mul(scale).unwrap();
+        coeffs.values.resize(new_len, F::ZERO);
         self.coset_dft_batch(coeffs, shift)
     }
 

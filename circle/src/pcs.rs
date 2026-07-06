@@ -133,7 +133,7 @@ where
     }
 
     fn log_max_lde_height(&self) -> usize {
-        Val::CIRCLE_TWO_ADICITY
+        Val::CIRCLE_TWO_ADICITY - 1
     }
 
     fn commit(

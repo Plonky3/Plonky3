@@ -290,11 +290,23 @@ fn inv_sbox_x5<R: PrimeCharacteristicRing + Copy, const N: usize>(state: &mut [R
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{PrimeCharacteristicRing, PrimeField64};
     use p3_symmetric::Permutation;
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn seed_matches_consts() {
+        let expected = alloc::format!(
+            "RPO\u{2011}M31:p={},m={},c={},n={}",
+            Mersenne31::ORDER_U64,
+            RPO_M31_WIDTH,
+            RPO_M31_CAPACITY,
+            RPO_M31_NUM_ROUNDS,
+        );
+        assert_eq!(RPO_M31_SEED, expected);
+    }
 
     /// Reference dense matrix-vector product against the circulant coefficients.
     fn mds_naive(input: [Mersenne31; RPO_M31_WIDTH]) -> [Mersenne31; RPO_M31_WIDTH] {

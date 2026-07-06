@@ -401,6 +401,43 @@ mod tests {
     }
 
     #[test]
+    fn pruned_amortized_rejects_tampered_non_lead_group_injection() {
+        // Two distinct leaves (0 and 1) merge into one path-sharing group at
+        // the very first layer above the leaves, exactly where the shorter
+        // matrix gets injected. Only the group's lead path hashes its row of
+        // the injected matrix into the tree; every other member's claimed
+        // row for that matrix must still be checked against the lead's,
+        // or a prover could substitute an arbitrary row for it.
+        let seed = 61u64;
+        let mmcs = make_binary_mmcs(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat1 = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let mat2 = RowMajorMatrix::<F>::rand(&mut rng, 4, 6);
+        let dims = vec![mat1.dimensions(), mat2.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat1, mat2]);
+
+        let indices: Vec<usize> = vec![0, 1];
+        let mut pruned = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        // Query index 1 is the non-lead member of the group. Tamper with its
+        // claimed row for the injected (shorter) matrix, index 1.
+        pruned.opened_values[1][1][0] = F::from_u32(999999);
+
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        );
+        assert!(
+            result.is_err(),
+            "a tampered non-lead group member's injected-matrix row must be rejected"
+        );
+    }
+
+    #[test]
     fn pruned_amortized_cap_height_nonzero_binary() {
         // Invariant: surviving group digests land in cap[idx >> 4], not the root.
         //

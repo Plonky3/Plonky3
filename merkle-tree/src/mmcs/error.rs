@@ -92,4 +92,16 @@ pub enum PrunedProofError {
         /// Unique-leaf slot the conflicting queries map to.
         slot: usize,
     },
+
+    /// A non-lead member of a merged path group disagrees with the group's
+    /// lead on the opened row of a matrix injected at their shared layer.
+    #[error(
+        "unique path slot {slot} disagrees with its group's lead on matrix {matrix}'s opened row"
+    )]
+    InconsistentGroupOpening {
+        /// Unique-path slot of the disagreeing group member.
+        slot: usize,
+        /// Index (into the caller-supplied `dimensions`) of the matrix whose opened row diverges.
+        matrix: usize,
+    },
 }

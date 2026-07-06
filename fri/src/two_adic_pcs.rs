@@ -595,14 +595,14 @@ where
         // we may need to revisit this and to ensure it is safe to batch them together.
 
         // num_reduced records the number of (function, opening point) pairs for each `log_height`.
-        // TODO: This should really be `[0; Val::TWO_ADICITY]` but that runs into issues with generics.
-        let mut num_reduced = [0; 32];
+        // TODO: This should really be `[0; Val::TWO_ADICITY + 1]` but that runs into issues with generics.
+        let mut num_reduced = [0; 33];
 
         // For each `log_height` from 2^1 -> 2^32, reduced_openings will contain either `None`
         // if there are no matrices of that height, or `Some(vec)` where `vec` is equal to
         // a weighted sum of `(f(zeta) - f(x))/(zeta - x)` over all `f`'s of that height and
         // for each `f`, all opening points `zeta`. The sum is weighted by powers of the challenge alpha.
-        let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
+        let mut reduced_openings: [_; 33] = core::array::from_fn(|_| None);
 
         for ((mats, points), openings_for_round) in
             mats_and_points.iter().zip(all_opened_values.iter())

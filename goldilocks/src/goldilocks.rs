@@ -413,7 +413,7 @@ impl Field for Goldilocks {
             not(target_feature = "avx512f")
         ),
         all(target_arch = "x86_64", target_feature = "avx512f"),
-        target_arch = "aarch64",
+        all(target_arch = "aarch64", target_feature = "neon"),
         all(target_arch = "wasm32", target_feature = "simd128"),
     )))]
     type Packing = Self;

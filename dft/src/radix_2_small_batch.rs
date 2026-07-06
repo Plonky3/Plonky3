@@ -173,11 +173,12 @@ where
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
         let corr = (log_h - log_num_par_rows) % LAYERS_PER_GROUP;
-        dft_layer_par_extra_layers(
-            &mut mat.as_view_mut(),
-            &root_table[log_num_par_rows..log_num_par_rows + corr],
-            multi_layer_dit,
-        );
+        let extra_layers: Vec<&[DitButterfly<F>]> = root_table
+            [log_num_par_rows..log_num_par_rows + corr]
+            .iter()
+            .map(|slice| unsafe { as_base_slice::<DitButterfly<F>, F>(slice) }) // Safe as DitButterfly is #[repr(transparent)]
+            .collect();
+        dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dit);
 
         // Once the blocks are small enough, we can split the matrix
         // into chunks of size `chunk_size` and process them in parallel.
@@ -234,11 +235,12 @@ where
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the initial layers separately.
         let corr = (log_h - log_num_par_rows) % LAYERS_PER_GROUP;
-        dft_layer_par_extra_layers(
-            &mut mat.as_view_mut(),
-            &root_table[log_num_par_rows..log_num_par_rows + corr],
-            multi_layer_dif,
-        );
+        let extra_layers: Vec<&[DifButterfly<F>]> = root_table
+            [log_num_par_rows..log_num_par_rows + corr]
+            .iter()
+            .map(|slice| unsafe { as_base_slice::<DifButterfly<F>, F>(slice) }) // Safe as DifButterfly is #[repr(transparent)]
+            .collect();
+        dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dif);
 
         // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
@@ -318,11 +320,12 @@ where
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
         let corr = (log_h - num_inner_dit_layers) % LAYERS_PER_GROUP;
-        dft_layer_par_extra_layers(
-            &mut mat.as_view_mut(),
-            &inv_root_table[num_inner_dit_layers..num_inner_dit_layers + corr],
-            multi_layer_dit,
-        );
+        let extra_layers: Vec<&[DitButterfly<F>]> = inv_root_table
+            [num_inner_dit_layers..num_inner_dit_layers + corr]
+            .iter()
+            .map(|slice| unsafe { as_base_slice::<DitButterfly<F>, F>(slice) }) // Safe as DitButterfly is #[repr(transparent)]
+            .collect();
+        dft_layer_par_extra_layers(&mut mat.as_view_mut(), &extra_layers, multi_layer_dit);
 
         // Now do all the inner layers at once. This does the final `log_num_par_rows` of
         // the initial transformation, then copies the values of mat to output, scales then
@@ -342,11 +345,12 @@ where
 
         // If the total number of layers is not a multiple of `LAYERS_PER_GROUP`,
         // we need to handle the remaining layers separately.
-        dft_layer_par_extra_layers(
-            &mut out.as_view_mut(),
-            &root_table[num_inner_dif_layers..num_inner_dif_layers + corr],
-            multi_layer_dif,
-        );
+        let extra_layers: Vec<&[DifButterfly<F>]> = root_table
+            [num_inner_dif_layers..num_inner_dif_layers + corr]
+            .iter()
+            .map(|slice| unsafe { as_base_slice::<DifButterfly<F>, F>(slice) }) // Safe as DifButterfly is #[repr(transparent)]
+            .collect();
+        dft_layer_par_extra_layers(&mut out.as_view_mut(), &extra_layers, multi_layer_dif);
 
         // We do `LAYERS_PER_GROUP` layers of the DFT at once, to minimize how much data we need to transfer
         // between threads.
@@ -362,11 +366,11 @@ where
     }
 }
 
-/// Applies one layer of the Radix-2 DIF FFT butterfly network making use of parallelization.
+/// Applies one layer of the Radix-2 FFT butterfly network making use of parallelization.
 ///
 /// Splits the matrix into blocks of rows and performs in-place butterfly operations
-/// on each block. Uses a `TwiddleFreeButterfly` for the first pair and `DifButterfly`
-/// with precomputed twiddles for the rest.
+/// on each block. Uses a `TwiddleFreeButterfly` for the first pair and the given
+/// `Butterfly` implementation with precomputed twiddles for the rest.
 ///
 /// Each block is processed in parallel, if the blocks are large enough they themselves
 /// are split into parallel sub-blocks.
@@ -408,7 +412,7 @@ fn dft_layer_par<F: Field, B: Butterfly<F>>(
                         // The first pair doesn't require a twiddle factor
                         TwiddleFreeButterfly.apply_to_rows(hi_chunk, lo_chunk);
                     } else {
-                        // Apply DIT butterfly using the twiddle factor at index `ind - 1`
+                        // Apply the butterfly using the twiddle factor at index `ind`
                         twiddles[ind].apply_to_rows(hi_chunk, lo_chunk);
                     }
                 });
@@ -699,22 +703,18 @@ fn dft_layer_par_triple<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>
 /// may not be a multiple of `LAYERS_PER_GROUP`.
 fn dft_layer_par_extra_layers<F: Field, B: Butterfly<F>, M: MultiLayerButterfly<F, B>>(
     mat: &mut RowMajorMatrixViewMut<'_, F>,
-    root_table: &[Vec<F>],
+    root_table: &[&[B]],
     multi_layer: M,
 ) {
     match root_table.len() {
         1 => {
-            // Safe as DitButterfly is #[repr(transparent)]
-            let fft_layer: &[B] = unsafe { as_base_slice(&root_table[0]) };
-            dft_layer_par(&mut mat.as_view_mut(), fft_layer);
+            dft_layer_par(&mut mat.as_view_mut(), root_table[0]);
         }
         2 => {
-            let fft_layer_0: &[B] = unsafe { as_base_slice(&root_table[0]) };
-            let fft_layer_1: &[B] = unsafe { as_base_slice(&root_table[1]) };
             dft_layer_par_double(
                 &mut mat.as_view_mut(),
-                fft_layer_1,
-                fft_layer_0,
+                root_table[1],
+                root_table[0],
                 multi_layer,
             );
         }

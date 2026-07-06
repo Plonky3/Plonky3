@@ -158,11 +158,23 @@ fn inv_sbox_x7<R: PrimeCharacteristicRing + Copy, const N: usize>(state: &mut [R
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{PrimeCharacteristicRing, PrimeField64};
     use p3_symmetric::Permutation;
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn seed_matches_consts() {
+        let expected = alloc::format!(
+            "RPO-BB:p={},m={},c={},n={}",
+            BabyBear::ORDER_U64,
+            RPO_BB_WIDTH,
+            RPO_BB_CAPACITY,
+            RPO_BB_NUM_ROUNDS,
+        );
+        assert_eq!(RPO_BB_SEED, expected);
+    }
 
     /// Permutation regression vector for input `[0, 1, …, 23]`.
     ///

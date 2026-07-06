@@ -79,7 +79,7 @@ where
     );
 
     // Index sampling and `open_input` must agree on the height; the caller's value is canonical.
-    debug_assert_eq!(
+    assert_eq!(
         log_global_max_height,
         log2_strict_usize(inputs[0].len()),
         "log_global_max_height must match the largest input length"

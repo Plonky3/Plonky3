@@ -129,22 +129,21 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         }
     }
 
-    fn create_disjoint_domain(&self, min_size: usize) -> Self {
+    fn try_create_disjoint_domain(&self, min_size: usize) -> Option<Self> {
         // Right now we simply guarantee the domain is disjoint by returning a
         // larger standard position coset, which is fine because we always ask for a larger
         // domain. If we wanted good performance for a disjoint domain of the same size,
         // we could change the shift. Also we could support nonstandard twin cosets.
-        assert!(
-            self.is_standard(),
-            "create_disjoint_domain not currently supported for nonstandard twin cosets"
-        );
+        if !self.is_standard() {
+            return None;
+        }
         let log_n = log2_ceil_usize(min_size);
         // Any standard position coset that is not the same size as us will be disjoint.
-        Self::standard(if log_n == self.log_n {
+        Some(Self::standard(if log_n == self.log_n {
             log_n + 1
         } else {
             log_n
-        })
+        }))
     }
 
     /// Decompose a domain into disjoint twin-cosets.

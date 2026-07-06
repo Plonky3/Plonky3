@@ -247,7 +247,7 @@ where
         fiat_shamir_challenger: &mut Challenger,
         _is_preprocessing: bool,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
-        debug_assert!(
+        assert!(
             !Self::ZK,
             "open_with_preprocessing should have a different implementation when ZK is enabled"
         );

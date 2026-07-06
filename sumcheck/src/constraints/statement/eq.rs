@@ -162,9 +162,9 @@ pub struct EqStatement<F> {
     /// Number of variables in the multilinear polynomial space.
     num_variables: usize,
     /// List of evaluation points.
-    pub points: Vec<Point<F>>,
+    points: Vec<Point<F>>,
     /// List of target evaluations.
-    pub evaluations: Vec<F>,
+    evaluations: Vec<F>,
 }
 
 impl<F: Field> EqStatement<F> {
