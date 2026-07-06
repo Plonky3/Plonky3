@@ -26,8 +26,8 @@ use crate::{Claim, SumcheckData, extrapolate_01inf};
 ///
 /// # Flow
 ///
-/// - Round one runs in SIMD-packed form.
-/// - Every later round runs on the residual product polynomial.
+/// - Every folding round is driven from precomputed SVO accumulators.
+/// - The handoff to the residual product polynomial is packed.
 #[derive(Debug, Clone)]
 pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     /// Recorded opening claims and the layout context that batches them.
@@ -229,8 +229,8 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
     ///       1   | Sample the batching challenge  a.
     ///       2   | running sum  = sum_{i}  a^i * eval_i.
     ///       3   | weight poly  = sum_{i}  a^i * eq(z_i, X).
-    ///       4   | Fold round 1 in SIMD-packed arithmetic.
-    ///       5   | Drive rounds 2..folding on the product polynomial.
+    ///       4   | Fold rounds 1..folding from precomputed SVO accumulators.
+    ///       5   | Hand off to the residual product polynomial, packed.
     /// ```
     ///
     /// # Precondition

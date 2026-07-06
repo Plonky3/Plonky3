@@ -22,6 +22,17 @@ use crate::table::{OpeningEvals, OpeningProtocol};
 /// The prescribed-point verifier does not absorb the commitment.
 /// The outer protocol absorbs the commitment once.
 /// That absorption happens before the outer protocol samples challenges.
+///
+/// # Fiat-Shamir / Soundness
+///
+/// In the sampled-point convention the opening point is transcript-derived by
+/// construction, so it cannot be influenced by the prover. In prescribed mode there is no
+/// such guarantee from this trait alone: soundness rests entirely on the caller fixing the
+/// point via the shared transcript (e.g. deriving it from the AIR's zerocheck challenges,
+/// which are themselves bound after the commitment is absorbed) *before* calling
+/// [`open_at`](PrescribedPointPcs::open_at) / `verify_at`. A prover-influenceable,
+/// non-transcript-bound point breaks the soundness of the alpha-batched claim this opening
+/// feeds into.
 pub trait PrescribedPointPcs<Challenge, Challenger>: MultilinearPcs<Challenge, Challenger>
 where
     Challenge: ExtensionField<Self::Val>,

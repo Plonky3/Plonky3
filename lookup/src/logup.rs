@@ -74,7 +74,7 @@ impl LogUpGadget {
     }
 
     /// Computes the combined elements for each tuple using the challenge `beta`:
-    /// `combined_elements[i] = ∑elements[i][n-j] * β^j`
+    /// `combined_elements[i] = ∑_j elements[i][j] * β^(k-1-j), for a tuple of width k`
     fn combine_elements<AB, E>(
         &self,
         elements: &[Vec<E>],
@@ -101,7 +101,7 @@ impl LogUpGadget {
 
     /// Computes the numerator and denominator of the fraction:
     /// `∑(m_i / (α - combined_elements[i]))`, where
-    /// `combined_elements[i] = ∑elements[i][n-j] * β^j`
+    /// `combined_elements[i] = ∑_j elements[i][j] * β^(k-1-j), for a tuple of width k`
     pub(crate) fn compute_combined_sum_terms<AB, E, M>(
         &self,
         elements: &[Vec<E>],
@@ -171,7 +171,7 @@ impl LookupProtocol for LogUpGadget {
     /// ```
     ///
     /// - `multiplicities` may be negative,
-    /// - `combined_elements[i] = ∑elements[i][n-j] * β^j`.
+    /// - `combined_elements[i] = ∑_j elements[i][j] * β^(k-1-j), for a tuple of width k`.
     fn eval_fraction<AB>(&self, builder: &mut AB, lookup: &Lookup<AB::F>)
     where
         AB: PermutationAirBuilder,
