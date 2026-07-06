@@ -60,9 +60,18 @@ pub fn generate_trace_rows<
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
     const NUM_MATCH_FLAGS: usize,
+    const NUM_CHI_CELLS: usize,
 >(
     inputs: Vec<[F; WIDTH]>,
-    air: &MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>,
+    air: &MonolithAir<
+        F,
+        WIDTH,
+        NUM_FULL_ROUNDS,
+        NUM_BARS,
+        FIELD_BITS,
+        NUM_MATCH_FLAGS,
+        NUM_CHI_CELLS,
+    >,
     bars: &B,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
@@ -73,7 +82,8 @@ pub fn generate_trace_rows<
     );
 
     // One permutation per row.
-    let ncols = num_cols::<WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>();
+    let ncols =
+        num_cols::<WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS>();
 
     // Allocate with extra capacity for LDE blowup.
     let mut vec = Vec::with_capacity((n * ncols) << extra_capacity_bits);
@@ -91,6 +101,7 @@ pub fn generate_trace_rows<
             NUM_BARS,
             FIELD_BITS,
             NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
         >>()
     };
     assert!(prefix.is_empty(), "Alignment should match");
@@ -137,6 +148,7 @@ pub fn generate_trace_rows_for_perm<
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
     const NUM_MATCH_FLAGS: usize,
+    const NUM_CHI_CELLS: usize,
 >(
     perm: &mut MonolithCols<
         MaybeUninit<F>,
@@ -145,9 +157,18 @@ pub fn generate_trace_rows_for_perm<
         NUM_BARS,
         FIELD_BITS,
         NUM_MATCH_FLAGS,
+        NUM_CHI_CELLS,
     >,
     mut state: [F; WIDTH],
-    air: &MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>,
+    air: &MonolithAir<
+        F,
+        WIDTH,
+        NUM_FULL_ROUNDS,
+        NUM_BARS,
+        FIELD_BITS,
+        NUM_MATCH_FLAGS,
+        NUM_CHI_CELLS,
+    >,
     bars: &B,
 ) {
     // Step 1: Write the initial state into the `inputs` columns.
@@ -163,7 +184,7 @@ pub fn generate_trace_rows_for_perm<
 
     // Step 3: Full rounds (NUM_FULL_ROUNDS rounds with round constants).
     for (round_idx, round_cols) in perm.full_rounds.iter_mut().enumerate() {
-        generate_round::<F, B, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>(
+        generate_round::<F, B, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS>(
             &mut state,
             round_cols,
             &air.mds_matrix,
@@ -175,7 +196,7 @@ pub fn generate_trace_rows_for_perm<
     }
 
     // Step 4: Final round (no round constants).
-    generate_round::<F, B, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>(
+    generate_round::<F, B, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS>(
         &mut state,
         &mut perm.final_round,
         &air.mds_matrix,
@@ -200,9 +221,17 @@ fn generate_round<
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
     const NUM_MATCH_FLAGS: usize,
+    const NUM_CHI_CELLS: usize,
 >(
     state: &mut [F; WIDTH],
-    round: &mut MonolithRoundCols<MaybeUninit<F>, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>,
+    round: &mut MonolithRoundCols<
+        MaybeUninit<F>,
+        WIDTH,
+        NUM_BARS,
+        FIELD_BITS,
+        NUM_MATCH_FLAGS,
+        NUM_CHI_CELLS,
+    >,
     mds_matrix: &[[F; WIDTH]; WIDTH],
     round_constants: Option<&[F; WIDTH]>,
     limb_bits: &[usize],
@@ -232,56 +261,62 @@ fn generate_round<
         // canonical integer instead of field multiplications.
         let val = state[bar_idx].as_canonical_u64();
 
-        // Per-limb AND products, walking limbs left to right.
+        // Per-limb AND products, walking limbs left to right. The trailing
+        // limb, when narrower than 8 bits, is inlined by the AIR instead of
+        // committed, so its AND term isn't written here at all.
         //
         // Bit j of `rot(k)` is `x[(j - k) mod n]` (a left rotation by k
-        // within the n-bit limb), matching the `sub(k) = (j - k) mod n`
-        // indexing of the field-arithmetic formulation this replaces:
+        // within the n-bit limb):
         //
-        //     andn   = (NOT x[j-2]) AND x[j-3]
-        //     8-bit  : chi[j] = andn AND x[j-4]
-        //     7-bit  : chi[j] = andn
+        //     chi[j] = (NOT x[j-2]) AND x[j-3] AND x[j-4]
         let mut bit_offset = 0;
+        let mut chi_offset = 0;
         for (limb_idx, &n) in limb_bits.iter().enumerate() {
-            // Only the trailing limb may be narrower than 8 bits.
             let is_last_reduced = limb_idx == limb_bits.len() - 1 && n < 8;
-            let mask = (1u64 << n) - 1;
-            let limb = (val >> bit_offset) & mask;
-            let rot = |k: usize| ((limb << k) | (limb >> (n - k))) & mask;
-
-            let chi_word = if is_last_reduced {
-                !rot(2) & rot(3)
-            } else {
-                !rot(2) & rot(3) & rot(4)
-            };
-            for j in 0..n {
-                bar_chi[bit_offset + j].write(F::from_bool((chi_word >> j) & 1 != 0));
+            if !is_last_reduced {
+                let mask = (1u64 << n) - 1;
+                let limb = (val >> bit_offset) & mask;
+                let rot = |k: usize| ((limb << k) | (limb >> (n - k))) & mask;
+                let chi_word = !rot(2) & rot(3) & rot(4);
+                for j in 0..n {
+                    bar_chi[chi_offset + j].write(F::from_bool((chi_word >> j) & 1 != 0));
+                }
+                chi_offset += n;
             }
             bit_offset += n;
         }
+        debug_assert_eq!(chi_offset, NUM_CHI_CELLS);
 
-        // Canonical-pattern walk (MSB → LSB):
+        // Canonical-pattern walk (MSB → LSB), batching two modulus one-bits
+        // into each committed flag:
         //
         //     prev = true
         //     for i from FIELD_BITS-1 down to 0:
-        //         if p_bit[i]: prev &= bit[i]; commit prev as the next flag cell
+        //         if p_bit[i]: pair with the pending one-bit (if any) and
+        //                      commit `prev &= pending_bit & bit[i]`;
+        //                      otherwise stash bit[i] as pending
         //         else       : prev stays                 (and prev AND bit[i] must be false)
         //
-        // Only modulus one-bits commit a flag cell (a zero-bit's flag is a
-        // pure copy of the previous one, so the AIR reuses `prev` directly
-        // instead of reading a redundant column). `bar_mflag` therefore has
-        // `NUM_MATCH_FLAGS` cells — the modulus's Hamming weight — filled in
-        // MSB-to-LSB order as one-bits are encountered.
-        //
-        // Canonical inputs always end with prev = false (some bit position
-        // must make them strictly less than p).
+        // A modulus-zero bit's flag is a pure copy of the previous one, so
+        // the AIR reuses `prev` directly instead of reading a column; two
+        // modulus one-bits share one committed cell. `bar_mflag` therefore
+        // has `NUM_MATCH_FLAGS` cells (`modulus.count_ones() / 2`) filled in
+        // MSB-to-LSB order. If the Hamming weight is odd, the final one-bit
+        // (always bit 0) never pairs and needs no cell — the AIR folds its
+        // check directly into the closing assertion instead.
         let mut prev = true;
         let mut flag_idx = 0;
+        let mut pending: Option<bool> = None;
         for i in (0..FIELD_BITS).rev() {
             if modulus_lsb_to_msb[i] {
-                prev &= (val >> i) & 1 != 0;
-                bar_mflag[flag_idx].write(F::from_bool(prev));
-                flag_idx += 1;
+                let bit_i = (val >> i) & 1 != 0;
+                if let Some(first) = pending.take() {
+                    prev = prev && first && bit_i;
+                    bar_mflag[flag_idx].write(F::from_bool(prev));
+                    flag_idx += 1;
+                } else {
+                    pending = Some(bit_i);
+                }
             }
         }
         debug_assert_eq!(flag_idx, NUM_MATCH_FLAGS);
