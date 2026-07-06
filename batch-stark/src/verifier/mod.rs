@@ -66,6 +66,7 @@ where
         || airs.len() != degree_bits.len()
         || airs.len() != lookup_terminals.len()
         || airs.len() != all_lookups.len()
+        || airs.len() != common.log_num_quotient_chunks.len()
         || common
             .preprocessed
             .as_ref()
@@ -89,8 +90,6 @@ where
     // Validate opened values shape per instance and observe per-instance binding data.
     // Precompute per-instance preprocessed widths and number of quotient chunks.
     let mut preprocessed_widths = Vec::with_capacity(airs.len());
-    // Number of quotient chunks per instance before ZK randomization.
-    let mut log_num_quotient_chunks = Vec::with_capacity(airs.len());
     // The total number of quotient chunks, including ZK randomization.
     let mut num_quotient_chunks = Vec::with_capacity(airs.len());
     let mut base_degree_bits = Vec::with_capacity(airs.len());
@@ -113,25 +112,35 @@ where
             .unwrap_or(0);
         preprocessed_widths.push(pre_w);
 
-        let layout = AirLayout {
-            preprocessed_width: pre_w,
-            main_width: air.width(),
-            num_public_values: air.num_public_values(),
-            num_periodic_columns: air.num_periodic_columns(),
-            ..Default::default()
-        };
-        let log_num_chunks =
-            info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
-                get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
-                    air,
-                    layout,
-                    1usize << base_db,
-                    &all_lookups[i],
-                    config.is_zk(),
-                    &lookup_gadget,
-                )
-            });
-        log_num_quotient_chunks.push(log_num_chunks);
+        // `log_num_quotient_chunks` is a pure function of the AIR's constraint
+        // degree, fixed at keygen and shared via `CommonData`; only debug
+        // builds re-derive it here, to catch drift from the keygen-time value.
+        let log_num_chunks = common.log_num_quotient_chunks[i];
+        #[cfg(debug_assertions)]
+        {
+            let layout = AirLayout {
+                preprocessed_width: pre_w,
+                main_width: air.width(),
+                num_public_values: air.num_public_values(),
+                num_periodic_columns: air.num_periodic_columns(),
+                ..Default::default()
+            };
+            let recomputed =
+                info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
+                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                        air,
+                        layout,
+                        1usize << base_db,
+                        &all_lookups[i],
+                        config.is_zk(),
+                        &lookup_gadget,
+                    )
+                });
+            debug_assert_eq!(
+                log_num_chunks, recomputed,
+                "common.log_num_quotient_chunks[{i}] diverged from a fresh symbolic recomputation"
+            );
+        }
 
         let (_, n_chunks) =
             checked_log_size_sum(log_num_chunks, config.is_zk()).ok_or_else(|| {
@@ -345,7 +354,7 @@ where
     let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
         .map(|i| {
             let ext_db = degree_bits[i];
-            let log_num_chunks = log_num_quotient_chunks[i];
+            let log_num_chunks = common.log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
             let (quotient_domain_log_size, quotient_domain_size) =

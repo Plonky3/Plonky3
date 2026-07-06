@@ -46,9 +46,22 @@ pub struct StarkInstance<'a, SC: SGC, A> {
     /// The AIR (constraint system) for this instance.
     pub air: &'a A,
     /// Execution trace as a row-major matrix over the base field.
-    pub trace: &'a RowMajorMatrix<Val<SC>>,
+    pub trace: RowMajorMatrix<Val<SC>>,
     /// Public input values exposed by this instance.
     pub public_values: Vec<Val<SC>>,
+}
+
+// Hand-written rather than `#[derive(Clone)]`, which would add unneeded
+// `SC: Clone` / `A: Clone` bounds: `air` is a reference, cheap to copy
+// regardless of whether `A` itself implements `Clone`.
+impl<'a, SC: SGC, A> Clone for StarkInstance<'a, SC, A> {
+    fn clone(&self) -> Self {
+        Self {
+            air: self.air,
+            trace: self.trace.clone(),
+            public_values: self.public_values.clone(),
+        }
+    }
 }
 
 impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
@@ -63,7 +76,7 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
             .zip(public_values.iter())
             .map(|((air, trace), public_values)| Self {
                 air,
-                trace,
+                trace: (*trace).clone(),
                 public_values: public_values.clone(),
             })
             .collect()
@@ -102,7 +115,7 @@ pub fn prove_batch<
         + Clone,
 >(
     config: &SC,
-    instances: &[StarkInstance<'_, SC, A>],
+    instances: Vec<StarkInstance<'_, SC, A>>,
     prover_data: &ProverData<SC>,
 ) -> BatchProof<SC>
 where
@@ -121,8 +134,21 @@ where
     let pcs = config.pcs();
     let mut transcript = BatchTranscript::<SC>::new(config.initialise_challenger());
 
+    // Split each instance into its AIR, trace, and public values up front so
+    // the trace can be moved (not cloned) into the main commit below for
+    // instances that don't need it again afterward.
+    let n_instances = instances.len();
+    let mut airs: Vec<&A> = Vec::with_capacity(n_instances);
+    let mut traces: Vec<RowMajorMatrix<Val<SC>>> = Vec::with_capacity(n_instances);
+    let mut public_values: Vec<Vec<Val<SC>>> = Vec::with_capacity(n_instances);
+    for inst in instances {
+        airs.push(inst.air);
+        traces.push(inst.trace);
+        public_values.push(inst.public_values);
+    }
+
     // Collect per-instance degree information.
-    let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
+    let degrees: Vec<usize> = traces.iter().map(|t| t.height()).collect();
     let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
     // Extended degree accounts for the ZK blinding factor (2x when ZK is enabled).
     let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + config.is_zk()).collect();
@@ -149,20 +175,17 @@ where
         })
         .unzip();
 
-    // Extract AIRs and borrow public values; consume traces later without cloning.
-    let airs: Vec<&A> = instances.iter().map(|i| i.air).collect();
-    let pub_vals: Vec<&[Val<SC>]> = instances
-        .iter()
-        .map(|i| i.public_values.as_slice())
-        .collect();
-
     // Determine preprocessed widths and quotient chunk counts per instance.
+    //
+    // `log_num_quotient_chunks` is a pure function of each AIR's constraint
+    // degree, already computed once at keygen and shared via `CommonData`;
+    // only debug builds re-derive it here, to catch drift between the
+    // keygen-time and prove-time symbolic layouts.
     let mut preprocessed_widths = Vec::with_capacity(airs.len());
-    let (log_num_quotient_chunks, num_quotient_chunks): (Vec<usize>, Vec<usize>) = airs
+    let num_quotient_chunks: Vec<usize> = airs
         .iter()
-        .zip(pub_vals.iter())
         .enumerate()
-        .map(|(i, (air, _pv))| {
+        .map(|(i, air)| {
             // Width of the preprocessed trace for this instance (0 if absent).
             let pre_w = common
                 .preprocessed
@@ -171,33 +194,37 @@ where
                 .unwrap_or(0);
             preprocessed_widths.push(pre_w);
 
-            let layout = AirLayout {
-                preprocessed_width: pre_w,
-                main_width: air.width(),
-                num_public_values: air.num_public_values(),
-                num_periodic_columns: air.num_periodic_columns(),
-                ..Default::default()
-            };
-
-            // Infer the log of the quotient polynomial degree from symbolic analysis.
-            let lq_chunks =
-                info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
-                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
-                        air,
-                        layout,
-                        degrees[i],
-                        all_lookups[i],
-                        config.is_zk(),
-                        &lookup_gadget,
-                    )
-                });
+            let lq_chunks = common.log_num_quotient_chunks[i];
+            #[cfg(debug_assertions)]
+            {
+                let layout = AirLayout {
+                    preprocessed_width: pre_w,
+                    main_width: air.width(),
+                    num_public_values: air.num_public_values(),
+                    num_periodic_columns: air.num_periodic_columns(),
+                    ..Default::default()
+                };
+                let recomputed =
+                    info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
+                        get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                            air,
+                            layout,
+                            degrees[i],
+                            all_lookups[i],
+                            config.is_zk(),
+                            &lookup_gadget,
+                        )
+                    });
+                debug_assert_eq!(
+                    lq_chunks, recomputed,
+                    "common.log_num_quotient_chunks[{i}] diverged from a fresh symbolic recomputation"
+                );
+            }
             // Actual number of quotient chunks (doubled when ZK is enabled).
-            let n_chunks = 1 << (lq_chunks + config.is_zk());
-            (lq_chunks, n_chunks)
+            1 << (lq_chunks + config.is_zk())
         })
-        .unzip();
+        .collect();
 
-    let n_instances = airs.len();
     let widths: Vec<usize> = airs.iter().map(|a| A::width(a)).collect();
 
     // Transcript: Observe instance count and per-instance bindings.
@@ -214,14 +241,31 @@ where
     // Transcript: Main trace commitment
 
     // Build PCS inputs for every instance and commit in a single batch.
-    let main_commit_inputs = instances
-        .iter()
+    //
+    // An instance's trace is read again after the commit only if it has
+    // lookups (`generate_permutation` runs post-commit, once Fiat-Shamir
+    // challenges are drawn) or in debug builds (the cross-AIR `check_lookups`
+    // pass below touches every trace). Otherwise the already-owned trace is
+    // moved straight into the commit input instead of being cloned first.
+    let mut retained_traces: Vec<Option<RowMajorMatrix<Val<SC>>>> = Vec::with_capacity(n_instances);
+    let main_commit_inputs: Vec<_> = traces
+        .into_iter()
         .zip(ext_trace_domains.iter().cloned())
-        .map(|(inst, dom)| (dom, inst.trace.clone()))
-        .collect::<Vec<_>>();
+        .enumerate()
+        .map(|(i, (trace, dom))| {
+            if cfg!(debug_assertions) || !all_lookups[i].is_empty() {
+                let committed = trace.clone();
+                retained_traces.push(Some(trace));
+                (dom, committed)
+            } else {
+                retained_traces.push(None);
+                (dom, trace)
+            }
+        })
+        .collect();
     let (main_commit, main_data) = pcs.commit(main_commit_inputs);
 
-    transcript.observe_main(&main_commit, &pub_vals);
+    transcript.observe_main(&main_commit, &public_values);
     transcript.observe_preprocessed(&preprocessed_widths, common.preprocessed.as_ref());
 
     // Transcript: Lookup challenges and permutation traces
@@ -231,67 +275,65 @@ where
 
     // Generate permutation traces for instances that have lookups.
     let mut permutation_commit_inputs = Vec::with_capacity(n_instances);
-    instances
-        .iter()
-        .enumerate()
-        .zip(ext_trace_domains.iter().cloned())
-        .for_each(|((i, inst), ext_domain)| {
-            if !all_lookups[i].is_empty() {
-                // Compute the permutation argument trace and the AIR's single terminal.
-                let (generated_perm, terminal) = lookup_gadget.generate_permutation::<SC>(
-                    inst.trace,
-                    &inst.air.preprocessed_trace(),
-                    &inst.public_values,
-                    all_lookups[i],
-                    &challenges_per_instance[i],
-                );
+    for (i, ext_domain) in ext_trace_domains.iter().cloned().enumerate() {
+        if all_lookups[i].is_empty() {
+            continue;
+        }
 
-                // Record the AIR's terminal for transcript observation and proof emission.
-                lookup_terminals[i] = terminal;
+        let trace = retained_traces[i]
+            .as_ref()
+            .expect("retained for lookup-bearing instance");
+        // Keygen already materialized this instance's preprocessed trace;
+        // reuse it instead of re-running the AIR's (possibly expensive) generator.
+        let preprocessed_trace = &prover_data.prover_only.preprocessed_traces[i];
 
-                #[cfg(debug_assertions)]
-                {
-                    use crate::check_constraints::check_constraints;
+        // Compute the permutation argument trace and the AIR's single terminal.
+        let (generated_perm, terminal) = lookup_gadget.generate_permutation::<SC>(
+            trace,
+            preprocessed_trace,
+            &public_values[i],
+            all_lookups[i],
+            &challenges_per_instance[i],
+        );
 
-                    let preprocessed_trace = inst.air.preprocessed_trace();
+        // Record the AIR's terminal for transcript observation and proof emission.
+        lookup_terminals[i] = terminal;
 
-                    let perm_vals: Vec<SC::Challenge> = terminal.iter().map(|t| t.0).collect();
-                    let lookup_constraints_inputs = (all_lookups[i], &lookup_gadget);
-                    check_constraints(
-                        inst.air,
-                        inst.trace,
-                        &preprocessed_trace,
-                        &generated_perm,
-                        &challenges_per_instance[i],
-                        &perm_vals,
-                        &inst.public_values,
-                        lookup_constraints_inputs,
-                    );
-                }
+        #[cfg(debug_assertions)]
+        {
+            use crate::check_constraints::check_constraints;
 
-                // Consume the generated matrix directly; no extra clone before flattening.
-                permutation_commit_inputs.push((ext_domain, generated_perm.flatten_to_base()));
-            }
-        });
+            let perm_vals: Vec<SC::Challenge> = terminal.iter().map(|t| t.0).collect();
+            let lookup_constraints_inputs = (all_lookups[i], &lookup_gadget);
+            check_constraints(
+                airs[i],
+                trace,
+                preprocessed_trace,
+                &generated_perm,
+                &challenges_per_instance[i],
+                &perm_vals,
+                &public_values[i],
+                lookup_constraints_inputs,
+            );
+        }
+
+        // Consume the generated matrix directly; no extra clone before flattening.
+        permutation_commit_inputs.push((ext_domain, generated_perm.flatten_to_base()));
+    }
 
     // Debug-only: verify that all lookup sums balance across instances.
     #[cfg(debug_assertions)]
     {
         use p3_lookup::debug_util::{LookupDebugInstance, check_lookups};
 
-        let preprocessed_traces: Vec<_> = instances
-            .iter()
-            .map(|inst| inst.air.preprocessed_trace())
-            .collect();
-        let debug_instances: Vec<_> = instances
-            .iter()
-            .zip(preprocessed_traces.iter())
-            .zip(all_lookups.iter())
-            .map(|((inst, prep), lookups)| LookupDebugInstance {
-                main_trace: inst.trace,
-                preprocessed_trace: prep,
-                public_values: &inst.public_values,
-                lookups,
+        let debug_instances: Vec<_> = (0..n_instances)
+            .map(|i| LookupDebugInstance {
+                main_trace: retained_traces[i]
+                    .as_ref()
+                    .expect("all traces retained in debug builds"),
+                preprocessed_trace: &prover_data.prover_only.preprocessed_traces[i],
+                public_values: &public_values[i],
+                lookups: all_lookups[i],
                 permutation_challenges: &[],
             })
             .collect();
@@ -338,7 +380,7 @@ where
         .map(|i| {
             let _air_span = info_span!("compute quotient", air_idx = i).entered();
 
-            let log_chunks = log_num_quotient_chunks[i];
+            let log_chunks = common.log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
             // Build the quotient domain: disjoint from the trace domain,
             // with size = ext_degree * num_quotient_chunks.
@@ -408,7 +450,7 @@ where
             let q_values = quotient_values(
                 pcs,
                 airs[i],
-                pub_vals[i],
+                &public_values[i],
                 sym_layout,
                 trace_domains[i],
                 quotient_domain,

@@ -363,7 +363,7 @@ fn make_instances<'a>(
         .zip(public_values)
         .map(|((air, trace), pv)| StarkInstance {
             air,
-            trace,
+            trace: trace.clone(),
             public_values: pv.clone(),
         })
         .collect()
@@ -421,7 +421,7 @@ fn measure(config: &MyConfig, case: &Case, packed: bool) -> Metrics {
 
     // One-shot prove with a wall-clock estimate; the metrics table reads this.
     let t = Instant::now();
-    let proof = prove_batch(config, &instances, &prover_data);
+    let proof = prove_batch(config, instances.clone(), &prover_data);
     let prove_ms = t.elapsed().as_secs_f64() * 1e3;
 
     // Verify is the correctness gate: a malformed workload panics here.
@@ -437,7 +437,7 @@ fn measure(config: &MyConfig, case: &Case, packed: bool) -> Metrics {
 
     // Peak heap of a fresh prove, measured in isolation.
     arm_heap();
-    let proof = prove_batch(config, &instances, &prover_data);
+    let proof = prove_batch(config, instances.clone(), &prover_data);
     let peak_bytes = disarm_heap();
     drop(proof);
 
@@ -537,11 +537,11 @@ fn bench_lookup(c: &mut Criterion) {
             };
 
             group.bench_function(BenchmarkId::new("prove", id.clone()), |b| {
-                b.iter(|| prove_batch(&config, &instances, &prover_data));
+                b.iter(|| prove_batch(&config, instances.clone(), &prover_data));
             });
 
             // A committed proof to verify repeatedly.
-            let proof = prove_batch(&config, &instances, &prover_data);
+            let proof = prove_batch(&config, instances.clone(), &prover_data);
             group.bench_function(BenchmarkId::new("verify", id), |b| {
                 b.iter(|| {
                     verify_batch(&config, &airs, &proof, &public_values, &prover_data.common)

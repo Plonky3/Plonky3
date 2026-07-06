@@ -150,7 +150,7 @@ fn bench_prove_batch(c: &mut Criterion) {
             .iter()
             .map(|(air, trace, pis)| StarkInstance {
                 air,
-                trace,
+                trace: trace.clone(),
                 public_values: pis.clone(),
             })
             .collect();
@@ -159,7 +159,7 @@ fn bench_prove_batch(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("fib", n_instances), |b| {
             b.iter(|| {
-                let proof = prove_batch(&config, &instances, &prover_data);
+                let proof = prove_batch(&config, instances.clone(), &prover_data);
 
                 // Lightweight sanity check — only on the first iteration would be
                 // enough, but verify is cheap relative to prove so we keep it.

@@ -16,6 +16,7 @@ use p3_commit::Pcs;
 use p3_field::{Algebra, BasedVectorSpace};
 use p3_lookup::{InteractionSymbolicBuilder, LogUpGadget, Lookups};
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_uni_stark::Val;
 use p3_util::log2_strict_usize;
 
@@ -73,6 +74,13 @@ pub struct CommonData<SC: SGC> {
     /// There is one `Lookups<Val<SC>>` per STARK instance.
     /// They are stored in the same order as the STARK instance inputs provided to `new`.
     pub lookups: Vec<Lookups<Val<SC>>>,
+    /// Log2 of the number of quotient chunks each instance's AIR needs, one
+    /// entry per STARK instance, in the same order as `lookups`.
+    ///
+    /// This is a pure function of the AIR's constraint degree (and its
+    /// lookups), fixed at keygen time and shared verbatim by the prover and
+    /// verifier so neither has to re-run the symbolic degree analysis per proof.
+    pub log_num_quotient_chunks: Vec<usize>,
 }
 
 /// Prover-exclusive data not shared with the verifier.
@@ -85,6 +93,12 @@ pub struct ProverOnlyData<SC: SGC> {
     /// Present only when at least one instance has preprocessed columns.
     pub preprocessed_prover_data:
         Option<<SC::Pcs as Pcs<Challenge<SC>, SC::Challenger>>::ProverData>,
+    /// Preprocessed trace materialized at keygen, one entry per STARK
+    /// instance (`None` for instances without preprocessed columns).
+    ///
+    /// Kept so the prover doesn't need to call `Air::preprocessed_trace()`
+    /// again on every proof to feed lookup permutation generation.
+    pub preprocessed_traces: Vec<Option<RowMajorMatrix<Val<SC>>>>,
 }
 
 /// Combined prover data containing both common and prover-only data.
@@ -102,30 +116,37 @@ impl<SC: SGC> CommonData<SC> {
     pub const fn new(
         preprocessed: Option<GlobalPreprocessed<SC>>,
         lookups: Vec<Lookups<Val<SC>>>,
+        log_num_quotient_chunks: Vec<usize>,
     ) -> Self {
         Self {
             preprocessed,
             lookups,
+            log_num_quotient_chunks,
         }
     }
 
     /// Create [`CommonData`] with no preprocessed columns or lookups.
     ///
-    /// Use this when none of your [`Air`] implementations have preprocessed columns or lookups.
+    /// Use this when none of your [`Air`] implementations have preprocessed columns or lookups
+    /// and every AIR's constraint degree fits in a single quotient chunk (degree <= 3 without
+    /// ZK, <= 2 with ZK). For anything else, build `CommonData` via [`ProverData::from_instances`]
+    /// or [`ProverData::from_airs_and_degrees`] so `log_num_quotient_chunks` is derived correctly.
     pub fn empty(num_instances: usize) -> Self {
         let lookups = vec![Lookups::default(); num_instances];
         Self {
             preprocessed: None,
             lookups,
+            log_num_quotient_chunks: vec![0; num_instances],
         }
     }
 }
 
 impl<SC: SGC> ProverOnlyData<SC> {
     /// Create empty [`ProverOnlyData`] with no preprocessed prover data.
-    pub const fn empty() -> Self {
+    pub fn empty(num_instances: usize) -> Self {
         Self {
             preprocessed_prover_data: None,
+            preprocessed_traces: vec![None; num_instances],
         }
     }
 }
@@ -137,7 +158,7 @@ impl<SC: SGC> ProverData<SC> {
     pub fn empty(num_instances: usize) -> Self {
         Self {
             common: CommonData::empty(num_instances),
-            prover_only: ProverOnlyData::empty(),
+            prover_only: ProverOnlyData::empty(num_instances),
         }
     }
 }
@@ -201,6 +222,8 @@ where
 
         let mut instances_meta: Vec<Option<PreprocessedInstanceMeta>> =
             Vec::with_capacity(airs.len());
+        let mut preprocessed_traces: Vec<Option<RowMajorMatrix<Val<SC>>>> =
+            Vec::with_capacity(airs.len());
         let mut matrix_to_instance: Vec<usize> = Vec::new();
         let mut domains_and_traces: Vec<(Domain<SC>, _)> = Vec::new();
 
@@ -211,12 +234,14 @@ where
 
             let Some(preprocessed) = maybe_prep else {
                 instances_meta.push(None);
+                preprocessed_traces.push(None);
                 continue;
             };
 
             let width = preprocessed.width();
             if width == 0 {
                 instances_meta.push(None);
+                preprocessed_traces.push(None);
                 continue;
             }
 
@@ -232,6 +257,7 @@ where
             let domain = pcs.natural_domain_for_degree(ext_degree);
             let matrix_index = domains_and_traces.len();
 
+            preprocessed_traces.push(Some(preprocessed.clone()));
             domains_and_traces.push((domain, preprocessed));
             matrix_to_instance.push(i);
 
@@ -263,6 +289,7 @@ where
         // An AIR with no spare degree gets a budget that folds nothing.
         // Prover and verifier fold deterministically, so the layout needs no exchange.
         let lookup_gadget = LogUpGadget::new();
+        let mut log_num_quotient_chunks: Vec<usize> = Vec::with_capacity(airs.len());
         let lookups: Vec<Lookups<Val<SC>>> = airs
             .iter()
             .zip(trace_ext_degree_bits.iter())
@@ -282,6 +309,7 @@ where
                         is_zk,
                         &lookup_gadget,
                     );
+                log_num_quotient_chunks.push(log_chunks);
 
                 // Largest fraction-pin degree still inside that bucket.
                 //
@@ -312,9 +340,11 @@ where
             common: CommonData {
                 preprocessed,
                 lookups,
+                log_num_quotient_chunks,
             },
             prover_only: ProverOnlyData {
                 preprocessed_prover_data,
+                preprocessed_traces,
             },
         }
     }
