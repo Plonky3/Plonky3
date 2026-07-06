@@ -36,9 +36,19 @@ const M31_WIDTH: usize = 16;
 const M31_NUM_FULL_ROUNDS: usize = 5;
 const M31_NUM_BARS: usize = 8;
 const M31_FIELD_BITS: usize = 31;
+// Mersenne31's modulus (0x7FFFFFFF) is all ones, so NUM_MATCH_FLAGS equals
+// FIELD_BITS exactly (every bit position needs a committed flag).
+const M31_NUM_MATCH_FLAGS: usize = 31;
 
 fn build_monolith_air_m31() -> (
-    MonolithAir<M31Val, M31_WIDTH, M31_NUM_FULL_ROUNDS, M31_NUM_BARS, M31_FIELD_BITS>,
+    MonolithAir<
+        M31Val,
+        M31_WIDTH,
+        M31_NUM_FULL_ROUNDS,
+        M31_NUM_BARS,
+        M31_FIELD_BITS,
+        M31_NUM_MATCH_FLAGS,
+    >,
     MonolithBarsM31,
 ) {
     let bars = MonolithBarsM31;
@@ -49,6 +59,7 @@ fn build_monolith_air_m31() -> (
         M31_NUM_FULL_ROUNDS,
         M31_NUM_BARS,
         M31_FIELD_BITS,
+        M31_NUM_MATCH_FLAGS,
     >::extract_mds_matrix(&mds);
     let monolith = MonolithMersenne31::new(bars, mds);
     let air = MonolithAir::new(monolith.round_constants, mds_matrix, MERSENNE31_LIMB_BITS);
@@ -130,6 +141,7 @@ fn bench_trace_generation_m31(c: &mut Criterion) {
                         M31_NUM_FULL_ROUNDS,
                         M31_NUM_BARS,
                         M31_FIELD_BITS,
+                        M31_NUM_MATCH_FLAGS,
                     >(inputs, &air, &bars, 0)
                 });
             },
@@ -196,9 +208,19 @@ const GL_WIDTH: usize = 8;
 const GL_NUM_FULL_ROUNDS: usize = 5;
 const GL_NUM_BARS: usize = 4;
 const GL_FIELD_BITS: usize = 64;
+// Goldilocks's modulus (0xFFFFFFFF00000001) has Hamming weight 33, so 31 of
+// its 64 bit positions need no committed match-flag cell.
+const GL_NUM_MATCH_FLAGS: usize = 33;
 
 fn build_monolith_air_goldilocks() -> (
-    MonolithAir<GlVal, GL_WIDTH, GL_NUM_FULL_ROUNDS, GL_NUM_BARS, GL_FIELD_BITS>,
+    MonolithAir<
+        GlVal,
+        GL_WIDTH,
+        GL_NUM_FULL_ROUNDS,
+        GL_NUM_BARS,
+        GL_FIELD_BITS,
+        GL_NUM_MATCH_FLAGS,
+    >,
     MonolithBarsGoldilocks<8>,
 ) {
     let bars = MonolithBarsGoldilocks::<8>;
@@ -209,6 +231,7 @@ fn build_monolith_air_goldilocks() -> (
         GL_NUM_FULL_ROUNDS,
         GL_NUM_BARS,
         GL_FIELD_BITS,
+        GL_NUM_MATCH_FLAGS,
     >::extract_mds_matrix(&mds);
     let monolith: MonolithGoldilocks8<_, GL_WIDTH, 5> = MonolithGoldilocks8::new(bars, mds);
     let air = MonolithAir::new(monolith.round_constants, mds_matrix, GOLDILOCKS_8_LIMB_BITS);
@@ -297,6 +320,7 @@ fn bench_trace_generation_goldilocks(c: &mut Criterion) {
                         GL_NUM_FULL_ROUNDS,
                         GL_NUM_BARS,
                         GL_FIELD_BITS,
+                        GL_NUM_MATCH_FLAGS,
                     >(inputs, &air, &bars, 0)
                 });
             },

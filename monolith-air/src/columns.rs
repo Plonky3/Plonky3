@@ -18,7 +18,8 @@
 //!
 //! - **Inputs**: `WIDTH` columns.
 //! - **Per round** (NUM_FULL_ROUNDS + 1 total rounds):
-//!   `NUM_BARS * FIELD_BITS` (bit decomposition)
+//!   `NUM_BARS * (2 * FIELD_BITS + NUM_MATCH_FLAGS)` (bit decomposition,
+//!   chi products, and match flags)
 //!   + `NUM_BARS` (bar outputs)
 //!   + `WIDTH` (post-state).
 //!
@@ -47,6 +48,7 @@ pub struct MonolithCols<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
+    const NUM_MATCH_FLAGS: usize,
 > {
     /// The initial permutation state before any operations are applied.
     pub inputs: [T; WIDTH],
@@ -55,21 +57,27 @@ pub struct MonolithCols<
     ///
     /// Each round applies: Bars → Bricks → Concrete → AddRoundConstants.
     /// The `post` field in each round stores the state after all four operations.
-    pub full_rounds: [MonolithRoundCols<T, WIDTH, NUM_BARS, FIELD_BITS>; NUM_FULL_ROUNDS],
+    pub full_rounds:
+        [MonolithRoundCols<T, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>; NUM_FULL_ROUNDS],
 
     /// Columns for the final round (no round constants).
     ///
     /// The final round applies: Bars → Bricks → Concrete.
     /// The `post` field stores the final permutation output.
-    pub final_round: MonolithRoundCols<T, WIDTH, NUM_BARS, FIELD_BITS>,
+    pub final_round: MonolithRoundCols<T, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>,
 }
 
 /// Columns for a single Monolith round.
 ///
 /// Each round applies: Bars → Bricks → Concrete (→ AddRC for non-final rounds).
 #[repr(C)]
-pub struct MonolithRoundCols<T, const WIDTH: usize, const NUM_BARS: usize, const FIELD_BITS: usize>
-{
+pub struct MonolithRoundCols<
+    T,
+    const WIDTH: usize,
+    const NUM_BARS: usize,
+    const FIELD_BITS: usize,
+    const NUM_MATCH_FLAGS: usize,
+> {
     /// Bit decomposition of the input to each Bar application (LSB first).
     ///
     /// For each of the `NUM_BARS` elements entering the Bars layer, we store
@@ -98,16 +106,25 @@ pub struct MonolithRoundCols<T, const WIDTH: usize, const NUM_BARS: usize, const
     ///   and a degree-2 XOR, capping the AIR at degree 3.
     pub bars_chi_products: [[T; FIELD_BITS]; NUM_BARS],
 
-    /// Running "still matches the modulus prefix" flag, one cell per input bit.
+    /// Running "still matches the modulus prefix" flag, one cell per
+    /// modulus **one**-bit.
     ///
     /// # Walk (MSB to LSB)
     ///
     /// - Start with `m = 1` above the most significant bit.
     /// - For each bit position i from MSB down to LSB:
-    ///   - If the modulus has 1 at i: `m_i = m_{i+1} * x_i`.
-    ///   - If the modulus has 0 at i: `m_i = m_{i+1}` plus the side constraint
-    ///     `m_{i+1} * x_i = 0` (any 1 in x while still matching means `x > p`).
-    /// - Final: `m_0 = 0`, ruling out the encoding `x == p`.
+    ///   - If the modulus has 1 at i: commit the next flag cell,
+    ///     `m_i = m_{i+1} * x_i`.
+    ///   - If the modulus has 0 at i: no cell is committed; `m_i = m_{i+1}`
+    ///     is enforced only through the side constraint
+    ///     `m_{i+1} * x_i = 0` (any 1 in x while still matching means
+    ///     `x > p`), with `m_{i+1}` reused directly from the previous step.
+    /// - Final: the last committed flag is `0`, ruling out the encoding
+    ///   `x == p`.
+    ///
+    /// A modulus-zero bit is a pure copy of the previous flag, so it needs
+    /// no committed column of its own — only `NUM_MATCH_FLAGS` cells (the
+    /// modulus's Hamming weight) are stored per Bar, one per one-bit.
     ///
     /// # Why this column exists
     ///
@@ -115,7 +132,7 @@ pub struct MonolithRoundCols<T, const WIDTH: usize, const NUM_BARS: usize, const
     ///   bit encoding for field elements already represented canonically.
     /// - The walk works for any prime, including those whose forbidden range
     ///   covers many bit patterns (e.g. Goldilocks).
-    pub bars_match_flags: [[T; FIELD_BITS]; NUM_BARS],
+    pub bars_match_flags: [[T; NUM_MATCH_FLAGS]; NUM_BARS],
 
     /// Committed output of each Bar (S-box) application.
     ///
@@ -143,8 +160,9 @@ pub const fn num_cols<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
+    const NUM_MATCH_FLAGS: usize,
 >() -> usize {
-    size_of::<MonolithCols<u8, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>>()
+    size_of::<MonolithCols<u8, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>>()
 }
 
 impl<
@@ -153,14 +171,17 @@ impl<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
-> Borrow<MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>> for [T]
+    const NUM_MATCH_FLAGS: usize,
+> Borrow<MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>> for [T]
 {
-    fn borrow(&self) -> &MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS> {
+    fn borrow(
+        &self,
+    ) -> &MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS> {
         // Reinterpret the flat slice as the column struct.
         // Safety: `#[repr(C)]` guarantees predictable layout and `T` has
         // alignment 1 for the `u8` case used in `num_cols`.
         let (prefix, shorts, suffix) = unsafe {
-            self.align_to::<MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>>()
+            self.align_to::<MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>>()
         };
 
         // No padding before or after the struct.
@@ -179,11 +200,15 @@ impl<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
-> BorrowMut<MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>> for [T]
+    const NUM_MATCH_FLAGS: usize,
+> BorrowMut<MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>>
+    for [T]
 {
-    fn borrow_mut(&mut self) -> &mut MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS> {
+    fn borrow_mut(
+        &mut self,
+    ) -> &mut MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS> {
         let (prefix, shorts, suffix) = unsafe {
-            self.align_to_mut::<MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>>()
+            self.align_to_mut::<MonolithCols<T, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>>()
         };
         debug_assert!(prefix.is_empty(), "Alignment should match");
         debug_assert!(suffix.is_empty(), "Alignment should match");

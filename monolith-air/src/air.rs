@@ -75,6 +75,7 @@ pub struct MonolithAir<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
+    const NUM_MATCH_FLAGS: usize,
 > {
     /// Round constants for each of the `NUM_FULL_ROUNDS` rounds.
     ///
@@ -107,7 +108,8 @@ impl<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
-> MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>
+    const NUM_MATCH_FLAGS: usize,
+> MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>
 {
     /// Build the AIR from a permutation's parameters.
     ///
@@ -127,6 +129,12 @@ impl<
     /// - Every non-trailing entry equals 8.
     /// - Trailing entry lies in `3..=8`.
     ///
+    /// # Match-flag width invariant
+    ///
+    /// - `NUM_MATCH_FLAGS` must equal the modulus's Hamming weight: a
+    ///   committed flag is stored only at modulus one-bits, since a
+    ///   modulus-zero bit's flag is a pure copy of the previous one.
+    ///
     /// # Panics
     ///
     /// - Field-bit parameter exceeds 63.
@@ -134,6 +142,7 @@ impl<
     /// - Bar applications exceed the state width.
     /// - Any non-trailing limb is not 8.
     /// - Trailing limb is outside `3..=8`.
+    /// - `NUM_MATCH_FLAGS` does not equal the modulus's Hamming weight.
     pub fn new(
         round_constants: [[F; WIDTH]; NUM_FULL_ROUNDS],
         mds_matrix: [[F; WIDTH]; WIDTH],
@@ -195,7 +204,15 @@ impl<
         //
         //     modulus_lsb_to_msb[i] = (ORDER >> i) & 1 == 1
         let modulus = F::ORDER_U64;
-        let modulus_lsb_to_msb = core::array::from_fn(|i| (modulus >> i) & 1 == 1);
+        let modulus_lsb_to_msb: [bool; FIELD_BITS] =
+            core::array::from_fn(|i| (modulus >> i) & 1 == 1);
+
+        // Only modulus one-bits get a committed match-flag cell.
+        assert_eq!(
+            modulus_lsb_to_msb.iter().filter(|&&b| b).count(),
+            NUM_MATCH_FLAGS,
+            "NUM_MATCH_FLAGS must equal the modulus's Hamming weight"
+        );
 
         Self {
             round_constants,
@@ -254,11 +271,12 @@ impl<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
-> BaseAir<F> for MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>
+    const NUM_MATCH_FLAGS: usize,
+> BaseAir<F> for MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>
 {
     /// Returns the number of trace columns (the AIR width).
     fn width(&self) -> usize {
-        num_cols::<WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>()
+        num_cols::<WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>()
     }
 
     /// No next-row columns. Each permutation is fully constrained within one row.
@@ -273,12 +291,19 @@ impl<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
-> Air<AB> for MonolithAir<AB::F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>
+    const NUM_MATCH_FLAGS: usize,
+> Air<AB> for MonolithAir<AB::F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local: &MonolithCols<AB::Var, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS> =
-            main.current_slice().borrow();
+        let local: &MonolithCols<
+            AB::Var,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+        > = main.current_slice().borrow();
 
         // Initialize the running state from the committed input columns.
         let mut state: [AB::Expr; WIDTH] = local.inputs.map(|x| x.into());
@@ -289,7 +314,7 @@ impl<
 
         // Full rounds: Bars → Bricks → Concrete → AddRoundConstants.
         for round_idx in 0..NUM_FULL_ROUNDS {
-            eval_round::<AB, WIDTH, NUM_BARS, FIELD_BITS>(
+            eval_round::<AB, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>(
                 &mut state,
                 &local.full_rounds[round_idx],
                 &self.mds_matrix,
@@ -301,7 +326,7 @@ impl<
         }
 
         // Final round: Bars → Bricks → Concrete (no round constants).
-        eval_round::<AB, WIDTH, NUM_BARS, FIELD_BITS>(
+        eval_round::<AB, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>(
             &mut state,
             &local.final_round,
             &self.mds_matrix,
@@ -330,9 +355,10 @@ fn eval_round<
     const WIDTH: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
+    const NUM_MATCH_FLAGS: usize,
 >(
     state: &mut [AB::Expr; WIDTH],
-    round: &MonolithRoundCols<AB::Var, WIDTH, NUM_BARS, FIELD_BITS>,
+    round: &MonolithRoundCols<AB::Var, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS>,
     mds_matrix: &[[AB::F; WIDTH]; WIDTH],
     round_constants: Option<&[AB::F; WIDTH]>,
     limb_bits: &[usize],
@@ -360,7 +386,7 @@ fn eval_round<
         // Lift committed cells to expressions for symbolic algebra.
         let bits: [AB::Expr; FIELD_BITS] = input_bits.map(|b| b.into());
         let chi: [AB::Expr; FIELD_BITS] = chi_products.map(|b| b.into());
-        let mflag: [AB::Expr; FIELD_BITS] = match_flags.map(|b| b.into());
+        let mflag: [AB::Expr; NUM_MATCH_FLAGS] = match_flags.map(|b| b.into());
 
         // Reconstruction:  sum_i bits[i] * 2^i  ==  state[bar_idx].
         let reconstructed: AB::Expr = pack_bits_le(bits.iter().cloned());
@@ -376,25 +402,32 @@ fn eval_round<
         // Define `m_i` = "bits[i..FIELD_BITS] still match the modulus prefix".
         // Start above the MSB with `m_top = 1` (no info yet):
         //
-        //     p_i = 1 : m_i = m_{i+1} * bits[i]
-        //     p_i = 0 : m_i = m_{i+1}                  (linear pass-through)
-        //               assert m_{i+1} * bits[i] = 0   (a 1 here would force X > p)
+        //     p_i = 1 : m_i = m_{i+1} * bits[i]           (committed cell)
+        //     p_i = 0 : m_i = m_{i+1}                     (no cell; reuse m_{i+1})
+        //               assert m_{i+1} * bits[i] = 0      (a 1 here would force X > p)
         //
-        // Final assertion `m_0 = 0` rejects the encoding `bits == p`, which
+        // Only modulus one-bits commit a flag cell, so `mflag` has
+        // `NUM_MATCH_FLAGS` entries (the modulus's Hamming weight) rather
+        // than one per bit position; `flag_idx` walks it in step with the
+        // one-bits encountered from the MSB down.
+        //
+        // Final assertion `prev = 0` rejects the encoding `bits == p`, which
         // is the only forbidden one in `[p, 2^FIELD_BITS - 1]` that survives
         // the side-constraints above.
         let mut prev = AB::Expr::ONE;
+        let mut flag_idx = 0;
         for i in (0..FIELD_BITS).rev() {
-            let m_i = mflag[i].clone();
             let x_i = bits[i].clone();
             if modulus_lsb_to_msb[i] {
-                builder.assert_eq(m_i.clone(), prev.clone() * x_i);
+                let m_i = mflag[flag_idx].clone();
+                builder.assert_eq(m_i.clone(), prev * x_i);
+                prev = m_i;
+                flag_idx += 1;
             } else {
-                builder.assert_eq(m_i.clone(), prev.clone());
                 builder.assert_zero(prev.clone() * x_i);
             }
-            prev = m_i;
         }
+        debug_assert_eq!(flag_idx, NUM_MATCH_FLAGS);
         builder.assert_zero(prev);
     }
 
