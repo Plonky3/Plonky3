@@ -667,8 +667,8 @@ where
                 log_inv_rate: last.log_inv_rate,
                 domain_size,
                 folded_domain_gen,
-                // Inherit OOD count from the last intermediate round.
-                ood_samples: last.ood_samples,
+                // The final phase has no OOD step; this field is unused here.
+                ood_samples: 0,
                 folding_pow_bits: self.final_folding_pow_bits,
             }
         }

@@ -73,7 +73,7 @@ where
         F: Default,
     {
         const {
-            assert!(RATE > 0 && RATE < WIDTH);
+            assert!(RATE > 0 && RATE < WIDTH && RATE <= 255);
         }
         Self {
             sponge_state: [F::default(); WIDTH],

@@ -22,11 +22,13 @@ impl<F, Mds, const WIDTH: usize, const ALPHA: u64> Rescue<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + PermutationMonomial<ALPHA>,
 {
-    pub const fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
+    /// `round_constants` must have length `2 * WIDTH * num_rounds`.
+    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
         const {
             assert!(WIDTH > 0);
             assert!(ALPHA > 1);
         }
+        assert_eq!(round_constants.len(), 2 * WIDTH * num_rounds);
         Self {
             num_rounds,
             mds,
@@ -90,6 +92,7 @@ where
     {
         let num_constants = 2 * WIDTH * num_rounds;
         let bytes_per_constant = F::bits().div_ceil(8) + 1;
+        assert!((1..=16).contains(&bytes_per_constant));
         let num_bytes = bytes_per_constant * num_constants;
 
         let seed_string = format!(
@@ -107,8 +110,8 @@ where
                 let integer = chunk
                     .iter()
                     .rev()
-                    .fold(0, |acc, &byte| (acc << 8) + byte as u64);
-                F::from_u64(integer)
+                    .fold(0u128, |acc, &byte| (acc << 8) | byte as u128);
+                F::from_u128(integer)
             })
             .collect()
     }

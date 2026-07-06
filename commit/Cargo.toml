@@ -10,7 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["test-utils"]
+default = []
 test-utils = ["p3-challenger", "p3-dft"]
 
 [dependencies]

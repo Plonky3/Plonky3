@@ -348,13 +348,21 @@ where
             let log_num_chunks = log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
-            let (_, quotient_domain_size) = checked_log_size_sum(ext_db, log_num_chunks)
-                .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
-                    air: Some(i),
-                    maximum: usize::BITS as usize - 1,
-                    got: ext_db.saturating_add(log_num_chunks),
+            let (quotient_domain_log_size, quotient_domain_size) =
+                checked_log_size_sum(ext_db, log_num_chunks).ok_or_else(|| {
+                    InvalidProofShapeError::QuotientDomainTooLarge {
+                        air: Some(i),
+                        maximum: usize::BITS as usize - 1,
+                        got: ext_db.saturating_add(log_num_chunks),
+                    }
                 })?;
-            let qdom = ext_dom.create_disjoint_domain(quotient_domain_size);
+            let qdom = ext_dom
+                .try_create_disjoint_domain(quotient_domain_size)
+                .ok_or(InvalidProofShapeError::QuotientDomainTooLarge {
+                    air: Some(i),
+                    maximum: pcs.log_max_lde_height(),
+                    got: quotient_domain_log_size,
+                })?;
             Ok(qdom.split_domains(n_chunks))
         })
         .collect::<Result<Vec<_>, InvalidProofShapeError>>()?;

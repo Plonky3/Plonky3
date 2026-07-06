@@ -78,7 +78,26 @@ pub trait PolynomialSpace: Copy {
     /// smaller than the `2`-adicity of the field.
     ///
     /// This fixes a canonical choice for prover/verifier determinism and LDE caching.
-    fn create_disjoint_domain(&self, min_size: usize) -> Self;
+    ///
+    /// # Panics
+    ///
+    /// Panics if `min_size` is too large for a disjoint domain to be constructed. Verifier-side
+    /// code processing untrusted input should prefer [`Self::try_create_disjoint_domain`], which
+    /// reports this condition as `None` instead of panicking.
+    fn create_disjoint_domain(&self, min_size: usize) -> Self {
+        self.try_create_disjoint_domain(min_size)
+            .unwrap_or_else(|| {
+                panic!("cannot construct a domain of size at least {min_size} disjoint from `self`")
+            })
+    }
+
+    /// The non-panicking counterpart to [`Self::create_disjoint_domain`].
+    ///
+    /// Returns `None` instead of panicking when `min_size` is too large for a disjoint domain
+    /// to be constructed (for two-adic domains, this happens when `log_2(min_size)` is not
+    /// smaller than the field's `2`-adicity). Intended for verifier-side code, which must
+    /// reject malformed or adversarial input rather than panic on it.
+    fn try_create_disjoint_domain(&self, min_size: usize) -> Option<Self>;
 
     /// Split the `PolynomialSpace` into `num_chunks` smaller `PolynomialSpaces` of equal size.
     ///
@@ -143,6 +162,15 @@ pub trait PolynomialSpace: Copy {
     /// gets value `col[i % col.len()]`. The default expands to trace size and
     /// delegates to [`Self::evaluate_polynomial_at`]; domains with algebraic
     /// structure (e.g. two-adic cosets) can override for O(period) work.
+    ///
+    /// # Performance
+    ///
+    /// This default is O(`self.size()`) time and allocates a `self.size()`-length
+    /// vector, versus O(`col.len()`) for an override that exploits the domain's
+    /// algebraic structure (e.g. two-adic cosets folding onto a sub-coset). For a
+    /// small period on a large trace this is a large (potentially many-orders-of-
+    /// magnitude) verifier slowdown. Any new `PolynomialSpace` implementor should
+    /// override this method rather than rely on the default.
     fn evaluate_periodic_column_at<Ext: ExtensionField<Self::Val>>(
         &self,
         col: &[Self::Val],
@@ -192,10 +220,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// is a fixed generator of `F^*` and `K` is the unique two-adic subgroup
     /// of with size `2^(ceil(log_2(min_size)))`.
     ///
-    /// # Panics
-    ///
-    /// This will panic if `min_size` > `1 << Val::TWO_ADICITY`.
-    fn create_disjoint_domain(&self, min_size: usize) -> Self {
+    /// Returns `None` if `min_size` > `1 << Val::TWO_ADICITY`.
+    fn try_create_disjoint_domain(&self, min_size: usize) -> Option<Self> {
         // We provide a short proof that these cosets are always disjoint:
         //
         // Assume without loss of generality that `|H| <= min_size <= |K|`.
@@ -206,8 +232,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         //
         // Thus `gH` and `gfK` are disjoint.
 
-        // This panics if (and only if) `min_size` > `1 << Val::TWO_ADICITY`.
-        Self::new(self.shift() * Val::GENERATOR, log2_ceil_usize(min_size)).unwrap()
+        // This is `None` if (and only if) `min_size` > `1 << Val::TWO_ADICITY`.
+        Self::new(self.shift() * Val::GENERATOR, log2_ceil_usize(min_size))
     }
 
     /// Given the coset `gH` and generator `h` of `H`, let `K = H^{num_chunks}`

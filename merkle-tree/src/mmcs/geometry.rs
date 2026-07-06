@@ -502,6 +502,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn replay_arity_and_positions_rejects_oversized_proof_len() {
+        // Once the walk reaches the root, there is no level left to replay.
+        // An oversized `num_opening_proofs` must be rejected, not answered
+        // with fabricated trailing schedule entries.
+        let mut rng = SmallRng::seed_from_u64(321);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 32, 4);
+        let dims = vec![mat.dimensions()];
+        let (_commit, prover_data) = mmcs.commit(vec![mat]);
+
+        let index = 5usize;
+        let opening = mmcs.open_batch(index, &prover_data);
+        let (_opened_values, proof) = opening.unpack();
+
+        let result = mmcs.replay_arity_and_positions(&dims, index, proof.len() + 1);
+        assert!(
+            matches!(
+                result,
+                Err(MerkleTreeError::WrongHeight {
+                    expected_proof_len,
+                    num_siblings,
+                }) if expected_proof_len == proof.len() && num_siblings == proof.len() + 1
+            ),
+            "an oversized proof length must be rejected instead of fabricating levels, got {result:?}"
+        );
+    }
+
     mod proptests {
         use alloc::vec::Vec;
 

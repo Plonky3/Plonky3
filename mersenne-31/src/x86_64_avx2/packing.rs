@@ -365,8 +365,10 @@ fn square_unred(x: __m256i) -> __m256i {
 }
 
 /// Compute the permutation x -> x^5 on Mersenne-31 field elements
-/// represented as values in {0, ..., P}. If the inputs do not conform
-/// to this representation, the result is undefined.
+/// represented as signed values in {-P, ..., P}, producing output in {0, ..., P}.
+/// If the inputs do not conform to this representation, the result is undefined.
+/// The Poseidon2 round-constant addition in `input_plus_rc` (utils.rs) relies on
+/// this signed input range, since round constants are added in their negative form.
 #[inline(always)]
 pub(crate) fn exp5(x: __m256i) -> __m256i {
     unsafe {

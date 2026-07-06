@@ -347,13 +347,12 @@ where
         let openings = if round_index == self.n_rounds() {
             &proof.final_openings
         } else {
+            // `verify` pins `proof.rounds.len() == n_rounds` at entry and only
+            // ever calls this with `round_index < n_rounds`, so this is always in bounds.
             &proof
                 .rounds
                 .get(round_index)
-                .ok_or_else(|| VerifierError::MerkleProofInvalid {
-                    position: 0,
-                    reason: format!("Round {round_index} missing from proof"),
-                })?
+                .expect("round_index is in bounds: verify() pins proof.rounds.len() == n_rounds")
                 .openings
         };
 
