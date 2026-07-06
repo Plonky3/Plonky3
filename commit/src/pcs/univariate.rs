@@ -75,9 +75,7 @@ where
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
     /// The base-2 logarithm of the largest evaluation domain this PCS can construct.
-    fn log_max_lde_height(&self) -> usize {
-        usize::BITS as usize - 1
-    }
+    fn log_max_lde_height(&self) -> usize;
 
     /// Given a collection of evaluation matrices, produce a binding commitment to
     /// the polynomials defined by those evaluations. If `zk` is enabled, the evaluations are
