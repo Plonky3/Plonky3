@@ -8,7 +8,7 @@ use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use thiserror::Error;
 
-use super::{FoldingFactor, FoldingFactorError, ProtocolParameters};
+use super::{Basis, FoldingFactor, FoldingFactorError, ProtocolParameters};
 
 /// Reasons a set of user-facing parameters cannot form a valid WHIR configuration.
 #[derive(Debug, Error)]
@@ -167,6 +167,12 @@ where
     pub final_sumcheck_rounds: usize,
     /// PoW bits for the final folding sumcheck.
     pub final_folding_pow_bits: usize,
+    /// Polynomial basis the prover and verifier operate in.
+    ///
+    /// Defaults to [`Basis::Evaluation`]; set via [`WhirConfig::with_basis`] to
+    /// opt into the projective (monomial-basis) protocol of eprint 2026/762.
+    /// The two bases are proof-incompatible and domain-separated.
+    pub basis: Basis,
     /// Phantom marker for the extension field type.
     pub _extension_field: PhantomData<EF>,
     /// Phantom marker for the challenger type.
@@ -497,6 +503,7 @@ where
             final_pow_bits: ceil_pow_bits(final_pow_bits),
             final_sumcheck_rounds,
             final_folding_pow_bits: ceil_pow_bits(final_folding_pow_bits),
+            basis: Basis::Evaluation,
             _extension_field: PhantomData,
             _challenger: PhantomData,
         };
@@ -524,6 +531,22 @@ where
         }
 
         Ok(config)
+    }
+
+    /// Opts this configuration into a polynomial [`Basis`].
+    ///
+    /// Defaults to [`Basis::Evaluation`]. Setting [`Basis::Projective`] runs
+    /// the monomial-basis protocol of eprint 2026/762 end to end; the prover
+    /// and verifier must agree on the basis, and the transcripts of the two
+    /// bases are domain-separated.
+    ///
+    /// The projective basis is supported for prefix layouts on the plain
+    /// (non-hiding) pipeline only; the suffix layout and the zk path reject
+    /// or do not consult it.
+    #[must_use]
+    pub const fn with_basis(mut self, basis: Basis) -> Self {
+        self.basis = basis;
+        self
     }
 
     /// Returns the size of the initial evaluation domain.
