@@ -81,10 +81,16 @@ impl<
     ) -> Result<Self, RoundConstantsShapeError> {
         let initial = external.get_initial_constants();
         let terminal = external.get_terminal_constants();
-        if initial.len() != HALF_FULL_ROUNDS || terminal.len() != HALF_FULL_ROUNDS {
+        if initial.len() != HALF_FULL_ROUNDS {
             return Err(RoundConstantsShapeError::FullRounds {
                 expected: HALF_FULL_ROUNDS,
-                got: initial.len().max(terminal.len()),
+                got: initial.len(),
+            });
+        }
+        if terminal.len() != HALF_FULL_ROUNDS {
+            return Err(RoundConstantsShapeError::FullRounds {
+                expected: HALF_FULL_ROUNDS,
+                got: terminal.len(),
             });
         }
         if internal.len() != PARTIAL_ROUNDS {
@@ -113,5 +119,78 @@ impl<
     /// The terminal (ending) full-round constants.
     pub const fn ending_full_round_constants(&self) -> &[[F; WIDTH]; HALF_FULL_ROUNDS] {
         &self.ending_full_round_constants
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use p3_baby_bear::BabyBear;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+
+    const WIDTH: usize = 16;
+    const HALF_FULL_ROUNDS: usize = 4;
+    const PARTIAL_ROUNDS: usize = 13;
+
+    fn layers(
+        half_full_rounds: usize,
+        partial_rounds: usize,
+    ) -> (ExternalLayerConstants<BabyBear, WIDTH>, Vec<BabyBear>) {
+        let mut rng = SmallRng::seed_from_u64(0);
+        let external = ExternalLayerConstants::new_from_rng(2 * half_full_rounds, &mut rng);
+        let internal = rng
+            .sample_iter(StandardUniform)
+            .take(partial_rounds)
+            .collect();
+        (external, internal)
+    }
+
+    #[test]
+    fn try_from_layers_accepts_matching_shape() {
+        let (external, internal) = layers(HALF_FULL_ROUNDS, PARTIAL_ROUNDS);
+        assert!(
+            RoundConstants::<BabyBear, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>::try_from_layers(
+                &external, &internal,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn try_from_layers_reports_the_actual_full_round_length() {
+        let (external, internal) = layers(HALF_FULL_ROUNDS - 1, PARTIAL_ROUNDS);
+        let err =
+            RoundConstants::<BabyBear, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>::try_from_layers(
+                &external, &internal,
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            RoundConstantsShapeError::FullRounds {
+                expected: HALF_FULL_ROUNDS,
+                got: HALF_FULL_ROUNDS - 1,
+            }
+        );
+    }
+
+    #[test]
+    fn try_from_layers_reports_the_actual_partial_round_length() {
+        let (external, internal) = layers(HALF_FULL_ROUNDS, PARTIAL_ROUNDS - 2);
+        let err =
+            RoundConstants::<BabyBear, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>::try_from_layers(
+                &external, &internal,
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            RoundConstantsShapeError::PartialRounds {
+                expected: PARTIAL_ROUNDS,
+                got: PARTIAL_ROUNDS - 2,
+            }
+        );
     }
 }
