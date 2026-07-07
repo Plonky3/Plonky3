@@ -3,12 +3,13 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpeningRef, Mmcs};
+use p3_field::ExtensionField;
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field};
 use p3_fri::verifier::FriError;
 use p3_fri::{FriFoldingStrategy, FriParameters};
 use p3_matrix::Dimensions;
 
+use crate::folding::{fold_row_with_inv_twiddle, query_x_twiddles_inv};
 use crate::{CircleCommitPhaseProofStep, CircleFriProof};
 
 pub fn verify<Folding, Val, Challenge, M, Challenger>(
@@ -207,16 +208,23 @@ where
             .zip(proof.commit_phase_commits.iter())
             .zip(qp.commit_phase_openings.iter());
 
+        // The whole x-fold chain for this query is index-derived (no Merkle or proof data
+        // needed), so it is precomputed and batch-inverted once up front instead of each
+        // round recomputing its own twiddle from scratch.
+        let top_level_index = index >> folding.extra_query_index_bits();
+        let x_twiddle_inv =
+            query_x_twiddles_inv::<Val>(top_level_index, log_max_height, log_arities.len());
+
         // Walk the FRI folding chain: at each round, verify the Merkle
         // opening against the commitment, then fold the sibling evaluations
         // using the challenge beta to produce the next-round evaluation.
         let folded_eval = verify_query(
-            folding,
             params,
-            index >> folding.extra_query_index_bits(),
+            top_level_index,
             fold_data_iter,
             ro,
             log_max_height,
+            &x_twiddle_inv,
         )?;
 
         // After all rounds, the polynomial has been folded to a constant.
@@ -265,19 +273,19 @@ type CommitStep<'a, F, M> = (
 ///
 /// The final folded evaluation, which the caller checks against
 /// the prover's claimed constant.
-fn verify_query<'a, Folding, F, EF, M>(
-    folding: &Folding,
+fn verify_query<'a, F, EF, M, InputError>(
     params: &FriParameters<M>,
     mut index: usize,
     steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>,
     reduced_openings: Vec<(usize, EF)>,
     log_max_height: usize,
-) -> Result<EF, FriError<M::Error, Folding::InputError>>
+    x_twiddle_inv: &[F],
+) -> Result<EF, FriError<M::Error, InputError>>
 where
-    F: Field,
+    F: ComplexExtendable,
     EF: ExtensionField<F>,
     M: Mmcs<EF> + 'a,
-    Folding: FriFoldingStrategy<F, EF>,
+    InputError: core::fmt::Debug,
 {
     // Running accumulator: starts at zero and accumulates reduced openings
     // and folding results as we walk up the tree.
@@ -368,10 +376,13 @@ where
             )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
-        // Fold the full sibling group down to a single evaluation using
-        // the random challenge beta. This is the core FRI step.
-        folded_eval =
-            folding.fold_row(index, log_folded_height, log_arity, beta, evals.into_iter());
+        // Fold the full sibling group down to a single evaluation using the random
+        // challenge beta. Circle PCS only ever folds by arity 2 (`CircleFriFolding::fold_row`
+        // asserts this too); the twiddle for this round was already precomputed for the
+        // whole query chain, so this is now pure arithmetic with no domain construction,
+        // scalar multiplication, or inversion left to do.
+        assert_eq!(log_arity, 1, "Circle PCS currently only supports arity 2");
+        folded_eval = fold_row_with_inv_twiddle(x_twiddle_inv[round], beta, evals.into_iter());
 
         // Advance to the next (smaller) domain.
         log_current_height = log_folded_height;

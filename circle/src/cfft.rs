@@ -15,7 +15,7 @@ use tracing::{debug_span, instrument};
 
 use crate::domain::CircleDomain;
 use crate::point::{Point, compute_lagrange_den_batched};
-use crate::{CfftPermutable, CfftView, cfft_permute_index, cfft_permute_slice};
+use crate::{CfftPermutable, CfftView, cfft_permute_slice};
 
 #[derive(Clone)]
 pub struct CircleEvaluations<F, M = RowMajorMatrix<F>> {
@@ -534,9 +534,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         reverse_slice_index_bits(&mut ys);
         ys
     }
-    pub(crate) fn nth_y_twiddle(&self, index: usize) -> F {
-        self.nth_point(cfft_permute_index(index << 1, self.log_n)).y
-    }
+
     pub(crate) fn x_twiddles(&self, layer: usize) -> Vec<F> {
         let generator = self.subgroup_generator() * (1 << layer);
         let shift = self.shift * (1 << layer);
@@ -598,6 +596,15 @@ mod tests {
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;
+
+    impl<F: ComplexExtendable> CircleDomain<F> {
+        /// Used only by [`crate::folding::fold_y_row`], the test-only reference implementation
+        /// of [`crate::folding::fold_y`]; see that function's doc comment.
+        pub(crate) fn nth_y_twiddle(&self, index: usize) -> F {
+            self.nth_point(crate::cfft_permute_index(index << 1, self.log_n))
+                .y
+        }
+    }
 
     #[test]
     fn test_cfft_icfft() {
