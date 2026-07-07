@@ -32,7 +32,7 @@ const BYTES_PER_CONSTANT: usize = 5;
 /// parameter choice (width 24, capacity 8, 7 rounds, x^3 / x^{1/3} S-boxes) mirrors
 /// the [RPO-M31](https://eprint.iacr.org/2024/1635) layout for a comparable small
 /// field, using the field's native S-box exponent.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RpoKoalaBear {
     inner: Rpo<KoalaBear, MdsMatrixKoalaBear, RPO_KB_WIDTH, RPO_KB_ALPHA>,
 }

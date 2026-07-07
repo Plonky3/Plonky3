@@ -23,7 +23,7 @@ pub struct Poseidon2Cols<
     pub beginning_full_rounds: [FullRound<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>; HALF_FULL_ROUNDS],
 
     /// Partial Rounds
-    pub partial_rounds: [PartialRound<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>; PARTIAL_ROUNDS],
+    pub partial_rounds: [PartialRound<T, SBOX_DEGREE, SBOX_REGISTERS>; PARTIAL_ROUNDS],
 
     /// Ending Full Rounds
     pub ending_full_rounds: [FullRound<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>; HALF_FULL_ROUNDS],
@@ -40,8 +40,7 @@ pub struct FullRound<T, const WIDTH: usize, const SBOX_DEGREE: u64, const SBOX_R
 
 /// Partial round columns.
 #[repr(C)]
-pub struct PartialRound<T, const WIDTH: usize, const SBOX_DEGREE: u64, const SBOX_REGISTERS: usize>
-{
+pub struct PartialRound<T, const SBOX_DEGREE: u64, const SBOX_REGISTERS: usize> {
     /// Possible intermediate results within the S-box.
     pub sbox: SBox<T, SBOX_DEGREE, SBOX_REGISTERS>,
     /// The output of the S-box.

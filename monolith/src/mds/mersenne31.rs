@@ -16,12 +16,16 @@ use crate::util::get_random_u32;
 
 /// MDS matrix implementation for the Monolith-31 Concrete layer.
 ///
+/// `NUM_FULL_ROUNDS` must match the [`Monolith`](crate::Monolith) instance this MDS matrix
+/// is plugged into, so that the SHAKE domain separator for non-standard widths binds to the
+/// actual round count (`NUM_FULL_ROUNDS + 1` total rounds) rather than a caller-recomputed copy.
+///
 /// For `WIDTH == 16` this uses the fast Karatsuba-convolution path over the
 /// paper's circulant matrix. For any other width, the matrix is a dense
 /// Cauchy matrix derived from SHAKE-128, precomputed once in [`Self::new`]
 /// rather than rebuilt on every permutation.
 #[derive(Clone, Debug)]
-pub struct MonolithMdsMatrixMersenne31<const WIDTH: usize, const NUM_ROUNDS: usize> {
+pub struct MonolithMdsMatrixMersenne31<const WIDTH: usize, const NUM_FULL_ROUNDS: usize> {
     /// Dense Cauchy MDS matrix, indexed `matrix[row][col]`.
     ///
     /// Left as all-zero and unused when `WIDTH == 16`, which takes the
@@ -29,22 +33,24 @@ pub struct MonolithMdsMatrixMersenne31<const WIDTH: usize, const NUM_ROUNDS: usi
     matrix: [[Mersenne31; WIDTH]; WIDTH],
 }
 
-impl<const WIDTH: usize, const NUM_ROUNDS: usize> Default
-    for MonolithMdsMatrixMersenne31<WIDTH, NUM_ROUNDS>
+impl<const WIDTH: usize, const NUM_FULL_ROUNDS: usize> Default
+    for MonolithMdsMatrixMersenne31<WIDTH, NUM_FULL_ROUNDS>
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const WIDTH: usize, const NUM_ROUNDS: usize> MonolithMdsMatrixMersenne31<WIDTH, NUM_ROUNDS> {
+impl<const WIDTH: usize, const NUM_FULL_ROUNDS: usize>
+    MonolithMdsMatrixMersenne31<WIDTH, NUM_FULL_ROUNDS>
+{
     /// Construct a new Monolith-31 MDS matrix, precomputing the dense Cauchy
     /// matrix once (skipped for `WIDTH == 16`, which uses the circulant path).
     pub fn new() -> Self {
         let matrix = if WIDTH == 16 {
             [[Mersenne31::ZERO; WIDTH]; WIDTH]
         } else {
-            derive_cauchy_mds_matrix::<WIDTH, NUM_ROUNDS>()
+            derive_cauchy_mds_matrix::<WIDTH, NUM_FULL_ROUNDS>()
         };
         Self { matrix }
     }
@@ -93,8 +99,8 @@ impl Convolve<Mersenne31, i64, i64> for MonolithConvolveMersenne31 {
     }
 }
 
-impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH]>
-    for MonolithMdsMatrixMersenne31<WIDTH, NUM_ROUNDS>
+impl<const WIDTH: usize, const NUM_FULL_ROUNDS: usize> Permutation<[Mersenne31; WIDTH]>
+    for MonolithMdsMatrixMersenne31<WIDTH, NUM_FULL_ROUNDS>
 {
     fn permute(&self, input: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
         if WIDTH == 16 {
@@ -116,8 +122,8 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
     }
 }
 
-impl<const WIDTH: usize, const NUM_ROUNDS: usize> MdsPermutation<Mersenne31, WIDTH>
-    for MonolithMdsMatrixMersenne31<WIDTH, NUM_ROUNDS>
+impl<const WIDTH: usize, const NUM_FULL_ROUNDS: usize> MdsPermutation<Mersenne31, WIDTH>
+    for MonolithMdsMatrixMersenne31<WIDTH, NUM_FULL_ROUNDS>
 {
 }
 
@@ -129,11 +135,12 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> MdsPermutation<Mersenne31, WID
 /// x_i + y_j (which must stay below p). Denominators are inverted a row
 /// at a time via Montgomery's batch-inversion trick, replacing WIDTH^2
 /// individual field inversions with WIDTH batched ones.
-fn derive_cauchy_mds_matrix<const WIDTH: usize, const NUM_ROUNDS: usize>()
+fn derive_cauchy_mds_matrix<const WIDTH: usize, const NUM_FULL_ROUNDS: usize>()
 -> [[Mersenne31; WIDTH]; WIDTH] {
+    const { assert!(WIDTH <= u8::MAX as usize) };
     let mut shake = Shake128::default();
     shake.update(b"Monolith");
-    shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
+    shake.update(&[WIDTH as u8, (NUM_FULL_ROUNDS + 1) as u8]);
     shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
     // The [16, 15] encodes the bit parameters for the Cauchy construction.
     shake.update(&[16, 15]);
@@ -199,11 +206,11 @@ mod tests {
     /// derivation (one `.inverse()` call per matrix entry), used as an oracle
     /// to confirm the batched-inversion path in [`derive_cauchy_mds_matrix`]
     /// is bit-identical.
-    fn naive_cauchy_mds_matrix<const WIDTH: usize, const NUM_ROUNDS: usize>()
+    fn naive_cauchy_mds_matrix<const WIDTH: usize, const NUM_FULL_ROUNDS: usize>()
     -> [[Mersenne31; WIDTH]; WIDTH] {
         let mut shake = Shake128::default();
         shake.update(b"Monolith");
-        shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
+        shake.update(&[WIDTH as u8, (NUM_FULL_ROUNDS + 1) as u8]);
         shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
         shake.update(&[16, 15]);
         shake.update(b"MDS");
@@ -228,15 +235,15 @@ mod tests {
 
     #[test]
     fn cauchy_matrix_width24_matches_naive_oracle() {
-        let fast = derive_cauchy_mds_matrix::<24, 6>();
-        let naive = naive_cauchy_mds_matrix::<24, 6>();
+        let fast = derive_cauchy_mds_matrix::<24, 5>();
+        let naive = naive_cauchy_mds_matrix::<24, 5>();
         assert_eq!(fast, naive);
     }
 
     #[test]
     fn cauchy_matrix_is_deterministic() {
-        let a = derive_cauchy_mds_matrix::<24, 6>();
-        let b = derive_cauchy_mds_matrix::<24, 6>();
+        let a = derive_cauchy_mds_matrix::<24, 5>();
+        let b = derive_cauchy_mds_matrix::<24, 5>();
         assert_eq!(a, b);
     }
 
@@ -245,7 +252,7 @@ mod tests {
         // permute() on standard basis vectors must reconstruct the same
         // dense matrix stored in the struct (mirrors monolith-air's
         // extract_mds_matrix, scoped here to this crate's own type).
-        let mds = MonolithMdsMatrixMersenne31::<24, 6>::new();
+        let mds = MonolithMdsMatrixMersenne31::<24, 5>::new();
         for col in 0..24 {
             let mut basis = [Mersenne31::ZERO; 24];
             basis[col] = Mersenne31::ONE;
@@ -258,7 +265,7 @@ mod tests {
 
     #[test]
     fn permute_width24_is_deterministic() {
-        let mds = MonolithMdsMatrixMersenne31::<24, 6>::new();
+        let mds = MonolithMdsMatrixMersenne31::<24, 5>::new();
         let input: [Mersenne31; 24] = array::from_fn(Mersenne31::from_usize);
 
         let out1 = mds.permute(input);

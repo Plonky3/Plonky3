@@ -71,7 +71,7 @@ mod tests {
         MonolithBarsM31,
     ) {
         let bars = MonolithBarsM31;
-        let mds = MonolithMdsMatrixMersenne31::<16, 6>::new();
+        let mds = MonolithMdsMatrixMersenne31::<16, 5>::new();
 
         // Extract MDS matrix before moving mds into the Monolith constructor.
         let mds_matrix = MonolithAir::<
@@ -186,7 +186,7 @@ mod tests {
 
         // Compute the expected output using the reference Monolith permutation.
         let monolith: MonolithMersenne31<_, WIDTH, NUM_FULL_ROUNDS> =
-            MonolithMersenne31::new(MonolithBarsM31, MonolithMdsMatrixMersenne31::<16, 6>::new());
+            MonolithMersenne31::new(MonolithBarsM31, MonolithMdsMatrixMersenne31::<16, 5>::new());
         let mut expected_state = input;
         monolith.permute_mut(&mut expected_state);
 

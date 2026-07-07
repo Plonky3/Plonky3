@@ -224,3 +224,17 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         self.periodic_values
     }
 }
+
+impl<SC: StarkGenericConfig> ExtensionBuilder for VerifierConstraintFolder<'_, SC> {
+    type EF = SC::Challenge;
+    type ExprEF = SC::Challenge;
+    type VarEF = SC::Challenge;
+
+    fn assert_zero_ext<I>(&mut self, x: I)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        self.accumulator *= self.alpha;
+        self.accumulator += x.into();
+    }
+}

@@ -80,6 +80,18 @@ pub fn generate_trace_rows<
         n.is_power_of_two(),
         "Callers expected to pad inputs to a power of two"
     );
+    assert_eq!(
+        B::NUM_BARS,
+        NUM_BARS,
+        "MonolithAir's NUM_BARS must match the MonolithBars implementation"
+    );
+    assert!(
+        air.limb_bits
+            .iter()
+            .copied()
+            .eq(B::LIMB_BITS.iter().map(|&b| b as usize)),
+        "MonolithAir's limb_bits must match the MonolithBars implementation's LIMB_BITS"
+    );
 
     // One permutation per row.
     let ncols =

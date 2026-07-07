@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 
 use p3_sumcheck::generic_degree::GenericDegreeProof;
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
+use serde::{Deserialize, Serialize};
 
 use crate::config::{Commitment, MultiStarkConfig, PcsProof};
 
@@ -14,6 +15,8 @@ use crate::config::{Commitment, MultiStarkConfig, PcsProof};
 /// - the commitment binds the trace columns.
 /// - the sumcheck reduces the AIR constraint to one bound-point claim.
 /// - the opening proves the trace columns at that point.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(bound = "")]
 pub struct MultiStarkProof<C: MultiStarkConfig> {
     /// Commitment to the trace columns.
     pub commitment: Commitment<C>,
@@ -21,6 +24,22 @@ pub struct MultiStarkProof<C: MultiStarkConfig> {
     pub sumcheck: GenericDegreeProof<C::Val, C::Challenge>,
     /// Commitment opening at the bound sumcheck point.
     pub opening: PcsProof<C>,
+}
+
+impl<C: MultiStarkConfig> core::fmt::Debug for MultiStarkProof<C>
+where
+    Commitment<C>: core::fmt::Debug,
+    C::Val: core::fmt::Debug,
+    C::Challenge: core::fmt::Debug,
+    PcsProof<C>: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MultiStarkProof")
+            .field("commitment", &self.commitment)
+            .field("sumcheck", &self.sumcheck)
+            .field("opening", &self.opening)
+            .finish()
+    }
 }
 
 /// Build the single-table opening protocol shared by the prover and verifier.

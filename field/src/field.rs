@@ -575,6 +575,24 @@ impl<const N: usize> SpongePaddingValue for [u64; N] {
     const PAD_ONE: Self = [1; N];
 }
 
+/// Trait for fields that support uniform bit sampling optimizations.
+pub trait UniformSamplingField {
+    /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
+    /// triggering an error / requiring a resample.
+    const MAX_SINGLE_SAMPLE_BITS: usize;
+    /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
+    /// is a multiple of `2^k` and less than P. `m_k` is defined as:
+    ///
+    /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
+    ///
+    /// This is used as a rejection sampling threshold (or error trigger), when sampling
+    /// random bits from uniformly sampled field elements. As long as we sample up to the `k`
+    /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
+    /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
+    /// number of zeroes and ones, leading to a uniform sampling.
+    const SAMPLING_BITS_M: [u64; 64];
+}
+
 impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     const DIMENSION: usize = 1;
 

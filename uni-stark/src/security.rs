@@ -27,13 +27,33 @@ use libm::{ceil, log2, pow, sqrt};
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_all_symbolic_constraints};
 use p3_field::{ExtensionField, Field};
-use p3_fri::FriParameters;
 use p3_util::log2_floor_usize;
+
+/// FRI shape parameters relevant to security-level computation.
+///
+/// Mirrors `p3_fri::FriParameters`'s public fields of the same name, kept as a standalone
+/// scalar struct so this PCS-generic crate doesn't need to depend on `p3-fri`.
+#[derive(Debug, Clone, Copy)]
+pub struct FriSecurityParams {
+    /// log2(blowup factor); the FRI rate is ρ = 2^{-log_blowup}.
+    pub log_blowup: usize,
+    /// log2(final FRI polynomial length) — controls when FRI stops folding.
+    pub log_final_poly_len: usize,
+    /// log2(maximum FRI folding arity).
+    pub max_log_arity: usize,
+    /// Number of FRI queries.
+    pub num_queries: usize,
+    /// Bits of grinding ground at every FRI commit-phase round.
+    pub commit_proof_of_work_bits: usize,
+    /// Bits of grinding ground once before sampling FRI queries.
+    pub query_proof_of_work_bits: usize,
+}
 
 /// Parameters required to compute STARK proof security level.
 ///
-/// FRI-related fields are read from [`FriParameters`]; the AIR-shape fields
-/// (`num_constraints`, `air_max_constraint_degree`, `max_combo`) describe the
+/// The FRI-related fields mirror `p3_fri::FriParameters`'s public fields (this crate is
+/// PCS-generic, so it takes them as plain scalars rather than depending on `p3-fri`); the
+/// AIR-shape fields (`num_constraints`, `air_max_constraint_degree`, `max_combo`) describe the
 /// AIR being proved and are used in the DEEP-ALI bounds. Use
 /// [`StarkSecurityParams::from_air`] to derive them automatically when an AIR
 /// is available.
@@ -67,12 +87,12 @@ pub struct StarkSecurityParams {
 }
 
 impl StarkSecurityParams {
-    /// Build security parameters explicitly from FRI parameters and the AIR shape.
+    /// Build security parameters explicitly from the FRI shape and the AIR shape.
     ///
     /// Use [`from_air`](Self::from_air) when an AIR is available — it derives
     /// `num_constraints` and `air_max_constraint_degree` from symbolic evaluation.
-    pub const fn new<M>(
-        fri_params: &FriParameters<M>,
+    pub const fn new(
+        fri: FriSecurityParams,
         num_modulus_bits: usize,
         collision_resistance: usize,
         num_constraints: usize,
@@ -80,12 +100,12 @@ impl StarkSecurityParams {
         max_combo: usize,
     ) -> Self {
         Self {
-            fri_log_blowup: fri_params.log_blowup,
-            fri_log_final_poly_len: fri_params.log_final_poly_len,
-            fri_max_log_arity: fri_params.max_log_arity,
-            fri_num_queries: fri_params.num_queries,
-            fri_commit_proof_of_work_bits: fri_params.commit_proof_of_work_bits,
-            fri_query_proof_of_work_bits: fri_params.query_proof_of_work_bits,
+            fri_log_blowup: fri.log_blowup,
+            fri_log_final_poly_len: fri.log_final_poly_len,
+            fri_max_log_arity: fri.max_log_arity,
+            fri_num_queries: fri.num_queries,
+            fri_commit_proof_of_work_bits: fri.commit_proof_of_work_bits,
+            fri_query_proof_of_work_bits: fri.query_proof_of_work_bits,
             num_modulus_bits,
             collision_resistance,
             num_constraints,
@@ -102,8 +122,8 @@ impl StarkSecurityParams {
     /// `AirLayout::from_air`, which fills only the `BaseAir` widths) leaves the
     /// permutation fields at `0`, so permutation-argument constraints are not counted
     /// and security is overstated.
-    pub fn from_air<F, EF, A, M>(
-        fri_params: &FriParameters<M>,
+    pub fn from_air<F, EF, A>(
+        fri: FriSecurityParams,
         air: &A,
         layout: AirLayout,
         num_modulus_bits: usize,
@@ -122,7 +142,7 @@ impl StarkSecurityParams {
         let ext_deg = ext.iter().map(|c| c.degree_multiple()).max().unwrap_or(0);
         let air_max_constraint_degree = base_deg.max(ext_deg).max(1);
         Self::new(
-            fri_params,
+            fri,
             num_modulus_bits,
             collision_resistance,
             num_constraints,

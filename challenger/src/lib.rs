@@ -16,6 +16,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
+pub use p3_field::UniformSamplingField;
 use p3_field::{Algebra, BasedVectorSpace, Field, PrimeField64};
 pub use serializing_challenger::*;
 

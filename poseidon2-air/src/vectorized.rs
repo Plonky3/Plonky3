@@ -134,6 +134,7 @@ impl<
 }
 
 /// A "vectorized" version of Poseidon2Air, for computing multiple Poseidon2 permutations per row.
+#[derive(Debug)]
 pub struct VectorizedPoseidon2Air<
     F: PrimeCharacteristicRing,
     LinearLayers,
@@ -153,6 +154,34 @@ pub struct VectorizedPoseidon2Air<
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
     >,
+}
+
+impl<
+    F: PrimeCharacteristicRing,
+    LinearLayers,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+    const VECTOR_LEN: usize,
+> Clone
+    for VectorizedPoseidon2Air<
+        F,
+        LinearLayers,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+        VECTOR_LEN,
+    >
+{
+    fn clone(&self) -> Self {
+        Self {
+            air: self.air.clone(),
+        }
+    }
 }
 
 impl<

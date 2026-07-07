@@ -17,7 +17,7 @@ use crate::{BoundedPowers, TwoAdicField};
 /// type F = BabyBear;
 /// let log_size = 3;
 /// let shift = F::from_u64(7);
-/// let mut coset = TwoAdicMultiplicativeCoset::new(shift, log_size).unwrap();
+/// let coset = TwoAdicMultiplicativeCoset::new(shift, log_size).unwrap();
 /// let generator = coset.subgroup_generator();
 ///
 /// // Coset elements can be queried by index
@@ -204,7 +204,7 @@ impl<F: TwoAdicField> TwoAdicMultiplicativeCoset<F> {
     /// element of `self` whenever `index` < self.size()).
     #[inline]
     #[must_use]
-    pub fn element(&mut self, index: usize) -> F {
+    pub fn element(&self, index: usize) -> F {
         self.shift * self.generator_exp(index)
     }
 

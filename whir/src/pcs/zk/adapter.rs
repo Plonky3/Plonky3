@@ -8,8 +8,9 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use spin::Mutex;
 
 use super::config::ZkWhirConfig;
@@ -54,6 +55,10 @@ where
     /// generator; a predictable stream lets an observer strip every mask and
     /// recover the witness from the reveals.
     /// Tests seed a deterministic generator on purpose.
+    ///
+    /// `rng` itself is only ever used to seed a fresh `StdRng` (a CSPRNG) for
+    /// each `commit`/`open` call, under a briefly-held lock; the forked generator
+    /// then drives the (possibly long) proving work without holding the lock.
     pub const fn new(config: ZkWhirConfig<EF, F, Challenger>, dft: Dft, mmcs: MT, rng: R) -> Self {
         Self {
             config,
@@ -112,8 +117,8 @@ where
         challenger: &mut Challenger,
     ) -> (Self::Commitment, Self::ProverData) {
         let prover = HidingWhirProver::new(&self.config, &self.dft, &self.mmcs);
-        let mut rng = self.rng.lock();
-        prover.commit(witness, challenger, &mut *rng)
+        let mut rng = StdRng::from_rng(&mut *self.rng.lock());
+        prover.commit(witness, challenger, &mut rng)
     }
 
     fn open(
@@ -134,8 +139,8 @@ where
             .collect();
 
         let prover = HidingWhirProver::new(&self.config, &self.dft, &self.mmcs);
-        let mut rng = self.rng.lock();
-        prover.prove(prover_data, &claims, challenger, &mut *rng)
+        let mut rng = StdRng::from_rng(&mut *self.rng.lock());
+        prover.prove(prover_data, &claims, challenger, &mut rng)
     }
 
     fn verify(

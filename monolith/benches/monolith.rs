@@ -17,12 +17,12 @@ fn bench_monolith(c: &mut Criterion) {
     monolith_m31::<_, 16>(
         c,
         "MonolithMds",
-        MonolithMdsMatrixMersenne31::<16, 6>::new(),
+        MonolithMdsMatrixMersenne31::<16, 5>::new(),
     );
     monolith_m31::<_, 24>(
         c,
         "MonolithMds",
-        MonolithMdsMatrixMersenne31::<24, 6>::new(),
+        MonolithMdsMatrixMersenne31::<24, 5>::new(),
     );
 
     // Goldilocks with WIDTH=8 and WIDTH=12.
