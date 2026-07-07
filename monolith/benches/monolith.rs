@@ -14,8 +14,16 @@ use p3_symmetric::Permutation;
 fn bench_monolith(c: &mut Criterion) {
     // Mersenne31 with WIDTH=16 and WIDTH=24.
     monolith_m31::<_, 16>(c, "MdsMatrixMersenne31", MdsMatrixMersenne31);
-    monolith_m31::<_, 16>(c, "MonolithMds", MonolithMdsMatrixMersenne31::<5>);
-    monolith_m31::<_, 24>(c, "MonolithMds", MonolithMdsMatrixMersenne31::<5>);
+    monolith_m31::<_, 16>(
+        c,
+        "MonolithMds",
+        MonolithMdsMatrixMersenne31::<16, 5>::new(),
+    );
+    monolith_m31::<_, 24>(
+        c,
+        "MonolithMds",
+        MonolithMdsMatrixMersenne31::<24, 5>::new(),
+    );
 
     // Goldilocks with WIDTH=8 and WIDTH=12.
     monolith_gl8::<_, 8>(c, "MdsMatrixGoldilocks", MdsMatrixGoldilocks);

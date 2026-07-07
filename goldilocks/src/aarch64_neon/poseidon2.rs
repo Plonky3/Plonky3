@@ -9,6 +9,7 @@
 //! overhead present in NEON addition.
 
 use alloc::vec::Vec;
+use core::arch::aarch64::uint64x2_t;
 
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
@@ -425,13 +426,13 @@ impl CryptographicPermutation<[PackedGoldilocksNeon; 8]> for Poseidon2Goldilocks
 
 impl Permutation<[PackedGoldilocksNeon; 12]> for Poseidon2GoldilocksFused<12> {
     fn permute_mut(&self, state: &mut [PackedGoldilocksNeon; 12]) {
-        let (mut lane0, mut lane1) = unpack_lanes(state);
-        let mut sv = lanes_to_neon(&lane0, &lane1);
+        let mut sv: [uint64x2_t; 12] = core::array::from_fn(|i| state[i].to_vector());
         external_initial_neon(&mut sv, &self.initial_constants_raw);
         internal_permute_neon_w12(&mut sv, &self.internal_constants_raw);
         external_terminal_neon(&mut sv, &self.terminal_constants_raw);
-        neon_to_lanes(&sv, &mut lane0, &mut lane1);
-        pack_lanes(state, &lane0, &lane1);
+        for (s, &v) in state.iter_mut().zip(sv.iter()) {
+            *s = PackedGoldilocksNeon::from_vector(v);
+        }
     }
 }
 
@@ -439,13 +440,13 @@ impl CryptographicPermutation<[PackedGoldilocksNeon; 12]> for Poseidon2Goldilock
 
 impl Permutation<[PackedGoldilocksNeon; 16]> for Poseidon2GoldilocksFused<16> {
     fn permute_mut(&self, state: &mut [PackedGoldilocksNeon; 16]) {
-        let (mut lane0, mut lane1) = unpack_lanes(state);
-        let mut sv = lanes_to_neon(&lane0, &lane1);
+        let mut sv: [uint64x2_t; 16] = core::array::from_fn(|i| state[i].to_vector());
         external_initial_neon(&mut sv, &self.initial_constants_raw);
         internal_permute_neon_w16(&mut sv, &self.internal_constants_raw);
         external_terminal_neon(&mut sv, &self.terminal_constants_raw);
-        neon_to_lanes(&sv, &mut lane0, &mut lane1);
-        pack_lanes(state, &lane0, &lane1);
+        for (s, &v) in state.iter_mut().zip(sv.iter()) {
+            *s = PackedGoldilocksNeon::from_vector(v);
+        }
     }
 }
 
@@ -453,13 +454,13 @@ impl CryptographicPermutation<[PackedGoldilocksNeon; 16]> for Poseidon2Goldilock
 
 impl Permutation<[PackedGoldilocksNeon; 20]> for Poseidon2GoldilocksFused<20> {
     fn permute_mut(&self, state: &mut [PackedGoldilocksNeon; 20]) {
-        let (mut lane0, mut lane1) = unpack_lanes(state);
-        let mut sv = lanes_to_neon(&lane0, &lane1);
+        let mut sv: [uint64x2_t; 20] = core::array::from_fn(|i| state[i].to_vector());
         external_initial_neon(&mut sv, &self.initial_constants_raw);
         internal_permute_neon(&mut sv, &DIAG_RAW_20, &self.internal_constants_raw);
         external_terminal_neon(&mut sv, &self.terminal_constants_raw);
-        neon_to_lanes(&sv, &mut lane0, &mut lane1);
-        pack_lanes(state, &lane0, &lane1);
+        for (s, &v) in state.iter_mut().zip(sv.iter()) {
+            *s = PackedGoldilocksNeon::from_vector(v);
+        }
     }
 }
 

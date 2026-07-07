@@ -28,7 +28,7 @@ mod tests {
 
     use p3_air::symbolic::{AirLayout, get_max_constraint_degree};
     use p3_air::{BaseAir, check_constraints};
-    use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use p3_field::{PrimeCharacteristicRing, PrimeField32, PrimeField64};
     use p3_goldilocks::Goldilocks;
     use p3_matrix::Matrix;
     use p3_mersenne_31::Mersenne31;
@@ -49,20 +49,40 @@ mod tests {
     const NUM_FULL_ROUNDS: usize = 5;
     const NUM_BARS: usize = 8;
     const FIELD_BITS: usize = 31;
+    // Mersenne31's modulus (0x7FFFFFFF) is all ones (Hamming weight 31, all
+    // "one" positions), so pairing two one-bits per flag gives 31/2 = 15
+    // committed flags (the odd leftover, bit 0, folds into the final assert).
+    const NUM_MATCH_FLAGS: usize = 15;
+    // Three leading 8-bit limbs commit chi (24 cells); the trailing 7-bit
+    // limb's chi is inlined into the XOR instead of committed.
+    const NUM_CHI_CELLS: usize = 24;
 
     /// Build a Monolith-31 AIR instance and return it with the Bars impl.
     fn build_monolith_air() -> (
-        MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>,
+        MonolithAir<
+            F,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        >,
         MonolithBarsM31,
     ) {
         let bars = MonolithBarsM31;
-        let mds = MonolithMdsMatrixMersenne31::<5>;
+        let mds = MonolithMdsMatrixMersenne31::<16, 5>::new();
 
         // Extract MDS matrix before moving mds into the Monolith constructor.
-        let mds_matrix =
-            MonolithAir::<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>::extract_mds_matrix(
-                &mds,
-            );
+        let mds_matrix = MonolithAir::<
+            F,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        >::extract_mds_matrix(&mds);
 
         let monolith = MonolithMersenne31::new(bars, mds);
 
@@ -73,10 +93,27 @@ mod tests {
     #[test]
     fn test_column_layout() {
         // num_cols() computes the expected column count from const generics.
-        let expected = num_cols::<WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>();
+        let expected = num_cols::<
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        >();
 
         // size_of with T=u8 gives the actual struct size in bytes = number of fields.
-        let actual = size_of::<MonolithCols<u8, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>>();
+        let actual = size_of::<
+            MonolithCols<
+                u8,
+                WIDTH,
+                NUM_FULL_ROUNDS,
+                NUM_BARS,
+                FIELD_BITS,
+                NUM_MATCH_FLAGS,
+                NUM_CHI_CELLS,
+            >,
+        >();
 
         assert_eq!(expected, actual);
     }
@@ -85,14 +122,26 @@ mod tests {
     fn test_column_count_mersenne31_16() {
         // Per round (Mersenne31, width 16):
         //
-        //     FIELD_BITS * NUM_BARS  (input bits)
-        //   + FIELD_BITS * NUM_BARS  (chi AND-product witnesses)
-        //   + FIELD_BITS * NUM_BARS  (canonical-pattern match flags)
-        //   + NUM_BARS               (Bar outputs)
-        //   + WIDTH                  (post-state)
-        let per_round = 3 * FIELD_BITS * NUM_BARS + NUM_BARS + WIDTH;
+        //     FIELD_BITS * NUM_BARS       (input bits)
+        //   + NUM_CHI_CELLS * NUM_BARS    (chi AND-product witnesses: 24 of
+        //                                  31 bits, since the trailing 7-bit
+        //                                  limb's chi is inlined, not committed)
+        //   + NUM_MATCH_FLAGS * NUM_BARS  (canonical-pattern match flags:
+        //                                  one per PAIR of modulus one-bits,
+        //                                  15 = 31/2, not FIELD_BITS)
+        //   + NUM_BARS                    (Bar outputs)
+        //   + WIDTH                       (post-state)
+        let per_round =
+            (FIELD_BITS + NUM_CHI_CELLS + NUM_MATCH_FLAGS) * NUM_BARS + NUM_BARS + WIDTH;
         let expected = WIDTH + (NUM_FULL_ROUNDS + 1) * per_round;
-        let actual = num_cols::<WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>();
+        let actual = num_cols::<
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        >();
         assert_eq!(expected, actual);
     }
 
@@ -106,8 +155,11 @@ mod tests {
         };
         let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 6);
 
-        // Cap set by the chi AND product binding (degree 3); all other
-        // constraints are degree ≤ 2.
+        // Degree 3 is the cap, reached by three constraint families:
+        //   - 8-bit chi AND-product binding, (1 - x) * x * x
+        //   - batched match-flag step, prev * bits[a] * bits[b]
+        //   - inlined trailing 7-bit limb output, x XOR ((1 - x) * x)
+        // Everything else (booleanity, reconstruction, MDS, Bricks) is degree <= 2.
         assert_eq!(degree, 3, "Expected constraint degree 3 for Monolith-31");
     }
 
@@ -118,22 +170,37 @@ mod tests {
         // Generate a single permutation trace with sequential input [0..15].
         let input: [F; WIDTH] = core::array::from_fn(F::from_usize);
         let inputs = vec![input];
-        let trace = generate_trace_rows::<_, _, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>(
-            inputs, &air, &bars, 0,
-        );
+        let trace = generate_trace_rows::<
+            _,
+            _,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        >(inputs, &air, &bars, 0);
 
         // One input → one row in the trace.
         assert_eq!(trace.height(), 1);
 
         // Compute the expected output using the reference Monolith permutation.
         let monolith: MonolithMersenne31<_, WIDTH, NUM_FULL_ROUNDS> =
-            MonolithMersenne31::new(MonolithBarsM31, MonolithMdsMatrixMersenne31::<5>);
+            MonolithMersenne31::new(MonolithBarsM31, MonolithMdsMatrixMersenne31::<16, 5>::new());
         let mut expected_state = input;
         monolith.permute_mut(&mut expected_state);
 
         // Extract the final post-state from the trace (last round's post).
         let local = trace.row_slice(0).expect("Trace is empty");
-        let row: &MonolithCols<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS> = (*local).borrow();
+        let row: &MonolithCols<
+            F,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        > = (*local).borrow();
         let final_post = &row.final_round.post;
 
         // The AIR trace output must match the reference implementation.
@@ -150,12 +217,27 @@ mod tests {
         // Input: [0, 1, 2, ..., 15] — standard test vector.
         let input: [F; WIDTH] = core::array::from_fn(F::from_usize);
         let inputs = vec![input];
-        let trace = generate_trace_rows::<_, _, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>(
-            inputs, &air, &bars, 0,
-        );
+        let trace = generate_trace_rows::<
+            _,
+            _,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        >(inputs, &air, &bars, 0);
 
         let local = trace.row_slice(0).expect("Trace is empty");
-        let row: &MonolithCols<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS> = (*local).borrow();
+        let row: &MonolithCols<
+            F,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        > = (*local).borrow();
 
         // Expected output from the Monolith-31 reference test vector
         // (validated against the HorizenLabs reference implementation).
@@ -180,9 +262,16 @@ mod tests {
         let inputs: alloc::vec::Vec<[F; WIDTH]> = (0..16)
             .map(|batch| core::array::from_fn(|i| F::from_usize(batch * WIDTH + i)))
             .collect();
-        let trace = generate_trace_rows::<_, _, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>(
-            inputs, &air, &bars, 0,
-        );
+        let trace = generate_trace_rows::<
+            _,
+            _,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        >(inputs, &air, &bars, 0);
 
         check_constraints(&air, &trace, &[]);
     }
@@ -193,9 +282,16 @@ mod tests {
 
         // Test with all-zero input (edge case for Bars fixed points).
         let inputs = vec![[F::ZERO; WIDTH]];
-        let trace = generate_trace_rows::<_, _, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>(
-            inputs, &air, &bars, 0,
-        );
+        let trace = generate_trace_rows::<
+            _,
+            _,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        >(inputs, &air, &bars, 0);
 
         check_constraints(&air, &trace, &[]);
     }
@@ -207,9 +303,16 @@ mod tests {
         // Test with maximum field values (p-1 = 2^31 - 2).
         let max_val = F::from_u32(0x7FFF_FFFE);
         let inputs = vec![[max_val; WIDTH]];
-        let trace = generate_trace_rows::<_, _, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>(
-            inputs, &air, &bars, 0,
-        );
+        let trace = generate_trace_rows::<
+            _,
+            _,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        >(inputs, &air, &bars, 0);
 
         check_constraints(&air, &trace, &[]);
     }
@@ -228,18 +331,22 @@ mod tests {
         // Fixture: honest trace over a 16-word all-zero input.
         let (air, bars) = build_monolith_air();
         let input: [F; WIDTH] = [F::ZERO; WIDTH];
-        let mut trace = generate_trace_rows::<_, _, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>(
-            vec![input],
-            &air,
-            &bars,
-            0,
-        );
+        let mut trace = generate_trace_rows::<
+            _,
+            _,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        >(vec![input], &air, &bars, 0);
 
         // Mutation on the first Bar of the first round:
         //
         //     bits           : 0...0  -->  1...1
         //     chi[j]         : 0      -->  0     ((1 - 1) * 1 * 1 = 0)
-        //     match_flag[i]  : 0      -->  1     (forced by walk:  m *= 1)
+        //     match_flag[i]  : 0      -->  1     (forced by walk pairing:  m &= 1 & 1)
         //
         // chi fixed points keep the S-box equation satisfied:
         //
@@ -247,11 +354,20 @@ mod tests {
         //     chi(0x7F) = 0x7F   (7-bit limb)
         //     packed    = p = 0  (mod p)
         //
-        // But the walk now ends with match_flag[0] = 1, which the
-        // `assert_zero(match_flag[0])` constraint rejects.
+        // The walk's every paired step still holds (`m = 1` throughout,
+        // since every bit is 1), but the final bit (index 0) never pairs
+        // and its check is folded directly into the closing assertion,
+        // which rejects it.
         let row_slice = trace.row_mut(0);
-        let row: &mut MonolithCols<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS> =
-            row_slice.borrow_mut();
+        let row: &mut MonolithCols<
+            F,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        > = row_slice.borrow_mut();
         let bar = &mut row.full_rounds[0];
         for b in bar.bars_input_bits[0].iter_mut() {
             *b = F::ONE;
@@ -295,7 +411,7 @@ mod tests {
             ].map(F::from_u32);
 
             let trace = generate_trace_rows::<
-                _, _, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS,
+                _, _, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS,
             >(vec![input], &air, &bars, 0);
 
             check_constraints(&air, &trace, &[]);
@@ -308,18 +424,65 @@ mod tests {
     const G_FULL: usize = 5;
     const G_BARS: usize = 4;
     const G_BITS: usize = 64;
+    // Goldilocks's modulus (0xFFFFFFFF00000001) has Hamming weight 33 (32
+    // leading one-bits plus bit 0): pairing two one-bits per flag gives
+    // 33/2 = 16 committed flags (the odd leftover, bit 0, folds into the
+    // final assert).
+    const G_NUM_MATCH_FLAGS: usize = 16;
+    // All eight limbs are 8 bits wide, so every chi cell is committed.
+    const G_NUM_CHI_CELLS: usize = 64;
 
     fn build_goldilocks_air() -> (
-        MonolithAir<G, G_WIDTH, G_FULL, G_BARS, G_BITS>,
+        MonolithAir<G, G_WIDTH, G_FULL, G_BARS, G_BITS, G_NUM_MATCH_FLAGS, G_NUM_CHI_CELLS>,
         MonolithBarsGoldilocks<8>,
     ) {
         let bars = MonolithBarsGoldilocks::<8>;
         let mds = MonolithMdsMatrixGoldilocks;
-        let mds_matrix =
-            MonolithAir::<G, G_WIDTH, G_FULL, G_BARS, G_BITS>::extract_mds_matrix(&mds);
+        let mds_matrix = MonolithAir::<
+            G,
+            G_WIDTH,
+            G_FULL,
+            G_BARS,
+            G_BITS,
+            G_NUM_MATCH_FLAGS,
+            G_NUM_CHI_CELLS,
+        >::extract_mds_matrix(&mds);
         let monolith = MonolithGoldilocks8::new(bars, mds);
         let air = MonolithAir::new(monolith.round_constants, mds_matrix, GOLDILOCKS_8_LIMB_BITS);
         (air, bars)
+    }
+
+    #[test]
+    fn test_column_count_goldilocks_8() {
+        // Per round (Goldilocks, width 8): same shape as
+        // `test_column_count_mersenne31_16`. NUM_CHI_CELLS equals FIELD_BITS
+        // since all eight limbs are 8 bits wide, but NUM_MATCH_FLAGS (16) is
+        // one committed cell per pair of modulus one-bits, well below
+        // FIELD_BITS (64).
+        let per_round = (G_BITS + G_NUM_CHI_CELLS + G_NUM_MATCH_FLAGS) * G_BARS + G_BARS + G_WIDTH;
+        let expected = G_WIDTH + (G_FULL + 1) * per_round;
+        let actual =
+            num_cols::<G_WIDTH, G_FULL, G_BARS, G_BITS, G_NUM_MATCH_FLAGS, G_NUM_CHI_CELLS>();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_monolith_air_degree_goldilocks() {
+        let (air, _bars) = build_goldilocks_air();
+
+        // Probe the symbolic degree over the full committed width, 64-row trace.
+        let layout = AirLayout {
+            main_width: air.width(),
+            ..Default::default()
+        };
+        let degree = get_max_constraint_degree::<G, _>(&air, layout, 1 << 6);
+
+        // Degree 3 is the cap, reached by two constraint families here:
+        //   - 8-bit chi AND-product binding, (1 - x) * x * x
+        //   - batched match-flag step, prev * bits[a] * bits[b]
+        // All eight limbs are 8 bits wide, so there is no inlined trailing
+        // limb (the third degree-3 family present for Mersenne31 is absent).
+        assert_eq!(degree, 3, "Expected constraint degree 3 for Monolith-64");
     }
 
     #[test]
@@ -328,8 +491,16 @@ mod tests {
         // high-bit activity.
         let (air, bars) = build_goldilocks_air();
         let inputs = vec![[G::ZERO; G_WIDTH]];
-        let trace =
-            generate_trace_rows::<_, _, G_WIDTH, G_FULL, G_BARS, G_BITS>(inputs, &air, &bars, 0);
+        let trace = generate_trace_rows::<
+            _,
+            _,
+            G_WIDTH,
+            G_FULL,
+            G_BARS,
+            G_BITS,
+            G_NUM_MATCH_FLAGS,
+            G_NUM_CHI_CELLS,
+        >(inputs, &air, &bars, 0);
         check_constraints(&air, &trace, &[]);
     }
 
@@ -342,13 +513,90 @@ mod tests {
         //     modulus bit 0          = 1       ->  final multiplicative step
         let (air, bars) = build_goldilocks_air();
         let input: [G; G_WIDTH] = core::array::from_fn(|i| G::from_u64(i as u64 * 0x9E37));
-        let trace = generate_trace_rows::<_, _, G_WIDTH, G_FULL, G_BARS, G_BITS>(
-            vec![input],
-            &air,
-            &bars,
-            0,
-        );
+        let trace = generate_trace_rows::<
+            _,
+            _,
+            G_WIDTH,
+            G_FULL,
+            G_BARS,
+            G_BITS,
+            G_NUM_MATCH_FLAGS,
+            G_NUM_CHI_CELLS,
+        >(vec![input], &air, &bars, 0);
         check_constraints(&air, &trace, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "constraints not satisfied")]
+    fn test_goldilocks_canonical_constraint_rejects_zero_bit_side_constraint_forgery() {
+        // Goldilocks modulus p = 0xFFFFFFFF00000001: bits 63..32 are all 1
+        // (matching the "all-ones" forgery through the top 32 bits), bits
+        // 31..1 are all 0, bit 0 is 1.
+        //
+        // Forging bits = all-ones keeps chi's fixed point (chi(0xFF) = 0xFF,
+        // since `1 - x[j-2] = 0` whenever `x[j-2] = 1`), so the S-box
+        // equation stays satisfied. The walk carries `prev = 1` through the
+        // top 32 one-bits (matching p), then hits the first modulus-zero
+        // bit (index 31) with `prev = 1` and `x_31 = 1`: the side constraint
+        // `assert_zero(prev * x_i)` fires there, before the walk ever
+        // reaches the final `assert_zero(m_0)` check exercised by the M31
+        // all-ones forgery test above.
+        let (air, bars) = build_goldilocks_air();
+        let input: [G; G_WIDTH] = [G::ZERO; G_WIDTH];
+        let mut trace = generate_trace_rows::<
+            _,
+            _,
+            G_WIDTH,
+            G_FULL,
+            G_BARS,
+            G_BITS,
+            G_NUM_MATCH_FLAGS,
+            G_NUM_CHI_CELLS,
+        >(vec![input], &air, &bars, 0);
+
+        let row_slice = trace.row_mut(0);
+        let row: &mut MonolithCols<
+            G,
+            G_WIDTH,
+            G_FULL,
+            G_BARS,
+            G_BITS,
+            G_NUM_MATCH_FLAGS,
+            G_NUM_CHI_CELLS,
+        > = row_slice.borrow_mut();
+        let bar = &mut row.full_rounds[0];
+        for b in bar.bars_input_bits[0].iter_mut() {
+            *b = G::ONE;
+        }
+        for c in bar.bars_chi_products[0].iter_mut() {
+            *c = G::ZERO;
+        }
+        for m in bar.bars_match_flags[0].iter_mut() {
+            *m = G::ONE;
+        }
+
+        check_constraints(&air, &trace, &[]);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_goldilocks_constraint_satisfaction_random(
+            s0 in 0u64..Goldilocks::ORDER_U64,
+            s1 in 0u64..Goldilocks::ORDER_U64,
+            s2 in 0u64..Goldilocks::ORDER_U64,
+            s3 in 0u64..Goldilocks::ORDER_U64,
+            s4 in 0u64..Goldilocks::ORDER_U64,
+            s5 in 0u64..Goldilocks::ORDER_U64,
+            s6 in 0u64..Goldilocks::ORDER_U64,
+            s7 in 0u64..Goldilocks::ORDER_U64,
+        ) {
+            let (air, bars) = build_goldilocks_air();
+            let input: [G; G_WIDTH] = [s0, s1, s2, s3, s4, s5, s6, s7].map(G::from_u64);
+            let trace = generate_trace_rows::<_, _, G_WIDTH, G_FULL, G_BARS, G_BITS, G_NUM_MATCH_FLAGS, G_NUM_CHI_CELLS>(
+                vec![input], &air, &bars, 0,
+            );
+            check_constraints(&air, &trace, &[]);
+        }
     }
 
     #[test]
@@ -356,12 +604,16 @@ mod tests {
         // AIR trace's final post-state must match the reference permutation.
         let (air, bars) = build_goldilocks_air();
         let input: [G; G_WIDTH] = core::array::from_fn(G::from_usize);
-        let trace = generate_trace_rows::<_, _, G_WIDTH, G_FULL, G_BARS, G_BITS>(
-            vec![input],
-            &air,
-            &bars,
-            0,
-        );
+        let trace = generate_trace_rows::<
+            _,
+            _,
+            G_WIDTH,
+            G_FULL,
+            G_BARS,
+            G_BITS,
+            G_NUM_MATCH_FLAGS,
+            G_NUM_CHI_CELLS,
+        >(vec![input], &air, &bars, 0);
 
         let monolith: MonolithGoldilocks8<_, G_WIDTH, G_FULL> =
             MonolithGoldilocks8::new(MonolithBarsGoldilocks::<8>, MonolithMdsMatrixGoldilocks);
@@ -369,7 +621,15 @@ mod tests {
         monolith.permute_mut(&mut expected);
 
         let local = trace.row_slice(0).expect("Trace is empty");
-        let row: &MonolithCols<G, G_WIDTH, G_FULL, G_BARS, G_BITS> = (*local).borrow();
+        let row: &MonolithCols<
+            G,
+            G_WIDTH,
+            G_FULL,
+            G_BARS,
+            G_BITS,
+            G_NUM_MATCH_FLAGS,
+            G_NUM_CHI_CELLS,
+        > = (*local).borrow();
         assert_eq!(row.final_round.post, expected);
     }
 }
