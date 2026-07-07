@@ -155,8 +155,11 @@ mod tests {
         };
         let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 6);
 
-        // Cap set by the chi AND product binding (degree 3); all other
-        // constraints are degree ≤ 2.
+        // Degree 3 is the cap, reached by three constraint families:
+        //   - 8-bit chi AND-product binding, (1 - x) * x * x
+        //   - batched match-flag step, prev * bits[a] * bits[b]
+        //   - inlined trailing 7-bit limb output, x XOR ((1 - x) * x)
+        // Everything else (booleanity, reconstruction, MDS, Bricks) is degree <= 2.
         assert_eq!(degree, 3, "Expected constraint degree 3 for Monolith-31");
     }
 
@@ -461,6 +464,25 @@ mod tests {
         let actual =
             num_cols::<G_WIDTH, G_FULL, G_BARS, G_BITS, G_NUM_MATCH_FLAGS, G_NUM_CHI_CELLS>();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_monolith_air_degree_goldilocks() {
+        let (air, _bars) = build_goldilocks_air();
+
+        // Probe the symbolic degree over the full committed width, 64-row trace.
+        let layout = AirLayout {
+            main_width: air.width(),
+            ..Default::default()
+        };
+        let degree = get_max_constraint_degree::<G, _>(&air, layout, 1 << 6);
+
+        // Degree 3 is the cap, reached by two constraint families here:
+        //   - 8-bit chi AND-product binding, (1 - x) * x * x
+        //   - batched match-flag step, prev * bits[a] * bits[b]
+        // All eight limbs are 8 bits wide, so there is no inlined trailing
+        // limb (the third degree-3 family present for Mersenne31 is absent).
+        assert_eq!(degree, 3, "Expected constraint degree 3 for Monolith-64");
     }
 
     #[test]
