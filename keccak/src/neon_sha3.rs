@@ -218,6 +218,7 @@ impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
     use tiny_keccak::keccakf;
 
     use super::*;
@@ -279,10 +280,10 @@ mod tests {
         ],
     ];
 
-    fn our_res() -> [[u64; 25]; 2] {
+    fn our_res(states: [[u64; 25]; 2]) -> [[u64; 25]; 2] {
         let mut packed_result = [[0; 2]; 25];
         for (i, packed_res) in packed_result.iter_mut().enumerate() {
-            *packed_res = [STATES[0][i], STATES[1][i]];
+            *packed_res = [states[0][i], states[1][i]];
         }
 
         keccak_perm(&mut packed_result);
@@ -295,8 +296,8 @@ mod tests {
         result
     }
 
-    fn tiny_keccak_res() -> [[u64; 25]; 2] {
-        let mut result = STATES;
+    fn tiny_keccak_res(states: [[u64; 25]; 2]) -> [[u64; 25]; 2] {
+        let mut result = states;
         keccakf(&mut result[0]);
         keccakf(&mut result[1]);
         result
@@ -304,8 +305,17 @@ mod tests {
 
     #[test]
     fn test_vs_tiny_keccak() {
-        let expected = tiny_keccak_res();
-        let computed = our_res();
+        let expected = tiny_keccak_res(STATES);
+        let computed = our_res(STATES);
         assert_eq!(expected, computed);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_vs_tiny_keccak(states in prop::array::uniform2(prop::array::uniform25(any::<u64>()))) {
+            let expected = tiny_keccak_res(states);
+            let computed = our_res(states);
+            prop_assert_eq!(expected, computed);
+        }
     }
 }
