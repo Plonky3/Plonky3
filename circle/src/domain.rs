@@ -111,6 +111,10 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     }
 }
 
+/// Below this length, chunking overhead (each chunk reseeds via a scalar multiplication costing
+/// `O(log len)` point operations) outweighs the benefit of splitting the chain across threads.
+const PARALLEL_THRESHOLD: usize = 1 << 10;
+
 /// Materialize `len` points of the sequential chain `iterate(seed, |&p| p + g)`, splitting it
 /// into chunks that run in parallel. Each chunk reseeds itself with one scalar multiplication
 /// (`g * chunk_start`) instead of walking the prefix of the chain that precedes it.
@@ -119,8 +123,8 @@ fn parallel_point_chain<F: ComplexExtendable>(
     g: Point<F>,
     len: usize,
 ) -> Vec<Point<F>> {
-    if len == 0 {
-        return Vec::new();
+    if len < PARALLEL_THRESHOLD {
+        return iterate(seed, move |&p| p + g).take(len).collect_vec();
     }
     let num_chunks = current_num_threads().max(1).min(len);
     let chunk_len = len.div_ceil(num_chunks);

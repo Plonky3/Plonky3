@@ -159,10 +159,12 @@ pub(crate) fn fold_row_with_inv_twiddle<F: Field, EF: ExtensionField<F>>(
     beta: EF,
     evals: impl Iterator<Item = EF>,
 ) -> EF {
-    let evals = evals.collect_vec();
-    assert_eq!(evals.len(), 2);
-    let sum = evals[0] + evals[1];
-    let diff = (evals[0] - evals[1]) * inv_twiddle;
+    let mut it = evals;
+    let (e0, e1) = (it.next().unwrap(), it.next().unwrap());
+    assert!(it.next().is_none());
+
+    let sum = e0 + e1;
+    let diff = (e0 - e1) * inv_twiddle;
     (sum + beta * diff).halve()
 }
 
