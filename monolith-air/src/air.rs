@@ -133,13 +133,20 @@ impl<
     ///
     /// # Match-flag width invariant
     ///
-    /// - `NUM_MATCH_FLAGS` must equal `modulus.count_ones() / 2`: two
-    ///   consecutive modulus one-bits share one committed flag cell via a
-    ///   degree-3 batched step (`m_i = m_prev2 * x_a * x_b`), and a
-    ///   modulus-zero bit needs no cell at all (its flag is a pure copy of
-    ///   the previous one). If the Hamming weight is odd, the final
-    ///   one-bit (always bit 0) is folded directly into the closing
-    ///   `assert_zero` with no committed cell of its own.
+    /// - `NUM_MATCH_FLAGS` must equal `modulus.count_ones() / 2`.
+    /// - The canonical-form walk pairs modulus one-bits two at a time.
+    /// - Each pair commits one flag cell, `m = m_prev * x_a * x_b` (degree 3).
+    /// - A modulus zero-bit commits no cell and reuses the previous flag.
+    /// - An odd Hamming weight leaves bit 0 unpaired, folded into the closing assert.
+    ///
+    /// # Match-flag batching precondition
+    ///
+    /// - A zero-bit reuses the flag from the last completed pair.
+    /// - That flag is correct only when no pair straddles the zero-bit.
+    /// - So every zero-bit must have an even count of one-bits above it.
+    /// - A bad modulus over-rejects valid inputs.
+    /// - It never accepts a non-canonical one, so this is completeness, not soundness.
+    /// - Mersenne31 (no zero-bits) and Goldilocks (32 one-bits, then zeros) both qualify.
     ///
     /// # Chi-cell width invariant
     ///
@@ -157,6 +164,7 @@ impl<
     /// - Trailing limb is outside `3..=8`.
     /// - `NUM_MATCH_FLAGS` does not equal `modulus.count_ones() / 2`.
     /// - `NUM_CHI_CELLS` does not match the trailing limb's width.
+    /// - Some modulus zero-bit has an odd count of one-bits above it.
     pub fn new(
         round_constants: [[F; WIDTH]; NUM_FULL_ROUNDS],
         mds_matrix: [[F; WIDTH]; WIDTH],
@@ -230,6 +238,34 @@ impl<
             NUM_MATCH_FLAGS,
             "NUM_MATCH_FLAGS must equal modulus.count_ones() / 2"
         );
+
+        // Invariant: no fold-pair may straddle a modulus zero-bit.
+        //
+        // - The canonical-form walk descends MSB -> LSB, pairing one-bits.
+        // - At a zero-bit it asserts the running match flag times that bit is 0.
+        // - The running flag covers only one-bits folded through closed pairs.
+        // - It means "prefix still equals p" only if no pair is half-open here.
+        // - A pair is closed exactly when an even count of one-bits sits above.
+        //
+        // - An odd count leaves one one-bit unfolded, so the flag runs too coarse.
+        // - A coarser flag only tightens the side constraint, never loosens it.
+        // - So it never admits a non-canonical encoding.
+        // - But it rejects valid ones, so reject the modulus here instead.
+        //
+        //     Mersenne31 : 1..1 (x31)                 no zero-bits         -> ok
+        //     Goldilocks : 1..1 (x32) 0..0 (x31) 1    even run above zeros -> ok
+        //     KoalaBear  : 1..1 (x7)  0..0 (x23) 1    odd run above zeros  -> rejected
+        let mut ones_above = 0usize;
+        for i in (0..FIELD_BITS).rev() {
+            if modulus_lsb_to_msb[i] {
+                ones_above += 1;
+            } else {
+                assert!(
+                    ones_above.is_multiple_of(2),
+                    "match-flag batching requires an even count of modulus one-bits above every zero-bit"
+                );
+            }
+        }
 
         // The trailing limb's chi is inlined (no committed column) exactly
         // when it uses the narrower 2-input AND variant.

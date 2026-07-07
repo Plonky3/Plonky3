@@ -141,8 +141,10 @@ pub struct MonolithRoundCols<
     ///
     /// - Without it, integers in `[p, 2^FIELD_BITS - 1]` would forge a second
     ///   bit encoding for field elements already represented canonically.
-    /// - The walk works for any prime, including those whose forbidden range
-    ///   covers many bit patterns (e.g. Goldilocks).
+    /// - The walk handles any prime whose one-bits pair cleanly.
+    /// - "Cleanly" means no fold-pair straddles a modulus zero-bit.
+    /// - Mersenne31 and Goldilocks both qualify.
+    /// - The constructor rejects any modulus that does not.
     pub bars_match_flags: [[T; NUM_MATCH_FLAGS]; NUM_BARS],
 
     /// Committed output of each Bar (S-box) application.
