@@ -29,6 +29,26 @@ use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_all_symbolic_constrain
 use p3_field::{ExtensionField, Field};
 use p3_util::log2_floor_usize;
 
+/// FRI shape parameters relevant to security-level computation.
+///
+/// Mirrors `p3_fri::FriParameters`'s public fields of the same name, kept as a standalone
+/// scalar struct so this PCS-generic crate doesn't need to depend on `p3-fri`.
+#[derive(Debug, Clone, Copy)]
+pub struct FriSecurityParams {
+    /// log2(blowup factor); the FRI rate is ρ = 2^{-log_blowup}.
+    pub log_blowup: usize,
+    /// log2(final FRI polynomial length) — controls when FRI stops folding.
+    pub log_final_poly_len: usize,
+    /// log2(maximum FRI folding arity).
+    pub max_log_arity: usize,
+    /// Number of FRI queries.
+    pub num_queries: usize,
+    /// Bits of grinding ground at every FRI commit-phase round.
+    pub commit_proof_of_work_bits: usize,
+    /// Bits of grinding ground once before sampling FRI queries.
+    pub query_proof_of_work_bits: usize,
+}
+
 /// Parameters required to compute STARK proof security level.
 ///
 /// The FRI-related fields mirror `p3_fri::FriParameters`'s public fields (this crate is
@@ -69,21 +89,10 @@ pub struct StarkSecurityParams {
 impl StarkSecurityParams {
     /// Build security parameters explicitly from the FRI shape and the AIR shape.
     ///
-    /// The six `fri_*` arguments mirror `p3_fri::FriParameters`'s public fields of the
-    /// same name (`log_blowup`, `log_final_poly_len`, `max_log_arity`, `num_queries`,
-    /// `commit_proof_of_work_bits`, `query_proof_of_work_bits`), passed as plain scalars
-    /// so this PCS-generic crate doesn't need to depend on `p3-fri`.
-    ///
     /// Use [`from_air`](Self::from_air) when an AIR is available — it derives
     /// `num_constraints` and `air_max_constraint_degree` from symbolic evaluation.
-    #[allow(clippy::too_many_arguments)]
     pub const fn new(
-        fri_log_blowup: usize,
-        fri_log_final_poly_len: usize,
-        fri_max_log_arity: usize,
-        fri_num_queries: usize,
-        fri_commit_proof_of_work_bits: usize,
-        fri_query_proof_of_work_bits: usize,
+        fri: FriSecurityParams,
         num_modulus_bits: usize,
         collision_resistance: usize,
         num_constraints: usize,
@@ -91,12 +100,12 @@ impl StarkSecurityParams {
         max_combo: usize,
     ) -> Self {
         Self {
-            fri_log_blowup,
-            fri_log_final_poly_len,
-            fri_max_log_arity,
-            fri_num_queries,
-            fri_commit_proof_of_work_bits,
-            fri_query_proof_of_work_bits,
+            fri_log_blowup: fri.log_blowup,
+            fri_log_final_poly_len: fri.log_final_poly_len,
+            fri_max_log_arity: fri.max_log_arity,
+            fri_num_queries: fri.num_queries,
+            fri_commit_proof_of_work_bits: fri.commit_proof_of_work_bits,
+            fri_query_proof_of_work_bits: fri.query_proof_of_work_bits,
             num_modulus_bits,
             collision_resistance,
             num_constraints,
@@ -113,14 +122,8 @@ impl StarkSecurityParams {
     /// `AirLayout::from_air`, which fills only the `BaseAir` widths) leaves the
     /// permutation fields at `0`, so permutation-argument constraints are not counted
     /// and security is overstated.
-    #[allow(clippy::too_many_arguments)]
     pub fn from_air<F, EF, A>(
-        fri_log_blowup: usize,
-        fri_log_final_poly_len: usize,
-        fri_max_log_arity: usize,
-        fri_num_queries: usize,
-        fri_commit_proof_of_work_bits: usize,
-        fri_query_proof_of_work_bits: usize,
+        fri: FriSecurityParams,
         air: &A,
         layout: AirLayout,
         num_modulus_bits: usize,
@@ -139,12 +142,7 @@ impl StarkSecurityParams {
         let ext_deg = ext.iter().map(|c| c.degree_multiple()).max().unwrap_or(0);
         let air_max_constraint_degree = base_deg.max(ext_deg).max(1);
         Self::new(
-            fri_log_blowup,
-            fri_log_final_poly_len,
-            fri_max_log_arity,
-            fri_num_queries,
-            fri_commit_proof_of_work_bits,
-            fri_query_proof_of_work_bits,
+            fri,
             num_modulus_bits,
             collision_resistance,
             num_constraints,
