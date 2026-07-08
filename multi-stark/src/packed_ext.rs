@@ -132,6 +132,41 @@ impl<F, P: PrimeCharacteristicRing + Copy> PrimeCharacteristicRing for PackedExt
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         Self::new(P::from_prime_subfield(f))
     }
+
+    #[inline]
+    fn double(&self) -> Self {
+        Self::new(self.0.double())
+    }
+
+    #[inline]
+    fn halve(&self) -> Self {
+        Self::new(self.0.halve())
+    }
+
+    #[inline]
+    fn square(&self) -> Self {
+        Self::new(self.0.square())
+    }
+
+    #[inline]
+    fn cube(&self) -> Self {
+        Self::new(self.0.cube())
+    }
+
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        Self::new(self.0.mul_2exp_u64(exp))
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        Self::new(self.0.div_2exp_u64(exp))
+    }
+
+    #[inline]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        Self::new(self.0.exp_const_u64::<POWER>())
+    }
 }
 
 impl<F: Field, P: Algebra<F::Packing> + Copy> From<F> for PackedExt<F, P> {
@@ -145,14 +180,14 @@ impl<F: Field, P: Algebra<F::Packing> + Copy> Add<F> for PackedExt<F, P> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: F) -> Self {
-        self + Self::from(rhs)
+        Self::new(self.0 + F::Packing::from(rhs))
     }
 }
 
 impl<F: Field, P: Algebra<F::Packing> + Copy> AddAssign<F> for PackedExt<F, P> {
     #[inline]
     fn add_assign(&mut self, rhs: F) {
-        *self += Self::from(rhs);
+        self.0 += F::Packing::from(rhs);
     }
 }
 
@@ -160,14 +195,14 @@ impl<F: Field, P: Algebra<F::Packing> + Copy> Sub<F> for PackedExt<F, P> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: F) -> Self {
-        self - Self::from(rhs)
+        Self::new(self.0 - F::Packing::from(rhs))
     }
 }
 
 impl<F: Field, P: Algebra<F::Packing> + Copy> SubAssign<F> for PackedExt<F, P> {
     #[inline]
     fn sub_assign(&mut self, rhs: F) {
-        *self -= Self::from(rhs);
+        self.0 -= F::Packing::from(rhs);
     }
 }
 
@@ -175,14 +210,14 @@ impl<F: Field, P: Algebra<F::Packing> + Copy> Mul<F> for PackedExt<F, P> {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: F) -> Self {
-        self * Self::from(rhs)
+        Self::new(self.0 * F::Packing::from(rhs))
     }
 }
 
 impl<F: Field, P: Algebra<F::Packing> + Copy> MulAssign<F> for PackedExt<F, P> {
     #[inline]
     fn mul_assign(&mut self, rhs: F) {
-        *self *= Self::from(rhs);
+        self.0 *= F::Packing::from(rhs);
     }
 }
 

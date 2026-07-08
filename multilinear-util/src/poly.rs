@@ -583,6 +583,56 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         r * (hi - lo) + lo
     }
 
+    /// Fixes the prefix variable at a challenge value from a borrowed evaluation slice,
+    /// returning a folded polynomial in SIMD-packed form.
+    ///
+    /// Computes:
+    /// ```text
+    ///     p'(x') = (1 - r) * p(0, x') + r * p(1, x')
+    /// ```
+    ///
+    /// The result has one fewer variable (n - 1).
+    ///
+    /// Takes a borrowed slice rather than a polynomial.
+    /// This folds a trace column straight from its matrix row, with no wrapping copy.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `evals.len()` is at most one, since then there is no variable to fold.
+    pub fn fix_prefix_var_to_packed_from_evals<Ext>(
+        evals: &[A],
+        r: Ext,
+    ) -> Poly<Ext::ExtensionPacking>
+    where
+        A: Field,
+        Ext: ExtensionField<A>,
+    {
+        assert!(evals.len() > 1, "no free variables");
+        // Broadcast the scalar challenge into every SIMD lane.
+        let r = Ext::ExtensionPacking::from(r);
+        // Reinterpret the base-field scalars as packed elements.
+        let poly = A::Packing::pack_slice(evals);
+        // Split evaluations into the x_0 = 0 half (p0) and x_0 = 1 half (p1).
+        let (p0, p1) = poly.split_at(poly.len() / 2);
+        if evals.len() >= PARALLEL_THRESHOLD {
+            // Parallel: linear interpolation between (p0, p1) pairs.
+            Poly::new(
+                p0.par_iter()
+                    .zip(p1.par_iter())
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                    .collect(),
+            )
+        } else {
+            // Sequential: same interpolation.
+            Poly::new(
+                p0.iter()
+                    .zip(p1.iter())
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                    .collect(),
+            )
+        }
+    }
+
     /// Fixes the prefix variable at a challenge value, returning a folded polynomial
     /// in SIMD-packed form.
     ///
@@ -601,29 +651,8 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         A: Field,
         Ext: ExtensionField<A>,
     {
-        // Broadcast the scalar challenge into every SIMD lane.
-        let r = Ext::ExtensionPacking::from_ext_slice(&vec![r; A::Packing::WIDTH]);
-        // Reinterpret the base-field scalars as packed elements.
-        let poly = A::Packing::pack_slice(self.as_slice());
-        // Split evaluations into the x_0 = 0 half (p0) and x_0 = 1 half (p1).
-        let (p0, p1) = poly.split_at(poly.len() / 2);
-        if self.num_evals() >= PARALLEL_THRESHOLD {
-            // Parallel: linear interpolation between (p0, p1) pairs.
-            Poly::new(
-                p0.par_iter()
-                    .zip(p1.par_iter())
-                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect(),
-            )
-        } else {
-            // Sequential: same interpolation.
-            Poly::new(
-                p0.iter()
-                    .zip(p1.iter())
-                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect(),
-            )
-        }
+        assert!(self.as_constant().is_none(), "no free variables");
+        Self::fix_prefix_var_to_packed_from_evals(self.as_slice(), r)
     }
 
     /// In-place version of the prefix-variable fix.
