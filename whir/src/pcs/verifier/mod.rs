@@ -19,7 +19,7 @@ use tracing::instrument;
 use super::committer::reader::ParsedCommitment;
 use super::utils::get_challenge_stir_queries;
 use crate::alloc::string::ToString;
-use crate::parameters::{RoundConfig, WhirConfig};
+use crate::parameters::{Basis, RoundConfig, WhirConfig};
 use crate::pcs::proof::{QueryOpenings, WhirProof};
 
 pub mod errors;
@@ -76,6 +76,14 @@ where
         mmcs: &'a MT,
         variable_order: VariableOrder,
     ) -> Self {
+        // The projective basis is prefix-only. Rejecting the pairing at
+        // construction keeps the per-arm guards deeper in the verifier
+        // genuinely unreachable.
+        assert!(
+            matches!(config.basis, Basis::Evaluation)
+                || matches!(variable_order, VariableOrder::Prefix),
+            "the projective basis is prefix-only"
+        );
         Self {
             config,
             mmcs,
@@ -242,15 +250,29 @@ where
         );
 
         // Evaluate the constraint polynomial at the folding point.
-        let evaluation_of_weights = self
-            .variable_order
-            .eval_constraints_poly(&constraints, &folding_randomness);
+        let evaluation_of_weights = self.variable_order.eval_constraints_poly(
+            &constraints,
+            &folding_randomness,
+            self.basis,
+        );
 
         // Final consistency check: claimed_eval == weight * f(r).
-        let final_value = match self.variable_order {
-            VariableOrder::Prefix => final_evaluations.eval_ext::<F>(&final_sumcheck_randomness),
-            VariableOrder::Suffix => {
+        //
+        // The final polynomial is the fully folded table; its value at the
+        // final randomness is read in the configured basis (the projective
+        // basis is prefix-only).
+        let final_value = match (self.variable_order, self.basis) {
+            (VariableOrder::Prefix, Basis::Evaluation) => {
+                final_evaluations.eval_ext::<F>(&final_sumcheck_randomness)
+            }
+            (VariableOrder::Prefix, Basis::Projective) => {
+                final_evaluations.eval_monomial(&final_sumcheck_randomness)
+            }
+            (VariableOrder::Suffix, Basis::Evaluation) => {
                 final_evaluations.eval_ext::<F>(&final_sumcheck_randomness.reversed())
+            }
+            (VariableOrder::Suffix, Basis::Projective) => {
+                unreachable!("the projective basis is prefix-only")
             }
         };
         if claimed_eval != evaluation_of_weights * final_value {
@@ -318,10 +340,14 @@ where
             VariableOrder::Suffix => folding_randomness.reversed(),
         };
 
-        // Evaluate folded polynomial at each queried position.
+        // Evaluate folded polynomial at each queried position, in the
+        // configured basis: the leaf fold must match the prover's bind rule.
         let folds: Vec<_> = answers
             .into_iter()
-            .map(|answer| Poly::new(answer).eval_ext::<F>(&query_randomness))
+            .map(|answer| match self.basis {
+                Basis::Evaluation => Poly::new(answer).eval_ext::<F>(&query_randomness),
+                Basis::Projective => Poly::new(answer).eval_monomial(&query_randomness),
+            })
             .collect();
 
         let stir_constraints = stir_challenges_indexes

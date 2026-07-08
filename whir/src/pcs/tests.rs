@@ -19,7 +19,7 @@ use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
 use crate::fiat_shamir::domain_separator::DomainSeparator;
-use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+use crate::parameters::{Basis, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use crate::pcs::prover::WhirProver;
 use crate::pcs::verifier::errors::VerifierError;
 
@@ -64,6 +64,22 @@ fn run_whir_pcs<L: Layout<F, EF>>(
     soundness_type: SecurityAssumption,
     pow_bits: usize,
 ) {
+    run_whir_pcs_in_basis::<L>(
+        specs,
+        folding_factor,
+        soundness_type,
+        pow_bits,
+        Basis::Evaluation,
+    );
+}
+
+fn run_whir_pcs_in_basis<L: Layout<F, EF>>(
+    specs: &[TableSpec],
+    folding_factor: FoldingFactor,
+    soundness_type: SecurityAssumption,
+    pow_bits: usize,
+    basis: Basis,
+) {
     let folding = folding_factor.at_round(0);
     let tables = table_specs_to_tables(specs);
     let witness = L::new_witness(tables, folding);
@@ -76,6 +92,7 @@ fn run_whir_pcs<L: Layout<F, EF>>(
         folding_factor,
         soundness_type,
         pow_bits,
+        basis,
     );
 }
 
@@ -86,6 +103,7 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
     folding_factor: FoldingFactor,
     soundness_type: SecurityAssumption,
     pow_bits: usize,
+    basis: Basis,
 ) {
     // Build Poseidon2-based hash and compression for the Merkle tree.
     let num_variables = witness.num_variables();
@@ -108,7 +126,9 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
 
     // Instantiate the PCS through the trait.
     let dft = MyDft::default();
-    let config = WhirConfig::new(num_variables, params).unwrap();
+    let config = WhirConfig::new(num_variables, params)
+        .unwrap()
+        .with_basis(basis);
     let pcs = TestWhirPcs::<L>::new(config, dft, mmcs);
 
     // Prover
@@ -149,6 +169,127 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
         )
         .expect("verification failed");
     }
+}
+
+/// Projective (monomial-basis) WHIR round trips: the full protocol under
+/// `Basis::Projective`, across schedules with and without intermediate STIR
+/// rounds (eprint 2026/762).
+#[test]
+fn test_whir_projective_partial_final_fold() {
+    // Multi-round schedule: initial folds + one intermediate round + final
+    // phase (Constant(8) on 15 variables derives [8, 7]).
+    let specs = vec![TableSpec::new(
+        TableShape::new(15, 2),
+        vec![
+            OpeningBatch::new(vec![0], Vec::new()),
+            OpeningBatch::new(vec![1], Vec::new()),
+        ],
+    )];
+    run_whir_pcs_in_basis::<PrefixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(8),
+        SecurityAssumption::UniqueDecoding,
+        0,
+        Basis::Projective,
+    );
+}
+
+/// Smaller schedule with more rounds, grinding enabled, and two tables, so
+/// the flat projective claim constraint must align with the verifier's
+/// placement-grouped alpha-power walk across placements.
+#[test]
+fn test_whir_projective_multi_round() {
+    let specs = vec![
+        TableSpec::new(
+            TableShape::new(12, 3),
+            vec![
+                OpeningBatch::new(vec![0, 1, 2], Default::default()),
+                OpeningBatch::new(vec![1], Default::default()),
+            ],
+        ),
+        TableSpec::new(
+            TableShape::new(10, 2),
+            vec![OpeningBatch::new(vec![0, 1], Default::default())],
+        ),
+    ];
+    run_whir_pcs_in_basis::<PrefixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(4),
+        SecurityAssumption::UniqueDecoding,
+        8,
+        Basis::Projective,
+    );
+}
+
+/// A proof produced in one basis must not verify in the other: the basis is
+/// bound into the domain separator, so the transcripts diverge structurally.
+#[test]
+fn test_whir_cross_basis_rejects() {
+    let specs = vec![TableSpec::new(
+        TableShape::new(12, 2),
+        vec![OpeningBatch::new(vec![0, 1], Vec::new())],
+    )];
+    let folding_factor = FoldingFactor::Constant(4);
+    let folding = folding_factor.at_round(0);
+    let tables = table_specs_to_tables(&specs);
+    let witness = <PrefixProver<F, EF> as Layout<F, EF>>::new_witness(tables, folding);
+    let protocol = OpeningProtocol::new(specs).pad_to_min_num_variables(folding);
+    let num_variables = witness.num_variables();
+
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+
+    let params = ProtocolParameters {
+        security_level: 32,
+        pow_bits: 0,
+        round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+        folding_factor,
+        soundness_type: SecurityAssumption::UniqueDecoding,
+        starting_log_inv_rate: 1,
+    };
+
+    // Prover runs projectively.
+    let prover_config = WhirConfig::new(num_variables, params.clone())
+        .unwrap()
+        .with_basis(Basis::Projective);
+    let prover_pcs =
+        TestWhirPcs::<PrefixProver<F, EF>>::new(prover_config, MyDft::default(), mmcs.clone());
+    let (commitment, proof) = {
+        let mut challenger = challenger();
+        let mut ds = DomainSeparator::new(vec![]);
+        prover_pcs.add_domain_separator::<8>(&mut ds);
+        ds.observe_domain_separator(&mut challenger);
+        let (commitment, prover_data) = <TestWhirPcs<PrefixProver<F, EF>> as MultilinearPcs<
+            EF,
+            MyChallenger,
+        >>::commit(&prover_pcs, witness, &mut challenger);
+        let proof = <TestWhirPcs<PrefixProver<F, EF>> as MultilinearPcs<EF, MyChallenger>>::open(
+            &prover_pcs,
+            prover_data,
+            protocol.clone(),
+            &mut challenger,
+        );
+        (commitment, proof)
+    };
+
+    // Verifier runs in the evaluation basis: its domain separator differs, so
+    // the transcript diverges and verification must fail.
+    let verifier_config = WhirConfig::new(num_variables, params).unwrap();
+    let verifier_pcs =
+        TestWhirPcs::<PrefixProver<F, EF>>::new(verifier_config, MyDft::default(), mmcs);
+    let mut challenger = challenger();
+    let mut ds = DomainSeparator::new(vec![]);
+    verifier_pcs.add_domain_separator::<8>(&mut ds);
+    ds.observe_domain_separator(&mut challenger);
+    let result = <TestWhirPcs<PrefixProver<F, EF>> as MultilinearPcs<EF, MyChallenger>>::verify(
+        &verifier_pcs,
+        &commitment,
+        &proof,
+        &mut challenger,
+        protocol,
+    );
+    assert!(result.is_err(), "cross-basis proof must be rejected");
 }
 
 /// How a prescribed-point run deviates from the honest transcript.

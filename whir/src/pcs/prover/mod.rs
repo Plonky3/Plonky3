@@ -19,7 +19,7 @@ use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use tracing::instrument;
 
 use crate::fiat_shamir::domain_separator::DomainSeparator;
-use crate::parameters::WhirConfig;
+use crate::parameters::{Basis, WhirConfig};
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{
     QueryOpenings, SharedProofOpening, SumcheckData, WhirProof, WhirRoundProof,
@@ -113,6 +113,13 @@ where
     /// The extension-field MMCS is constructed by wrapping the base-field one,
     /// so callers never have to thread it through manually.
     pub fn new(config: WhirConfig<EF, F, Challenger>, dft: Dft, mmcs: MT) -> Self {
+        // The projective basis is prefix-only; reject the pairing before any
+        // protocol work.
+        assert!(
+            config.basis == Basis::Evaluation
+                || matches!(L::variable_order(), VariableOrder::Prefix),
+            "the projective basis is prefix-only"
+        );
         let extension_mmcs = ExtensionMmcs::new(mmcs.clone());
         Self {
             config,
@@ -162,6 +169,7 @@ where
             &mut initial_sumcheck,
             self.starting_folding_pow_bits,
             challenger,
+            self.basis,
         );
 
         let mut round_state = RoundState {
@@ -268,7 +276,12 @@ where
                     SharedProofOpening::open(&self.mmcs, &stir_challenges_indexes, data);
                 for (row, &challenge) in opening.rows.iter_mut().zip(&stir_challenges_indexes) {
                     let poly = Poly::new(mem::take(row));
-                    let eval = poly.eval_base(&query_randomness);
+                    // Fold the opened row in the configured basis, matching
+                    // the sumcheck bind and the verifier's leaf fold.
+                    let eval = match self.basis {
+                        Basis::Evaluation => poly.eval_base(&query_randomness),
+                        Basis::Projective => poly.eval_monomial_base(&query_randomness),
+                    };
                     let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
                     stir_statement.add_constraint(var, eval);
                     *row = poly.into_evals();
@@ -280,7 +293,10 @@ where
                     SharedProofOpening::open(&self.extension_mmcs, &stir_challenges_indexes, data);
                 for (row, &challenge) in opening.rows.iter_mut().zip(&stir_challenges_indexes) {
                     let poly = Poly::new(mem::take(row));
-                    let eval = poly.eval_ext::<F>(&query_randomness);
+                    let eval = match self.basis {
+                        Basis::Evaluation => poly.eval_ext::<F>(&query_randomness),
+                        Basis::Projective => poly.eval_monomial(&query_randomness),
+                    };
                     let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
                     stir_statement.add_constraint(var, eval);
                     *row = poly.into_evals();
