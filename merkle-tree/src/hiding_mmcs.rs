@@ -210,22 +210,18 @@ where
 
         // Split every salted row back into its unsalted prefix and its salt suffix.
         // Salts move into the proof.
-        // The unsalted rows are returned to the caller.
-        let mut salts = Vec::with_capacity(salted_values.len());
-        let opened_values = salted_values
+        let (opened_values, salts): (Vec<_>, Vec<_>) = salted_values
             .into_iter()
             .map(|rows_at_index| {
-                let (opened, salts_at_index): (Vec<_>, Vec<_>) = rows_at_index
+                rows_at_index
                     .into_iter()
                     .map(|row| {
                         let (a, b) = row.split_at(row.len() - SALT_ELEMS);
                         (a.to_vec(), b.to_vec())
                     })
-                    .unzip();
-                salts.push(salts_at_index);
-                opened
+                    .unzip()
             })
-            .collect();
+            .unzip();
 
         (opened_values, (salts, pruned))
     }
