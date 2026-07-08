@@ -28,7 +28,6 @@ p3-monty-31.workspace = true
 p3-poseidon1-air.workspace = true
 p3-poseidon2.workspace = true
 p3-poseidon2-air.workspace = true
-p3-security.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
 
