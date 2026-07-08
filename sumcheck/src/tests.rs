@@ -282,8 +282,12 @@ where
         .map(|(table_idx, batch)| layout.eval(table_idx, batch, &mut prover_challenger))
         .collect();
 
-    let (mut sumcheck, mut prover_randomness) =
-        layout.into_sumcheck(proof.first_mut().unwrap(), 0, &mut prover_challenger);
+    let (mut sumcheck, mut prover_randomness) = layout.into_sumcheck(
+        proof.first_mut().unwrap(),
+        0,
+        &mut prover_challenger,
+        Basis::Evaluation,
+    );
     let mut num_variables_inter = num_variables - FOLDING;
 
     for sumcheck_data in proof.iter_mut().take(num_rounds + 1).skip(1) {
@@ -401,9 +405,11 @@ where
     );
 
     assert_eq!(prover_randomness, verifier_randomness);
-    let weights = strategy
-        .variable_order
-        .eval_constraints_poly(&constraints, &verifier_randomness);
+    let weights = strategy.variable_order.eval_constraints_poly(
+        &constraints,
+        &verifier_randomness,
+        Basis::Evaluation,
+    );
     assert_eq!(sum, final_folded_value * weights);
 }
 

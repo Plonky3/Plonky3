@@ -222,6 +222,17 @@ impl<F: Field> EqStatement<F> {
             .map(|point| Point::eval_eq(point.as_slice(), row.as_slice()))
     }
 
+    /// Projective counterpart of [`Self::weights_at`]: the same stored weight
+    /// tensors read as monomial coefficients (see [`Point::eval_eq_projective`]).
+    pub fn weights_at_projective<'a, EF: ExtensionField<F>>(
+        &'a self,
+        row: &'a Point<EF>,
+    ) -> impl Iterator<Item = EF> + 'a {
+        self.points
+            .iter()
+            .map(|point| Point::eval_eq_projective(point.as_slice(), row.as_slice()))
+    }
+
     /// Verifies that a given polynomial satisfies all constraints in the statement.
     #[must_use]
     pub fn verify(&self, poly: &Poly<F>) -> bool {

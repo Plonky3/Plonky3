@@ -162,6 +162,7 @@ where
             &mut initial_sumcheck,
             self.starting_folding_pow_bits,
             challenger,
+            self.basis,
         );
 
         let mut round_state = RoundState {
