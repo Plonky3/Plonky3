@@ -1,10 +1,11 @@
 //! Verify a multilinear AIR SNARK against a trace commitment.
 
-use core::fmt::{self, Debug, Display, Formatter};
+use core::fmt::Debug;
 
 use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_sumcheck::PrescribedPointPcs;
+use thiserror::Error;
 
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::MultilinearFolder;
@@ -14,17 +15,25 @@ use crate::proof::{MultiStarkProof, single_table_protocol};
 use crate::zerocheck::{AirZerocheck, ZerocheckError};
 
 /// Reasons the multilinear AIR verifier rejects a proof.
-#[derive(Debug)]
-pub enum VerificationError<E> {
+#[derive(Debug, Error)]
+pub enum VerificationError<E>
+where
+    E: Debug,
+{
     /// The zerocheck reduction or its closing constraint check failed.
+    #[error("zerocheck: {0}")]
     Zerocheck(ZerocheckError),
     /// The commitment opening failed to verify.
+    #[error("opening: {0:?}")]
     Opening(E),
     /// The verifying key expects a preprocessed opening, but the proof carries none.
+    #[error("preprocessed opening expected but absent")]
     MissingPreprocessedOpening,
     /// The proof carries a preprocessed opening, but the verifying key expects none.
+    #[error("preprocessed opening present but not expected")]
     UnexpectedPreprocessedOpening,
     /// The preprocessed key height disagrees with the proof's trace height.
+    #[error("preprocessed height mismatch: expected {expected}, got {actual}")]
     PreprocessedHeightMismatch {
         /// Trace arity the preprocessed commitment was built for.
         expected: usize,
@@ -32,27 +41,6 @@ pub enum VerificationError<E> {
         actual: usize,
     },
 }
-
-impl<E: Debug> Display for VerificationError<E> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Zerocheck(e) => write!(f, "zerocheck: {e}"),
-            Self::Opening(e) => write!(f, "opening: {e:?}"),
-            Self::MissingPreprocessedOpening => {
-                write!(f, "preprocessed opening expected but absent")
-            }
-            Self::UnexpectedPreprocessedOpening => {
-                write!(f, "preprocessed opening present but not expected")
-            }
-            Self::PreprocessedHeightMismatch { expected, actual } => write!(
-                f,
-                "preprocessed height mismatch: expected {expected}, got {actual}"
-            ),
-        }
-    }
-}
-
-impl<E: Debug> core::error::Error for VerificationError<E> {}
 
 /// Verify a complete multilinear AIR proof.
 ///
