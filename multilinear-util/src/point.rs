@@ -123,6 +123,29 @@ where
             .product()
     }
 
+    /// Evaluates the equality-weight tensor as *monomial coefficients* at `q`.
+    ///
+    /// The projective counterpart of [`Self::eval_eq`]: the same per-variable
+    /// pairs `(1 - p_i, p_i)` are read as coefficient pairs, so the value at
+    /// `q` is the monomial evaluation
+    ///
+    /// ```text
+    /// prod_i ((1 - p_i) + p_i * q_i)
+    /// ```
+    pub fn eval_eq_projective<EF: ExtensionField<F>>(p: &[F], q: &[EF]) -> EF {
+        assert_eq!(
+            p.len(),
+            q.len(),
+            "Points must have the same number of variables"
+        );
+
+        // Per-variable factor: (1 - p) + p * q = p * (q - 1) + 1.
+        p.iter()
+            .zip(q)
+            .map(|(&l, &r)| (r - EF::ONE) * l + EF::ONE)
+            .product()
+    }
+
     /// Evaluates the selection polynomial of a point against a univariate domain element.
     ///
     /// The univariate element is expanded into the square-power vector
@@ -150,6 +173,33 @@ where
                 term
             })
             // Multiply all per-coordinate factors into the selection value.
+            .product()
+    }
+
+    /// Evaluates the selection-weight tensor as *monomial coefficients* at `point`.
+    ///
+    /// The projective counterpart of [`Self::eval_select`]: the selection
+    /// weight table is the tensor with per-variable pairs `(1, var^(2^i))` in
+    /// both bases, but read as coefficient pairs its value at `point` is the
+    /// monomial evaluation
+    ///
+    /// ```text
+    /// prod_i (1 + var^(2^i) * point_i)
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn eval_select_projective<EF: ExtensionField<F>>(mut var: F, point: &[EF]) -> EF {
+        // Same descending-power walk as `eval_select`; only the per-variable
+        // factor changes from interpolation to the monomial rule.
+        point
+            .iter()
+            .rev()
+            .map(|&r| {
+                // Per-coordinate factor: 1 + var * r.
+                let term = r * var + EF::ONE;
+                var = var.square();
+                term
+            })
             .product()
     }
 
