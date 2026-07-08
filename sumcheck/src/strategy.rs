@@ -475,6 +475,33 @@ impl Basis {
             Self::Projective => extrapolate_01inf(claimed_sum - c_inf, c_a, c_inf, r),
         }
     }
+
+    /// Binds the active round variable of `poly` to challenge `r`.
+    ///
+    /// - [`Basis::Evaluation`]: `a0 + (a1 - a0) * r`, dispatching on `order`.
+    /// - [`Basis::Projective`]: the subtraction-free `a0 + a1 * r` (prefix
+    ///   only).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the projective basis is paired with suffix binding.
+    pub fn fix_var<A, Ch>(self, order: VariableOrder, poly: &mut Poly<A>, r: Ch)
+    where
+        A: Algebra<Ch> + Copy + Send + Sync,
+        Ch: Copy + Send + Sync,
+    {
+        match self {
+            Self::Evaluation => order.fix_var(poly, r),
+            Self::Projective => {
+                assert_eq!(
+                    order,
+                    VariableOrder::Prefix,
+                    "the projective basis is prefix-only"
+                );
+                poly.fix_prefix_var_mut_monomial(r);
+            }
+        }
+    }
 }
 
 /// Which side of the variable order is bound first by the sumcheck rounds.
