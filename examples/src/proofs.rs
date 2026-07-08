@@ -9,6 +9,7 @@ use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::{Mersenne31, QM31};
+use p3_security::fri::FriRegime;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{
     AirLayout, PcsError, Proof, StarkGenericConfig, StarkSecurityParams, VerificationError, prove,
@@ -97,8 +98,15 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
 
-    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
-        &fri_params,
+    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+        FriRegime {
+            log_blowup: fri_params.log_blowup,
+            log_final_poly_len: fri_params.log_final_poly_len,
+            max_log_arity: fri_params.max_log_arity,
+            num_queries: fri_params.num_queries,
+            commit_pow_bits: fri_params.commit_proof_of_work_bits,
+            query_pow_bits: fri_params.query_proof_of_work_bits,
+        },
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
@@ -151,8 +159,15 @@ where
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
-    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
-        &fri_params,
+    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+        FriRegime {
+            log_blowup: fri_params.log_blowup,
+            log_final_poly_len: fri_params.log_final_poly_len,
+            max_log_arity: fri_params.max_log_arity,
+            num_queries: fri_params.num_queries,
+            commit_pow_bits: fri_params.commit_proof_of_work_bits,
+            query_pow_bits: fri_params.query_proof_of_work_bits,
+        },
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
@@ -197,8 +212,15 @@ pub fn prove_m31_keccak<
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = FriParameters::new_benchmark(challenge_mmcs);
-    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
-        &fri_params,
+    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+        FriRegime {
+            log_blowup: fri_params.log_blowup,
+            log_final_poly_len: fri_params.log_final_poly_len,
+            max_log_arity: fri_params.max_log_arity,
+            num_queries: fri_params.num_queries,
+            commit_pow_bits: fri_params.commit_proof_of_work_bits,
+            query_pow_bits: fri_params.query_proof_of_work_bits,
+        },
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
@@ -250,8 +272,15 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = FriParameters::new_benchmark(challenge_mmcs);
-    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
-        &fri_params,
+    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+        FriRegime {
+            log_blowup: fri_params.log_blowup,
+            log_final_poly_len: fri_params.log_final_poly_len,
+            max_log_arity: fri_params.max_log_arity,
+            num_queries: fri_params.num_queries,
+            commit_pow_bits: fri_params.commit_proof_of_work_bits,
+            query_pow_bits: fri_params.query_proof_of_work_bits,
+        },
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),

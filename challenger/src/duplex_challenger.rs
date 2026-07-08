@@ -3,8 +3,10 @@ use alloc::vec::Vec;
 use core::error::Error;
 use core::fmt::{Display, Formatter};
 
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing, PrimeField, PrimeField64};
-use p3_monty_31::{MontyField31, MontyParameters};
+use p3_field::{
+    BasedVectorSpace, Field, PrimeCharacteristicRing, PrimeField, PrimeField64,
+    UniformSamplingField,
+};
 use p3_symmetric::{CryptographicPermutation, Hash, MerkleCap};
 
 use crate::{
@@ -128,7 +130,7 @@ where
     ///
     /// - The tag distinguishes at most 256 absorb lengths.
     /// - Callers must keep logical lengths at most 255, or lengths differing by 256 collide.
-    pub fn absorb_rate_padded_with_tag(&mut self, values: &[F], length_tag: u8) {
+    pub(crate) fn absorb_rate_padded_with_tag(&mut self, values: &[F], length_tag: u8) {
         const {
             assert!(
                 RATE < WIDTH,
@@ -286,35 +288,6 @@ where
         let rand_usize = rand_f.as_canonical_u64() as usize;
         rand_usize & ((1 << bits) - 1)
     }
-}
-
-/// Trait for fields that support uniform bit sampling optimizations
-pub trait UniformSamplingField {
-    /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
-    /// triggering an error / requiring a resample.
-    const MAX_SINGLE_SAMPLE_BITS: usize;
-    /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
-    /// is a multiple of `2^k` and less than P. `m_k` is defined as:
-    ///
-    /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
-    ///
-    /// This is used as a rejection sampling threshold (or error trigger), when sampling
-    /// random bits from uniformly sampled field elements. As long as we sample up to the `k`
-    /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
-    /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
-    /// number of zeroes and ones, leading to a uniform sampling.
-    const SAMPLING_BITS_M: [u64; 64];
-}
-
-// Provide a blanket implementation for Monty31 fields here, which forwards the
-// implementation of the variables to the generic argument `<Field>Parameter`,
-// for which we implement the trait (KoalaBear, BabyBear).
-impl<MP> UniformSamplingField for MontyField31<MP>
-where
-    MP: UniformSamplingField + MontyParameters,
-{
-    const MAX_SINGLE_SAMPLE_BITS: usize = MP::MAX_SINGLE_SAMPLE_BITS;
-    const SAMPLING_BITS_M: [u64; 64] = MP::SAMPLING_BITS_M;
 }
 
 // Set of different strategies we currently support for sampling

@@ -53,11 +53,20 @@ pub struct StarkInstance<'a, SC: SGC, A> {
 
 impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
     /// Build instances from parallel slices of AIRs, traces, and public values.
+    ///
+    /// # Panics
+    /// Panics if `airs`, `traces`, and `public_values` don't all have the same length.
     pub fn new_multiple(
         airs: &'a [A],
         traces: &'a [&'a RowMajorMatrix<Val<SC>>],
         public_values: &[Vec<Val<SC>>],
     ) -> Vec<Self> {
+        assert_eq!(airs.len(), traces.len(), "airs/traces length mismatch");
+        assert_eq!(
+            airs.len(),
+            public_values.len(),
+            "airs/public_values length mismatch"
+        );
         airs.iter()
             .zip(traces.iter())
             .zip(public_values.iter())

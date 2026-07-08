@@ -234,7 +234,7 @@ fn generate_partial_round<
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [F; WIDTH],
-    partial_round: &mut PartialRound<MaybeUninit<F>, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
+    partial_round: &mut PartialRound<MaybeUninit<F>, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constant: F,
 ) {
     state[0] += round_constant;

@@ -200,7 +200,7 @@ mod tests {
         // Known-answer test from the paper / reference implementation.
         // Input: [0, 1, 2, ..., 15], Width: 16, Rounds: 6 (NUM_FULL_ROUNDS=5).
         let bars = MonolithBarsM31;
-        let mds = MonolithMdsMatrixMersenne31::<6>;
+        let mds = MonolithMdsMatrixMersenne31::<16, 5>::new();
         let monolith: MonolithMersenne31<_, 16, 5> = MonolithMersenne31::new(bars, mds);
 
         let mut input: [Mersenne31; 16] = array::from_fn(Mersenne31::from_usize);
@@ -239,7 +239,7 @@ mod tests {
         // The Feistel Type-3 Bricks layer leaves the first element unchanged.
         let mut state: [Mersenne31; 16] = array::from_fn(Mersenne31::from_usize);
         let first = state[0];
-        Monolith::<Mersenne31, MonolithBarsM31, MonolithMdsMatrixMersenne31<6>, 16, 5>::bricks(
+        Monolith::<Mersenne31, MonolithBarsM31, MonolithMdsMatrixMersenne31<16, 5>, 16, 5>::bricks(
             &mut state,
         );
         assert_eq!(state[0], first);
@@ -250,7 +250,7 @@ mod tests {
         // For Bricks, state[1] should become state[1] + state[0]^2.
         let mut state: [Mersenne31; 16] = array::from_fn(Mersenne31::from_usize);
         let expected_1 = state[1] + state[0] * state[0];
-        Monolith::<Mersenne31, MonolithBarsM31, MonolithMdsMatrixMersenne31<6>, 16, 5>::bricks(
+        Monolith::<Mersenne31, MonolithBarsM31, MonolithMdsMatrixMersenne31<16, 5>, 16, 5>::bricks(
             &mut state,
         );
         assert_eq!(state[1], expected_1);
@@ -260,7 +260,7 @@ mod tests {
     fn test_permutation_deterministic() {
         // Two invocations with the same input must produce the same output.
         let bars = MonolithBarsM31;
-        let mds = MonolithMdsMatrixMersenne31::<6>;
+        let mds = MonolithMdsMatrixMersenne31::<16, 5>::new();
         let monolith: MonolithMersenne31<_, 16, 5> = MonolithMersenne31::new(bars, mds);
 
         let input: [Mersenne31; 16] = array::from_fn(Mersenne31::from_usize);

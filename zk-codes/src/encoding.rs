@@ -17,6 +17,9 @@ pub trait ZkEncoding<F: Field> {
     /// The maximum number of queries that can be perfectly simulated.
     fn query_bound(&self) -> usize;
 
+    /// The length of the codeword (the domain size that query positions range over).
+    fn codeword_len(&self) -> usize;
+
     /// Statistical simulation error:
     fn error(&self) -> f64;
 

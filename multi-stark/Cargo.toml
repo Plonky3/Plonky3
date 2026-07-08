@@ -26,6 +26,7 @@ p3-maybe-rayon.workspace = true
 p3-multilinear-util.workspace = true
 p3-sumcheck.workspace = true
 p3-util.workspace = true
+serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror.workspace = true
 tracing.workspace = true
 

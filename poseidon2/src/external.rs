@@ -235,14 +235,14 @@ impl<T, const WIDTH: usize> ExternalLayerConstants<T, WIDTH> {
     /// Get a reference to the list of initial round constants.
     ///
     /// These are used in the first half of the external rounds.
-    pub const fn get_initial_constants(&self) -> &Vec<[T; WIDTH]> {
+    pub fn get_initial_constants(&self) -> &[[T; WIDTH]] {
         &self.initial
     }
 
     /// Get a reference to the list of terminal round constants.
     ///
     /// These are used in the second half (terminal rounds) of the external layer.
-    pub const fn get_terminal_constants(&self) -> &Vec<[T; WIDTH]> {
+    pub fn get_terminal_constants(&self) -> &[[T; WIDTH]] {
         &self.terminal
     }
 }

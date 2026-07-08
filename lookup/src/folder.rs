@@ -174,8 +174,7 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for VerifierConstraintFolderWithLo
     where
         I: Into<Self::ExprEF>,
     {
-        self.inner.accumulator *= self.inner.alpha;
-        self.inner.accumulator += x.into();
+        self.inner.assert_zero_ext(x);
     }
 }
 

@@ -125,7 +125,7 @@ impl<F: Field> Point<F> {
 /// Compute (ṽ_P(x,y) * s_p)^{-1} for each element in the list.
 ///
 /// All denominators share a single batch inversion instead of one inversion per point.
-pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
+pub(crate) fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
     points: &[Point<F>],
     at: Point<EF>,
     log_n: usize,

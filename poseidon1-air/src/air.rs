@@ -154,6 +154,26 @@ impl<
             extra_capacity_bits,
         )
     }
+
+    /// Generate a trace from caller-supplied permutation inputs.
+    ///
+    /// Unlike [`Self::generate_trace_rows`], this proves the actual `inputs` rather than
+    /// fixed-seed random ones.
+    pub fn generate_trace_rows_from_inputs(
+        &self,
+        inputs: Vec<[F; WIDTH]>,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F>
+    where
+        F: PrimeField,
+    {
+        generate_trace_rows::<_, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
+            inputs,
+            &self.full_constants,
+            &self.partial_constants,
+            extra_capacity_bits,
+        )
+    }
 }
 
 impl<

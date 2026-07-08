@@ -13,31 +13,12 @@ use crate::{PeriodicLdeTable, PolynomialSpace};
 
 pub type Val<D> = <D as PolynomialSpace>::Val;
 
-/// Optional fast path for building the periodic LDE table (e.g. via coset LDE).
-/// Implement for PCS backends that can avoid evaluating at every quotient point.
-pub trait BuildPeriodicLdeTableFast {
-    type PeriodicDomain: PolynomialSpace;
-
-    fn maybe_build_periodic_lde_table_fast(
-        &self,
-        _periodic_cols: &[Vec<Val<Self::PeriodicDomain>>],
-        _trace_domain: Self::PeriodicDomain,
-        _quotient_domain: Self::PeriodicDomain,
-    ) -> Option<PeriodicLdeTable<Val<Self::PeriodicDomain>>>
-    where
-        Val<Self::PeriodicDomain>: Clone,
-    {
-        None
-    }
-}
-
 /// A polynomial commitment scheme, for committing to batches of polynomials defined by their evaluations
 /// over some domain.
 ///
 /// In general this does not have to be a hiding commitment scheme but it might be for some implementations.
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
-pub trait Pcs<Challenge, Challenger>:
-    BuildPeriodicLdeTableFast<PeriodicDomain = Self::Domain>
+pub trait Pcs<Challenge, Challenger>
 where
     Challenge: ExtensionField<Val<Self::Domain>>,
 {
@@ -75,9 +56,7 @@ where
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
     /// The base-2 logarithm of the largest evaluation domain this PCS can construct.
-    fn log_max_lde_height(&self) -> usize {
-        usize::BITS as usize - 1
-    }
+    fn log_max_lde_height(&self) -> usize;
 
     /// Given a collection of evaluation matrices, produce a binding commitment to
     /// the polynomials defined by those evaluations. If `zk` is enabled, the evaluations are
@@ -296,7 +275,8 @@ where
 
     /// Build the compact periodic LDE table (height = max_period × blowup, width = num periodic columns).
     ///
-    /// Default: try fast path (e.g. coset LDE), else evaluate each column at the first `extended_height` quotient points.
+    /// Default: evaluate each column at the first `extended_height` quotient points. Backends that
+    /// can compute this faster (e.g. via coset LDE) should override this method.
     fn build_periodic_lde_table(
         &self,
         periodic_cols: &[Vec<Val<Self::Domain>>],
@@ -307,11 +287,6 @@ where
         Self::Domain: Clone,
         Val<Self::Domain>: Clone,
     {
-        if let Some(table) =
-            self.maybe_build_periodic_lde_table_fast(periodic_cols, trace_domain, quotient_domain)
-        {
-            return table;
-        }
         if periodic_cols.is_empty() {
             return PeriodicLdeTable::empty();
         }
