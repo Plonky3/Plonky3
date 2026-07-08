@@ -100,12 +100,20 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
     fn fold(self, r: EF, want_packed: bool) -> Self {
         match self {
             Self::Packed(mut cols) => {
-                cols.par_iter_mut()
-                    .for_each(|col| col.fix_prefix_var_mut(r));
                 if want_packed {
+                    cols.par_iter_mut()
+                        .for_each(|col| col.fix_prefix_var_mut(r));
                     Self::Packed(cols)
                 } else {
-                    Self::Scalar(cols.par_iter().map(Poly::unpack::<F, EF>).collect())
+                    // Fold and unpack each column in a single pass.
+                    Self::Scalar(
+                        cols.into_par_iter()
+                            .map(|mut col| {
+                                col.fix_prefix_var_mut(r);
+                                col.unpack::<F, EF>()
+                            })
+                            .collect(),
+                    )
                 }
             }
             Self::Scalar(mut cols) => {
@@ -113,20 +121,6 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
                 cols.par_iter_mut()
                     .for_each(|col| col.fix_prefix_var_mut(r));
                 Self::Scalar(cols)
-            }
-        }
-    }
-
-    /// Reads the scalar value at flat residual index `idx` from every column.
-    fn scalar_row_at(&self, idx: usize) -> Vec<EF> {
-        match self {
-            Self::Scalar(cols) => cols.iter().map(|col| col.as_slice()[idx]).collect(),
-            Self::Packed(cols) => {
-                let packing_width = F::Packing::WIDTH;
-                let (group, lane) = (idx / packing_width, idx % packing_width);
-                cols.iter()
-                    .map(|col| col.as_slice()[group].extract(lane))
-                    .collect()
             }
         }
     }
@@ -884,13 +878,24 @@ where
         let num_evals = self.num_evals();
         let half = num_evals / 2;
 
-        self.next_tail = self
-            .columns
-            .scalar_row_at(half)
-            .into_iter()
-            .zip(self.next_tail.iter())
-            .map(|(lo, &next_tail)| lo + r * (next_tail - lo))
-            .collect();
+        // Fold each column's repeat-last tail in place with the value at row `half`.
+        // Read that row straight from the current storage, no per-column temporary.
+        match &self.columns {
+            ExtColumns::Scalar(cols) => {
+                for (next_tail, col) in self.next_tail.iter_mut().zip(cols) {
+                    let lo = col.as_slice()[half];
+                    *next_tail = lo + r * (*next_tail - lo);
+                }
+            }
+            ExtColumns::Packed(cols) => {
+                let packing_width = F::Packing::WIDTH;
+                let (group, lane) = (half / packing_width, half % packing_width);
+                for (next_tail, col) in self.next_tail.iter_mut().zip(cols) {
+                    let lo = col.as_slice()[group].extract(lane);
+                    *next_tail = lo + r * (*next_tail - lo);
+                }
+            }
+        }
 
         self.eq_suffix.sum_prefix_var_mut();
 
