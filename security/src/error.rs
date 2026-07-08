@@ -3,9 +3,10 @@
 use alloc::vec::Vec;
 
 use libm::log2;
+use serde::Serialize;
 
 /// `-log2(error_probability)`. Higher = tighter bound.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize)]
 pub struct ErrorBits(pub f64);
 
 impl ErrorBits {

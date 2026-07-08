@@ -18,6 +18,7 @@ use libm::{log2, pow};
 use p3_util::log2_floor_usize;
 
 use crate::error::ErrorBits;
+use crate::ldt::LowDegreeTest;
 use crate::proximity::{LDR_M_CAP, alpha_ldr_m, alpha_udr, compute_upper_m, gamma_ldr_m};
 use crate::shape::{InstanceShape, StarkAirParams};
 
@@ -40,6 +41,24 @@ pub struct FriRegime {
 impl FriRegime {
     const fn folding_factor(self) -> f64 {
         (1usize << self.max_log_arity) as f64
+    }
+}
+
+impl LowDegreeTest for FriRegime {
+    fn log_blowup(&self) -> usize {
+        self.log_blowup
+    }
+
+    fn proven_error_udr(&self, air: &StarkAirParams, shape: &InstanceShape) -> ErrorBits {
+        proven_error_udr(self, air, shape)
+    }
+
+    fn best_ldr(&self, air: &StarkAirParams, shape: &InstanceShape) -> Option<(usize, ErrorBits)> {
+        best_ldr_m(self, air, shape)
+    }
+
+    fn conjectured_error(&self, shape: &InstanceShape) -> ErrorBits {
+        conjectured_error(self, shape)
     }
 }
 
