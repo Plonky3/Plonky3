@@ -179,6 +179,12 @@ pub fn proven_error_ldr_m(
 
 /// Search `m ∈ [3, min(compute_upper_m, LDR_M_CAP)]` for the value
 /// maximising LDR security; returns `(best_m, ldt_error_at_best_m)`.
+///
+/// Optimizes `min(commit, query)` only — the LDT-only error — not the full
+/// `min(ALI, DEEP, commit, query)` composite ultimately reported by
+/// [`crate::stark::proven_security`]. In practice ALI/DEEP don't bind at
+/// the optimum, so the chosen `m` matches what optimizing the full
+/// composite would pick, but this function does not verify that.
 pub fn best_ldr_m(
     regime: &FriRegime,
     air: &StarkAirParams,
@@ -218,8 +224,6 @@ mod tests {
     fn benchmark_shape() -> InstanceShape {
         InstanceShape {
             log_trace_length: 20,
-            num_opening_points: 2,
-            num_columns: 1,
             modulus_bits: 252,
             collision_resistance: 128,
         }
@@ -248,7 +252,6 @@ mod tests {
 
         let udr_bits = crate::stark::proven_security_udr(&air, &shape, udr_ldt, &[])
             .bits()
-            .min(shape.collision_resistance as f64)
             .floor() as usize;
         let ldr_bits = crate::stark::proven_security_ldr_m(
             &air,
@@ -259,7 +262,6 @@ mod tests {
             &[],
         )
         .bits()
-        .min(shape.collision_resistance as f64)
         .floor() as usize;
 
         assert_eq!(udr_bits, 57);
@@ -275,7 +277,6 @@ mod tests {
             &[],
         )
         .bits()
-        .min(shape.collision_resistance as f64)
         .floor() as usize;
         assert_eq!(combined, 65);
     }
@@ -292,8 +293,6 @@ mod tests {
         };
         let shape = InstanceShape {
             log_trace_length: 16,
-            num_opening_points: 2,
-            num_columns: 1,
             modulus_bits: 128,
             collision_resistance: 128,
         };

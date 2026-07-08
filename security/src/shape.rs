@@ -59,8 +59,6 @@ impl StarkAirParams {
 #[derive(Copy, Clone, Debug)]
 pub struct InstanceShape {
     pub log_trace_length: usize,
-    pub num_opening_points: usize,
-    pub num_columns: usize,
     /// Bit-length of the field FRI/WHIR operates over (typically the
     /// extension field).
     pub modulus_bits: usize,

@@ -22,6 +22,10 @@ use crate::{air, deep};
 /// phases (see e.g. [`crate::fri::proven_error_udr`]). `list_size` is the
 /// regime's L⁺. `extras` lets the caller fold in additional independent
 /// error sources (lookup, custom DEEP, …) without dropping the orchestrator.
+///
+/// The result is capped at `shape.collision_resistance`: a collision in the
+/// commitment hash forges the proof regardless of the algebraic bound, so
+/// real security is `min(algebraic soundness, hash collision resistance)`.
 pub fn proven_security_regime(
     air: &StarkAirParams,
     shape: &InstanceShape,
@@ -36,7 +40,8 @@ pub fn proven_security_regime(
     all.push(deep);
     all.push(ldt_error);
     all.extend_from_slice(extras);
-    ErrorBits::min(&all)
+    let algebraic = ErrorBits::min(&all);
+    ErrorBits::from_log2(algebraic.bits().min(shape.collision_resistance as f64))
 }
 
 /// Composite STARK bits in the UDR regime, with optional `extras`.
@@ -93,8 +98,6 @@ mod tests {
     fn shape() -> InstanceShape {
         InstanceShape {
             log_trace_length: 20,
-            num_opening_points: 2,
-            num_columns: 1,
             modulus_bits: 252,
             collision_resistance: 128,
         }

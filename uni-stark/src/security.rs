@@ -133,8 +133,6 @@ impl StarkSecurityParams {
     const fn instance_shape(&self, log_trace_length: usize) -> InstanceShape {
         InstanceShape {
             log_trace_length,
-            num_opening_points: self.max_combo,
-            num_columns: 0,
             modulus_bits: self.num_modulus_bits,
             collision_resistance: self.collision_resistance,
         }
@@ -171,8 +169,6 @@ impl ConjecturedSecurity {
         };
         let shape = InstanceShape {
             log_trace_length: 0,
-            num_opening_points: 0,
-            num_columns: 0,
             modulus_bits: num_modulus_bits,
             collision_resistance,
         };
@@ -218,6 +214,12 @@ impl ProvenSecurity {
     }
 
     /// Compute proven security from protocol parameters and the trace length.
+    ///
+    /// `trace_length` is floored to a power of two via [`log2_floor_usize`]. Plonky3
+    /// commits only power-of-two-sized traces, so this should always be exact; a
+    /// non-power-of-two input would silently analyze a smaller domain and report an
+    /// optimistic bound. Use [`Self::compute_from_proof`] to pass `degree_bits` directly
+    /// when it is available.
     pub fn compute(params: &StarkSecurityParams, trace_length: usize) -> Self {
         if trace_length == 0 {
             return Self {
@@ -225,6 +227,10 @@ impl ProvenSecurity {
                 list_decoding_bits: 0,
             };
         }
+        debug_assert!(
+            trace_length.is_power_of_two(),
+            "trace_length {trace_length} is not a power of two; committed traces always are"
+        );
         Self::compute_from_proof(log2_floor_usize(trace_length), params)
     }
 
@@ -249,19 +255,14 @@ impl ProvenSecurity {
         let regime = params.fri_regime();
         let air = params.air_shape();
         let shape = params.instance_shape(degree_bits);
-        let cap = params.collision_resistance as u64;
 
         let udr_ldt = proven_error_udr(&regime, &air, &shape);
-        let udr_bits = min(
-            proven_security_udr(&air, &shape, udr_ldt, &[]).bits() as u64,
-            cap,
-        ) as usize;
+        let udr_bits = proven_security_udr(&air, &shape, udr_ldt, &[]).bits() as usize;
 
         let ldr_bits = match best_ldr_m(&regime, &air, &shape) {
-            Some((m, ldt)) => min(
-                proven_security_ldr_m(&air, &shape, regime.log_blowup, m, ldt, &[]).bits() as u64,
-                cap,
-            ) as usize,
+            Some((m, ldt)) => {
+                proven_security_ldr_m(&air, &shape, regime.log_blowup, m, ldt, &[]).bits() as usize
+            }
             None => 0,
         };
 

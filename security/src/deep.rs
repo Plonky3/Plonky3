@@ -3,6 +3,12 @@
 //! ε_DEEP = L⁺ · (max_deg · (k + max_combo − 1) + (k − 1)) / |F|,
 //! with k = trace domain size. Matches `soundcalc/circuits/deep_ali.py`.
 //! `soundcalc` divides by `|F| − k − D`; the difference is negligible.
+//!
+//! The list size `L⁺` enters linearly here, following `soundcalc`.
+//! [2024/1553] Theorem 2 (`eps_2`) instead uses `L² ≈ (m/ρ)²`, which is
+//! a few bits more conservative in the list-decoding regime; ALI/DEEP
+//! don't bind at the LDR optimum in practice (see `fri::best_ldr_m`), so
+//! the difference does not currently affect reported bounds.
 
 use libm::log2;
 
