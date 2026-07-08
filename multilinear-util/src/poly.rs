@@ -816,6 +816,20 @@ where
         }
     }
 
+    /// Evaluates the base-field table as *monomial coefficients* at an
+    /// extension-field point.
+    ///
+    /// Widening counterpart of [`Poly::eval_monomial`]; see there for the
+    /// convention (prefix variable most significant).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the point arity does not match the polynomial.
+    pub fn eval_monomial_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
+        assert_eq!(self.num_variables(), point.num_variables());
+        eval_monomial_rec_wide(self.as_slice(), point.as_slice())
+    }
+
     /// Evaluates this polynomial against the repeat-last successor weights at a point.
     ///
     /// Each hypercube row is read at its successor, with the maximal row repeating itself:
@@ -1003,6 +1017,25 @@ where
             // Perform the final linear interpolation for the first variable `x`.
             f0_eval + (f1_eval - f0_eval) * *x
         }
+    }
+}
+
+/// Widening variant of [`eval_monomial_rec`]: base-field coefficients
+/// evaluated at an extension-field point, returning an extension value.
+fn eval_monomial_rec_wide<A, Ch>(coeffs: &[A], zs: &[Ch]) -> Ch
+where
+    A: Copy,
+    Ch: Algebra<A> + Copy,
+{
+    match (coeffs, zs) {
+        ([c], []) => Ch::ZERO + *c,
+        (_, [z, sub_point @ ..]) => {
+            let (lo, hi) = coeffs.split_at(coeffs.len() / 2);
+            let lo = eval_monomial_rec_wide(lo, sub_point);
+            let hi = eval_monomial_rec_wide(hi, sub_point);
+            lo + hi * *z
+        }
+        _ => unreachable!("coefficient count must be 2^|zs|"),
     }
 }
 
