@@ -27,9 +27,9 @@ use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
+use crate::SumcheckData;
 use crate::constraints::Constraint;
 use crate::strategy::{Basis, VariableOrder};
-use crate::{SumcheckData, extrapolate_01inf};
 
 /// A paired representation of evaluation and weight polynomials for quadratic sumcheck.
 ///
@@ -443,17 +443,10 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         // Step 5: Fold both polynomials using the challenge.
         self.compress(r);
 
-        // Step 6: Update the claimed sum to h(r) via the {0, 1, inf} weights.
-        //
-        // Evaluation basis: the message is [h(0), h(inf)] and the round
-        // identity h(0) + h(1) = C supplies h(1) = C - h(0).
-        // Projective basis: the message is [s(1), s(inf)] and the round
-        // identity s(0) + s(inf) = C supplies s(0) = C - s(inf)
-        // (eprint 2026/762, Fig. 3).
-        *sum = match basis {
-            Basis::Evaluation => extrapolate_01inf(c_a, *sum - c_a, c_inf, r),
-            Basis::Projective => extrapolate_01inf(*sum - c_inf, c_a, c_inf, r),
-        };
+        // Step 6: Update the claimed sum to h(r); the round identity that
+        // supplies the third quadratic value is basis-dependent and lives in
+        // one place, shared with the verifier.
+        *sum = basis.reduce_claim(c_a, c_inf, r, *sum);
 
         // Sanity check: the updated sum should equal the inner product after folding.
         debug_assert_eq!(*sum, self.dot_product());
@@ -664,6 +657,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::extrapolate_01inf;
     use crate::strategy::sumcheck_coefficients_prefix;
 
     type F = BabyBear;

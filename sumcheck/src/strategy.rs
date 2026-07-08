@@ -436,6 +436,26 @@ impl Basis {
         }
     }
 
+    /// Reduces the running claim to `h(r)` from the two sent message elements.
+    ///
+    /// One source of truth for the round identity, shared by the prover and
+    /// the verifier:
+    ///
+    /// - [`Basis::Evaluation`]: message `[h(0), h(inf)]`; the identity
+    ///   `h(0) + h(1) = C` supplies `h(1) = C - h(0)`.
+    /// - [`Basis::Projective`]: message `[s(1), s(inf)]`; the identity
+    ///   `s(0) + s(inf) = C` supplies `s(0) = C - s(inf)`
+    ///   (eprint 2026/762, Fig. 3).
+    ///
+    /// Both reconstruct the quadratic through `{0, 1, inf}` and evaluate it
+    /// at `r`.
+    pub fn reduce_claim<EF: Field>(self, c_a: EF, c_inf: EF, r: EF, claimed_sum: EF) -> EF {
+        match self {
+            Self::Evaluation => extrapolate_01inf(c_a, claimed_sum - c_a, c_inf, r),
+            Self::Projective => extrapolate_01inf(claimed_sum - c_inf, c_a, c_inf, r),
+        }
+    }
+
     /// Binds the active round variable of `poly` to challenge `r`.
     ///
     /// - [`Basis::Evaluation`]: `a0 + (a1 - a0) * r`, dispatching on `order`.
@@ -635,6 +655,15 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// Folds the residual product polynomial by one challenge and updates the
     /// claimed sum with the same quadratic extrapolation as the plain path.
     pub(crate) fn fold_round_with_coefficients(&mut self, c0: EF, c_inf: EF, gamma: EF) {
+        // This entry point hardcodes the evaluation-basis reduction; its only
+        // caller is the zk residual path, which does not consult the basis.
+        // Guard the assumption so a projective configuration cannot silently
+        // run evaluation arithmetic here.
+        debug_assert_eq!(
+            self.poly.basis(),
+            Basis::Evaluation,
+            "the zk residual path does not support the projective basis"
+        );
         self.sum = extrapolate_01inf(c0, self.sum - c0, c_inf, gamma);
         self.poly.fold_round(gamma);
         debug_assert_eq!(self.sum, self.poly.dot_product());

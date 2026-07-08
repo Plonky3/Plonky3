@@ -207,7 +207,7 @@ pub(super) mod test_utils {
 
     use crate::SumcheckData;
     use crate::layout::{Layout, LayoutStrategy, Table, TableShape, Verifier, Witness};
-    use crate::strategy::VariableOrder;
+    use crate::strategy::{Basis, VariableOrder};
     use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
     use crate::tests::*;
 
@@ -324,7 +324,13 @@ pub(super) mod test_utils {
         let mut verifier_challenge = Point::new(vec![]);
         verifier_challenge.extend(
             &proof0
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    0,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
 
@@ -339,7 +345,13 @@ pub(super) mod test_utils {
         constraints.push(intermediate_constraint);
         verifier_challenge.extend(
             &proof1
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, POW_BITS)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    POW_BITS,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
         verifier_challenge.extend(
@@ -349,6 +361,7 @@ pub(super) mod test_utils {
                     &mut sum,
                     stacked_num_variables - 2 * FOLDING,
                     0,
+                    Basis::Evaluation,
                 )
                 .unwrap(),
         );
@@ -637,6 +650,7 @@ mod tests {
         FOLDING, build_tables, run_roundtrip_test, table_shapes, tables_from_shape,
     };
     use crate::layout::{Layout, Verifier};
+    use crate::strategy::Basis;
     use crate::table::OpeningBatch;
     use crate::tests::*;
 
@@ -840,7 +854,13 @@ mod tests {
         let mut verifier_challenge = Point::new(vec![]);
         verifier_challenge.extend(
             &proof0
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    0,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
 
@@ -857,7 +877,13 @@ mod tests {
         // The grinding stage carries proof-of-work bits; the final stage none.
         verifier_challenge.extend(
             &proof1
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, POW_BITS)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    POW_BITS,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
         verifier_challenge.extend(
@@ -867,6 +893,7 @@ mod tests {
                     &mut sum,
                     stacked_num_variables - 2 * FOLDING,
                     0,
+                    Basis::Evaluation,
                 )
                 .unwrap(),
         );
@@ -956,7 +983,13 @@ mod tests {
         let mut verifier_challenge = Point::new(vec![]);
         verifier_challenge.extend(
             &proof0
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    0,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
 
@@ -973,7 +1006,13 @@ mod tests {
         // The grinding stage carries proof-of-work bits; the final stage none.
         verifier_challenge.extend(
             &proof1
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, POW_BITS)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    POW_BITS,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
         verifier_challenge.extend(
@@ -983,6 +1022,7 @@ mod tests {
                     &mut sum,
                     stacked_num_variables - 2 * FOLDING,
                     0,
+                    Basis::Evaluation,
                 )
                 .unwrap(),
         );
