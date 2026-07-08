@@ -554,19 +554,20 @@ where
         // Replace index with the index of the parent FRI node.
         *start_index >>= log_arity;
 
-        // Record the group index and reconstructed row for the round's shared
-        // verification. `evals` is tiny, so the clone is cheap.
-        group_indices_by_round[round].push(*start_index);
-        rows_by_round[round].push(vec![evals.clone()]);
-
-        // Fold the group of sibling nodes to get the evaluation of the parent FRI node.
+        // Fold the sibling group into the parent FRI node's evaluation.
+        // Borrowing the row keeps ownership for the collector below.
         folded_eval = folding.fold_row(
             *start_index,
             log_folded_height,
             log_arity,
             beta,
-            evals.into_iter(),
+            evals.iter().copied(),
         );
+
+        // Hand this query's group index and reconstructed row to the collector.
+        // The round's shared proof authenticates every query at once.
+        group_indices_by_round[round].push(*start_index);
+        rows_by_round[round].push(vec![evals]);
 
         // Update current height
         log_current_height = log_folded_height;
@@ -907,11 +908,17 @@ mod tests {
         >,
     }
 
-    /// Build a deterministic, minimal test fixture.
+    /// Build the default fixture: the minimal instance with 2 queries.
+    ///
+    /// Two queries are the minimum for the arity-consistency checks.
+    fn make_test_fixture() -> TestFixture {
+        make_test_fixture_with_queries(2)
+    }
+
+    /// Build a deterministic, minimal test fixture with the given query count.
     ///
     /// Commits a single 8-row, 2-column trace, opens it at one
     /// random challenge point, and produces a valid FRI proof with:
-    /// - 2 queries (minimum for arity-consistency checks)
     /// - binary folding (log arity 1)
     /// - blowup factor 2
     /// - zero proof-of-work bits
@@ -932,13 +939,16 @@ mod tests {
     /// The resulting proof contains:
     /// - 3 commit-phase commitments (one per round)
     /// - 3 proof-of-work witnesses (one per round)
-    /// - 3 commit-phase multi-openings (one per round, each covering both queries)
-    /// - 1 input batch multi-opening (covering both queries)
+    /// - 3 commit-phase multi-openings (one per round, each covering every query)
+    /// - 1 input batch multi-opening (covering every query)
     /// - 1 final polynomial coefficient
+    ///
+    /// The final round folds a 4-point codeword onto a 2-node layer.
+    /// So any 3 or more queries must collide on one of those 2 nodes.
     ///
     /// The challenger is advanced past the opened-values observation,
     /// ready for the verification entry point.
-    fn make_test_fixture() -> TestFixture {
+    fn make_test_fixture_with_queries(num_queries: usize) -> TestFixture {
         // Use a fixed seed so every test run is deterministic.
         let mut rng = SmallRng::seed_from_u64(42);
 
@@ -958,14 +968,13 @@ mod tests {
         //   the smallest blowup for a sound protocol
         // - final poly length 1: fold down to f^(r) with degree 0
         // - binary folding: each round halves the domain (arity 2)
-        // - 2 queries: minimum for arity-schedule consistency checks
-        //   across different query proofs
+        // - queries: chosen by the caller
         // - 0 PoW bits: every witness is trivially valid
         let fri_params = FriParameters {
             log_blowup: 1,
             log_final_poly_len: 0,
             max_log_arity: 1,
-            num_queries: 2,
+            num_queries,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 0,
             mmcs: challenge_mmcs,
@@ -1051,6 +1060,82 @@ mod tests {
     ) -> Result<(), TestError> {
         let folding: Folding = TwoAdicFriFolding(PhantomData);
         verify_fri(&folding, params, proof, challenger, cwop, input_mmcs)
+    }
+
+    #[test]
+    fn colliding_queries_are_collapsed() {
+        // The last round folds a 4-point codeword onto a 2-node layer.
+        // Three queries into two nodes must collide by pigeonhole.
+        // The shared node is opened once and reused by both queries.
+        //
+        // Fixture state (seed 42, 3 queries): sampled indices [2, 4, 11].
+        // Final group index = index >> 3.
+        //
+        //     query 0 : idx 2  -> node 0
+        //     query 1 : idx 4  -> node 0   (collides with query 0)
+        //     query 2 : idx 11 -> node 1
+        //
+        // An honest proof must still verify.
+        // The multiproof authenticates the shared node once.
+        // Both colliding queries fold through it.
+        let f = make_test_fixture_with_queries(3);
+        let mut challenger = f.challenger.clone();
+        let result = run_verify_fri(
+            &f.fri_params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        );
+        assert!(
+            result.is_ok(),
+            "honest proof with colliding queries should pass: {result:?}"
+        );
+    }
+
+    #[test]
+    fn tampered_shared_node_is_rejected() {
+        let f = make_test_fixture_with_queries(3);
+        let mut proof = f.proof.clone();
+
+        // Two queries collide on one node in the last round.
+        // The multiproof opens that shared node once for both.
+        // Tampering the shared node's values must still be caught.
+        //
+        // Fixture state (seed 42, 3 queries): sampled indices [2, 4, 11].
+        // Last round folds a 4-point codeword onto a 2-node layer.
+        //
+        //     query 0 : idx 2  -> node 0, position 0
+        //     query 1 : idx 4  -> node 0, position 1
+        //     query 2 : idx 11 -> node 1
+        //
+        // Mutation: bump query 0's sibling in the shared node by one.
+        //
+        //     honest : the row folds to the committed final value
+        //     bumped : the row folds to a different value
+        //
+        // The reconstructed row feeds the fold.
+        // A tampered value changes the folded evaluation.
+        // The final-polynomial check then rejects the proof.
+        let last_round = proof.commit_phase_openings.len() - 1;
+        proof.commit_phase_openings[last_round].sibling_values[0][0] += Challenge::ONE;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject a tampered shared node");
+
+        // The fold arithmetic pins the shared node's values.
+        // A collapsed opening grants no escape from the final-polynomial check.
+        match err {
+            FriError::FinalPolyMismatch => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
     }
 
     #[test]
