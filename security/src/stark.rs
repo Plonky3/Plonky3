@@ -102,21 +102,38 @@ pub fn proven_security(
 /// instance, evaluated in `assumption`'s regime (UD in the unique-decoding
 /// regime, JB in the list-decoding regime). Returns `None` when nothing is
 /// batched (fewer than two functions).
+///
+/// `ldr_m` is the proximity parameter the surrounding [`Regime::ListDecoding`]
+/// actually decodes at (e.g. FRI's `best_m`); `None` for the unique-decoding
+/// regime, where it does not apply. The batch RLC must be δ-close at the
+/// same radius the rest of the regime's terms (ALI/DEEP/LDT) are evaluated
+/// at, so the Johnson-bound branch is computed at `ldr_m` rather than the
+/// fixed `m = 10` WHIR safety choice.
 fn batching_term(
     assumption: SecurityAssumption,
     shape: &InstanceShape,
     log_blowup: usize,
+    ldr_m: Option<usize>,
 ) -> Option<SecurityTerm> {
     let num_functions = shape.num_batched_functions;
     if num_functions < 2 {
         return None;
     }
-    let bits = assumption.prox_gaps_error(
-        shape.log_trace_length,
-        log_blowup,
-        shape.modulus_bits,
-        num_functions,
-    );
+    let bits = match (assumption, ldr_m) {
+        (SecurityAssumption::JohnsonBound, Some(m)) => SecurityAssumption::prox_gaps_error_jb_at_m(
+            shape.log_trace_length,
+            log_blowup,
+            shape.modulus_bits,
+            num_functions,
+            m,
+        ),
+        _ => assumption.prox_gaps_error(
+            shape.log_trace_length,
+            log_blowup,
+            shape.modulus_bits,
+            num_functions,
+        ),
+    };
     Some(SecurityTerm::new(
         BATCH_LABEL,
         ErrorBits::from_log2(bits.max(0.0)),
@@ -177,7 +194,7 @@ pub fn proven_security_report<L: LowDegreeTest>(
         shape,
         list_size_udr(),
         udr_ldt,
-        batching_term(SecurityAssumption::UniqueDecoding, shape, log_blowup),
+        batching_term(SecurityAssumption::UniqueDecoding, shape, log_blowup, None),
         extras,
     );
 
@@ -189,7 +206,7 @@ pub fn proven_security_report<L: LowDegreeTest>(
             shape,
             list_size,
             ldr_ldt,
-            batching_term(SecurityAssumption::JohnsonBound, shape, log_blowup),
+            batching_term(SecurityAssumption::JohnsonBound, shape, log_blowup, Some(m)),
             extras,
         )
     });
@@ -392,5 +409,57 @@ mod tests {
         // With 2^20 batched functions over a 64-bit field, the batch term binds.
         let (_, binding) = with_batch.binding();
         assert_eq!(binding.label, BATCH_LABEL);
+    }
+
+    /// The LDR batch term is evaluated at the same `m` the surrounding
+    /// `ListDecoding` regime reports (`best_m`), not the fixed `m = 10`
+    /// WHIR safety choice — at the benchmark shape `best_m` is far from 10,
+    /// so this pins the two diverging.
+    #[test]
+    fn ldr_batch_term_uses_regime_m_not_fixed_ten() {
+        let regime = benchmark_regime();
+        let air = air();
+        let shape = InstanceShape {
+            num_batched_functions: 2,
+            ..shape()
+        };
+
+        let report = proven_security_report(&regime, &air, &shape, &[]);
+        let ldr = report
+            .ldr
+            .as_ref()
+            .expect("benchmark has a valid LDR regime");
+        let Regime::ListDecoding { m } = ldr.regime else {
+            panic!("expected a list-decoding regime");
+        };
+        assert_ne!(m, 10, "test only pins the m != 10 path if best_m != 10");
+
+        let batch_term = ldr
+            .terms()
+            .iter()
+            .find(|t| t.label == BATCH_LABEL)
+            .expect("batching two functions emits a batch-combination term");
+
+        let expected_bits = SecurityAssumption::prox_gaps_error_jb_at_m(
+            shape.log_trace_length,
+            regime.log_blowup,
+            shape.modulus_bits,
+            shape.num_batched_functions,
+            m,
+        )
+        .max(0.0);
+        assert!((batch_term.bits.bits() - expected_bits).abs() < 1e-9);
+
+        // The fixed m = 10 WHIR default would report a tighter (larger)
+        // batch error here, since (m + 1/2)^5 grows with m.
+        let fixed_m_bits = SecurityAssumption::JohnsonBound
+            .prox_gaps_error(
+                shape.log_trace_length,
+                regime.log_blowup,
+                shape.modulus_bits,
+                shape.num_batched_functions,
+            )
+            .max(0.0);
+        assert!(batch_term.bits.bits() < fixed_m_bits);
     }
 }
