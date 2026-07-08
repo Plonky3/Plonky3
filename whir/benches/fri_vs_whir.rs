@@ -54,7 +54,7 @@ use itertools::Itertools;
 use p3_challenger::{
     CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
 };
-use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, MultilinearPcs, Pcs};
+use p3_commit::{ExtensionMmcs, Mmcs, MultilinearPcs, Pcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
@@ -452,8 +452,11 @@ where
 }
 
 /// Bound bundle the FRI helpers require on the input MMCS type.
-trait FriInputMmcs: Mmcs<F, Proof: Sync, Error: Sync> + Clone + Send + Sync {}
-impl<T: Mmcs<F, Proof: Sync, Error: Sync> + Clone + Send + Sync> FriInputMmcs for T {}
+trait FriInputMmcs: Mmcs<F, MultiProof: Sync, Proof: Sync, Error: Sync> + Clone + Send + Sync {}
+impl<T: Mmcs<F, MultiProof: Sync, Proof: Sync, Error: Sync> + Clone + Send + Sync> FriInputMmcs
+    for T
+{
+}
 
 /// Bound bundle the FRI helpers require on the per-round MMCS type.
 trait FriChallengeMmcs: Mmcs<EF> + Clone + Send + Sync {}
@@ -503,7 +506,8 @@ where
 }
 
 /// FRI proof type for this bench's MMCS configuration.
-type FriProofTy<InMmcs, ChMmcs> = p3_fri::FriProof<EF, ChMmcs, F, Vec<BatchOpening<F, InMmcs>>>;
+type FriProofTy<InMmcs, ChMmcs> =
+    p3_fri::FriProof<EF, ChMmcs, F, Vec<p3_fri::BatchMultiOpening<F, InMmcs>>>;
 
 /// FRI commitment type for an input MMCS.
 type FriCommitTy<InMmcs> = <InMmcs as Mmcs<F>>::Commitment;

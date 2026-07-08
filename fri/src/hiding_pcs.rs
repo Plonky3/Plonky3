@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, TwoAdicField, batch_multiplicative_inverse};
@@ -17,7 +17,7 @@ use spin::Mutex;
 use tracing::info_span;
 
 use crate::verifier::FriError;
-use crate::{FriParameters, FriProof, TwoAdicFriPcs};
+use crate::{BatchMultiOpening, FriParameters, FriProof, TwoAdicFriPcs};
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
@@ -70,7 +70,7 @@ where
     Val: TwoAdicField,
     StandardUniform: Distribution<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: Mmcs<Val, Proof: Sync, Error: Sync>,
+    InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
     Challenger:
@@ -86,7 +86,7 @@ where
     /// The second item is the usual FRI proof.
     type Proof = (
         OpenedValues<Challenge>,
-        FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>,
+        FriProof<Challenge, FriMmcs, Val, Vec<BatchMultiOpening<Val, InputMmcs>>>,
     );
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 

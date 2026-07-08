@@ -1,9 +1,11 @@
 use alloc::collections::btree_map::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
+use core::iter;
 
-use itertools::Itertools;
+use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
+use p3_commit::Mmcs;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Dimensions;
@@ -11,8 +13,8 @@ use p3_util::{log2_strict_usize, reverse_bits_len};
 use thiserror::Error;
 
 use crate::{
-    CommitPhaseProofStep, CommitmentWithOpeningPoints, FriFoldingStrategy, FriParameters, FriProof,
-    QueryProof,
+    BatchMultiOpening, CommitPhaseMultiStep, CommitmentWithOpeningPoints, FriFoldingStrategy,
+    FriParameters, FriProof,
 };
 
 #[derive(Debug, Error)]
@@ -21,6 +23,8 @@ where
     CommitMmcsErr: core::fmt::Debug,
     InputError: core::fmt::Debug,
 {
+    #[error("commit phase opening count mismatch: expected {expected}, got {got}")]
+    CommitPhaseOpeningsCountMismatch { expected: usize, got: usize },
     #[error("query {query}: commit phase opening count mismatch: expected {expected}, got {got}")]
     QueryCommitPhaseOpeningsCountMismatch {
         query: usize,
@@ -35,12 +39,24 @@ where
         expected: Vec<usize>,
         got: Vec<usize>,
     },
+    #[error("query proof count mismatch: expected {expected}, got {got}")]
+    QueryProofCountMismatch { expected: usize, got: usize },
+    #[error("round {round}: opened query count mismatch: expected {expected}, got {got}")]
+    CommitPhaseQueryCountMismatch {
+        round: usize,
+        expected: usize,
+        got: usize,
+    },
+    #[error("batch {batch}: opened query count mismatch: expected {expected}, got {got}")]
+    InputOpeningsQueryCountMismatch {
+        batch: usize,
+        expected: usize,
+        got: usize,
+    },
     #[error("commit PoW witness count mismatch: expected {expected}, got {got}")]
     CommitPowWitnessCountMismatch { expected: usize, got: usize },
     #[error("final polynomial length mismatch: expected {expected}, got {got}")]
     FinalPolyLengthMismatch { expected: usize, got: usize },
-    #[error("query proof count mismatch: expected {expected}, got {got}")]
-    QueryProofCountMismatch { expected: usize, got: usize },
     /// The instance is configured with zero queries.
     ///
     /// - The query loop never runs, so any final polynomial would be accepted.
@@ -177,7 +193,7 @@ where
             Val,
             Challenge,
             InputError = InputMmcs::Error,
-            InputProof = Vec<BatchOpening<Val, InputMmcs>>,
+            InputProof = Vec<BatchMultiOpening<Val, InputMmcs>>,
         >,
 {
     // Reject a vacuous instance before any transcript work.
@@ -194,59 +210,52 @@ where
     // (i.e counting the number (point, claimed_evaluation) pairs).
     let alpha: Challenge = challenger.sample_algebra_element();
 
-    // Validate that all query proofs have the same number of commit phase openings
+    // One commit-phase opening set per commitment.
     let expected_rounds = proof.commit_phase_commits.len();
-    for (query, qp) in proof.query_proofs.iter().enumerate() {
-        let got_rounds = qp.commit_phase_openings.len();
-        if got_rounds != expected_rounds {
-            return Err(FriError::QueryCommitPhaseOpeningsCountMismatch {
-                query,
-                expected: expected_rounds,
-                got: got_rounds,
-            });
-        }
+    if proof.commit_phase_openings.len() != expected_rounds {
+        return Err(FriError::CommitPhaseOpeningsCountMismatch {
+            expected: expected_rounds,
+            got: proof.commit_phase_openings.len(),
+        });
     }
 
-    // Extract the per-round folding arities from the proof and ensure they are consistent.
-    let log_arities: Vec<usize> = if let Some(qp) = proof.query_proofs.first() {
-        qp.commit_phase_openings
-            .iter()
-            .enumerate()
-            .map(|(round, opening)| {
-                opening
-                    .checked_log_arity(params.max_log_arity)
-                    .ok_or(FriError::InvalidLogArity {
-                        round,
-                        log_arity: opening.log_arity as usize,
-                        max: params.max_log_arity,
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        Vec::new()
-    };
+    // Extract the per-round folding arities from the proof.
+    let log_arities: Vec<usize> = proof
+        .commit_phase_openings
+        .iter()
+        .enumerate()
+        .map(|(round, opening)| {
+            opening
+                .checked_log_arity(params.max_log_arity)
+                .ok_or(FriError::InvalidLogArity {
+                    round,
+                    log_arity: opening.log_arity as usize,
+                    max: params.max_log_arity,
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    for (query, qp) in proof.query_proofs.iter().enumerate().skip(1) {
-        let got_log_arities = qp
-            .commit_phase_openings
-            .iter()
-            .enumerate()
-            .map(|(round, opening)| {
-                opening
-                    .checked_log_arity(params.max_log_arity)
-                    .ok_or(FriError::InvalidLogArity {
-                        round,
-                        log_arity: opening.log_arity as usize,
-                        max: params.max_log_arity,
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if got_log_arities != log_arities {
-            return Err(FriError::QueryLogAritiesMismatch {
-                query,
-                expected: log_arities,
-                got: got_log_arities,
+    // Every round must open every query, and each opening must carry
+    // exactly arity - 1 sibling values.
+    for (round, (opening, &log_arity)) in
+        izip!(&proof.commit_phase_openings, &log_arities).enumerate()
+    {
+        if opening.sibling_values.len() != params.num_queries {
+            return Err(FriError::CommitPhaseQueryCountMismatch {
+                round,
+                expected: params.num_queries,
+                got: opening.sibling_values.len(),
             });
+        }
+        let arity = 1 << log_arity;
+        for siblings in &opening.sibling_values {
+            if siblings.len() != arity - 1 {
+                return Err(FriError::SiblingValuesLengthMismatch {
+                    round,
+                    expected: arity - 1,
+                    got: siblings.len(),
+                });
+            }
         }
     }
 
@@ -322,14 +331,6 @@ where
     // Observe all coefficients of the final polynomial.
     challenger.observe_algebra_slice(&proof.final_poly);
 
-    // Ensure that we have the expected number of FRI query proofs.
-    if proof.query_proofs.len() != params.num_queries {
-        return Err(FriError::QueryProofCountMismatch {
-            expected: params.num_queries,
-            got: proof.query_proofs.len(),
-        });
-    }
-
     // Bind the variable-arity schedule into the transcript before query grinding.
     for &log_arity in &log_arities {
         challenger.observe(Val::from_usize(log_arity));
@@ -343,26 +344,39 @@ where
     // The log of the final domain size.
     let log_final_height = params.log_blowup + params.log_final_poly_len;
 
-    for QueryProof {
-        input_proof,
-        commit_phase_openings,
-    } in proof.query_proofs.iter()
-    {
-        // For each query proof, we start by generating the random index.
-        let index =
-            challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits());
+    // Sample every query index. The transcript is identical to sampling one
+    // index per query proof: nothing is observed between samples.
+    let indices: Vec<usize> = iter::repeat_with(|| {
+        challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits())
+    })
+    .take(params.num_queries)
+    .collect();
 
-        // Next we open all polynomials `f` at the relevant index and combine them into our FRI inputs.
-        let ro = open_input(
-            params,
-            log_global_max_height,
-            index,
-            input_proof,
-            alpha,
-            input_mmcs,
-            commitments_with_opening_points,
-        )?;
+    // Check all input openings against their commitments (one shared proof per
+    // batch) and combine the opened values into each query's FRI inputs.
+    let reduced_openings = open_inputs(
+        params,
+        log_global_max_height,
+        &indices,
+        &proof.input_openings,
+        alpha,
+        input_mmcs,
+        commitments_with_opening_points,
+    )?;
 
+    // Walk every query's fold chain (pure arithmetic), reconstructing the full
+    // evaluation row the prover committed to at each round. The rows are
+    // authenticated afterwards, one shared check per round.
+    let num_rounds = proof.commit_phase_commits.len();
+    let mut group_indices_by_round: Vec<Vec<usize>> =
+        vec![Vec::with_capacity(params.num_queries); num_rounds];
+    // rows_by_round[round][query] holds the opened rows of the round's single
+    // committed matrix, in the `opened_values[query][matrix]` shape that the
+    // multi-opening verification expects.
+    let mut rows_by_round: Vec<Vec<Vec<Vec<Challenge>>>> =
+        vec![Vec::with_capacity(params.num_queries); num_rounds];
+
+    for (query, (&index, ro)) in izip!(&indices, reduced_openings).enumerate() {
         debug_assert!(
             ro.iter().tuple_windows().all(|((l, _), (r, _))| l > r),
             "reduced openings sorted by height descending"
@@ -371,23 +385,21 @@ where
         // If we queried extra bits, shift them off now.
         let mut domain_index = index >> folding.extra_query_index_bits();
 
-        let fold_data_iter = betas
-            .iter()
-            .zip(proof.commit_phase_commits.iter())
-            .zip(commit_phase_openings.iter());
-
         // Starting at the evaluation at `index` of the initial domain,
-        // perform FRI folds until the domain size reaches the final domain size.
-        // Check after each fold that the pair of sibling evaluations at the current
-        // node match the commitment.
-        let folded_eval = verify_query(
+        // perform FRI folds until the domain size reaches the final domain size,
+        // recording the reconstructed evaluation row of every round.
+        let folded_eval = fold_query(
             folding,
-            params,
+            query,
             &mut domain_index,
-            fold_data_iter,
+            &betas,
+            &log_arities,
+            &proof.commit_phase_openings,
             ro,
             log_global_max_height,
             log_final_height,
+            &mut group_indices_by_round,
+            &mut rows_by_round,
         )?;
 
         // We open the final polynomial at index `domain_index`, which corresponds to evaluating
@@ -407,54 +419,88 @@ where
         }
     }
 
+    // Verify the commitment to the evaluations of every queried group, one
+    // shared amortized check per round. Paths that share a parent reuse a
+    // single compression instead of recomputing it once per query.
+    let mut log_current_height = log_global_max_height;
+    for (round, ((commit, opening), &log_arity)) in proof
+        .commit_phase_commits
+        .iter()
+        .zip(&proof.commit_phase_openings)
+        .zip(&log_arities)
+        .enumerate()
+    {
+        let arity = 1 << log_arity;
+        let log_folded_height = log_current_height - log_arity;
+        let dims = &[Dimensions {
+            width: arity,
+            height: 1 << log_folded_height,
+        }];
+        params
+            .mmcs
+            .verify_multi_batch(
+                commit,
+                dims,
+                &group_indices_by_round[round],
+                &rows_by_round[round],
+                &opening.opening_proof,
+            )
+            .map_err(FriError::CommitPhaseMmcsError)?;
+        log_current_height = log_folded_height;
+    }
+
     Ok(())
 }
 
-type CommitStep<'a, F, M> = (
-    (
-        &'a F, // The challenge point beta used for the next fold of FRI evaluations.
-        &'a <M as Mmcs<F>>::Commitment, // A commitment to the FRI evaluations on the current domain.
-    ),
-    &'a CommitPhaseProofStep<F, M>, // The sibling and opening proof for the current FRI node.
-);
-
 /// Verifies a single query chain in the FRI proof. This is the verifier complement
-/// to the prover's `answer_query` function.
+/// to the prover's `answer_queries` function.
 ///
 /// Given an initial `index` corresponding to a point in the initial domain
 /// and a series of `reduced_openings` corresponding to evaluations of
 /// polynomials to be added in at specific domain sizes, perform the standard
-/// sequence of FRI folds, checking at each step that the group of sibling evaluations
-/// matches the commitment.
+/// sequence of FRI folds, reconstructing at each step the full evaluation row
+/// the prover committed to.
+///
+/// This pass is pure arithmetic: the reconstructed rows and group indices are
+/// pushed into the per-round collectors and authenticated afterwards, one
+/// shared amortized check per round.
 ///
 /// With variable arity, each round may fold by a different factor determined by the
 /// `log_arity` field in the opening.
 ///
 /// Arguments:
 /// - `folding`: The FRI folding scheme used by the prover.
-/// - `params`: The parameters for the specific FRI protocol instance.
+/// - `query`: The position of this query within the sampled batch.
 /// - `start_index`: The opening index for the unfolded polynomial.
-/// - `fold_data_iter`: An iterator containing, for each fold, the beta challenge, polynomial commitment
-///   and commitment opening at the appropriate index.
+/// - `betas`: The folding challenge of each round.
+/// - `log_arities`: The validated log-arity schedule, one entry per round.
+/// - `commit_phase_openings`: The per-round openings; round `i` holds this query's siblings at `sibling_values[query]`.
 /// - `reduced_openings`: A vector of pairs of a size and an opening. The opening is a linear combination
 ///   of all input polynomials of that size opened at the appropriate index. Each opening is added into the
 ///   the FRI folding chain once the domain size reaches the size specified in the pair.
 /// - `log_global_max_height`: The log of the maximum domain size.
 /// - `log_final_height`: The log of the final domain size.
+/// - `group_indices_by_round`: Collector for this query's group index at each round.
+/// - `rows_by_round`: Collector for this query's reconstructed evaluation row at each round.
+#[expect(clippy::too_many_arguments)]
 #[inline]
-fn verify_query<'a, Folding, F, EF, M>(
+fn fold_query<Folding, F, EF, M>(
     folding: &Folding,
-    params: &FriParameters<M>,
+    query: usize,
     start_index: &mut usize,
-    fold_data_iter: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>,
+    betas: &[EF],
+    log_arities: &[usize],
+    commit_phase_openings: &[CommitPhaseMultiStep<EF, M>],
     reduced_openings: FriOpenings<EF>,
     log_global_max_height: usize,
     log_final_height: usize,
+    group_indices_by_round: &mut [Vec<usize>],
+    rows_by_round: &mut [Vec<Vec<Vec<EF>>>],
 ) -> Result<EF, FriError<M::Error, Folding::InputError>>
 where
     F: Field,
     EF: ExtensionField<F>,
-    M: Mmcs<EF> + 'a,
+    M: Mmcs<EF>,
     Folding: FriFoldingStrategy<F, EF>,
 {
     let mut ro_iter = reduced_openings.into_iter().peekable();
@@ -481,35 +527,23 @@ where
 
     // We start with evaluations over a domain of size (1 << log_global_max_height). We fold
     // using FRI until the domain size reaches (1 << log_final_height).
-    for (round, ((&beta, comm), opening)) in fold_data_iter.enumerate() {
-        let max_log_arity = core::cmp::min(params.max_log_arity, log_current_height);
-        let Some(log_arity) = opening.checked_log_arity(max_log_arity) else {
-            return Err(FriError::InvalidLogArity {
-                round,
-                log_arity: opening.log_arity as usize,
-                max: max_log_arity,
-            });
-        };
+    for (round, (&beta, &log_arity, opening)) in
+        izip!(betas, log_arities, commit_phase_openings).enumerate()
+    {
         let arity = 1 << log_arity;
 
-        // Validate that sibling_values has the expected length (arity - 1)
-        if opening.sibling_values.len() != arity - 1 {
-            return Err(FriError::SiblingValuesLengthMismatch {
-                round,
-                expected: arity - 1,
-                got: opening.sibling_values.len(),
-            });
-        }
-
-        // Reconstruct the full evaluation row from self + siblings
+        // Reconstruct the full evaluation row from self + siblings.
+        // The row is authenticated by the round's shared opening proof below,
+        // which binds this query's folded value to the committed codeword.
         let index_in_group = *start_index % arity;
         let mut evals = EF::zero_vec(arity);
         evals[index_in_group] = folded_eval;
 
+        let siblings = &opening.sibling_values[query];
         let mut sibling_idx = 0;
         for (j, eval) in evals.iter_mut().enumerate() {
             if j != index_in_group {
-                *eval = opening.sibling_values[sibling_idx];
+                *eval = siblings[sibling_idx];
                 sibling_idx += 1;
             }
         }
@@ -517,24 +551,13 @@ where
         // Compute the new height after folding
         let log_folded_height = log_current_height - log_arity;
 
-        let dims = &[Dimensions {
-            width: arity,
-            height: 1 << log_folded_height,
-        }];
-
         // Replace index with the index of the parent FRI node.
         *start_index >>= log_arity;
 
-        // Verify the commitment to the evaluations of the sibling nodes.
-        params
-            .mmcs
-            .verify_batch(
-                comm,
-                dims,
-                *start_index,
-                BatchOpeningRef::new(&[evals.clone()], &opening.opening_proof), // It's possible to remove the clone here but unnecessary as evals is tiny.
-            )
-            .map_err(FriError::CommitPhaseMmcsError)?;
+        // Record the group index and reconstructed row for the round's shared
+        // verification. `evals` is tiny, so the clone is cheap.
+        group_indices_by_round[round].push(*start_index);
+        rows_by_round[round].push(vec![evals.clone()]);
 
         // Fold the group of sibling nodes to get the evaluation of the parent FRI node.
         folded_eval = folding.fold_row(
@@ -578,16 +601,18 @@ where
         });
     }
 
-    // If we reached this point, we have verified that, starting at the initial index,
-    // the chain of folds has produced folded_eval.
+    // If we reached this point, the chain of folds starting at the initial
+    // index produces folded_eval, contingent on the per-round row
+    // authentication performed by the caller.
     Ok(folded_eval)
 }
 
-/// Given an index and a collection of opening proofs, check all opening proofs and combine
-/// the opened values into the FRI inputs along the path specified by the index.
+/// Given the query indices and one shared opening per input batch, check every
+/// opening proof and combine the opened values into each query's FRI inputs
+/// along the path specified by its index.
 ///
 /// In cases where the maximum height of a batch of matrices is smaller than the
-/// global max height, shift the index down to compensate.
+/// global max height, shift the indices down to compensate.
 ///
 /// We combine the functions by mapping each function and opening point pair to `(f(z) - f(x))/(z - x)`
 /// and then combining functions of the same degree using the challenge alpha.
@@ -595,19 +620,20 @@ where
 /// ## Arguments:
 /// - `params`: The FRI parameters.
 /// - `log_global_max_height`: The log of the maximum height of the input matrices.
-/// - `index`: The index at which to open the functions.
-/// - `input_proof`: A vector of batch openings with each opening containing a
-///   list of opened values for a collection of matrices along with a batched opening proof.
+/// - `indices`: The index at which to open the functions, one per query.
+/// - `input_openings`: One multi-opening per input batch, containing the opened
+///   values of every query for a collection of matrices along with one shared proof.
 /// - `alpha`: The challenge used to combine the functions.
 /// - `input_mmcs`: The input multi-matrix commitment scheme.
 /// - `commitments_with_opening_points`: A vector of joint commitments to collections of matrices
 ///   and openings of those matrices at a collection of points.
+#[expect(clippy::type_complexity)]
 #[inline]
-fn open_input<Val, Challenge, InputMmcs, FriMmcs>(
+fn open_inputs<Val, Challenge, InputMmcs, FriMmcs>(
     params: &FriParameters<FriMmcs>,
     log_global_max_height: usize,
-    index: usize,
-    input_proof: &[BatchOpening<Val, InputMmcs>],
+    indices: &[usize],
+    input_openings: &[BatchMultiOpening<Val, InputMmcs>],
     alpha: Challenge,
     input_mmcs: &InputMmcs,
     commitments_with_opening_points: &[CommitmentWithOpeningPoints<
@@ -615,72 +641,47 @@ fn open_input<Val, Challenge, InputMmcs, FriMmcs>(
         InputMmcs::Commitment,
         TwoAdicMultiplicativeCoset<Val>,
     >],
-) -> Result<FriOpenings<Challenge>, FriError<FriMmcs::Error, InputMmcs::Error>>
+) -> Result<Vec<FriOpenings<Challenge>>, FriError<FriMmcs::Error, InputMmcs::Error>>
 where
     Val: TwoAdicField,
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
 {
-    // For each log_height, we store the alpha power and compute the reduced opening.
-    // log_height -> (alpha_pow, reduced_opening)
-    let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
-
-    if input_proof.len() != commitments_with_opening_points.len() {
+    if input_openings.len() != commitments_with_opening_points.len() {
         return Err(FriError::InputProofBatchCountMismatch {
             expected: commitments_with_opening_points.len(),
-            got: input_proof.len(),
+            got: input_openings.len(),
         });
     }
 
-    // Each opening point `z` contributes a quotient `(f(z) - f(x)) / (z - x)`, requiring the
-    // inverse of `(z - x)`. The denominators depend only on the query point `x` and the opening
-    // points, so collect all of them across this query and invert them with a single
-    // `batch_multiplicative_inverse` (one inversion plus ~3N muls) rather than one inversion per
-    // point.
-    //
-    // `batch_multiplicative_inverse` panics on a zero input, so reject a coinciding opening point
-    // (`z == x`, making the quotient undefined) here; this preserves the per-point
-    // `OpeningPointMatchesQueryPoint` rejection. The collection order matches the accumulation
-    // loop below (batch, then matrix, then point), so the inverses are consumed in lockstep.
-    let mut denominators = Vec::new();
-    for (batch, (_, mats)) in commitments_with_opening_points.iter().enumerate() {
-        for (matrix, (mat_domain, mat_points_and_values)) in mats.iter().enumerate() {
-            let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
-            let bits_reduced = log_global_max_height - log_height;
-            let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
-            let x = Val::GENERATOR
-                * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
-
-            for (point, (z, _)) in mat_points_and_values.iter().enumerate() {
-                let denominator = *z - x;
-                if denominator.is_zero() {
-                    return Err(FriError::OpeningPointMatchesQueryPoint {
-                        batch,
-                        matrix,
-                        point,
-                    });
-                }
-                denominators.push(denominator);
-            }
-        }
-    }
-    let mut inverse_denominators = batch_multiplicative_inverse(&denominators).into_iter();
-
-    // For each batch commitment and opening proof
-    for (batch, (batch_opening, (batch_commit, mats))) in input_proof
+    // Check every batch's openings against its commitment first, one shared
+    // amortized verification per batch, so the arithmetic below only ever
+    // reads authenticated values.
+    for (batch, (batch_opening, (batch_commit, mats))) in input_openings
         .iter()
         .zip(commitments_with_opening_points.iter())
         .enumerate()
     {
-        // The opened rows must pair one-to-one with the committed matrices.
-        // Why: the width derivation below zips rows with matrix metadata.
-        if batch_opening.opened_values.len() != mats.len() {
-            return Err(FriError::BatchOpenedValuesCountMismatch {
+        // One opened row set per query.
+        if batch_opening.opened_values.len() != indices.len() {
+            return Err(FriError::InputOpeningsQueryCountMismatch {
                 batch,
-                expected: mats.len(),
+                expected: indices.len(),
                 got: batch_opening.opened_values.len(),
             });
+        }
+
+        // The opened rows must pair one-to-one with the committed matrices.
+        // Why: the width derivation below zips rows with matrix metadata.
+        for opened_values in &batch_opening.opened_values {
+            if opened_values.len() != mats.len() {
+                return Err(FriError::BatchOpenedValuesCountMismatch {
+                    batch,
+                    expected: mats.len(),
+                    got: opened_values.len(),
+                });
+            }
         }
 
         // Find the height of each matrix in the batch.
@@ -713,80 +714,139 @@ where
             .collect::<Result<Vec<_>, _>>()?;
 
         // If the maximum height of the batch is smaller than the global max height,
-        // we need to correct the index by right shifting it.
-        // If the batch is empty, we set the index to 0.
-        let reduced_index = batch_heights
+        // we need to correct the indices by right shifting them.
+        // If the batch is empty, we set the indices to 0.
+        let reduced_indices: Vec<usize> = batch_heights
             .iter()
             .max()
-            .map(|&h| index >> (log_global_max_height - log2_strict_usize(h)))
-            .unwrap_or(0);
+            .map(|&h| {
+                let bits_reduced = log_global_max_height - log2_strict_usize(h);
+                indices.iter().map(|&index| index >> bits_reduced).collect()
+            })
+            .unwrap_or_else(|| vec![0; indices.len()]);
 
         input_mmcs
-            .verify_batch(
+            .verify_multi_batch(
                 batch_commit,
                 &batch_dims,
-                reduced_index,
-                batch_opening.into(),
+                &reduced_indices,
+                &batch_opening.opened_values,
+                &batch_opening.opening_proof,
             )
             .map_err(FriError::InputError)?;
+    }
 
-        // For each matrix in the commitment
-        for (matrix, (mat_opening, (mat_domain, mat_points_and_values))) in batch_opening
-            .opened_values
-            .iter()
-            .zip(mats.iter())
-            .enumerate()
-        {
-            let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
+    // Each opening point `z` contributes a quotient `(f(z) - f(x)) / (z - x)` per query,
+    // requiring the inverse of `(z - x)`. The denominators depend only on the query point `x`
+    // and the opening points, so collect all of them across every query and invert them with a
+    // single `batch_multiplicative_inverse` (one inversion plus ~3N muls) rather than one
+    // inversion per point.
+    //
+    // `batch_multiplicative_inverse` panics on a zero input, so reject a coinciding opening point
+    // (`z == x`, making the quotient undefined) here; this preserves the per-point
+    // `OpeningPointMatchesQueryPoint` rejection. The collection order matches the accumulation
+    // loop below (query, then batch, then matrix, then point), so the inverses are consumed in
+    // lockstep.
+    let mut denominators = Vec::new();
+    for &index in indices {
+        for (batch, (_, mats)) in commitments_with_opening_points.iter().enumerate() {
+            for (matrix, (mat_domain, mat_points_and_values)) in mats.iter().enumerate() {
+                let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
+                let bits_reduced = log_global_max_height - log_height;
+                let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
+                let x = Val::GENERATOR
+                    * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
 
-            let (alpha_pow, ro) = reduced_openings
-                .entry(log_height) // Get a mutable reference to the entry.
-                .or_insert((Challenge::ONE, Challenge::ZERO));
-
-            // For each polynomial `f` in our matrix, compute `(f(z) - f(x))/(z - x)`,
-            // scale by the appropriate alpha power and add to the reduced opening for this log_height.
-            for (point, (_z, ps_at_z)) in mat_points_and_values.iter().enumerate() {
-                if mat_opening.len() != ps_at_z.len() {
-                    return Err(FriError::PointEvaluationCountMismatch {
-                        batch,
-                        matrix,
-                        point,
-                        expected: mat_opening.len(),
-                        got: ps_at_z.len(),
-                    });
-                }
-                // Inverse of (z - x), precomputed in the batched inversion above. The pre-pass
-                // pushed exactly one denominator per (batch, matrix, point) in this iteration
-                // order, so the next entry corresponds to this opening point.
-                let quotient = inverse_denominators
-                    .next()
-                    .expect("one inverse was precomputed per opening point");
-                for (&p_at_x, &p_at_z) in mat_opening.iter().zip(ps_at_z.iter()) {
-                    // Note we just checked batch proofs to ensure p_at_x is correct.
-                    // x, z were sent by the verifier.
-                    // ps_at_z was sent to the verifier and we are using fri to prove it is correct.
-                    *ro += *alpha_pow * (p_at_z - p_at_x) * quotient;
-                    *alpha_pow *= alpha;
+                for (point, (z, _)) in mat_points_and_values.iter().enumerate() {
+                    let denominator = *z - x;
+                    if denominator.is_zero() {
+                        return Err(FriError::OpeningPointMatchesQueryPoint {
+                            batch,
+                            matrix,
+                            point,
+                        });
+                    }
+                    denominators.push(denominator);
                 }
             }
         }
     }
+    let mut inverse_denominators = batch_multiplicative_inverse(&denominators).into_iter();
 
-    // The blowup-height entry exists only for a height-1 (constant) trace matrix.
-    // Its quotient `(f(zeta) - f(x)) / (zeta - x)` must then be zero.
-    // One check after all batches suffices: the random combining challenge rules out cancellation.
-    if let Some((_, ro)) = reduced_openings.get(&params.log_blowup)
-        && !ro.is_zero()
-    {
-        return Err(FriError::FinalPolyMismatch);
-    }
+    // Combine each query's authenticated values into its reduced openings.
+    indices
+        .iter()
+        .enumerate()
+        .map(|(query, _)| {
+            // For each log_height, we store the alpha power and compute the reduced opening.
+            // log_height -> (alpha_pow, reduced_opening)
+            let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
-    // Return reduced openings descending by log_height.
-    Ok(reduced_openings
-        .into_iter()
-        .rev()
-        .map(|(log_height, (_, ro))| (log_height, ro))
-        .collect())
+            for (batch, (batch_opening, (_, mats))) in input_openings
+                .iter()
+                .zip(commitments_with_opening_points.iter())
+                .enumerate()
+            {
+                // For each matrix in the commitment
+                for (matrix, (mat_opening, (mat_domain, mat_points_and_values))) in batch_opening
+                    .opened_values[query]
+                    .iter()
+                    .zip(mats.iter())
+                    .enumerate()
+                {
+                    let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
+
+                    let (alpha_pow, ro) = reduced_openings
+                        .entry(log_height) // Get a mutable reference to the entry.
+                        .or_insert((Challenge::ONE, Challenge::ZERO));
+
+                    // For each polynomial `f` in our matrix, compute `(f(z) - f(x))/(z - x)`,
+                    // scale by the appropriate alpha power and add to the reduced opening for this log_height.
+                    for (point, (_z, ps_at_z)) in mat_points_and_values.iter().enumerate() {
+                        if mat_opening.len() != ps_at_z.len() {
+                            return Err(FriError::PointEvaluationCountMismatch {
+                                batch,
+                                matrix,
+                                point,
+                                expected: mat_opening.len(),
+                                got: ps_at_z.len(),
+                            });
+                        }
+                        // Inverse of (z - x), precomputed in the batched inversion above. The
+                        // pre-pass pushed exactly one denominator per (query, batch, matrix,
+                        // point) in this iteration order, so the next entry corresponds to this
+                        // opening point.
+                        let quotient = inverse_denominators
+                            .next()
+                            .expect("one inverse was precomputed per opening point");
+                        for (&p_at_x, &p_at_z) in mat_opening.iter().zip(ps_at_z.iter()) {
+                            // Note we just checked batch proofs to ensure p_at_x is correct.
+                            // x, z were sent by the verifier.
+                            // ps_at_z was sent to the verifier and we are using fri to prove it is correct.
+                            *ro += *alpha_pow * (p_at_z - p_at_x) * quotient;
+                            *alpha_pow *= alpha;
+                        }
+                    }
+                }
+            }
+
+            // The blowup-height entry exists only for a height-1 (constant) trace matrix.
+            // Its quotient `(f(zeta) - f(x)) / (zeta - x)` must then be zero.
+            // One check after all batches suffices: the random combining challenge rules out cancellation.
+            if let Some((_, ro)) = reduced_openings.get(&params.log_blowup)
+                && !ro.is_zero()
+            {
+                return Err(FriError::FinalPolyMismatch);
+            }
+
+            // Return reduced openings descending by log_height.
+            Ok(reduced_openings
+                .into_iter()
+                .rev()
+                .map(|(log_height, (_, ro))| (log_height, ro))
+                .collect())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -796,7 +856,7 @@ mod tests {
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
-    use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, Pcs};
+    use p3_commit::{ExtensionMmcs, Mmcs, Pcs};
     use p3_dft::Radix2Dit;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, HornerIter, PrimeCharacteristicRing, TwoAdicField};
@@ -821,7 +881,7 @@ mod tests {
         MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
-    type Proof = FriProof<Challenge, ChallengeMmcs, Val, Vec<BatchOpening<Val, ValMmcs>>>;
+    type Proof = FriProof<Challenge, ChallengeMmcs, Val, Vec<BatchMultiOpening<Val, ValMmcs>>>;
     type Folding = TwoAdicFriFoldingForMmcs<Val, ValMmcs>;
     type TestError =
         FriError<<ChallengeMmcs as Mmcs<Challenge>>::Error, <ValMmcs as Mmcs<Val>>::Error>;
@@ -872,7 +932,8 @@ mod tests {
     /// The resulting proof contains:
     /// - 3 commit-phase commitments (one per round)
     /// - 3 proof-of-work witnesses (one per round)
-    /// - 2 query proofs, each with 3 commit-phase openings
+    /// - 3 commit-phase multi-openings (one per round, each covering both queries)
+    /// - 1 input batch multi-opening (covering both queries)
     /// - 1 final polynomial coefficient
     ///
     /// The challenger is advanced past the opened-values observation,
@@ -1008,23 +1069,24 @@ mod tests {
     }
 
     #[test]
-    fn query_commit_phase_openings_count_mismatch() {
+    fn commit_phase_openings_count_mismatch() {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
         // In FRI, each COMMIT round produces one oracle f^(i). During the
-        // QUERY phase, the verifier opens that oracle at the queried index.
-        // So each query proof must carry exactly one opening per round.
+        // QUERY phase, the verifier opens that oracle at every queried index,
+        // all authenticated by the round's shared multi-opening.
+        // So the proof must carry exactly one multi-opening per round.
         //
-        // Fixture state: 3 rounds → 3 commitments → expect 3 openings.
+        // Fixture state: 3 rounds → 3 commitments → expect 3 multi-openings.
         //
-        // Mutation: append a duplicate opening to query 0.
+        // Mutation: append a duplicate multi-opening.
         //
-        //     query 0 openings:  [round_0, round_1, round_2, EXTRA]
-        //     commitments:       [round_0, round_1, round_2]
-        //     → 4 != 3 → error on query 0
-        let extra = proof.query_proofs[0].commit_phase_openings[0].clone();
-        proof.query_proofs[0].commit_phase_openings.push(extra);
+        //     openings:     [round_0, round_1, round_2, EXTRA]
+        //     commitments:  [round_0, round_1, round_2]
+        //     → 4 != 3 → error
+        let extra = proof.commit_phase_openings[0].clone();
+        proof.commit_phase_openings.push(extra);
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -1038,12 +1100,7 @@ mod tests {
 
         let expected_rounds = f.proof.commit_phase_commits.len();
         match err {
-            FriError::QueryCommitPhaseOpeningsCountMismatch {
-                query,
-                expected,
-                got,
-            } => {
-                assert_eq!(query, 0);
+            FriError::CommitPhaseOpeningsCountMismatch { expected, got } => {
                 assert_eq!(expected, expected_rounds);
                 assert_eq!(got, expected_rounds + 1);
             }
@@ -1087,62 +1144,42 @@ mod tests {
     }
 
     #[test]
-    fn query_log_arities_mismatch() {
+    fn commit_phase_query_count_mismatch() {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
-        let mut params = f.fri_params.clone();
-        // Allow arity 2 so this mutation remains "shape mismatch" instead of
-        // being rejected as an out-of-range arity.
-        params.max_log_arity = 2;
 
-        // The folding schedule is the sequence of log-arities that
-        // controls how much the domain shrinks each round. In this fixture,
-        // binary folding means every round has log_arity = 1 (halving).
-        // This schedule must be identical across all query proofs — it is
-        // a protocol-wide constant, not a per-query choice.
+        // Each round's multi-opening must open the codeword at every query:
+        // one sibling row per query. The log-arity schedule lives once per
+        // round, so a cross-query schedule mismatch is unrepresentable; the
+        // remaining per-query shape to check is the round's query coverage.
         //
-        // The verifier extracts the schedule from query 0 and checks all
-        // others against it.
+        // Fixture state: 2 queries → each round carries 2 sibling rows.
         //
-        // Mutation: bump the first round's log_arity in query 1 from 1 to 2.
+        // Mutation: drop query 1's sibling row from round 0.
         //
-        //     query 0 schedule: [1, 1, 1]   ← reference
-        //     query 1 schedule: [2, 1, 1]   ← corrupted
-        //     → mismatch detected at query 1
-
-        // Capture the uncorrupted reference schedule from query 0.
-        let expected_arities: Vec<usize> = proof.query_proofs[0]
-            .commit_phase_openings
-            .iter()
-            .map(|o| o.log_arity as usize)
-            .collect();
-
-        // Corrupt query 1's first round.
-        proof.query_proofs[1].commit_phase_openings[0].log_arity += 1;
-
-        // Build what the corrupted schedule looks like for the assertion.
-        let mut corrupted_arities = expected_arities.clone();
-        corrupted_arities[0] += 1;
+        //     round 0 sibling rows: [q_0]        (was [q_0, q_1])
+        //     → 1 != 2 → error at round 0
+        proof.commit_phase_openings[0].sibling_values.pop();
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
-            &params,
+            &f.fri_params,
             &proof,
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
         )
-        .expect_err("should reject inconsistent arity schedule across queries");
+        .expect_err("should reject a round that does not open every query");
 
         match err {
-            FriError::QueryLogAritiesMismatch {
-                query,
+            FriError::CommitPhaseQueryCountMismatch {
+                round,
                 expected,
                 got,
             } => {
-                assert_eq!(query, 1);
-                assert_eq!(expected, expected_arities);
-                assert_eq!(got, corrupted_arities);
+                assert_eq!(round, 0);
+                assert_eq!(expected, f.fri_params.num_queries);
+                assert_eq!(got, f.fri_params.num_queries - 1);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
@@ -1215,18 +1252,18 @@ mod tests {
     }
 
     #[test]
-    fn query_proof_count_mismatch() {
+    fn input_openings_query_count_mismatch() {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
         // The number of queries determines soundness: each independent
         // query multiplies the cheating prover's probability of escaping
-        // detection. The protocol parameters fix the exact query count.
+        // detection. Every input batch must open all of them.
         //
-        // Fixture state: num_queries = 2 → expect 2 query proofs.
+        // Fixture state: num_queries = 2 → batch 0 carries 2 opened row sets.
         //
-        // Mutation: pop one query proof → 1 vs 2 expected.
-        proof.query_proofs.pop();
+        // Mutation: pop query 1's row set from batch 0 → 1 vs 2 expected.
+        proof.input_openings[0].opened_values.pop();
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -1236,10 +1273,15 @@ mod tests {
             &f.commitments_with_opening_points,
             &f.input_mmcs,
         )
-        .expect_err("should reject proof with missing query proof");
+        .expect_err("should reject an input batch that does not open every query");
 
         match err {
-            FriError::QueryProofCountMismatch { expected, got } => {
+            FriError::InputOpeningsQueryCountMismatch {
+                batch,
+                expected,
+                got,
+            } => {
+                assert_eq!(batch, 0);
                 assert_eq!(expected, f.fri_params.num_queries);
                 assert_eq!(got, f.fri_params.num_queries - 1);
             }
@@ -1258,14 +1300,12 @@ mod tests {
         //
         // Fixture state: 1 committed polynomial → 1 seed expected.
         //
-        // Mutation: clear input proofs + external commitment data → no seed.
+        // Mutation: clear input openings + external commitment data → no seed.
         //
-        //     input proofs:      []   (was [batch_0])
+        //     input openings:    []   (was [batch_0])
         //     commitment data:   []   (was [(commit, mats)])
         //     → reduced openings = [] → fold chain has no starting value
-        for qp in &mut proof.query_proofs {
-            qp.input_proof = vec![];
-        }
+        proof.input_openings = vec![];
         let empty_cwop: Vec<
             CommitmentWithOpeningPoints<
                 Challenge,
@@ -1298,16 +1338,15 @@ mod tests {
         // In each fold round the verifier reads the queried evaluation
         // plus (arity - 1) siblings. Binary folding → arity 2 → 1 sibling.
         // Siblings are not in the Fiat-Shamir transcript → safe to mutate.
+        // The row shape is checked upfront for every query of every round.
         //
-        // Fixture state: binary fold → expect 1 sibling per round.
+        // Fixture state: binary fold → expect 1 sibling per query per round.
         //
-        // Mutation: push an extra sibling into round 0 of query 0.
+        // Mutation: push an extra sibling into query 0's row of round 0.
         //
-        //     Before: sibling_values = [s0]          (length 1 = arity - 1)
-        //     After:  sibling_values = [s0, ZERO]    (length 2 = arity)
-        proof.query_proofs[0].commit_phase_openings[0]
-            .sibling_values
-            .push(Challenge::ZERO);
+        //     Before: sibling_values[0] = [s0]          (length 1 = arity - 1)
+        //     After:  sibling_values[0] = [s0, ZERO]    (length 2 = arity)
+        proof.commit_phase_openings[0].sibling_values[0].push(Challenge::ZERO);
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -1340,7 +1379,7 @@ mod tests {
         let mut proof = f.proof.clone();
 
         // Mutation: set the first round arity to zero (invalid).
-        proof.query_proofs[0].commit_phase_openings[0].log_arity = 0;
+        proof.commit_phase_openings[0].log_arity = 0;
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -1382,7 +1421,7 @@ mod tests {
             + log_blowup;
 
         // H_fold: sum of per-round log-arities + log_blowup + log_final_poly_len.
-        let log_arities_sum: usize = proof.query_proofs[0]
+        let log_arities_sum: usize = proof
             .commit_phase_openings
             .iter()
             .map(|step| step.log_arity as usize)
@@ -1402,16 +1441,14 @@ mod tests {
         //
         // Fixture state: input matrix log_height = 4, honest schedule = 3 rounds of arity 1.
         //
-        // Mutation: drop the last fold round (commit, PoW witness, opening per query).
+        // Mutation: drop the last fold round (commit, PoW witness, multi-opening).
         //
         //     before:  schedule [r_0, r_1, r_2]   → H_fold = 4 == H_in ✓
         //     after:   schedule [r_0, r_1]        → H_fold = 3 != H_in = 4
         //     → error
         proof.commit_phase_commits.pop();
         proof.commit_pow_witnesses.pop();
-        for query_proof in &mut proof.query_proofs {
-            query_proof.commit_phase_openings.pop();
-        }
+        proof.commit_phase_openings.pop();
 
         let (h_in, h_fold) = derive_heights(&f, &proof);
 
@@ -1445,7 +1482,7 @@ mod tests {
         //
         // Fixture state: input matrix log_height = 4, honest schedule = 3 rounds of arity 1.
         //
-        // Mutation: clone the last fold round (commit, PoW witness, opening per query).
+        // Mutation: clone the last fold round (commit, PoW witness, multi-opening).
         // The clones need not validate — this check runs before commit-phase verification.
         //
         //     before:  schedule [r_0, r_1, r_2]          → H_fold = 4 == H_in ✓
@@ -1457,10 +1494,8 @@ mod tests {
         let extra_witness = *proof.commit_pow_witnesses.last().unwrap();
         proof.commit_pow_witnesses.push(extra_witness);
 
-        for query_proof in &mut proof.query_proofs {
-            let extra_opening = query_proof.commit_phase_openings.last().unwrap().clone();
-            query_proof.commit_phase_openings.push(extra_opening);
-        }
+        let extra_opening = proof.commit_phase_openings.last().unwrap().clone();
+        proof.commit_phase_openings.push(extra_opening);
 
         let (h_in, h_fold) = derive_heights(&f, &proof);
 
@@ -1504,16 +1539,12 @@ mod tests {
         //     sum(log_arities) + log_blowup > TWO_ADICITY
         let target_rounds = Val::TWO_ADICITY + 1;
         let commit = proof.commit_phase_commits[0].clone();
-        let first_openings: Vec<_> = proof
-            .query_proofs
-            .iter()
-            .map(|qp| qp.commit_phase_openings[0].clone())
-            .collect();
+        let witness = proof.commit_pow_witnesses[0];
+        let opening = proof.commit_phase_openings[0].clone();
         while proof.commit_phase_commits.len() < target_rounds {
             proof.commit_phase_commits.push(commit.clone());
-            for (qp, opening) in proof.query_proofs.iter_mut().zip(first_openings.iter()) {
-                qp.commit_phase_openings.push(opening.clone());
-            }
+            proof.commit_pow_witnesses.push(witness);
+            proof.commit_phase_openings.push(opening.clone());
         }
 
         let mut challenger = f.challenger.clone();
@@ -1539,20 +1570,17 @@ mod tests {
         let mut proof = f.proof.clone();
 
         // Each batch of committed polynomials needs exactly one Merkle
-        // batch-opening proof. This check fires before any cryptographic work.
+        // multi-opening. This check fires before any cryptographic work.
         //
-        // Fixture state: 1 batch commitment → expect 1 batch opening.
+        // Fixture state: 1 batch commitment → expect 1 batch multi-opening.
         //
-        // Mutation: push an extra empty batch opening.
+        // Mutation: push a duplicate batch multi-opening.
         //
         //     batch openings:  [batch_0, EXTRA]
         //     commitments:     [commit_0]
         //     → 2 != 1 → error
-        let extra_batch = BatchOpening {
-            opened_values: vec![],
-            opening_proof: proof.query_proofs[0].input_proof[0].opening_proof.clone(),
-        };
-        proof.query_proofs[0].input_proof.push(extra_batch);
+        let extra_batch = proof.input_openings[0].clone();
+        proof.input_openings.push(extra_batch);
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -1579,16 +1607,17 @@ mod tests {
         let mut proof = f.proof.clone();
 
         // Each committed matrix needs exactly one row of opened column
-        // values. This check fires before Merkle verification.
+        // values per query. This check fires before Merkle verification.
         //
-        // Fixture state: 1 matrix per batch → expect 1 opened-values entry.
+        // Fixture state: 1 matrix per batch → expect 1 opened-values entry
+        // in every query's row set.
         //
-        // Mutation: pop the only opened-values entry.
+        // Mutation: pop query 0's only opened-values entry.
         //
-        //     opened_values:  []           (was [row_0])
-        //     matrices:       [matrix_0]
+        //     query 0 opened_values:  []           (was [row_0])
+        //     matrices:               [matrix_0]
         //     → 0 != 1 → error
-        proof.query_proofs[0].input_proof[0].opened_values.pop();
+        proof.input_openings[0].opened_values[0].pop();
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -1702,8 +1731,6 @@ mod tests {
 
     #[test]
     fn initial_reduced_opening_height_mismatch() {
-        let f = make_test_fixture();
-        let params = &f.fri_params;
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
         // The fold chain starts at the global maximum domain height.
@@ -1719,21 +1746,24 @@ mod tests {
 
         // Empty fold-data: the error fires before any folding.
         let betas: Vec<Challenge> = vec![];
-        let commits: Vec<<ChallengeMmcs as Mmcs<Challenge>>::Commitment> = vec![];
-        let openings: Vec<CommitPhaseProofStep<Challenge, ChallengeMmcs>> = vec![];
-        let fold_data_iter = betas.iter().zip(commits.iter()).zip(openings.iter());
+        let log_arities: Vec<usize> = vec![];
+        let openings: Vec<CommitPhaseMultiStep<Challenge, ChallengeMmcs>> = vec![];
 
         let mut start_index = 0;
         let log_final_height = 1;
 
-        let err = verify_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
+        let err = fold_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
             &folding,
-            params,
+            0,
             &mut start_index,
-            fold_data_iter,
+            &betas,
+            &log_arities,
+            &openings,
             reduced_openings,
             log_global_max_height,
             log_final_height,
+            &mut [],
+            &mut [],
         )
         .expect_err("should reject opening at wrong initial height");
 
@@ -1748,8 +1778,6 @@ mod tests {
 
     #[test]
     fn final_fold_height_mismatch() {
-        let f = make_test_fixture();
-        let params = &f.fri_params;
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
         // After all COMMIT rounds, the domain must have been folded down to
@@ -1767,20 +1795,23 @@ mod tests {
 
         // No fold rounds: jump straight to the final-height check.
         let betas: Vec<Challenge> = vec![];
-        let commits: Vec<<ChallengeMmcs as Mmcs<Challenge>>::Commitment> = vec![];
-        let openings: Vec<CommitPhaseProofStep<Challenge, ChallengeMmcs>> = vec![];
-        let fold_data_iter = betas.iter().zip(commits.iter()).zip(openings.iter());
+        let log_arities: Vec<usize> = vec![];
+        let openings: Vec<CommitPhaseMultiStep<Challenge, ChallengeMmcs>> = vec![];
 
         let mut start_index = 0;
 
-        let err = verify_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
+        let err = fold_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
             &folding,
-            params,
+            0,
             &mut start_index,
-            fold_data_iter,
+            &betas,
+            &log_arities,
+            &openings,
             reduced_openings,
             log_global_max_height,
             log_final_height,
+            &mut [],
+            &mut [],
         )
         .expect_err("should reject when final height is not reached");
 
@@ -1795,8 +1826,6 @@ mod tests {
 
     #[test]
     fn unconsumed_reduced_openings() {
-        let f = make_test_fixture();
-        let params = &f.fri_params;
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
         // The fold chain rolls in each committed polynomial at the round
@@ -1821,20 +1850,23 @@ mod tests {
 
         // No fold rounds: the leftover is detected right after the loop.
         let betas: Vec<Challenge> = vec![];
-        let commits: Vec<<ChallengeMmcs as Mmcs<Challenge>>::Commitment> = vec![];
-        let openings: Vec<CommitPhaseProofStep<Challenge, ChallengeMmcs>> = vec![];
-        let fold_data_iter = betas.iter().zip(commits.iter()).zip(openings.iter());
+        let log_arities: Vec<usize> = vec![];
+        let openings: Vec<CommitPhaseMultiStep<Challenge, ChallengeMmcs>> = vec![];
 
         let mut start_index = 0;
 
-        let err = verify_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
+        let err = fold_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
             &folding,
-            params,
+            0,
             &mut start_index,
-            fold_data_iter,
+            &betas,
+            &log_arities,
+            &openings,
             reduced_openings,
             log_global_max_height,
             log_final_height,
+            &mut [],
+            &mut [],
         )
         .expect_err("should reject proof with leftover reduced openings");
 
@@ -1881,13 +1913,13 @@ mod tests {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
-        // Each fold round verifies the Merkle opening proof for the
-        // committed oracle f^(i). A corrupted authentication path makes
-        // the recomputed root diverge from the commitment.
+        // Each fold round verifies one shared Merkle multi-opening for the
+        // committed oracle f^(i). A corrupted sibling digest makes the
+        // recomputed root diverge from the commitment.
         //
         // Merkle proofs are NOT in the Fiat-Shamir transcript → safe to
         // mutate without desyncing the challenger.
-        proof.query_proofs[0].commit_phase_openings[0].opening_proof[0] = Default::default();
+        proof.commit_phase_openings[0].opening_proof.sibling_hashes[0] = Default::default();
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -1910,13 +1942,13 @@ mod tests {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
-        // Before the fold chain, the verifier checks Merkle proofs for
-        // the input polynomials. A corrupted authentication path makes
+        // Before the fold chain, the verifier checks each input batch's
+        // shared Merkle multi-opening. A corrupted sibling digest makes
         // the recomputed root diverge from the input commitment.
         //
         // Input Merkle proofs are NOT in the Fiat-Shamir transcript →
         // safe to mutate without desyncing the challenger.
-        proof.query_proofs[0].input_proof[0].opening_proof[0] = Default::default();
+        proof.input_openings[0].opening_proof.sibling_hashes[0] = Default::default();
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -2037,7 +2069,7 @@ mod tests {
 
     #[test]
     fn opening_point_equal_to_query_point_is_rejected() {
-        // open_input forms (f(z) - f(x)) / (z - x) for each opening point z, where x is
+        // open_inputs forms (f(z) - f(x)) / (z - x) for each opening point z, where x is
         // the query point derived from the index. At index 0 with no height reduction,
         //     x = GENERATOR * g^reverse_bits(0) = GENERATOR.
         // Setting z = GENERATOR makes the denominator zero.
@@ -2055,7 +2087,11 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(7);
         let mat = RowMajorMatrix::<Val>::rand_nonzero(&mut rng, height, 1);
         let (commit, prover_data) = f.input_mmcs.commit(vec![mat]);
-        let input_proof = vec![f.input_mmcs.open_batch(0, &prover_data)];
+        let (opened_values, opening_proof) = f.input_mmcs.open_multi_batch(&[0], &prover_data);
+        let input_openings = vec![BatchMultiOpening {
+            opened_values,
+            opening_proof,
+        }];
 
         // One opening point placed exactly on the query point x = GENERATOR.
         //     opening point z : GENERATOR   (claimed value is irrelevant; the denominator fails first)
@@ -2063,11 +2099,11 @@ mod tests {
         let z = Challenge::from(Val::GENERATOR);
         let cwop = vec![(commit, vec![(domain, vec![(z, vec![Challenge::ZERO])])])];
 
-        let err = open_input::<Val, Challenge, ValMmcs, ChallengeMmcs>(
+        let err = open_inputs::<Val, Challenge, ValMmcs, ChallengeMmcs>(
             &f.fri_params,
             log_global_max_height,
-            0,
-            &input_proof,
+            &[0],
+            &input_openings,
             Challenge::ONE,
             &f.input_mmcs,
             &cwop,
