@@ -693,6 +693,15 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// Folds the residual product polynomial by one challenge and updates the
     /// claimed sum with the same quadratic extrapolation as the plain path.
     pub(crate) fn fold_round_with_coefficients(&mut self, c0: EF, c_inf: EF, gamma: EF) {
+        // This entry point hardcodes the evaluation-basis reduction; its only
+        // caller is the zk residual path, which does not consult the basis.
+        // Guard the assumption so a projective configuration cannot silently
+        // run evaluation arithmetic here.
+        debug_assert_eq!(
+            self.poly.basis(),
+            Basis::Evaluation,
+            "the zk residual path does not support the projective basis"
+        );
         self.sum = extrapolate_01inf(c0, self.sum - c0, c_inf, gamma);
         self.poly.fold_round(gamma);
         debug_assert_eq!(self.sum, self.poly.dot_product());

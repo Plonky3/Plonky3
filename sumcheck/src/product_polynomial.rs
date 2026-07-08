@@ -397,8 +397,9 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         // Step 5: Fold both polynomials using the challenge.
         self.compress(r);
 
-        // Step 6: Update the claimed sum, through the same round identity the
-        // verifier will apply to this message.
+        // Step 6: Update the claimed sum to h(r); the round identity that
+        // supplies the third quadratic value is basis-dependent and lives in
+        // one place, shared with the verifier.
         *sum = basis.reduce_claim(c_a, c_inf, r, *sum);
 
         // Sanity check: the updated sum should equal the inner product after folding.
