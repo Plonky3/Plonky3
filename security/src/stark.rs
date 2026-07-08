@@ -149,7 +149,7 @@ fn regime_report(
         COLLISION_LABEL,
         ErrorBits::from_log2(shape.collision_resistance as f64),
     ));
-    RegimeReport { regime, terms }
+    RegimeReport::new(regime, terms)
 }
 
 /// Composite proven-security report, generic over the low-degree test.
@@ -361,9 +361,9 @@ mod tests {
     #[test]
     fn no_batch_term_for_single_function() {
         let report = proven_security_report(&benchmark_regime(), &air(), &shape(), &[]);
-        assert!(report.udr.terms.iter().all(|t| t.label != BATCH_LABEL));
+        assert!(report.udr.terms().iter().all(|t| t.label != BATCH_LABEL));
         if let Some(ldr) = &report.ldr {
-            assert!(ldr.terms.iter().all(|t| t.label != BATCH_LABEL));
+            assert!(ldr.terms().iter().all(|t| t.label != BATCH_LABEL));
         }
     }
 

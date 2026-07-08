@@ -54,10 +54,26 @@ pub enum Regime {
 #[derive(Clone, Debug, Serialize)]
 pub struct RegimeReport {
     pub regime: Regime,
-    pub terms: Vec<SecurityTerm>,
+    terms: Vec<SecurityTerm>,
 }
 
 impl RegimeReport {
+    /// Builds a report from its labeled terms. `terms` must be non-empty —
+    /// every regime carries at least the ALI, DEEP, LDT, and collision terms.
+    pub(crate) fn new(regime: Regime, terms: Vec<SecurityTerm>) -> Self {
+        debug_assert!(
+            !terms.is_empty(),
+            "a regime report must carry at least one term"
+        );
+        Self { regime, terms }
+    }
+
+    /// Every soundness contribution in this regime — ALI, DEEP, LDT, any
+    /// protocol extras, and the commitment-collision cap.
+    pub fn terms(&self) -> &[SecurityTerm] {
+        &self.terms
+    }
+
     /// The binding (minimum-bits) term. `terms` is always non-empty — every
     /// regime carries at least the ALI, DEEP, LDT, and collision terms.
     pub fn binding(&self) -> SecurityTerm {

@@ -1,10 +1,11 @@
 //! Typed low-degree-test boundary.
 //!
 //! [`crate::stark`]'s composite orchestration is generic over the LDT through
-//! this trait: any protocol — FRI, WHIR, or an out-of-tree drop-in —
-//! implements [`LowDegreeTest`] and composes with the AIR + DEEP-ALI bounds
-//! via [`crate::stark::proven_security_report`]. The FRI implementation lives
-//! in [`crate::fri`].
+//! this trait: any protocol — FRI, WHIR, or an out-of-tree drop-in — can
+//! implement [`LowDegreeTest`] and compose with the AIR + DEEP-ALI bounds via
+//! [`crate::stark::proven_security_report`]. The FRI implementation lives in
+//! [`crate::fri`]; [`crate::whir`] currently exposes only the underlying WHIR
+//! error terms, not yet a [`LowDegreeTest`] impl.
 
 use crate::error::ErrorBits;
 use crate::shape::{InstanceShape, StarkAirParams};

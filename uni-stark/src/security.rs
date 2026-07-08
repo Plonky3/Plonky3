@@ -151,6 +151,11 @@ impl StarkSecurityParams {
 ///
 /// The cited paper recommends proven bounds for deployment; users staying with
 /// conjectured bounds should remain above the cutoff.
+///
+/// Unlike [`ProvenSecurity`], this does not model the batched-openings term
+/// (`num_batched_functions`): the conjectured path is optimistic relative to
+/// the proven one for instances that random-linear-combine more than one
+/// committed codeword.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConjecturedSecurity {
     pub security_bits: usize,
