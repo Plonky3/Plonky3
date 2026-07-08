@@ -209,7 +209,6 @@ where
         let (salted_values, pruned) = self.inner.open_multi_batch(indices, prover_data);
 
         // Split every salted row back into its unsalted prefix and its salt suffix.
-        // Salts move into the proof.
         let (opened_values, salts): (Vec<_>, Vec<_>) = salted_values
             .into_iter()
             .map(|rows_at_index| {
