@@ -23,7 +23,12 @@ use crate::pcs::proof::PcsProof;
 ///
 /// - Built by the commit phase alongside the public commitment.
 /// - Stored by the caller while the public transcript advances.
-/// - Consumed by the opening phase; never reused afterwards.
+/// - Consumed by one opening call.
+///
+/// A commitment reused across proofs stores this data once.
+/// Each opening then receives a clone instead of a freshly committed copy.
+/// Cloning copies only the committed data.
+/// It skips the codeword re-encode and the Merkle rebuild.
 pub struct WhirProverData<F, EF, MT, L>
 where
     F: TwoAdicField,
@@ -37,6 +42,23 @@ where
     pub merkle_data: MT::ProverData<DenseMatrix<F>>,
     /// Marker tying the data to its extension field; carries no runtime state.
     _marker: PhantomData<EF>,
+}
+
+impl<F, EF, MT, L> Clone for WhirProverData<F, EF, MT, L>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+    MT: Mmcs<F>,
+    L: Layout<F, EF> + Clone,
+    MT::ProverData<DenseMatrix<F>>: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            layout: self.layout.clone(),
+            merkle_data: self.merkle_data.clone(),
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<EF, F, Dft, MT, Challenger, L> MultilinearPcs<EF, Challenger>

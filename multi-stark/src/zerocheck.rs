@@ -23,7 +23,7 @@ use p3_util::log2_strict_usize;
 use thiserror::Error;
 
 use crate::folder::MultilinearFolder;
-use crate::opening::OpeningClaims;
+use crate::opening::{OpeningClaims, TableOpening};
 use crate::packed_ext::PackedExt;
 use crate::rounds::RoundStateBase;
 use crate::selectors::BoundaryEvals;
@@ -53,6 +53,26 @@ pub enum ZerocheckError {
         /// Number of next-row values the proof carries.
         actual: usize,
     },
+    /// The preprocessed current-row openings did not carry one value per preprocessed column.
+    #[error(
+        "zerocheck preprocessed current-row opening count mismatch: expected {expected}, got {actual}"
+    )]
+    PreprocessedOpeningCountMismatch {
+        /// Number of preprocessed columns the AIR declares.
+        expected: usize,
+        /// Number of preprocessed current-row values the proof carries.
+        actual: usize,
+    },
+    /// The preprocessed next-row openings did not carry one value per preprocessed next-row column.
+    #[error(
+        "zerocheck preprocessed next-row opening count mismatch: expected {expected}, got {actual}"
+    )]
+    PreprocessedNextOpeningCountMismatch {
+        /// Number of preprocessed columns the AIR reads on the next row.
+        expected: usize,
+        /// Number of preprocessed next-row values the proof carries.
+        actual: usize,
+    },
     /// The reduced sum did not match the constraint evaluated at the random point.
     #[error("zerocheck final sum does not match the constraint at the challenge point")]
     FinalSumMismatch,
@@ -65,12 +85,21 @@ pub struct ZerocheckProof<F, EF> {
     pub sumcheck: GenericDegreeProof<F, EF>,
     /// Current-row value of every main column at the sumcheck point, in column order.
     ///
-    /// These are the `Eq` opening claims.
+    /// These are the main-trace `Eq` opening claims.
     pub local: Vec<EF>,
-    /// Repeat-last successor value of each column the AIR reads on the next row.
+    /// Repeat-last successor value of each main column the AIR reads on the next row.
     ///
-    /// These are the `Next` opening claims, in the AIR's declared next-row order.
+    /// These are the main-trace `Next` opening claims, in the AIR's declared next-row order.
     pub next: Vec<EF>,
+    /// Current-row value of every preprocessed column at the sumcheck point, in column order.
+    ///
+    /// Empty when the AIR declares no preprocessed columns.
+    pub preprocessed_local: Vec<EF>,
+    /// Repeat-last successor value of each preprocessed column the AIR reads on the next row.
+    ///
+    /// In the AIR's declared preprocessed next-row order.
+    /// Empty when the AIR declares no preprocessed columns.
+    pub preprocessed_next: Vec<EF>,
 }
 
 /// An AIR zerocheck instance.
@@ -98,29 +127,23 @@ impl<'a, A> AirZerocheck<'a, A> {
 
     /// Derive the AIR layout and reject column kinds this version cannot prove.
     ///
-    /// Version one proves a single main trace.
-    /// Preprocessed and periodic columns are not wired in yet.
-    /// An AIR that declared either would be evaluated against empty data and silently mis-proved.
+    /// Main and preprocessed columns are supported.
+    /// Periodic columns are not wired in yet.
+    /// An AIR that declared periodic columns would be evaluated against empty data and silently mis-proved.
     ///
     /// # Returns
     ///
-    /// The AIR layout, carrying the main width and public-value count.
+    /// The AIR layout, carrying the main width, preprocessed width, and public-value count.
     ///
     /// # Panics
     ///
-    /// Panics if the AIR declares any preprocessed or periodic columns.
+    /// Panics if the AIR declares any periodic columns.
     fn layout<F>(&self) -> AirLayout
     where
         F: Field,
         A: BaseAir<F>,
     {
         let layout = AirLayout::from_air::<F>(self.air);
-
-        // Preprocessed columns need their own committed table and opening claims.
-        assert_eq!(
-            layout.preprocessed_width, 0,
-            "zerocheck does not support preprocessed columns yet"
-        );
 
         // Periodic columns need closed-form evaluation threaded into the folder.
         assert_eq!(
@@ -192,7 +215,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     ///
     /// # Arguments
     ///
-    /// - `trace`: the execution trace, one column per AIR column, height a power of two.
+    /// - `trace`: the execution trace, one column per main AIR column, height a power of two.
+    /// - `preprocessed`: the preprocessed trace, or `None` when the AIR declares none.
     /// - `public_values`: public inputs forwarded to the AIR.
     /// - `challenger`: the Fiat-Shamir transcript.
     ///
@@ -202,11 +226,12 @@ impl<'a, A> AirZerocheck<'a, A> {
     ///
     /// # Panics
     ///
-    /// Panics if the AIR declares preprocessed or periodic columns, which this version does not support.
+    /// Panics if the AIR declares periodic columns, which this version does not support.
     #[tracing::instrument(skip_all)]
     pub fn prove<F, EF, Challenger>(
         &self,
         trace: &RowMajorMatrix<F>,
+        preprocessed: Option<&RowMajorMatrix<F>>,
         public_values: &[F],
         challenger: &mut Challenger,
     ) -> (ZerocheckProof<F, EF>, Point<EF>)
@@ -257,6 +282,7 @@ impl<'a, A> AirZerocheck<'a, A> {
             alpha,
             &tau,
             trace,
+            preprocessed,
             degree - 1,
         );
 
@@ -317,19 +343,33 @@ impl<'a, A> AirZerocheck<'a, A> {
             challenges.push(r);
         }
 
-        let (local, next, _) = state.evals();
+        // The state holds main columns then preprocessed columns.
+        // Split the two groups at the main width before forming opening claims.
+        let (local, next_tail, _) = state.evals();
+        let (main_local, preprocessed_local) = local.split_at(layout.main_width);
+        let (main_next_tail, preprocessed_next_tail) = next_tail.split_at(layout.main_width);
+
+        // Keep only the successor claims for the columns the AIR reads on the next row.
         let next = self
             .air
             .main_next_row_columns()
             .iter()
-            .map(|&column| next[column])
+            .map(|&column| main_next_tail[column])
+            .collect();
+        let preprocessed_next = self
+            .air
+            .preprocessed_next_row_columns()
+            .iter()
+            .map(|&column| preprocessed_next_tail[column])
             .collect();
 
         (
             ZerocheckProof {
                 sumcheck,
-                local,
+                local: main_local.to_vec(),
                 next,
+                preprocessed_local: preprocessed_local.to_vec(),
+                preprocessed_next,
             },
             Point::new(challenges),
         )
@@ -353,15 +393,15 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// # Errors
     ///
     /// Returns an error when:
-    /// - the current-row openings do not carry one value per main column,
-    /// - the next-row openings do not carry one value per next-row column,
+    /// - a table's current-row openings do not carry one value per column,
+    /// - a table's next-row openings do not carry one value per next-row column,
     /// - the claimed sum is nonzero,
     /// - the inner sumcheck transcript fails to verify,
     /// - the reduced sum does not match the constraint at the random point.
     ///
     /// # Panics
     ///
-    /// Panics if the AIR declares preprocessed or periodic columns, which this version does not support.
+    /// Panics if the AIR declares periodic columns, which this version does not support.
     pub fn verify<F, EF, Challenger>(
         &self,
         proof: &ZerocheckProof<F, EF>,
@@ -377,24 +417,36 @@ impl<'a, A> AirZerocheck<'a, A> {
     {
         // Reject column kinds this version cannot prove, and read the layout once.
         let layout = self.layout::<F>();
-        let width = layout.main_width;
 
         // Only the columns the AIR reads on the next row carry a successor claim.
         let next_columns = self.air.main_next_row_columns();
+        let preprocessed_next_columns = self.air.preprocessed_next_row_columns();
 
-        // Every main column must contribute exactly one current-row opening.
-        if proof.local.len() != width {
+        // Every column of each table must contribute exactly one current-row opening.
+        if proof.local.len() != layout.main_width {
             return Err(ZerocheckError::OpeningCountMismatch {
-                expected: width,
+                expected: layout.main_width,
                 actual: proof.local.len(),
             });
         }
+        if proof.preprocessed_local.len() != layout.preprocessed_width {
+            return Err(ZerocheckError::PreprocessedOpeningCountMismatch {
+                expected: layout.preprocessed_width,
+                actual: proof.preprocessed_local.len(),
+            });
+        }
 
-        // Every next-row column must contribute exactly one successor opening.
+        // Every next-row column of each table must contribute exactly one successor opening.
         if proof.next.len() != next_columns.len() {
             return Err(ZerocheckError::NextOpeningCountMismatch {
                 expected: next_columns.len(),
                 actual: proof.next.len(),
+            });
+        }
+        if proof.preprocessed_next.len() != preprocessed_next_columns.len() {
+            return Err(ZerocheckError::PreprocessedNextOpeningCountMismatch {
+                expected: preprocessed_next_columns.len(),
+                actual: proof.preprocessed_next.len(),
             });
         }
 
@@ -407,9 +459,12 @@ impl<'a, A> AirZerocheck<'a, A> {
         )?;
         self.check_constraint::<F, EF>(
             &reduction,
-            &proof.local,
-            &next_columns,
-            &proof.next,
+            TableOpening::new(&proof.local, &next_columns, &proof.next),
+            TableOpening::new(
+                &proof.preprocessed_local,
+                &preprocessed_next_columns,
+                &proof.preprocessed_next,
+            ),
             public_values,
         )?;
         Ok(reduction.point)
@@ -488,9 +543,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// # Arguments
     ///
     /// - Verified sumcheck reduction data.
-    /// - Current-row value of each main column.
-    /// - Column indices read on the next row.
-    /// - Successor values aligned with those column indices.
+    /// - Main-trace opened values at the bound point.
+    /// - Preprocessed-trace opened values at the bound point, empty when the AIR declares none.
     /// - Public inputs forwarded to the AIR.
     ///
     /// # Errors
@@ -500,13 +554,12 @@ impl<'a, A> AirZerocheck<'a, A> {
     ///
     /// # Panics
     ///
-    /// Panics if the successor column list and value list have different lengths.
+    /// Panics if a table's successor column list and value list have different lengths.
     pub fn check_constraint<F, EF>(
         &self,
         reduction: &ZerocheckReduction<EF>,
-        local: &[EF],
-        next_columns: &[usize],
-        next_values: &[EF],
+        main: TableOpening<'_, EF>,
+        preprocessed: TableOpening<'_, EF>,
         public_values: &[F],
     ) -> Result<(), ZerocheckError>
     where
@@ -514,28 +567,35 @@ impl<'a, A> AirZerocheck<'a, A> {
         EF: ExtensionField<F>,
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
     {
-        let width = local.len();
-
-        // Reduce to opening claims at the bound point.
-        let claims = OpeningClaims::new(
+        // Reduce each table to opening claims at the bound point, then rebuild its two rows.
+        let main_claims = OpeningClaims::new(
             reduction.point.clone(),
-            local.to_vec(),
-            next_columns,
-            next_values,
+            main.local.to_vec(),
+            main.next_columns,
+            main.next_values,
         );
+        let main_next_row = main_claims.next_row(main.local.len());
 
-        // Reconstruct the rows the folder reads, then recompute the alpha-batched constraint.
-        let next_row = claims.next_row(width);
-        let boundary = BoundaryEvals::at(claims.point.as_slice());
+        let preprocessed_claims = OpeningClaims::new(
+            reduction.point.clone(),
+            preprocessed.local.to_vec(),
+            preprocessed.next_columns,
+            preprocessed.next_values,
+        );
+        let preprocessed_next_row = preprocessed_claims.next_row(preprocessed.local.len());
+
+        // Recompute the alpha-batched constraint from the committed values at the point.
+        let boundary = BoundaryEvals::at(main_claims.point.as_slice());
         let g = MultilinearFolder::new(
-            &claims.local,
-            &next_row,
+            &main_claims.local,
+            &main_next_row,
             boundary,
             public_values,
             reduction.alpha,
         )
+        .with_preprocessed(&preprocessed_claims.local, &preprocessed_next_row)
         .eval_air(self.air);
-        let eq_at_point = Point::eval_eq(&reduction.tau, claims.point.as_slice());
+        let eq_at_point = Point::eval_eq(&reduction.tau, main_claims.point.as_slice());
 
         // Close the protocol: the reduced sum must equal the integrand at the point.
         if reduction.final_sum != eq_at_point * g {
@@ -807,7 +867,7 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
 
         let mut verifier_challenger = fresh_challenger();
         zerocheck
@@ -825,7 +885,7 @@ mod tests {
 
         let mut challenger = fresh_challenger();
         let (proof, point) =
-            AirZerocheck::new(&FibAir, 0).prove::<F, EF, _>(&trace, &pis, &mut challenger);
+            AirZerocheck::new(&FibAir, 0).prove::<F, EF, _>(&trace, None, &pis, &mut challenger);
 
         // Each Fibonacci constraint is per-variable degree 2 (a degree-1 selector
         // times a degree-1 column), so the eq-weighted integrand is degree 3.
@@ -860,7 +920,7 @@ mod tests {
 
         // Prove with grinding enabled.
         let mut prover_challenger = fresh_challenger();
-        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
 
         // Grinding emits exactly one witness per sumcheck round.
         assert_eq!(proof.sumcheck.pow_witnesses.len(), log2_strict_usize(n));
@@ -883,7 +943,7 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
 
         let mut verifier_challenger = fresh_challenger();
         let err = zerocheck
@@ -901,7 +961,8 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (mut proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (mut proof, _) =
+            zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
         proof.local[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();
@@ -921,7 +982,8 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (mut proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (mut proof, _) =
+            zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
         proof.next[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();
@@ -942,7 +1004,8 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (mut proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (mut proof, _) =
+            zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
 
         // Declare a nonzero sum; the verifier must reject before any further work.
         proof.sumcheck.claimed_sum += EF::ONE;
@@ -971,7 +1034,8 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (mut proof, _) = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        let (mut proof, _) =
+            zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
 
         // Remove one opened value so the count no longer matches the AIR width.
         proof.local.pop();
@@ -1040,7 +1104,7 @@ mod tests {
         let zerocheck = AirZerocheck::new(&ConstColAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, &[], &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, None, &[], &mut prover_challenger);
 
         // Two committed columns yield two current-row claims.
         assert_eq!(proof.local.len(), 2);
@@ -1080,7 +1144,7 @@ mod tests {
             let zerocheck = AirZerocheck::new(&air, 0);
             let mut prover_challenger = fresh_challenger();
             let (proof, point_prover) =
-                zerocheck.prove::<F, EF, _>(&trace, &[], &mut prover_challenger);
+                zerocheck.prove::<F, EF, _>(&trace, None, &[], &mut prover_challenger);
 
             // Reference columns: one multilinear per trace column, in row order.
             //
@@ -1114,5 +1178,128 @@ mod tests {
                 .unwrap();
             assert_eq!(point_prover, point_verifier);
         }
+    }
+
+    /// Width-1 main AIR tied to a fixed width-1 preprocessed column.
+    ///
+    /// With the main trace equal to the preprocessed trace on every row, both constraints vanish:
+    ///
+    /// - first row: `main.local[0] == preprocessed.local[0]`
+    /// - transition: `main.next[0] == preprocessed.next[0]`
+    ///
+    /// The transition reads both the main and the preprocessed next row, so every opening path runs.
+    struct PreprocessedAir;
+
+    impl<X> BaseAir<X> for PreprocessedAir {
+        fn width(&self) -> usize {
+            1
+        }
+        fn preprocessed_width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for PreprocessedAir {
+        fn eval(&self, builder: &mut AB) {
+            // Bind the current and next entry of each single-column window.
+            let main = builder.main();
+            let main_local = main.current_slice()[0];
+            let main_next = main.next_slice()[0];
+            let preprocessed = builder.preprocessed();
+            let preprocessed_local = preprocessed.current_slice()[0];
+            let preprocessed_next = preprocessed.next_slice()[0];
+
+            // The main column equals the fixed column at the boundary and along every step.
+            builder
+                .when_first_row()
+                .assert_eq(main_local, preprocessed_local);
+            builder
+                .when_transition()
+                .assert_eq(main_next, preprocessed_next);
+        }
+    }
+
+    /// A satisfying main / preprocessed pair: both columns hold the same fixed values.
+    fn preprocessed_pair(n: usize) -> (RowMajorMatrix<F>, RowMajorMatrix<F>) {
+        let values: Vec<F> = (0..n).map(|i| F::from_u64(3 + 2 * i as u64)).collect();
+        (
+            RowMajorMatrix::new(values.clone(), 1),
+            RowMajorMatrix::new(values, 1),
+        )
+    }
+
+    #[test]
+    fn zerocheck_accepts_preprocessed() {
+        // Invariant on the preprocessed AIR, swept over trace heights 1..10:
+        //   - each preprocessed current-row opening equals its column multilinear at the point;
+        //   - each preprocessed next-row opening equals that column shifted by one row;
+        //   - a satisfying trace proves and verifies.
+        for num_vars in 1..10 {
+            let n = 1 << num_vars;
+            let (trace, preprocessed) = preprocessed_pair(n);
+            let zerocheck = AirZerocheck::new(&PreprocessedAir, 0);
+
+            let mut prover_challenger = fresh_challenger();
+            let (proof, point) = zerocheck.prove::<F, EF, _>(
+                &trace,
+                Some(&preprocessed),
+                &[],
+                &mut prover_challenger,
+            );
+
+            // The preprocessed openings must match the preprocessed column at the bound point.
+            let preprocessed_col = Poly::new(preprocessed.values.clone());
+            assert_eq!(
+                proof.preprocessed_local,
+                [preprocessed_col.eval_base(&point)]
+            );
+            assert_eq!(
+                proof.preprocessed_next,
+                [preprocessed_col.eval_next_base(&point)]
+            );
+
+            let mut verifier_challenger = fresh_challenger();
+            zerocheck
+                .verify::<F, EF, _>(&proof, num_vars, &[], &mut verifier_challenger)
+                .expect("preprocessed AIR must verify");
+        }
+    }
+
+    #[test]
+    fn zerocheck_rejects_tampered_preprocessed_opening() {
+        // Corrupt a preprocessed current-row opening, so the final check must reject.
+        let num_vars = 4;
+        let (trace, preprocessed) = preprocessed_pair(1 << num_vars);
+        let zerocheck = AirZerocheck::new(&PreprocessedAir, 0);
+
+        let mut prover_challenger = fresh_challenger();
+        let (mut proof, _) =
+            zerocheck.prove::<F, EF, _>(&trace, Some(&preprocessed), &[], &mut prover_challenger);
+        proof.preprocessed_local[0] += EF::ONE;
+
+        let mut verifier_challenger = fresh_challenger();
+        let err = zerocheck
+            .verify::<F, EF, _>(&proof, num_vars, &[], &mut verifier_challenger)
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch));
+    }
+
+    #[test]
+    fn zerocheck_rejects_tampered_preprocessed_next_opening() {
+        // Corrupt a preprocessed next-row opening, so the final check must reject.
+        let num_vars = 4;
+        let (trace, preprocessed) = preprocessed_pair(1 << num_vars);
+        let zerocheck = AirZerocheck::new(&PreprocessedAir, 0);
+
+        let mut prover_challenger = fresh_challenger();
+        let (mut proof, _) =
+            zerocheck.prove::<F, EF, _>(&trace, Some(&preprocessed), &[], &mut prover_challenger);
+        proof.preprocessed_next[0] += EF::ONE;
+
+        let mut verifier_challenger = fresh_challenger();
+        let err = zerocheck
+            .verify::<F, EF, _>(&proof, num_vars, &[], &mut verifier_challenger)
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch));
     }
 }

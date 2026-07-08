@@ -12,7 +12,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::zerocheck::ZerocheckError;
-use p3_multi_stark::{VerificationError, prove, verify};
+use p3_multi_stark::{VerificationError, prove, setup, verify};
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::OpeningBatch;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
@@ -207,10 +207,29 @@ fn prove_verify_fibonacci_roundtrips() {
     let pis = fib_public_values(n);
     let config = config_for(log2_strict_usize(n), NUM_COLS);
 
-    let proof = prove(&config, &FibAir, &trace, &pis, 0, &mut challenger(&config));
+    // Fibonacci has no preprocessed trace, so setup yields empty keys.
+    let (pk, vk) = setup(&config, &FibAir, &mut challenger(&config));
 
-    verify(&config, &FibAir, &proof, &pis, 0, &mut challenger(&config))
-        .expect("honest Fibonacci proof must verify");
+    let proof = prove(
+        &config,
+        &pk,
+        &FibAir,
+        &trace,
+        &pis,
+        0,
+        &mut challenger(&config),
+    );
+
+    verify(
+        &config,
+        &vk,
+        &FibAir,
+        &proof,
+        &pis,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("honest Fibonacci proof must verify");
 }
 
 #[test]
@@ -221,7 +240,17 @@ fn verify_rejects_tampered_opening() {
     let pis = fib_public_values(n);
     let config = config_for(log2_strict_usize(n), NUM_COLS);
 
-    let mut proof = prove(&config, &FibAir, &trace, &pis, 0, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &FibAir, &mut challenger(&config));
+
+    let mut proof = prove(
+        &config,
+        &pk,
+        &FibAir,
+        &trace,
+        &pis,
+        0,
+        &mut challenger(&config),
+    );
 
     // Mutation: shift the first claimed current-row value by one field element.
     let batch = &proof.opening.evals[0];
@@ -233,7 +262,16 @@ fn verify_rejects_tampered_opening() {
     // Why: the verifier samples query positions from the absorbed value.
     //   the round verifies as one pruned multiproof
     //   -> failure reports a batched placeholder position, not a per-query index.
-    let err = verify(&config, &FibAir, &proof, &pis, 0, &mut challenger(&config)).unwrap_err();
+    let err = verify(
+        &config,
+        &vk,
+        &FibAir,
+        &proof,
+        &pis,
+        0,
+        &mut challenger(&config),
+    )
+    .unwrap_err();
     match err {
         VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position, reason }) => {
             assert_eq!(position, 0);
@@ -253,10 +291,29 @@ fn verify_rejects_violated_constraint() {
     let pis = fib_public_values(n);
     let config = config_for(log2_strict_usize(n), NUM_COLS);
 
-    let proof = prove(&config, &FibAir, &trace, &pis, 0, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &FibAir, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        &pk,
+        &FibAir,
+        &trace,
+        &pis,
+        0,
+        &mut challenger(&config),
+    );
 
     // Expected rejection: the zerocheck closes on a nonzero constraint value.
-    let err = verify(&config, &FibAir, &proof, &pis, 0, &mut challenger(&config)).unwrap_err();
+    let err = verify(
+        &config,
+        &vk,
+        &FibAir,
+        &proof,
+        &pis,
+        0,
+        &mut challenger(&config),
+    )
+    .unwrap_err();
     assert!(
         matches!(
             err,
@@ -274,7 +331,17 @@ fn verify_rejects_tampered_public_values() {
     let pis = fib_public_values(n);
     let config = config_for(log2_strict_usize(n), NUM_COLS);
 
-    let proof = prove(&config, &FibAir, &trace, &pis, 0, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &FibAir, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        &pk,
+        &FibAir,
+        &trace,
+        &pis,
+        0,
+        &mut challenger(&config),
+    );
 
     // Mutation: shift the claimed output by one field element.
     let mut wrong = pis;
@@ -285,6 +352,7 @@ fn verify_rejects_tampered_public_values() {
     //   -> failure reports a batched placeholder position, not a per-query index.
     let err = verify(
         &config,
+        &vk,
         &FibAir,
         &proof,
         &wrong,

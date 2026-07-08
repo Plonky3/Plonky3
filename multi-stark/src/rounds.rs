@@ -20,7 +20,11 @@ use crate::selectors::BoundaryEvals;
 
 /// Sumcheck prover state for the AIR zerocheck.
 ///
-/// Stores the base trace as one transposed row-major matrix: each matrix row is one trace column.
+/// Stores the trace as one transposed row-major matrix: each matrix row is one trace column.
+///
+/// Preprocessed columns fold exactly like main columns.
+/// They are laid out immediately after the main columns in the same matrix.
+/// A stored split index separates the two views when a folder is built.
 #[derive(Debug)]
 pub(crate) struct RoundStateBase<'a, A, F, EF> {
     /// AIR whose alpha-batched constraint is being evaluated.
@@ -31,8 +35,11 @@ pub(crate) struct RoundStateBase<'a, A, F, EF> {
     alpha: EF,
     /// Equality weight over the current round's suffix variables.
     eq_suffix: Poly<EF>,
-    /// Main trace columns, stored as a row-major matrix with one original column per row.
+    /// Main columns then preprocessed columns, one original column per matrix row.
     columns: RowMajorMatrix<F>,
+    /// Count of leading rows that are main columns.
+    /// Every later row is a preprocessed column.
+    main_width: usize,
     /// Per-round sumcheck degree.
     degree: usize,
 }
@@ -49,9 +56,12 @@ pub(crate) struct RoundStateExt<'a, A, F, EF> {
     eq_suffix: Poly<EF>,
     /// Folded boundary-selector values at the current sumcheck prefix.
     boundary: BoundaryEvals<EF>,
-    /// Main trace columns after the first base-field fold.
+    /// Main columns then preprocessed columns, after the first base-field fold.
     columns: Vec<Poly<EF>>,
-    /// Repeat-last successor values for each main column at the folded tail row.
+    /// Count of leading columns that are main columns.
+    /// Every later column is a preprocessed column.
+    main_width: usize,
+    /// Repeat-last successor value for each column at the folded tail row.
     next_tail: Vec<EF>,
     /// Per-round sumcheck degree.
     degree: usize,
@@ -117,6 +127,23 @@ where
     EF: ExtensionField<F>,
 {
     /// Build the prover state from a trace and a sampled zerocheck point.
+    ///
+    /// The preprocessed columns, when present, are appended after the main columns.
+    /// Both traces must share the same height, so every column has the same arity.
+    ///
+    /// # Arguments
+    ///
+    /// - `air`: the AIR whose alpha-batched constraint is evaluated.
+    /// - `public_values`: public inputs forwarded to the AIR.
+    /// - `alpha`: random scalar batching the constraints.
+    /// - `tau`: the sampled zerocheck point.
+    /// - `trace`: the main execution trace, one column per main AIR column.
+    /// - `preprocessed`: the preprocessed trace, or `None` when the AIR declares none.
+    /// - `degree`: the per-round sumcheck degree.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the preprocessed trace height differs from the main trace height.
     #[tracing::instrument(skip_all)]
     pub(crate) fn new(
         air: &'a A,
@@ -124,16 +151,38 @@ where
         alpha: EF,
         tau: &Point<EF>,
         trace: &'a RowMajorMatrix<F>,
+        preprocessed: Option<&RowMajorMatrix<F>>,
         degree: usize,
     ) -> Self {
         // TODO: we may want to send cm_trace directly since PCS needs Vec<Poly> representation of witneses
-        let columns = tracing::info_span!("transpose").in_scope(|| trace.transpose());
+        // One matrix row per column: transpose lays each column out contiguously.
+        let main_width = trace.width;
+        let columns = tracing::info_span!("transpose").in_scope(|| {
+            let main = trace.transpose();
+            match preprocessed {
+                // No preprocessed trace: the main columns are the whole matrix.
+                None => main,
+                // Append the preprocessed columns as extra rows of the same width.
+                Some(preprocessed) => {
+                    let trace_height = main.width;
+                    let prep = preprocessed.transpose();
+                    assert_eq!(
+                        prep.width, trace_height,
+                        "preprocessed trace height must match the main trace height"
+                    );
+                    let mut values = main.values;
+                    values.extend_from_slice(&prep.values);
+                    RowMajorMatrix::new(values, trace_height)
+                }
+            }
+        });
         Self {
             air,
             public_values,
             alpha,
             eq_suffix: Poly::new_from_point(&tau.as_slice()[1..], EF::ONE),
             columns,
+            main_width,
             degree,
         }
     }
@@ -168,6 +217,7 @@ where
         EF::ExtensionPacking: From<EF> + From<F::Packing>,
     {
         let width = self.width();
+        let main_width = self.main_width;
         let height = self.num_evals();
         let scalar_half = height / 2;
         let packing_width = F::Packing::WIDTH;
@@ -250,11 +300,15 @@ where
                         boundary += boundary_diff;
 
                         let g = MultilinearFolder::new(
-                            &scratch.local_point,
-                            &scratch.next_point,
+                            &scratch.local_point[..main_width],
+                            &scratch.next_point[..main_width],
                             boundary,
                             self.public_values,
                             alpha,
+                        )
+                        .with_preprocessed(
+                            &scratch.local_point[main_width..],
+                            &scratch.next_point[main_width..],
                         )
                         .eval_air(self.air);
                         *acc += dot_product::<EF, _, _>(
@@ -282,6 +336,7 @@ where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
     {
         let width = self.width();
+        let main_width = self.main_width;
         let height = self.num_evals();
         let half = height / 2;
 
@@ -326,12 +381,13 @@ where
                 boundary += boundary_diff;
 
                 let g = MultilinearFolder::new(
-                    &local_point,
-                    &next_point,
+                    &local_point[..main_width],
+                    &next_point[..main_width],
                     boundary,
                     self.public_values,
                     self.alpha,
                 )
+                .with_preprocessed(&local_point[main_width..], &next_point[main_width..])
                 .eval_air(self.air);
                 *acc += eq_suffix * g;
             }
@@ -366,6 +422,7 @@ where
             eq_suffix,
             degree: self.degree,
             columns,
+            main_width: self.main_width,
             next_tail,
             boundary: BoundaryEvals::new(EF::ONE - r, r, EF::ONE - r),
         }
@@ -424,6 +481,7 @@ where
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
     {
         let width = self.width();
+        let main_width = self.main_width;
         let num_evals = self.num_evals();
         let half = num_evals / 2;
         let degree = self.degree;
@@ -465,11 +523,15 @@ where
                         BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
 
                     let g = MultilinearFolder::new(
-                        &scratch.local_point,
-                        &scratch.next_point,
+                        &scratch.local_point[..main_width],
+                        &scratch.next_point[..main_width],
                         boundary,
                         self.public_values,
                         self.alpha,
+                    )
+                    .with_preprocessed(
+                        &scratch.local_point[main_width..],
+                        &scratch.next_point[main_width..],
                     )
                     .eval_air(self.air);
                     scratch.out[0] += eq_suffix * g;
@@ -484,11 +546,15 @@ where
                         boundary += boundary_diff;
 
                         let g = MultilinearFolder::new(
-                            &scratch.local_point,
-                            &scratch.next_point,
+                            &scratch.local_point[..main_width],
+                            &scratch.next_point[..main_width],
                             boundary,
                             self.public_values,
                             self.alpha,
+                        )
+                        .with_preprocessed(
+                            &scratch.local_point[main_width..],
+                            &scratch.next_point[main_width..],
                         )
                         .eval_air(self.air);
                         *acc += eq_suffix * g;
@@ -531,6 +597,7 @@ where
         EF::ExtensionPacking: From<EF> + From<F::Packing>,
     {
         let width = self.width();
+        let main_width = self.main_width;
         let height = self.num_evals();
         let scalar_half = height / 2;
         let packing_width = F::Packing::WIDTH;
@@ -608,11 +675,15 @@ where
                     );
 
                     let g = MultilinearFolder::new(
-                        &scratch.local_point,
-                        &scratch.next_point,
+                        &scratch.local_point[..main_width],
+                        &scratch.next_point[..main_width],
                         boundary,
                         self.public_values,
                         alpha,
+                    )
+                    .with_preprocessed(
+                        &scratch.local_point[main_width..],
+                        &scratch.next_point[main_width..],
                     )
                     .eval_air(self.air);
                     scratch.out[0] += dot_product::<EF, _, _>(
@@ -646,11 +717,15 @@ where
                         boundary += boundary_diff;
 
                         let g = MultilinearFolder::new(
-                            &scratch.local_point,
-                            &scratch.next_point,
+                            &scratch.local_point[..main_width],
+                            &scratch.next_point[..main_width],
                             boundary,
                             self.public_values,
                             alpha,
+                        )
+                        .with_preprocessed(
+                            &scratch.local_point[main_width..],
+                            &scratch.next_point[main_width..],
                         )
                         .eval_air(self.air);
                         *acc += dot_product::<EF, _, _>(
