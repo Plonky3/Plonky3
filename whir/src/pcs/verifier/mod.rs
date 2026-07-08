@@ -244,7 +244,7 @@ where
         // Evaluate the constraint polynomial at the folding point.
         let evaluation_of_weights = self
             .variable_order
-            .eval_constraints_poly(&constraints, &folding_randomness);
+            .eval_constraints_poly(&constraints, &folding_randomness, self.basis);
 
         // Final consistency check: claimed_eval == weight * f(r).
         let final_value = match self.variable_order {
