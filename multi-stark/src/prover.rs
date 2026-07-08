@@ -49,7 +49,7 @@ use crate::zerocheck::AirZerocheck;
 /// - This keeps the committed successor view in the same frame as zerocheck.
 /// - The preprocessed key width must match the AIR's declared preprocessed width.
 /// - A preprocessed key, when present, must have the same height as the main trace.
-/// - The AIR must declare no periodic columns.
+/// - A periodic column's period must be a power of two dividing the trace height.
 pub fn prove<C, A>(
     config: &C,
     proving_key: &ProvingKey<C>,

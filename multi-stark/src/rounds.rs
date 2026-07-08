@@ -4,7 +4,7 @@
 
 use alloc::vec::Vec;
 
-use p3_air::Air;
+use p3_air::{Air, BaseAir};
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -20,9 +20,14 @@ use crate::selectors::BoundaryEvals;
 ///
 /// Stores the trace as one transposed row-major matrix: each matrix row is one trace column.
 ///
-/// Preprocessed columns fold exactly like main columns.
-/// They are laid out immediately after the main columns in the same matrix.
-/// A stored split index separates the two views when a folder is built.
+/// Three column groups fold identically and share one matrix, laid out in this order:
+/// - main columns, then
+/// - preprocessed columns, then
+/// - periodic columns, each materialized to full trace height (`col[i mod period]`).
+///
+/// Two stored split indices separate the three views when a folder is built.
+/// Periodic columns are uncommitted: they carry no opening claim.
+/// The verifier recomputes them in closed form at the bound point.
 #[derive(Debug)]
 pub(crate) struct RoundStateBase<'a, A, F, EF> {
     /// AIR whose alpha-batched constraint is being evaluated.
@@ -33,11 +38,14 @@ pub(crate) struct RoundStateBase<'a, A, F, EF> {
     alpha: EF,
     /// Equality weight over the current round's suffix variables.
     eq_suffix: Poly<EF>,
-    /// Main columns then preprocessed columns, one original column per matrix row.
+    /// Main columns, then preprocessed columns, then periodic columns.
+    /// Each matrix row is one original column.
     columns: RowMajorMatrix<F>,
     /// Count of leading rows that are main columns.
-    /// Every later row is a preprocessed column.
     main_width: usize,
+    /// Count of rows following the main columns that are preprocessed columns.
+    /// Every row after the first `main_width + preprocessed_width` is a periodic column.
+    preprocessed_width: usize,
     /// Per-round sumcheck degree.
     degree: usize,
 }
@@ -169,11 +177,13 @@ pub(crate) struct RoundStateExt<'a, A, F: Field, EF: ExtensionField<F>> {
     eq_suffix: Poly<EF>,
     /// Folded boundary-selector values at the current sumcheck prefix.
     boundary: BoundaryEvals<EF>,
-    /// Main columns then preprocessed columns, after the first base-field fold.
+    /// Main columns, then preprocessed columns, then periodic columns, after the first base-field fold.
     columns: ExtColumns<F, EF>,
     /// Count of leading columns that are main columns.
-    /// Every later column is a preprocessed column.
     main_width: usize,
+    /// Count of columns following the main columns that are preprocessed columns.
+    /// Every later column is a periodic column.
+    preprocessed_width: usize,
     /// Repeat-last successor value for each column at the folded tail row.
     next_tail: Vec<EF>,
     /// Per-round sumcheck degree.
@@ -246,7 +256,15 @@ where
     /// Build the prover state from a trace and a sampled zerocheck point.
     ///
     /// The preprocessed columns, when present, are appended after the main columns.
-    /// Both traces must share the same height, so every column has the same arity.
+    /// Periodic columns are appended last, each materialized to the full trace height.
+    /// The main and preprocessed traces must share the same height.
+    /// So every column has the same arity.
+    ///
+    /// A period-`p` periodic column repeats every `p` rows.
+    /// Its full-height column therefore holds `col[i mod p]` at row `i`.
+    /// This full column is a genuine multilinear polynomial over the trace variables.
+    /// So it folds exactly like a committed column.
+    /// Its fold to the bound point equals the column's multilinear extension there.
     ///
     /// # Arguments
     ///
@@ -261,6 +279,7 @@ where
     /// # Panics
     ///
     /// Panics if the preprocessed trace height differs from the main trace height.
+    /// Panics if a periodic column's period is not a power of two dividing the trace height.
     #[tracing::instrument(skip_all)]
     pub(crate) fn new(
         air: &'a A,
@@ -270,28 +289,43 @@ where
         trace: &'a RowMajorMatrix<F>,
         preprocessed: Option<&RowMajorMatrix<F>>,
         degree: usize,
-    ) -> Self {
+    ) -> Self
+    where
+        A: BaseAir<F>,
+    {
         // TODO: we may want to send cm_trace directly since PCS needs Vec<Poly> representation of witneses
         // One matrix row per column: transpose lays each column out contiguously.
         let main_width = trace.width;
+        let preprocessed_width = preprocessed.map_or(0, |p| p.width);
         let columns = tracing::info_span!("transpose").in_scope(|| {
+            // Transposed main trace: one row per column, each row `trace_height` long.
             let main = trace.transpose();
-            match preprocessed {
-                // No preprocessed trace: the main columns are the whole matrix.
-                None => main,
-                // Append the preprocessed columns as extra rows of the same width.
-                Some(preprocessed) => {
-                    let trace_height = main.width;
-                    let prep = preprocessed.transpose();
-                    assert_eq!(
-                        prep.width, trace_height,
-                        "preprocessed trace height must match the main trace height"
-                    );
-                    let mut values = main.values;
-                    values.extend_from_slice(&prep.values);
-                    RowMajorMatrix::new(values, trace_height)
-                }
+            let trace_height = main.width;
+            let mut values = main.values;
+
+            // Append the preprocessed columns as extra rows of the same length.
+            if let Some(preprocessed) = preprocessed {
+                let prep = preprocessed.transpose();
+                assert_eq!(
+                    prep.width, trace_height,
+                    "preprocessed trace height must match the main trace height"
+                );
+                values.extend_from_slice(&prep.values);
             }
+
+            // Append each periodic column, expanded to the full trace height.
+            for col in air.periodic_columns().iter() {
+                let period = col.len();
+                assert!(
+                    period.is_power_of_two() && trace_height.is_multiple_of(period),
+                    "periodic column period must be a power of two dividing the trace height"
+                );
+                // Row i reads value i mod period.
+                // So the column cycles through the p values.
+                values.extend((0..trace_height).map(|i| col[i % period]));
+            }
+
+            RowMajorMatrix::new(values, trace_height)
         });
         Self {
             air,
@@ -300,6 +334,7 @@ where
             eq_suffix: Poly::new_from_point(&tau.as_slice()[1..], EF::ONE),
             columns,
             main_width,
+            preprocessed_width,
             degree,
         }
     }
@@ -335,6 +370,9 @@ where
     {
         let width = self.width();
         let main_width = self.main_width;
+        // End of the preprocessed group.
+        // Every column after this is a periodic column.
+        let prep_end = main_width + self.preprocessed_width;
         let height = self.num_evals();
         let scalar_half = height / 2;
         let packing_width = F::Packing::WIDTH;
@@ -425,9 +463,10 @@ where
                             alpha,
                         )
                         .with_preprocessed(
-                            &scratch.local_point[main_width..],
-                            &scratch.next_point[main_width..],
+                            &scratch.local_point[main_width..prep_end],
+                            &scratch.next_point[main_width..prep_end],
                         )
+                        .with_periodic(&scratch.local_point[prep_end..])
                         .eval_air(self.air);
                         *acc += g * eq_suffix;
                     }
@@ -455,6 +494,9 @@ where
     {
         let width = self.width();
         let main_width = self.main_width;
+        // End of the preprocessed group.
+        // Every column after this is a periodic column.
+        let prep_end = main_width + self.preprocessed_width;
         let height = self.num_evals();
         let half = height / 2;
 
@@ -505,7 +547,11 @@ where
                     self.public_values,
                     self.alpha,
                 )
-                .with_preprocessed(&local_point[main_width..], &next_point[main_width..])
+                .with_preprocessed(
+                    &local_point[main_width..prep_end],
+                    &next_point[main_width..prep_end],
+                )
+                .with_periodic(&local_point[prep_end..])
                 .eval_air(self.air);
                 *acc += eq_suffix * g;
             }
@@ -552,6 +598,7 @@ where
             degree: self.degree,
             columns,
             main_width: self.main_width,
+            preprocessed_width: self.preprocessed_width,
             next_tail,
             boundary: BoundaryEvals::new(EF::ONE - r, r, EF::ONE - r),
         }
@@ -619,6 +666,9 @@ where
     {
         let width = self.width();
         let main_width = self.main_width;
+        // End of the preprocessed group.
+        // Every column after this is a periodic column.
+        let prep_end = main_width + self.preprocessed_width;
         let num_evals = self.num_evals();
         let half = num_evals / 2;
         let degree = self.degree;
@@ -667,9 +717,10 @@ where
                         self.alpha,
                     )
                     .with_preprocessed(
-                        &scratch.local_point[main_width..],
-                        &scratch.next_point[main_width..],
+                        &scratch.local_point[main_width..prep_end],
+                        &scratch.next_point[main_width..prep_end],
                     )
+                    .with_periodic(&scratch.local_point[prep_end..])
                     .eval_air(self.air);
                     scratch.out[0] += eq_suffix * g;
 
@@ -690,9 +741,10 @@ where
                             self.alpha,
                         )
                         .with_preprocessed(
-                            &scratch.local_point[main_width..],
-                            &scratch.next_point[main_width..],
+                            &scratch.local_point[main_width..prep_end],
+                            &scratch.next_point[main_width..prep_end],
                         )
+                        .with_periodic(&scratch.local_point[prep_end..])
                         .eval_air(self.air);
                         *acc += eq_suffix * g;
                     }
@@ -735,6 +787,9 @@ where
     {
         let width = self.width();
         let main_width = self.main_width;
+        // End of the preprocessed group.
+        // Every column after this is a periodic column.
+        let prep_end = main_width + self.preprocessed_width;
         let height = self.num_evals();
         let scalar_half = height / 2;
         let packing_width = F::Packing::WIDTH;
@@ -817,9 +872,10 @@ where
                         alpha,
                     )
                     .with_preprocessed(
-                        &scratch.local_point[main_width..],
-                        &scratch.next_point[main_width..],
+                        &scratch.local_point[main_width..prep_end],
+                        &scratch.next_point[main_width..prep_end],
                     )
+                    .with_periodic(&scratch.local_point[prep_end..])
                     .eval_air(self.air);
                     scratch.out[0] += g.0 * eq_suffix;
 
@@ -856,9 +912,10 @@ where
                             alpha,
                         )
                         .with_preprocessed(
-                            &scratch.local_point[main_width..],
-                            &scratch.next_point[main_width..],
+                            &scratch.local_point[main_width..prep_end],
+                            &scratch.next_point[main_width..prep_end],
                         )
+                        .with_periodic(&scratch.local_point[prep_end..])
                         .eval_air(self.air);
                         *acc += g.0 * eq_suffix;
                     }

@@ -94,7 +94,6 @@ impl<E: Debug> core::error::Error for VerificationError<E> {}
 /// # Panics
 ///
 /// Panics if the preprocessed key width disagrees with the AIR's declared preprocessed width.
-/// Panics if the AIR declares periodic columns.
 pub fn verify<C, A>(
     config: &C,
     verifying_key: &VerifyingKey<C>,
