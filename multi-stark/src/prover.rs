@@ -47,6 +47,7 @@ use crate::zerocheck::AirZerocheck;
 /// - The trace width must match the AIR width.
 /// - The trace arity must meet the commitment scheme's padding floor.
 /// - This keeps the committed successor view in the same frame as zerocheck.
+/// - The preprocessed key width must match the AIR's declared preprocessed width.
 /// - A preprocessed key, when present, must have the same height as the main trace.
 /// - The AIR must declare no periodic columns.
 pub fn prove<C, A>(
@@ -101,6 +102,14 @@ where
     assert!(
         log_height >= config.min_num_variables(),
         "trace arity must be at least the commitment scheme's padding floor"
+    );
+
+    // Invariant: committed preprocessed column count == AIR's declared preprocessed width.
+    // A key with no preprocessed data pairs with an AIR that declares none (width 0).
+    assert_eq!(
+        preprocessed.map_or(0, |p| p.width),
+        air.preprocessed_width(),
+        "preprocessed key width must match the AIR's declared preprocessed width"
     );
 
     // Preprocessed and main columns share the bound point, so they must share a height.

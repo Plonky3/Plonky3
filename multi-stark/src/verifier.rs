@@ -93,6 +93,7 @@ impl<E: Debug> core::error::Error for VerificationError<E> {}
 ///
 /// # Panics
 ///
+/// Panics if the preprocessed key width disagrees with the AIR's declared preprocessed width.
 /// Panics if the AIR declares periodic columns.
 pub fn verify<C, A>(
     config: &C,
@@ -120,6 +121,14 @@ where
     let width = AirLayout::from_air::<C::Val>(air).main_width;
     let next_columns = air.main_next_row_columns();
     let preprocessed = verifying_key.preprocessed.as_ref();
+
+    // Invariant: committed preprocessed column count == AIR's declared preprocessed width.
+    // A key with no preprocessed data pairs with an AIR that declares none (width 0).
+    assert_eq!(
+        preprocessed.map_or(0, |p| p.width),
+        air.preprocessed_width(),
+        "preprocessed key width must match the AIR's declared preprocessed width"
+    );
 
     // The proof's preprocessed opening must match what the key expects.
     match (preprocessed, &proof.preprocessed_opening) {
