@@ -41,6 +41,16 @@ where
         self.input_buffer.extend_from_slice(&output);
         self.output_buffer = output.into();
     }
+
+    /// The bytes pending absorption, not yet folded into a digest.
+    pub(crate) fn input_buffer(&self) -> &[T] {
+        &self.input_buffer
+    }
+
+    /// The hasher used to fold the input buffer into a digest.
+    pub(crate) const fn hasher(&self) -> &H {
+        &self.hasher
+    }
 }
 
 impl<T, H, const OUT_LEN: usize> CanObserve<T> for HashChallenger<T, H, OUT_LEN>

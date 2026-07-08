@@ -199,10 +199,39 @@ where
     }
 }
 
-impl<F, Inner> GrindingChallenger for SerializingChallenger32<F, Inner>
+impl<F, H> SerializingChallenger32<F, HashChallenger<u8, H, 32>>
 where
     F: PrimeField32,
-    Inner: CanSample<u8> + CanObserve<u8> + Clone + Send + Sync,
+    H: CryptographicHasher<u8, [u8; 32]> + Sync,
+{
+    /// Build the proof-of-work acceptance predicate used by
+    /// [`GrindingChallenger::grind`](crate::GrindingChallenger::grind).
+    ///
+    /// Replays `check_witness` = `observe(witness)` + `sample_bits(bits)` against the
+    /// current transcript prefix, without cloning the challenger or allocating per
+    /// candidate: the prefix and the witness bytes are hashed together directly via
+    /// `hash_iter_slices`, and the last 4 digest bytes (the ones `sample_bits` would
+    /// have popped) are checked in place.
+    fn pow_check_fn(&self, bits: usize) -> impl Fn(u32) -> bool + Sync + '_ {
+        let prefix = self.inner.input_buffer();
+        let hasher = self.inner.hasher();
+        let mask = (1u64 << bits) - 1;
+        move |candidate| {
+            // candidate < F::ORDER_U32 by construction so this is safe.
+            let witness = unsafe { F::from_canonical_unchecked(candidate) };
+            let witness_bytes = witness.to_unique_u32().to_le_bytes();
+            let digest = hasher.hash_iter_slices([prefix, witness_bytes.as_slice()]);
+            // `sample_bits` pops the last 4 digest bytes, most-recent first.
+            let rand_bytes = [digest[31], digest[30], digest[29], digest[28]];
+            (u64::from(u32::from_le_bytes(rand_bytes)) & mask) == 0
+        }
+    }
+}
+
+impl<F, H> GrindingChallenger for SerializingChallenger32<F, HashChallenger<u8, H, 32>>
+where
+    F: PrimeField32,
+    H: CryptographicHasher<u8, [u8; 32]> + Clone + Send + Sync,
 {
     type Witness = F;
 
@@ -221,14 +250,17 @@ where
             return F::ZERO;
         }
 
-        let witness = (0..F::ORDER_U32)
-            .into_par_iter()
-            .map(|i| unsafe {
-                // i < F::ORDER_U32 by construction so this is safe.
-                F::from_canonical_unchecked(i)
-            })
-            .find_any(|witness| self.clone().check_witness(bits, *witness))
-            .expect("failed to find witness");
+        // The candidate-independent transcript work happens once inside `pow_check_fn`.
+        // The parallel search then runs one hash call per candidate, no clone or alloc.
+        let witness = {
+            let accepts = self.pow_check_fn(bits);
+            (0..F::ORDER_U32)
+                .into_par_iter()
+                .find_any(|&candidate| accepts(candidate))
+                .expect("failed to find witness")
+        };
+        // witness < F::ORDER_U32 by construction so this is safe.
+        let witness = unsafe { F::from_canonical_unchecked(witness) };
         assert!(self.check_witness(bits, witness));
         witness
     }
@@ -394,10 +426,42 @@ where
     }
 }
 
-impl<F, Inner> GrindingChallenger for SerializingChallenger64<F, Inner>
+impl<F, H> SerializingChallenger64<F, HashChallenger<u8, H, 32>>
 where
     F: PrimeField64,
-    Inner: CanSample<u8> + CanObserve<u8> + Clone + Send + Sync,
+    H: CryptographicHasher<u8, [u8; 32]> + Sync,
+{
+    /// Build the proof-of-work acceptance predicate used by
+    /// [`GrindingChallenger::grind`](crate::GrindingChallenger::grind).
+    ///
+    /// Replays `check_witness` = `observe(witness)` + `sample_bits(bits)` against the
+    /// current transcript prefix, without cloning the challenger or allocating per
+    /// candidate: the prefix and the witness bytes are hashed together directly via
+    /// `hash_iter_slices`, and the last 8 digest bytes (the ones `sample_bits` would
+    /// have popped) are checked in place.
+    fn pow_check_fn(&self, bits: usize) -> impl Fn(u64) -> bool + Sync + '_ {
+        let prefix = self.inner.input_buffer();
+        let hasher = self.inner.hasher();
+        let mask = (1u64 << bits) - 1;
+        move |candidate| {
+            // candidate < F::ORDER_U64 by construction so this is safe.
+            let witness = unsafe { F::from_canonical_unchecked(candidate) };
+            let witness_bytes = witness.to_unique_u64().to_le_bytes();
+            let digest = hasher.hash_iter_slices([prefix, witness_bytes.as_slice()]);
+            // `sample_bits` pops the last 8 digest bytes, most-recent first.
+            let rand_bytes = [
+                digest[31], digest[30], digest[29], digest[28], digest[27], digest[26], digest[25],
+                digest[24],
+            ];
+            (u64::from_le_bytes(rand_bytes) & mask) == 0
+        }
+    }
+}
+
+impl<F, H> GrindingChallenger for SerializingChallenger64<F, HashChallenger<u8, H, 32>>
+where
+    F: PrimeField64,
+    H: CryptographicHasher<u8, [u8; 32]> + Clone + Send + Sync,
 {
     type Witness = F;
 
@@ -411,14 +475,17 @@ where
             return F::ZERO;
         }
 
-        let witness = (0..F::ORDER_U64)
-            .into_par_iter()
-            .map(|i| unsafe {
-                // i < F::ORDER_U64 by construction so this is safe.
-                F::from_canonical_unchecked(i)
-            })
-            .find_any(|witness| self.clone().check_witness(bits, *witness))
-            .expect("failed to find witness");
+        // The candidate-independent transcript work happens once inside `pow_check_fn`.
+        // The parallel search then runs one hash call per candidate, no clone or alloc.
+        let witness = {
+            let accepts = self.pow_check_fn(bits);
+            (0..F::ORDER_U64)
+                .into_par_iter()
+                .find_any(|&candidate| accepts(candidate))
+                .expect("failed to find witness")
+        };
+        // witness < F::ORDER_U64 by construction so this is safe.
+        let witness = unsafe { F::from_canonical_unchecked(witness) };
         assert!(self.check_witness(bits, witness));
         witness
     }
@@ -459,8 +526,10 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
+    use p3_field::integers::QuotientMap;
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::CryptographicHasher;
+    use proptest::prelude::*;
 
     use super::*;
     use crate::HashChallenger;
@@ -546,5 +615,48 @@ mod tests {
         let inner = Inner::new(vec![0, 1, 2, 3], ByteCountHasher);
         let mut challenger = SerializingChallenger32::<F, Inner>::new(inner);
         let _ = challenger.grind(32);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_serializing_challenger32_pow_check_matches_check_witness(
+            pending_bytes in prop::collection::vec(any::<u8>(), 0..16),
+            candidate in 0u32..BabyBear::ORDER_U32,
+            bits in 1usize..8,
+        ) {
+            // Specialization-vs-reference pin:
+            // the prefix-hashing predicate must agree with the plain
+            // `observe + sample_bits` verifier path on every candidate.
+            type F = BabyBear;
+            let inner = Inner::new(pending_bytes, ByteCountHasher);
+            let mut challenger = SerializingChallenger32::<F, Inner>::new(inner);
+
+            let fast = challenger.pow_check_fn(bits)(candidate);
+
+            // candidate is canonical by the range above.
+            let witness = unsafe { F::from_canonical_unchecked(candidate) };
+            let reference = challenger.check_witness(bits, witness);
+
+            prop_assert_eq!(fast, reference);
+        }
+
+        #[test]
+        fn prop_serializing_challenger64_pow_check_matches_check_witness(
+            pending_bytes in prop::collection::vec(any::<u8>(), 0..16),
+            candidate in 0u64..Goldilocks::ORDER_U64,
+            bits in 1usize..8,
+        ) {
+            type F = Goldilocks;
+            let inner = Inner::new(pending_bytes, ByteCountHasher);
+            let mut challenger = SerializingChallenger64::<F, Inner>::new(inner);
+
+            let fast = challenger.pow_check_fn(bits)(candidate);
+
+            // candidate is canonical by the range above.
+            let witness = unsafe { F::from_canonical_unchecked(candidate) };
+            let reference = challenger.check_witness(bits, witness);
+
+            prop_assert_eq!(fast, reference);
+        }
     }
 }
