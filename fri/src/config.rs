@@ -3,6 +3,7 @@ use core::fmt::Debug;
 
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
+use p3_security::fri::FriRegime;
 
 /// A set of parameters defining a specific instance of the FRI protocol.
 #[derive(Clone, Debug)]
@@ -41,6 +42,33 @@ impl<M> FriParameters<M> {
     /// isn't currently supported by this crate.
     pub const fn conjectured_soundness_bits(&self) -> usize {
         self.log_blowup * self.num_queries + self.query_proof_of_work_bits
+    }
+
+    /// Assemble the [`FriRegime`] mirror consumed by `p3-security` for
+    /// soundness analysis.
+    ///
+    /// The exhaustive destructuring is deliberate: adding a field to
+    /// `FriParameters` breaks this method until the new field is either
+    /// mapped into [`FriRegime`] or explicitly ignored, so the runtime config
+    /// and the soundness model cannot drift apart silently.
+    pub const fn security_regime(&self) -> FriRegime {
+        let Self {
+            log_blowup,
+            log_final_poly_len,
+            max_log_arity,
+            num_queries,
+            commit_proof_of_work_bits,
+            query_proof_of_work_bits,
+            mmcs: _,
+        } = self;
+        FriRegime {
+            log_blowup: *log_blowup,
+            num_queries: *num_queries,
+            log_final_poly_len: *log_final_poly_len,
+            max_log_arity: *max_log_arity,
+            commit_pow_bits: *commit_proof_of_work_bits,
+            query_pow_bits: *query_proof_of_work_bits,
+        }
     }
 
     /// Creates a minimal set of `FriParameters` for testing purposes.
@@ -176,4 +204,35 @@ pub fn compute_log_arity_for_round(
     });
 
     max_fold.min(max_log_arity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the field-by-field mapping in [`FriParameters::security_regime`].
+    /// Distinct values per field catch a mis-wired mapping (e.g. swapping the
+    /// commit and query PoW bits); the method's exhaustive destructuring is
+    /// what catches a newly-added `FriParameters` field.
+    #[test]
+    fn security_regime_mirrors_parameters() {
+        let params = FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 2,
+            max_log_arity: 3,
+            num_queries: 4,
+            commit_proof_of_work_bits: 5,
+            query_proof_of_work_bits: 6,
+            mmcs: (),
+        };
+
+        let regime = params.security_regime();
+
+        assert_eq!(regime.log_blowup, 1);
+        assert_eq!(regime.log_final_poly_len, 2);
+        assert_eq!(regime.max_log_arity, 3);
+        assert_eq!(regime.num_queries, 4);
+        assert_eq!(regime.commit_pow_bits, 5);
+        assert_eq!(regime.query_pow_bits, 6);
+    }
 }

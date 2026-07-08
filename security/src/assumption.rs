@@ -25,6 +25,17 @@ use core::str::FromStr;
 
 use serde::Serialize;
 
+/// \[BCSS25\] Theorem 1.5 dominant term, in bits:
+/// `log_2(2·(m + 1/2)⁵ / (3·ρ^{3/2}) · n)`. Shared by
+/// [`SecurityAssumption::prox_gaps_error`] (fixed `m = 10`) and
+/// [`SecurityAssumption::prox_gaps_error_jb_at_m`] (explicit `m`).
+fn jb_prox_gaps_dominant_term_bits(log_degree: usize, log_inv_rate: usize, m: usize) -> f64 {
+    let log_n = (log_degree + log_inv_rate) as f64;
+    let constant = libm::log2(2. * libm::pow(m as f64 + 0.5, 5.) / 3.);
+    let log_rho_neg_3_2 = 1.5 * log_inv_rate as f64;
+    log_n + constant + log_rho_neg_3_2
+}
+
 /// Proximity regime selector for Reed–Solomon-based IOPs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SecurityAssumption {
@@ -85,10 +96,15 @@ impl SecurityAssumption {
     /// Proximity-gap error in bits for combining `num_functions` functions
     /// at the regime's distance.
     ///
-    /// The Johnson-bound branch uses \[BCSS25\] Theorem 1.5. Only the
-    /// dominant term `2·(m + 1/2)⁵ / (3·ρ^{3/2}) · n` is kept; the
-    /// additive `(m + 1/2)/√ρ` and sub-dominant `3·(m + 1/2)·γ·ρ` terms
-    /// are negligible at `m = 10` (the safety choice η = √ρ/20).
+    /// The Johnson-bound branch uses \[BCSS25\] Theorem 1.5 at the fixed
+    /// safety choice `m = max(ceil(sqrt(rho)/(2*eta)), 3) = 10` (η = √ρ/20,
+    /// see [`Self::log_eta`]). Only the dominant term
+    /// `2·(m + 1/2)⁵ / (3·ρ^{3/2}) · n` is kept; the additive `(m + 1/2)/√ρ`
+    /// and sub-dominant `3·(m + 1/2)·γ·ρ` terms are negligible at `m = 10`.
+    /// Use [`Self::prox_gaps_error_jb_at_m`] when the surrounding regime
+    /// decodes at a different explicit `m` (e.g. FRI's `best_m`) — the
+    /// fixed `m = 10` here is a WHIR-style default, not necessarily the `m`
+    /// the caller's list-decoding regime actually operates at.
     #[must_use]
     pub fn prox_gaps_error(
         &self,
@@ -114,34 +130,9 @@ impl SecurityAssumption {
             //
             // With eta = sqrt(rho)/20 (safe gap), m = max(ceil(sqrt(rho)/(2*eta)), 3) = max(10, 3) = 10.
             //
-            // Only the first (dominant) term is kept.
-            // The second additive term (m + 1/2) / sqrt(rho) is O(1), negligible for large n.
-            // Within the first term, the sub-term 3*(m + 1/2)*gamma*rho is also dropped
-            // because 2*(m + 1/2)^5 dominates it when m = 10.
-            //
-            // This gives the approximation:
-            //
-            //   a ~ (2 * 10.5^5) / (3 * rho^(3/2)) * n
-            //
-            // In log form:
-            //   log_2(a) = log_2(n) + log_2(2 * 10.5^5 / 3) + 1.5 * log_2(1/rho)
-            //            = (log_degree + log_inv_rate) + 16.38 + 1.5 * log_inv_rate
-            //            = log_degree + 2.5 * log_inv_rate + 16.38
-            //
             // This improves over [BCI+20] which had:
             //   log_2(a) = 2*log_degree + 3.5*log_inv_rate + 23.24
-            Self::JohnsonBound => {
-                // n = 2^(log_degree + log_inv_rate)
-                let log_n = (log_degree + log_inv_rate) as f64;
-
-                // Constant from (2 * 10.5^5 / 3)
-                let constant = libm::log2(2. * libm::pow(10.5, 5.) / 3.);
-
-                // rho^(-3/2) contributes 1.5 * log_inv_rate
-                let log_rho_neg_3_2 = 1.5 * log_inv_rate as f64;
-
-                log_n + constant + log_rho_neg_3_2
-            }
+            Self::JohnsonBound => jb_prox_gaps_dominant_term_bits(log_degree, log_inv_rate, 10),
 
             // In CB we assume the error is degree/(eta*rho^2)
             Self::CapacityBound => {
@@ -150,6 +141,39 @@ impl SecurityAssumption {
         };
 
         // Error is (num_functions - 1) * error/|F|;
+        let num_functions_1_log = libm::log2(num_functions as f64 - 1.);
+        field_size_bits as f64 - (error + num_functions_1_log)
+    }
+
+    /// Johnson-bound proximity-gap error (\[BCSS25\] Theorem 1.5, dominant
+    /// term) at an explicit proximity parameter `m`, rather than the fixed
+    /// `m = 10` safety choice [`Self::prox_gaps_error`] uses.
+    ///
+    /// Only the dominant term `2·(m + 1/2)⁵ / (3·ρ^{3/2}) · n` is kept; see
+    /// [`Self::prox_gaps_error`] for the full derivation and the terms this
+    /// drops. Those terms remain negligible for any `m` in FRI's searched
+    /// range (`m ∈ [3, 1000]`): the dropped `3·(m + 1/2)·γ·ρ` sub-term is
+    /// smaller than the kept `2·(m + 1/2)⁵` term by a factor of
+    /// `2·(m + 1/2)⁴ / (3·γ)`, which grows with `m`.
+    ///
+    /// For use when the caller already knows the `m` the surrounding
+    /// list-decoding regime decodes at (e.g. FRI's `best_m` from
+    /// [`crate::fri::best_ldr_m`]) and needs the batch-combination term
+    /// evaluated at that same radius rather than the WHIR-style fixed
+    /// safety margin.
+    #[must_use]
+    pub fn prox_gaps_error_jb_at_m(
+        log_degree: usize,
+        log_inv_rate: usize,
+        field_size_bits: usize,
+        num_functions: usize,
+        m: usize,
+    ) -> f64 {
+        assert!(
+            num_functions >= 2,
+            "num_functions must be >= 2 to compute proximity gaps error",
+        );
+        let error = jb_prox_gaps_dominant_term_bits(log_degree, log_inv_rate, m);
         let num_functions_1_log = libm::log2(num_functions as f64 - 1.);
         field_size_bits as f64 - (error + num_functions_1_log)
     }

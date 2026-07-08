@@ -38,11 +38,14 @@ extern crate alloc;
 pub mod assumption;
 pub mod error;
 pub mod proximity;
+pub mod report;
 pub mod shape;
 
 pub mod air;
 pub mod deep;
 pub mod grinding;
+
+pub mod ldt;
 
 pub mod fri;
 pub mod whir;
@@ -51,4 +54,6 @@ pub mod stark;
 
 pub use assumption::SecurityAssumption;
 pub use error::ErrorBits;
+pub use ldt::LowDegreeTest;
+pub use report::{Regime, RegimeReport, SecurityReport, SecurityTerm};
 pub use shape::{InstanceShape, StarkAirParams};
