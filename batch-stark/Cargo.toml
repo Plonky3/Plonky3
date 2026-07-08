@@ -38,6 +38,7 @@ p3-keccak = { path = "../keccak" }
 p3-matrix = { path = "../matrix" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-mersenne-31 = { path = "../mersenne-31" }
+p3-security = { path = "../security" }
 p3-symmetric = { path = "../symmetric" }
 
 criterion.workspace = true
