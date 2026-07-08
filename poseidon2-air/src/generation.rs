@@ -128,9 +128,11 @@ pub fn generate_trace_rows<
 
 /// Fill every permutation's trace columns from its input.
 ///
-/// Runs `F::Packing::WIDTH` permutations at a time through the packed round functions when
-/// the input count divides evenly into that width, falling back to one permutation at a time
-/// (via [`generate_trace_rows_for_perm`]) otherwise.
+/// - With SIMD packing available, process `F::Packing::WIDTH` permutations per task.
+/// - A trailing group of fewer than that many permutations cannot fill a SIMD vector.
+/// - That short group, and every permutation on a target without packing, runs one at a time.
+///
+/// The packed and one-at-a-time paths write identical trace cells, so the choice is pure throughput.
 fn generate_perms<
     F: PrimeField,
     LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
@@ -152,22 +154,9 @@ fn generate_perms<
     constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
 ) {
     let packing_width = F::Packing::WIDTH;
-    if packing_width > 1 && inputs.len().is_multiple_of(packing_width) {
-        perms
-            .par_chunks_mut(packing_width)
-            .zip(inputs.par_chunks(packing_width))
-            .for_each(|(perm_chunk, input_chunk)| {
-                generate_trace_rows_for_perm_batch::<
-                    F,
-                    LinearLayers,
-                    WIDTH,
-                    SBOX_DEGREE,
-                    SBOX_REGISTERS,
-                    HALF_FULL_ROUNDS,
-                    PARTIAL_ROUNDS,
-                >(perm_chunk, input_chunk, constants);
-            });
-    } else {
+
+    // Width 1 means the target has no SIMD packing: batching would add overhead with no gain.
+    if packing_width == 1 {
         perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
             generate_trace_rows_for_perm::<
                 F,
@@ -179,7 +168,46 @@ fn generate_perms<
                 PARTIAL_ROUNDS,
             >(perm, input, constants);
         });
+        return;
     }
+
+    // Split the permutations into groups of `packing_width`.
+    //
+    //     inputs:  [ p0 p1 p2 p3 | p4 p5 p6 p7 | p8 p9 ]   (packing_width = 4)
+    //               \__ batch __/ \__ batch __/ \ tail /
+    //
+    // Full groups run through the packed round functions.
+    // The short final group appears only when the count is not a multiple of the width.
+    perms
+        .par_chunks_mut(packing_width)
+        .zip(inputs.par_chunks(packing_width))
+        .for_each(|(perm_chunk, input_chunk)| {
+            if perm_chunk.len() == packing_width {
+                // A full SIMD vector's worth of permutations: one packed pass covers all lanes.
+                generate_trace_rows_for_perm_batch::<
+                    F,
+                    LinearLayers,
+                    WIDTH,
+                    SBOX_DEGREE,
+                    SBOX_REGISTERS,
+                    HALF_FULL_ROUNDS,
+                    PARTIAL_ROUNDS,
+                >(perm_chunk, input_chunk, constants);
+            } else {
+                // Fewer than a full vector: fall back to one permutation at a time.
+                for (perm, &input) in perm_chunk.iter_mut().zip(input_chunk) {
+                    generate_trace_rows_for_perm::<
+                        F,
+                        LinearLayers,
+                        WIDTH,
+                        SBOX_DEGREE,
+                        SBOX_REGISTERS,
+                        HALF_FULL_ROUNDS,
+                        PARTIAL_ROUNDS,
+                    >(perm, input, constants);
+                }
+            }
+        });
 }
 
 /// `rows` will normally consist of 24 rows, with an exception for the final row.
@@ -420,42 +448,19 @@ fn generate_partial_round_packed<
     LinearLayers::internal_linear_layer(state);
 }
 
-/// Packed analog of [`generate_sbox`]: computes `x -> x^{DEGREE}` over `F::Packing::WIDTH`
-/// permutations at once, returning the packed intermediate registers instead of writing them
-/// directly (the caller unpacks them into each lane's own trace columns).
+/// Apply the S-box over `F::Packing::WIDTH` permutations at once and return the packed powers.
+///
+/// The caller unpacks each lane of the returned powers into that permutation's own trace columns.
 #[inline]
 fn generate_sbox_packed<F: PrimeField, const DEGREE: u64, const REGISTERS: usize>(
     x: &mut F::Packing,
 ) -> [F::Packing; REGISTERS] {
-    let mut registers = [F::Packing::ZERO; REGISTERS];
-    *x = match (DEGREE, REGISTERS) {
-        (3, 0) => x.cube(),
-        (5, 0) => x.exp_const_u64::<5>(),
-        (7, 0) => x.exp_const_u64::<7>(),
-        (5, 1) => {
-            let x2 = x.square();
-            let x3 = x2 * *x;
-            registers[0] = x3;
-            x3 * x2
-        }
-        (7, 1) => {
-            let x3 = x.cube();
-            registers[0] = x3;
-            x3 * x3 * *x
-        }
-        (11, 2) => {
-            let x2 = x.square();
-            let x3 = x2 * *x;
-            let x9 = x3.cube();
-            registers[0] = x3;
-            registers[1] = x9;
-            x9 * x2
-        }
-        _ => panic!(
-            "Unexpected (DEGREE, REGISTERS) of ({}, {})",
-            DEGREE, REGISTERS
-        ),
-    };
+    // Evaluate x^DEGREE lane-wise and collect the packed intermediate powers.
+    let (output, registers) = sbox_with_registers::<F::Packing, DEGREE, REGISTERS>(*x);
+
+    // Advance the packed state to the S-box output.
+    *x = output;
+
     registers
 }
 
@@ -509,45 +514,244 @@ fn generate_partial_round<
     LinearLayers::internal_linear_layer(state);
 }
 
-/// Computes the S-box `x -> x^{DEGREE}` and stores the partial data required to
-/// verify the computation.
-///
-/// # Panics
-///
-/// This method panics if the number of `REGISTERS` is not chosen optimally for the given
-/// `DEGREE` or if the `DEGREE` is not supported by the S-box. The supported degrees are
-/// `3`, `5`, `7`, and `11`.
+/// Apply the S-box in place and write its committed intermediate powers into the trace row.
 #[inline]
 fn generate_sbox<F: PrimeField, const DEGREE: u64, const REGISTERS: usize>(
     sbox: &mut SBox<MaybeUninit<F>, DEGREE, REGISTERS>,
     x: &mut F,
 ) {
-    *x = match (DEGREE, REGISTERS) {
+    // Evaluate x^DEGREE and collect the intermediate powers.
+    let (output, registers) = sbox_with_registers::<F, DEGREE, REGISTERS>(*x);
+
+    // Advance the state to the S-box output.
+    *x = output;
+
+    // Persist each intermediate power into its own trace column.
+    for (column, power) in sbox.0.iter_mut().zip(registers) {
+        column.write(power);
+    }
+}
+
+/// Evaluate the S-box `x -> x^DEGREE` and return the intermediate powers the trace commits to.
+///
+/// - The non-linear step of the permutation raises each state element to a fixed power.
+/// - A single constraint can only certify a power up to the AIR's max degree.
+/// - Splitting the exponent across `REGISTERS` committed powers keeps every constraint at degree `DEGREE`.
+///
+/// This is the single source of truth for that split, shared by the scalar and packed round functions.
+///
+/// # Returns
+/// - The S-box output `x^DEGREE`.
+/// - The `REGISTERS` intermediate powers, ordered as the trace columns expect them.
+///
+/// # Panics
+/// Panics unless `(DEGREE, REGISTERS)` is one of the supported pairs:
+/// `(3, 0)`, `(5, 0)`, `(7, 0)`, `(5, 1)`, `(7, 1)`, `(11, 2)`.
+#[inline]
+fn sbox_with_registers<
+    R: PrimeCharacteristicRing + Copy,
+    const DEGREE: u64,
+    const REGISTERS: usize,
+>(
+    x: R,
+) -> (R, [R; REGISTERS]) {
+    // Intermediate powers the verifier re-derives; stays empty when REGISTERS = 0.
+    let mut registers = [R::ZERO; REGISTERS];
+
+    let output = match (DEGREE, REGISTERS) {
+        // x^3 is itself degree 3: no intermediate power to commit.
         (3, 0) => x.cube(),
+        // x^5 and x^7 fit in one degree-5 / degree-7 constraint.
         (5, 0) => x.exp_const_u64::<5>(),
         (7, 0) => x.exp_const_u64::<7>(),
+        // x^5 through x^3: commit x^3, then x^5 = x^3 * x^2.
         (5, 1) => {
             let x2 = x.square();
-            let x3 = x2 * *x;
-            sbox.0[0].write(x3);
+            let x3 = x2 * x;
+            registers[0] = x3;
             x3 * x2
         }
+        // x^7 through x^3: commit x^3, then x^7 = x^3 * x^3 * x.
         (7, 1) => {
             let x3 = x.cube();
-            sbox.0[0].write(x3);
-            x3 * x3 * *x
+            registers[0] = x3;
+            x3 * x3 * x
         }
+        // x^11 through x^3 and x^9: commit both, then x^11 = x^9 * x^2.
         (11, 2) => {
             let x2 = x.square();
-            let x3 = x2 * *x;
+            let x3 = x2 * x;
             let x9 = x3.cube();
-            sbox.0[0].write(x3);
-            sbox.0[1].write(x9);
+            registers[0] = x3;
+            registers[1] = x9;
             x9 * x2
         }
-        _ => panic!(
-            "Unexpected (DEGREE, REGISTERS) of ({}, {})",
-            DEGREE, REGISTERS
-        ),
+        // Any other pairing would let a constraint exceed degree DEGREE.
+        _ => panic!("Unexpected (DEGREE, REGISTERS) of ({DEGREE}, {REGISTERS})"),
+    };
+
+    (output, registers)
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::{
+        BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
+        BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear,
+    };
+    use p3_koala_bear::{
+        GenericPoseidon2LinearLayersKoalaBear, KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS,
+        KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16, KOALABEAR_S_BOX_DEGREE, KoalaBear,
+    };
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+
+    /// Build the trace one permutation at a time, never touching the packed batch path.
+    ///
+    /// This mirrors the buffer setup of the public generator exactly.
+    /// Any difference in the output then isolates the packed round functions, not the layout.
+    fn reference_trace_rows<
+        F: PrimeField,
+        LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
+        const WIDTH: usize,
+        const SBOX_DEGREE: u64,
+        const SBOX_REGISTERS: usize,
+        const HALF_FULL_ROUNDS: usize,
+        const PARTIAL_ROUNDS: usize,
+    >(
+        inputs: Vec<[F; WIDTH]>,
+        constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    ) -> RowMajorMatrix<F> {
+        // One trace row per permutation.
+        let n = inputs.len();
+        let ncols =
+            num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>();
+
+        // Reserve the flat backing store, then reinterpret it as typed permutation rows.
+        let mut vec = Vec::with_capacity(n * ncols);
+        let trace = &mut vec.spare_capacity_mut()[..n * ncols];
+        let trace = RowMajorMatrixViewMut::new(trace, ncols);
+        let (prefix, perms, suffix) = unsafe {
+            trace.values.align_to_mut::<Poseidon2Cols<
+                MaybeUninit<F>,
+                WIDTH,
+                SBOX_DEGREE,
+                SBOX_REGISTERS,
+                HALF_FULL_ROUNDS,
+                PARTIAL_ROUNDS,
+            >>()
+        };
+        assert!(prefix.is_empty(), "Alignment should match");
+        assert!(suffix.is_empty(), "Alignment should match");
+        assert_eq!(perms.len(), n);
+
+        // Force the one-at-a-time path for every permutation.
+        perms.iter_mut().zip(inputs).for_each(|(perm, input)| {
+            generate_trace_rows_for_perm::<
+                F,
+                LinearLayers,
+                WIDTH,
+                SBOX_DEGREE,
+                SBOX_REGISTERS,
+                HALF_FULL_ROUNDS,
+                PARTIAL_ROUNDS,
+            >(perm, input, constants);
+        });
+
+        // Every cell is now initialized.
+        unsafe {
+            vec.set_len(n * ncols);
+        }
+
+        RowMajorMatrix::new(vec, ncols)
+    }
+
+    /// Assert that the packed and one-at-a-time generators produce the same trace.
+    ///
+    /// Packing is only a throughput transform, so both generators must agree cell for cell.
+    /// The public generator takes the packed path when packing is available and the count fills full vectors.
+    /// The reference always runs one permutation at a time.
+    /// On a target with packing width above 1 this compares the packed path against the scalar path.
+    fn check_packed_matches_scalar<
+        F: PrimeField,
+        LinearLayers: GenericPoseidon2LinearLayers<WIDTH>,
+        const WIDTH: usize,
+        const SBOX_DEGREE: u64,
+        const SBOX_REGISTERS: usize,
+        const HALF_FULL_ROUNDS: usize,
+        const PARTIAL_ROUNDS: usize,
+    >(
+        seed: u64,
+        n: usize,
+    ) where
+        StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
+    {
+        // Same seed drives both constants and inputs, so the run is deterministic.
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let constants = RoundConstants::from_rng(&mut rng);
+        let inputs: Vec<[F; WIDTH]> = (0..n).map(|_| rng.sample(StandardUniform)).collect();
+
+        // Packed path (when SIMD is available) versus the one-at-a-time reference.
+        let packed = generate_trace_rows::<
+            F,
+            LinearLayers,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+        >(inputs.clone(), &constants, 0);
+        let scalar = reference_trace_rows::<
+            F,
+            LinearLayers,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+        >(inputs, &constants);
+
+        assert_eq!(packed.values, scalar.values);
+    }
+
+    #[test]
+    fn packed_matches_scalar_babybear() {
+        // BabyBear uses the degree-7 S-box with one committed register (the x^7-through-x^3 arm).
+        //
+        //     n = 2  -> shorter than a NEON/AVX vector -> exercises the tail fallback
+        //     n = 8  -> full vectors on width 4 and 8  -> exercises the packed batch path
+        //     n = 16 -> multiple full vectors
+        for &n in &[2, 8, 16] {
+            check_packed_matches_scalar::<
+                BabyBear,
+                GenericPoseidon2LinearLayersBabyBear,
+                16,
+                BABYBEAR_S_BOX_DEGREE,
+                1,
+                BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS,
+                BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
+            >(n as u64, n);
+        }
+    }
+
+    #[test]
+    fn packed_matches_scalar_koalabear() {
+        // KoalaBear uses the degree-3 S-box with zero registers (the direct x^3 arm).
+        //
+        // This covers the register-free branch of the shared S-box that BabyBear does not reach.
+        for &n in &[2, 8, 16] {
+            check_packed_matches_scalar::<
+                KoalaBear,
+                GenericPoseidon2LinearLayersKoalaBear,
+                16,
+                KOALABEAR_S_BOX_DEGREE,
+                0,
+                KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS,
+                KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16,
+            >(n as u64, n);
+        }
     }
 }

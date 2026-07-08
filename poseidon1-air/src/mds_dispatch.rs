@@ -19,15 +19,18 @@ pub(crate) fn mds_dispatch<F: PrimeCharacteristicRing, A: Algebra<F>, const WIDT
 ) {
     match WIDTH {
         16 => {
-            let state_16: &mut [A; 16] = state.as_mut_slice().try_into().unwrap();
-            let col_16: &[F; 16] = circ_col.as_slice().try_into().unwrap();
+            // WIDTH == 16 in this arm, so both fixed-size views always succeed.
+            let state_16: &mut [A; 16] = state.as_mut_slice().try_into().expect("WIDTH == 16");
+            let col_16: &[F; 16] = circ_col.as_slice().try_into().expect("WIDTH == 16");
             mds_circulant_karatsuba_16(state_16, col_16);
         }
         24 => {
-            let state_24: &mut [A; 24] = state.as_mut_slice().try_into().unwrap();
-            let col_24: &[F; 24] = circ_col.as_slice().try_into().unwrap();
+            // WIDTH == 24 in this arm, so both fixed-size views always succeed.
+            let state_24: &mut [A; 24] = state.as_mut_slice().try_into().expect("WIDTH == 24");
+            let col_24: &[F; 24] = circ_col.as_slice().try_into().expect("WIDTH == 24");
             mds_circulant_karatsuba_24(state_24, col_24);
         }
+        // No circulant fast path for this width: fall back to the dense O(WIDTH^2) multiply.
         _ => mds_multiply(state, dense_mds),
     }
 }
