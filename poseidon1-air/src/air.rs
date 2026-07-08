@@ -34,7 +34,7 @@ use alloc::vec::Vec;
 use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
-use p3_field::{PrimeCharacteristicRing, PrimeField, dot_product};
+use p3_field::{Algebra, PrimeCharacteristicRing, PrimeField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon1::external::mds_multiply;
 use rand::distr::{Distribution, StandardUniform};
@@ -42,6 +42,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::columns::{Poseidon1Cols, num_cols};
+use crate::mds_dispatch::mds_dispatch;
 use crate::{
     FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox, generate_trace_rows,
 };
@@ -250,6 +251,10 @@ pub(crate) fn eval<
     // Initialize the running state from the committed input columns.
     let mut state: [_; WIDTH] = local.inputs.map(|x| x.into());
 
+    // Circulant first column of the dense MDS matrix, for the Karatsuba fast path.
+    let circ_col: [AB::F; WIDTH] =
+        core::array::from_fn(|i| air.full_constants.dense_mds[i][0].clone());
+
     // Phase 1: Beginning full rounds (RF/2 rounds)
     //
     // Each round: add constants → S-box on all elements → MDS multiply.
@@ -258,6 +263,7 @@ pub(crate) fn eval<
             &mut state,
             &local.beginning_full_rounds[round],
             &air.full_constants.initial[round],
+            &circ_col,
             &air.full_constants.dense_mds,
             builder,
         );
@@ -303,6 +309,7 @@ pub(crate) fn eval<
             &mut state,
             &local.ending_full_rounds[round],
             &air.full_constants.terminal[round],
+            &circ_col,
             &air.full_constants.dense_mds,
             builder,
         );
@@ -352,6 +359,7 @@ fn eval_full_round<
     state: &mut [AB::Expr; WIDTH],
     full_round: &FullRound<AB::Var, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constants: &[AB::F; WIDTH],
+    circ_col: &[AB::F; WIDTH],
     mds_matrix: &[[AB::F; WIDTH]; WIDTH],
     builder: &mut AB,
 ) {
@@ -365,8 +373,8 @@ fn eval_full_round<
         eval_sbox(&full_round.sbox[i], s, builder);
     }
 
-    // Step 3: Multiply by the dense MDS matrix.
-    mds_multiply(state, mds_matrix);
+    // Step 3: Multiply by the dense MDS matrix (circulant Karatsuba for supported widths).
+    mds_dispatch(state, circ_col, mds_matrix);
 
     // Constrain: computed state must equal committed post-state.
     // Then reset state to the committed values (degree 1).
@@ -411,7 +419,7 @@ fn eval_sparse_partial_round<
 
     // Sparse matrix multiply.
     let old_s0 = state[0].clone();
-    state[0] = dot_product(state.iter().cloned(), first_row.iter().cloned());
+    state[0] = AB::Expr::mixed_dot_product(state, first_row);
 
     for i in 1..WIDTH {
         state[i] += old_s0.clone() * v[i - 1].clone();

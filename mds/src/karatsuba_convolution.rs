@@ -47,30 +47,30 @@
 use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
-use p3_field::{Algebra, Field};
+use p3_field::{Algebra, PrimeCharacteristicRing};
 
 /// Bound alias for the wide operand type (used for both lhs and output).
 ///
 /// Must support addition, subtraction, negation, and in-place variants.
 pub trait ConvolutionElt:
-    Add<Output = Self> + AddAssign + Copy + Neg<Output = Self> + Sub<Output = Self> + SubAssign
+    Add<Output = Self> + AddAssign + Clone + Neg<Output = Self> + Sub<Output = Self> + SubAssign
 {
 }
 
 impl<T> ConvolutionElt for T where
-    T: Add<Output = T> + AddAssign + Copy + Neg<Output = T> + Sub<Output = T> + SubAssign
+    T: Add<Output = T> + AddAssign + Clone + Neg<Output = T> + Sub<Output = T> + SubAssign
 {
 }
 
 /// Bound alias for the narrow operand type (rhs only).
 ///
-/// Requires addition, subtraction, negation, and copy.
+/// Requires addition, subtraction, negation, and clone.
 pub trait ConvolutionRhs:
-    Add<Output = Self> + Copy + Neg<Output = Self> + Sub<Output = Self>
+    Add<Output = Self> + Clone + Neg<Output = Self> + Sub<Output = Self>
 {
 }
 
-impl<T> ConvolutionRhs for T where T: Add<Output = T> + Copy + Neg<Output = T> + Sub<Output = T> {}
+impl<T> ConvolutionRhs for T where T: Add<Output = T> + Clone + Neg<Output = T> + Sub<Output = T> {}
 
 /// Trait for computing cyclic and negacyclic convolutions.
 ///
@@ -146,48 +146,104 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
 
     #[inline(always)]
     fn conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [T]) {
-        output[0] = Self::parity_dot(lhs, [rhs[0], rhs[2], rhs[1]]);
-        output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], rhs[2]]);
-        output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0]]);
+        output[0] = Self::parity_dot(
+            lhs.clone(),
+            [rhs[0].clone(), rhs[2].clone(), rhs[1].clone()],
+        );
+        output[1] = Self::parity_dot(
+            lhs.clone(),
+            [rhs[1].clone(), rhs[0].clone(), rhs[2].clone()],
+        );
+        output[2] = Self::parity_dot(lhs, [rhs[2].clone(), rhs[1].clone(), rhs[0].clone()]);
     }
 
     #[inline(always)]
     fn negacyclic_conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [T]) {
-        output[0] = Self::parity_dot(lhs, [rhs[0], -rhs[2], -rhs[1]]);
-        output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], -rhs[2]]);
-        output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0]]);
+        output[0] = Self::parity_dot(
+            lhs.clone(),
+            [rhs[0].clone(), -rhs[2].clone(), -rhs[1].clone()],
+        );
+        output[1] = Self::parity_dot(
+            lhs.clone(),
+            [rhs[1].clone(), rhs[0].clone(), -rhs[2].clone()],
+        );
+        output[2] = Self::parity_dot(lhs, [rhs[2].clone(), rhs[1].clone(), rhs[0].clone()]);
     }
 
     #[inline(always)]
     fn conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [T]) {
         // NB: This is just explicitly implementing
         // conv_n_recursive::<4, 2, _, _>(lhs, rhs, output, Self::conv2, Self::negacyclic_conv2)
-        let u_p = [lhs[0] + lhs[2], lhs[1] + lhs[3]];
-        let u_m = [lhs[0] - lhs[2], lhs[1] - lhs[3]];
-        let v_p = [rhs[0] + rhs[2], rhs[1] + rhs[3]];
-        let v_m = [rhs[0] - rhs[2], rhs[1] - rhs[3]];
+        let u_p = [
+            lhs[0].clone() + lhs[2].clone(),
+            lhs[1].clone() + lhs[3].clone(),
+        ];
+        let u_m = [
+            lhs[0].clone() - lhs[2].clone(),
+            lhs[1].clone() - lhs[3].clone(),
+        ];
+        let v_p = [
+            rhs[0].clone() + rhs[2].clone(),
+            rhs[1].clone() + rhs[3].clone(),
+        ];
+        let v_m = [
+            rhs[0].clone() - rhs[2].clone(),
+            rhs[1].clone() - rhs[3].clone(),
+        ];
 
-        output[0] = Self::parity_dot(u_m, [v_m[0], -v_m[1]]);
-        output[1] = Self::parity_dot(u_m, [v_m[1], v_m[0]]);
-        output[2] = Self::parity_dot(u_p, v_p);
-        output[3] = Self::parity_dot(u_p, [v_p[1], v_p[0]]);
+        output[0] = Self::parity_dot(u_m.clone(), [v_m[0].clone(), -v_m[1].clone()]);
+        output[1] = Self::parity_dot(u_m, [v_m[1].clone(), v_m[0].clone()]);
+        output[2] = Self::parity_dot(u_p.clone(), v_p.clone());
+        output[3] = Self::parity_dot(u_p, [v_p[1].clone(), v_p[0].clone()]);
 
-        output[0] += output[2];
-        output[1] += output[3];
+        output[0] += output[2].clone();
+        output[1] += output[3].clone();
 
-        output[0] = Self::halve(output[0]);
-        output[1] = Self::halve(output[1]);
+        output[0] = Self::halve(output[0].clone());
+        output[1] = Self::halve(output[1].clone());
 
-        output[2] -= output[0];
-        output[3] -= output[1];
+        output[2] -= output[0].clone();
+        output[3] -= output[1].clone();
     }
 
     #[inline(always)]
     fn negacyclic_conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [T]) {
-        output[0] = Self::parity_dot(lhs, [rhs[0], -rhs[3], -rhs[2], -rhs[1]]);
-        output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], -rhs[3], -rhs[2]]);
-        output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0], -rhs[3]]);
-        output[3] = Self::parity_dot(lhs, [rhs[3], rhs[2], rhs[1], rhs[0]]);
+        output[0] = Self::parity_dot(
+            lhs.clone(),
+            [
+                rhs[0].clone(),
+                -rhs[3].clone(),
+                -rhs[2].clone(),
+                -rhs[1].clone(),
+            ],
+        );
+        output[1] = Self::parity_dot(
+            lhs.clone(),
+            [
+                rhs[1].clone(),
+                rhs[0].clone(),
+                -rhs[3].clone(),
+                -rhs[2].clone(),
+            ],
+        );
+        output[2] = Self::parity_dot(
+            lhs.clone(),
+            [
+                rhs[2].clone(),
+                rhs[1].clone(),
+                rhs[0].clone(),
+                -rhs[3].clone(),
+            ],
+        );
+        output[3] = Self::parity_dot(
+            lhs,
+            [
+                rhs[3].clone(),
+                rhs[2].clone(),
+                rhs[1].clone(),
+                rhs[0].clone(),
+            ],
+        );
     }
 
     /// Compute output(x) = lhs(x)rhs(x) mod x^N - 1 recursively using
@@ -210,16 +266,16 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
         let mut rhs_neg = [Self::U_ZERO; HALF_N]; // rhs_neg = rhs(x) mod x^{N/2} + 1
 
         for i in 0..HALF_N {
-            let s = lhs[i];
-            let t = lhs[i + HALF_N];
+            let s = lhs[i].clone();
+            let t = lhs[i + HALF_N].clone();
 
-            lhs_pos[i] = s + t;
+            lhs_pos[i] = s.clone() + t.clone();
             lhs_neg[i] = s - t;
 
-            let s = rhs[i];
-            let t = rhs[i + HALF_N];
+            let s = rhs[i].clone();
+            let t = rhs[i + HALF_N].clone();
 
-            rhs_pos[i] = s + t;
+            rhs_pos[i] = s.clone() + t.clone();
             rhs_neg[i] = s - t;
         }
 
@@ -232,9 +288,9 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
         inner_conv(lhs_pos, rhs_pos, right);
 
         for i in 0..HALF_N {
-            left[i] += right[i]; // w_0 + w_1
-            left[i] = Self::halve(left[i]); // (w_0 + w_1)/2
-            right[i] -= left[i]; // (w_0 - w_1)/2
+            left[i] += right[i].clone(); // w_0 + w_1
+            left[i] = Self::halve(left[i].clone()); // (w_0 + w_1)/2
+            right[i] -= left[i].clone(); // (w_0 - w_1)/2
         }
     }
 
@@ -258,17 +314,17 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
         let mut rhs_sum = [Self::U_ZERO; HALF_N];
 
         for i in 0..HALF_N {
-            let s = lhs[2 * i];
-            let t = lhs[2 * i + 1];
+            let s = lhs[2 * i].clone();
+            let t = lhs[2 * i + 1].clone();
+            lhs_sum[i] = s.clone() + t.clone();
             lhs_even[i] = s;
             lhs_odd[i] = t;
-            lhs_sum[i] = s + t;
 
-            let s = rhs[2 * i];
-            let t = rhs[2 * i + 1];
+            let s = rhs[2 * i].clone();
+            let t = rhs[2 * i + 1].clone();
+            rhs_sum[i] = s.clone() + t.clone();
             rhs_even[i] = s;
             rhs_odd[i] = t;
-            rhs_sum[i] = s + t;
         }
 
         let mut even_s_conv = [Self::T_ZERO; HALF_N];
@@ -282,18 +338,18 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
 
         // Adjust so that the correct values are in right and
         // even_s_conv respectively:
-        right[0] -= even_s_conv[0] + left[0];
-        even_s_conv[0] -= left[HALF_N - 1];
+        right[0] -= even_s_conv[0].clone() + left[0].clone();
+        even_s_conv[0] -= left[HALF_N - 1].clone();
 
         for i in 1..HALF_N {
-            right[i] -= even_s_conv[i] + left[i];
-            even_s_conv[i] += left[i - 1];
+            right[i] -= even_s_conv[i].clone() + left[i].clone();
+            even_s_conv[i] += left[i - 1].clone();
         }
 
         // Interleave even_s_conv and right in the output:
         for i in 0..HALF_N {
-            output[2 * i] = even_s_conv[i];
-            output[2 * i + 1] = output[i + HALF_N];
+            output[2 * i] = even_s_conv[i].clone();
+            output[2 * i + 1] = output[i + HALF_N].clone();
         }
     }
 
@@ -364,7 +420,7 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
 /// Used by the public Karatsuba entry points for generic field/algebra pairs.
 struct FieldConvolve<F, A>(PhantomData<(F, A)>);
 
-impl<F: Field, A: Algebra<F> + Copy> Convolve<A, A, F> for FieldConvolve<F, A> {
+impl<F: PrimeCharacteristicRing, A: Algebra<F> + Clone> Convolve<A, A, F> for FieldConvolve<F, A> {
     const T_ZERO: A = A::ZERO;
     const U_ZERO: F = F::ZERO;
 
@@ -391,39 +447,42 @@ impl<F: Field, A: Algebra<F> + Copy> Convolve<A, A, F> for FieldConvolve<F, A> {
 
 /// Circulant matrix-vector multiply for width 8 via Karatsuba convolution.
 #[inline]
-pub fn mds_circulant_karatsuba_8<F: Field, A: Algebra<F> + Copy>(state: &mut [A; 8], col: &[F; 8]) {
-    let input = *state;
-    FieldConvolve::<F, A>::conv8(input, *col, state.as_mut_slice());
+pub fn mds_circulant_karatsuba_8<F: PrimeCharacteristicRing, A: Algebra<F> + Clone>(
+    state: &mut [A; 8],
+    col: &[F; 8],
+) {
+    let input = state.clone();
+    FieldConvolve::<F, A>::conv8(input, col.clone(), state.as_mut_slice());
 }
 
 /// Circulant matrix-vector multiply for width 12 via Karatsuba convolution.
 #[inline]
-pub fn mds_circulant_karatsuba_12<F: Field, A: Algebra<F> + Copy>(
+pub fn mds_circulant_karatsuba_12<F: PrimeCharacteristicRing, A: Algebra<F> + Clone>(
     state: &mut [A; 12],
     col: &[F; 12],
 ) {
-    let input = *state;
-    FieldConvolve::<F, A>::conv12(input, *col, state.as_mut_slice());
+    let input = state.clone();
+    FieldConvolve::<F, A>::conv12(input, col.clone(), state.as_mut_slice());
 }
 
 /// Circulant matrix-vector multiply for width 16 via Karatsuba convolution.
 #[inline]
-pub fn mds_circulant_karatsuba_16<F: Field, A: Algebra<F> + Copy>(
+pub fn mds_circulant_karatsuba_16<F: PrimeCharacteristicRing, A: Algebra<F> + Clone>(
     state: &mut [A; 16],
     col: &[F; 16],
 ) {
-    let input = *state;
-    FieldConvolve::<F, A>::conv16(input, *col, state.as_mut_slice());
+    let input = state.clone();
+    FieldConvolve::<F, A>::conv16(input, col.clone(), state.as_mut_slice());
 }
 
 /// Circulant matrix-vector multiply for width 24 via Karatsuba convolution.
 #[inline]
-pub fn mds_circulant_karatsuba_24<F: Field, A: Algebra<F> + Copy>(
+pub fn mds_circulant_karatsuba_24<F: PrimeCharacteristicRing, A: Algebra<F> + Clone>(
     state: &mut [A; 24],
     col: &[F; 24],
 ) {
-    let input = *state;
-    FieldConvolve::<F, A>::conv24(input, *col, state.as_mut_slice());
+    let input = state.clone();
+    FieldConvolve::<F, A>::conv24(input, col.clone(), state.as_mut_slice());
 }
 
 #[cfg(test)]
