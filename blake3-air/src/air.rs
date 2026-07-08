@@ -232,6 +232,10 @@ impl<F> BaseAir<F> for Blake3Air {
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![]
     }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        Some(3)
+    }
 }
 
 impl<AB: AirBuilder> Air<AB> for Blake3Air {
@@ -384,10 +388,9 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             });
         // Additionally, we need to ensure that both local.final_round_helpers and local.outputs[0] are boolean.
 
-        local
-            .final_round_helpers
+        // `final_round_helpers` values are already boolean asserted within `xor_32_shift()`
+        local.outputs[0]
             .iter()
-            .chain(local.outputs[0].iter())
             .for_each(|bits| bits.iter().for_each(|&bit| builder.assert_bool(bit)));
 
         // Finally we check the xor by xor'ing the output with final_round_helpers, packing the bits
