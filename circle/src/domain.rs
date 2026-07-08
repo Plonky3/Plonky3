@@ -73,6 +73,16 @@ impl<F: ComplexExtendable> CircleDomain<F> {
     pub(crate) fn points(&self) -> impl Iterator<Item = Point<F>> {
         self.coset0().interleave(self.coset1())
     }
+    /// Same points as [`Self::points`], materialized eagerly. Each half-coset's sequential
+    /// point-addition chain is split into chunks (reseeded via a scalar multiplication) that
+    /// run in parallel, instead of walking the whole chain on a single thread.
+    pub(crate) fn points_vec(&self) -> Vec<Point<F>> {
+        let half = 1usize << (self.log_n - 1);
+        let g = self.subgroup_generator();
+        let c0 = parallel_point_chain(self.shift, g, half);
+        let c1 = parallel_point_chain(g - self.shift, g, half);
+        c0.into_iter().interleave(c1).collect()
+    }
     pub(crate) fn nth_point(&self, idx: usize) -> Point<F> {
         let (idx, lsb) = (idx >> 1, idx & 1);
         if lsb == 0 {
@@ -84,14 +94,6 @@ impl<F: ComplexExtendable> CircleDomain<F> {
 
     pub(crate) fn vanishing_poly<EF: ExtensionField<F>>(&self, at: Point<EF>) -> EF {
         at.v_n(self.log_n) - self.shift.v_n(self.log_n)
-    }
-
-    pub(crate) fn s_p<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
-        self.vanishing_poly(at) / p.v_tilde_p(at)
-    }
-
-    pub(crate) fn s_p_normalized<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
-        self.vanishing_poly(at) / (p.v_tilde_p(at) * p.s_p_at_p(self.log_n))
     }
 
     /// `log_period`, `log_repetitions` with `trace_len / period = 2^log_repetitions`.
@@ -107,6 +109,37 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         let log_repetitions = log2_strict_usize(trace_len / period);
         (log_period, log_repetitions)
     }
+}
+
+/// Below this length, chunking overhead (each chunk reseeds via a scalar multiplication costing
+/// `O(log len)` point operations) outweighs the benefit of splitting the chain across threads.
+const PARALLEL_THRESHOLD: usize = 1 << 10;
+
+/// Materialize `len` points of the sequential chain `iterate(seed, |&p| p + g)`, splitting it
+/// into chunks that run in parallel. Each chunk reseeds itself with one scalar multiplication
+/// (`g * chunk_start`) instead of walking the prefix of the chain that precedes it.
+fn parallel_point_chain<F: ComplexExtendable>(
+    seed: Point<F>,
+    g: Point<F>,
+    len: usize,
+) -> Vec<Point<F>> {
+    if len < PARALLEL_THRESHOLD {
+        return iterate(seed, move |&p| p + g).take(len).collect_vec();
+    }
+    let num_chunks = current_num_threads().max(1).min(len);
+    let chunk_len = len.div_ceil(num_chunks);
+    (0..len.div_ceil(chunk_len))
+        .into_par_iter()
+        .map(|c| {
+            let chunk_start = c * chunk_len;
+            let this_len = chunk_len.min(len - chunk_start);
+            let chunk_seed = seed + g * chunk_start;
+            iterate(chunk_seed, move |&p| p + g)
+                .take(this_len)
+                .collect_vec()
+        })
+        .collect::<Vec<_>>()
+        .concat()
 }
 
 impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
@@ -129,22 +162,21 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         }
     }
 
-    fn create_disjoint_domain(&self, min_size: usize) -> Self {
+    fn try_create_disjoint_domain(&self, min_size: usize) -> Option<Self> {
         // Right now we simply guarantee the domain is disjoint by returning a
         // larger standard position coset, which is fine because we always ask for a larger
         // domain. If we wanted good performance for a disjoint domain of the same size,
         // we could change the shift. Also we could support nonstandard twin cosets.
-        assert!(
-            self.is_standard(),
-            "create_disjoint_domain not currently supported for nonstandard twin cosets"
-        );
+        if !self.is_standard() {
+            return None;
+        }
         let log_n = log2_ceil_usize(min_size);
         // Any standard position coset that is not the same size as us will be disjoint.
-        Self::standard(if log_n == self.log_n {
+        Some(Self::standard(if log_n == self.log_n {
             log_n + 1
         } else {
             log_n
-        })
+        }))
     }
 
     /// Decompose a domain into disjoint twin-cosets.
@@ -189,11 +221,25 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         point: Ext,
     ) -> LagrangeSelectors<Ext> {
         let point = Point::from_projective_line(point);
+
+        // Single-point specialization of the fused pass in `selectors_on_coset`: one
+        // shared `vanishing_poly` evaluation and one batch inversion instead of four
+        // separate `log_n`-step squaring chains and three separate inversions.
+        let neg_shift = -self.shift;
+        let k = neg_shift.s_p_at_p(self.log_n);
+        let z = self.vanishing_poly(point);
+        let den_shift = self.shift.v_tilde_p(point);
+        let den_negshift_k = neg_shift.v_tilde_p(point) * k;
+
+        let inv = batch_multiplicative_inverse(&[den_shift, den_negshift_k, z]);
+        let (inv_den_shift, inv_den_negshift_k, inv_z) = (inv[0], inv[1], inv[2]);
+
+        let z_inv_dk = z * inv_den_negshift_k;
         LagrangeSelectors {
-            is_first_row: self.s_p(self.shift, point),
-            is_last_row: self.s_p(-self.shift, point),
-            is_transition: Ext::ONE - self.s_p_normalized(-self.shift, point),
-            inv_vanishing: self.vanishing_poly(point).inverse(),
+            is_first_row: z * inv_den_shift,
+            is_last_row: z_inv_dk * k,
+            is_transition: Ext::ONE - z_inv_dk,
+            inv_vanishing: inv_z,
         }
     }
 
@@ -220,6 +266,10 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
 
         let neg_shift = -self.shift;
         let k = neg_shift.s_p_at_p(self.log_n);
+        // `vanishing_poly(at) = at.v_n(log_n) - shift.v_n(log_n)`; the second term is the
+        // same constant for every point in the coset, so it is hoisted out of the loop
+        // below instead of being recomputed (as a `log_n`-step squaring chain) per point.
+        let shift_v_n = self.shift.v_n(self.log_n);
 
         // Fused parallel pass over the coset points: `vanishing_poly`,
         // `shift.v_tilde_p` and `(-shift).v_tilde_p * k` are independent per
@@ -234,7 +284,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .zip(den_negshift_k.par_iter_mut())
             .zip(pts.par_iter())
             .for_each(|(((z, ds), dnk), &at)| {
-                *z = self.vanishing_poly(at);
+                *z = at.v_n(self.log_n) - shift_v_n;
                 *ds = self.shift.v_tilde_p(at);
                 *dnk = neg_shift.v_tilde_p(at) * k;
             });
@@ -494,5 +544,14 @@ mod tests {
     fn test_circle_domain() {
         do_test_circle_domain(4, 8);
         do_test_circle_domain(10, 32);
+    }
+
+    #[test]
+    fn points_vec_matches_points() {
+        type F = Mersenne31;
+        for log_n in 1..8 {
+            let d = CircleDomain::<F>::standard(log_n);
+            assert_eq!(d.points_vec(), d.points().collect_vec());
+        }
     }
 }

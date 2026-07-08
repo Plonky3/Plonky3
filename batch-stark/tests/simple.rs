@@ -300,8 +300,8 @@ where
             // Local lookup: 'a' against the permuted column.
             if self.is_local {
                 builder.push_local_interaction(vec![
-                    (vec![a.into()], AB::Expr::ONE),    // query (receive)
-                    (vec![lut.into()], -AB::Expr::ONE), // table (send, negated)
+                    (vec![a.into()], Count::bounded(AB::Expr::ONE, 1)), // query (receive)
+                    (vec![lut.into()], Count::provided(-AB::Expr::ONE)), // table (send, negated)
                 ]);
             }
 
@@ -2541,18 +2541,27 @@ where
         // Three independent local lookups, each with a different selector.
         // Lagrange selectors are not normalized, so we multiply on both sides.
         builder.push_local_interaction(vec![
-            (vec![sender1.into()], is_first.clone()),
-            (vec![table.into()], -(is_first * mul1.into())),
+            (vec![sender1.into()], Count::bounded(is_first.clone(), 1)),
+            (
+                vec![table.into()],
+                Count::provided(-(is_first * mul1.into())),
+            ),
         ]);
 
         builder.push_local_interaction(vec![
-            (vec![sender2.into()], is_trans.clone()),
-            (vec![table.into()], -(is_trans * mul2.into())),
+            (vec![sender2.into()], Count::bounded(is_trans.clone(), 1)),
+            (
+                vec![table.into()],
+                Count::provided(-(is_trans * mul2.into())),
+            ),
         ]);
 
         builder.push_local_interaction(vec![
-            (vec![sender3.into()], is_last.clone()),
-            (vec![table.into()], -(is_last * mul3.into())),
+            (vec![sender3.into()], Count::bounded(is_last.clone(), 1)),
+            (
+                vec![table.into()],
+                Count::provided(-(is_last * mul3.into())),
+            ),
         ]);
     }
 }

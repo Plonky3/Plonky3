@@ -56,6 +56,12 @@ jobs:
       - name: Test with parallel
         run: cargo test --features parallel
 
+      - name: Test keccak (aarch64, no SHA3)
+        if: ${{ matrix.os == 'macos-latest' }}
+        env:
+          RUSTFLAGS: -C debuginfo=0 -C target-feature=-sha3
+        run: cargo test -p p3-keccak
+
   check_embedded:
     name: Build embedded
     runs-on: ubuntu-latest
@@ -112,6 +118,7 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-poseidon2-air
           cargo build --verbose --target ${{ env.target }} -p p3-rescue
           cargo build --verbose --target ${{ env.target }} -p p3-sha256
+          cargo build --verbose --target ${{ env.target }} -p p3-security
           cargo build --verbose --target ${{ env.target }} -p p3-sumcheck
           cargo build --verbose --target ${{ env.target }} -p p3-symmetric
           cargo build --verbose --target ${{ env.target }} -p p3-uni-stark

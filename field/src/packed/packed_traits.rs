@@ -89,6 +89,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         );
         let buf_ptr = buf.as_ptr().cast::<Self>();
         let n = buf.len() / Self::WIDTH;
+        // SAFETY: `buf_ptr` is valid for `n * WIDTH` values of `Self::Value`, which is
+        // the same region as `n` values of `Self` given the alignment and length checks above.
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
 
@@ -110,6 +112,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         );
         let buf_ptr = buf.as_mut_ptr().cast::<Self>();
         let n = buf.len() / Self::WIDTH;
+        // SAFETY: `buf_ptr` is valid for `n * WIDTH` values of `Self::Value`, which is
+        // the same region as `n` values of `Self` given the alignment and length checks above.
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
@@ -134,6 +138,9 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         );
         let buf_ptr = buf.as_mut_ptr().cast::<MaybeUninit<Self>>();
         let n = buf.len() / Self::WIDTH;
+        // SAFETY: `buf_ptr` is valid for `n * WIDTH` values of `MaybeUninit<Self::Value>`,
+        // which is the same region as `n` values of `MaybeUninit<Self>` given the
+        // alignment and length checks above.
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 

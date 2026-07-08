@@ -7,7 +7,7 @@ use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
 use p3_challenger::DuplexChallenger;
-use p3_commit::MultilinearPcs;
+use p3_commit::{MultiOpeningMmcs, MultilinearPcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::extension::QuinticTrinomialExtensionField;
@@ -18,9 +18,8 @@ use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
-use p3_whir::parameters::{
-    DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
-};
+use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+use p3_whir::pcs::proof::{PcsProof, QueryOpenings};
 use p3_whir::pcs::prover::WhirProver;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -111,6 +110,18 @@ fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFac
     rates
 }
 
+/// Size and shape statistics extracted from one honestly-produced proof.
+struct ProofStats {
+    /// Total serialized proof size, in bytes (postcard encoding).
+    proof_bytes: usize,
+    /// Number of STIR query positions opened across all rounds.
+    stir_queries: usize,
+    /// Merkle sibling digests actually shipped, summed over every round.
+    ///
+    /// This is the frontier proof: each boundary digest travels once.
+    pruned_digests: usize,
+}
+
 /// Pre-built benchmark fixture parameterized by the sumcheck layout mode.
 struct Bench<L: Layout<F, EF>> {
     /// Fully-instantiated WHIR PCS.
@@ -146,7 +157,7 @@ impl<L: Layout<F, EF>> Bench<L> {
         let folding_factor = FoldingFactor::Constant(opts.folding);
         let params = ProtocolParameters {
             security_level: SECURITY_LEVEL,
-            pow_bits: DEFAULT_MAX_POW,
+            pow_bits: 20,
             round_log_inv_rates: default_round_log_inv_rates(opts.num_variables, &folding_factor),
             folding_factor,
             soundness_type: opts.soundness,
@@ -272,6 +283,62 @@ impl<L: Layout<F, EF>> Bench<L> {
             );
         });
     }
+
+    /// Produce one honest proof outside any timing window.
+    fn build_proof(&self) -> PcsProof<F, EF, Mmcs> {
+        let mut challenger = self.challenger();
+        let (_, prover_data) = <Pcs<L> as MultilinearPcs<EF, Challenger>>::commit(
+            &self.pcs,
+            self.witness.clone(),
+            &mut challenger,
+        );
+        <Pcs<L> as MultilinearPcs<EF, Challenger>>::open(
+            &self.pcs,
+            prover_data,
+            self.protocol.clone(),
+            &mut challenger,
+        )
+    }
+
+    /// Measure serialized size and Merkle-path shape of one honest proof.
+    fn stats(&self) -> ProofStats {
+        let proof = self.build_proof();
+        let proof_bytes = postcard::to_allocvec(&proof)
+            .expect("proof serializes")
+            .len();
+
+        // The frontier proof carries no indices, so the query count comes from the opened rows.
+        // The pruned digest count is the length of the flat boundary-sibling list.
+        //   queries = rows.len()   (one opened row per STIR query)
+        //   pruned  = sibling_hashes.len()   (boundary digests, shared once)
+        let round_stats =
+            |openings: &QueryOpenings<F, EF, <Mmcs as MultiOpeningMmcs<F>>::MultiProof>| {
+                let (queries, proof) = match openings {
+                    QueryOpenings::Base(opening) => (opening.rows.len(), &opening.proof),
+                    QueryOpenings::Extension(opening) => (opening.rows.len(), &opening.proof),
+                };
+                (queries, proof.sibling_hashes.len())
+            };
+
+        let mut stir_queries = 0;
+        let mut pruned_digests = 0;
+        let mut accumulate =
+            |o: &QueryOpenings<F, EF, <Mmcs as MultiOpeningMmcs<F>>::MultiProof>| {
+                let (q, pruned) = round_stats(o);
+                stir_queries += q;
+                pruned_digests += pruned;
+            };
+        for round in &proof.whir.rounds {
+            accumulate(&round.openings);
+        }
+        accumulate(&proof.whir.final_openings);
+
+        ProofStats {
+            proof_bytes,
+            stir_queries,
+            pruned_digests,
+        }
+    }
 }
 
 /// Apply a uniform sample-size policy to heavy benchmark groups.
@@ -367,5 +434,30 @@ fn bench_options(c: &mut Criterion) {
     }
 }
 
+/// Print a proof-size and Merkle-pruning report across the scaling sizes.
+fn report_proof_size(_c: &mut Criterion) {
+    type L = SuffixProver<F, EF>;
+    let cases = [("small", SMALL), ("medium", MEDIUM), ("large", LARGE)];
+
+    eprintln!();
+    eprintln!(
+        "whir_pcs proof report  (security={SECURITY_LEVEL}, soundness={SOUNDNESS:?}, \
+         folding={FOLDING}, starting_log_inv_rate={LOG_INV_RATE}, evals={NUM_EVALUATIONS})"
+    );
+    eprintln!(
+        "{:<8} {:>5} {:>14} {:>9} {:>16}",
+        "case", "vars", "proof_bytes", "queries", "merkle_digests",
+    );
+    for (label, num_variables) in cases {
+        let stats = Bench::<L>::new(Options::sized(num_variables)).stats();
+        eprintln!(
+            "{:<8} {:>5} {:>14} {:>9} {:>16}",
+            label, num_variables, stats.proof_bytes, stats.stir_queries, stats.pruned_digests,
+        );
+    }
+    eprintln!();
+}
+
 criterion_group!(benches, bench_scaling, bench_options);
-criterion_main!(benches);
+criterion_group!(reports, report_proof_size);
+criterion_main!(benches, reports);

@@ -6,7 +6,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::extension::FlatMatrixView;
 use p3_matrix::{Dimensions, Matrix};
 
-use crate::{BatchOpening, BatchOpeningRef, Mmcs};
+use crate::{BatchOpening, BatchOpeningRef, Mmcs, MultiOpeningMmcs};
 
 /// A wrapper to lift an MMCS from a base field `F` to an extension field `EF`.
 ///
@@ -92,6 +92,62 @@ where
             &base_dimensions,
             index,
             BatchOpeningRef::new(&opened_base_values, batch_opening.opening_proof),
+        )
+    }
+}
+
+impl<F, EF, InnerMmcs> MultiOpeningMmcs<EF> for ExtensionMmcs<F, EF, InnerMmcs>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    InnerMmcs: MultiOpeningMmcs<F>,
+{
+    type MultiProof = InnerMmcs::MultiProof;
+
+    fn open_multi_batch<M: Matrix<EF>>(
+        &self,
+        indices: &[usize],
+        prover_data: &Self::ProverData<M>,
+    ) -> (Vec<Vec<Vec<EF>>>, Self::MultiProof) {
+        let (base_values, proof) = self.inner.open_multi_batch(indices, prover_data);
+        let ext_values = base_values
+            .into_iter()
+            .map(|rows| rows.into_iter().map(EF::reconstitute_from_base).collect())
+            .collect();
+        (ext_values, proof)
+    }
+
+    fn verify_multi_batch<R: AsRef<[EF]> + PartialEq>(
+        &self,
+        commit: &Self::Commitment,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+        opened_values: &[Vec<R>],
+        proof: &Self::MultiProof,
+    ) -> Result<(), Self::Error> {
+        // Each extension row reinterprets as `EF::DIMENSION` base elements.
+        // This layer always materializes owned base rows.
+        let opened_base_values: Vec<Vec<Vec<F>>> = opened_values
+            .iter()
+            .map(|rows| {
+                rows.iter()
+                    .map(|row| EF::flatten_to_base(row.as_ref().to_vec()))
+                    .collect()
+            })
+            .collect();
+        let base_dimensions = dimensions
+            .iter()
+            .map(|dim| Dimensions {
+                width: dim.width * EF::DIMENSION,
+                height: dim.height,
+            })
+            .collect::<Vec<_>>();
+        self.inner.verify_multi_batch(
+            commit,
+            &base_dimensions,
+            indices,
+            &opened_base_values,
+            proof,
         )
     }
 }

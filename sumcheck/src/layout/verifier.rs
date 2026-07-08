@@ -151,6 +151,10 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// The caller supplies the local-frame opening point instead of sampling it.
     /// An outer protocol that fixes the point opens its columns through this entry.
     ///
+    /// Soundness requires `point` to be sampled from, or bound to, the same `challenger`
+    /// before this call (see `PrescribedPointPcs`'s Fiat-Shamir/Soundness doc) — this
+    /// method absorbs the evaluations but not the point itself.
+    ///
     /// # Arguments
     ///
     /// - Index of the table whose columns are opened.

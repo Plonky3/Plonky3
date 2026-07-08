@@ -259,22 +259,14 @@ fn verify_rejects_tampered_opening() {
     proof.opening.evals[0] = OpeningBatch::new(current, batch.next().to_vec());
 
     // Expected rejection: the tampered value is no longer bound to the commitment.
-    // The verifier derives query positions from the absorbed value and opens one the
-    // prover never authenticated, so a Merkle path check rejects the proof.
-    let err = verify(
-        &config,
-        &vk,
-        &FibAir,
-        &proof,
-        &pis,
-        0,
-        &mut challenger(&config),
-    )
-    .unwrap_err();
+    // Why: the verifier samples query positions from the absorbed value.
+    //   the round verifies as one pruned multiproof
+    //   -> failure reports a batched placeholder position, not a per-query index.
+    let err = verify(&config, &vk, &FibAir, &proof, &pis, 0, &mut challenger(&config)).unwrap_err();
     match err {
         VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position, reason }) => {
-            assert_eq!(position, 10);
-            assert_eq!(reason, "Base field Merkle proof verification failed");
+            assert_eq!(position, 0);
+            assert_eq!(reason, "Base field Merkle multiproof verification failed");
         }
         other => panic!("expected a Merkle opening rejection, got {other:?}"),
     }
@@ -346,8 +338,9 @@ fn verify_rejects_tampered_public_values() {
     let mut wrong = pis;
     wrong[2] += F::ONE;
     // Expected rejection: the wrong public value desyncs the transcript.
-    // The verifier then derives a different opening point than the prover used,
-    // so it opens a Merkle position the prover never authenticated.
+    // Why: the verifier derives a different opening point than the prover used.
+    //   the round verifies as one pruned multiproof
+    //   -> failure reports a batched placeholder position, not a per-query index.
     let err = verify(
         &config,
         &vk,
@@ -360,8 +353,8 @@ fn verify_rejects_tampered_public_values() {
     .unwrap_err();
     match err {
         VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position, reason }) => {
-            assert_eq!(position, 2);
-            assert_eq!(reason, "Base field Merkle proof verification failed");
+            assert_eq!(position, 0);
+            assert_eq!(reason, "Base field Merkle multiproof verification failed");
         }
         other => panic!("expected a Merkle opening rejection, got {other:?}"),
     }

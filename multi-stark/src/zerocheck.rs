@@ -1138,7 +1138,7 @@ mod tests {
             // Witness trace: each row is one full permutation, satisfying every constraint.
             let trace =
                 tracing::info_span!("zerocheck_poseidon2_generate_trace", num_vars, num_hashes)
-                    .in_scope(|| air.generate_trace_rows(num_hashes, 0));
+                    .in_scope(|| air.generate_random_trace_rows(num_hashes, 0));
 
             // Prove the alpha-batched constraint vanishes on every row.
             let zerocheck = AirZerocheck::new(&air, 0);

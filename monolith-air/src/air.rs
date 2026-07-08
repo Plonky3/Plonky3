@@ -75,6 +75,8 @@ pub struct MonolithAir<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
+    const NUM_MATCH_FLAGS: usize,
+    const NUM_CHI_CELLS: usize,
 > {
     /// Round constants for each of the `NUM_FULL_ROUNDS` rounds.
     ///
@@ -107,7 +109,9 @@ impl<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
-> MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>
+    const NUM_MATCH_FLAGS: usize,
+    const NUM_CHI_CELLS: usize,
+> MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS>
 {
     /// Build the AIR from a permutation's parameters.
     ///
@@ -127,6 +131,30 @@ impl<
     /// - Every non-trailing entry equals 8.
     /// - Trailing entry lies in `3..=8`.
     ///
+    /// # Match-flag width invariant
+    ///
+    /// - `NUM_MATCH_FLAGS` must equal `modulus.count_ones() / 2`.
+    /// - The canonical-form walk pairs modulus one-bits two at a time.
+    /// - Each pair commits one flag cell, `m = m_prev * x_a * x_b` (degree 3).
+    /// - A modulus zero-bit commits no cell and reuses the previous flag.
+    /// - An odd Hamming weight leaves bit 0 unpaired, folded into the closing assert.
+    ///
+    /// # Match-flag batching precondition
+    ///
+    /// - A zero-bit reuses the flag from the last completed pair.
+    /// - That flag is correct only when no pair straddles the zero-bit.
+    /// - So every zero-bit must have an even count of one-bits above it.
+    /// - A bad modulus over-rejects valid inputs.
+    /// - It never accepts a non-canonical one, so this is completeness, not soundness.
+    /// - Mersenne31 (no zero-bits) and Goldilocks (32 one-bits, then zeros) both qualify.
+    ///
+    /// # Chi-cell width invariant
+    ///
+    /// - `NUM_CHI_CELLS` must equal `FIELD_BITS` minus the trailing limb's
+    ///   width when that limb uses the 2-input chi variant (width `< 8`):
+    ///   its AND term is cheap enough (degree 2) to inline directly into
+    ///   the output XOR without a committed column of its own.
+    ///
     /// # Panics
     ///
     /// - Field-bit parameter exceeds 63.
@@ -134,6 +162,9 @@ impl<
     /// - Bar applications exceed the state width.
     /// - Any non-trailing limb is not 8.
     /// - Trailing limb is outside `3..=8`.
+    /// - `NUM_MATCH_FLAGS` does not equal `modulus.count_ones() / 2`.
+    /// - `NUM_CHI_CELLS` does not match the trailing limb's width.
+    /// - Some modulus zero-bit has an odd count of one-bits above it.
     pub fn new(
         round_constants: [[F; WIDTH]; NUM_FULL_ROUNDS],
         mds_matrix: [[F; WIDTH]; WIDTH],
@@ -195,7 +226,58 @@ impl<
         //
         //     modulus_lsb_to_msb[i] = (ORDER >> i) & 1 == 1
         let modulus = F::ORDER_U64;
-        let modulus_lsb_to_msb = core::array::from_fn(|i| (modulus >> i) & 1 == 1);
+        let modulus_lsb_to_msb: [bool; FIELD_BITS] =
+            core::array::from_fn(|i| (modulus >> i) & 1 == 1);
+
+        // Two modulus one-bits share one committed flag cell; an odd
+        // leftover (always bit 0) folds into the closing assert with no
+        // cell of its own.
+        let num_ones = modulus_lsb_to_msb.iter().filter(|&&b| b).count();
+        assert_eq!(
+            num_ones / 2,
+            NUM_MATCH_FLAGS,
+            "NUM_MATCH_FLAGS must equal modulus.count_ones() / 2"
+        );
+
+        // Invariant: no fold-pair may straddle a modulus zero-bit.
+        //
+        // - The canonical-form walk descends MSB -> LSB, pairing one-bits.
+        // - At a zero-bit it asserts the running match flag times that bit is 0.
+        // - The running flag covers only one-bits folded through closed pairs.
+        // - It means "prefix still equals p" only if no pair is half-open here.
+        // - A pair is closed exactly when an even count of one-bits sits above.
+        //
+        // - An odd count leaves one one-bit unfolded, so the flag runs too coarse.
+        // - A coarser flag only tightens the side constraint, never loosens it.
+        // - So it never admits a non-canonical encoding.
+        // - But it rejects valid ones, so reject the modulus here instead.
+        //
+        //     Mersenne31 : 1..1 (x31)                 no zero-bits         -> ok
+        //     Goldilocks : 1..1 (x32) 0..0 (x31) 1    even run above zeros -> ok
+        //     KoalaBear  : 1..1 (x7)  0..0 (x23) 1    odd run above zeros  -> rejected
+        let mut ones_above = 0usize;
+        for i in (0..FIELD_BITS).rev() {
+            if modulus_lsb_to_msb[i] {
+                ones_above += 1;
+            } else {
+                assert!(
+                    ones_above.is_multiple_of(2),
+                    "match-flag batching requires an even count of modulus one-bits above every zero-bit"
+                );
+            }
+        }
+
+        // The trailing limb's chi is inlined (no committed column) exactly
+        // when it uses the narrower 2-input AND variant.
+        let reduced_width = limb_bits
+            .split_last()
+            .map(|(&last, _)| if last < 8 { last } else { 0 })
+            .unwrap_or(0);
+        assert_eq!(
+            FIELD_BITS - reduced_width,
+            NUM_CHI_CELLS,
+            "NUM_CHI_CELLS must equal FIELD_BITS minus the inlined trailing limb's width"
+        );
 
         Self {
             round_constants,
@@ -254,11 +336,14 @@ impl<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
-> BaseAir<F> for MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>
+    const NUM_MATCH_FLAGS: usize,
+    const NUM_CHI_CELLS: usize,
+> BaseAir<F>
+    for MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS>
 {
     /// Returns the number of trace columns (the AIR width).
     fn width(&self) -> usize {
-        num_cols::<WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>()
+        num_cols::<WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS>()
     }
 
     /// No next-row columns. Each permutation is fully constrained within one row.
@@ -273,12 +358,30 @@ impl<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
-> Air<AB> for MonolithAir<AB::F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>
+    const NUM_MATCH_FLAGS: usize,
+    const NUM_CHI_CELLS: usize,
+> Air<AB>
+    for MonolithAir<
+        AB::F,
+        WIDTH,
+        NUM_FULL_ROUNDS,
+        NUM_BARS,
+        FIELD_BITS,
+        NUM_MATCH_FLAGS,
+        NUM_CHI_CELLS,
+    >
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local: &MonolithCols<AB::Var, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS> =
-            main.current_slice().borrow();
+        let local: &MonolithCols<
+            AB::Var,
+            WIDTH,
+            NUM_FULL_ROUNDS,
+            NUM_BARS,
+            FIELD_BITS,
+            NUM_MATCH_FLAGS,
+            NUM_CHI_CELLS,
+        > = main.current_slice().borrow();
 
         // Initialize the running state from the committed input columns.
         let mut state: [AB::Expr; WIDTH] = local.inputs.map(|x| x.into());
@@ -289,7 +392,7 @@ impl<
 
         // Full rounds: Bars → Bricks → Concrete → AddRoundConstants.
         for round_idx in 0..NUM_FULL_ROUNDS {
-            eval_round::<AB, WIDTH, NUM_BARS, FIELD_BITS>(
+            eval_round::<AB, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS>(
                 &mut state,
                 &local.full_rounds[round_idx],
                 &self.mds_matrix,
@@ -301,7 +404,7 @@ impl<
         }
 
         // Final round: Bars → Bricks → Concrete (no round constants).
-        eval_round::<AB, WIDTH, NUM_BARS, FIELD_BITS>(
+        eval_round::<AB, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS>(
             &mut state,
             &local.final_round,
             &self.mds_matrix,
@@ -330,9 +433,11 @@ fn eval_round<
     const WIDTH: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
+    const NUM_MATCH_FLAGS: usize,
+    const NUM_CHI_CELLS: usize,
 >(
     state: &mut [AB::Expr; WIDTH],
-    round: &MonolithRoundCols<AB::Var, WIDTH, NUM_BARS, FIELD_BITS>,
+    round: &MonolithRoundCols<AB::Var, WIDTH, NUM_BARS, FIELD_BITS, NUM_MATCH_FLAGS, NUM_CHI_CELLS>,
     mds_matrix: &[[AB::F; WIDTH]; WIDTH],
     round_constants: Option<&[AB::F; WIDTH]>,
     limb_bits: &[usize],
@@ -359,43 +464,63 @@ fn eval_round<
 
         // Lift committed cells to expressions for symbolic algebra.
         let bits: [AB::Expr; FIELD_BITS] = input_bits.map(|b| b.into());
-        let chi: [AB::Expr; FIELD_BITS] = chi_products.map(|b| b.into());
-        let mflag: [AB::Expr; FIELD_BITS] = match_flags.map(|b| b.into());
+        let chi: [AB::Expr; NUM_CHI_CELLS] = chi_products.map(|b| b.into());
+        let mflag: [AB::Expr; NUM_MATCH_FLAGS] = match_flags.map(|b| b.into());
 
         // Reconstruction:  sum_i bits[i] * 2^i  ==  state[bar_idx].
         let reconstructed: AB::Expr = pack_bits_le(bits.iter().cloned());
         builder.assert_eq(reconstructed, state[bar_idx].clone());
 
-        // S-box: committed Bar output == chi(bits), degree 2 thanks to the
-        // committed AND product witnesses.
-        let sbox_output = eval_bar_sbox::<AB, FIELD_BITS>(&bits, &chi, limb_bits, builder);
+        // S-box: committed Bar output == chi(bits), degree ≤ 3 thanks to the
+        // committed AND product witnesses (or an inlined one, for the
+        // trailing 2-input limb).
+        let sbox_output =
+            eval_bar_sbox::<AB, FIELD_BITS, NUM_CHI_CELLS>(&bits, &chi, limb_bits, builder);
         builder.assert_eq(AB::Expr::from(bar_out), sbox_output);
 
-        // Canonical bit-pattern walk (MSB → LSB).
+        // Canonical bit-pattern walk (MSB → LSB), with two modulus one-bits
+        // batched into each committed flag.
         //
         // Define `m_i` = "bits[i..FIELD_BITS] still match the modulus prefix".
         // Start above the MSB with `m_top = 1` (no info yet):
         //
-        //     p_i = 1 : m_i = m_{i+1} * bits[i]
-        //     p_i = 0 : m_i = m_{i+1}                  (linear pass-through)
-        //               assert m_{i+1} * bits[i] = 0   (a 1 here would force X > p)
+        //     p_i = p_{i-1} = 1 : m_{i-1} = m_{i+1} * bits[i] * bits[i-1]   (committed, degree 3)
+        //     p_i = 0           : m_i = m_{i+1}                            (no cell; reuse m_{i+1})
+        //                         assert m_{i+1} * bits[i] = 0             (a 1 here would force X > p)
         //
-        // Final assertion `m_0 = 0` rejects the encoding `bits == p`, which
-        // is the only forbidden one in `[p, 2^FIELD_BITS - 1]` that survives
+        // Modulus one-bits are paired as encountered (`pending` holds the
+        // first bit of an unfinished pair); a modulus-zero bit needs no
+        // cell at all. If the Hamming weight is odd, the final one-bit
+        // (always bit 0, since any prime modulus is odd) never pairs — its
+        // check is folded directly into the closing assertion below instead
+        // of getting its own committed cell.
+        //
+        // The closing assertion rejects the encoding `bits == p`, which is
+        // the only forbidden one in `[p, 2^FIELD_BITS - 1]` that survives
         // the side-constraints above.
         let mut prev = AB::Expr::ONE;
+        let mut flag_idx = 0;
+        let mut pending: Option<AB::Expr> = None;
         for i in (0..FIELD_BITS).rev() {
-            let m_i = mflag[i].clone();
             let x_i = bits[i].clone();
             if modulus_lsb_to_msb[i] {
-                builder.assert_eq(m_i.clone(), prev.clone() * x_i);
+                if let Some(first) = pending.take() {
+                    let m_i = mflag[flag_idx].clone();
+                    builder.assert_eq(m_i.clone(), prev * first * x_i);
+                    prev = m_i;
+                    flag_idx += 1;
+                } else {
+                    pending = Some(x_i);
+                }
             } else {
-                builder.assert_eq(m_i.clone(), prev.clone());
                 builder.assert_zero(prev.clone() * x_i);
             }
-            prev = m_i;
         }
-        builder.assert_zero(prev);
+        debug_assert_eq!(flag_idx, NUM_MATCH_FLAGS);
+        match pending {
+            Some(last) => builder.assert_zero(prev * last),
+            None => builder.assert_zero(prev),
+        }
     }
 
     // Phase 2: Build the post-Bars state.
@@ -444,57 +569,61 @@ fn eval_round<
 ///
 /// - Apply chi independently to each limb (widths from the input slice).
 /// - Recombine output bits via little-endian packing.
-/// - Use the committed AND product witnesses to cap degree at 3.
+/// - Use a committed AND product witness to cap degree at 3 for 8-bit
+///   limbs; the trailing 2-input limb's AND term is cheap enough (degree
+///   2) to inline directly into the XOR instead, so it commits nothing.
 ///
 /// # Chi per limb (width n, indices mod n)
 ///
 /// ```text
-///   8-bit:  out[j] = x[j-1] XOR ((NOT x[j-2]) AND x[j-3] AND x[j-4])
-///   7-bit:  out[j] = x[j-1] XOR ((NOT x[j-2]) AND x[j-3])
+///   8-bit:  out[j] = x[j-1] XOR ((NOT x[j-2]) AND x[j-3] AND x[j-4])   — degree 3, chi[j] committed
+///   7-bit:  out[j] = x[j-1] XOR ((NOT x[j-2]) AND x[j-3])              — degree 3, inlined
 /// ```
-fn eval_bar_sbox<AB: AirBuilder, const FIELD_BITS: usize>(
+fn eval_bar_sbox<AB: AirBuilder, const FIELD_BITS: usize, const NUM_CHI_CELLS: usize>(
     bits: &[AB::Expr; FIELD_BITS],
-    chi_products: &[AB::Expr; FIELD_BITS],
+    chi_products: &[AB::Expr; NUM_CHI_CELLS],
     limb_bits: &[usize],
     builder: &mut AB,
 ) -> AB::Expr {
     // Accumulator for the recombined field element.
     let mut result = AB::Expr::ZERO;
 
-    // Running offset into the global bit array; advances by limb width.
+    // Running offsets: `bit_offset` spans the full bit array (every limb),
+    // `chi_offset` spans only the committed chi cells (skips the inlined
+    // trailing limb, if any).
     let mut bit_offset = 0;
+    let mut chi_offset = 0;
 
     for (limb_idx, &n) in limb_bits.iter().enumerate() {
-        // Slice the input bits and committed AND products for this limb.
+        // Slice the input bits for this limb.
         let x = &bits[bit_offset..bit_offset + n];
-        let chi = &chi_products[bit_offset..bit_offset + n];
 
         // Only the trailing limb may be narrower than 8 bits; it uses the
-        // 2-input AND variant of chi.
+        // 2-input AND variant of chi, inlined rather than committed.
         let is_last_reduced = limb_idx == limb_bits.len() - 1 && n < 8;
 
         //     sub(j, k) = (j - k) mod n
         let sub = |base: usize, offset: usize| (base + n - (offset % n)) % n;
 
-        // Bind each AND product witness:
-        //
-        //     8-bit:  chi[j] = (1 - x[j-2]) * x[j-3] * x[j-4]
-        //     7-bit:  chi[j] = (1 - x[j-2]) * x[j-3]
-        for j in 0..n {
-            let andn = x[sub(j, 2)].clone().andn(&x[sub(j, 3)].clone());
-            let expected = if is_last_reduced {
-                andn
-            } else {
-                andn * x[sub(j, 4)].clone()
-            };
-            builder.assert_eq(chi[j].clone(), expected);
-        }
+        let limb_value: AB::Expr = if is_last_reduced {
+            // Output bit:  out[j] = x[j-1] XOR ((1 - x[j-2]) * x[j-3])  (degree 3).
+            pack_bits_le((0..n).map(|j| {
+                let andn = x[sub(j, 2)].clone().andn(&x[sub(j, 3)].clone());
+                x[sub(j, 1)].clone().xor(&andn)
+            }))
+        } else {
+            let chi = &chi_products[chi_offset..chi_offset + n];
 
-        // Output bit:  out[j] = x[j-1] XOR chi[j]  (degree 2).
-        let get_out_bit = |j: usize| -> AB::Expr { x[sub(j, 1)].clone().xor(&chi[j].clone()) };
+            // Bind each AND product witness:  chi[j] = (1 - x[j-2]) * x[j-3] * x[j-4].
+            for j in 0..n {
+                let andn = x[sub(j, 2)].clone().andn(&x[sub(j, 3)].clone());
+                builder.assert_eq(chi[j].clone(), andn * x[sub(j, 4)].clone());
+            }
+            chi_offset += n;
 
-        // Pack the limb's bits into one field element (Horner).
-        let limb_value: AB::Expr = pack_bits_le((0..n).map(get_out_bit));
+            // Output bit:  out[j] = x[j-1] XOR chi[j]  (degree 2).
+            pack_bits_le((0..n).map(|j| x[sub(j, 1)].clone().xor(&chi[j].clone())))
+        };
 
         // Shift into global position and accumulate:  result += limb * 2^offset.
         let limb_shift = AB::F::from_u64(1u64 << bit_offset);

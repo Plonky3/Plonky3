@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_field::{Algebra, InjectiveMonomial, PrimeCharacteristicRing};
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 use p3_poseidon2::Poseidon2;
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, GenericPoseidon2LinearLayers,
@@ -49,13 +49,23 @@ pub const GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_16: usize = 22;
 /// An implementation of the Poseidon2 hash function for the Goldilocks field.
 ///
 /// It acts on arrays of the form `[Goldilocks; WIDTH]`.
+///
+/// On this platform this alias resolves to [`crate::Poseidon2GoldilocksFused`], a
+/// concrete, non-generic type: it only implements `Permutation` for `[Goldilocks; WIDTH]`
+/// and `[PackedGoldilocksNeon; WIDTH]` (not the generic `Algebra<Goldilocks>` state that
+/// the fallback `p3_poseidon2::Poseidon2` type below supports), and its constructor takes
+/// its round constants by reference rather than by value. Code that needs to build against
+/// both platforms should go through [`default_goldilocks_poseidon2_8`],
+/// [`default_goldilocks_poseidon2_12`], [`default_goldilocks_poseidon2_16`], or
+/// `new_from_rng`/`new_from_rng_128` (which have matching signatures on both platforms),
+/// rather than calling `new` directly.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub type Poseidon2Goldilocks<const WIDTH: usize> = crate::Poseidon2GoldilocksFused<WIDTH>;
 
 /// An implementation of the Poseidon2 hash function for the Goldilocks field.
 ///
 /// It acts on arrays of the form `[Goldilocks; WIDTH]`.
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     Goldilocks,
     Poseidon2ExternalLayerGoldilocks<WIDTH>,
@@ -566,7 +576,7 @@ pub const GOLDILOCKS_POSEIDON2_RC_16_INTERNAL: [Goldilocks; 22] = Goldilocks::ne
 ]);
 
 /// Create a default width-8 Poseidon2 permutation for Goldilocks.
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 pub fn default_goldilocks_poseidon2_8() -> Poseidon2Goldilocks<8> {
     Poseidon2::new(
         ExternalLayerConstants::new(
@@ -590,7 +600,7 @@ pub fn default_goldilocks_poseidon2_8() -> Poseidon2Goldilocks<8> {
 }
 
 /// Create a default width-12 Poseidon2 permutation for Goldilocks.
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 pub fn default_goldilocks_poseidon2_12() -> Poseidon2Goldilocks<12> {
     Poseidon2::new(
         ExternalLayerConstants::new(
@@ -614,7 +624,7 @@ pub fn default_goldilocks_poseidon2_12() -> Poseidon2Goldilocks<12> {
 }
 
 /// Create a default width-16 Poseidon2 permutation for Goldilocks.
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 pub fn default_goldilocks_poseidon2_16() -> Poseidon2Goldilocks<16> {
     Poseidon2::new(
         ExternalLayerConstants::new(
@@ -682,6 +692,9 @@ pub const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] = Goldilocks::new_array([
     0xfffffffe00000002, // 1/2^32
 ]);
 
+// Unlike the width-8/12/16 diagonals above (small values with a documented
+// `-2, 1, 2, 1/2, ...` structure), these are opaque full field elements with no
+// derivation recorded in this crate and no width-20 KAT to cross-check them against.
 pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = Goldilocks::new_array([
     0x95c381fda3b1fa57,
     0xf36fe9eb1288f42c,

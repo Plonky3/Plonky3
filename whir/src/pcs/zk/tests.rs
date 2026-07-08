@@ -23,6 +23,7 @@ use super::proof::ZkWhirProof;
 use super::verifier::ZkVerifierError;
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption};
+use crate::pcs::proof::QueryOpenings;
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -322,14 +323,8 @@ fn zk_whir_rejects_wrong_eval() {
     proven.proof.evals[0] += EF::ONE;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so a round-0 opening fails to authenticate.
-    //
-    // The exact position is a transcript artifact, not a protocol
-    // invariant, so only the variant and round are pinned.
-    assert!(matches!(
-        err,
-        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
-    ));
+    // so the round-0 multiproof fails to authenticate.
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
 }
 
 #[test]
@@ -365,14 +360,8 @@ fn zk_whir_rejects_tampered_ood_answer() {
     proven.proof.rounds[0].ood_answers[0] += EF::ONE;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so a round-0 opening fails to authenticate.
-    //
-    // The exact position is a transcript artifact, not a protocol
-    // invariant, so only the variant and round are pinned.
-    assert!(matches!(
-        err,
-        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
-    ));
+    // so the round-0 multiproof fails to authenticate.
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
 }
 
 #[test]
@@ -478,10 +467,11 @@ fn zk_whir_rejects_missing_query_opening() {
     // Openings are not absorbed, so the transcript matches up to the
     // count check itself.
     let mut proven = Setup::new(16).prove();
-    let _ = proven.proof.rounds[0]
-        .queries
-        .pop()
-        .expect("fixture has query openings");
+    let dropped = match &mut proven.proof.rounds[0].openings {
+        QueryOpenings::Base(opening) => opening.rows.pop().is_some(),
+        QueryOpenings::Extension(opening) => opening.rows.pop().is_some(),
+    };
+    assert!(dropped, "fixture has query openings");
     let err = proven.verify().unwrap_err();
     assert_eq!(
         err,
@@ -520,11 +510,11 @@ fn zk_whir_rejects_tampered_pow_witness() {
     proven.proof.rounds[0].pow_witness += F::ONE;
     let err = proven.verify().unwrap_err();
     // The bad witness usually fails the grind; if it coincidentally still
-    // satisfies it, the diverged transcript fails a later round-0 opening.
+    // satisfies it, the diverged transcript fails a later round-0 multiproof.
     assert!(matches!(
         err,
         ZkVerifierError::InvalidPowWitness { round: 0 }
-            | ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
+            | ZkVerifierError::MerkleVerificationFailed { round: 0 },
     ));
 }
 
@@ -538,14 +528,8 @@ fn zk_whir_rejects_tampered_sumcheck_wire() {
     proven.proof.sumchecks[0].round_coefficients[0][0] += EF::ONE;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so a round-0 opening fails to authenticate.
-    //
-    // The exact position is a transcript artifact, not a protocol
-    // invariant, so only the variant and round are pinned.
-    assert!(matches!(
-        err,
-        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
-    ));
+    // so the round-0 multiproof fails to authenticate.
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
 }
 
 #[test]
@@ -558,14 +542,8 @@ fn zk_whir_rejects_wrong_commitment() {
     proven.commitment = other.commitment;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so a round-0 opening fails to authenticate.
-    //
-    // The exact position is a transcript artifact, not a protocol
-    // invariant, so only the variant and round are pinned.
-    assert!(matches!(
-        err,
-        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
-    ));
+    // so the round-0 multiproof fails to authenticate.
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
 }
 
 /// Conditions a uniformly random witness on the public claims.

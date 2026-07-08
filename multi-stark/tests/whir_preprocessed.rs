@@ -310,13 +310,14 @@ fn verify_rejects_tampered_preprocessed_opening() {
     opening.evals[0] = OpeningBatch::new(current, batch.next().to_vec());
 
     // Expected rejection: the tampered value is no longer bound to the preprocessed commitment.
-    // The verifier derives query positions from the absorbed value and opens one the
-    // prover never authenticated, so a Merkle path check on the preprocessed tree rejects.
+    // Why: the verifier samples query positions from the absorbed value.
+    //   the round verifies as one pruned multiproof
+    //   -> failure reports a batched placeholder position, not a per-query index.
     let err = verify(&config, &vk, &air, &proof, &[], 0, &mut challenger(&config)).unwrap_err();
     match err {
         VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position, reason }) => {
-            assert_eq!(position, 10);
-            assert_eq!(reason, "Base field Merkle proof verification failed");
+            assert_eq!(position, 0);
+            assert_eq!(reason, "Base field Merkle multiproof verification failed");
         }
         other => panic!("expected a preprocessed Merkle opening rejection, got {other:?}"),
     }

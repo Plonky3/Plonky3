@@ -20,9 +20,7 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{
-    BatchOpening, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs, PeriodicLdeTable,
-};
+use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PeriodicLdeTable};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
@@ -595,14 +593,14 @@ where
         // we may need to revisit this and to ensure it is safe to batch them together.
 
         // num_reduced records the number of (function, opening point) pairs for each `log_height`.
-        // TODO: This should really be `[0; Val::TWO_ADICITY]` but that runs into issues with generics.
-        let mut num_reduced = [0; 32];
+        // TODO: This should really be `[0; Val::TWO_ADICITY + 1]` but that runs into issues with generics.
+        let mut num_reduced = [0; 33];
 
         // For each `log_height` from 2^1 -> 2^32, reduced_openings will contain either `None`
         // if there are no matrices of that height, or `Some(vec)` where `vec` is equal to
         // a weighted sum of `(f(zeta) - f(x))/(zeta - x)` over all `f`'s of that height and
         // for each `f`, all opening points `zeta`. The sum is weighted by powers of the challenge alpha.
-        let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
+        let mut reduced_openings: [_; 33] = core::array::from_fn(|_| None);
 
         for ((mats, points), openings_for_round) in
             mats_and_points.iter().zip(all_opened_values.iter())
@@ -714,32 +712,14 @@ where
 
         Ok(())
     }
-}
 
-impl<Val, Dft, InputMmcs, FriMmcs> BuildPeriodicLdeTableFast
-    for TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
-where
-    Val: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<Val> + Default,
-{
-    type PeriodicDomain = TwoAdicMultiplicativeCoset<Val>;
-
-    fn maybe_build_periodic_lde_table_fast(
+    fn build_periodic_lde_table(
         &self,
-        periodic_cols: &[Vec<p3_commit::Val<Self::PeriodicDomain>>],
-        trace_domain: Self::PeriodicDomain,
-        quotient_domain: Self::PeriodicDomain,
-    ) -> Option<PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>>
-    where
-        p3_commit::Val<Self::PeriodicDomain>: Clone,
-    {
-        let periodic_cols_val: &[Vec<Val>] = unsafe { core::mem::transmute(periodic_cols) };
-        let table = build_periodic_lde_table_two_adic::<Val, Dft>(
-            periodic_cols_val,
-            &trace_domain,
-            &quotient_domain,
-        );
-        Some(table)
+        periodic_cols: &[Vec<Val>],
+        trace_domain: Self::Domain,
+        quotient_domain: Self::Domain,
+    ) -> PeriodicLdeTable<Val> {
+        build_periodic_lde_table_two_adic(&self.dft, periodic_cols, &trace_domain, &quotient_domain)
     }
 }
 

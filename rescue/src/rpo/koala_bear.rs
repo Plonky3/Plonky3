@@ -32,7 +32,7 @@ const BYTES_PER_CONSTANT: usize = 5;
 /// parameter choice (width 24, capacity 8, 7 rounds, x^3 / x^{1/3} S-boxes) mirrors
 /// the [RPO-M31](https://eprint.iacr.org/2024/1635) layout for a comparable small
 /// field, using the field's native S-box exponent.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RpoKoalaBear {
     inner: Rpo<KoalaBear, MdsMatrixKoalaBear, RPO_KB_WIDTH, RPO_KB_ALPHA>,
 }
@@ -156,11 +156,23 @@ fn inv_sbox_x3<R: PrimeCharacteristicRing + Copy, const N: usize>(state: &mut [R
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{PrimeCharacteristicRing, PrimeField64};
     use p3_symmetric::Permutation;
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn seed_matches_consts() {
+        let expected = alloc::format!(
+            "RPO-KB:p={},m={},c={},n={}",
+            KoalaBear::ORDER_U64,
+            RPO_KB_WIDTH,
+            RPO_KB_CAPACITY,
+            RPO_KB_NUM_ROUNDS,
+        );
+        assert_eq!(RPO_KB_SEED, expected);
+    }
 
     /// Permutation regression vector for input `[0, 1, …, 23]`.
     ///

@@ -32,19 +32,9 @@ pub(crate) fn cfft_permute_slice_chunked_in_place<T>(xs: &mut [T], chunk_size: u
     for i in 0..n_chunks {
         let j = cfft_permute_index(i, log_n);
         if i < j {
-            // somehow this is slightly faster than the unsafe block below
             for k in 0..chunk_size {
                 xs.swap(i * chunk_size + k, j * chunk_size + k);
             }
-            /*
-            unsafe {
-                core::ptr::swap_nonoverlapping(
-                    xs.as_mut_ptr().add(i * chunk_size),
-                    xs.as_mut_ptr().add(j * chunk_size),
-                    chunk_size,
-                );
-            }
-            */
         }
     }
 }

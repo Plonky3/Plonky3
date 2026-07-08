@@ -343,7 +343,7 @@ mod tests {
         //
         // One distinct query set per mask, sized within the encoding's randomness budget so the RS simulator does not panic on too-many queries.
         let t_zk = encoding.randomness_len();
-        let m = encoding.m;
+        let m = encoding.codeword_len();
         let mut query_rng = SmallRng::seed_from_u64(seed.wrapping_add(5));
         let mut sim_ans_rng = SmallRng::seed_from_u64(seed.wrapping_add(6));
         for _ in 0..folding_factor {

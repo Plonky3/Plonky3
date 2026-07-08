@@ -531,10 +531,12 @@ pub fn trinomial_cubic_mul<R: PrimeCharacteristicRing>(a: &[R; 3], b: &[R; 3], r
 
 #[inline]
 pub fn cubic_square<R: PrimeCharacteristicRing>(a: &[R; 3], res: &mut [R; 3]) {
-    let a0_plus_a2 = a[0].dup() + a[2].dup();
-    let a1_plus_a2 = a[1].dup() + a[2].dup();
+    let a0_2 = a[0].double();
+    let a1_2 = a[1].double();
+    let two_a0_plus_a2 = a0_2.dup() + a[2].dup();
+    let two_a1_plus_a2 = a1_2.dup() + a[2].dup();
 
-    res[0] = R::dot_product::<3>(a, &[a[0].dup(), a[2].dup(), a[1].dup()]);
-    res[1] = R::dot_product::<3>(a, &[a[1].dup(), a0_plus_a2.dup(), a1_plus_a2]);
-    res[2] = R::dot_product::<3>(a, &[a[2].dup(), a[1].dup(), a0_plus_a2]);
+    res[0] = R::dot_product::<2>(&[a[0].dup(), a1_2], &[a[0].dup(), a[2].dup()]);
+    res[1] = R::dot_product::<2>(&[a0_2, a[2].dup()], &[a[1].dup(), two_a1_plus_a2]);
+    res[2] = R::dot_product::<2>(&[a[1].dup(), a[2].dup()], &[a[1].dup(), two_a0_plus_a2]);
 }

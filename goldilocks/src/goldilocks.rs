@@ -8,7 +8,6 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use core::{array, fmt};
 
 use num_bigint::BigUint;
-use p3_challenger::UniformSamplingField;
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::integers::QuotientMap;
 use p3_field::op_assign_macros::{
@@ -16,9 +15,9 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField64, RawDataSerializable, TwoAdicField, impl_raw_serializable_primefield64,
-    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
-    tonelli_shanks_two_adic,
+    PrimeField64, RawDataSerializable, TwoAdicField, UniformSamplingField,
+    impl_raw_serializable_primefield64, quotient_map_large_iint, quotient_map_large_uint,
+    quotient_map_small_int, tonelli_shanks_two_adic,
 };
 use p3_util::{branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
@@ -216,7 +215,7 @@ impl Distribution<Goldilocks> for StandardUniform {
 }
 
 impl UniformSamplingField for Goldilocks {
-    const MAX_SINGLE_SAMPLE_BITS: usize = 24;
+    const MAX_SINGLE_SAMPLE_BITS: usize = 32;
     const SAMPLING_BITS_M: [u64; 64] = {
         let prime: u64 = P;
         let mut a = [0u64; 64];
@@ -413,7 +412,7 @@ impl Field for Goldilocks {
             not(target_feature = "avx512f")
         ),
         all(target_arch = "x86_64", target_feature = "avx512f"),
-        target_arch = "aarch64",
+        all(target_arch = "aarch64", target_feature = "neon"),
         all(target_arch = "wasm32", target_feature = "simd128"),
     )))]
     type Packing = Self;

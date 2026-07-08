@@ -24,6 +24,8 @@ pub enum Kind {
     /// - Draws a fresh challenge pair, shared with no other lookup.
     /// - So its terminal contribution cannot cancel against another lookup.
     /// - The cross-AIR terminal sum forces it to balance on its own.
+    /// - Its query-side count still carries a per-row weight bound, folded into
+    ///   the multiplicity height-bound check like any global lookup.
     Local,
     /// Cross-AIR lookup on a named bus.
     ///
@@ -46,10 +48,10 @@ pub struct Lookup<F: Field> {
     /// Static per-row upper bound on the magnitude of this lookup's count.
     ///
     /// - One term of the multiplicity height-bound soundness check `sum_i w_i * h_i < p`.
-    /// - Carried straight from the emitting global interaction.
+    /// - Carried straight from the emitting interaction (global or local).
     /// - Sound only if the AIR constrains the count to respect it on every row.
     /// - Typically `1` for a query and `0` for a table entry being provided.
-    /// - Always `0` for intra-AIR lookups, which never cross AIRs.
+    /// - For a local lookup, the sum of every tuple's own declared weight.
     pub count_weight: u32,
     /// Slot index for this lookup within the AIR.
     ///
@@ -57,6 +59,39 @@ pub struct Lookup<F: Field> {
     /// - Owns fraction column `column + 1` of the permutation trace.
     /// - Column `0` of the permutation trace is the shared accumulator.
     pub column: usize,
+}
+
+/// Panics unless every tuple in `elements` shares one payload width.
+///
+/// # Why this matters
+///
+/// The LogUp combiner folds each tuple with Horner's rule aligned to its own
+/// length (see [`crate::Challenges`]'s injectivity note), so a shorter tuple
+/// is implicitly left-zero-padded and can fingerprint identically to a
+/// longer tuple encoding the same value: `[x]` collides with `[0, x]`. Every
+/// tuple folded into one fraction column — whether by one AIR's own local
+/// lookup, or by several independently-authored AIRs sharing a named bus —
+/// must therefore agree on tuple width.
+///
+/// # Arguments
+///
+/// - `elements` — every tuple folded into one lookup argument.
+/// - `context` — identifies the lookup in the panic message.
+pub fn assert_uniform_tuple_width<F>(
+    elements: &[Vec<SymbolicExpression<F>>],
+    context: &str,
+) -> usize {
+    let width = elements.first().map_or(0, Vec::len);
+    for tuple in elements {
+        assert_eq!(
+            tuple.len(),
+            width,
+            "{context}: tuple widths {width} and {} differ; every tuple folded into one \
+             lookup must share a payload width, or a shorter tuple can alias a longer one",
+            tuple.len(),
+        );
+    }
+    width
 }
 
 /// All lookups for one AIR, with column indices assigned.
@@ -88,14 +123,22 @@ impl<F: Field> Lookups<F> {
         let mut col = 0;
 
         for i in local {
-            let (elements, multiplicities) =
-                i.tuples.iter().map(|(f, c)| (f.clone(), c.clone())).unzip();
+            let mut elements = Vec::with_capacity(i.tuples.len());
+            let mut multiplicities = Vec::with_capacity(i.tuples.len());
+            // Each tuple carries its own declared weight; the table (provided)
+            // side uses `Count::provided`, so only query-side weight adds up here.
+            let count_weight = i.tuples.iter().fold(0u32, |acc, (fields, count)| {
+                let (expr, weight) = count.clone().into_parts();
+                elements.push(fields.clone());
+                multiplicities.push(expr);
+                acc.saturating_add(weight)
+            });
+            assert_uniform_tuple_width(&elements, "local lookup");
             lookups.push(Lookup {
                 kind: Kind::Local,
                 elements,
                 multiplicities,
-                // Intra-AIR lookups balance within one AIR, so they sit out the cross-AIR bound.
-                count_weight: 0,
+                count_weight,
                 column: col,
             });
             col += 1;
@@ -186,7 +229,10 @@ impl<F: Field> Lookups<F> {
                         if gadget.constraint_degree(&cur) <= max_degree {
                             // Within budget: keep the merge.
                             // Each tuple holds its own per-row query bound, so the bounds add.
-                            cur.count_weight = cur.count_weight.saturating_add(member.count_weight);
+                            cur.count_weight = cur
+                                .count_weight
+                                .checked_add(member.count_weight)
+                                .expect("count_weight overflow: aggregate lookup weight exceeds u32::MAX");
                             current = Some(cur);
                         } else {
                             // Over budget: undo the trial, seal the column, start a new one.
@@ -255,15 +301,18 @@ pub fn check_multiplicity_height_bound<F: PrimeField>(
         "lookups and heights must be aligned per AIR"
     );
 
-    // Accumulate `sum_i w_i * h_i` in 128 bits.
-    // A saturating add only caps far past any field size, where the bound already fails.
-    let weighted_height_sum = lookups.iter().zip(heights).fold(0u128, |acc, (air, &h)| {
-        let term = u128::from(air.total_count_weight()).saturating_mul(h as u128);
-        acc.saturating_add(term)
-    });
+    // Accumulate `sum_i w_i * h_i` exactly via `BigUint`, since this sum
+    // feeds the soundness comparison below and must stay exact for every
+    // supported field, including large ones like BN254 (`p ~ 2^254`).
+    let weighted_height_sum = lookups
+        .iter()
+        .zip(heights)
+        .fold(BigUint::ZERO, |acc, (air, &h)| {
+            acc + BigUint::from(air.total_count_weight()) * BigUint::from(h)
+        });
 
     // Compare against the exact characteristic `p`, valid for any prime size.
-    if BigUint::from(weighted_height_sum) >= F::order() {
+    if weighted_height_sum >= F::order() {
         return Err(LookupError::MultiplicityHeightBoundExceeded {
             weighted_height_sum,
             field_bits: F::bits(),
@@ -343,7 +392,7 @@ pub enum LookupError {
         "LogUp multiplicity height-bound exceeded: weighted height sum {weighted_height_sum} reaches the ~2^{field_bits} field characteristic"
     )]
     MultiplicityHeightBoundExceeded {
-        weighted_height_sum: u128,
+        weighted_height_sum: BigUint,
         field_bits: usize,
     },
 }
@@ -359,6 +408,7 @@ mod tests {
     use p3_field::{PrimeCharacteristicRing, PrimeField32};
 
     use super::*;
+    use crate::count::Count;
     use crate::logup::LogUpGadget;
 
     type F = BabyBear;
@@ -409,8 +459,62 @@ mod tests {
     }
 
     #[test]
-    fn from_interactions_carries_global_weight_and_zeroes_local() {
-        // Layout: one local lookup, then a query (weight 1) and a table entry (weight 0).
+    fn assert_uniform_tuple_width_accepts_equal_widths() {
+        let elements: Vec<Vec<SymbolicExpression<F>>> = vec![
+            vec![
+                SymbolicExpression::from(F::ONE),
+                SymbolicExpression::from(F::TWO),
+            ],
+            vec![
+                SymbolicExpression::from(F::ZERO),
+                SymbolicExpression::from(F::ONE),
+            ],
+        ];
+        assert_eq!(assert_uniform_tuple_width(&elements, "ctx"), 2);
+    }
+
+    #[test]
+    #[should_panic = "tuple widths"]
+    fn assert_uniform_tuple_width_rejects_mixed_widths() {
+        // `[x]` and `[0, x]` would fingerprint identically once combined with beta,
+        // so mixing widths on one lookup must be rejected outright.
+        let elements: Vec<Vec<SymbolicExpression<F>>> = vec![
+            vec![SymbolicExpression::from(F::ONE)],
+            vec![
+                SymbolicExpression::from(F::ZERO),
+                SymbolicExpression::from(F::ONE),
+            ],
+        ];
+        assert_uniform_tuple_width(&elements, "ctx");
+    }
+
+    #[test]
+    #[should_panic = "tuple widths"]
+    fn from_interactions_rejects_local_tuple_width_mismatch() {
+        // A width-1 query tuple folded with a width-2 table tuple on the same
+        // local lookup would let `[x]` alias `[0, x]` in the LogUp combiner.
+        let local: Vec<SymbolicLocalInteraction<F>> = vec![SymbolicLocalInteraction {
+            tuples: vec![
+                (
+                    vec![SymbolicExpression::from(F::ONE)],
+                    Count::bounded(SymbolicExpression::from(F::ONE), 1),
+                ),
+                (
+                    vec![
+                        SymbolicExpression::from(F::ZERO),
+                        SymbolicExpression::from(F::ONE),
+                    ],
+                    Count::provided(SymbolicExpression::from(F::ONE)),
+                ),
+            ],
+        }];
+        Lookups::from_interactions(&[], &local);
+    }
+
+    #[test]
+    fn from_interactions_sums_local_weight_and_carries_global_weight() {
+        // Layout: one local lookup (query weight 1, table weight 0), then a
+        // global query (weight 1) and a global table entry (weight 0).
         // Local interactions are emitted first, matching the LogUp column order.
         let global: Vec<SymbolicInteraction<F>> = vec![
             SymbolicInteraction {
@@ -427,20 +531,23 @@ mod tests {
             },
         ];
         let local: Vec<SymbolicLocalInteraction<F>> = vec![SymbolicLocalInteraction {
-            tuples: vec![(vec![], SymbolicExpression::from(F::ONE))],
+            tuples: vec![
+                (vec![], Count::bounded(SymbolicExpression::from(F::ONE), 1)),
+                (vec![], Count::provided(SymbolicExpression::from(F::ONE))),
+            ],
         }];
 
         let lookups = Lookups::from_interactions(&global, &local);
 
-        //     index 0: local        → weight 0 (never crosses AIRs)
+        //     index 0: local        → weight 1 (query side only, table side is provided)
         //     index 1: global query → weight 1
         //     index 2: global table → weight 0
-        assert_eq!(lookups[0].count_weight, 0);
+        assert_eq!(lookups[0].count_weight, 1);
         assert_eq!(lookups[1].count_weight, 1);
         assert_eq!(lookups[2].count_weight, 0);
 
-        // Only the query contributes to this AIR's weight.
-        assert_eq!(lookups.total_count_weight(), 1);
+        // The local query and the global query both contribute to this AIR's weight.
+        assert_eq!(lookups.total_count_weight(), 2);
     }
 
     #[test]
@@ -477,7 +584,7 @@ mod tests {
                 weighted_height_sum,
                 field_bits,
             } => {
-                assert_eq!(weighted_height_sum, 1u128 << 31);
+                assert_eq!(weighted_height_sum, BigUint::from(1u128 << 31));
                 assert_eq!(field_bits, F::bits());
             }
             other => panic!("wrong error variant: {other:?}"),
@@ -558,7 +665,7 @@ mod tests {
         // The local keeps column 0.
         // The three globals fold into two columns: two tuples, then one.
         let local = vec![SymbolicLocalInteraction {
-            tuples: vec![(vec![], SymbolicExpression::from(F::ONE))],
+            tuples: vec![(vec![], Count::bounded(SymbolicExpression::from(F::ONE), 1))],
         }];
         let global = vec![
             global_payload("a", 1),
@@ -634,7 +741,7 @@ mod tests {
                     BaseEntry::Main { offset: 0 },
                     0,
                 ))],
-                SymbolicExpression::from(F::ONE),
+                Count::bounded(SymbolicExpression::from(F::ONE), 1),
             )],
         }];
         let global = vec![global_payload("bus", 1), global_payload("bus", 0)];

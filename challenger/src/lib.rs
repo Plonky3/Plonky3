@@ -16,6 +16,7 @@ pub use duplex_challenger::*;
 pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
+pub use p3_field::UniformSamplingField;
 use p3_field::{Algebra, BasedVectorSpace, Field, PrimeField64};
 pub use serializing_challenger::*;
 
@@ -81,10 +82,10 @@ pub trait CanSampleUniformBits<F> {
     /// Performance overhead depends on the field and number of bits requested.
     /// E.g. for KoalaBear sampling up to 24 bits uniformly is essentially free.
     ///
-    /// If `REJECTION_SAMPLE` is set to true then this function will sample multiple field
+    /// If `RESAMPLE` is set to true then this function will sample multiple field
     /// elements until it finds one which will produce uniform bits.
-    /// If `REJECTION_SAMPLE` is set to false then this function will sample a single field
-    /// element and produce and error if the value would produce non-uniform bits.
+    /// If `RESAMPLE` is set to false then this function will sample a single field
+    /// element and produce an error if the value would produce non-uniform bits.
     ///
     /// The probability of a panic or a resample is about 1/P for most fields.
     /// See `UniformSamplingField` implementation for each field for details.
