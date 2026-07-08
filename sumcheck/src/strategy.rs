@@ -403,6 +403,67 @@ pub enum Basis {
     Projective,
 }
 
+impl Basis {
+    /// Computes the two-element round message for one quadratic sumcheck round.
+    ///
+    /// - [`Basis::Evaluation`]: `[h(0), h(inf)]`, dispatching on `order`.
+    /// - [`Basis::Projective`]: `[s(1), s(inf)]` (prefix only); the verifier
+    ///   derives `s(0) := C - s(inf)` from the projective round identity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the projective basis is paired with suffix binding.
+    pub fn sumcheck_coefficients<B, A>(
+        self,
+        order: VariableOrder,
+        evals: &[B],
+        weights: &[A],
+    ) -> (A, A)
+    where
+        B: PrimeCharacteristicRing + Copy + Send + Sync,
+        A: Algebra<B> + Copy + Send + Sync,
+    {
+        match self {
+            Self::Evaluation => order.sumcheck_coefficients(evals, weights),
+            Self::Projective => {
+                assert_eq!(
+                    order,
+                    VariableOrder::Prefix,
+                    "the projective basis is prefix-only"
+                );
+                sumcheck_coefficients_prefix_projective(evals, weights)
+            }
+        }
+    }
+
+    /// Binds the active round variable of `poly` to challenge `r`.
+    ///
+    /// - [`Basis::Evaluation`]: `a0 + (a1 - a0) * r`, dispatching on `order`.
+    /// - [`Basis::Projective`]: the subtraction-free `a0 + a1 * r` (prefix
+    ///   only).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the projective basis is paired with suffix binding.
+    pub fn fix_var<A, Ch>(self, order: VariableOrder, poly: &mut Poly<A>, r: Ch)
+    where
+        A: Algebra<Ch> + Copy + Send + Sync,
+        Ch: Copy + Send + Sync,
+    {
+        match self {
+            Self::Evaluation => order.fix_var(poly, r),
+            Self::Projective => {
+                assert_eq!(
+                    order,
+                    VariableOrder::Prefix,
+                    "the projective basis is prefix-only"
+                );
+                poly.fix_prefix_var_mut_projective(r);
+            }
+        }
+    }
+}
+
 impl VariableOrder {
     /// Computes `(h(0), h(inf))` for one quadratic sumcheck round.
     pub fn sumcheck_coefficients<B, A>(self, evals: &[B], weights: &[A]) -> (A, A)
