@@ -24,7 +24,7 @@ pub use suffix::SuffixProver;
 use crate::SumcheckData;
 use crate::commit::commit_base;
 use crate::layout::{LayoutStrategy, Table, Witness};
-use crate::strategy::{SumcheckProver, VariableOrder};
+use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 use crate::table::{OpeningEvals, OpeningRequest};
 
 /// Stacked-sumcheck prover layout
@@ -182,6 +182,7 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
         sumcheck_data: &mut SumcheckData<F, EF>,
         pow_bits: usize,
         challenger: &mut Ch,
+        basis: Basis,
     ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
@@ -370,9 +371,11 @@ pub(super) mod test_utils {
         //     - Prover and verifier agreed on the same randomness.
         //     - Batched sum equals the final folded value times the batched weights.
         assert_eq!(expected_randomness, &verifier_challenge);
-        let weights = strategy
-            .variable_order
-            .eval_constraints_poly(&constraints, &verifier_challenge);
+        let weights = strategy.variable_order.eval_constraints_poly(
+            &constraints,
+            &verifier_challenge,
+            Basis::Evaluation,
+        );
         assert_eq!(sum, final_folded_value * weights);
     }
 
@@ -478,7 +481,7 @@ pub(super) mod test_utils {
         // Preprocessing: consume FOLDING rounds, hand off the residual prover.
         let mut proof0 = SumcheckData::<F, EF>::default();
         let (mut prover, mut prover_randomness) =
-            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
+            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger, Basis::Evaluation);
         assert_eq!(proof0.num_rounds(), FOLDING);
         assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
 
@@ -814,7 +817,7 @@ mod tests {
         // First sumcheck stage folds the SVO rounds and writes their proof.
         let mut proof0 = SumcheckData::<F, EF>::default();
         let (mut prover, mut prover_randomness) =
-            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
+            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger, Basis::Evaluation);
         // The first stage consumes exactly the folding-depth rounds.
         assert_eq!(proof0.num_rounds(), FOLDING);
         assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
@@ -901,9 +904,11 @@ mod tests {
         // Both sides must have folded the identical challenge vector.
         assert_eq!(prover_randomness, verifier_challenge);
         // Final identity: running sum equals folded value times the constraint weights.
-        let weights = strategy
-            .variable_order
-            .eval_constraints_poly(&constraints, &verifier_challenge);
+        let weights = strategy.variable_order.eval_constraints_poly(
+            &constraints,
+            &verifier_challenge,
+            Basis::Evaluation,
+        );
         assert_eq!(sum, final_folded_value * weights);
     }
 
@@ -944,7 +949,7 @@ mod tests {
         // First sumcheck stage folds the SVO rounds and writes their proof.
         let mut proof0 = SumcheckData::<F, EF>::default();
         let (mut prover, mut prover_randomness) =
-            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
+            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger, Basis::Evaluation);
         assert_eq!(proof0.num_rounds(), FOLDING);
         assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
 
@@ -1030,9 +1035,11 @@ mod tests {
         // Both sides must have folded the identical challenge vector.
         assert_eq!(prover_randomness, verifier_challenge);
         // Final identity: running sum equals folded value times the constraint weights.
-        let weights = strategy
-            .variable_order
-            .eval_constraints_poly(&constraints, &verifier_challenge);
+        let weights = strategy.variable_order.eval_constraints_poly(
+            &constraints,
+            &verifier_challenge,
+            Basis::Evaluation,
+        );
         assert_eq!(sum, final_folded_value * weights);
     }
 

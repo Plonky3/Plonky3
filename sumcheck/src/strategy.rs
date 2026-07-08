@@ -521,6 +521,7 @@ impl VariableOrder {
         self,
         constraints: &[Constraint<F, EF>],
         challenge: &Point<EF>,
+        basis: Basis,
     ) -> EF
     where
         F: Field,
@@ -556,26 +557,44 @@ impl VariableOrder {
                 // Each statement group exposes its weights evaluated at the
                 // local challenge; the kinds differ only in how weights are formed.
                 for statement in constraint.statements() {
-                    match statement {
+                    match (statement, basis) {
                         // Equality weights: one term per recorded equality point.
-                        Statements::Eq(eq_statement) => {
+                        (Statements::Eq(eq_statement), Basis::Evaluation) => {
                             // Pair this group's weights with powers starting at the shift.
                             acc += dot_product::<EF, _, _>(
                                 eq_statement.weights_at(&local_challenge),
                                 constraint.challenge_powers(shift),
                             );
                         }
+                        // Projective: the same weight tensors read as monomial
+                        // coefficients, so the closed form changes.
+                        (Statements::Eq(eq_statement), Basis::Projective) => {
+                            acc += dot_product::<EF, _, _>(
+                                eq_statement.weights_at_projective(&local_challenge),
+                                constraint.challenge_powers(shift),
+                            );
+                        }
                         // Successor-view weights: equality through the repeat-last view.
-                        Statements::Next(next_statement) => {
+                        // Multi-stark only; the projective basis has no consumer for it.
+                        (Statements::Next(next_statement), Basis::Evaluation) => {
                             acc += dot_product::<EF, _, _>(
                                 next_statement.weights_at(&local_challenge),
                                 constraint.challenge_powers(shift),
                             );
                         }
+                        (Statements::Next(_), Basis::Projective) => {
+                            unimplemented!("Next statements are not supported projectively")
+                        }
                         // Selector weights: one term per single-variable selector.
-                        Statements::Select(sel_statement) => {
+                        (Statements::Select(sel_statement), Basis::Evaluation) => {
                             acc += dot_product::<EF, _, _>(
                                 sel_statement.weights_at(&local_challenge),
+                                constraint.challenge_powers(shift),
+                            );
+                        }
+                        (Statements::Select(sel_statement), Basis::Projective) => {
+                            acc += dot_product::<EF, _, _>(
+                                sel_statement.weights_at_projective(&local_challenge),
                                 constraint.challenge_powers(shift),
                             );
                         }
@@ -754,7 +773,7 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use super::VariableOrder;
+    use super::{Basis, VariableOrder};
     use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement};
     use crate::constraints::{Constraint, Statements};
 
@@ -851,7 +870,11 @@ mod tests {
         let challenge = Point::rand(&mut rng, 20);
 
         // Fast path vs reference implementation must agree.
-        let got = VariableOrder::Prefix.eval_constraints_poly(&constraints, &challenge);
+        let got = VariableOrder::Prefix.eval_constraints_poly(
+            &constraints,
+            &challenge,
+            Basis::Evaluation,
+        );
         let expected =
             eval_constraints_poly_reference(VariableOrder::Prefix, &constraints, &challenge);
         assert_eq!(got, expected);
@@ -865,7 +888,11 @@ mod tests {
         let challenge = Point::rand(&mut rng, 20);
 
         // Fast path vs reference implementation must agree.
-        let got = VariableOrder::Suffix.eval_constraints_poly(&constraints, &challenge);
+        let got = VariableOrder::Suffix.eval_constraints_poly(
+            &constraints,
+            &challenge,
+            Basis::Evaluation,
+        );
         let expected =
             eval_constraints_poly_reference(VariableOrder::Suffix, &constraints, &challenge);
         assert_eq!(got, expected);
@@ -886,11 +913,11 @@ mod tests {
             let challenge = Point::rand(&mut rng, total_num_variables);
 
             prop_assert_eq!(
-                VariableOrder::Prefix.eval_constraints_poly(&constraints, &challenge),
+                VariableOrder::Prefix.eval_constraints_poly(&constraints, &challenge, Basis::Evaluation),
                 eval_constraints_poly_reference(VariableOrder::Prefix, &constraints, &challenge),
             );
             prop_assert_eq!(
-                VariableOrder::Suffix.eval_constraints_poly(&constraints, &challenge),
+                VariableOrder::Suffix.eval_constraints_poly(&constraints, &challenge, Basis::Evaluation),
                 eval_constraints_poly_reference(VariableOrder::Suffix, &constraints, &challenge),
             );
         }

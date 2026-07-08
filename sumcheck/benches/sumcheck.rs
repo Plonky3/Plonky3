@@ -32,7 +32,7 @@ use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{
-    SumcheckProver, VariableOrder, sumcheck_coefficients_prefix,
+    Basis, SumcheckProver, VariableOrder, sumcheck_coefficients_prefix,
     sumcheck_coefficients_prefix_projective, sumcheck_coefficients_suffix,
 };
 use p3_sumcheck::{OpeningBatch, SumcheckData};
@@ -645,7 +645,7 @@ where
     let mut data = SumcheckData::<B::F, B::EF>::default();
 
     // Consume the prover, yielding the residual prover and the sampled challenges.
-    let (residual, randomness) = prover.into_sumcheck(&mut data, 0, challenger);
+    let (residual, randomness) = prover.into_sumcheck(&mut data, 0, challenger, Basis::Evaluation);
     black_box((data, residual, randomness));
 }
 
