@@ -245,6 +245,7 @@ mod tests {
             log_trace_length: 20,
             modulus_bits: 252,
             collision_resistance: 128,
+            num_batched_functions: 1,
         }
     }
 
@@ -314,6 +315,7 @@ mod tests {
             log_trace_length: 16,
             modulus_bits: 128,
             collision_resistance: 128,
+            num_batched_functions: 1,
         };
         let bits = conjectured_error(&regime, &shape)
             .bits()

@@ -18,6 +18,8 @@ pub const ALI_LABEL: &str = "air-composition";
 pub const DEEP_LABEL: &str = "deep-ali";
 /// Label for the low-degree-test term.
 pub const LDT_LABEL: &str = "low-degree-test";
+/// Label for the batched-openings random-linear-combination term.
+pub const BATCH_LABEL: &str = "batch-combination";
 /// Label for the commitment-collision cap term.
 pub const COLLISION_LABEL: &str = "commitment-collision";
 

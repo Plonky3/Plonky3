@@ -64,4 +64,9 @@ pub struct InstanceShape {
     pub modulus_bits: usize,
     /// Collision resistance of the commitment hash, in bits.
     pub collision_resistance: usize,
+    /// Number of committed codewords random-linear-combined into a single
+    /// low-degree-test instance (trace segments, quotient chunks, …). `1`
+    /// means no batching. Read by the batched-openings proximity term in
+    /// [`crate::stark::proven_security_report`].
+    pub num_batched_functions: usize,
 }

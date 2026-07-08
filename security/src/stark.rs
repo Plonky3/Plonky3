@@ -10,12 +10,13 @@
 
 use alloc::vec::Vec;
 
+use crate::assumption::SecurityAssumption;
 use crate::error::ErrorBits;
 use crate::ldt::LowDegreeTest;
 use crate::proximity::{list_size_ldr_m, list_size_udr};
 use crate::report::{
-    ALI_LABEL, COLLISION_LABEL, DEEP_LABEL, LDT_LABEL, Regime, RegimeReport, SecurityReport,
-    SecurityTerm,
+    ALI_LABEL, BATCH_LABEL, COLLISION_LABEL, DEEP_LABEL, LDT_LABEL, Regime, RegimeReport,
+    SecurityReport, SecurityTerm,
 };
 use crate::shape::{InstanceShape, StarkAirParams};
 use crate::{air, deep};
@@ -96,23 +97,53 @@ pub fn proven_security(
     ErrorBits::from_log2(udr.bits().max(ldr.bits()))
 }
 
-/// Labeled term list for one proximity regime: ALI, DEEP, LDT, `extras`, and
-/// the commitment-collision cap. Attained security is the min over these
-/// (see [`RegimeReport::security_bits`]), matching [`proven_security_regime`].
+/// Proximity-gap error of the initial random linear combination that batches
+/// `shape.num_batched_functions` committed codewords into a single LDT
+/// instance, evaluated in `assumption`'s regime (UD in the unique-decoding
+/// regime, JB in the list-decoding regime). Returns `None` when nothing is
+/// batched (fewer than two functions).
+fn batching_term(
+    assumption: SecurityAssumption,
+    shape: &InstanceShape,
+    log_blowup: usize,
+) -> Option<SecurityTerm> {
+    let num_functions = shape.num_batched_functions;
+    if num_functions < 2 {
+        return None;
+    }
+    let bits = assumption.prox_gaps_error(
+        shape.log_trace_length,
+        log_blowup,
+        shape.modulus_bits,
+        num_functions,
+    );
+    Some(SecurityTerm::new(
+        BATCH_LABEL,
+        ErrorBits::from_log2(bits.max(0.0)),
+    ))
+}
+
+/// Labeled term list for one proximity regime: ALI, DEEP, LDT, the optional
+/// batch-combination term, `extras`, and the commitment-collision cap.
+/// Attained security is the min over these (see
+/// [`RegimeReport::security_bits`]), matching [`proven_security_regime`] plus
+/// the batching term.
 fn regime_report(
     regime: Regime,
     air: &StarkAirParams,
     shape: &InstanceShape,
     list_size: f64,
     ldt_error: ErrorBits,
+    batch: Option<SecurityTerm>,
     extras: &[SecurityTerm],
 ) -> RegimeReport {
     let ali = air::composition_error(air.num_constraints, list_size, shape.modulus_bits);
     let deep = deep::deep_ali_error(air, shape, list_size);
-    let mut terms = Vec::with_capacity(4 + extras.len());
+    let mut terms = Vec::with_capacity(5 + extras.len());
     terms.push(SecurityTerm::new(ALI_LABEL, ali));
     terms.push(SecurityTerm::new(DEEP_LABEL, deep));
     terms.push(SecurityTerm::new(LDT_LABEL, ldt_error));
+    terms.extend(batch);
     terms.extend_from_slice(extras);
     terms.push(SecurityTerm::new(
         COLLISION_LABEL,
@@ -137,6 +168,8 @@ pub fn proven_security_report<L: LowDegreeTest>(
     shape: &InstanceShape,
     extras: &[SecurityTerm],
 ) -> SecurityReport {
+    let log_blowup = ldt.log_blowup();
+
     let udr_ldt = ldt.proven_error_udr(air, shape);
     let udr = regime_report(
         Regime::UniqueDecoding,
@@ -144,17 +177,19 @@ pub fn proven_security_report<L: LowDegreeTest>(
         shape,
         list_size_udr(),
         udr_ldt,
+        batching_term(SecurityAssumption::UniqueDecoding, shape, log_blowup),
         extras,
     );
 
     let ldr = ldt.best_ldr(air, shape).map(|(m, ldr_ldt)| {
-        let list_size = list_size_ldr_m(ldt.log_blowup(), m);
+        let list_size = list_size_ldr_m(log_blowup, m);
         regime_report(
             Regime::ListDecoding { m },
             air,
             shape,
             list_size,
             ldr_ldt,
+            batching_term(SecurityAssumption::JohnsonBound, shape, log_blowup),
             extras,
         )
     });
@@ -171,6 +206,7 @@ mod tests {
             log_trace_length: 20,
             modulus_bits: 252,
             collision_resistance: 128,
+            num_batched_functions: 1,
         }
     }
 
@@ -221,6 +257,7 @@ mod tests {
             &shape,
             list_size,
             ldt,
+            None,
             &[SecurityTerm::new("extra", extra)],
         );
 
@@ -306,5 +343,54 @@ mod tests {
             LowDegreeTest::conjectured_error(&regime, &shape).bits(),
             conjectured_error(&regime, &shape).bits()
         );
+    }
+
+    fn benchmark_regime() -> crate::fri::FriRegime {
+        crate::fri::FriRegime {
+            log_blowup: 1,
+            num_queries: 100,
+            log_final_poly_len: 0,
+            max_log_arity: 3,
+            commit_pow_bits: 0,
+            query_pow_bits: 16,
+        }
+    }
+
+    /// A single committed function is not batched, so no batch-combination
+    /// term is emitted in either regime.
+    #[test]
+    fn no_batch_term_for_single_function() {
+        let report = proven_security_report(&benchmark_regime(), &air(), &shape(), &[]);
+        assert!(report.udr.terms.iter().all(|t| t.label != BATCH_LABEL));
+        if let Some(ldr) = &report.ldr {
+            assert!(ldr.terms.iter().all(|t| t.label != BATCH_LABEL));
+        }
+    }
+
+    /// Batching many functions over a small field only tightens the bound and,
+    /// once large enough, becomes the binding term.
+    #[test]
+    fn batching_lowers_security_when_binding() {
+        let regime = benchmark_regime();
+        let air = air();
+        let base = InstanceShape {
+            log_trace_length: 20,
+            modulus_bits: 64,
+            collision_resistance: 128,
+            num_batched_functions: 1,
+        };
+        let batched = InstanceShape {
+            num_batched_functions: 1 << 20,
+            ..base
+        };
+
+        let no_batch = proven_security_report(&regime, &air, &base, &[]);
+        let with_batch = proven_security_report(&regime, &air, &batched, &[]);
+
+        // Batching is an extra independent error source: it can only tighten.
+        assert!(with_batch.security_bits() <= no_batch.security_bits());
+        // With 2^20 batched functions over a 64-bit field, the batch term binds.
+        let (_, binding) = with_batch.binding();
+        assert_eq!(binding.label, BATCH_LABEL);
     }
 }

@@ -9,9 +9,9 @@ use core::cmp::{max, min};
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
 use p3_field::{ExtensionField, Field};
-use p3_security::fri::{FriRegime, best_ldr_m, conjectured_error, proven_error_udr};
+use p3_security::fri::{FriRegime, conjectured_error};
 use p3_security::shape::{InstanceShape, StarkAirParams as P3AirShape};
-use p3_security::stark::{proven_security_ldr_m, proven_security_udr};
+use p3_security::stark::proven_security_report;
 use p3_util::log2_floor_usize;
 
 /// Parameters required to compute STARK proof security level.
@@ -49,6 +49,11 @@ pub struct StarkSecurityParams {
     /// (DEEP-ALI's `max_combo`). For a uni-STARK using `local`/`next` rotations this
     /// is `2`; `1` if no transition constraint is present.
     pub max_combo: usize,
+    /// Number of committed codewords random-linear-combined into the single
+    /// FRI instance (trace columns, quotient chunks, …). Defaults to `1` (no
+    /// batching term); set it to the actual count to account for the
+    /// batched-openings proximity error. Leaving it at `1` is optimistic.
+    pub num_batched_functions: usize,
 }
 
 impl StarkSecurityParams {
@@ -76,6 +81,7 @@ impl StarkSecurityParams {
             num_constraints,
             air_max_constraint_degree,
             max_combo,
+            num_batched_functions: 1,
         }
     }
 
@@ -135,6 +141,7 @@ impl StarkSecurityParams {
             log_trace_length,
             modulus_bits: self.num_modulus_bits,
             collision_resistance: self.collision_resistance,
+            num_batched_functions: self.num_batched_functions,
         }
     }
 }
@@ -171,6 +178,7 @@ impl ConjecturedSecurity {
             log_trace_length: 0,
             modulus_bits: num_modulus_bits,
             collision_resistance,
+            num_batched_functions: 1,
         };
         let fri_bits = conjectured_error(&regime, &shape).bits() as usize;
         let bits = min(min(fri_bits, collision_resistance), num_modulus_bits);
@@ -256,19 +264,14 @@ impl ProvenSecurity {
         let air = params.air_shape();
         let shape = params.instance_shape(degree_bits);
 
-        let udr_ldt = proven_error_udr(&regime, &air, &shape);
-        let udr_bits = proven_security_udr(&air, &shape, udr_ldt, &[]).bits() as usize;
-
-        let ldr_bits = match best_ldr_m(&regime, &air, &shape) {
-            Some((m, ldt)) => {
-                proven_security_ldr_m(&air, &shape, regime.log_blowup, m, ldt, &[]).bits() as usize
-            }
-            None => 0,
-        };
+        let report = proven_security_report(&regime, &air, &shape, &[]);
 
         Self {
-            unique_decoding_bits: udr_bits,
-            list_decoding_bits: ldr_bits,
+            unique_decoding_bits: report.udr.security_bits() as usize,
+            list_decoding_bits: report
+                .ldr
+                .as_ref()
+                .map_or(0, |r| r.security_bits() as usize),
         }
     }
 }
@@ -313,6 +316,7 @@ mod tests {
             num_constraints: TEST_NUM_CONSTRAINTS,
             air_max_constraint_degree: TEST_AIR_MAX_DEG,
             max_combo: TEST_MAX_COMBO,
+            num_batched_functions: 1,
         }
     }
 
@@ -387,9 +391,21 @@ mod tests {
         assert!(p_a8.unique_decoding_bits <= p_a2.unique_decoding_bits);
     }
 
+    #[test]
+    fn more_batched_functions_decreases_or_holds_security() {
+        // Over a small field the batched-openings term is active.
+        let mut params = benchmark_high_arity_params(64);
+        params.num_batched_functions = 1;
+        let p1 = ProvenSecurity::compute(&params, 1 << 20);
+        params.num_batched_functions = 1 << 20;
+        let p_batched = ProvenSecurity::compute(&params, 1 << 20);
+        assert!(p_batched.security_bits() <= p1.security_bits());
+    }
+
     // Regression vector pinning the proven-security output for a fixed configuration:
     // log_blowup=1, num_queries=100, query_pow=16, commit_pow=0, max_log_arity=3,
     // |F|=252 bits, trace 2^20, num_constraints=1, max_deg=2, max_combo=2.
+    // num_batched_functions defaults to 1, so no batching term applies.
     #[test]
     fn proven_security_regression_benchmark_high_arity() {
         let params = benchmark_high_arity_params(252);
