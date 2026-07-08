@@ -262,7 +262,16 @@ fn verify_rejects_tampered_opening() {
     // Why: the verifier samples query positions from the absorbed value.
     //   the round verifies as one pruned multiproof
     //   -> failure reports a batched placeholder position, not a per-query index.
-    let err = verify(&config, &vk, &FibAir, &proof, &pis, 0, &mut challenger(&config)).unwrap_err();
+    let err = verify(
+        &config,
+        &vk,
+        &FibAir,
+        &proof,
+        &pis,
+        0,
+        &mut challenger(&config),
+    )
+    .unwrap_err();
     match err {
         VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position, reason }) => {
             assert_eq!(position, 0);
