@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 
 use masks::VerifierMasks;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{ExtensionMmcs, Mmcs, MultiOpeningMmcs};
+use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
@@ -119,7 +119,7 @@ impl<'a, EF, F, MT, Challenger> HidingWhirVerifier<'a, EF, F, MT, Challenger>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    MT: MultiOpeningMmcs<F>,
+    MT: Mmcs<F>,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>

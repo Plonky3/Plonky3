@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use p3_commit::MultiOpeningMmcs;
+use p3_commit::Mmcs;
 use p3_sumcheck::zk::ZkSumcheckData;
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +14,7 @@ use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
     serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::MultiProof: Serialize",
     deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
-pub struct ZkWhirProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
+pub struct ZkWhirProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Claimed opening evaluations, one per requested point.
     pub evals: Vec<EF>,
     /// Masked sumcheck transcripts, one per fold batch (`n_rounds + 1` batches).
@@ -33,7 +33,7 @@ pub struct ZkWhirProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
     serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::MultiProof: Serialize",
     deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
-pub struct ZkRoundProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
+pub struct ZkRoundProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Commitment to the next interleaved ZK oracle.
     pub commitment: MT::Commitment,
     /// Commitment to the fresh code-switch mask `(folded randomness || pad)`.
@@ -56,7 +56,7 @@ pub struct ZkRoundProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
     serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::MultiProof: Serialize",
     deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
-pub struct BaseCaseZkProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
+pub struct BaseCaseZkProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Commitment to the fresh main mask `g`, in the folded source code.
     pub fresh_main_commitment: MT::Commitment,
     /// Commitments to the fresh blinds, one per carried mask group, in chronological group order.

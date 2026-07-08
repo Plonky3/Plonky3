@@ -54,7 +54,7 @@ use itertools::Itertools;
 use p3_challenger::{
     CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
 };
-use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, MultiOpeningMmcs, MultilinearPcs, Pcs};
+use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, MultilinearPcs, Pcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
@@ -202,9 +202,9 @@ const BENCH_SEED: u64 = 0xA17_5C0DE;
 /// Bound bundle the WHIR helpers require on the Merkle MMCS type.
 ///
 /// Every concrete hash backend in this bench satisfies these bounds.
-trait WhirMmcs: MultiOpeningMmcs<F> + Clone + Send + Sync {}
+trait WhirMmcs: Mmcs<F> + Clone + Send + Sync {}
 
-impl<T: MultiOpeningMmcs<F> + Clone + Send + Sync> WhirMmcs for T {}
+impl<T: Mmcs<F> + Clone + Send + Sync> WhirMmcs for T {}
 
 /// Bound bundle the WHIR helpers require on the Fiat-Shamir challenger.
 trait WhirChallenger<MT: Mmcs<F>>:

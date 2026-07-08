@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use core::iter::repeat_n;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{ExtensionMmcs, Mmcs, MultiOpeningMmcs};
+use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_field::{ExtensionField, TwoAdicField, dot_product};
 use p3_matrix::Dimensions;
 use p3_util::log2_strict_usize;
@@ -34,7 +34,7 @@ impl<F, EF, MT> BaseCaseZkVerifier<'_, F, EF, MT>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    MT: MultiOpeningMmcs<F>,
+    MT: Mmcs<F>,
 {
     /// Replays Construction 7.2 against the carried claim.
     ///

@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::MultiOpeningMmcs;
+use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::constraints::statement::EqStatement;
@@ -31,7 +31,7 @@ where
     ///
     /// - Round index is past the last round carried by the proof.
     /// - Round entry is present but its Merkle-root slot is empty.
-    pub fn parse_with_round<EF, MT: MultiOpeningMmcs<F>, Challenger>(
+    pub fn parse_with_round<EF, MT: Mmcs<F>, Challenger>(
         proof: &WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
         num_variables: usize,
