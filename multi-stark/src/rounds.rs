@@ -20,17 +20,34 @@ use crate::folder::MultilinearFolder;
 use crate::packed_ext::PackedExt;
 use crate::selectors::BoundaryEvals;
 
+/// One batch of AIRs that share a single trace height.
+///
+/// A stage activates when the global sumcheck cube shrinks to its height.
+/// Every table inside a stage has the same number of variables.
 pub(super) struct Stage<'air, 'data, A, F: Field> {
+    /// Original caller indices of these AIRs, used to return openings in caller order.
     pub(super) indices: Vec<usize>,
+    /// The AIRs in this stage.
     pub(super) airs: Vec<&'air A>,
+    /// Public inputs forwarded to each AIR.
     pub(super) public_values: Vec<&'data [F]>,
+    /// Optional preprocessed table for each AIR.
     pub(super) preprocessed: Vec<Option<&'data Table<F>>>,
+    /// Transposed main trace table for each AIR.
     pub(super) tables: Vec<&'data Table<F>>,
+    /// Per-variable constraint degree of each AIR, with the eq factor stripped.
     pub(super) degrees: Vec<usize>,
+    /// Shared variable count, equal to the base-two logarithm of the common height.
     pub(super) num_vars: usize,
 }
 
 impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
+    /// Build a stage from AIRs that all share one trace height.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the tables do not all have the same height.
+    /// Panics if a preprocessed table's height differs from the stage height.
     pub(super) fn new(
         airs: &[&'air A],
         public_values: &[&'data [F]],
@@ -39,12 +56,14 @@ impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
         tables: &[&'data Table<F>],
         degrees: &[usize],
     ) -> Self {
+        // Every table in a stage binds the same zerocheck variables, so heights must agree.
         let num_vars = tables
             .iter()
             .map(|table| table.num_variables())
             .all_equal_value()
             .expect("all tables must have the same height");
 
+        // Preprocessed columns fold alongside the main columns, so they share the height.
         assert!(
             preprocessed
                 .iter()
@@ -372,65 +391,124 @@ fn write_last_evals<EF: Field>(
     }
 }
 
-/// AIRs with the same internal degree share one beta-weighted round polynomial.
+/// One AIR's column placement inside its degree group.
+///
+/// The group fixes the degree; this records where the AIR's columns live in the merged buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DegreeGroupAir {
+    /// Position of this AIR within its stage, in caller order.
     air_index: usize,
+    /// First main column of this AIR inside the merged column buffer.
     main_offset: usize,
+    /// Number of main columns this AIR owns.
     main_width: usize,
+    /// First preprocessed column of this AIR inside the merged column buffer.
     preprocessed_offset: usize,
+    /// Number of preprocessed columns this AIR owns.
     preprocessed_width: usize,
 }
 
+/// AIRs sharing one per-variable degree, folded into a single beta-weighted round polynomial.
+///
+/// Grouping by degree lets a lower-degree AIR skip the interpolation nodes that only a
+/// higher-degree AIR needs.
 struct DegreeGroup<EF> {
+    /// Common per-variable degree of every AIR in this group, with the eq factor stripped.
     degree: usize,
+    /// The AIRs in this group, each carrying its own column span.
     airs: Vec<DegreeGroupAir>,
+    /// Current reduced sumcheck claim for this group's round polynomial.
     claim: EF,
+    /// This round's beta-weighted evaluations at nodes `0, 2, 3, ..., degree`.
     last_evals: Vec<EF>,
+    /// Barycentric helper for this group's degree, reused across rounds.
     interpolator: RoundPolyInterpolator<EF>,
 }
 
 impl<EF: Field> DegreeGroup<EF> {
+    /// Evaluate this group's eq-stripped round polynomial `q` at an interpolation node.
+    ///
+    /// The prover never stores `q(1)`; it is recovered from the sumcheck claim relation:
+    ///
+    /// ```text
+    ///     claim = (1 - tau) * q(0) + tau * q(1)
+    ///  => q(1)  = (claim - (1 - tau) * q(0)) / tau
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the group degree is zero, since a constant has no round polynomial.
     fn eval(&self, tau: EF, point: EF) -> EF {
         debug_assert_eq!(self.last_evals.len(), self.degree);
         assert!(self.degree > 0, "round polynomial degree must be positive");
+        // Node 0 is stored directly as the first evaluation.
         if point.is_zero() {
             return self.last_evals[0];
         }
 
+        // Recover the dropped node 1 from the inter-round claim relation.
         let q1 = (self.claim - (EF::ONE - tau) * self.last_evals[0]) * tau.inverse();
         if point == EF::ONE {
             return q1;
         }
 
+        // Any higher node is a barycentric extrapolation of the stored evaluations.
         self.interpolator
             .eval(&self.last_evals, self.last_evals[0] + q1, point)
     }
 
+    /// Add this group's per-node evaluations into the stage's shared accumulator.
+    ///
+    /// The accumulator carries the stage's max degree, so a lower-degree group is
+    /// extrapolated up to the missing top nodes.
+    ///
+    /// ```text
+    ///     out index : 0    1    2    3    ...
+    ///     node      : 0    2    3    4    ...   (node 1 is never stored)
+    /// ```
     fn combine_evals(&self, out: &mut [EF], tau: EF) {
         for (idx, acc) in out.iter_mut().enumerate() {
+            // Map the dense output index onto the sparse node set {0, 2, 3, ...}.
             let node = if idx == 0 { 0 } else { idx + 1 };
             let value = if node == 0 || node <= self.degree {
+                // Within this group's own degree: read the stored evaluation directly.
                 let index = if node == 0 { 0 } else { node - 1 };
                 self.last_evals[index]
             } else {
+                // Above this group's degree: extrapolate to the stage's top nodes.
                 self.eval(tau, EF::from_usize(node))
             };
             *acc += value;
         }
     }
 
+    /// Reduce this group's claim to the value of its round polynomial at the sampled challenge.
     fn update_claim(&mut self, tau: EF, r: EF) {
         self.claim = self.eval(tau, r);
     }
 }
 
+/// Bucket AIRs by degree and assign each AIR its column span in the merged buffer.
+///
+/// Columns are laid out per AIR as main columns then preprocessed columns, in caller order:
+///
+/// ```text
+///     [ air0 main | air0 preproc | air1 main | air1 preproc | ... ]
+/// ```
+///
+/// # Arguments
+///
+/// - `degrees`: per-variable constraint degree of each AIR, in stage-local order.
+/// - `main_widths`: main column count of each AIR, in stage-local order.
+/// - `preprocessed_widths`: preprocessed column count of each AIR, in stage-local order.
 fn build_degree_groups<EF: Field>(
     degrees: &[usize],
     main_widths: &[usize],
     preprocessed_widths: &[usize],
 ) -> Vec<DegreeGroup<EF>> {
+    // A btree keyed by degree gives deterministic group order across prover and verifier.
     let mut groups = BTreeMap::<usize, Vec<DegreeGroupAir>>::new();
+    // Running column cursor into the merged buffer, advanced AIR by AIR.
     let mut column_offset = 0;
     for (air_index, ((&degree, &main_width), &preprocessed_width)) in degrees
         .iter()
@@ -438,10 +516,13 @@ fn build_degree_groups<EF: Field>(
         .zip(preprocessed_widths)
         .enumerate()
     {
+        // Main columns come first for this AIR.
         let main_offset = column_offset;
         column_offset += main_width;
+        // Preprocessed columns follow immediately after.
         let preprocessed_offset = column_offset;
         column_offset += preprocessed_width;
+        // File the AIR under its degree, keeping its column span.
         groups.entry(degree).or_default().push(DegreeGroupAir {
             air_index,
             main_offset,
@@ -451,6 +532,7 @@ fn build_degree_groups<EF: Field>(
         });
     }
 
+    // Each degree becomes one group with a zero starting claim and a prebuilt interpolator.
     groups
         .into_iter()
         .map(|(degree, airs)| DegreeGroup {

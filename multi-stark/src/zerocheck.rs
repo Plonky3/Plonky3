@@ -97,6 +97,10 @@ pub struct ZerocheckProof<F, EF> {
     pub preprocessed_next: Vec<Vec<EF>>,
 }
 
+/// A batched AIR zerocheck instance.
+///
+/// Bundles the AIRs and the grinding parameter shared by the prover and verifier.
+/// The field and transcript are chosen per call, so one instance serves any field.
 #[derive(Debug)]
 pub struct AirZerocheck<'a, A> {
     /// AIRs whose alpha-batched constraints are checked.
@@ -105,6 +109,10 @@ pub struct AirZerocheck<'a, A> {
     pow_bits: usize,
 }
 
+/// Per-round degree of an AIR's zerocheck sumcheck.
+///
+/// The integrand is `eq(tau, x) * g(x)`.
+/// Its per-variable degree is the constraint degree plus one for the multilinear eq weight.
 fn sumcheck_degree<F, EF, A>(air: &A) -> usize
 where
     F: Field,
@@ -114,6 +122,20 @@ where
     air_degree(air) + 1
 }
 
+/// Per-variable constraint degree of an AIR, with the eq weight not yet applied.
+///
+/// The degree comes from one of two sources:
+/// - a constant-time hint supplied by the AIR, when present;
+/// - otherwise a symbolic pass that scores each constraint at domain size two.
+///
+/// At domain size two every column and boundary selector scores degree one, so the symbolic value
+/// is exact.
+///
+/// The hint must be at least the true degree:
+/// - a smaller hint drops evaluations from each round polynomial and breaks soundness;
+/// - a larger hint only inflates the proof and the per-row work.
+///
+/// A debug assertion pins the hint against the symbolic value.
 fn air_degree<F, EF, A>(air: &A) -> usize
 where
     F: Field,
@@ -145,7 +167,7 @@ where
         return degree;
     }
 
-    // Add one for the multilinear eq weight.
+    // No hint: fall back to the symbolic constraint degree.
     symbolic_constraint_degree()
 }
 
@@ -160,6 +182,15 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// Prove that every AIR in the batch vanishes on its trace.
     ///
     /// `tables[i]`, `preprocessed[i]`, and `public_values[i]` correspond to `airs[i]`.
+    ///
+    /// The caller must observe every trace commitment into the challenger before this call.
+    /// The public values are observed here, so the caller need not observe them.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the input lengths disagree with the number of AIRs.
+    /// Panics if any AIR declares periodic columns, which this version does not support.
+    /// Panics if any trace height is less than two.
     #[tracing::instrument(skip_all)]
     pub fn prove<F, EF, Challenger>(
         &self,
@@ -207,6 +238,12 @@ impl<'a, A> AirZerocheck<'a, A> {
                 assert_eq!(
                     layout.num_periodic_columns, 0,
                     "zerocheck does not support periodic columns yet"
+                );
+                // A height-1 trace has zero variables and never activates a stage.
+                // Reject it here, matching the verifier's `log_height > 0` guard.
+                assert!(
+                    table.num_variables() > 0,
+                    "zerocheck requires each trace height to be at least two"
                 );
                 assert_eq!(table.num_polys(), layout.main_width);
                 assert_eq!(
@@ -497,28 +534,29 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// The opened column values are trusted at this layer.
     /// Binding them to a commitment is the job of the polynomial commitment scheme in a later step.
     ///
-    /// The caller must observe the trace commitment into the challenger before this call.
+    /// The caller must observe every trace commitment into the challenger before this call.
     /// The public values are observed here, so the caller need not observe them.
     ///
     /// # Arguments
     ///
     /// - `proof`: the zerocheck proof.
-    /// - `log_height`: base-two logarithm of the trace height.
-    /// - `public_values`: public inputs forwarded to the AIR.
+    /// - `log_heights`: base-two logarithm of each AIR's trace height, in caller order.
+    /// - `public_values`: public inputs forwarded to each AIR, in caller order.
     /// - `challenger`: the Fiat-Shamir transcript.
     ///
     /// # Errors
     ///
     /// Returns an error when:
-    /// - the current-row openings do not carry one value per main column,
-    /// - the next-row openings do not carry one value per next-row column,
+    /// - the per-AIR opening groups do not number one per AIR,
+    /// - an AIR's current-row openings do not carry one value per main column,
+    /// - an AIR's next-row openings do not carry one value per next-row column,
     /// - the claimed sum is nonzero,
     /// - the inner sumcheck transcript fails to verify,
-    /// - the reduced sum does not match the constraint at the random point.
+    /// - the reduced sum does not match the constraints at the random point.
     ///
     /// # Panics
     ///
-    /// Panics if the AIR declares preprocessed or periodic columns, which this version does not support.
+    /// Panics if any AIR declares periodic columns, which this version does not support.
     pub fn verify<F, EF, Challenger>(
         &self,
         proof: &ZerocheckProof<F, EF>,
@@ -624,15 +662,15 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// The opened column values are not yet known.
     /// The committed verifier opens them through a commitment scheme.
     ///
-    /// The caller must observe the trace commitment into the challenger before this call.
+    /// The caller must observe every trace commitment into the challenger before this call.
     /// The public values are observed here.
     /// The caller therefore does not observe them separately.
     ///
     /// # Arguments
     ///
     /// - Zerocheck sumcheck transcript.
-    /// - Base-two logarithm of the trace height.
-    /// - Public inputs forwarded to the AIR.
+    /// - Base-two logarithm of each AIR's trace height, in caller order.
+    /// - Public inputs forwarded to each AIR, in caller order.
     /// - Fiat-Shamir transcript.
     ///
     /// # Errors
@@ -1731,5 +1769,294 @@ mod tests {
                 .unwrap();
             assert_eq!(point_prover, point_verifier);
         }
+    }
+
+    /// Width-1 main AIR tied to a fixed width-1 preprocessed column.
+    ///
+    /// With the main trace equal to the preprocessed trace on every row, both constraints vanish:
+    ///
+    /// - first row: main current value equals preprocessed current value
+    /// - transition: main next value equals preprocessed next value
+    ///
+    /// The transition reads both the main and the preprocessed next row, so every opening path runs.
+    struct PreprocessedAir;
+
+    impl<X> BaseAir<X> for PreprocessedAir {
+        fn width(&self) -> usize {
+            1
+        }
+        fn preprocessed_width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for PreprocessedAir {
+        fn eval(&self, builder: &mut AB) {
+            // Read the current and next entry of each single-column window.
+            let main = builder.main();
+            let main_local = main.current_slice()[0];
+            let main_next = main.next_slice()[0];
+            let preprocessed = builder.preprocessed();
+            let preprocessed_local = preprocessed.current_slice()[0];
+            let preprocessed_next = preprocessed.next_slice()[0];
+
+            // The main column equals the fixed column at the boundary and along every step.
+            builder
+                .when_first_row()
+                .assert_eq(main_local, preprocessed_local);
+            builder
+                .when_transition()
+                .assert_eq(main_next, preprocessed_next);
+        }
+    }
+
+    /// A satisfying main / preprocessed pair: both columns hold the same fixed values.
+    fn preprocessed_pair(n: usize) -> (RowMajorMatrix<F>, RowMajorMatrix<F>) {
+        // Any injective column works; an odd arithmetic progression keeps the values distinct.
+        let values: Vec<F> = (0..n).map(|i| F::from_u64(3 + 2 * i as u64)).collect();
+        (
+            RowMajorMatrix::new(values.clone(), 1),
+            RowMajorMatrix::new(values, 1),
+        )
+    }
+
+    /// Build a preprocessed batch of two tall AIRs plus one short AIR.
+    ///
+    /// The two tall AIRs land in one stage, so the second carries nonzero column offsets.
+    /// The short AIR activates one round later, exercising staging with preprocessed columns.
+    ///
+    /// ```text
+    ///     stage tall (num_vars):     air0, air1
+    ///     stage short (num_vars-1):  air2   (activates one round later)
+    /// ```
+    fn preprocessed_batch(
+        num_vars: usize,
+    ) -> ([usize; 3], Vec<RowMajorMatrix<F>>, Vec<RowMajorMatrix<F>>) {
+        // Two AIRs at the tall height share a stage; one AIR sits one height below.
+        let log_heights = [num_vars, num_vars, num_vars - 1];
+        // Split each satisfying pair into its main matrix and its preprocessed matrix.
+        let (mains, preprocessed) = log_heights
+            .iter()
+            .map(|&log_height| preprocessed_pair(1 << log_height))
+            .unzip();
+        (log_heights, mains, preprocessed)
+    }
+
+    #[test]
+    fn staged_zerocheck_preprocessed_multi_air() {
+        for num_vars in 2..6 {
+            // Fixture: three preprocessed AIRs, two sharing the tall stage, one activating late.
+            let (log_heights, mains, preprocessed) = preprocessed_batch(num_vars);
+            let air = PreprocessedAir;
+            let airs = [&air, &air, &air];
+
+            // Transpose each main and preprocessed matrix into the column-major table layout.
+            let main_tables = mains
+                .iter()
+                .map(|main| Table::new(main.transpose()))
+                .collect::<Vec<_>>();
+            let preprocessed_tables = preprocessed
+                .iter()
+                .map(|preprocessed| Table::new(preprocessed.transpose()))
+                .collect::<Vec<_>>();
+            let table_refs = main_tables.iter().collect::<Vec<_>>();
+            let preprocessed_refs = preprocessed_tables.iter().map(Some).collect::<Vec<_>>();
+            let empty: &[F] = &[];
+            let public_values = alloc::vec![empty; 3];
+
+            let zerocheck = AirZerocheck::new(&airs, 0);
+            let mut prover_challenger = fresh_challenger();
+            let (proof, point) = zerocheck.prove::<F, EF, _>(
+                &preprocessed_refs,
+                &table_refs,
+                &public_values,
+                &mut prover_challenger,
+            );
+
+            // One opening group per AIR, in caller order.
+            assert_eq!(proof.preprocessed_local.len(), 3);
+            assert_eq!(proof.preprocessed_next.len(), 3);
+
+            // Each preprocessed opening equals the preprocessed column at that AIR's sub-point.
+            for (air_index, &log_height) in log_heights.iter().enumerate() {
+                // A shorter AIR binds only the last `log_height` coordinates of the global point.
+                let activation_round = num_vars - log_height;
+                let sub_point = Point::new(point.as_slice()[activation_round..].to_vec());
+                let column = preprocessed_tables[air_index].poly(0);
+                assert_eq!(
+                    proof.preprocessed_local[air_index],
+                    [column.eval_base(&sub_point)]
+                );
+                assert_eq!(
+                    proof.preprocessed_next[air_index],
+                    [column.eval_next_base(&sub_point)]
+                );
+            }
+
+            // The whole batch verifies end to end.
+            let mut verifier_challenger = fresh_challenger();
+            zerocheck
+                .verify::<F, EF, _>(
+                    &proof,
+                    &log_heights,
+                    &public_values,
+                    &mut verifier_challenger,
+                )
+                .expect("preprocessed batch must verify");
+        }
+    }
+
+    #[test]
+    fn staged_zerocheck_rejects_tampered_preprocessed_in_batch() {
+        // Invariant: corrupting one AIR's preprocessed opening in a batch must fail the close.
+        //
+        // Mutation: bump the current-row preprocessed opening of the second tall AIR.
+        //
+        //     air1 shares the tall stage with air0, so its columns sit at a nonzero offset.
+        let num_vars = 4;
+        let (log_heights, mains, preprocessed) = preprocessed_batch(num_vars);
+        let air = PreprocessedAir;
+        let airs = [&air, &air, &air];
+
+        let main_tables = mains
+            .iter()
+            .map(|main| Table::new(main.transpose()))
+            .collect::<Vec<_>>();
+        let preprocessed_tables = preprocessed
+            .iter()
+            .map(|preprocessed| Table::new(preprocessed.transpose()))
+            .collect::<Vec<_>>();
+        let table_refs = main_tables.iter().collect::<Vec<_>>();
+        let preprocessed_refs = preprocessed_tables.iter().map(Some).collect::<Vec<_>>();
+        let empty: &[F] = &[];
+        let public_values = alloc::vec![empty; 3];
+
+        let zerocheck = AirZerocheck::new(&airs, 0);
+        let mut prover_challenger = fresh_challenger();
+        let (mut proof, _) = zerocheck.prove::<F, EF, _>(
+            &preprocessed_refs,
+            &table_refs,
+            &public_values,
+            &mut prover_challenger,
+        );
+
+        // Corrupt the second AIR's preprocessed current-row opening.
+        proof.preprocessed_local[1][0] += EF::ONE;
+
+        let mut verifier_challenger = fresh_challenger();
+        let err = zerocheck
+            .verify::<F, EF, _>(
+                &proof,
+                &log_heights,
+                &public_values,
+                &mut verifier_challenger,
+            )
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch));
+    }
+
+    /// Build a Fibonacci batch of two tall AIRs plus one short AIR.
+    ///
+    /// The two tall AIRs share a stage; the short one activates a round later.
+    fn fib_batch(num_vars: usize) -> ([usize; 3], Vec<RowMajorMatrix<F>>, Vec<Vec<F>>) {
+        let log_heights = [num_vars, num_vars, num_vars - 1];
+        let traces = log_heights
+            .iter()
+            .map(|&log_height| fib_trace(1 << log_height))
+            .collect::<Vec<_>>();
+        let public_values = log_heights
+            .iter()
+            .map(|&log_height| fib_public_values(1 << log_height).to_vec())
+            .collect::<Vec<_>>();
+        (log_heights, traces, public_values)
+    }
+
+    #[test]
+    fn staged_zerocheck_rejects_violated_air_in_batch() {
+        // Invariant: one unsatisfied AIR in a batch makes the batched final check reject.
+        //
+        // Mutation: break a transition row of the second tall AIR, leaving the others valid.
+        //
+        //     beta batches the AIRs, so a single nonzero constraint sum survives w.h.p.
+        let num_vars = 4;
+        let (log_heights, mut traces, public_values) = fib_batch(num_vars);
+
+        // Break the transition constraint at row 2 of the second AIR.
+        traces[1].values[2 * NUM_COLS] += F::ONE;
+
+        let air = FibAir;
+        let airs = [&air, &air, &air];
+        let trace_refs = traces.iter().collect::<Vec<_>>();
+        let public_refs = public_values
+            .iter()
+            .map(|values| &values[..])
+            .collect::<Vec<_>>();
+        let zerocheck = AirZerocheck::new(&airs, 0);
+
+        let mut prover_challenger = fresh_challenger();
+        let (proof, _) = prove_traces(
+            &zerocheck,
+            &trace_refs,
+            &public_refs,
+            &mut prover_challenger,
+        );
+
+        let mut verifier_challenger = fresh_challenger();
+        let err = zerocheck
+            .verify::<F, EF, _>(&proof, &log_heights, &public_refs, &mut verifier_challenger)
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch));
+    }
+
+    #[test]
+    fn staged_zerocheck_rejects_tampered_opening_in_late_stage() {
+        // Invariant: tampering a late-activating AIR's opening is caught at its own sub-point.
+        //
+        // Mutation: bump a current-row opening of the short AIR, which activates one round late.
+        let num_vars = 4;
+        let (log_heights, traces, public_values) = fib_batch(num_vars);
+
+        let air = FibAir;
+        let airs = [&air, &air, &air];
+        let trace_refs = traces.iter().collect::<Vec<_>>();
+        let public_refs = public_values
+            .iter()
+            .map(|values| &values[..])
+            .collect::<Vec<_>>();
+        let zerocheck = AirZerocheck::new(&airs, 0);
+
+        let mut prover_challenger = fresh_challenger();
+        let (mut proof, _) = prove_traces(
+            &zerocheck,
+            &trace_refs,
+            &public_refs,
+            &mut prover_challenger,
+        );
+
+        // The short AIR is the last entry; corrupt its first current-row opening.
+        proof.local[2][0] += EF::ONE;
+
+        let mut verifier_challenger = fresh_challenger();
+        let err = zerocheck
+            .verify::<F, EF, _>(&proof, &log_heights, &public_refs, &mut verifier_challenger)
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch));
+    }
+
+    #[test]
+    #[should_panic = "at least two"]
+    fn zerocheck_rejects_height_one_trace() {
+        // A single-row trace has zero sumcheck variables, so no stage ever activates.
+        // The prover rejects it up front rather than failing deep inside the fold.
+        let trace = fib_trace(1);
+        let pis = fib_public_values(1);
+        let air = FibAir;
+        let airs = [&air];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+
+        let traces = [&trace];
+        let public_values = [&pis[..]];
+        let mut challenger = fresh_challenger();
+        let _ = prove_traces(&zerocheck, &traces, &public_values, &mut challenger);
     }
 }
