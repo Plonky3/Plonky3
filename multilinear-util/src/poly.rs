@@ -274,6 +274,41 @@ impl<Packed, S> Poly<Packed, S>
 where
     S: Borrow<[Packed]>,
 {
+    /// Evaluates the packed table as *monomial coefficients* at `point`.
+    ///
+    /// Packed counterpart of [`Poly::eval_monomial`]: the stored (prefix)
+    /// variables fold in packed form, then the SIMD lanes (the last
+    /// `log2(W)` variables) finish in scalar form.
+    ///
+    /// Kept for representation parity with [`Poly::eval_packed`]; the
+    /// production protocol reads final openings in scalar form, so this is
+    /// exercised by the packed equivalence tests rather than the prover.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the point arity does not match the logical variable count.
+    pub fn eval_monomial_packed<F, EF>(&self, point: &Point<EF>) -> EF
+    where
+        F: Field,
+        EF: ExtensionField<F, ExtensionPacking = Packed>,
+        Packed: PackedFieldExtension<F, EF> + Copy,
+    {
+        let lane_vars = log2_strict_usize(F::Packing::WIDTH);
+        assert_eq!(
+            self.num_variables() + lane_vars,
+            point.num_variables(),
+            "point arity must match the logical variable count"
+        );
+        let (stored, lanes) = point.as_slice().split_at(self.num_variables());
+
+        // Fold the stored prefix variables down to one packed element.
+        let seed = eval_monomial_rec(self.as_slice(), stored);
+
+        // Unpack the lanes (the last `lane_vars` variables) and finish scalar.
+        let scalars: Vec<EF> = Packed::to_ext_iter([seed]).collect();
+        eval_monomial_rec(&scalars, lanes)
+    }
+
     /// Converts a SIMD-packed polynomial back to scalar extension-field form.
     ///
     /// Expands each packed element into W scalar evaluations,
@@ -482,6 +517,31 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
 
         // Discard the second half; the first half now holds the summed result.
         self.0.truncate(mid);
+    }
+
+    /// Evaluates the table as *monomial coefficients* at `point`.
+    ///
+    /// The table is interpreted in the projective basis of eprint 2026/762:
+    /// entry `a_S` is the coefficient of the monomial `prod_{i in S} X_i`, and
+    ///
+    /// ```text
+    ///     g(z) = sum_S a_S * prod_{i in S} z_i.
+    /// ```
+    ///
+    /// The prefix variable is the most significant one, matching
+    /// [`Self::fix_prefix_var_mut_projective`]: binding `z_0`, then `z_1`, and
+    /// so on down to a constant produces the same value.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the point arity does not match the polynomial.
+    pub fn eval_monomial<Ch>(&self, point: &Point<Ch>) -> A
+    where
+        A: Algebra<Ch>,
+        Ch: Field,
+    {
+        assert_eq!(self.num_variables(), point.num_variables());
+        eval_monomial_rec(self.as_slice(), point.as_slice())
     }
 
     /// Fixes the prefix variable at a challenge value in the *monomial* basis,
@@ -943,6 +1003,36 @@ where
             // Perform the final linear interpolation for the first variable `x`.
             f0_eval + (f1_eval - f0_eval) * *x
         }
+    }
+}
+
+/// Evaluates a table of *monomial coefficients* at a point, recursively.
+///
+/// Writing the polynomial as `g(X_0, x') = lo(x') + X_0 * hi(x')` (the prefix
+/// variable is the most significant one, splitting the table into halves):
+///
+/// ```text
+///     g(z_0, z') = lo(z') + z_0 * hi(z')
+/// ```
+///
+/// Subtraction-free, mirroring `fix_prefix_var_mut_projective`. Serial: the
+/// callers evaluate once per protocol round, so the O(2^n) pass is not worth
+/// fan-out overhead.
+fn eval_monomial_rec<A, Ch>(coeffs: &[A], zs: &[Ch]) -> A
+where
+    A: Algebra<Ch> + Copy,
+    Ch: Copy,
+{
+    match (coeffs, zs) {
+        ([c], []) => *c,
+        (_, [z, sub_point @ ..]) => {
+            // Low half: monomials without X_0; high half: monomials with X_0.
+            let (lo, hi) = coeffs.split_at(coeffs.len() / 2);
+            let lo = eval_monomial_rec(lo, sub_point);
+            let hi = eval_monomial_rec(hi, sub_point);
+            lo + hi * *z
+        }
+        _ => unreachable!("coefficient count must be 2^|zs|"),
     }
 }
 
@@ -2050,6 +2140,49 @@ pub(crate) mod test {
                 compressed.fix_prefix_var_mut_projective(zi);
             }
             prop_assert_eq!(compressed.as_constant().unwrap(), expected);
+
+            // The monomial evaluation is the same sum computed without binding.
+            prop_assert_eq!(poly.eval_monomial(&point), expected);
+        }
+
+        /// Packed monomial evaluation agrees with the scalar one on the same
+        /// logical table, across the packed/scalar variable boundary.
+        #[test]
+        fn prop_eval_monomial_packed_matches_scalar(
+            extra in 0usize..=6,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let k_pack = log2_strict_usize(PackedF::WIDTH);
+            let k = k_pack + extra;
+
+            let poly = Poly::<EF>::rand(&mut rng, k);
+            let point: Point<EF> = Point::rand(&mut rng, k);
+
+            let packed_poly = poly.pack::<F, EF>();
+            prop_assert_eq!(
+                packed_poly.eval_monomial_packed(&point),
+                poly.eval_monomial(&point)
+            );
+        }
+
+        /// Binding all variables projectively, one challenge at a time, gives
+        /// the same value as one monomial evaluation at the challenge point.
+        #[test]
+        fn prop_projective_binding_equals_eval_monomial(
+            k in 1usize..=12,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let poly = Poly::<EF>::rand(&mut rng, k);
+            let point: Point<EF> = Point::rand(&mut rng, k);
+
+            let mut bound = Poly::new(poly.as_slice().to_vec());
+            for &zi in point.as_slice() {
+                bound.fix_prefix_var_mut_projective(zi);
+            }
+
+            prop_assert_eq!(bound.as_constant().unwrap(), poly.eval_monomial(&point));
         }
     }
 

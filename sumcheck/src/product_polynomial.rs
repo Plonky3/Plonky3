@@ -292,6 +292,10 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///
     /// * `point` - The evaluation point as a [`Point`].
     pub fn eval(&self, point: &Point<EF>) -> EF {
+        // The MLE of the table at `point`, in BOTH bases: the out-of-domain
+        // anchor is a binding linear functional of the committed bytes, so it
+        // is deliberately basis-independent. Monomial evaluation lives on
+        // `Poly` and serves the final opening instead.
         match &self.inner {
             MaybePacked::Packed { evals, .. } => evals.eval_packed(point),
             MaybePacked::Unpacked { evals, .. } => evals.eval_ext::<F>(point),
