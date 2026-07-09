@@ -104,22 +104,6 @@ where
         "trace arity must be at least the commitment scheme's padding floor"
     );
 
-    // Invariant: committed preprocessed column count == AIR's declared preprocessed width.
-    // A key with no preprocessed data pairs with an AIR that declares none (width 0).
-    assert_eq!(
-        preprocessed.map_or(0, |p| p.width),
-        air.preprocessed_width(),
-        "preprocessed key width must match the AIR's declared preprocessed width"
-    );
-
-    // Preprocessed and main columns share the bound point, so they must share a height.
-    if let Some(preprocessed) = preprocessed {
-        assert_eq!(
-            preprocessed.log_height, log_height,
-            "preprocessed trace height must match the main trace height"
-        );
-    }
-
     // 1. Absorb the reusable preprocessed commitment before any challenge depends on it.
     if let Some(preprocessed) = preprocessed {
         challenger.observe(preprocessed.commitment.clone());
@@ -133,9 +117,13 @@ where
     // The committed prover opens the columns through the commitment scheme,
     // so the zerocheck's own opened values are not used here.
     let zerocheck = AirZerocheck::new(air, pow_bits);
+
+    let committed_trace = config.committed_table(&prover_data);
+    let committed_preprocessed =
+        preprocessed.map(|preprocessed| config.committed_table(&preprocessed.prover_data));
     let (zerocheck_proof, point) = zerocheck.prove::<C::Val, C::Challenge, _>(
-        trace,
-        preprocessed.map(|p| &p.trace),
+        committed_trace,
+        committed_preprocessed,
         public_values,
         challenger,
     );
@@ -154,9 +142,9 @@ where
     // Cloning the committed data reuses the setup encoding and Merkle tree, skipping a rebuild.
     let preprocessed_opening = preprocessed.map(|preprocessed| {
         let protocol = single_table_protocol(
-            preprocessed.log_height,
-            preprocessed.width,
-            &preprocessed.next_columns,
+            log_height,
+            air.preprocessed_width(),
+            &air.preprocessed_next_row_columns(),
         );
         config.preprocessed_pcs().open_at(
             preprocessed.prover_data.clone(),

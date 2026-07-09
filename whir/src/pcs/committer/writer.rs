@@ -4,7 +4,7 @@ use p3_field::{ExtensionField, PackedFieldExtension, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::extension::FlatMatrixView;
-use p3_sumcheck::product_polynomial::PolyView;
+use p3_sumcheck::product_polynomial::PolyMaybePacked;
 use p3_sumcheck::strategy::VariableOrder;
 use tracing::info_span;
 
@@ -15,14 +15,14 @@ use tracing::info_span;
 /// - the DFT runs over extension-field values;
 /// - the extension MMCS views each extension row as base-field data for the Merkle tree.
 ///
-/// `poly` is borrowed as a [`PolyView`] over the live sumcheck buffer.
+/// `poly` is borrowed as a [`PolyMaybePacked`] over the live sumcheck buffer.
 /// No intermediate scalar copy is materialized.
 #[allow(clippy::type_complexity)]
 pub(crate) fn commit_extension<F, EF, Dft, MT>(
     order: VariableOrder,
     dft: &Dft,
     extension_mmcs: &ExtensionMmcs<F, EF, MT>,
-    poly: PolyView<'_, F, EF>,
+    poly: PolyMaybePacked<'_, F, EF>,
     folding: usize,
     inv_rate: usize,
 ) -> (
@@ -51,7 +51,7 @@ where
                 // Transpose the folding blocks straight into the leading rows.
                 match poly {
                     // Packed source: fuse the lane unpacking with the transpose; no scalar staging.
-                    PolyView::Packed(packed) => {
+                    PolyMaybePacked::Packed(packed) => {
                         EF::ExtensionPacking::unpack_transpose_into(
                             packed.as_slice(),
                             leading,
@@ -59,7 +59,7 @@ where
                         );
                     }
                     // Scalar source: reuse the cache-blocked transpose directly.
-                    PolyView::Scalar(scalar) => {
+                    PolyMaybePacked::Scalar(scalar) => {
                         RowMajorMatrixView::new(scalar.as_slice(), src_width)
                             .transpose_into(&mut RowMajorMatrixViewMut::new(leading, width));
                     }

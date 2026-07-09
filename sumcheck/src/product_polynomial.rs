@@ -116,16 +116,16 @@ enum MaybePacked<F: Field, EF: ExtensionField<F>> {
 /// Reads the current evaluations with no scalar copy.
 /// Works directly on the SIMD-packed buffer the prover still holds.
 #[derive(Debug, Clone, Copy)]
-pub enum PolyView<'a, F: Field, EF: ExtensionField<F>> {
+pub enum PolyMaybePacked<'a, F: Field, EF: ExtensionField<F>> {
     /// SIMD-packed evaluations; each element holds `F::Packing::WIDTH` lanes.
     Packed(&'a Poly<EF::ExtensionPacking>),
     /// Scalar evaluations.
     Scalar(&'a Poly<EF>),
 }
 
-impl<F: Field, EF: ExtensionField<F>> PolyView<'_, F, EF> {
+impl<F: Field, EF: ExtensionField<F>> PolyMaybePacked<'_, F, EF> {
     /// Returns the logical number of variables, accounting for SIMD packing.
-    pub const fn num_variables(&self) -> usize {
+    pub fn num_variables(&self) -> usize {
         match self {
             Self::Packed(poly) => poly.num_variables() + log2_strict_usize(F::Packing::WIDTH),
             Self::Scalar(poly) => poly.num_variables(),
@@ -133,7 +133,7 @@ impl<F: Field, EF: ExtensionField<F>> PolyView<'_, F, EF> {
     }
 
     /// Returns the logical number of evaluations, `2^num_variables`.
-    pub const fn num_evals(&self) -> usize {
+    pub fn num_evals(&self) -> usize {
         1 << self.num_variables()
     }
 
@@ -500,10 +500,10 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     /// Borrows the evaluation polynomial in its live representation.
     ///
     /// No unpacking or copying takes place.
-    pub const fn evals_view(&self) -> PolyView<'_, F, EF> {
+    pub const fn evals_view(&self) -> PolyMaybePacked<'_, F, EF> {
         match &self.inner {
-            MaybePacked::Packed { evals, .. } => PolyView::Packed(evals),
-            MaybePacked::Unpacked { evals, .. } => PolyView::Scalar(evals),
+            MaybePacked::Packed { evals, .. } => PolyMaybePacked::Packed(evals),
+            MaybePacked::Unpacked { evals, .. } => PolyMaybePacked::Scalar(evals),
         }
     }
 
@@ -1097,7 +1097,7 @@ mod tests {
         let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
 
         let view = poly.evals_view();
-        assert!(matches!(view, PolyView::Scalar(_)));
+        assert!(matches!(view, PolyMaybePacked::Scalar(_)));
         assert_eq!(view.num_variables(), 2);
         assert_eq!(view.num_evals(), 4);
 
@@ -1135,7 +1135,7 @@ mod tests {
         );
 
         let view = poly.evals_view();
-        assert!(matches!(view, PolyView::Packed(_)));
+        assert!(matches!(view, PolyMaybePacked::Packed(_)));
         assert_eq!(view.num_variables(), num_variables);
 
         // The view must unpack to the same scalars as the copying extraction.

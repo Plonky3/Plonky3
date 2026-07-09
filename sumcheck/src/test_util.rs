@@ -5,7 +5,6 @@ use alloc::vec::Vec;
 
 use p3_baby_bear::BabyBear;
 use p3_field::{Field, PackedValue};
-use p3_multilinear_util::poly::Poly;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -81,11 +80,6 @@ pub fn table_specs_to_tables(specs: &[TableSpec]) -> Vec<Table<F>> {
     let mut rng = SmallRng::seed_from_u64(3);
     specs
         .iter()
-        .map(|spec| {
-            let polys = (0..spec.shape().width())
-                .map(|_| Poly::<F>::rand(&mut rng, spec.shape().num_variables()))
-                .collect();
-            Table::new(polys)
-        })
+        .map(|spec| Table::rand(&mut rng, spec.shape().width(), spec.shape().num_variables()))
         .collect()
 }

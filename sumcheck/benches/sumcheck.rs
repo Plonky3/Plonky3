@@ -555,7 +555,7 @@ where
         let mut rng = rng_for(0x0007, k);
 
         // Single source table, one column of `2^k` base-field evaluations.
-        let table = Table::new(vec![rand_base::<B>(&mut rng, k)]);
+        let table = Table::rand(&mut rng, 1, k);
 
         group.bench_with_input(BenchmarkId::new("prefix", &label), &table, |b, table| {
             b.iter_batched(

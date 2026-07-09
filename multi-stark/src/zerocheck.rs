@@ -15,11 +15,9 @@ use alloc::vec::Vec;
 use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder, get_all_symbolic_constraints};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
-use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundPolyInterpolator};
-use p3_util::log2_strict_usize;
+use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
 use crate::folder::MultilinearFolder;
@@ -210,12 +208,14 @@ impl<'a, A> AirZerocheck<'a, A> {
 
     /// Prove that the AIR's alpha-batched constraint vanishes on every trace row.
     ///
+    /// The `table` must have one original trace column per table row.
+    ///
     /// The caller must observe the trace commitment into the challenger before this call.
     /// The public values are observed here, so the caller need not observe them.
     ///
     /// # Arguments
     ///
-    /// - `trace`: the execution trace, one column per main AIR column, height a power of two.
+    /// - `table`: committed trace table, one original trace column per table row.
     /// - `preprocessed`: the preprocessed trace, or `None` when the AIR declares none.
     /// - `public_values`: public inputs forwarded to the AIR.
     /// - `challenger`: the Fiat-Shamir transcript.
@@ -230,8 +230,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     #[tracing::instrument(skip_all)]
     pub fn prove<F, EF, Challenger>(
         &self,
-        trace: &RowMajorMatrix<F>,
-        preprocessed: Option<&RowMajorMatrix<F>>,
+        table: &Table<F>,
+        preprocessed: Option<&Table<F>>,
         public_values: &[F],
         challenger: &mut Challenger,
     ) -> (ZerocheckProof<F, EF>, Point<EF>)
@@ -252,10 +252,15 @@ impl<'a, A> AirZerocheck<'a, A> {
         EF::ExtensionPacking: From<EF> + From<F::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        let log_height = log2_strict_usize(trace.height());
+        let log_height = table.num_variables();
 
         // Reject column kinds this version cannot prove, and read the layout once.
         let layout = self.layout::<F>();
+        assert_eq!(
+            table.num_polys(),
+            layout.main_width,
+            "trace width must match the AIR width"
+        );
 
         // Per-round sumcheck degree from the symbolic constraint degree.
         let degree = self.sumcheck_degree::<F, EF>(layout);
@@ -281,7 +286,7 @@ impl<'a, A> AirZerocheck<'a, A> {
             public_values,
             alpha,
             &tau,
-            trace,
+            table,
             preprocessed,
             degree - 1,
         );
@@ -749,6 +754,7 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_poseidon2_air::{Poseidon2Air, RoundConstants};
+    use p3_util::log2_strict_usize;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -867,7 +873,8 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
+        let table = Table::new(trace.transpose());
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
 
         let mut verifier_challenger = fresh_challenger();
         zerocheck
@@ -884,8 +891,9 @@ mod tests {
         let pis = fib_public_values(n);
 
         let mut challenger = fresh_challenger();
+        let table = Table::new(trace.transpose());
         let (proof, point) =
-            AirZerocheck::new(&FibAir, 0).prove::<F, EF, _>(&trace, None, &pis, &mut challenger);
+            AirZerocheck::new(&FibAir, 0).prove::<F, EF, _>(&table, None, &pis, &mut challenger);
 
         // Each Fibonacci constraint is per-variable degree 2 (a degree-1 selector
         // times a degree-1 column), so the eq-weighted integrand is degree 3.
@@ -920,7 +928,8 @@ mod tests {
 
         // Prove with grinding enabled.
         let mut prover_challenger = fresh_challenger();
-        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
+        let table = Table::new(trace.transpose());
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
 
         // Grinding emits exactly one witness per sumcheck round.
         assert_eq!(proof.sumcheck.pow_witnesses.len(), log2_strict_usize(n));
@@ -943,7 +952,8 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
+        let table = Table::new(trace.transpose());
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
 
         let mut verifier_challenger = fresh_challenger();
         let err = zerocheck
@@ -961,8 +971,9 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
+        let table = Table::new(trace.transpose());
         let (mut proof, _) =
-            zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
+            zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
         proof.local[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();
@@ -982,8 +993,9 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
+        let table = Table::new(trace.transpose());
         let (mut proof, _) =
-            zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
+            zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
         proof.next[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();
@@ -1004,8 +1016,9 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
+        let table = Table::new(trace.transpose());
         let (mut proof, _) =
-            zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
+            zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
 
         // Declare a nonzero sum; the verifier must reject before any further work.
         proof.sumcheck.claimed_sum += EF::ONE;
@@ -1034,8 +1047,9 @@ mod tests {
         let zerocheck = AirZerocheck::new(&FibAir, 0);
 
         let mut prover_challenger = fresh_challenger();
+        let table = Table::new(trace.transpose());
         let (mut proof, _) =
-            zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut prover_challenger);
+            zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
 
         // Remove one opened value so the count no longer matches the AIR width.
         proof.local.pop();
@@ -1104,7 +1118,8 @@ mod tests {
         let zerocheck = AirZerocheck::new(&ConstColAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (proof, _) = zerocheck.prove::<F, EF, _>(&trace, None, &[], &mut prover_challenger);
+        let table = Table::new(trace.transpose());
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&table, None, &[], &mut prover_challenger);
 
         // Two committed columns yield two current-row claims.
         assert_eq!(proof.local.len(), 2);
@@ -1143,15 +1158,15 @@ mod tests {
             // Prove the alpha-batched constraint vanishes on every row.
             let zerocheck = AirZerocheck::new(&air, 0);
             let mut prover_challenger = fresh_challenger();
+            let table = Table::new(trace.transpose());
             let (proof, point_prover) =
-                zerocheck.prove::<F, EF, _>(&trace, None, &[], &mut prover_challenger);
+                zerocheck.prove::<F, EF, _>(&table, None, &[], &mut prover_challenger);
 
             // Reference columns: one multilinear per trace column, in row order.
             //
             //     row-major trace --transpose--> one row per column
-            let columns = trace.transpose();
-            let columns = columns
-                .row_slices()
+            let columns = table
+                .iter_polys()
                 .map(|col| Poly::new(col.to_vec()))
                 .collect::<Vec<_>>();
 
@@ -1240,15 +1255,17 @@ mod tests {
             let zerocheck = AirZerocheck::new(&PreprocessedAir, 0);
 
             let mut prover_challenger = fresh_challenger();
+            let table = Table::new(trace.transpose());
+            let preprocessed_table = Table::new(preprocessed.transpose());
             let (proof, point) = zerocheck.prove::<F, EF, _>(
-                &trace,
-                Some(&preprocessed),
+                &table,
+                Some(&preprocessed_table),
                 &[],
                 &mut prover_challenger,
             );
 
             // The preprocessed openings must match the preprocessed column at the bound point.
-            let preprocessed_col = Poly::new(preprocessed.values.clone());
+            let preprocessed_col = preprocessed_table.poly(0);
             assert_eq!(
                 proof.preprocessed_local,
                 [preprocessed_col.eval_base(&point)]
@@ -1273,8 +1290,14 @@ mod tests {
         let zerocheck = AirZerocheck::new(&PreprocessedAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (mut proof, _) =
-            zerocheck.prove::<F, EF, _>(&trace, Some(&preprocessed), &[], &mut prover_challenger);
+        let table = Table::new(trace.transpose());
+        let preprocessed_table = Table::new(preprocessed.transpose());
+        let (mut proof, _) = zerocheck.prove::<F, EF, _>(
+            &table,
+            Some(&preprocessed_table),
+            &[],
+            &mut prover_challenger,
+        );
         proof.preprocessed_local[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();
@@ -1292,8 +1315,14 @@ mod tests {
         let zerocheck = AirZerocheck::new(&PreprocessedAir, 0);
 
         let mut prover_challenger = fresh_challenger();
-        let (mut proof, _) =
-            zerocheck.prove::<F, EF, _>(&trace, Some(&preprocessed), &[], &mut prover_challenger);
+        let table = Table::new(trace.transpose());
+        let preprocessed_table = Table::new(preprocessed.transpose());
+        let (mut proof, _) = zerocheck.prove::<F, EF, _>(
+            &table,
+            Some(&preprocessed_table),
+            &[],
+            &mut prover_challenger,
+        );
         proof.preprocessed_next[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();

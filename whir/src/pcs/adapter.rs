@@ -9,7 +9,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
-use p3_sumcheck::layout::{Layout, Verifier, Witness};
+use p3_sumcheck::layout::{Layout, Table, Verifier, Witness};
 use p3_sumcheck::{OpeningEvals, OpeningProtocol, PrescribedPointPcs};
 
 use super::prover::WhirProver;
@@ -29,6 +29,7 @@ use crate::pcs::proof::PcsProof;
 /// Each opening then receives a clone instead of a freshly committed copy.
 /// Cloning copies only the committed data.
 /// It skips the codeword re-encode and the Merkle rebuild.
+#[derive(Clone)]
 pub struct WhirProverData<F, EF, MT, L>
 where
     F: TwoAdicField,
@@ -44,20 +45,16 @@ where
     _marker: PhantomData<EF>,
 }
 
-impl<F, EF, MT, L> Clone for WhirProverData<F, EF, MT, L>
+impl<F, EF, MT, L> WhirProverData<F, EF, MT, L>
 where
     F: TwoAdicField,
     EF: ExtensionField<F>,
     MT: Mmcs<F>,
-    L: Layout<F, EF> + Clone,
-    MT::ProverData<DenseMatrix<F>>: Clone,
+    L: Layout<F, EF>,
 {
-    fn clone(&self) -> Self {
-        Self {
-            layout: self.layout.clone(),
-            merkle_data: self.merkle_data.clone(),
-            _marker: PhantomData,
-        }
+    /// Returns source table `id` retained by the committed layout.
+    pub fn table(&self, id: usize) -> &Table<F> {
+        self.layout.table(id)
     }
 }
 

@@ -11,7 +11,6 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, Witness};
 use p3_sumcheck::test_util::{random_table_specs, table_specs_to_tables};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
@@ -493,10 +492,7 @@ fn test_whir_end_to_end_mixed_current_next_openings() {
         const FOLDING: usize = 3;
 
         let mut rng = SmallRng::seed_from_u64(42);
-        let table = Table::new(vec![
-            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
-            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
-        ]);
+        let table = Table::rand(&mut rng, 2, NUM_VARIABLES);
         let witness = L::new_witness(vec![table], FOLDING);
         let protocol = OpeningProtocol::new(vec![TableSpec::new(
             TableShape::new(NUM_VARIABLES, 2),
@@ -681,10 +677,7 @@ mod error_variant_tests {
     ) {
         // Random table of two columns; deterministic seed for reproducibility.
         let mut rng = SmallRng::seed_from_u64(1);
-        let table = Table::new(vec![
-            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
-            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
-        ]);
+        let table = Table::rand(&mut rng, 2, NUM_VARIABLES);
         let witness = L::new_witness(vec![table], FOLDING);
         // Two opening batches: (cols [0, 1]) and (col [0]).
         let protocol = OpeningProtocol::new(vec![TableSpec::new(
@@ -1100,7 +1093,6 @@ mod keccak_tests {
     use p3_keccak::{Keccak256Hash, KeccakF};
     use p3_koala_bear::KoalaBear;
     use p3_merkle_tree::MerkleTreeMmcs;
-    use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
     use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
     use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
@@ -1138,7 +1130,7 @@ mod keccak_tests {
 
         // Build one random table, stack it through the chosen layout mode.
         let mut rng = SmallRng::seed_from_u64(1);
-        let table = Table::new(vec![Poly::<F>::rand(&mut rng, NUM_VARIABLES)]);
+        let table = Table::rand(&mut rng, 1, NUM_VARIABLES);
         let witness = L::new_witness(vec![table], FOLDING);
         // Public protocol: open the single column at one point.
         let protocol = OpeningProtocol::new(vec![TableSpec::new(
