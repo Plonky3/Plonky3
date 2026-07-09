@@ -104,6 +104,11 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
         self.claims().num_variables_table(id)
     }
 
+    /// Returns source table `id`.
+    fn table(&self, id: usize) -> &Table<F> {
+        self.claims().table(id)
+    }
+
     /// Records opening claims for the selected columns of one table at a sampled point.
     ///
     /// - The local-frame opening point is drawn from the transcript.
@@ -196,7 +201,6 @@ pub(super) mod test_utils {
     use p3_challenger::FieldChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::point::Point;
-    use p3_multilinear_util::poly::Poly;
     use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -235,12 +239,10 @@ pub(super) mod test_utils {
     pub(crate) fn build_tables() -> Vec<Table<F>> {
         let mut rng = SmallRng::seed_from_u64(1);
         // Table at index 1 in the insertion order: arity 10, two columns.
-        let a0 = Poly::<F>::rand(&mut rng, 10);
-        let a1 = Poly::<F>::rand(&mut rng, 10);
+        let a = Table::rand(&mut rng, 2, 10);
         // Table at index 0 in the insertion order: arity 9, two columns.
-        let b0 = Poly::<F>::rand(&mut rng, 9);
-        let b1 = Poly::<F>::rand(&mut rng, 9);
-        vec![Table::new(vec![b0, b1]), Table::new(vec![a0, a1])]
+        let b = Table::rand(&mut rng, 2, 9);
+        vec![b, a]
     }
 
     /// Returns the per-table shape used by the verifier side.
@@ -535,12 +537,7 @@ pub(super) mod test_utils {
         // One table per (arity, column_count) pair; each column is a random polynomial.
         shape
             .iter()
-            .map(|&(arity, num_cols)| {
-                let polys: Vec<Poly<F>> = (0..num_cols)
-                    .map(|_| Poly::<F>::rand(&mut rng, arity))
-                    .collect();
-                Table::new(polys)
-            })
+            .map(|&(arity, num_cols)| Table::rand(&mut rng, num_cols, arity))
             .collect()
     }
 

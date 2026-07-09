@@ -10,6 +10,7 @@ use p3_challenger::DuplexChallenger;
 use p3_field::extension::BinomialExtensionField;
 use p3_multi_stark::zerocheck::AirZerocheck;
 use p3_poseidon2_air::{Poseidon2Air, RoundConstants};
+use p3_sumcheck::layout::Table;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -68,20 +69,32 @@ fn bench_poseidon2_zerocheck_prove(c: &mut Criterion) {
         let num_hashes = 1 << num_vars;
         let air = poseidon2_air();
         let trace = air.generate_random_trace_rows(num_hashes, 0);
-        let zerocheck = AirZerocheck::new(&air, 0);
+        let table = Table::new(trace.transpose());
+        let empty_public_values: &[F] = &[];
+        for num_airs in [1, 5, 10] {
+            let airs = vec![&air; num_airs];
+            let preprocessed = vec![None; num_airs];
+            let tables = vec![&table; num_airs];
+            let public_values = vec![empty_public_values; num_airs];
+            let zerocheck = AirZerocheck::new(&airs, 0);
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(num_vars),
-            &num_vars,
-            |b, &num_vars| {
-                b.iter(|| {
-                    let mut challenger = fresh_challenger();
-                    let (proof, point) =
-                        zerocheck.prove::<F, EF, _>(&trace, None, &[], &mut challenger);
-                    black_box((proof, point, num_vars));
-                });
-            },
-        );
+            group.bench_with_input(
+                BenchmarkId::new(format!("{num_airs}_airs"), num_vars),
+                &num_vars,
+                |b, &num_vars| {
+                    b.iter(|| {
+                        let mut challenger = fresh_challenger();
+                        let (proof, point) = zerocheck.prove::<F, EF, _>(
+                            &preprocessed,
+                            &tables,
+                            &public_values,
+                            &mut challenger,
+                        );
+                        black_box((proof, point, num_vars, num_airs));
+                    });
+                },
+            );
+        }
     }
 
     group.finish();

@@ -92,7 +92,7 @@ where
     let log_height = log2_strict_usize(trace.height());
     let width = trace.width;
     let next_columns = air.main_next_row_columns();
-    let preprocessed = proving_key.preprocessed.as_ref();
+    let preprocessed_key = proving_key.preprocessed.as_ref();
 
     // The trace columns are the AIR columns, so their counts must agree.
     assert_eq!(width, air.width(), "trace width must match the AIR width");
@@ -104,24 +104,8 @@ where
         "trace arity must be at least the commitment scheme's padding floor"
     );
 
-    // Invariant: committed preprocessed column count == AIR's declared preprocessed width.
-    // A key with no preprocessed data pairs with an AIR that declares none (width 0).
-    assert_eq!(
-        preprocessed.map_or(0, |p| p.width),
-        air.preprocessed_width(),
-        "preprocessed key width must match the AIR's declared preprocessed width"
-    );
-
-    // Preprocessed and main columns share the bound point, so they must share a height.
-    if let Some(preprocessed) = preprocessed {
-        assert_eq!(
-            preprocessed.log_height, log_height,
-            "preprocessed trace height must match the main trace height"
-        );
-    }
-
     // 1. Absorb the reusable preprocessed commitment before any challenge depends on it.
-    if let Some(preprocessed) = preprocessed {
+    if let Some(preprocessed) = preprocessed_key {
         challenger.observe(preprocessed.commitment.clone());
     }
 
@@ -132,11 +116,18 @@ where
     // 3. Reduce the AIR constraint to a single bound point.
     // The committed prover opens the columns through the commitment scheme,
     // so the zerocheck's own opened values are not used here.
-    let zerocheck = AirZerocheck::new(air, pow_bits);
+    let airs = [air];
+    let committed_trace = config.committed_table(&prover_data);
+    let committed_preprocessed =
+        preprocessed_key.map(|preprocessed| config.committed_table(&preprocessed.prover_data));
+    let preprocessed = [committed_preprocessed];
+    let tables = [committed_trace];
+    let public_values = [public_values];
+    let zerocheck = AirZerocheck::new(&airs, pow_bits);
     let (zerocheck_proof, point) = zerocheck.prove::<C::Val, C::Challenge, _>(
-        trace,
-        preprocessed.map(|p| &p.trace),
-        public_values,
+        &preprocessed,
+        &tables,
+        &public_values,
         challenger,
     );
     let sumcheck = zerocheck_proof.sumcheck;
@@ -152,11 +143,11 @@ where
 
     // 5. Open the preprocessed columns at the same point against the reused commitment.
     // Cloning the committed data reuses the setup encoding and Merkle tree, skipping a rebuild.
-    let preprocessed_opening = preprocessed.map(|preprocessed| {
+    let preprocessed_opening = preprocessed_key.map(|preprocessed| {
         let protocol = single_table_protocol(
-            preprocessed.log_height,
-            preprocessed.width,
-            &preprocessed.next_columns,
+            log_height,
+            air.preprocessed_width(),
+            &air.preprocessed_next_row_columns(),
         );
         config.preprocessed_pcs().open_at(
             preprocessed.prover_data.clone(),

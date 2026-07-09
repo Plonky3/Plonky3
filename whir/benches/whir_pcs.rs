@@ -13,7 +13,6 @@ use p3_field::Field;
 use p3_field::extension::QuinticTrinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -171,7 +170,7 @@ impl<L: Layout<F, EF>> Bench<L> {
 
         // Single random table of one column committed by every iteration.
         let mut data_rng = SmallRng::seed_from_u64(0xD157A1B);
-        let table = Table::new(vec![Poly::<F>::rand(&mut data_rng, opts.num_variables)]);
+        let table = Table::rand(&mut data_rng, 1, opts.num_variables);
         let witness = L::new_witness(vec![table], opts.folding);
 
         // Open the single column NUM_EVALUATIONS times at fresh sampled points.

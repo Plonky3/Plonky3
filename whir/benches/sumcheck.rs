@@ -85,9 +85,7 @@ fn make_challenger() -> Challenger {
 
 fn make_table(num_variables: usize) -> Table<F> {
     let mut rng = SmallRng::seed_from_u64(num_variables as u64);
-    Table::new(vec![Poly::new(
-        (0..1 << num_variables).map(|_| rng.random()).collect(),
-    )])
+    Table::rand(&mut rng, 1, num_variables)
 }
 
 fn setup_prefix(table: &Table<F>, folding: usize) -> (PrefixProver<F, EF>, Challenger) {

@@ -629,11 +629,9 @@ mod tests {
         // Builds a four-column table and opens the first `open` of them.
         // Four columns tile a power-of-two space, so `open` columns is `open/4` occupancy.
         let mut routed = |open: usize| {
-            let mut prover =
-                PrefixProver::<F, EF>::from_witness(PrefixProver::<F, EF>::new_witness(
-                    vec![Table::new((0..4).map(|_| Poly::<F>::zero(8)).collect())],
-                    FOLDING,
-                ));
+            let mut prover = PrefixProver::<F, EF>::from_witness(
+                PrefixProver::<F, EF>::new_witness(vec![Table::zero(4, 8)], FOLDING),
+            );
             let cols: Vec<usize> = (0..open).collect();
             prover.eval(0, &OpeningBatch::new(cols, Vec::new()), &mut ch);
             prover.scatter_beats_pack(&rs)
@@ -646,7 +644,7 @@ mod tests {
 
         // A holey layout (one of five columns) sits far below the threshold.
         let mut sparse = PrefixProver::<F, EF>::from_witness(PrefixProver::<F, EF>::new_witness(
-            vec![Table::new((0..5).map(|_| Poly::<F>::zero(8)).collect())],
+            vec![Table::zero(5, 8)],
             FOLDING,
         ));
         sparse.eval(0, &OpeningBatch::new(vec![2], Vec::new()), &mut ch);

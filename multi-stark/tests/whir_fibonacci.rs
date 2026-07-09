@@ -13,7 +13,6 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::zerocheck::ZerocheckError;
 use p3_multi_stark::{VerificationError, prove, setup, verify};
-use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::OpeningBatch;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -64,9 +63,16 @@ impl MultiStarkConfig for WhirConfigForTest {
         FOLDING
     }
 
-    fn build_witness(&self, columns: Vec<Poly<F>>) -> Witness<F> {
+    fn build_witness(&self, table: Table<F>) -> Witness<F> {
         // Version one commits a single table: the whole trace.
-        L::new_witness(vec![Table::new(columns)], FOLDING)
+        L::new_witness(vec![table], FOLDING)
+    }
+
+    fn committed_table<'a>(
+        &self,
+        prover_data: &'a p3_whir::WhirProverData<F, EF, MyMmcs, L>,
+    ) -> &'a Table<F> {
+        prover_data.table(0)
     }
 }
 

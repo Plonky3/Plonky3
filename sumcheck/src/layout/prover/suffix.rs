@@ -255,7 +255,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
                 &point,
                 VariableOrder::Suffix,
             );
-            let (ref_eval, ref_partials) = ref_svo.eval(poly);
+            let (ref_eval, ref_partials) = ref_svo.eval(poly.as_view());
             let opening = Opening {
                 poly_idx: None,
                 eval: ref_eval,
@@ -476,7 +476,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
                 rs.compress_suffix_into(
                     &mut out.as_mut_slice()
                         [off..off + (1 << (poly.num_variables() - rs.num_variables()))],
-                    poly,
+                    poly.as_view(),
                 );
             }
         }

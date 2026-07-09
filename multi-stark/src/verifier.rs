@@ -1,10 +1,11 @@
 //! Verify a multilinear AIR SNARK against a trace commitment.
 
-use core::fmt::{self, Debug, Display, Formatter};
+use core::fmt::Debug;
 
 use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_sumcheck::PrescribedPointPcs;
+use thiserror::Error;
 
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::MultilinearFolder;
@@ -14,17 +15,25 @@ use crate::proof::{MultiStarkProof, single_table_protocol};
 use crate::zerocheck::{AirZerocheck, ZerocheckError};
 
 /// Reasons the multilinear AIR verifier rejects a proof.
-#[derive(Debug)]
-pub enum VerificationError<E> {
+#[derive(Debug, Error)]
+pub enum VerificationError<E>
+where
+    E: Debug,
+{
     /// The zerocheck reduction or its closing constraint check failed.
+    #[error("zerocheck: {0}")]
     Zerocheck(ZerocheckError),
     /// The commitment opening failed to verify.
+    #[error("opening: {0:?}")]
     Opening(E),
     /// The verifying key expects a preprocessed opening, but the proof carries none.
+    #[error("preprocessed opening expected but absent")]
     MissingPreprocessedOpening,
     /// The proof carries a preprocessed opening, but the verifying key expects none.
+    #[error("preprocessed opening present but not expected")]
     UnexpectedPreprocessedOpening,
     /// The preprocessed key height disagrees with the proof's trace height.
+    #[error("preprocessed height mismatch: expected {expected}, got {actual}")]
     PreprocessedHeightMismatch {
         /// Trace arity the preprocessed commitment was built for.
         expected: usize,
@@ -32,27 +41,6 @@ pub enum VerificationError<E> {
         actual: usize,
     },
 }
-
-impl<E: Debug> Display for VerificationError<E> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Zerocheck(e) => write!(f, "zerocheck: {e}"),
-            Self::Opening(e) => write!(f, "opening: {e:?}"),
-            Self::MissingPreprocessedOpening => {
-                write!(f, "preprocessed opening expected but absent")
-            }
-            Self::UnexpectedPreprocessedOpening => {
-                write!(f, "preprocessed opening present but not expected")
-            }
-            Self::PreprocessedHeightMismatch { expected, actual } => write!(
-                f,
-                "preprocessed height mismatch: expected {expected}, got {actual}"
-            ),
-        }
-    }
-}
-
-impl<E: Debug> core::error::Error for VerificationError<E> {}
 
 /// Verify a complete multilinear AIR proof.
 ///
@@ -156,12 +144,15 @@ where
     challenger.observe(proof.commitment.clone());
 
     // 3. Verify the zerocheck sumcheck, yielding the bound point and the reduced sum.
-    let zerocheck = AirZerocheck::new(air, pow_bits);
+    let airs = [air];
+    let log_heights = [log_height];
+    let public_values = [public_values];
+    let zerocheck = AirZerocheck::new(&airs, pow_bits);
     let reduction = zerocheck
         .verify_reduction::<C::Val, C::Challenge, _>(
             &proof.sumcheck,
-            log_height,
-            public_values,
+            &log_heights,
+            &public_values,
             challenger,
         )
         .map_err(VerificationError::Zerocheck)?;
@@ -218,12 +209,19 @@ where
     };
 
     // 6. Close the zerocheck: recompute g from the commitment-bound values and match the sum.
+    let main_opening = [TableOpening::new(
+        main.current(),
+        &next_columns,
+        main.next(),
+    )];
+    let preprocessed_opening = [preprocessed_opening];
     zerocheck
         .check_constraint(
             &reduction,
-            TableOpening::new(main.current(), &next_columns, main.next()),
-            preprocessed_opening,
-            public_values,
+            &main_opening,
+            &preprocessed_opening,
+            &log_heights,
+            &public_values,
         )
         .map_err(VerificationError::Zerocheck)
 }

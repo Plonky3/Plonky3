@@ -82,6 +82,11 @@ impl<F: Field, EF: ExtensionField<F>> StackedClaims<F, EF> {
         self.tables[id].num_variables()
     }
 
+    /// Returns source table `id`.
+    pub fn table(&self, id: usize) -> &Table<F> {
+        &self.tables[id]
+    }
+
     /// Returns the total number of concrete openings recorded so far.
     pub(crate) fn num_claims(&self) -> usize {
         self.claim_map
@@ -163,7 +168,6 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_multilinear_util::point::Point;
-    use p3_multilinear_util::poly::Poly;
 
     use super::*;
     use crate::layout::opening::{EqSvoPartials, NextSvoPartials, Opening};
@@ -175,7 +179,7 @@ mod tests {
 
     // A single zero column of the given arity, enough to drive the table getters.
     fn table(arity: usize) -> Table<F> {
-        Table::new(vec![Poly::<F>::zero(arity)])
+        Table::zero(1, arity)
     }
 
     // Placement pointing back at source table `idx`.
