@@ -79,7 +79,7 @@ fn bench_plain(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
     let pcs = PlainPcs::new(config, Dft::default(), mmcs());
 
     let mut rng = SmallRng::seed_from_u64(3);
-    let table = Table::new(vec![Poly::<F>::rand(&mut rng, num_variables)]);
+    let table = Table::rand(&mut rng, 1, num_variables);
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(num_variables, 1),
         vec![OpeningBatch::new(vec![0], Vec::new())],
@@ -147,7 +147,7 @@ fn report_proof_sizes(num_variables: usize) {
     let config = WhirConfig::new(num_variables, protocol_params()).unwrap();
     let pcs = PlainPcs::new(config, Dft::default(), mmcs());
     let mut rng = SmallRng::seed_from_u64(3);
-    let table = Table::new(vec![Poly::<F>::rand(&mut rng, num_variables)]);
+    let table = Table::rand(&mut rng, 1, num_variables);
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(num_variables, 1),
         vec![OpeningBatch::new(vec![0], Vec::new())],

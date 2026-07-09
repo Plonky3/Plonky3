@@ -120,7 +120,7 @@ where
 
     // One-column table built from the witness polynomial.
     let poly = Poly::new(evals);
-    let table = Table::new(vec![poly]);
+    let table = Table::from_polys(vec![poly]);
 
     // Witness shape comes from the layout factory; binding mode is encoded
     // in the layout type itself.

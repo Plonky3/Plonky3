@@ -12,10 +12,9 @@ use alloc::vec::Vec;
 use p3_air::BaseAir;
 use p3_commit::MultilinearPcs;
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_sumcheck::layout::Table;
 use p3_util::log2_strict_usize;
 
-use crate::commit::trace_to_columns;
 use crate::config::{Commitment, MultiStarkConfig, ProverData};
 
 /// Preprocessed data the prover reuses across proofs.
@@ -25,18 +24,10 @@ use crate::config::{Commitment, MultiStarkConfig, ProverData};
 pub struct PreprocessedProverData<C: MultiStarkConfig> {
     /// The preprocessed trace, one column per preprocessed AIR column.
     ///
-    /// Retained so the zerocheck round state can fold it alongside the main trace.
-    pub(crate) trace: RowMajorMatrix<C::Val>,
     /// Commitment to the stacked preprocessed columns.
     pub(crate) commitment: Commitment<C>,
     /// Committed prover data behind the commitment, cloned per proof to open.
     pub(crate) prover_data: ProverData<C>,
-    /// Number of preprocessed columns.
-    pub(crate) width: usize,
-    /// Preprocessed columns whose next row the AIR reads.
-    pub(crate) next_columns: Vec<usize>,
-    /// Base-two logarithm of the preprocessed trace height.
-    pub(crate) log_height: usize,
 }
 
 /// The prover's key for a fixed AIR and trace height.
@@ -106,19 +97,14 @@ where
     let next_columns = air.preprocessed_next_row_columns();
 
     // Turn the trace into one multilinear per column, then commit the stacked columns once.
-    let columns = trace_to_columns(&trace);
-    let witness = config.build_witness(columns);
+    let witness = config.build_witness(Table::new(trace.transpose()));
     let (commitment, prover_data) = config.preprocessed_pcs().commit(witness, challenger);
 
     // The prover key keeps the trace to fold and the committed data to open each proof.
     let proving = ProvingKey {
         preprocessed: Some(PreprocessedProverData {
-            trace,
             commitment: commitment.clone(),
             prover_data,
-            width,
-            next_columns: next_columns.clone(),
-            log_height,
         }),
     };
     // The verifier key keeps only the commitment and the shape facts.

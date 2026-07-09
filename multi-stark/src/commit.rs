@@ -1,12 +1,9 @@
 //! Turn an execution trace into the committed multilinear witness.
 
-use alloc::vec::Vec;
-
 use p3_commit::MultilinearPcs;
 use p3_field::Field;
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::layout::Table;
 
 use crate::config::{Commitment, MultiStarkConfig, ProverData};
 
@@ -18,22 +15,8 @@ use crate::config::{Commitment, MultiStarkConfig, ProverData};
 /// # Panics
 ///
 /// Panics if the trace height is not a power of two.
-pub(crate) fn trace_to_columns<F: Field>(trace: &RowMajorMatrix<F>) -> Vec<Poly<F>> {
-    let width = trace.width;
-    let height = trace.height();
-
-    // Build one polynomial per column.
-    (0..width)
-        .map(|col| {
-            // Row-major storage places entry (row, col) at index `row * width + col`.
-            //
-            //     column `col` evaluations = trace[col], trace[width + col], trace[2*width + col], ...
-            let evals = (0..height)
-                .map(|row| trace.values[row * width + col])
-                .collect();
-            Poly::new(evals)
-        })
-        .collect()
+pub(crate) fn trace_to_table<F: Field>(trace: &RowMajorMatrix<F>) -> Table<F> {
+    Table::new(tracing::info_span!("transpose").in_scope(|| trace.transpose()))
 }
 
 /// Commit to a trace through the configured commitment scheme.
@@ -62,20 +45,11 @@ pub fn commit_trace<C: MultiStarkConfig>(
     trace: &RowMajorMatrix<C::Val>,
     challenger: &mut C::Challenger,
 ) -> (Commitment<C>, ProverData<C>) {
-    // One multilinear polynomial per trace column.
-    let columns = trace_to_columns(trace);
-
-    // The witness builder lays each column into a slot sized by its arity.
-    // Every column must therefore share the same number of variables.
-    debug_assert!(
-        columns
-            .windows(2)
-            .all(|pair| pair[0].num_variables() == pair[1].num_variables()),
-        "all trace columns must share the same arity"
-    );
+    // One multilinear polynomial per trace column, stored as one table row per column.
+    let table = trace_to_table(trace);
 
     // Pack the columns into the scheme's witness form (slot layout and folding live in the config).
-    let witness = config.build_witness(columns);
+    let witness = config.build_witness(table);
 
     // Commit; the scheme observes its commitment into the transcript.
     config.pcs().commit(witness, challenger)
@@ -91,7 +65,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
-    use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::layout::Table;
 
     use super::*;
     use crate::config::MultiStarkConfig;
@@ -116,10 +90,10 @@ mod tests {
     impl MultilinearPcs<EF, RecordingChallenger> for MockPcs {
         type Val = F;
         type Commitment = Vec<F>;
-        type ProverData = Vec<Poly<F>>;
+        type ProverData = Table<F>;
         type Proof = ();
         type Error = ();
-        type Witness = Vec<Poly<F>>;
+        type Witness = Table<F>;
         type OpeningProtocol = ();
 
         fn num_vars(&self) -> usize {
@@ -133,8 +107,8 @@ mod tests {
         ) -> (Self::Commitment, Self::ProverData) {
             // One checksum per column: the sum of that column's evaluations.
             let commitment: Vec<F> = witness
-                .iter()
-                .map(|column| column.as_slice().iter().copied().sum())
+                .iter_polys()
+                .map(|column| column.iter().copied().sum())
                 .collect();
             // Absorb the commitment so any later transcript draw depends on it.
             challenger.observed.extend_from_slice(&commitment);
@@ -180,14 +154,18 @@ mod tests {
             0
         }
 
-        fn build_witness(&self, columns: Vec<Poly<F>>) -> Vec<Poly<F>> {
+        fn build_witness(&self, table: Table<F>) -> Table<F> {
             // The mock scheme commits columns directly, with no stacking or folding.
-            columns
+            table
+        }
+
+        fn committed_table<'a>(&self, prover_data: &'a Table<F>) -> &'a Table<F> {
+            prover_data
         }
     }
 
     #[test]
-    fn trace_to_columns_extracts_each_column() {
+    fn trace_to_table_extracts_each_column() {
         // Fixture state: a width-2, height-4 row-major trace.
         //
         //     row 0: [1, 5]
@@ -199,16 +177,16 @@ mod tests {
         let values = [1, 5, 2, 6, 3, 7, 4, 8].map(F::from_u64).to_vec();
         let trace = RowMajorMatrix::new(values, 2);
 
-        let columns = trace_to_columns(&trace);
+        let table = trace_to_table(&trace);
 
         // One polynomial per column.
-        assert_eq!(columns.len(), 2);
+        assert_eq!(table.num_polys(), 2);
         // Each column has height-4 evaluations, so two variables.
-        assert_eq!(columns[0].num_variables(), 2);
+        assert_eq!(table.poly(0).num_variables(), 2);
         // Column 0 read in row order.
-        assert_eq!(columns[0].as_slice(), &[1, 2, 3, 4].map(F::from_u64));
+        assert_eq!(table.poly(0).as_slice(), &[1, 2, 3, 4].map(F::from_u64));
         // Column 1 read in row order.
-        assert_eq!(columns[1].as_slice(), &[5, 6, 7, 8].map(F::from_u64));
+        assert_eq!(table.poly(1).as_slice(), &[5, 6, 7, 8].map(F::from_u64));
     }
 
     #[test]
@@ -231,7 +209,7 @@ mod tests {
         // The commitment carries one checksum per column.
         assert_eq!(commitment, vec![F::from_u64(10), F::from_u64(26)]);
         // Prover data retains all committed columns.
-        assert_eq!(prover_data.len(), 2);
+        assert_eq!(prover_data.num_polys(), 2);
         // The commitment was absorbed into the transcript.
         assert_eq!(challenger.observed, vec![F::from_u64(10), F::from_u64(26)]);
     }

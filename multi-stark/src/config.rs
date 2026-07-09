@@ -1,10 +1,8 @@
 //! Configuration tying together the commitment scheme, challenge field, and transcript.
 
-use alloc::vec::Vec;
-
 use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
-use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::layout::Table;
 
 /// The wiring a multilinear AIR proof depends on.
 ///
@@ -59,7 +57,7 @@ pub trait MultiStarkConfig {
     /// For a WHIR-backed config this is the first-round folding factor.
     fn min_num_variables(&self) -> usize;
 
-    /// Pack committed column polynomials into the commitment scheme's witness form.
+    /// Pack the committed trace table into the commitment scheme's witness form.
     ///
     /// The witness representation is private to the commitment scheme:
     /// - it folds in the slot layout and preprocessing depth that scheme expects,
@@ -68,11 +66,14 @@ pub trait MultiStarkConfig {
     ///
     /// # Arguments
     ///
-    /// - `columns`: one multilinear polynomial per committed trace column.
+    /// - `table`: one source table whose rows are trace-column polynomials.
     fn build_witness(
         &self,
-        columns: Vec<Poly<Self::Val>>,
+        table: Table<Self::Val>,
     ) -> <Self::Pcs as MultilinearPcs<Self::Challenge, Self::Challenger>>::Witness;
+
+    /// Borrows the committed trace table retained between commit and open.
+    fn committed_table<'a>(&self, prover_data: &'a ProverData<Self>) -> &'a Table<Self::Val>;
 }
 
 /// Commitment scheme selected by a configuration.

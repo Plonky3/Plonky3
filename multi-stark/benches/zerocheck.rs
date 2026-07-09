@@ -8,6 +8,7 @@ use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multi_stark::zerocheck::AirZerocheck;
+use p3_sumcheck::layout::Table;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -143,10 +144,11 @@ fn bench_zerocheck(c: &mut Criterion) {
         let last = trace.values[(n - 1) * NUM_COLS + 1];
         let pis = [F::ZERO, F::ONE, last];
         let zerocheck = AirZerocheck::new(&FibAir, 0);
+        let table = Table::new(trace.transpose());
         group.bench_with_input(BenchmarkId::from_parameter(log_height), &n, |b, _| {
             b.iter(|| {
                 let mut ch = fresh_challenger();
-                zerocheck.prove::<F, EF, _>(&trace, None, &pis, &mut ch)
+                zerocheck.prove::<F, EF, _>(None, &table, &pis, &mut ch)
             });
         });
     }
@@ -158,14 +160,14 @@ fn bench_wide_zerocheck(c: &mut Criterion) {
     group.sample_size(10);
     for log_height in [16, 18, 20] {
         let n = 1 << log_height;
-        let trace = wide_fib_trace(n);
+        let table = Table::new(wide_fib_trace(n).transpose());
         for (label, all_next) in [("all_next", true), ("sparse_next", false)] {
             let air = WideFibAir { all_next };
             let zerocheck = AirZerocheck::new(&air, 0);
             group.bench_with_input(BenchmarkId::new(label, log_height), &n, |b, _| {
                 b.iter(|| {
                     let mut ch = fresh_challenger();
-                    zerocheck.prove::<F, EF, _>(&trace, None, &[], &mut ch)
+                    zerocheck.prove::<F, EF, _>(None, &table, &[], &mut ch)
                 });
             });
         }

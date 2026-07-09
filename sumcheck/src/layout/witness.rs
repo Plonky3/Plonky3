@@ -1,12 +1,17 @@
 //! Physical placement of source tables inside the stacked committed polynomial.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::Itertools;
 use p3_field::Field;
+use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::poly::{Poly, PolyView};
 use p3_util::reverse_bits_len;
+use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
 
 use crate::layout::plan::{LayoutShape, plan_layout};
 use crate::table::TableShape;
@@ -80,45 +85,98 @@ impl Selector {
 
 /// A column-major table of multilinear polynomials sharing a common arity.
 ///
+/// The backing matrix is row-major, with one row per polynomial. Each row is
+/// therefore one trace column in evaluation order.
+///
 /// # Invariants
 ///
 /// - At least one column.
 /// - Every column has the same number of variables.
 #[derive(Debug, Clone)]
-pub struct Table<F: Field>(Vec<Poly<F>>);
+pub struct Table<F: Field>(RowMajorMatrix<F>);
 
 impl<F: Field> Table<F> {
-    /// Creates a table from one or more polynomials.
+    /// Creates a table from a row-major matrix with one polynomial per row.
+    ///
+    /// # Panics
+    ///
+    /// - Matrix must have at least one row.
+    pub fn new(columns: RowMajorMatrix<F>) -> Self {
+        assert!(columns.width > 0, "table row width must be positive");
+        Self(columns)
+    }
+
+    /// Creates a table from one or more owned polynomials.
     ///
     /// # Panics
     ///
     /// - Column list must not be empty.
     /// - Every column must share the same arity.
-    pub fn new(polys: Vec<Poly<F>>) -> Self {
-        // Structural precondition: at least one column.
+    #[cfg(test)]
+    pub fn from_polys(polys: Vec<Poly<F>>) -> Self {
         assert!(!polys.is_empty());
-        // Consistency precondition: every column shares the same arity.
+        let num_variables = polys[0].num_variables();
         assert!(
-            polys.iter().map(Poly::num_variables).all_equal(),
+            polys
+                .iter()
+                .all(|poly| poly.num_variables() == num_variables),
             "every column of a table must share the same arity",
         );
-        Self(polys)
+
+        let width = polys[0].num_evals();
+        let values = polys.into_iter().flat_map(Poly::into_evals).collect();
+        Self::new(RowMajorMatrix::new(values, width))
+    }
+
+    /// Creates a zero-filled table.
+    ///
+    /// # Panics
+    ///
+    /// - `num_polys` must be nonzero.
+    pub fn zero(num_polys: usize, num_variables: usize) -> Self {
+        Self::new(RowMajorMatrix::new(
+            vec![F::ZERO; num_polys * (1 << num_variables)],
+            1 << num_variables,
+        ))
+    }
+
+    /// Samples a table whose rows are independent random polynomials.
+    ///
+    /// # Panics
+    ///
+    /// - `num_polys` must be nonzero.
+    pub fn rand<R: Rng>(rng: &mut R, num_polys: usize, num_variables: usize) -> Self
+    where
+        StandardUniform: Distribution<F>,
+    {
+        Self::new(RowMajorMatrix::rand(rng, num_polys, 1 << num_variables))
+    }
+
+    /// Iterates over the table rows, one polynomial evaluation slice per row.
+    pub fn iter_polys(&self) -> impl DoubleEndedIterator<Item = &[F]> {
+        self.0.row_slices()
+    }
+
+    /// Iterates over the table rows in parallel, one polynomial evaluation slice per row.
+    pub fn par_iter_polys(&self) -> impl IndexedParallelIterator<Item = &[F]> {
+        self.0.par_row_slices()
     }
 
     /// Returns the polynomial at column `id`.
-    pub fn poly(&self, id: usize) -> &Poly<F> {
-        &self.0[id]
+    pub fn poly(&self, id: usize) -> PolyView<'_, F> {
+        let start = id * self.0.width;
+        PolyView::new(&self.0.values[start..start + self.0.width])
     }
 
     /// Returns the number of columns.
-    pub const fn num_polys(&self) -> usize {
-        self.0.len()
+    pub fn num_polys(&self) -> usize {
+        self.0.height()
     }
 
     /// Returns the shared number of variables.
     pub fn num_variables(&self) -> usize {
         // Invariant (set by the constructor): every column shares this value.
-        self.0[0].num_variables()
+        self.poly(0).num_variables()
     }
 
     /// Returns the verifier shape of this table.
@@ -131,8 +189,7 @@ impl<F: Field> Table<F> {
         let current_num_variables = self.num_variables();
         if current_num_variables < num_variables {
             self.0
-                .iter_mut()
-                .for_each(|poly| poly.pad_zeros(num_variables));
+                .widen_right((1 << num_variables) - (1 << current_num_variables), F::ZERO);
         }
     }
 }
@@ -503,34 +560,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn table_new_panics_on_empty_polys() {
-        // Invariant:
-        //     A table with no columns is rejected.
-        let _: Table<F> = Table::new(vec![]);
-    }
-
-    #[test]
-    #[should_panic(expected = "must share the same arity")]
-    fn table_new_panics_on_mixed_arities() {
-        // Invariant:
-        //     Mixing columns of different arities is rejected.
-        //
-        // Fixture state:
-        //     poly_a: 3 variables, poly_b: 4 variables → must panic.
-        let poly_a = Poly::<F>::zero(3);
-        let poly_b = Poly::<F>::zero(4);
-        let _ = Table::new(vec![poly_a, poly_b]);
-    }
-
-    #[test]
     fn table_accessors_report_shape() {
         // Invariant:
         //     num_polys, num_variables, size, and poly(id) all agree with the input.
         //
         // Fixture state:
         //     two columns of arity 3 → num_polys = 2, num_variables = 3, size = 2^3 * 2 = 16.
-        let table = Table::new(vec![Poly::<F>::zero(3), Poly::<F>::zero(3)]);
+        let table = Table::<F>::zero(2, 3);
 
         // Check: all shape queries match the fixture.
         assert_eq!(table.num_polys(), 2);
@@ -595,11 +631,7 @@ mod tests {
         //
         // Fixture state:
         //     three columns of arity 4 → expected shape: (4, 3).
-        let table = Table::new(vec![
-            Poly::<F>::zero(4),
-            Poly::<F>::zero(4),
-            Poly::<F>::zero(4),
-        ]);
+        let table = Table::<F>::zero(3, 4);
 
         let shape = table.shape();
 
@@ -612,15 +644,9 @@ mod tests {
     fn fixture_witness() -> Witness<F> {
         let mut rng = SmallRng::seed_from_u64(1);
         // Table 0: arity 3, two columns.
-        let t0 = Table::new(vec![
-            Poly::<F>::rand(&mut rng, 3),
-            Poly::<F>::rand(&mut rng, 3),
-        ]);
+        let t0 = Table::rand(&mut rng, 2, 3);
         // Table 1: arity 4, two columns.
-        let t1 = Table::new(vec![
-            Poly::<F>::rand(&mut rng, 4),
-            Poly::<F>::rand(&mut rng, 4),
-        ]);
+        let t1 = Table::rand(&mut rng, 2, 4);
         Witness::new(vec![t0, t1], 1)
     }
 
@@ -692,8 +718,8 @@ mod tests {
         let b0 = F::from_u64(20);
         let b1 = F::from_u64(21);
 
-        let table_a = Table::new(vec![Poly::new(vec![a0, a1, a2, a3])]);
-        let table_b = Table::new(vec![Poly::new(vec![b0, b1])]);
+        let table_a = Table::from_polys(vec![Poly::new(vec![a0, a1, a2, a3])]);
+        let table_b = Table::from_polys(vec![Poly::new(vec![b0, b1])]);
         let witness = Witness::new_interleaved(vec![table_a, table_b], 0);
 
         assert_eq!(witness.num_variables(), 3);
@@ -710,7 +736,7 @@ mod tests {
         //     zero-padded polynomial with arity equal to folding.
         let a0 = F::from_u64(10);
         let a1 = F::from_u64(11);
-        let table = Table::new(vec![Poly::new(vec![a0, a1])]);
+        let table = Table::from_polys(vec![Poly::new(vec![a0, a1])]);
 
         let witness = Witness::new(vec![table], 3);
 
@@ -860,8 +886,7 @@ mod tests {
             let tables: Vec<Table<F>> = shapes
                 .iter()
                 .map(|&(arity, width)| {
-                    let polys = (0..width).map(|_| Poly::<F>::rand(&mut rng, arity)).collect();
-                    Table::new(polys)
+                    Table::rand(&mut rng, width, arity)
                 })
                 .collect();
 
