@@ -97,6 +97,19 @@ pub struct ZerocheckProof<F, EF> {
     pub preprocessed_next: Vec<Vec<EF>>,
 }
 
+/// One AIR's opening values at its sub-point, held together while scattering back to caller order.
+#[derive(Clone)]
+struct AirOpenings<EF> {
+    /// Current-row value of each main column.
+    local: Vec<EF>,
+    /// Successor value of each main column the AIR reads on the next row.
+    next: Vec<EF>,
+    /// Current-row value of each preprocessed column.
+    preprocessed_local: Vec<EF>,
+    /// Successor value of each preprocessed column the AIR reads on the next row.
+    preprocessed_next: Vec<EF>,
+}
+
 /// A batched AIR zerocheck instance.
 ///
 /// Bundles the AIRs and the grinding parameter shared by the prover and verifier.
@@ -353,20 +366,11 @@ impl<'a, A> AirZerocheck<'a, A> {
                 let round_poly = state.round_poly(&eq_suffix);
                 let q1 = (claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                 let unweighted_claim = round_poly[0] + q1;
-                let interpolator = &interpolators[round_poly.len()];
-                let round_poly = round_poly
-                    .iter()
-                    .map(Some)
-                    .chain(core::iter::repeat(None))
-                    .take(max_degree)
-                    .enumerate()
-                    .map(|(i, value)| match value {
-                        Some(&value) => value,
-                        None => {
-                            interpolator.eval(&round_poly, unweighted_claim, EF::from_usize(i + 1))
-                        }
-                    })
-                    .collect::<Vec<_>>();
+                let round_poly = interpolators[round_poly.len()].extend_evals(
+                    &round_poly,
+                    unweighted_claim,
+                    max_degree,
+                );
                 EF::add_slices(&mut round_poly_acc, &round_poly);
                 round_polys.push(round_poly);
             }
@@ -384,22 +388,14 @@ impl<'a, A> AirZerocheck<'a, A> {
                     .collect::<Vec<_>>();
                 let mut state = RoundStateBase::new(&stages[next_stage], alpha, betas, &tau);
                 let round_poly = state.round_poly(&eq_suffix);
+                // A stage's first round runs on an unfolded trace, so its claim starts at zero.
                 let q1 = (EF::ZERO - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                 let unweighted_claim = round_poly[0] + q1;
-                let interpolator = &interpolators[round_poly.len()];
-                let round_poly = round_poly
-                    .iter()
-                    .map(Some)
-                    .chain(core::iter::repeat(None))
-                    .take(max_degree)
-                    .enumerate()
-                    .map(|(i, value)| match value {
-                        Some(&value) => value,
-                        None => {
-                            interpolator.eval(&round_poly, unweighted_claim, EF::from_usize(i + 1))
-                        }
-                    })
-                    .collect::<Vec<_>>();
+                let round_poly = interpolators[round_poly.len()].extend_evals(
+                    &round_poly,
+                    unweighted_claim,
+                    max_degree,
+                );
                 EF::add_slices(&mut round_poly_acc, &round_poly);
                 new_state = Some((state, round_poly));
                 next_stage += 1;
@@ -457,12 +453,8 @@ impl<'a, A> AirZerocheck<'a, A> {
         }
 
         // States are ordered by activation height, not caller AIR order.
-        // Scatter final local/next openings back through the original AIR indices.
-        let mut local_by_air = (0..self.airs.len()).map(|_| None).collect::<Vec<_>>();
-        let mut next_by_air = (0..self.airs.len()).map(|_| None).collect::<Vec<_>>();
-        let mut preprocessed_local_by_air = (0..self.airs.len()).map(|_| None).collect::<Vec<_>>();
-        let mut preprocessed_next_by_air = (0..self.airs.len()).map(|_| None).collect::<Vec<_>>();
-
+        // Scatter each AIR's openings back to its original index, then read them out in order.
+        let mut openings: Vec<Option<AirOpenings<EF>>> = alloc::vec![None; self.airs.len()];
         for (stage, state) in stages.iter().zip(states) {
             let (local, all_next, _) = state.evals();
             let mut column_offset = 0;
@@ -473,49 +465,48 @@ impl<'a, A> AirZerocheck<'a, A> {
                 .zip(stage.preprocessed.iter())
                 .zip(stage.airs.iter())
             {
+                // Main columns occupy the first span of this AIR's merged block.
                 let main_offset = column_offset;
-                let main_width = table.num_polys();
-                let main_end = main_offset + main_width;
-                local_by_air[air_index] = Some(local[main_offset..main_end].to_vec());
-                next_by_air[air_index] = Some(
-                    air.main_next_row_columns()
-                        .into_iter()
-                        .map(|column| all_next[main_offset + column])
-                        .collect::<Vec<_>>(),
-                );
+                let main_end = main_offset + table.num_polys();
+                let next = air
+                    .main_next_row_columns()
+                    .into_iter()
+                    .map(|column| all_next[main_offset + column])
+                    .collect();
                 column_offset = main_end;
 
+                // Preprocessed columns follow immediately after the main columns.
                 let preprocessed_offset = column_offset;
-                let preprocessed_width = preprocessed.map_or(0, |table| table.num_polys());
-                let preprocessed_end = preprocessed_offset + preprocessed_width;
-                preprocessed_local_by_air[air_index] =
-                    Some(local[preprocessed_offset..preprocessed_end].to_vec());
-                preprocessed_next_by_air[air_index] = Some(
-                    air.preprocessed_next_row_columns()
-                        .into_iter()
-                        .map(|column| all_next[preprocessed_offset + column])
-                        .collect::<Vec<_>>(),
-                );
+                let preprocessed_end =
+                    preprocessed_offset + preprocessed.map_or(0, |table| table.num_polys());
+                let preprocessed_next = air
+                    .preprocessed_next_row_columns()
+                    .into_iter()
+                    .map(|column| all_next[preprocessed_offset + column])
+                    .collect();
                 column_offset = preprocessed_end;
+
+                openings[air_index] = Some(AirOpenings {
+                    local: local[main_offset..main_end].to_vec(),
+                    next,
+                    preprocessed_local: local[preprocessed_offset..preprocessed_end].to_vec(),
+                    preprocessed_next,
+                });
             }
         }
 
-        let local = local_by_air
-            .into_iter()
-            .map(|values| values.expect("every AIR must have local openings"))
-            .collect();
-        let next = next_by_air
-            .into_iter()
-            .map(|values| values.expect("every AIR must have next openings"))
-            .collect();
-        let preprocessed_local = preprocessed_local_by_air
-            .into_iter()
-            .map(|values| values.expect("every AIR must have preprocessed local openings"))
-            .collect();
-        let preprocessed_next = preprocessed_next_by_air
-            .into_iter()
-            .map(|values| values.expect("every AIR must have preprocessed next openings"))
-            .collect();
+        // Split the per-AIR openings into the four proof vectors, in caller order.
+        let mut local = Vec::with_capacity(self.airs.len());
+        let mut next = Vec::with_capacity(self.airs.len());
+        let mut preprocessed_local = Vec::with_capacity(self.airs.len());
+        let mut preprocessed_next = Vec::with_capacity(self.airs.len());
+        for opening in openings {
+            let opening = opening.expect("every AIR must have openings");
+            local.push(opening.local);
+            next.push(opening.next);
+            preprocessed_local.push(opening.preprocessed_local);
+            preprocessed_next.push(opening.preprocessed_next);
+        }
 
         (
             ZerocheckProof {
