@@ -102,6 +102,10 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     betas: Vec<EF>,
     /// AIRs grouped by their internal round-polynomial degree.
     degree_groups: Vec<DegreeGroup<EF>>,
+    /// Per-AIR column spans and degrees, in stage-local order, driving the per-round column fold.
+    ///
+    /// Derived once from the degree groups, since the layout is fixed for the state's lifetime.
+    slots: Vec<AirSlot>,
     /// Zerocheck point coordinates, used to recover the omitted node one for each AIR.
     tau: Point<EF>,
 }
@@ -261,6 +265,10 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>>
     betas: Vec<EF>,
     /// AIRs grouped by their internal round-polynomial degree.
     degree_groups: Vec<DegreeGroup<EF>>,
+    /// Per-AIR column spans and degrees, in stage-local order, driving the per-round column fold.
+    ///
+    /// Derived once from the degree groups, since the layout is fixed for the state's lifetime.
+    slots: Vec<AirSlot>,
     /// Zerocheck point coordinates, used to recover the omitted node one for each AIR.
     tau: Point<EF>,
     /// Number of already-bound prefix coordinates.
@@ -358,10 +366,9 @@ where
 
 /// Per-AIR fold metadata, in stage-local order.
 ///
-/// Flattens the degree groups.
-/// The hot loop then drives one AIR at a time.
+/// Flattens the degree groups so the hot loop drives one AIR at a time.
 /// Interpolation nodes above an AIR's own degree are still skipped.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct AirSlot {
     /// Position of this AIR within its stage, in caller order.
     air_index: usize,
@@ -377,35 +384,31 @@ struct AirSlot {
     degree: usize,
 }
 
-/// Flatten the degree groups into per-AIR slots, ordered by stage-local index.
-fn air_slots<EF>(degree_groups: &[DegreeGroup<EF>], num_airs: usize) -> Vec<AirSlot> {
-    // One placeholder slot per AIR; scattered into place in group order below.
-    let mut slots = alloc::vec![
-        AirSlot {
-            air_index: 0,
-            main_offset: 0,
-            main_width: 0,
-            preprocessed_offset: 0,
-            preprocessed_width: 0,
-            degree: 0,
-        };
-        num_airs
-    ];
-    // A group fixes the degree; each AIR in it fixes its own column span.
-    for group in degree_groups {
-        for air in &group.airs {
-            // Store at the stage-local position so callers index by AIR, not group.
-            slots[air.air_index] = AirSlot {
-                air_index: air.air_index,
-                main_offset: air.main_offset,
-                main_width: air.main_width,
-                preprocessed_offset: air.preprocessed_offset,
-                preprocessed_width: air.preprocessed_width,
-                degree: group.degree,
-            };
+impl AirSlot {
+    /// Flatten the degree groups into one slot per AIR, indexed by stage-local position.
+    ///
+    /// The groups iterate in degree order, but the hot loop wants AIR order.
+    /// Each AIR belongs to exactly one group, so every output slot is written exactly once.
+    fn flatten<EF>(degree_groups: &[DegreeGroup<EF>]) -> Vec<Self> {
+        // The stage-local indices run `0..num_airs`, so the total AIR count sizes the output.
+        let num_airs = degree_groups.iter().map(|group| group.airs.len()).sum();
+        let mut slots = alloc::vec![Self::default(); num_airs];
+        // A group fixes the degree; each AIR in it fixes its own column span.
+        for group in degree_groups {
+            for air in &group.airs {
+                // Scatter to the stage-local position so callers index by AIR, not group.
+                slots[air.air_index] = Self {
+                    air_index: air.air_index,
+                    main_offset: air.main_offset,
+                    main_width: air.main_width,
+                    preprocessed_offset: air.preprocessed_offset,
+                    preprocessed_width: air.preprocessed_width,
+                    degree: group.degree,
+                };
+            }
         }
+        slots
     }
-    slots
 }
 
 /// Beta-weight each AIR's evaluations and reduce them into its degree group.
@@ -667,6 +670,10 @@ where
             assert_eq!(public_values.len(), air.num_public_values());
         }
 
+        // Build the degree grouping once, then flatten it into the AIR-ordered fold view.
+        let degree_groups = build_degree_groups(&stage.degrees, &main_widths, &preprocessed_widths);
+        let slots = AirSlot::flatten(&degree_groups);
+
         Self {
             airs: stage.airs.clone(),
             public_values: stage.public_values.clone(),
@@ -674,7 +681,8 @@ where
             preprocessed: stage.preprocessed.clone(),
             tables: stage.tables.clone(),
             betas,
-            degree_groups: build_degree_groups(&stage.degrees, &main_widths, &preprocessed_widths),
+            degree_groups,
+            slots,
             tau: tau.clone(),
         }
     }
@@ -735,8 +743,11 @@ where
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
         let alpha = EF::ExtensionPacking::from(self.alpha);
-        let slots = air_slots(&self.degree_groups, self.airs.len());
-        let air_degrees = slots.iter().map(|slot| slot.degree).collect::<Vec<_>>();
+        let air_degrees = self
+            .slots
+            .iter()
+            .map(|slot| slot.degree)
+            .collect::<Vec<_>>();
         assert_ne!(packed_half, 0);
 
         let air_evals = eq_suffix
@@ -788,7 +799,7 @@ where
                             *next_delta = next_hi - next_lo;
                         }
                     };
-                    for slot in &slots {
+                    for slot in &self.slots {
                         fill_columns(&mut scratch, slot.main_offset, self.tables[slot.air_index]);
                         if let Some(preprocessed) = self.preprocessed[slot.air_index] {
                             fill_columns(&mut scratch, slot.preprocessed_offset, preprocessed);
@@ -812,7 +823,7 @@ where
                         scratch.add_diffs();
                         boundary += boundary_diff;
 
-                        slots
+                        self.slots
                             .iter()
                             .zip(scratch.air_evals.iter_mut())
                             .for_each(|(slot, evals)| {
@@ -871,8 +882,11 @@ where
         let half = height / 2;
         let degree = self.degree();
 
-        let slots = air_slots(&self.degree_groups, self.airs.len());
-        let air_degrees = slots.iter().map(|slot| slot.degree).collect::<Vec<_>>();
+        let air_degrees = self
+            .slots
+            .iter()
+            .map(|slot| slot.degree)
+            .collect::<Vec<_>>();
         let mut scratch = Scratch::<F, EF>::new(&air_degrees, width);
 
         for (s, &eq_suffix) in eq_suffix.as_slice().iter().enumerate() {
@@ -900,7 +914,7 @@ where
                         *next_delta = next_hi - next_lo;
                     });
             };
-            for slot in &slots {
+            for slot in &self.slots {
                 fill_columns(&mut scratch, slot.main_offset, self.tables[slot.air_index]);
                 if let Some(preprocessed) = self.preprocessed[slot.air_index] {
                     fill_columns(&mut scratch, slot.preprocessed_offset, preprocessed);
@@ -923,7 +937,7 @@ where
                 scratch.add_diffs();
                 boundary += boundary_diff;
 
-                slots
+                self.slots
                     .iter()
                     .zip(scratch.air_evals.iter_mut())
                     .for_each(|(slot, evals)| {
@@ -971,10 +985,9 @@ where
 
         let num_evals = self.num_evals();
         let half = num_evals / 2;
-        let slots = air_slots(&self.degree_groups, self.airs.len());
         let width = self.total_width();
         let mut next_tail = Vec::with_capacity(width);
-        for slot in &slots {
+        for slot in &self.slots {
             next_tail.extend(
                 self.tables[slot.air_index]
                     .iter_polys()
@@ -992,7 +1005,7 @@ where
         let want_packed = (half / 2) >= F::Packing::WIDTH;
         let columns = if want_packed {
             let mut columns = Vec::with_capacity(width);
-            for slot in &slots {
+            for slot in &self.slots {
                 columns.extend(
                     self.tables[slot.air_index]
                         .par_iter_polys()
@@ -1011,7 +1024,7 @@ where
             ExtColumns::Packed(columns)
         } else {
             let mut columns = Vec::with_capacity(width);
-            for slot in &slots {
+            for slot in &self.slots {
                 columns.extend(
                     self.tables[slot.air_index]
                         .par_iter_polys()
@@ -1036,6 +1049,7 @@ where
             alpha: self.alpha,
             betas: self.betas,
             degree_groups: self.degree_groups,
+            slots: self.slots,
             tau: self.tau,
             round: 1,
             columns,
@@ -1109,8 +1123,11 @@ where
         let num_evals = self.num_evals();
         let half = num_evals / 2;
         let degree = self.degree();
-        let slots = air_slots(&self.degree_groups, self.airs.len());
-        let air_degrees = slots.iter().map(|slot| slot.degree).collect::<Vec<_>>();
+        let air_degrees = self
+            .slots
+            .iter()
+            .map(|slot| slot.degree)
+            .collect::<Vec<_>>();
 
         let air_evals = eq_suffix
             .as_slice()
@@ -1148,7 +1165,7 @@ where
                     let (mut boundary, boundary_diff) =
                         BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
 
-                    slots
+                    self.slots
                         .iter()
                         .zip(scratch.air_evals.iter_mut())
                         .for_each(|(slot, evals)| {
@@ -1179,7 +1196,7 @@ where
                         scratch.add_diffs();
                         boundary += boundary_diff;
 
-                        slots
+                        self.slots
                             .iter()
                             .zip(scratch.air_evals.iter_mut())
                             .for_each(|(slot, evals)| {
@@ -1256,8 +1273,11 @@ where
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
         let alpha = PackedExt::new(EF::ExtensionPacking::from(self.alpha));
-        let slots = air_slots(&self.degree_groups, self.airs.len());
-        let air_degrees = slots.iter().map(|slot| slot.degree).collect::<Vec<_>>();
+        let air_degrees = self
+            .slots
+            .iter()
+            .map(|slot| slot.degree)
+            .collect::<Vec<_>>();
         assert_ne!(packed_half, 0);
 
         let air_evals = eq_suffix
@@ -1323,7 +1343,7 @@ where
                         PackedExt::new(raw_boundary_diff.transition),
                     );
 
-                    slots
+                    self.slots
                         .iter()
                         .zip(scratch.air_evals.iter_mut())
                         .for_each(|(slot, evals)| {
@@ -1357,7 +1377,7 @@ where
                         scratch.add_diffs();
                         boundary += boundary_diff;
 
-                        slots
+                        self.slots
                             .iter()
                             .zip(scratch.air_evals.iter_mut())
                             .for_each(|(slot, evals)| {
