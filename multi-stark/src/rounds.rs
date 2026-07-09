@@ -446,6 +446,59 @@ struct DegreeGroup<EF> {
 }
 
 impl<EF: Field> DegreeGroup<EF> {
+    /// Bucket AIRs by degree and assign each AIR its column span in the merged buffer.
+    ///
+    /// Columns are laid out per AIR as main columns then preprocessed columns, in caller order:
+    ///
+    /// ```text
+    ///     [ air0 main | air0 preproc | air1 main | air1 preproc | ... ]
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// - `degrees`: per-variable constraint degree of each AIR, in stage-local order.
+    /// - `main_widths`: main column count of each AIR, in stage-local order.
+    /// - `preprocessed_widths`: preprocessed column count of each AIR, in stage-local order.
+    fn build(degrees: &[usize], main_widths: &[usize], preprocessed_widths: &[usize]) -> Vec<Self> {
+        // A btree keyed by degree gives deterministic group order across prover and verifier.
+        let mut groups = BTreeMap::<usize, Vec<DegreeGroupAir>>::new();
+        // Running column cursor into the merged buffer, advanced AIR by AIR.
+        let mut column_offset = 0;
+        for (air_index, ((&degree, &main_width), &preprocessed_width)) in degrees
+            .iter()
+            .zip(main_widths)
+            .zip(preprocessed_widths)
+            .enumerate()
+        {
+            // Main columns come first for this AIR.
+            let main_offset = column_offset;
+            column_offset += main_width;
+            // Preprocessed columns follow immediately after.
+            let preprocessed_offset = column_offset;
+            column_offset += preprocessed_width;
+            // File the AIR under its degree, keeping its column span.
+            groups.entry(degree).or_default().push(DegreeGroupAir {
+                air_index,
+                main_offset,
+                main_width,
+                preprocessed_offset,
+                preprocessed_width,
+            });
+        }
+
+        // Each degree becomes one group with a zero starting claim and a prebuilt interpolator.
+        groups
+            .into_iter()
+            .map(|(degree, airs)| Self {
+                degree,
+                airs,
+                claim: EF::ZERO,
+                last_evals: EF::zero_vec(degree),
+                interpolator: RoundPolyInterpolator::new(degree),
+            })
+            .collect()
+    }
+
     /// Evaluate this group's eq-stripped round polynomial `q` at an interpolation node.
     ///
     /// The prover never stores `q(1)`; it is recovered from the sumcheck claim relation:
@@ -529,63 +582,6 @@ impl<EF: Field> DegreeGroup<EF> {
     }
 }
 
-/// Bucket AIRs by degree and assign each AIR its column span in the merged buffer.
-///
-/// Columns are laid out per AIR as main columns then preprocessed columns, in caller order:
-///
-/// ```text
-///     [ air0 main | air0 preproc | air1 main | air1 preproc | ... ]
-/// ```
-///
-/// # Arguments
-///
-/// - `degrees`: per-variable constraint degree of each AIR, in stage-local order.
-/// - `main_widths`: main column count of each AIR, in stage-local order.
-/// - `preprocessed_widths`: preprocessed column count of each AIR, in stage-local order.
-fn build_degree_groups<EF: Field>(
-    degrees: &[usize],
-    main_widths: &[usize],
-    preprocessed_widths: &[usize],
-) -> Vec<DegreeGroup<EF>> {
-    // A btree keyed by degree gives deterministic group order across prover and verifier.
-    let mut groups = BTreeMap::<usize, Vec<DegreeGroupAir>>::new();
-    // Running column cursor into the merged buffer, advanced AIR by AIR.
-    let mut column_offset = 0;
-    for (air_index, ((&degree, &main_width), &preprocessed_width)) in degrees
-        .iter()
-        .zip(main_widths)
-        .zip(preprocessed_widths)
-        .enumerate()
-    {
-        // Main columns come first for this AIR.
-        let main_offset = column_offset;
-        column_offset += main_width;
-        // Preprocessed columns follow immediately after.
-        let preprocessed_offset = column_offset;
-        column_offset += preprocessed_width;
-        // File the AIR under its degree, keeping its column span.
-        groups.entry(degree).or_default().push(DegreeGroupAir {
-            air_index,
-            main_offset,
-            main_width,
-            preprocessed_offset,
-            preprocessed_width,
-        });
-    }
-
-    // Each degree becomes one group with a zero starting claim and a prebuilt interpolator.
-    groups
-        .into_iter()
-        .map(|(degree, airs)| DegreeGroup {
-            degree,
-            airs,
-            claim: EF::ZERO,
-            last_evals: EF::zero_vec(degree),
-            interpolator: RoundPolyInterpolator::new(degree),
-        })
-        .collect()
-}
-
 impl<'air, 'data, A, F, EF> RoundStateBase<'air, 'data, A, F, EF>
 where
     F: Field,
@@ -659,7 +655,7 @@ where
         }
 
         // Build the degree grouping once, then flatten it into the AIR-ordered fold view.
-        let degree_groups = build_degree_groups(&stage.degrees, &main_widths, &preprocessed_widths);
+        let degree_groups = DegreeGroup::build(&stage.degrees, &main_widths, &preprocessed_widths);
         let slots = AirSlot::flatten(&degree_groups);
 
         Self {
