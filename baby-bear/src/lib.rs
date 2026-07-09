@@ -20,6 +20,11 @@ mod aarch64_neon;
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub use aarch64_neon::*;
 
+#[cfg(all(target_arch = "aarch64", target_feature = "sve"))]
+mod aarch64_sve;
+#[cfg(all(target_arch = "aarch64", target_feature = "sve"))]
+pub use aarch64_sve::*;
+
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "avx2",

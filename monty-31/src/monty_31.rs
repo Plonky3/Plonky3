@@ -418,8 +418,14 @@ impl<FP: FieldParameters> RawDataSerializable for MontyField31<FP> {
 }
 
 impl<FP: FieldParameters> Field for MontyField31<FP> {
-    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        not(target_feature = "sve")
+    ))]
     type Packing = crate::PackedMontyField31Neon<FP>;
+    #[cfg(all(target_arch = "aarch64", target_feature = "sve"))]
+    type Packing = crate::PackedMontyField31Sve<FP>;
     #[cfg(all(
         target_arch = "x86_64",
         target_feature = "avx2",

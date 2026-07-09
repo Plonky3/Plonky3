@@ -43,5 +43,9 @@ harness = false
 name = "extension"
 harness = false
 
+[[bench]]
+name = "sve_packing"
+harness = false
+
 [lints]
 workspace = true
