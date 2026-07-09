@@ -111,28 +111,6 @@ impl<F: Field> Table<F> {
         Self(columns)
     }
 
-    /// Creates a table from one or more owned polynomials.
-    ///
-    /// # Panics
-    ///
-    /// - Column list must not be empty.
-    /// - Every column must share the same arity.
-    #[cfg(test)]
-    pub fn from_polys(polys: Vec<Poly<F>>) -> Self {
-        assert!(!polys.is_empty());
-        let num_variables = polys[0].num_variables();
-        assert!(
-            polys
-                .iter()
-                .all(|poly| poly.num_variables() == num_variables),
-            "every column of a table must share the same arity",
-        );
-
-        let width = polys[0].num_evals();
-        let values = polys.into_iter().flat_map(Poly::into_evals).collect();
-        Self::new(RowMajorMatrix::new(values, width))
-    }
-
     /// Creates a zero-filled table.
     ///
     /// # Panics
@@ -745,8 +723,8 @@ mod tests {
         let b0 = F::from_u64(20);
         let b1 = F::from_u64(21);
 
-        let table_a = Table::from_polys(vec![Poly::new(vec![a0, a1, a2, a3])]);
-        let table_b = Table::from_polys(vec![Poly::new(vec![b0, b1])]);
+        let table_a = Table::new(RowMajorMatrix::new(vec![a0, a1, a2, a3], 4));
+        let table_b = Table::new(RowMajorMatrix::new(vec![b0, b1], 2));
         let witness = Witness::new_interleaved(vec![table_a, table_b], 0);
 
         assert_eq!(witness.num_variables(), 3);
@@ -763,7 +741,7 @@ mod tests {
         //     zero-padded polynomial with arity equal to folding.
         let a0 = F::from_u64(10);
         let a1 = F::from_u64(11);
-        let table = Table::from_polys(vec![Poly::new(vec![a0, a1])]);
+        let table = Table::new(RowMajorMatrix::new(vec![a0, a1], 2));
 
         let witness = Witness::new(vec![table], 3);
 
