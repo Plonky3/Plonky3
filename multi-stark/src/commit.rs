@@ -1,23 +1,10 @@
 //! Turn an execution trace into the committed multilinear witness.
 
 use p3_commit::MultilinearPcs;
-use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_sumcheck::layout::Table;
 
 use crate::config::{Commitment, MultiStarkConfig, ProverData};
-
-/// Split a trace matrix into one multilinear polynomial per column.
-///
-/// A column of height `2^k` becomes the evaluations of a `k`-variable multilinear polynomial.
-/// The evaluations are taken in row order over the Boolean hypercube.
-///
-/// # Panics
-///
-/// Panics if the trace height is not a power of two.
-pub(crate) fn trace_to_table<F: Field>(trace: &RowMajorMatrix<F>) -> Table<F> {
-    Table::new(tracing::info_span!("transpose").in_scope(|| trace.transpose()))
-}
 
 /// Commit to a trace through the configured commitment scheme.
 ///
@@ -46,7 +33,8 @@ pub fn commit_trace<C: MultiStarkConfig>(
     challenger: &mut C::Challenger,
 ) -> (Commitment<C>, ProverData<C>) {
     // One multilinear polynomial per trace column, stored as one table row per column.
-    let table = trace_to_table(trace);
+    // Transposing lays each column out contiguously as a table row.
+    let table = Table::new(tracing::info_span!("transpose").in_scope(|| trace.transpose()));
 
     // Pack the columns into the scheme's witness form (slot layout and folding live in the config).
     let witness = config.build_witness(table);
@@ -165,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn trace_to_table_extracts_each_column() {
+    fn transposed_trace_extracts_each_column() {
         // Fixture state: a width-2, height-4 row-major trace.
         //
         //     row 0: [1, 5]
@@ -177,7 +165,8 @@ mod tests {
         let values = [1, 5, 2, 6, 3, 7, 4, 8].map(F::from_u64).to_vec();
         let trace = RowMajorMatrix::new(values, 2);
 
-        let table = trace_to_table(&trace);
+        // Transposing lays each column out contiguously as a table row.
+        let table = Table::new(trace.transpose());
 
         // One polynomial per column.
         assert_eq!(table.num_polys(), 2);

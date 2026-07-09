@@ -536,10 +536,11 @@ where
                 .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
                 .collect::<Vec<_>>();
             if let Some(preprocessed) = self.preprocessed {
-                columns.par_extend(
+                columns.extend(
                     preprocessed
                         .par_iter_polys()
-                        .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r)),
+                        .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
+                        .collect::<Vec<_>>(),
                 );
             }
             ExtColumns::Packed(columns)
@@ -550,10 +551,11 @@ where
                 .map(|col| PolyView::new(col).fix_prefix_var(r))
                 .collect::<Vec<_>>();
             if let Some(preprocessed) = self.preprocessed {
-                columns.par_extend(
+                columns.extend(
                     preprocessed
                         .par_iter_polys()
-                        .map(|col| PolyView::new(col).fix_prefix_var(r)),
+                        .map(|col| PolyView::new(col).fix_prefix_var(r))
+                        .collect::<Vec<_>>(),
                 );
             }
             ExtColumns::Scalar(columns)

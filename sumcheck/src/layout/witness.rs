@@ -1,6 +1,5 @@
 //! Physical placement of source tables inside the stacked committed polynomial.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::Field;
@@ -118,7 +117,7 @@ impl<F: Field> Table<F> {
     /// - `num_polys` must be nonzero.
     pub fn zero(num_polys: usize, num_variables: usize) -> Self {
         Self::new(RowMajorMatrix::new(
-            vec![F::ZERO; num_polys * (1 << num_variables)],
+            F::zero_vec(num_polys * (1 << num_variables)),
             1 << num_variables,
         ))
     }
@@ -550,7 +549,7 @@ mod tests {
         //
         // Fixture state:
         //     one row of width 3 → not a power of two → must panic.
-        let _ = Table::new(RowMajorMatrix::new(vec![F::ZERO; 3], 3));
+        let _ = Table::new(RowMajorMatrix::new(F::zero_vec(3), 3));
     }
 
     #[test]
