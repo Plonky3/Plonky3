@@ -100,9 +100,14 @@ impl<F: Field> Table<F> {
     ///
     /// # Panics
     ///
-    /// - Matrix must have at least one row.
+    /// - Matrix must have at least one row (one polynomial).
+    /// - Row width must be a power of two, since each row is a hypercube evaluation table.
     pub fn new(columns: RowMajorMatrix<F>) -> Self {
-        assert!(columns.width > 0, "table row width must be positive");
+        assert!(
+            columns.width.is_power_of_two(),
+            "table row width must be a power of two"
+        );
+        assert!(columns.height() > 0, "table must have at least one column");
         Self(columns)
     }
 
@@ -557,6 +562,28 @@ mod tests {
 
         assert_eq!(sel.num_variables(), 5);
         assert_eq!(sel.index(), original_index);
+    }
+
+    #[test]
+    #[should_panic(expected = "power of two")]
+    fn table_new_panics_on_non_power_of_two_width() {
+        // Invariant:
+        //     Each row is a hypercube evaluation table, so its width must be 2^k.
+        //
+        // Fixture state:
+        //     one row of width 3 → not a power of two → must panic.
+        let _ = Table::new(RowMajorMatrix::new(vec![F::ZERO; 3], 3));
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one column")]
+    fn table_new_panics_on_zero_columns() {
+        // Invariant:
+        //     A table with no columns (no rows) is rejected.
+        //
+        // Fixture state:
+        //     empty buffer with width 2 → height 0 → must panic.
+        let _ = Table::new(RowMajorMatrix::new(Vec::<F>::new(), 2));
     }
 
     #[test]

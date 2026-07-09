@@ -148,7 +148,7 @@ fn bench_zerocheck(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(log_height), &n, |b, _| {
             b.iter(|| {
                 let mut ch = fresh_challenger();
-                zerocheck.prove::<F, EF, _>(None, &table, &pis, &mut ch)
+                zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut ch)
             });
         });
     }
@@ -167,7 +167,7 @@ fn bench_wide_zerocheck(c: &mut Criterion) {
             group.bench_with_input(BenchmarkId::new(label, log_height), &n, |b, _| {
                 b.iter(|| {
                     let mut ch = fresh_challenger();
-                    zerocheck.prove::<F, EF, _>(None, &table, &[], &mut ch)
+                    zerocheck.prove::<F, EF, _>(&table, None, &[], &mut ch)
                 });
             });
         }

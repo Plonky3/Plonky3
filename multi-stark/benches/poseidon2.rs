@@ -79,7 +79,7 @@ fn bench_poseidon2_zerocheck_prove(c: &mut Criterion) {
                 b.iter(|| {
                     let mut challenger = fresh_challenger();
                     let (proof, point) =
-                        zerocheck.prove::<F, EF, _>(None, &table, &[], &mut challenger);
+                        zerocheck.prove::<F, EF, _>(&table, None, &[], &mut challenger);
                     black_box((proof, point, num_vars));
                 });
             },

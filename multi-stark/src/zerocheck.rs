@@ -215,8 +215,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     ///
     /// # Arguments
     ///
-    /// - `preprocessed`: the preprocessed trace, or `None` when the AIR declares none.
     /// - `table`: committed trace table, one original trace column per table row.
+    /// - `preprocessed`: the preprocessed trace, or `None` when the AIR declares none.
     /// - `public_values`: public inputs forwarded to the AIR.
     /// - `challenger`: the Fiat-Shamir transcript.
     ///
@@ -230,8 +230,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     #[tracing::instrument(skip_all)]
     pub fn prove<F, EF, Challenger>(
         &self,
-        preprocessed: Option<&Table<F>>,
         table: &Table<F>,
+        preprocessed: Option<&Table<F>>,
         public_values: &[F],
         challenger: &mut Challenger,
     ) -> (ZerocheckProof<F, EF>, Point<EF>)
@@ -286,8 +286,8 @@ impl<'a, A> AirZerocheck<'a, A> {
             public_values,
             alpha,
             &tau,
-            preprocessed,
             table,
+            preprocessed,
             degree - 1,
         );
 
@@ -874,7 +874,7 @@ mod tests {
 
         let mut prover_challenger = fresh_challenger();
         let table = Table::new(trace.transpose());
-        let (proof, _) = zerocheck.prove::<F, EF, _>(None, &table, &pis, &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
 
         let mut verifier_challenger = fresh_challenger();
         zerocheck
@@ -893,7 +893,7 @@ mod tests {
         let mut challenger = fresh_challenger();
         let table = Table::new(trace.transpose());
         let (proof, point) =
-            AirZerocheck::new(&FibAir, 0).prove::<F, EF, _>(None, &table, &pis, &mut challenger);
+            AirZerocheck::new(&FibAir, 0).prove::<F, EF, _>(&table, None, &pis, &mut challenger);
 
         // Each Fibonacci constraint is per-variable degree 2 (a degree-1 selector
         // times a degree-1 column), so the eq-weighted integrand is degree 3.
@@ -929,7 +929,7 @@ mod tests {
         // Prove with grinding enabled.
         let mut prover_challenger = fresh_challenger();
         let table = Table::new(trace.transpose());
-        let (proof, _) = zerocheck.prove::<F, EF, _>(None, &table, &pis, &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
 
         // Grinding emits exactly one witness per sumcheck round.
         assert_eq!(proof.sumcheck.pow_witnesses.len(), log2_strict_usize(n));
@@ -953,7 +953,7 @@ mod tests {
 
         let mut prover_challenger = fresh_challenger();
         let table = Table::new(trace.transpose());
-        let (proof, _) = zerocheck.prove::<F, EF, _>(None, &table, &pis, &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
 
         let mut verifier_challenger = fresh_challenger();
         let err = zerocheck
@@ -973,7 +973,7 @@ mod tests {
         let mut prover_challenger = fresh_challenger();
         let table = Table::new(trace.transpose());
         let (mut proof, _) =
-            zerocheck.prove::<F, EF, _>(None, &table, &pis, &mut prover_challenger);
+            zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
         proof.local[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();
@@ -995,7 +995,7 @@ mod tests {
         let mut prover_challenger = fresh_challenger();
         let table = Table::new(trace.transpose());
         let (mut proof, _) =
-            zerocheck.prove::<F, EF, _>(None, &table, &pis, &mut prover_challenger);
+            zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
         proof.next[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();
@@ -1018,7 +1018,7 @@ mod tests {
         let mut prover_challenger = fresh_challenger();
         let table = Table::new(trace.transpose());
         let (mut proof, _) =
-            zerocheck.prove::<F, EF, _>(None, &table, &pis, &mut prover_challenger);
+            zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
 
         // Declare a nonzero sum; the verifier must reject before any further work.
         proof.sumcheck.claimed_sum += EF::ONE;
@@ -1049,7 +1049,7 @@ mod tests {
         let mut prover_challenger = fresh_challenger();
         let table = Table::new(trace.transpose());
         let (mut proof, _) =
-            zerocheck.prove::<F, EF, _>(None, &table, &pis, &mut prover_challenger);
+            zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut prover_challenger);
 
         // Remove one opened value so the count no longer matches the AIR width.
         proof.local.pop();
@@ -1119,7 +1119,7 @@ mod tests {
 
         let mut prover_challenger = fresh_challenger();
         let table = Table::new(trace.transpose());
-        let (proof, _) = zerocheck.prove::<F, EF, _>(None, &table, &[], &mut prover_challenger);
+        let (proof, _) = zerocheck.prove::<F, EF, _>(&table, None, &[], &mut prover_challenger);
 
         // Two committed columns yield two current-row claims.
         assert_eq!(proof.local.len(), 2);
@@ -1160,7 +1160,7 @@ mod tests {
             let mut prover_challenger = fresh_challenger();
             let table = Table::new(trace.transpose());
             let (proof, point_prover) =
-                zerocheck.prove::<F, EF, _>(None, &table, &[], &mut prover_challenger);
+                zerocheck.prove::<F, EF, _>(&table, None, &[], &mut prover_challenger);
 
             // Reference columns: one multilinear per trace column, in row order.
             //
@@ -1258,8 +1258,8 @@ mod tests {
             let table = Table::new(trace.transpose());
             let preprocessed_table = Table::new(preprocessed.transpose());
             let (proof, point) = zerocheck.prove::<F, EF, _>(
-                Some(&preprocessed_table),
                 &table,
+                Some(&preprocessed_table),
                 &[],
                 &mut prover_challenger,
             );
@@ -1293,8 +1293,8 @@ mod tests {
         let table = Table::new(trace.transpose());
         let preprocessed_table = Table::new(preprocessed.transpose());
         let (mut proof, _) = zerocheck.prove::<F, EF, _>(
-            Some(&preprocessed_table),
             &table,
+            Some(&preprocessed_table),
             &[],
             &mut prover_challenger,
         );
@@ -1318,8 +1318,8 @@ mod tests {
         let table = Table::new(trace.transpose());
         let preprocessed_table = Table::new(preprocessed.transpose());
         let (mut proof, _) = zerocheck.prove::<F, EF, _>(
-            Some(&preprocessed_table),
             &table,
+            Some(&preprocessed_table),
             &[],
             &mut prover_challenger,
         );

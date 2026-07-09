@@ -122,8 +122,8 @@ where
     let committed_preprocessed =
         preprocessed.map(|preprocessed| config.committed_table(&preprocessed.prover_data));
     let (zerocheck_proof, point) = zerocheck.prove::<C::Val, C::Challenge, _>(
-        committed_preprocessed,
         committed_trace,
+        committed_preprocessed,
         public_values,
         challenger,
     );

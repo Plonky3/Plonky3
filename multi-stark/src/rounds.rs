@@ -264,8 +264,8 @@ where
         public_values: &'a [F],
         alpha: EF,
         tau: &Point<EF>,
-        preprocessed: Option<&'a Table<F>>,
         table: &'a Table<F>,
+        preprocessed: Option<&'a Table<F>>,
         degree: usize,
     ) -> Self {
         assert_eq!(tau.num_variables(), table.num_variables());
@@ -274,6 +274,15 @@ where
             air.preprocessed_width(),
             preprocessed.map_or(0, Table::num_polys)
         );
+        // Both traces bind the same zerocheck point, so they must share an arity.
+        // The fold reads preprocessed columns at offsets derived from the main height.
+        if let Some(preprocessed) = preprocessed {
+            assert_eq!(
+                preprocessed.num_variables(),
+                table.num_variables(),
+                "preprocessed trace height must match the main trace height"
+            );
+        }
         if let Some(air_degree) = air.max_constraint_degree() {
             assert_eq!(degree, air_degree);
         }
@@ -527,11 +536,10 @@ where
                 .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
                 .collect::<Vec<_>>();
             if let Some(preprocessed) = self.preprocessed {
-                columns.extend(
+                columns.par_extend(
                     preprocessed
                         .par_iter_polys()
-                        .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
-                        .collect::<Vec<_>>(),
+                        .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r)),
                 );
             }
             ExtColumns::Packed(columns)
@@ -542,11 +550,10 @@ where
                 .map(|col| PolyView::new(col).fix_prefix_var(r))
                 .collect::<Vec<_>>();
             if let Some(preprocessed) = self.preprocessed {
-                columns.extend(
+                columns.par_extend(
                     preprocessed
                         .par_iter_polys()
-                        .map(|col| PolyView::new(col).fix_prefix_var(r))
-                        .collect::<Vec<_>>(),
+                        .map(|col| PolyView::new(col).fix_prefix_var(r)),
                 );
             }
             ExtColumns::Scalar(columns)
