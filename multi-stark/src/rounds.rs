@@ -744,31 +744,30 @@ where
         let mut scratch = Scratch::<F, EF>::new(&air_degrees, width);
 
         for (s, &eq_suffix) in eq_suffix.as_slice().iter().enumerate() {
-            let fill_columns =
-                |scratch: &mut Scratch<F, EF>, offset: usize, table: &Table<F>| {
-                    let end = offset + table.num_polys();
-                    scratch.local_point[offset..end]
-                        .iter_mut()
-                        .zip(scratch.local_diff[offset..end].iter_mut())
-                        .zip(scratch.next_point[offset..end].iter_mut())
-                        .zip(scratch.next_diff[offset..end].iter_mut())
-                        .zip(table.iter_polys())
-                        .for_each(|((((local, local_delta), next), next_delta), column)| {
-                            let local_lo = column[s];
-                            let local_hi = column[s + half];
-                            *local = local_lo;
-                            *local_delta = local_hi - local_lo;
+            let fill_columns = |scratch: &mut Scratch<F, EF>, offset: usize, table: &Table<F>| {
+                let end = offset + table.num_polys();
+                scratch.local_point[offset..end]
+                    .iter_mut()
+                    .zip(scratch.local_diff[offset..end].iter_mut())
+                    .zip(scratch.next_point[offset..end].iter_mut())
+                    .zip(scratch.next_diff[offset..end].iter_mut())
+                    .zip(table.iter_polys())
+                    .for_each(|((((local, local_delta), next), next_delta), column)| {
+                        let local_lo = column[s];
+                        let local_hi = column[s + half];
+                        *local = local_lo;
+                        *local_delta = local_hi - local_lo;
 
-                            let next_lo = column[s + 1];
-                            let next_hi = if s + half + 1 < height {
-                                column[s + half + 1]
-                            } else {
-                                column[height - 1]
-                            };
-                            *next = next_lo;
-                            *next_delta = next_hi - next_lo;
-                        });
-                };
+                        let next_lo = column[s + 1];
+                        let next_hi = if s + half + 1 < height {
+                            column[s + half + 1]
+                        } else {
+                            column[height - 1]
+                        };
+                        *next = next_lo;
+                        *next_delta = next_hi - next_lo;
+                    });
+            };
             for slot in &slots {
                 fill_columns(&mut scratch, slot.main_offset, self.tables[slot.air_index]);
                 if let Some(preprocessed) = self.preprocessed[slot.air_index] {
