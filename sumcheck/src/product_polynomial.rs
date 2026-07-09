@@ -366,7 +366,10 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
 
             if k == 0 {
                 // Unpack each packed element into its WIDTH scalar lanes, keeping the same order.
-                *self = Self::new_unpacked(self.order, evals.unpack(), weights.unpack());
+                // The basis must survive the representation change: dropping it here would
+                // silently switch the remaining rounds back to evaluation arithmetic.
+                *self = Self::new_unpacked(self.order, evals.unpack(), weights.unpack())
+                    .with_basis(self.basis);
             }
         }
     }
@@ -1093,6 +1096,13 @@ mod tests {
         // Same invariant as above, but starting packed and folding through the
         // packed -> scalar transition, so both representation arms of the
         // projective round path are exercised.
+        //
+        // The dot-product invariant alone cannot catch a basis dropped at the
+        // transition seam: the post-reset rounds stay internally coherent,
+        // just in the wrong basis. The final assertion below can: the fully
+        // bound table must equal the monomial evaluation of the ORIGINAL
+        // table at the sampled challenges, which only holds if every round
+        // bound projectively.
         type EP = <EF as ExtensionField<F>>::ExtensionPacking;
 
         let simd_width = <F as Field>::Packing::WIDTH;
@@ -1102,6 +1112,8 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(321);
         let evals: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
         let weights: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
+
+        let original_evals = Poly::new(evals.clone());
 
         let packed_evals: Vec<EP> = evals.chunks(simd_width).map(EP::from_ext_slice).collect();
         let packed_weights: Vec<EP> = weights.chunks(simd_width).map(EP::from_ext_slice).collect();
@@ -1117,13 +1129,21 @@ mod tests {
         let mut sumcheck_data = SumcheckData::default();
         let mut challenger = make_challenger();
 
+        let mut challenges = Vec::new();
         for expected_vars in (1..=num_variables).rev() {
             assert_eq!(poly.num_variables(), expected_vars);
-            let _ = poly.round(&mut sumcheck_data, &mut challenger, &mut sum, 0);
+            challenges.push(poly.round(&mut sumcheck_data, &mut challenger, &mut sum, 0));
             assert_eq!(poly.dot_product(), sum);
         }
 
         assert_eq!(poly.num_variables(), 0);
+
+        // The transition-seam probe: ties every bind, before and after the
+        // packed -> scalar switch, to one monomial evaluation.
+        assert_eq!(
+            poly.evals().as_constant().unwrap(),
+            original_evals.eval_monomial(&Point::new(challenges)),
+        );
     }
 
     #[test]
