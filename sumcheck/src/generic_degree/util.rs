@@ -75,6 +75,27 @@ impl<EF: Field> RoundPolyInterpolator<EF> {
         RowMajorMatrix::new_col(full)
             .interpolate_arbitrary_with_precomputation(&self.weights, &diff_invs)[0]
     }
+
+    /// Extend a round polynomial's transmitted evaluations up to `target_len` entries.
+    ///
+    /// The layout matches [`Self::eval`]: entry `0` is `h(0)`, entry `i >= 1` is `h(i + 1)`.
+    /// Entries past the input are the same polynomial extrapolated at the higher nodes.
+    ///
+    /// # Arguments
+    ///
+    /// - `evals`: transmitted evaluations `h(0), h(2), …, h(degree)`.
+    /// - `sum_constraint`: the running claimed sum, equal to `h(0) + h(1)`.
+    /// - `target_len`: length of the returned vector; must be at least the input length.
+    pub fn extend_evals(&self, evals: &[EF], sum_constraint: EF, target_len: usize) -> Vec<EF> {
+        let mut extended = Vec::with_capacity(target_len);
+        extended.extend_from_slice(evals);
+        // Each appended entry `i` carries node `i + 1`, extrapolated from the input.
+        extended.extend(
+            (evals.len()..target_len)
+                .map(|i| self.eval(evals, sum_constraint, EF::from_usize(i + 1))),
+        );
+        extended
+    }
 }
 
 #[cfg(test)]
