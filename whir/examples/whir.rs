@@ -15,12 +15,12 @@ use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_sumcheck::layout::{Layout as _, SuffixProver, Table};
+use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{
-    DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
+    Basis, DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
 };
 use p3_whir::pcs::prover::WhirProver;
 use rand::SeedableRng;
@@ -49,8 +49,7 @@ type MyChallenger = DuplexChallenger<F, Poseidon16, 16, 8>;
 type PackedF = <F as Field>::Packing;
 type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MerkleHash, MerkleCompress, 2, 8>;
 type MyDft = Radix2DFTSmallBatch<F>;
-type Layout = SuffixProver<F, EF>;
-type MyPcs = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, Layout>;
+type MyPcs<L> = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, L>;
 
 /// Command-line arguments for the WHIR benchmark.
 #[derive(Parser, Debug)]
@@ -88,12 +87,31 @@ struct Args {
     #[arg(long = "sec", default_value = "CapacityBound")]
     soundness_type: SecurityAssumption,
 
+    /// Run the protocol in the projective (monomial) basis of eprint 2026/762.
+    /// Requires the prefix variable order.
+    #[arg(long = "projective", default_value = "false")]
+    projective: bool,
+
+    /// Variable-binding order: "suffix" (default) or "prefix".
+    #[arg(long = "order", default_value = "suffix")]
+    order: String,
+
     /// Explicit comma-separated log-inverse rates for intermediate codewords.
     #[arg(long = "round-log-inv-rates", value_delimiter = ',')]
     round_log_inv_rates: Vec<usize>,
 }
 
 fn main() {
+    let args = Args::parse();
+    match (args.order.as_str(), args.projective) {
+        ("suffix", false) => run::<SuffixProver<F, EF>>(args),
+        ("prefix", _) => run::<PrefixProver<F, EF>>(args),
+        ("suffix", true) => panic!("the projective basis is prefix-only; pass --order prefix"),
+        (other, _) => panic!("unknown order {other:?}; use \"prefix\" or \"suffix\""),
+    }
+}
+
+fn run<L: Layout<F, EF>>(mut args: Args) {
     // Initialize structured logging with tracing-forest.
     // Respects RUST_LOG env var; defaults to INFO level.
     let env_filter = EnvFilter::builder()
@@ -104,9 +122,6 @@ fn main() {
         .with(env_filter)
         .with(ForestLayer::default())
         .init();
-
-    // Parse command-line arguments.
-    let mut args = Args::parse();
 
     // Default PoW to the protocol's recommended maximum if not specified.
     if args.pow_bits.is_none() {
@@ -172,7 +187,7 @@ fn main() {
     // Generate one random single-column table.
     let mut rng = SmallRng::seed_from_u64(0);
     let table = Table::rand(&mut rng, 1, num_variables);
-    let witness = Layout::new_witness(vec![table], folding_factor.at_round(0));
+    let witness = L::new_witness(vec![table], folding_factor.at_round(0));
 
     let point_schedule: PointSchedule = (0..num_evaluations)
         .map(|_| OpeningBatch::new(vec![0], Vec::new()))
@@ -185,8 +200,14 @@ fn main() {
     assert_eq!(witness.table_shapes(), protocol.table_shapes());
 
     // Derive the full round-by-round configuration from the committed witness.
-    let config =
-        WhirConfig::<EF, F, MyChallenger>::new(witness.num_variables(), whir_params).unwrap();
+    let basis = if args.projective {
+        Basis::Projective
+    } else {
+        Basis::Evaluation
+    };
+    let config = WhirConfig::<EF, F, MyChallenger>::new(witness.num_variables(), whir_params)
+        .unwrap()
+        .with_basis(basis);
     if !config.check_pow_bits() {
         warn!("more PoW bits required than what was specified");
     }
@@ -196,7 +217,7 @@ fn main() {
 
     // Pre-allocate DFT twiddle factors up to the maximum FFT size.
     let dft = Radix2DFTSmallBatch::<F>::new(1 << config.max_fft_size());
-    let pcs = MyPcs::new(config, dft, mmcs);
+    let pcs = MyPcs::<L>::new(config, dft, mmcs);
 
     // Phase 1: Commitment (DFT encoding + Merkle tree + OOD sampling).
     let mut prover_challenger = challenger.clone();
@@ -204,13 +225,16 @@ fn main() {
     pcs.add_domain_separator::<8>(&mut domainsep);
     domainsep.observe_domain_separator(&mut prover_challenger);
     let time = Instant::now();
-    let (commitment, prover_data) =
-        <MyPcs as MultilinearPcs<EF, MyChallenger>>::commit(&pcs, witness, &mut prover_challenger);
+    let (commitment, prover_data) = <MyPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+        &pcs,
+        witness,
+        &mut prover_challenger,
+    );
     let commit_time = time.elapsed();
 
     // Phase 2: Opening proof (multi-round sumcheck + STIR queries + PoW).
     let time = Instant::now();
-    let proof = <MyPcs as MultilinearPcs<EF, MyChallenger>>::open(
+    let proof = <MyPcs<L> as MultilinearPcs<EF, MyChallenger>>::open(
         &pcs,
         prover_data,
         protocol.clone(),
@@ -234,7 +258,7 @@ fn main() {
 
     // Phase 3: Verification (sumcheck checks + Merkle proof verification).
     let verif_time = Instant::now();
-    <MyPcs as MultilinearPcs<EF, MyChallenger>>::verify(
+    <MyPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
         &pcs,
         &commitment,
         &proof,
