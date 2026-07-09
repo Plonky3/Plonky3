@@ -111,11 +111,14 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
 /// Columns stay SIMD-packed as long as there are enough residual rows to fill a packed lane.
 /// Once a fold would leave fewer rows than a lane, columns unpack to scalar form.
 enum ExtColumns<F: Field, EF: ExtensionField<F>> {
+    /// One SIMD lane per residual row, holding several rows per stored element.
     Packed(Vec<Poly<EF::ExtensionPacking>>),
+    /// One extension element per residual row.
     Scalar(Vec<Poly<EF>>),
 }
 
 impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
+    /// Number of stored columns.
     const fn len(&self) -> usize {
         match self {
             Self::Packed(cols) => cols.len(),
@@ -123,6 +126,14 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
         }
     }
 
+    /// Number of residual rows across every column.
+    ///
+    /// A packed column stores one lane group per `F::Packing::WIDTH` rows.
+    /// Multiplying the stored-element count by the packing width recovers the scalar row count.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there are no columns, since the row count is read from the first column.
     fn num_evals(&self) -> usize {
         match self {
             Self::Packed(cols) => {
@@ -138,6 +149,12 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
         }
     }
 
+    /// Borrow the columns as packed lanes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the columns have already unpacked to scalar form.
+    /// Callers gate on the same width threshold that decides the storage variant, so this never fires.
     fn as_packed(&self) -> &[Poly<EF::ExtensionPacking>] {
         match self {
             Self::Packed(cols) => cols,
@@ -145,6 +162,12 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
         }
     }
 
+    /// Borrow the columns as scalar extension elements.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the columns are still packed.
+    /// Callers gate on the same width threshold that decides the storage variant, so this never fires.
     fn as_scalar(&self) -> &[Poly<EF>] {
         match self {
             Self::Scalar(cols) => cols,
@@ -152,6 +175,16 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
         }
     }
 
+    /// Fold the prefix variable of every column at `r`.
+    ///
+    /// Stays packed when `want_packed` holds; otherwise unpacks to scalar form in the same pass.
+    ///
+    /// The residual row count only shrinks round to round.
+    /// So a fold can never make packed storage viable again once it stopped being viable.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `want_packed` is true while the columns are already scalar.
     fn fold(self, r: EF, want_packed: bool) -> Self {
         match self {
             Self::Packed(mut cols) => {
@@ -181,6 +214,13 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
     }
 }
 
+/// Read one packed lane group of consecutive residual rows, starting at scalar row `start`.
+///
+/// Rows at or past `len` fall back to `tail`, the repeat-last successor value.
+///
+/// The stored groups are aligned to multiples of the packing width.
+/// An offset window generally straddles two adjacent groups.
+/// So each lane is reconstructed independently rather than assuming a contiguous layout.
 #[inline]
 fn packed_window<F: Field, EF: ExtensionField<F>>(
     column: &[EF::ExtensionPacking],
@@ -190,10 +230,13 @@ fn packed_window<F: Field, EF: ExtensionField<F>>(
 ) -> EF::ExtensionPacking {
     let packing_width = F::Packing::WIDTH;
     EF::ExtensionPacking::from_ext_fn(|lane| {
+        // Scalar row this lane maps to inside the window.
         let row = start + lane;
         if row < len {
+            // Locate the row's group, then pull its lane out of that group.
             column[row / packing_width].extract(row % packing_width)
         } else {
+            // Past the last real row: repeat the tail value.
             tail
         }
     })
@@ -228,27 +271,34 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>>
 
 /// Scratch for scalar round-polynomial folds.
 ///
-/// Holds one unweighted evaluation accumulator per AIR.
-/// The row buffers carry one residual row's interpolation node and its step difference.
 /// The base path uses one instance; the extension path allocates one per worker.
 struct Scratch<F, EF> {
+    /// Unweighted per-node evaluation accumulator for each AIR.
     air_evals: Vec<Vec<EF>>,
+    /// Current-row value of each column at the active interpolation node.
     local_point: Vec<F>,
+    /// Step added to advance each current-row value to the next node.
     local_diff: Vec<F>,
+    /// Successor-row value of each column at the active interpolation node.
     next_point: Vec<F>,
+    /// Step added to advance each successor-row value to the next node.
     next_diff: Vec<F>,
 }
 
 /// Per-worker scratch for the packed base-field first-round fold.
 ///
-/// Mirrors [`Scratch`] with packed base-field row buffers and a pair of
-/// per-lane equality-weight buffers. One instance is allocated per worker and
-/// reused across that worker's packed blocks.
+/// Mirrors the scalar scratch with packed row buffers, so each element covers one SIMD lane group.
+/// One instance is allocated per worker and reused across that worker's packed blocks.
 struct PackedScratch<P, EF> {
+    /// Unweighted per-node evaluation accumulator for each AIR.
     air_evals: Vec<Vec<EF>>,
+    /// Current-row lanes of each column at the active interpolation node.
     local_point: Vec<P>,
+    /// Step added to advance each current-row lane to the next node.
     local_diff: Vec<P>,
+    /// Successor-row lanes of each column at the active interpolation node.
     next_point: Vec<P>,
+    /// Step added to advance each successor-row lane to the next node.
     next_diff: Vec<P>,
 }
 
