@@ -138,19 +138,31 @@ fn fresh_challenger() -> Ch {
 
 fn bench_zerocheck(c: &mut Criterion) {
     let mut group = c.benchmark_group("zerocheck_prove");
+    group.sample_size(10);
     for log_height in [16, 18, 20] {
         let n = 1 << log_height;
         let trace = fib_trace(n);
         let last = trace.values[(n - 1) * NUM_COLS + 1];
         let pis = [F::ZERO, F::ONE, last];
-        let zerocheck = AirZerocheck::new(&FibAir, 0);
         let table = Table::new(trace.transpose());
-        group.bench_with_input(BenchmarkId::from_parameter(log_height), &n, |b, _| {
-            b.iter(|| {
-                let mut ch = fresh_challenger();
-                zerocheck.prove::<F, EF, _>(&table, None, &pis, &mut ch)
-            });
-        });
+        let air = FibAir;
+        for num_airs in [1, 5, 10] {
+            let airs = (0..num_airs).map(|_| &air).collect::<Vec<_>>();
+            let preprocessed = vec![None; num_airs];
+            let tables = vec![&table; num_airs];
+            let public_values = vec![&pis[..]; num_airs];
+            let zerocheck = AirZerocheck::new(&airs, 0);
+            group.bench_with_input(
+                BenchmarkId::new(format!("{num_airs}_airs"), log_height),
+                &n,
+                |b, _| {
+                    b.iter(|| {
+                        let mut ch = fresh_challenger();
+                        zerocheck.prove::<F, EF, _>(&preprocessed, &tables, &public_values, &mut ch)
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -161,15 +173,31 @@ fn bench_wide_zerocheck(c: &mut Criterion) {
     for log_height in [16, 18, 20] {
         let n = 1 << log_height;
         let table = Table::new(wide_fib_trace(n).transpose());
+        let empty_public_values: &[F] = &[];
         for (label, all_next) in [("all_next", true), ("sparse_next", false)] {
             let air = WideFibAir { all_next };
-            let zerocheck = AirZerocheck::new(&air, 0);
-            group.bench_with_input(BenchmarkId::new(label, log_height), &n, |b, _| {
-                b.iter(|| {
-                    let mut ch = fresh_challenger();
-                    zerocheck.prove::<F, EF, _>(&table, None, &[], &mut ch)
-                });
-            });
+            for num_airs in [1, 5, 10] {
+                let airs = (0..num_airs).map(|_| &air).collect::<Vec<_>>();
+                let preprocessed = vec![None; num_airs];
+                let tables = vec![&table; num_airs];
+                let public_values = vec![empty_public_values; num_airs];
+                let zerocheck = AirZerocheck::new(&airs, 0);
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{label}_{num_airs}_airs"), log_height),
+                    &n,
+                    |b, _| {
+                        b.iter(|| {
+                            let mut ch = fresh_challenger();
+                            zerocheck.prove::<F, EF, _>(
+                                &preprocessed,
+                                &tables,
+                                &public_values,
+                                &mut ch,
+                            )
+                        });
+                    },
+                );
+            }
         }
     }
     group.finish();

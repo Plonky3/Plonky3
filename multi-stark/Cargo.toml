@@ -17,6 +17,7 @@ parallel = [
 ]
 
 [dependencies]
+itertools.workspace = true
 p3-air.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
@@ -30,10 +31,10 @@ serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror.workspace = true
 tracing.workspace = true
 
-
 [dev-dependencies]
 criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
+p3-blake3-air.workspace = true
 p3-dft.workspace = true
 p3-merkle-tree.workspace = true
 p3-poseidon2-air.workspace = true

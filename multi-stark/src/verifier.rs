@@ -145,12 +145,15 @@ where
     challenger.observe(proof.commitment.clone());
 
     // 3. Verify the zerocheck sumcheck, yielding the bound point and the reduced sum.
-    let zerocheck = AirZerocheck::new(air, pow_bits);
+    let airs = [air];
+    let log_heights = [log_height];
+    let public_values = [public_values];
+    let zerocheck = AirZerocheck::new(&airs, pow_bits);
     let reduction = zerocheck
         .verify_reduction::<C::Val, C::Challenge, _>(
             &proof.sumcheck,
-            log_height,
-            public_values,
+            &log_heights,
+            &public_values,
             challenger,
         )
         .map_err(VerificationError::Zerocheck)?;
@@ -207,12 +210,19 @@ where
     };
 
     // 6. Close the zerocheck: recompute g from the commitment-bound values and match the sum.
+    let main_opening = [TableOpening::new(
+        main.current(),
+        &next_columns,
+        main.next(),
+    )];
+    let preprocessed_opening = [preprocessed_opening];
     zerocheck
         .check_constraint(
             &reduction,
-            TableOpening::new(main.current(), &next_columns, main.next()),
-            preprocessed_opening,
-            public_values,
+            &main_opening,
+            &preprocessed_opening,
+            &log_heights,
+            &public_values,
         )
         .map_err(VerificationError::Zerocheck)
 }
