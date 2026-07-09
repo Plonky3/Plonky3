@@ -411,39 +411,6 @@ impl AirSlot {
     }
 }
 
-/// Beta-weight each AIR's evaluations and reduce them into its degree group.
-///
-/// The per-row fold accumulates `sum_x eq(x) * g_air(x)` with no beta factor.
-/// Beta enters here, once per AIR per node, since the sum is linear:
-///
-/// ```text
-///     sum_x beta * eq(x) * g(x) = beta * sum_x eq(x) * g(x)
-/// ```
-///
-/// This keeps beta out of the row loop.
-/// It saves one extension multiply per node per row.
-/// That multiply dominates the fold for cheap AIRs.
-fn write_last_evals<EF: Field>(
-    degree_groups: &mut [DegreeGroup<EF>],
-    betas: &[EF],
-    air_evals: &[Vec<EF>],
-) {
-    for group in degree_groups.iter_mut() {
-        // One accumulator per interpolation node this group carries.
-        let mut last = EF::zero_vec(group.degree);
-        for air in &group.airs {
-            // beta^i for this AIR, applied once here rather than per row.
-            let beta = betas[air.air_index];
-            // Fold the AIR's unweighted per-node sums in, scaled by beta.
-            last.iter_mut()
-                .zip(air_evals[air.air_index].iter())
-                .for_each(|(acc, &value)| *acc += beta * value);
-        }
-        // The group's beta-weighted round polynomial for this round.
-        group.last_evals = last;
-    }
-}
-
 /// One AIR's column placement inside its degree group.
 ///
 /// The group fixes the degree; this records where the AIR's columns live in the merged buffer.
@@ -535,9 +502,30 @@ impl<EF: Field> DegreeGroup<EF> {
         }
     }
 
-    /// Reduce this group's claim to the value of its round polynomial at the sampled challenge.
-    fn update_claim(&mut self, tau: EF, r: EF) {
-        self.claim = self.eval(tau, r);
+    /// Beta-weight each AIR's per-node sums and store them as this round's evaluations.
+    ///
+    /// The per-row fold accumulates `sum_x eq(x) * g_air(x)` with no beta factor.
+    /// Beta enters here, once per AIR per node, since the sum is linear:
+    ///
+    /// ```text
+    ///     sum_x beta * eq(x) * g(x) = beta * sum_x eq(x) * g(x)
+    /// ```
+    ///
+    /// This keeps beta out of the row loop.
+    /// It saves one extension multiply per node per row.
+    /// That multiply dominates the fold for cheap AIRs.
+    fn write_last_evals(&mut self, betas: &[EF], air_evals: &[Vec<EF>]) {
+        // One accumulator per interpolation node this group carries.
+        let mut last = EF::zero_vec(self.degree);
+        for air in &self.airs {
+            // beta^i for this AIR, applied once here rather than per row.
+            let beta = betas[air.air_index];
+            // Fold the AIR's unweighted per-node sums in, scaled by beta.
+            last.iter_mut()
+                .zip(air_evals[air.air_index].iter())
+                .for_each(|(acc, &value)| *acc += beta * value);
+        }
+        self.last_evals = last;
     }
 }
 
@@ -865,7 +853,9 @@ where
             .air_evals;
         let mut out = EF::zero_vec(degree);
         let tau = self.tau.as_slice()[0];
-        write_last_evals(&mut self.degree_groups, &self.betas, &air_evals);
+        for group in &mut self.degree_groups {
+            group.write_last_evals(&self.betas, &air_evals);
+        }
         self.degree_groups
             .iter()
             .for_each(|group| group.combine_evals(&mut out, tau));
@@ -966,7 +956,9 @@ where
 
         let mut out = EF::zero_vec(degree);
         let tau = self.tau.as_slice()[0];
-        write_last_evals(&mut self.degree_groups, &self.betas, &scratch.air_evals);
+        for group in &mut self.degree_groups {
+            group.write_last_evals(&self.betas, &scratch.air_evals);
+        }
         self.degree_groups
             .iter()
             .for_each(|group| group.combine_evals(&mut out, tau));
@@ -981,7 +973,7 @@ where
         let tau = self.tau.as_slice()[0];
         self.degree_groups
             .iter_mut()
-            .for_each(|group| group.update_claim(tau, r));
+            .for_each(|group| group.claim = group.eval(tau, r));
 
         let num_evals = self.num_evals();
         let half = num_evals / 2;
@@ -1235,7 +1227,9 @@ where
             .air_evals;
         let mut out = EF::zero_vec(degree);
         let tau = self.tau.as_slice()[self.round];
-        write_last_evals(&mut self.degree_groups, &self.betas, &air_evals);
+        for group in &mut self.degree_groups {
+            group.write_last_evals(&self.betas, &air_evals);
+        }
         self.degree_groups
             .iter()
             .for_each(|group| group.combine_evals(&mut out, tau));
@@ -1419,7 +1413,9 @@ where
             .air_evals;
         let mut out = EF::zero_vec(degree);
         let tau = self.tau.as_slice()[self.round];
-        write_last_evals(&mut self.degree_groups, &self.betas, &air_evals);
+        for group in &mut self.degree_groups {
+            group.write_last_evals(&self.betas, &air_evals);
+        }
         self.degree_groups
             .iter()
             .for_each(|group| group.combine_evals(&mut out, tau));
@@ -1434,7 +1430,7 @@ where
         let tau = self.tau.as_slice()[self.round];
         self.degree_groups
             .iter_mut()
-            .for_each(|group| group.update_claim(tau, r));
+            .for_each(|group| group.claim = group.eval(tau, r));
 
         let num_evals = self.num_evals();
         let half = num_evals / 2;
