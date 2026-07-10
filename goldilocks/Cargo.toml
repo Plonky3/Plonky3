@@ -47,5 +47,9 @@ harness = false
 name = "sve_packing"
 harness = false
 
+[[bench]]
+name = "poseidon2_packing_ab"
+harness = false
+
 [lints]
 workspace = true
