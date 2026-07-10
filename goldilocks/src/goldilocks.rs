@@ -399,14 +399,21 @@ impl Field for Goldilocks {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedGoldilocksAVX512;
 
+    // Plain NEON and SVE2 parts (Graviton4/5) pack with the NEON backend; on SVE2 its Goldilocks
+    // multiply uses a register-native SVE2-assisted product. SVE1-only parts (Graviton3) use the
+    // standalone SVE backend.
     #[cfg(all(
         target_arch = "aarch64",
         target_feature = "neon",
-        not(target_feature = "sve")
+        not(all(target_feature = "sve", not(target_feature = "sve2")))
     ))]
     type Packing = crate::PackedGoldilocksNeon;
 
-    #[cfg(all(target_arch = "aarch64", target_feature = "sve"))]
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_feature = "sve",
+        not(target_feature = "sve2")
+    ))]
     type Packing = crate::PackedGoldilocksSve;
 
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
