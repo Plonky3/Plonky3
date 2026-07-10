@@ -9,9 +9,9 @@
 
 extern crate alloc;
 
-pub mod commit;
 pub mod config;
 pub mod folder;
+pub mod instance;
 pub mod keys;
 pub mod metadata;
 pub mod opening;
@@ -23,6 +23,7 @@ pub mod selectors;
 pub mod verifier;
 pub mod zerocheck;
 
+pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};
 pub use keys::{ProvingKey, VerifyingKey, setup};
 pub use proof::MultiStarkProof;
 pub use prover::prove;
