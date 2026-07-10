@@ -41,14 +41,6 @@ where
         /// Number of proof slots.
         actual: usize,
     },
-    /// The preprocessed key height disagrees with the proof's trace height.
-    #[error("preprocessed height mismatch: expected {expected}, got {actual}")]
-    PreprocessedHeightMismatch {
-        /// Trace arity the preprocessed commitment was built for.
-        expected: usize,
-        /// Trace arity the proof's instance fixes.
-        actual: usize,
-    },
 }
 
 /// Verify a complete batched multilinear AIR proof.
@@ -203,25 +195,27 @@ where
         .map(|(batch, next_columns)| TableOpening::new(batch.current(), next_columns, batch.next()))
         .collect::<Vec<_>>();
 
-    // Build preprocessed table views in instance order. AIRs with no preprocessed
-    // columns get an empty view; the table index advances only for non-empty AIRs.
-    let mut table_index = 0;
+    // Build one preprocessed opening view per instance, in instance order.
+    //
+    // An AIR with no preprocessed columns gets an empty view.
+    // Opened batches and their next-column lists share the non-empty order.
+    // One iterator advances through them, stepping only for non-empty AIRs.
+    // A shortfall yields an empty view, which the closing check rejects instead of panicking.
+    let mut preprocessed_batches = preprocessed_evals
+        .iter()
+        .flatten()
+        .zip(preprocessed_next_columns.iter());
     let preprocessed_openings = instances
         .iter()
         .map(|instance| {
             if instance.air.preprocessed_width() == 0 {
                 TableOpening::empty()
             } else {
-                let evals = preprocessed_evals
-                    .as_ref()
-                    .expect("missing preprocessed evals rejected before verification");
-                let current_table_index = table_index;
-                let batch = &evals[current_table_index];
-                table_index += 1;
-                TableOpening::new(
-                    batch.current(),
-                    &preprocessed_next_columns[current_table_index],
-                    batch.next(),
+                preprocessed_batches.next().map_or_else(
+                    TableOpening::empty,
+                    |(batch, next_columns)| {
+                        TableOpening::new(batch.current(), next_columns, batch.next())
+                    },
                 )
             }
         })

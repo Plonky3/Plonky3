@@ -304,6 +304,120 @@ fn prove_verify_batched_fibonacci_roundtrips() {
 }
 
 #[test]
+fn prove_verify_mixed_height_fibonacci_roundtrips() {
+    // Invariant: two traces of different heights batch into one commitment and
+    //   one zerocheck, and the honest proof verifies.
+    //
+    // Fixture state:
+    //
+    //     trace a: height 256 -> 8 variables
+    //     trace b: height 128 -> 7 variables
+    //     common bound point: 8 coordinates
+    //
+    // Each trace opens at the suffix of the common point matching its height.
+    // The height-7 trace drops the leading coordinate before opening.
+    // Equal-height batches never drop a coordinate, so this path is otherwise unexercised.
+    let air = FibAir;
+    let n_a = 256;
+    let n_b = 128;
+    let log_a = log2_strict_usize(n_a);
+    let log_b = log2_strict_usize(n_b);
+    let trace_a = fib_trace(n_a);
+    let trace_b = fib_trace(n_b);
+    let pis_a = fib_public_values_for_trace(&trace_a);
+    let pis_b = fib_public_values_for_trace(&trace_b);
+
+    // Size the config for the stacked cell count the layout planner computes.
+    // That count is the summed cells across both tables, rounded up to a power of two.
+    let cells = NUM_COLS * n_a + NUM_COLS * n_b;
+    let config = config_for_stacked(log2_ceil_usize(cells));
+    let airs = [&air, &air];
+
+    // One setup, then one proof binding both traces under a shared commitment.
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&air, Table::new(trace_a.transpose()), &pk, &pis_a),
+            ProverInstance::new(&air, Table::new(trace_b.transpose()), &pk, &pis_b),
+        ]),
+        0,
+        &mut challenger(&config),
+    );
+
+    // Both instances verify against the shared proof, each at its own height.
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&air, &vk, log_a, &pis_a),
+            VerifierInstance::new(&air, &vk, log_b, &pis_b),
+        ]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("honest mixed-height batched proof must verify");
+}
+
+#[test]
+fn verify_rejects_violated_constraint_in_shorter_table() {
+    // Invariant: a broken constraint in the shorter trace of a mixed-height
+    //   batch is rejected, so the shorter table's suffix opening is checked.
+    //
+    // Fixture state:
+    //
+    //     trace a: height 256, honest
+    //     trace b: height 128, one transition broken
+    let air = FibAir;
+    let n_a = 256;
+    let n_b = 128;
+    let log_a = log2_strict_usize(n_a);
+    let log_b = log2_strict_usize(n_b);
+    let trace_a = fib_trace(n_a);
+    let mut trace_b = fib_trace(n_b);
+    // Mutation: shift row 2 of the shorter trace, breaking its transition.
+    trace_b.values[2 * NUM_COLS] += F::ONE;
+    let pis_a = fib_public_values_for_trace(&trace_a);
+    let pis_b = fib_public_values_for_trace(&trace_b);
+
+    let cells = NUM_COLS * n_a + NUM_COLS * n_b;
+    let config = config_for_stacked(log2_ceil_usize(cells));
+    let airs = [&air, &air];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&air, Table::new(trace_a.transpose()), &pk, &pis_a),
+            ProverInstance::new(&air, Table::new(trace_b.transpose()), &pk, &pis_b),
+        ]),
+        0,
+        &mut challenger(&config),
+    );
+
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&air, &vk, log_a, &pis_a),
+            VerifierInstance::new(&air, &vk, log_b, &pis_b),
+        ]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerificationError::Zerocheck(ZerocheckError::FinalSumMismatch)
+        ),
+        "expected zerocheck final-sum mismatch, got {err:?}"
+    );
+}
+
+#[test]
 fn verify_rejects_tampered_opening() {
     // Fixture state: the proof carries commitment-bound trace openings.
     let n = 256;

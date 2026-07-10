@@ -326,6 +326,64 @@ fn prove_verify_batched_preprocessed_roundtrips() {
 }
 
 #[test]
+fn prove_verify_mixed_height_preprocessed_roundtrips() {
+    // Invariant: two AIRs of different heights, each with a preprocessed trace,
+    //   batch into one main commitment and one preprocessed commitment, and the
+    //   honest proof verifies.
+    //
+    // Fixture state:
+    //
+    //     air a: height 256 -> 8 variables, 1 preprocessed column
+    //     air b: height 128 -> 7 variables, 1 preprocessed column
+    //
+    // The main and preprocessed openings of the height-7 AIR both drop the
+    //   leading coordinate before opening.
+    let n_a = 256;
+    let n_b = 128;
+    let log_a = log2_strict_usize(n_a);
+    let log_b = log2_strict_usize(n_b);
+    let air_a = PreprocessedAir { height: n_a };
+    let air_b = PreprocessedAir { height: n_b };
+    let trace_a = main_trace(&fixed_column(n_a));
+    let trace_b = main_trace(&fixed_column(n_b));
+
+    // Size each scheme for the stacked cell count the layout planner computes.
+    let main_cells = MAIN_WIDTH * n_a + MAIN_WIDTH * n_b;
+    let preprocessed_cells = PREPROCESSED_WIDTH * n_a + PREPROCESSED_WIDTH * n_b;
+    let config = WhirConfigForTest {
+        pcs: pcs_for_stacked(log2_ceil_usize(main_cells)),
+        preprocessed_pcs: pcs_for_stacked(log2_ceil_usize(preprocessed_cells)),
+    };
+    let airs = [&air_a, &air_b];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&air_a, Table::new(trace_a.transpose()), &pk, &[]),
+            ProverInstance::new(&air_b, Table::new(trace_b.transpose()), &pk, &[]),
+        ]),
+        0,
+        &mut challenger(&config),
+    );
+
+    assert!(proof.preprocessed_opening.is_some());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&air_a, &vk, log_a, &[]),
+            VerifierInstance::new(&air_b, &vk, log_b, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("honest mixed-height batched preprocessed proof must verify");
+}
+
+#[test]
 fn setup_is_reusable_across_proofs() {
     // One setup commits the preprocessed trace, then two independent proofs reuse it.
     let n = 256;

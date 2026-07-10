@@ -43,6 +43,10 @@ pub struct VerifyingKey<C: MultiStarkConfig> {
 /// When the AIR declares no preprocessed trace, both keys carry no preprocessed data.
 /// The proof then runs exactly as the main-only flow does.
 ///
+/// The AIR order fixed here is the batch order.
+/// The prover-side and verifier-side batches must list their instances in this same order.
+/// The preprocessed tables are stacked in this order, so a mismatch pairs each instance with the wrong table.
+///
 /// The commitment is deterministic in the trace.
 /// The throwaway challenger therefore only satisfies the commit signature.
 /// Its post-state is discarded.

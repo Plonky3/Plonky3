@@ -47,6 +47,7 @@ use crate::zerocheck::AirZerocheck;
 /// # Panics
 ///
 /// Panics if the instance list is empty.
+/// Panics if any trace arity is below the commitment scheme's padding floor.
 /// Panics if the prover instances do not all use the same proving key.
 /// Panics if an AIR declares preprocessed columns but the proving key has none.
 #[tracing::instrument(skip_all)]
@@ -89,6 +90,19 @@ where
     assert!(!instances.is_empty());
 
     let (proving_key, tables, instances) = instances.into_parts();
+
+    // Every committed table must meet the scheme's padding floor.
+    //
+    // A table below the floor is zero-padded before commitment.
+    // Padding moves the repeated boundary row into the pad.
+    // The committed successor view then reads a pad row instead of the last row.
+    // That disagrees with the zerocheck's repeat-last successor convention.
+    assert!(
+        tables
+            .iter()
+            .all(|table| table.num_variables() >= config.min_num_variables()),
+        "every trace arity must be at least the commitment scheme's padding floor"
+    );
 
     // 1. Absorb the reusable batched preprocessed commitment before any challenge depends on it.
     if let Some(preprocessed) = &proving_key.preprocessed {

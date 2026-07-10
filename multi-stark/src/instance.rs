@@ -188,6 +188,9 @@ where
     C: MultiStarkConfig,
 {
     /// Create a prover-side batch in proof order.
+    ///
+    /// The order must match the AIR order used at setup.
+    /// Main and preprocessed tables are committed and opened in this order.
     pub const fn new(instances: Vec<ProverInstance<'a, C, A>>) -> Self {
         Self(instances)
     }
@@ -232,6 +235,9 @@ where
     C: MultiStarkConfig,
 {
     /// Create a verifier-side batch in proof order.
+    ///
+    /// The order must match the prover-side batch order and the AIR order used at setup.
+    /// Openings are replayed in this order.
     pub const fn new(instances: Vec<VerifierInstance<'a, C, A>>) -> Self {
         Self(instances)
     }
