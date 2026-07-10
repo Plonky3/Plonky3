@@ -1,7 +1,7 @@
 use p3_field::InjectiveMonomial;
 use p3_poseidon2::{
-    ExternalLayer, InternalLayer, MDSMat4, add_rc_and_sbox_generic,
-    external_initial_permute_state, external_terminal_permute_state,
+    ExternalLayer, InternalLayer, MDSMat4, add_rc_and_sbox_generic, external_initial_permute_state,
+    external_terminal_permute_state,
 };
 
 use super::PackedMontyField31Sve;

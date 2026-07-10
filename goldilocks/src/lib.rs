@@ -1,10 +1,6 @@
 //! The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 
 #![no_std]
-#![cfg_attr(
-    all(target_arch = "aarch64", target_feature = "sve"),
-    feature(stdarch_aarch64_sve)
-)]
 
 extern crate alloc;
 

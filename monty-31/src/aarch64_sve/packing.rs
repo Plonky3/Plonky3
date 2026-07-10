@@ -1,23 +1,23 @@
-//! Fixed-length (VLS) SVE packing for `MontyField31`.
+//! Fixed-length (VLS) SVE packing for `MontyField31`, built on inline `asm!`.
 //!
-//! Unlike the NEON backend, which stores its lanes in a `uint32x4_t` register type, SVE vector
-//! registers are *sizeless*: they cannot be struct fields, array elements, or `Sized`. The packed
-//! type therefore keeps its data in a plain `[MontyField31; WIDTH]` array (exactly like the NEON and
-//! WASM backends) and only materialises an `svuint32_t` as a transient function local, loading with
-//! `svld1` and storing with `svst1`.
+//! SVE vector registers are *sizeless*: they cannot be struct fields, array elements, or `Sized`.
+//! The packed type therefore keeps its data in a plain `[MontyField31; WIDTH]` array (exactly like
+//! the NEON and WASM backends), and each arithmetic kernel is a self-contained `asm!` block that
+//! loads the operands into `z` registers (`ld1w`), computes, and stores the result (`st1w`).
+//!
+//! The kernels use only base **SVE (SVE1)** instructions, so they run on Neoverse V1 (Graviton3) as
+//! well as SVE2 parts. Because the intrinsics are expressed as assembly rather than
+//! `core::arch::aarch64` intrinsics, no nightly feature flag is required: the backend builds on
+//! stable Rust whenever `-C target-feature=+sve` is set.
 //!
 //! `WIDTH` is fixed at compile time. The governing predicate covers exactly the first `WIDTH` lanes
-//! (`svwhilelt`), so loads and stores never touch memory past the backing array even when the
-//! hardware vector length exceeds `WIDTH * 32` bits. Correctness still requires the hardware vector
-//! length to be *at least* `WIDTH * 32` bits; this is checked once via `debug_assert` in
-//! [`PackedMontyField31Sve::to_vec`].
-//!
-//! The SVE intrinsic names below follow ACLE and target `core::arch::aarch64`. Coverage of the SVE
-//! surface in `stdarch` evolves; any intrinsic that is not yet available on the pinned nightly can
-//! be expressed with an inline `asm!` block over the same registers.
+//! (`whilelt p, xzr, WIDTH`), so loads and stores never touch memory past the backing array even
+//! when the hardware vector length exceeds `WIDTH * 32` bits. Correctness still requires the
+//! hardware vector length to be *at least* `WIDTH * 32` bits; this is checked once per kernel via
+//! `debug_assert` (see [`debug_assert_vl`]).
 
 use alloc::vec::Vec;
-use core::arch::aarch64::{self, svbool_t, svint32_t, svuint32_t};
+use core::arch::asm;
 use core::iter::{Product, Sum};
 use core::mem::MaybeUninit;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -40,14 +40,31 @@ use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrim
 /// Number of `MontyField31` elements per packed vector.
 ///
 /// Fixed at 8, i.e. a 256-bit vector length (Graviton3 / Neoverse V1). For a 512-bit part set this
-/// to 16; the runtime guard in [`PackedMontyField31Sve::to_vec`] ensures the hardware vector length
-/// is large enough.
+/// to 16; the runtime guard in [`debug_assert_vl`] ensures the hardware vector length is large
+/// enough.
 const WIDTH: usize = 8;
 
-/// The governing predicate: active on exactly the first `WIDTH` 32-bit lanes.
+/// Hardware vector length expressed as a count of 32-bit words (`VL / 32`).
 #[inline(always)]
-fn pg() -> svbool_t {
-    unsafe { aarch64::svwhilelt_b32_u32(0, WIDTH as u32) }
+fn hw_vl_words() -> u64 {
+    let n: u64;
+    // SAFETY: `cntw` reads the (process-constant) vector length and has no other effect.
+    unsafe {
+        asm!("cntw {n}", n = out(reg) n, options(pure, nomem, nostack, preserves_flags));
+    }
+    n
+}
+
+/// Debug-only assertion that the hardware vector length covers `WIDTH` 32-bit lanes.
+///
+/// A machine whose vector length is below `WIDTH * 32` bits would leave the high predicate lanes
+/// outside the register and silently drop elements; this catches that in debug builds.
+#[inline(always)]
+fn debug_assert_vl() {
+    debug_assert!(
+        hw_vl_words() >= WIDTH as u64,
+        "SVE vector length is below WIDTH * 32 bits"
+    );
 }
 
 /// Fixed-length SVE implementation of `MontyField31` arithmetic.
@@ -57,35 +74,6 @@ fn pg() -> svbool_t {
 pub struct PackedMontyField31Sve<PMP: PackedMontyParameters>(pub [MontyField31<PMP>; WIDTH]);
 
 impl<PMP: PackedMontyParameters> PackedMontyField31Sve<PMP> {
-    /// Load the backing array into an SVE vector, reading only the first `WIDTH` lanes.
-    #[inline]
-    #[must_use]
-    fn to_vec(self) -> svuint32_t {
-        // The hardware vector length (in 32-bit words) must cover our fixed `WIDTH`; otherwise the
-        // predicate's high lanes fall outside the register and elements are silently dropped.
-        debug_assert!(unsafe { aarch64::svcntw() } as usize >= WIDTH);
-
-        // Safety: `MontyField31` is `repr(transparent)` over `u32`, so the array is `WIDTH`
-        // contiguous `u32`s. The predicate activates exactly `WIDTH` lanes, so `svld1` reads only
-        // within the array.
-        unsafe { aarch64::svld1_u32(pg(), self.0.as_ptr().cast::<u32>()) }
-    }
-
-    /// Store an SVE vector into a fresh backing array, writing only the first `WIDTH` lanes.
-    ///
-    /// SAFETY: every active lane of `vec` must be a canonical `MontyField31`, i.e. in `[0, P)`.
-    #[inline]
-    unsafe fn from_vec(vec: svuint32_t) -> Self {
-        let mut out = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
-        // Safety: the predicate activates exactly `WIDTH` lanes and `out` is `WIDTH` `u32`s wide, so
-        // `svst1` initialises every lane and stays within `out`. The caller guarantees canonical
-        // lane values.
-        unsafe {
-            aarch64::svst1_u32(pg(), out.as_mut_ptr().cast::<u32>(), vec);
-            Self(out.assume_init())
-        }
-    }
-
     /// Copy `value` to all positions in a packed vector.
     #[inline]
     const fn broadcast(value: MontyField31<PMP>) -> Self {
@@ -94,24 +82,15 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Sve<PMP> {
 
     /// Fused DIF butterfly for the forward FFT: computes `(x + y, (x - y) * roots)`.
     ///
-    /// The `x - y` term is left unreduced: as `x, y` are in `[0, P)`, the raw `svsub` reinterpreted
-    /// as signed lies in `(-P, P)`, which is exactly the input range accepted by the signed
-    /// Montgomery multiply. This skips the modular reduction on `x - y`.
+    /// The `x - y` term is left unreduced: as `x, y` are in `[0, P)`, the raw wrapping subtraction
+    /// reinterpreted as signed lies in `(-P, P)`, which is exactly the input range accepted by the
+    /// signed Montgomery multiply. This skips the modular reduction on `x - y`.
     #[inline]
     pub(crate) fn forward_butterfly(self, y: Self, roots: Self) -> (Self, Self) {
-        let (sum, product);
-        unsafe {
-            let x_vec = self.to_vec();
-            let y_vec = y.to_vec();
-
-            sum = vec_add::<PMP>(x_vec, y_vec);
-
-            let diff = aarch64::svreinterpret_s32_u32(aarch64::svsub_u32_x(pg(), x_vec, y_vec));
-            let roots_s = aarch64::svreinterpret_s32_u32(roots.to_vec());
-            product = vec_mul_signed::<PMP>(diff, roots_s);
-        }
-        // Safety: `vec_add` and `vec_mul_signed` return canonical values.
-        unsafe { (Self::from_vec(sum), Self::from_vec(product)) }
+        let sum = vec_add(&self, &y);
+        let diff = vec_sub_raw(&self, &y);
+        let product = vec_mul_signed(&diff, &roots);
+        (sum, product)
     }
 }
 
@@ -123,8 +102,11 @@ impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31S
 }
 
 // -----------------------------------------------------------------------------
-// Vector kernels. Each takes and returns a transient `svuint32_t`; the governing
-// predicate is `pg()` throughout. Inactive lanes are don't-care (`_x` forms).
+// Vector kernels. Each loads its operands, computes over the first `WIDTH` lanes
+// (predicate `whilelt p0, xzr, WIDTH`), and stores the result. Only base SVE1
+// instructions are used, so `mul`/`umulh`/`smulh` take the predicated,
+// destructive form and `movprfx` is used where a non-destructive result is
+// needed.
 // -----------------------------------------------------------------------------
 
 /// Canonical modular addition: given `a, b` in `[0, P)` returns `(a + b) mod P` in `[0, P)`.
@@ -132,13 +114,35 @@ impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31S
 /// `t = a + b`, `u = t - P`; `min(t, u)` picks `t` when `t < P` (then `u` wrapped high) and `u`
 /// otherwise. Mirrors `uint32x4_mod_add`.
 #[inline]
-#[must_use]
-fn vec_add<PMP: PackedMontyParameters>(a: svuint32_t, b: svuint32_t) -> svuint32_t {
+fn vec_add<PMP: PackedMontyParameters>(
+    a: &PackedMontyField31Sve<PMP>,
+    b: &PackedMontyField31Sve<PMP>,
+) -> PackedMontyField31Sve<PMP> {
+    debug_assert_vl();
+    let mut out = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+    // SAFETY: the operand pointers span `WIDTH` contiguous `u32`s (`MontyField31` is
+    // `repr(transparent)` over `u32`), and the predicate activates exactly `WIDTH` lanes, so the
+    // load reads and the store writes only within the arrays. Every lane of `out` is written, so
+    // `assume_init` is sound; canonical inputs yield a canonical result.
     unsafe {
-        let p = aarch64::svdup_n_u32(PMP::PRIME);
-        let t = aarch64::svadd_u32_x(pg(), a, b);
-        let u = aarch64::svsub_u32_x(pg(), t, p);
-        aarch64::svmin_u32_x(pg(), t, u)
+        asm!(
+            "whilelt p0.s, xzr, {w}",
+            "dup z2.s, {p:w}",
+            "ld1w {{z0.s}}, p0/z, [{a}]",
+            "ld1w {{z1.s}}, p0/z, [{b}]",
+            "add z0.s, z0.s, z1.s",
+            "sub z1.s, z0.s, z2.s",
+            "umin z0.s, p0/m, z0.s, z1.s",
+            "st1w {{z0.s}}, p0, [{o}]",
+            w = in(reg) WIDTH as u64,
+            p = in(reg) PMP::PRIME,
+            a = in(reg) a.0.as_ptr().cast::<u32>(),
+            b = in(reg) b.0.as_ptr().cast::<u32>(),
+            o = in(reg) out.as_mut_ptr().cast::<u32>(),
+            out("z0") _, out("z1") _, out("z2") _, out("p0") _,
+            options(nostack),
+        );
+        PackedMontyField31Sve(out.assume_init())
     }
 }
 
@@ -146,26 +150,92 @@ fn vec_add<PMP: PackedMontyParameters>(a: svuint32_t, b: svuint32_t) -> svuint32
 ///
 /// Mirrors `uint32x4_mod_sub`.
 #[inline]
-#[must_use]
-fn vec_sub<PMP: PackedMontyParameters>(a: svuint32_t, b: svuint32_t) -> svuint32_t {
+fn vec_sub<PMP: PackedMontyParameters>(
+    a: &PackedMontyField31Sve<PMP>,
+    b: &PackedMontyField31Sve<PMP>,
+) -> PackedMontyField31Sve<PMP> {
+    debug_assert_vl();
+    let mut out = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+    // SAFETY: as in `vec_add`; the predicate bounds every access to the `WIDTH`-lane arrays and all
+    // lanes of `out` are written.
     unsafe {
-        let p = aarch64::svdup_n_u32(PMP::PRIME);
-        let t = aarch64::svsub_u32_x(pg(), a, b);
-        let u = aarch64::svadd_u32_x(pg(), t, p);
-        aarch64::svmin_u32_x(pg(), t, u)
+        asm!(
+            "whilelt p0.s, xzr, {w}",
+            "dup z2.s, {p:w}",
+            "ld1w {{z0.s}}, p0/z, [{a}]",
+            "ld1w {{z1.s}}, p0/z, [{b}]",
+            "sub z0.s, z0.s, z1.s",
+            "add z1.s, z0.s, z2.s",
+            "umin z0.s, p0/m, z0.s, z1.s",
+            "st1w {{z0.s}}, p0, [{o}]",
+            w = in(reg) WIDTH as u64,
+            p = in(reg) PMP::PRIME,
+            a = in(reg) a.0.as_ptr().cast::<u32>(),
+            b = in(reg) b.0.as_ptr().cast::<u32>(),
+            o = in(reg) out.as_mut_ptr().cast::<u32>(),
+            out("z0") _, out("z1") _, out("z2") _, out("p0") _,
+            options(nostack),
+        );
+        PackedMontyField31Sve(out.assume_init())
+    }
+}
+
+/// Unreduced signed subtraction used by the fused butterfly: returns the raw wrapping `a - b` bit
+/// pattern, which for canonical `a, b` is the two's-complement of a value in `(-P, P)`.
+#[inline]
+#[must_use]
+fn vec_sub_raw<PMP: PackedMontyParameters>(
+    a: &PackedMontyField31Sve<PMP>,
+    b: &PackedMontyField31Sve<PMP>,
+) -> [u32; WIDTH] {
+    debug_assert_vl();
+    let mut out = MaybeUninit::<[u32; WIDTH]>::uninit();
+    // SAFETY: the predicate bounds every access to the `WIDTH`-lane arrays and all lanes of `out`
+    // are written.
+    unsafe {
+        asm!(
+            "whilelt p0.s, xzr, {w}",
+            "ld1w {{z0.s}}, p0/z, [{a}]",
+            "ld1w {{z1.s}}, p0/z, [{b}]",
+            "sub z0.s, z0.s, z1.s",
+            "st1w {{z0.s}}, p0, [{o}]",
+            w = in(reg) WIDTH as u64,
+            a = in(reg) a.0.as_ptr().cast::<u32>(),
+            b = in(reg) b.0.as_ptr().cast::<u32>(),
+            o = in(reg) out.as_mut_ptr().cast::<u32>(),
+            out("z0") _, out("z1") _, out("p0") _,
+            options(nostack),
+        );
+        out.assume_init()
     }
 }
 
 /// Negate a vector in canonical form: returns `0` where `a == 0` and `P - a` otherwise.
 #[inline]
-#[must_use]
-fn vec_neg<PMP: PackedMontyParameters>(a: svuint32_t) -> svuint32_t {
+fn vec_neg<PMP: PackedMontyParameters>(
+    a: &PackedMontyField31Sve<PMP>,
+) -> PackedMontyField31Sve<PMP> {
+    debug_assert_vl();
+    let mut out = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+    // SAFETY: the predicate bounds every access to the `WIDTH`-lane arrays and all lanes of `out`
+    // are written; `P - a` and the zeroed lanes are canonical.
     unsafe {
-        let p = aarch64::svdup_n_u32(PMP::PRIME);
-        let zero = aarch64::svdup_n_u32(0);
-        let t = aarch64::svsub_u32_x(pg(), p, a);
-        let is_zero = aarch64::svcmpeq_n_u32(pg(), a, 0);
-        aarch64::svsel_u32(is_zero, zero, t)
+        asm!(
+            "whilelt p0.s, xzr, {w}",
+            "dup z2.s, {p:w}",
+            "ld1w {{z0.s}}, p0/z, [{a}]",
+            "sub z1.s, z2.s, z0.s",
+            "cmpeq p1.s, p0/z, z0.s, #0",
+            "mov z1.s, p1/m, #0",
+            "st1w {{z1.s}}, p0, [{o}]",
+            w = in(reg) WIDTH as u64,
+            p = in(reg) PMP::PRIME,
+            a = in(reg) a.0.as_ptr().cast::<u32>(),
+            o = in(reg) out.as_mut_ptr().cast::<u32>(),
+            out("z0") _, out("z1") _, out("z2") _, out("p0") _, out("p1") _,
+            options(nostack),
+        );
+        PackedMontyField31Sve(out.assume_init())
     }
 }
 
@@ -185,21 +255,41 @@ fn vec_neg<PMP: PackedMontyParameters>(a: svuint32_t) -> svuint32_t {
 /// cancel and only the high words are needed. `x = a * b < P^2 < 2^32 * P`, satisfying the
 /// `monty_reduce` precondition.
 #[inline]
-#[must_use]
-fn vec_mul<PMP: PackedMontyParameters>(a: svuint32_t, b: svuint32_t) -> svuint32_t {
+fn vec_mul<PMP: PackedMontyParameters>(
+    a: &PackedMontyField31Sve<PMP>,
+    b: &PackedMontyField31Sve<PMP>,
+) -> PackedMontyField31Sve<PMP> {
+    debug_assert_vl();
+    let mut out = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+    // SAFETY: the predicate bounds every access to the `WIDTH`-lane arrays and all lanes of `out`
+    // are written; canonical inputs yield a canonical result.
     unsafe {
-        let p = aarch64::svdup_n_u32(PMP::PRIME);
-        let mu = aarch64::svdup_n_u32(PMP::MONTY_MU);
-
-        let x_hi = aarch64::svmulh_u32_x(pg(), a, b); // UMULH: high 32 bits of a * b.
-        let x_lo = aarch64::svmul_u32_x(pg(), a, b); // low 32 bits of a * b.
-        let t = aarch64::svmul_u32_x(pg(), x_lo, mu); // (x_lo * MONTY_MU) mod 2^32.
-        let u_hi = aarch64::svmulh_u32_x(pg(), t, p); // high 32 bits of t * P.
-
-        let diff = aarch64::svsub_u32_x(pg(), x_hi, u_hi);
-        let borrow = aarch64::svcmplt_u32(pg(), x_hi, u_hi);
-        // Add P back on the lanes that borrowed.
-        aarch64::svadd_u32_m(borrow, diff, p)
+        asm!(
+            "whilelt p0.s, xzr, {w}",
+            "dup z2.s, {p:w}",
+            "dup z3.s, {mu:w}",
+            "ld1w {{z0.s}}, p0/z, [{a}]",
+            "ld1w {{z1.s}}, p0/z, [{b}]",
+            "movprfx z4, z0",
+            "umulh z4.s, p0/m, z4.s, z1.s", // x_hi = high(a * b)
+            "mul z0.s, p0/m, z0.s, z1.s",   // x_lo = low(a * b)
+            "mul z0.s, p0/m, z0.s, z3.s",   // t = low(x_lo * MONTY_MU)
+            "umulh z0.s, p0/m, z0.s, z2.s", // u_hi = high(t * P)
+            "cmphi p1.s, p0/z, z0.s, z4.s", // borrow = u_hi > x_hi
+            "sub z4.s, z4.s, z0.s",         // x_hi - u_hi
+            "add z4.s, p1/m, z4.s, z2.s",   // + P on the lanes that borrowed
+            "st1w {{z4.s}}, p0, [{o}]",
+            w = in(reg) WIDTH as u64,
+            p = in(reg) PMP::PRIME,
+            mu = in(reg) PMP::MONTY_MU,
+            a = in(reg) a.0.as_ptr().cast::<u32>(),
+            b = in(reg) b.0.as_ptr().cast::<u32>(),
+            o = in(reg) out.as_mut_ptr().cast::<u32>(),
+            out("z0") _, out("z1") _, out("z2") _, out("z3") _, out("z4") _,
+            out("p0") _, out("p1") _,
+            options(nostack),
+        );
+        PackedMontyField31Sve(out.assume_init())
     }
 }
 
@@ -210,22 +300,41 @@ fn vec_mul<PMP: PackedMontyParameters>(a: svuint32_t, b: svuint32_t) -> svuint32
 /// doubling/halving correction (the low words of `C = lhs·rhs` and `Q·P` are congruent mod `2³²`, so
 /// they cancel exactly). `Q = (lhs·rhs·MONTY_MU) mod 2³²`.
 #[inline]
-#[must_use]
-fn vec_mul_signed<PMP: PackedMontyParameters>(lhs: svint32_t, rhs: svint32_t) -> svuint32_t {
+fn vec_mul_signed<PMP: PackedMontyParameters>(
+    lhs: &[u32; WIDTH],
+    rhs: &PackedMontyField31Sve<PMP>,
+) -> PackedMontyField31Sve<PMP> {
+    debug_assert_vl();
+    let mut out = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+    // SAFETY: the predicate bounds every access to the `WIDTH`-lane arrays and all lanes of `out`
+    // are written; the reduced result lands in `[0, P)`.
     unsafe {
-        let p = aarch64::svdup_n_s32(PMP::PRIME as i32);
-        let mu = aarch64::svdup_n_s32(PMP::MONTY_MU as i32);
-
-        let c_hi = aarch64::svmulh_s32_x(pg(), lhs, rhs); // SMULH: ⌊lhs·rhs / 2³²⌋.
-        let mu_rhs = aarch64::svmul_s32_x(pg(), rhs, mu); // (rhs·MONTY_MU) mod 2³².
-        let q = aarch64::svmul_s32_x(pg(), lhs, mu_rhs); // (lhs·rhs·MONTY_MU) mod 2³².
-        let qp_hi = aarch64::svmulh_s32_x(pg(), q, p); // SMULH: ⌊Q·P / 2³²⌋.
-
-        let d = aarch64::svsub_s32_x(pg(), c_hi, qp_hi); // D in (-P, P).
-        // D is negative iff `c_hi < qp_hi`; add P there to land in [0, P).
-        let underflow = aarch64::svcmplt_s32(pg(), c_hi, qp_hi);
-        let reduced = aarch64::svadd_s32_m(underflow, d, p);
-        aarch64::svreinterpret_u32_s32(reduced)
+        asm!(
+            "whilelt p0.s, xzr, {w}",
+            "dup z2.s, {p:w}",
+            "dup z3.s, {mu:w}",
+            "ld1w {{z0.s}}, p0/z, [{a}]", // lhs
+            "ld1w {{z1.s}}, p0/z, [{b}]", // rhs
+            "movprfx z4, z0",
+            "smulh z4.s, p0/m, z4.s, z1.s", // c_hi = high(lhs * rhs), signed
+            "mul z1.s, p0/m, z1.s, z3.s",   // mu_rhs = low(rhs * MONTY_MU)
+            "mul z0.s, p0/m, z0.s, z1.s",   // q = low(lhs * mu_rhs)
+            "smulh z0.s, p0/m, z0.s, z2.s", // qp_hi = high(q * P), signed
+            "cmpgt p1.s, p0/z, z0.s, z4.s", // underflow = qp_hi > c_hi (signed)
+            "sub z4.s, z4.s, z0.s",         // c_hi - qp_hi
+            "add z4.s, p1/m, z4.s, z2.s",   // + P on the lanes that underflowed
+            "st1w {{z4.s}}, p0, [{o}]",
+            w = in(reg) WIDTH as u64,
+            p = in(reg) PMP::PRIME,
+            mu = in(reg) PMP::MONTY_MU,
+            a = in(reg) lhs.as_ptr(),
+            b = in(reg) rhs.0.as_ptr().cast::<u32>(),
+            o = in(reg) out.as_mut_ptr().cast::<u32>(),
+            out("z0") _, out("z1") _, out("z2") _, out("z3") _, out("z4") _,
+            out("p0") _, out("p1") _,
+            options(nostack),
+        );
+        PackedMontyField31Sve(out.assume_init())
     }
 }
 
@@ -233,9 +342,7 @@ impl<PMP: PackedMontyParameters> Add for PackedMontyField31Sve<PMP> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let res = vec_add::<PMP>(self.to_vec(), rhs.to_vec());
-        // Safety: `vec_add` returns canonical values given canonical inputs.
-        unsafe { Self::from_vec(res) }
+        vec_add(&self, &rhs)
     }
 }
 
@@ -243,9 +350,7 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31Sve<PMP> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let res = vec_sub::<PMP>(self.to_vec(), rhs.to_vec());
-        // Safety: `vec_sub` returns canonical values given canonical inputs.
-        unsafe { Self::from_vec(res) }
+        vec_sub(&self, &rhs)
     }
 }
 
@@ -253,9 +358,7 @@ impl<PMP: PackedMontyParameters> Neg for PackedMontyField31Sve<PMP> {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
-        let res = vec_neg::<PMP>(self.to_vec());
-        // Safety: `vec_neg` returns canonical values given canonical inputs.
-        unsafe { Self::from_vec(res) }
+        vec_neg(&self)
     }
 }
 
@@ -263,9 +366,7 @@ impl<PMP: PackedMontyParameters> Mul for PackedMontyField31Sve<PMP> {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        let res = vec_mul::<PMP>(self.to_vec(), rhs.to_vec());
-        // Safety: `vec_mul` returns canonical values given canonical inputs.
-        unsafe { Self::from_vec(res) }
+        vec_mul(&self, &rhs)
     }
 }
 
@@ -290,57 +391,47 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Sve<FP> 
 
     #[inline]
     fn cube(&self) -> Self {
-        let x = self.to_vec();
-        let x2 = vec_mul::<FP>(x, x);
-        let x3 = vec_mul::<FP>(x2, x);
-        // Safety: `vec_mul` returns canonical values given canonical inputs.
-        unsafe { Self::from_vec(x3) }
+        let x2 = vec_mul(self, self);
+        vec_mul(&x2, self)
     }
 
     #[inline]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         // Specialise the small powers that dominate Poseidon2 / Rescue S-boxes (D = 3, 5, 7). Each
-        // loads once, chains `vec_mul`, and stores once. Larger powers fall back to the generic
-        // square-and-multiply.
-        let x = self.to_vec();
-        // Safety: every `vec_mul` result is canonical given canonical inputs.
-        unsafe {
-            match POWER {
-                0 => Self::ONE,
-                1 => *self,
-                2 => Self::from_vec(vec_mul::<FP>(x, x)),
-                3 => self.cube(),
-                4 => {
-                    let x2 = vec_mul::<FP>(x, x);
-                    Self::from_vec(vec_mul::<FP>(x2, x2))
-                }
-                5 => {
-                    let x2 = vec_mul::<FP>(x, x);
-                    let x4 = vec_mul::<FP>(x2, x2);
-                    Self::from_vec(vec_mul::<FP>(x4, x))
-                }
-                6 => self.square().cube(),
-                7 => {
-                    let x2 = vec_mul::<FP>(x, x);
-                    let x3 = vec_mul::<FP>(x2, x);
-                    let x4 = vec_mul::<FP>(x2, x2);
-                    Self::from_vec(vec_mul::<FP>(x4, x3))
-                }
-                _ => self.exp_u64(POWER),
+        // chains `vec_mul`; larger powers fall back to the generic square-and-multiply.
+        match POWER {
+            0 => Self::ONE,
+            1 => *self,
+            2 => vec_mul(self, self),
+            3 => self.cube(),
+            4 => {
+                let x2 = vec_mul(self, self);
+                vec_mul(&x2, &x2)
             }
+            5 => {
+                let x2 = vec_mul(self, self);
+                let x4 = vec_mul(&x2, &x2);
+                vec_mul(&x4, self)
+            }
+            6 => self.square().cube(),
+            7 => {
+                let x2 = vec_mul(self, self);
+                let x3 = vec_mul(&x2, self);
+                let x4 = vec_mul(&x2, &x2);
+                vec_mul(&x4, &x3)
+            }
+            _ => self.exp_u64(POWER),
         }
     }
 
     #[inline]
     fn halve(&self) -> Self {
-        // Scalar per-lane fallback. A native version would fold the odd/even correction into a
-        // predicated shift, mirroring `halve_neon`.
         Self(self.0.map(|x| x.halve()))
     }
 
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
-        // Safety: this is a `repr(transparent)` wrapper around `[MontyField31; WIDTH]`.
+        // SAFETY: this is a `repr(transparent)` wrapper around `[MontyField31; WIDTH]`.
         unsafe { reconstitute_from_base(MontyField31::<FP>::zero_vec(len * WIDTH)) }
     }
 }
@@ -393,31 +484,31 @@ unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31Sve<FP> {
 unsafe impl<FP: FieldParameters> PackedFieldPow2 for PackedMontyField31Sve<FP> {
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
-        // Interleaving `block_len`-sized chunks of 32-bit lanes is a transpose of `32*block_len`-bit
-        // elements: `TRN1`/`TRN2` at the matching element (or quadword) granularity.
+        // Interleaving `block_len`-sized chunks of lanes is a `TRN1`/`TRN2` of `32*block_len`-bit
+        // elements. Since the vector length is fixed at `WIDTH`, this is a fixed permutation of the
+        // backing arrays, computed directly (the 128-bit-granule case would otherwise need the
+        // optional F64MM extension).
         assert!(block_len.is_power_of_two() && block_len <= WIDTH);
         if block_len == WIDTH {
             return (*self, other);
         }
 
-        let a = self.to_vec();
-        let b = other.to_vec();
-        let (r0, r1) = unsafe {
-            match block_len {
-                1 => (aarch64::svtrn1_u32(a, b), aarch64::svtrn2_u32(a, b)),
-                2 => {
-                    let a64 = aarch64::svreinterpret_u64_u32(a);
-                    let b64 = aarch64::svreinterpret_u64_u32(b);
-                    (
-                        aarch64::svreinterpret_u32_u64(aarch64::svtrn1_u64(a64, b64)),
-                        aarch64::svreinterpret_u32_u64(aarch64::svtrn2_u64(a64, b64)),
-                    )
-                }
-                // `block_len == 4` transposes 128-bit blocks (quadwords).
-                _ => (aarch64::svtrn1q_u32(a, b), aarch64::svtrn2q_u32(a, b)),
-            }
-        };
-        // Safety: interleaving only permutes canonical lanes, so the results stay canonical.
-        unsafe { (Self::from_vec(r0), Self::from_vec(r1)) }
+        let a = self.0;
+        let b = other.0;
+        let mut r0 = [MontyField31::ZERO; WIDTH];
+        let mut r1 = [MontyField31::ZERO; WIDTH];
+        // `TRN1` gathers even-indexed blocks, `TRN2` odd-indexed blocks, taking each pair `(a, b)`.
+        let blocks = WIDTH / block_len;
+        for i in 0..blocks / 2 {
+            let even = 2 * i;
+            let odd = 2 * i + 1;
+            let lo = 2 * i * block_len;
+            let hi = (2 * i + 1) * block_len;
+            r0[lo..lo + block_len].copy_from_slice(&a[even * block_len..(even + 1) * block_len]);
+            r0[hi..hi + block_len].copy_from_slice(&b[even * block_len..(even + 1) * block_len]);
+            r1[lo..lo + block_len].copy_from_slice(&a[odd * block_len..(odd + 1) * block_len]);
+            r1[hi..hi + block_len].copy_from_slice(&b[odd * block_len..(odd + 1) * block_len]);
+        }
+        (Self(r0), Self(r1))
     }
 }
