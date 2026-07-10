@@ -363,6 +363,46 @@ pub enum VariableOrder {
     Suffix,
 }
 
+/// How the sumcheck tables are interpreted, and with it the round arithmetic.
+///
+/// The table bytes are identical in both bases; the tag selects which
+/// polynomial those bytes describe, and one round arithmetic follows from
+/// each choice (eprint 2026/762, Section 3):
+///
+/// | per round                    | [`Basis::Evaluation`]                        | [`Basis::Projective`]                          |
+/// |------------------------------|----------------------------------------------|------------------------------------------------|
+/// | a table entry is             | a value on the hypercube `{0,1}^n`           | a monomial coefficient (a value on `{0,inf}^n`) |
+/// | binding `X = r`              | `a0 + (a1 - a0) * r`                         | `a0 + a1 * r`                                  |
+/// | message sent                 | `[s(0), s(inf)]`                             | `[s(1), s(inf)]`                               |
+/// | value the verifier derives   | `s(1) := C - s(0)`                           | `s(0) := C - s(inf)`                           |
+/// | fold of committed data       | multilinear interpolation at `r`             | monomial (Horner) evaluation at `r`            |
+/// | weight tensor `(u_i, v_i)`   | `prod((1 - r_i) * u_i + r_i * v_i)`          | `prod(u_i + v_i * r_i)`                        |
+///
+/// The rows are one package per column: a consumer that folds committed data
+/// (such as WHIR, where the sumcheck challenge is also the codeword folding
+/// challenge) must take an entire column, never a mix.
+///
+/// The claim invariant `C = dot(evals, weights)` is the same in both bases:
+/// the `{0,1}`-sum of products in the evaluation basis and the `{0,inf}`-sum
+/// in the projective basis are both the dot product of the two tables, so
+/// the running-sum bookkeeping does not change. Like [`VariableOrder`], the
+/// tag is consulted once per round in the outer frame, never inside the
+/// O(2^n) inner loops.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Basis {
+    /// The tables hold values over the boolean hypercube `{0,1}^n`; rounds
+    /// sum over `{0,1}` and bind by linear interpolation. The default.
+    #[default]
+    Evaluation,
+    /// The tables hold monomial coefficients, equivalently values over
+    /// `{0,inf}^n`; rounds sum over `{0,inf}` and bind subtraction-free
+    /// (eprint 2026/762).
+    ///
+    /// Prefix order only: the projective kernels are implemented for
+    /// prefix-bound variables (WHIR's path).
+    Projective,
+}
+
 impl VariableOrder {
     /// Computes `(h(0), h(inf))` for one quadratic sumcheck round.
     pub fn sumcheck_coefficients<B, A>(self, evals: &[B], weights: &[A]) -> (A, A)
