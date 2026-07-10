@@ -31,6 +31,7 @@ use rand::rngs::SmallRng;
 
 type F = KoalaBear;
 type EF = BinomialExtensionField<F, 4>;
+type OcticEF = BinomialExtensionField<F, 8>;
 
 type Poseidon16 = Poseidon2KoalaBear<16>;
 type Poseidon24 = Poseidon2KoalaBear<24>;
@@ -43,12 +44,14 @@ type Dft = Radix2DFTSmallBatch<F>;
 
 type PlainPcs = WhirProver<EF, F, Dft, Mmcs, Challenger, PrefixProver<F, EF>>;
 type ZkPcs = HidingWhirPcs<EF, F, Dft, Mmcs, Challenger, SmallRng>;
+type OcticZkPcs = HidingWhirPcs<OcticEF, F, Dft, Mmcs, Challenger, SmallRng>;
 
 // Polynomial sizes (log_2 of coefficient count) and shared knobs.
 const SIZES: [usize; 2] = [16, 18];
 const FOLDING: usize = 4;
 const LOG_INV_RATE: usize = 2;
 const SECURITY_LEVEL: usize = 100;
+const OCTIC_OPEN_SIZES: [usize; 3] = [18, 19, 20];
 
 const fn protocol_params() -> ProtocolParameters {
     ProtocolParameters {
@@ -59,6 +62,29 @@ const fn protocol_params() -> ProtocolParameters {
         soundness_type: SecurityAssumption::CapacityBound,
         starting_log_inv_rate: LOG_INV_RATE,
     }
+}
+
+fn octic_no_pow_protocol_params() -> ProtocolParameters {
+    ProtocolParameters {
+        security_level: 128,
+        pow_bits: 0,
+        round_log_inv_rates: vec![4],
+        folding_factor: FoldingFactor::ConstantFromSecondRound(8, 6),
+        soundness_type: SecurityAssumption::JohnsonBound,
+        starting_log_inv_rate: 1,
+    }
+}
+
+fn octic_no_pow_config(num_variables: usize) -> ZkWhirConfig<OcticEF, F, Challenger> {
+    ZkWhirConfig::new(
+        num_variables,
+        octic_no_pow_protocol_params(),
+        ZkParameters {
+            ell_zk: 3,
+            mask_log_inv_rate: 3,
+        },
+    )
+    .unwrap()
 }
 
 fn mmcs() -> Mmcs {
@@ -205,5 +231,45 @@ fn bench_zk_overhead(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_zk_overhead);
+/// Measures the opening path affected by batched mask encoding.
+///
+/// Commitment setup is deliberately outside the timed routine and PoW is
+/// disabled so unrelated work does not hide the encoding cost. Run this group
+/// with the crate's `parallel` feature to model the threaded prover path.
+fn bench_octic_zk_open_no_pow(c: &mut Criterion) {
+    let mut group = c.benchmark_group("whir_zk_open_no_pow");
+    group
+        .sample_size(30)
+        .measurement_time(Duration::from_secs(20));
+
+    for num_variables in OCTIC_OPEN_SIZES {
+        let pcs = OcticZkPcs::new(
+            octic_no_pow_config(num_variables),
+            Dft::default(),
+            mmcs(),
+            SmallRng::seed_from_u64(4),
+        );
+        let mut rng = SmallRng::seed_from_u64(3);
+        let witness = Poly::<F>::rand(&mut rng, num_variables);
+        let points = vec![Point::<OcticEF>::rand(&mut rng, num_variables)];
+
+        group.bench_function(format!("octic_n{num_variables}_ff8_6_ell3_rate3"), |b| {
+            b.iter_batched(
+                || {
+                    let mut ch = challenger();
+                    let mut ds = DomainSeparator::new(vec![]);
+                    pcs.add_domain_separator::<8>(&mut ds);
+                    ds.observe_domain_separator(&mut ch);
+                    let (_, data) = pcs.commit(witness.clone(), &mut ch);
+                    (ch, data)
+                },
+                |(mut ch, data)| pcs.open(data, points.clone(), &mut ch),
+                BatchSize::PerIteration,
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_zk_overhead, bench_octic_zk_open_no_pow);
 criterion_main!(benches);

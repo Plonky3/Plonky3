@@ -6,8 +6,6 @@ use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingC
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField, dot_product};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_sumcheck::zk::stack_codewords;
 use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
@@ -110,22 +108,18 @@ where
             let encoding = group.shape.encoding::<EF>();
             let mut blind_messages = Vec::with_capacity(group.width);
             let mut blind_randomness = Vec::with_capacity(group.width);
-            let codewords: Vec<RowMajorMatrix<EF>> = (0..group.width)
-                .map(|_| {
-                    // Uniform blind message s~'_i and fresh encoding
-                    // randomness r'_i, retained for the reveals below.
-                    let message = encoding.sample_message(rng);
-                    let randomness = encoding.sample_randomness(rng);
-                    let codeword = encoding.encode_with_randomness(&message, &randomness);
-                    blind_messages.push(message);
-                    blind_randomness.push(randomness);
-                    codeword
-                })
-                .collect();
+            for _ in 0..group.width {
+                // Uniform blind message s~'_i and fresh encoding
+                // randomness r'_i, retained for the reveals below.
+                let message = encoding.sample_message(rng);
+                let randomness = encoding.sample_randomness(rng);
+                blind_messages.push(message);
+                blind_randomness.push(randomness);
+            }
             // Row z of the stacked matrix holds position z of every blind.
-            let (commitment, data) = self
-                .extension_mmcs
-                .commit_matrix(stack_codewords(&codewords));
+            let (commitment, data) = self.extension_mmcs.commit_matrix(
+                encoding.encode_batch_with_randomness(&blind_messages, &blind_randomness),
+            );
             challenger.observe(commitment.clone());
             fresh_mask_commitments.push(commitment);
             fresh_groups.push((blind_messages, blind_randomness, data, witness));

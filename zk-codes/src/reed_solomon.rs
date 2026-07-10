@@ -190,6 +190,51 @@ where
         let mat = RowMajorMatrix::new_col(coeffs);
         self.dft.dft_batch(mat).to_row_major_matrix()
     }
+
+    // Unlike the trait fallback, this override packs all columns first and
+    // transforms them with one batched DFT.
+    fn encode_batch_with_randomness<Msg, Rand>(
+        &self,
+        messages: &[Msg],
+        randomness: &[Rand],
+    ) -> RowMajorMatrix<F>
+    where
+        Msg: AsRef<[F]>,
+        Rand: AsRef<[F]>,
+    {
+        assert_eq!(
+            messages.len(),
+            randomness.len(),
+            "batch message/randomness counts must match"
+        );
+        let width = messages.len();
+        assert!(width > 0, "batch must contain at least one message");
+
+        let mut coeffs = F::zero_vec(self.m * width);
+        for (column, (msg, randomness)) in messages.iter().zip(randomness).enumerate() {
+            let msg = msg.as_ref();
+            let randomness = randomness.as_ref();
+            assert_eq!(
+                msg.len(),
+                self.msg_len,
+                "Message length must match configured msg_len"
+            );
+            assert_eq!(
+                randomness.len(),
+                self.t,
+                "Randomness length must match configured t"
+            );
+            for (row, &value) in msg.iter().enumerate() {
+                coeffs[row * width + column] = value;
+            }
+            for (row, &value) in randomness.iter().enumerate() {
+                coeffs[(self.msg_len + row) * width + column] = value;
+            }
+        }
+
+        let mat = RowMajorMatrix::new(coeffs, width);
+        self.dft.dft_batch(mat).to_row_major_matrix()
+    }
 }
 
 impl<F, Dft> LinearZkEncoding<F> for ReedSolomonZkEncoding<F, Dft>
@@ -237,11 +282,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::rc::Rc;
     use alloc::vec;
+    use core::cell::Cell;
 
     use p3_baby_bear::BabyBear;
     use p3_dft::Radix2Dit;
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
     use p3_goldilocks::Goldilocks;
     use p3_koala_bear::KoalaBear;
     use proptest::prelude::*;
@@ -251,6 +298,35 @@ mod tests {
     use super::*;
 
     type F = BabyBear;
+
+    #[derive(Clone, Default)]
+    struct CountingDft<Dft> {
+        inner: Dft,
+        calls: Rc<Cell<usize>>,
+    }
+
+    impl<Dft> CountingDft<Dft> {
+        fn calls(&self) -> usize {
+            self.calls.get()
+        }
+
+        fn reset(&self) {
+            self.calls.set(0);
+        }
+    }
+
+    impl<Field, Dft> TwoAdicSubgroupDft<Field> for CountingDft<Dft>
+    where
+        Field: TwoAdicField,
+        Dft: TwoAdicSubgroupDft<Field>,
+    {
+        type Evaluations = Dft::Evaluations;
+
+        fn dft_batch(&self, mat: RowMajorMatrix<Field>) -> Self::Evaluations {
+            self.calls.set(self.calls.get() + 1);
+            self.inner.dft_batch(mat)
+        }
+    }
 
     #[test]
     fn test_zero_randomness_matches_plain_rs() {
@@ -419,6 +495,74 @@ mod tests {
         let a = encoding.encode_with_randomness(&msg, &r).values;
         let b = encoding.encode_with_randomness(&msg, &r).values;
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_batch_encode_matches_stacked_single_encodes() {
+        let msg_len = 4;
+        let t = 3;
+        let m = 16;
+        let width = 5;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
+
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(20260709);
+        let messages: Vec<Vec<F>> = (0..width)
+            .map(|_| (0..msg_len).map(|_| rng.random()).collect())
+            .collect();
+        let randomness: Vec<Vec<F>> = (0..width)
+            .map(|_| (0..t).map(|_| rng.random()).collect())
+            .collect();
+
+        let singles: Vec<_> = messages
+            .iter()
+            .zip(&randomness)
+            .map(|(message, randomness)| encoding.encode_with_randomness(message, randomness))
+            .collect();
+        let stacked = crate::encoding::stack_codewords(&singles);
+        let batched = encoding.encode_batch_with_randomness(&messages, &randomness);
+
+        assert_eq!(batched, stacked);
+    }
+
+    #[test]
+    fn test_batch_encode_uses_one_dft() {
+        let msg_len = 4;
+        let t = 3;
+        let m = 16;
+        let width = 5;
+        let dft = CountingDft::<Radix2Dit<F>>::default();
+        let encoding = ReedSolomonZkEncoding::new(t, msg_len, m, dft.clone());
+
+        let messages = vec![vec![F::ZERO; msg_len]; width];
+        let randomness = vec![vec![F::ZERO; t]; width];
+
+        for (message, randomness) in messages.iter().zip(&randomness) {
+            let _ = encoding.encode_with_randomness(message, randomness);
+        }
+        assert_eq!(dft.calls(), width);
+
+        dft.reset();
+        let _ = encoding.encode_batch_with_randomness(&messages, &randomness);
+        assert_eq!(dft.calls(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "batch must contain at least one message")]
+    fn test_batch_encode_rejects_empty_batch() {
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(2, 4, 8, Radix2Dit::default());
+        let messages: Vec<&[F]> = Vec::new();
+        let randomness: Vec<&[F]> = Vec::new();
+
+        let _ = encoding.encode_batch_with_randomness(&messages, &randomness);
+    }
+
+    #[test]
+    #[should_panic(expected = "batch must contain at least one codeword")]
+    fn test_stack_codewords_rejects_empty_batch() {
+        let codewords: Vec<RowMajorMatrix<F>> = Vec::new();
+
+        let _ = crate::encoding::stack_codewords(&codewords);
     }
 
     #[test]

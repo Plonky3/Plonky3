@@ -12,7 +12,6 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::data::ZkSumcheckData;
-use super::prover::stack_codewords;
 use super::verifier::ZkVerifier;
 
 /// Witness-free HVZK simulator (Lemma 6.4).
@@ -92,16 +91,14 @@ where
 
     let masks: Vec<Vec<EF>> = (0..k).map(|_| encoding.sample_message(rng)).collect();
 
-    // Encode with the same explicit draw order as the prover, stack the
-    // batch column-wise, and commit once.
-    let codewords: Vec<Enc::Codeword> = masks
+    // Draw explicit randomness in the same order as the prover, batch encode
+    // the masks into one width-`k` matrix, and commit once.
+    let mask_randomness: Vec<Vec<EF>> = masks
         .iter()
-        .map(|mask| {
-            let randomness = encoding.sample_randomness(rng);
-            encoding.encode_with_randomness(mask, &randomness)
-        })
+        .map(|_| encoding.sample_randomness(rng))
         .collect();
-    let (mask_commitment, _prover_data) = mmcs.commit_matrix(stack_codewords(&codewords));
+    let (mask_commitment, _prover_data) =
+        mmcs.commit_matrix(encoding.encode_batch_with_randomness(&masks, &mask_randomness));
     challenger.observe(mask_commitment.clone());
 
     // Phase 3: mu_tilde via the closed form (Construction 6.3 step 2 replay).
