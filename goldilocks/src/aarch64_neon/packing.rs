@@ -3,10 +3,6 @@ use core::arch::aarch64::{
     uint64x2_t, vaddq_u64, vandq_u64, vdupq_n_u64, vgetq_lane_u64, vsetq_lane_u64, vshrq_n_u64,
     vsubq_u64,
 };
-#[cfg(target_feature = "sve2")]
-use core::arch::aarch64::{vcltq_u64, vshlq_n_u64};
-#[cfg(target_feature = "sve2")]
-use core::arch::asm;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::mem::transmute;
@@ -224,8 +220,7 @@ pub(crate) fn halve(input: uint64x2_t) -> uint64x2_t {
     }
 }
 
-/// Goldilocks modular multiplication using interleaved dual-lane scalar ASM.
-#[cfg(not(target_feature = "sve2"))]
+/// Goldilocks modular multiplication using interleaved dual-lane ASM.
 #[inline]
 fn mul(x: uint64x2_t, y: uint64x2_t) -> uint64x2_t {
     unsafe {
@@ -240,72 +235,8 @@ fn mul(x: uint64x2_t, y: uint64x2_t) -> uint64x2_t {
     }
 }
 
-/// Goldilocks modular multiplication, register-native via SVE2 (Graviton4/5).
-///
-/// On 128-bit-VL parts the packed pair fits one NEON register, so the 64×64→128 product is a pure
-/// register-to-register SVE2 fragment and the reduction stays in NEON intrinsics — no lane extraction,
-/// no scalar round-trip.
-#[cfg(target_feature = "sve2")]
-#[inline]
-fn mul(x: uint64x2_t, y: uint64x2_t) -> uint64x2_t {
-    // SAFETY: register-only SVE2/NEON fragment; touches no memory or predicate state.
-    unsafe {
-        let (lo, hi) = sve2_mul_wide(x, y);
-        reduce128_neon(hi, lo)
-    }
-}
-
-/// SVE2 register-native 64×64→128 multiply across both lanes: returns `(lo, hi)` where `hi:lo = x*y`
-/// per lane. The low 128 bits of `z0..z2` alias `v0..v2`, so on 128-bit-VL hardware this reads and
-/// writes the `uint64x2_t` operands directly.
-#[cfg(target_feature = "sve2")]
-#[inline]
-unsafe fn sve2_mul_wide(x: uint64x2_t, y: uint64x2_t) -> (uint64x2_t, uint64x2_t) {
-    let lo: uint64x2_t;
-    let hi: uint64x2_t;
-    // SAFETY: unpredicated SVE2 integer multiplies; register-only, no memory or flags touched.
-    unsafe {
-        asm!(
-            "umulh z2.d, z0.d, z1.d", // hi = high(x * y) per lane
-            "mul   z0.d, z0.d, z1.d", // lo = low(x * y) per lane (overwrites x in z0/v0)
-            inlateout("v0") x => lo,
-            in("v1") y,
-            out("v2") hi,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
-    (lo, hi)
-}
-
-/// Goldilocks reduction of a per-lane 128-bit product `(hi, lo)` in NEON intrinsics.
-///
-/// Mirrors the scalar `reduce128`: `lo - (hi >> 32) + (hi & (2^32-1)) * EPSILON`, with the two
-/// conditional folds applied through compare masks. Output is in `[0, 2^64)`, not necessarily
-/// canonical (matching the packed contract).
-#[cfg(target_feature = "sve2")]
-#[inline]
-unsafe fn reduce128_neon(hi: uint64x2_t, lo: uint64x2_t) -> uint64x2_t {
-    // SAFETY: all operands are NEON vectors; the intrinsics have no preconditions.
-    unsafe {
-        let eps = vdupq_n_u64(EPSILON);
-        let hi_hi = vshrq_n_u64::<32>(hi);
-        let hi_lo = vandq_u64(hi, eps);
-        // t0 = lo - hi_hi, folding EPSILON back on the lanes that borrowed.
-        let borrow = vcltq_u64(lo, hi_hi);
-        let t0 = vsubq_u64(lo, hi_hi);
-        let t0 = vsubq_u64(t0, vandq_u64(borrow, eps));
-        // t1 = hi_lo * EPSILON = (hi_lo << 32) - hi_lo (hi_lo < 2^32, so exact).
-        let t1 = vsubq_u64(vshlq_n_u64::<32>(hi_lo), hi_lo);
-        // t2 = t0 + t1, folding EPSILON in on the lanes that carried.
-        let t2 = vaddq_u64(t0, t1);
-        let carry = vcltq_u64(t2, t0);
-        vaddq_u64(t2, vandq_u64(carry, eps))
-    }
-}
-
 /// Interleaved dual-lane multiplication and reduction using scalar ASM.
 /// Uses shift-based EPSILON multiplication: hi_lo * EPSILON = (hi_lo << 32) - hi_lo
-#[cfg(not(target_feature = "sve2"))]
 #[inline(always)]
 unsafe fn mul_reduce_dual_asm(a0: u64, b0: u64, a1: u64, b1: u64) -> (u64, u64) {
     use core::arch::asm;
@@ -380,8 +311,7 @@ unsafe fn mul_reduce_dual_asm(a0: u64, b0: u64, a1: u64, b1: u64) -> (u64, u64) 
     (result0, result1)
 }
 
-/// Goldilocks modular square using interleaved dual-lane scalar ASM.
-#[cfg(not(target_feature = "sve2"))]
+/// Goldilocks modular square using interleaved dual-lane ASM.
 #[inline]
 fn square(x: uint64x2_t) -> uint64x2_t {
     unsafe {
@@ -392,13 +322,6 @@ fn square(x: uint64x2_t) -> uint64x2_t {
 
         transmute([res_0, res_1])
     }
-}
-
-/// Goldilocks modular square, register-native via SVE2 (Graviton4/5).
-#[cfg(target_feature = "sve2")]
-#[inline]
-fn square(x: uint64x2_t) -> uint64x2_t {
-    mul(x, x)
 }
 
 #[cfg(test)]
