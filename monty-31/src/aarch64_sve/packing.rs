@@ -212,6 +212,8 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Sve<PMP> {
     /// The `x - y` term is left unreduced: as `x, y` are in `[0, P)`, the raw wrapping subtraction
     /// reinterpreted as signed lies in `(-P, P)`, which is exactly the input range accepted by the
     /// signed Montgomery multiply. This skips the modular reduction on `x - y`.
+    // The forward DFT dispatches this on the NEON packing; on this reference backend it is unused.
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn forward_butterfly(self, y: Self, roots: Self) -> (Self, Self) {
         debug_assert_vl();

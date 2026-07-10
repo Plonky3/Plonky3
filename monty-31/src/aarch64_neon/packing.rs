@@ -120,7 +120,6 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     /// Saves 2 NEON ops per butterfly by skipping the modular reduction on
     /// `x - y`. The raw `vsubq_u32(x, y)` lies in `(-P, P)` as signed,
     /// which is already a valid input for Montgomery multiplication.
-    #[cfg(not(target_feature = "sve"))]
     #[inline(always)]
     pub(crate) fn forward_butterfly(self, y: Self, roots: Self) -> (Self, Self) {
         unsafe {

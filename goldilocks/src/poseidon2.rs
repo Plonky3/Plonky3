@@ -3,11 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_field::{Algebra, InjectiveMonomial, PrimeCharacteristicRing};
-#[cfg(not(all(
-    target_arch = "aarch64",
-    target_feature = "neon",
-    not(target_feature = "sve")
-)))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 use p3_poseidon2::Poseidon2;
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, GenericPoseidon2LinearLayers,
@@ -63,21 +59,13 @@ pub const GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_16: usize = 22;
 /// [`default_goldilocks_poseidon2_12`], [`default_goldilocks_poseidon2_16`], or
 /// `new_from_rng`/`new_from_rng_128` (which have matching signatures on both platforms),
 /// rather than calling `new` directly.
-#[cfg(all(
-    target_arch = "aarch64",
-    target_feature = "neon",
-    not(target_feature = "sve")
-))]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub type Poseidon2Goldilocks<const WIDTH: usize> = crate::Poseidon2GoldilocksFused<WIDTH>;
 
 /// An implementation of the Poseidon2 hash function for the Goldilocks field.
 ///
 /// It acts on arrays of the form `[Goldilocks; WIDTH]`.
-#[cfg(not(all(
-    target_arch = "aarch64",
-    target_feature = "neon",
-    not(target_feature = "sve")
-)))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     Goldilocks,
     Poseidon2ExternalLayerGoldilocks<WIDTH>,
@@ -588,11 +576,7 @@ pub const GOLDILOCKS_POSEIDON2_RC_16_INTERNAL: [Goldilocks; 22] = Goldilocks::ne
 ]);
 
 /// Create a default width-8 Poseidon2 permutation for Goldilocks.
-#[cfg(not(all(
-    target_arch = "aarch64",
-    target_feature = "neon",
-    not(target_feature = "sve")
-)))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 pub fn default_goldilocks_poseidon2_8() -> Poseidon2Goldilocks<8> {
     Poseidon2::new(
         ExternalLayerConstants::new(
@@ -604,11 +588,7 @@ pub fn default_goldilocks_poseidon2_8() -> Poseidon2Goldilocks<8> {
 }
 
 /// Create a default width-8 Poseidon2 permutation for Goldilocks.
-#[cfg(all(
-    target_arch = "aarch64",
-    target_feature = "neon",
-    not(target_feature = "sve")
-))]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub fn default_goldilocks_poseidon2_8() -> Poseidon2Goldilocks<8> {
     crate::Poseidon2GoldilocksFused::new(
         &ExternalLayerConstants::new(
@@ -620,11 +600,7 @@ pub fn default_goldilocks_poseidon2_8() -> Poseidon2Goldilocks<8> {
 }
 
 /// Create a default width-12 Poseidon2 permutation for Goldilocks.
-#[cfg(not(all(
-    target_arch = "aarch64",
-    target_feature = "neon",
-    not(target_feature = "sve")
-)))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 pub fn default_goldilocks_poseidon2_12() -> Poseidon2Goldilocks<12> {
     Poseidon2::new(
         ExternalLayerConstants::new(
@@ -636,11 +612,7 @@ pub fn default_goldilocks_poseidon2_12() -> Poseidon2Goldilocks<12> {
 }
 
 /// Create a default width-12 Poseidon2 permutation for Goldilocks.
-#[cfg(all(
-    target_arch = "aarch64",
-    target_feature = "neon",
-    not(target_feature = "sve")
-))]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub fn default_goldilocks_poseidon2_12() -> Poseidon2Goldilocks<12> {
     crate::Poseidon2GoldilocksFused::new(
         &ExternalLayerConstants::new(
@@ -652,11 +624,7 @@ pub fn default_goldilocks_poseidon2_12() -> Poseidon2Goldilocks<12> {
 }
 
 /// Create a default width-16 Poseidon2 permutation for Goldilocks.
-#[cfg(not(all(
-    target_arch = "aarch64",
-    target_feature = "neon",
-    not(target_feature = "sve")
-)))]
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 pub fn default_goldilocks_poseidon2_16() -> Poseidon2Goldilocks<16> {
     Poseidon2::new(
         ExternalLayerConstants::new(
@@ -668,11 +636,7 @@ pub fn default_goldilocks_poseidon2_16() -> Poseidon2Goldilocks<16> {
 }
 
 /// Create a default width-16 Poseidon2 permutation for Goldilocks.
-#[cfg(all(
-    target_arch = "aarch64",
-    target_feature = "neon",
-    not(target_feature = "sve")
-))]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub fn default_goldilocks_poseidon2_16() -> Poseidon2Goldilocks<16> {
     crate::Poseidon2GoldilocksFused::new(
         &ExternalLayerConstants::new(
