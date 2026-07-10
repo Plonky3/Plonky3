@@ -150,6 +150,50 @@ macro_rules! sve_montmul_signed {
     };
 }
 
+/// Interleave `a` and `b` at 32-bit (`$suffix = "s"`) or 64-bit (`"d"`) element granularity via
+/// `TRN1`/`TRN2`. Base SVE supports these granules; the 128-bit granule would need F64MM and is
+/// handled by the scalar path in `interleave`.
+#[rustfmt::skip]
+macro_rules! interleave_trn {
+    ($name:ident, $suffix:literal) => {
+        #[inline]
+        fn $name<PMP: PackedMontyParameters>(
+            a: &PackedMontyField31Sve<PMP>,
+            b: &PackedMontyField31Sve<PMP>,
+        ) -> (PackedMontyField31Sve<PMP>, PackedMontyField31Sve<PMP>) {
+            debug_assert_vl();
+            let mut r0 = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+            let mut r1 = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+            // SAFETY: the predicate bounds every access to the `WIDTH`-lane arrays; `trn` only
+            // permutes canonical lanes, and both outputs are fully written.
+            unsafe {
+                asm!(
+                    "whilelt p0.s, xzr, {w}",
+                    "ld1w {{z0.s}}, p0/z, [{a}]",
+                    "ld1w {{z1.s}}, p0/z, [{b}]",
+                    concat!("trn1 z2.", $suffix, ", z0.", $suffix, ", z1.", $suffix),
+                    concat!("trn2 z3.", $suffix, ", z0.", $suffix, ", z1.", $suffix),
+                    "st1w {{z2.s}}, p0, [{r0}]",
+                    "st1w {{z3.s}}, p0, [{r1}]",
+                    w = in(reg) WIDTH as u64,
+                    a = in(reg) a.0.as_ptr().cast::<u32>(),
+                    b = in(reg) b.0.as_ptr().cast::<u32>(),
+                    r0 = in(reg) r0.as_mut_ptr().cast::<u32>(),
+                    r1 = in(reg) r1.as_mut_ptr().cast::<u32>(),
+                    out("z0") _, out("z1") _, out("z2") _, out("z3") _, out("p0") _,
+                    options(nostack),
+                );
+                (
+                    PackedMontyField31Sve(r0.assume_init()),
+                    PackedMontyField31Sve(r1.assume_init()),
+                )
+            }
+        }
+    };
+}
+interleave_trn!(interleave_trn_s, "s");
+interleave_trn!(interleave_trn_d, "d");
+
 /// Fixed-length SVE implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
@@ -606,30 +650,38 @@ unsafe impl<FP: FieldParameters> PackedFieldPow2 for PackedMontyField31Sve<FP> {
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         // Interleaving `block_len`-sized chunks of lanes is a `TRN1`/`TRN2` of `32*block_len`-bit
-        // elements. Since the vector length is fixed at `WIDTH`, this is a fixed permutation of the
-        // backing arrays, computed directly (the 128-bit-granule case would otherwise need the
-        // optional F64MM extension).
+        // elements. The 32- and 64-bit granules use base-SVE `trn`; the 128-bit granule
+        // (`block_len == 4`) would need the optional F64MM extension, so it is permuted directly.
         assert!(block_len.is_power_of_two() && block_len <= WIDTH);
         if block_len == WIDTH {
             return (*self, other);
         }
-
-        let a = self.0;
-        let b = other.0;
-        let mut r0 = [MontyField31::ZERO; WIDTH];
-        let mut r1 = [MontyField31::ZERO; WIDTH];
-        // `TRN1` gathers even-indexed blocks, `TRN2` odd-indexed blocks, taking each pair `(a, b)`.
-        let blocks = WIDTH / block_len;
-        for i in 0..blocks / 2 {
-            let even = 2 * i;
-            let odd = 2 * i + 1;
-            let lo = 2 * i * block_len;
-            let hi = (2 * i + 1) * block_len;
-            r0[lo..lo + block_len].copy_from_slice(&a[even * block_len..(even + 1) * block_len]);
-            r0[hi..hi + block_len].copy_from_slice(&b[even * block_len..(even + 1) * block_len]);
-            r1[lo..lo + block_len].copy_from_slice(&a[odd * block_len..(odd + 1) * block_len]);
-            r1[hi..hi + block_len].copy_from_slice(&b[odd * block_len..(odd + 1) * block_len]);
+        match block_len {
+            1 => interleave_trn_s(self, &other),
+            2 => interleave_trn_d(self, &other),
+            _ => {
+                let a = self.0;
+                let b = other.0;
+                let mut r0 = [MontyField31::ZERO; WIDTH];
+                let mut r1 = [MontyField31::ZERO; WIDTH];
+                // `TRN1` gathers even-indexed blocks, `TRN2` odd-indexed blocks, taking each pair.
+                let blocks = WIDTH / block_len;
+                for i in 0..blocks / 2 {
+                    let even = 2 * i;
+                    let odd = 2 * i + 1;
+                    let lo = 2 * i * block_len;
+                    let hi = (2 * i + 1) * block_len;
+                    r0[lo..lo + block_len]
+                        .copy_from_slice(&a[even * block_len..(even + 1) * block_len]);
+                    r0[hi..hi + block_len]
+                        .copy_from_slice(&b[even * block_len..(even + 1) * block_len]);
+                    r1[lo..lo + block_len]
+                        .copy_from_slice(&a[odd * block_len..(odd + 1) * block_len]);
+                    r1[hi..hi + block_len]
+                        .copy_from_slice(&b[odd * block_len..(odd + 1) * block_len]);
+                }
+                (Self(r0), Self(r1))
+            }
         }
-        (Self(r0), Self(r1))
     }
 }

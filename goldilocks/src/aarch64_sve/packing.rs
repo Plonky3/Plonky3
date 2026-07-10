@@ -305,35 +305,78 @@ unsafe impl PackedField for PackedGoldilocksSve {
     type Scalar = Goldilocks;
 }
 
+/// Interleave `a` and `b` at 64-bit element granularity via `TRN1`/`TRN2` (base SVE); the 128-bit
+/// granule would need F64MM and is handled by the scalar path in `interleave`.
+#[inline]
+fn interleave_trn_d(
+    a: &PackedGoldilocksSve,
+    b: &PackedGoldilocksSve,
+) -> (PackedGoldilocksSve, PackedGoldilocksSve) {
+    debug_assert_vl();
+    let mut r0 = MaybeUninit::<[Goldilocks; WIDTH]>::uninit();
+    let mut r1 = MaybeUninit::<[Goldilocks; WIDTH]>::uninit();
+    // SAFETY: the predicate bounds every access to the `WIDTH`-lane arrays; `trn` only permutes the
+    // active lanes, and both outputs are fully written.
+    unsafe {
+        asm!(
+            "whilelt p0.d, xzr, {w}",
+            "ld1d {{z0.d}}, p0/z, [{a}]",
+            "ld1d {{z1.d}}, p0/z, [{b}]",
+            "trn1 z2.d, z0.d, z1.d",
+            "trn2 z3.d, z0.d, z1.d",
+            "st1d {{z2.d}}, p0, [{r0}]",
+            "st1d {{z3.d}}, p0, [{r1}]",
+            w = in(reg) WIDTH as u64,
+            a = in(reg) a.0.as_ptr().cast::<u64>(),
+            b = in(reg) b.0.as_ptr().cast::<u64>(),
+            r0 = in(reg) r0.as_mut_ptr().cast::<u64>(),
+            r1 = in(reg) r1.as_mut_ptr().cast::<u64>(),
+            out("z0") _, out("z1") _, out("z2") _, out("z3") _, out("p0") _,
+            options(nostack),
+        );
+        (
+            PackedGoldilocksSve(r0.assume_init()),
+            PackedGoldilocksSve(r1.assume_init()),
+        )
+    }
+}
+
 unsafe impl PackedFieldPow2 for PackedGoldilocksSve {
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         // Interleaving `block_len`-sized chunks of lanes is a `TRN1`/`TRN2` of `64*block_len`-bit
-        // elements. Since the vector length is fixed at `WIDTH`, this is a fixed permutation of the
-        // backing arrays, computed directly (the 128-bit-granule case would otherwise need the
-        // optional F64MM extension).
+        // elements. The 64-bit granule uses base-SVE `trn`; the 128-bit granule (`block_len == 2`)
+        // would need the optional F64MM extension, so it is permuted directly.
         assert!(block_len.is_power_of_two() && block_len <= WIDTH);
         if block_len == WIDTH {
             return (*self, other);
         }
-
-        let a = self.0;
-        let b = other.0;
-        let mut r0 = [Goldilocks::ZERO; WIDTH];
-        let mut r1 = [Goldilocks::ZERO; WIDTH];
-        // `TRN1` gathers even-indexed blocks, `TRN2` odd-indexed blocks, taking each pair `(a, b)`.
-        let blocks = WIDTH / block_len;
-        for i in 0..blocks / 2 {
-            let even = 2 * i;
-            let odd = 2 * i + 1;
-            let lo = 2 * i * block_len;
-            let hi = (2 * i + 1) * block_len;
-            r0[lo..lo + block_len].copy_from_slice(&a[even * block_len..(even + 1) * block_len]);
-            r0[hi..hi + block_len].copy_from_slice(&b[even * block_len..(even + 1) * block_len]);
-            r1[lo..lo + block_len].copy_from_slice(&a[odd * block_len..(odd + 1) * block_len]);
-            r1[hi..hi + block_len].copy_from_slice(&b[odd * block_len..(odd + 1) * block_len]);
+        match block_len {
+            1 => interleave_trn_d(self, &other),
+            _ => {
+                let a = self.0;
+                let b = other.0;
+                let mut r0 = [Goldilocks::ZERO; WIDTH];
+                let mut r1 = [Goldilocks::ZERO; WIDTH];
+                // `TRN1` gathers even-indexed blocks, `TRN2` odd-indexed blocks, taking each pair.
+                let blocks = WIDTH / block_len;
+                for i in 0..blocks / 2 {
+                    let even = 2 * i;
+                    let odd = 2 * i + 1;
+                    let lo = 2 * i * block_len;
+                    let hi = (2 * i + 1) * block_len;
+                    r0[lo..lo + block_len]
+                        .copy_from_slice(&a[even * block_len..(even + 1) * block_len]);
+                    r0[hi..hi + block_len]
+                        .copy_from_slice(&b[even * block_len..(even + 1) * block_len]);
+                    r1[lo..lo + block_len]
+                        .copy_from_slice(&a[odd * block_len..(odd + 1) * block_len]);
+                    r1[hi..hi + block_len]
+                        .copy_from_slice(&b[odd * block_len..(odd + 1) * block_len]);
+                }
+                (Self(r0), Self(r1))
+            }
         }
-        (Self(r0), Self(r1))
     }
 }
 
