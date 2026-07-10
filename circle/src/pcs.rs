@@ -5,13 +5,11 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{
-    BatchOpening, BatchOpeningRef, Mmcs, OpenedValues, Pcs, PeriodicLdeTable, PolynomialSpace,
-};
+use p3_commit::{Mmcs, OpenedValues, Pcs, PeriodicLdeTable, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field, batch_multiplicative_inverse, dot_product};
-use p3_fri::FriParameters;
 use p3_fri::verifier::FriError;
+use p3_fri::{BatchMultiOpening, FriParameters};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::{Dimensions, Matrix};
@@ -62,9 +60,13 @@ pub struct CircleInputProof<
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
 > {
-    input_openings: Vec<BatchOpening<Val, InputMmcs>>,
-    first_layer_siblings: Vec<Challenge>,
-    first_layer_proof: FriMmcs::Proof,
+    /// One multi-opening per input commitment, each covering every query with a
+    /// single shared proof.
+    input_openings: Vec<BatchMultiOpening<Val, InputMmcs>>,
+    /// `first_layer_siblings[query]` holds one sibling per committed height.
+    first_layer_siblings: Vec<Vec<Challenge>>,
+    /// One shared proof authenticating every query's first-layer row.
+    first_layer_proof: FriMmcs::MultiProof,
 }
 
 #[derive(Debug, Error)]
@@ -481,40 +483,59 @@ where
         let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriFolding(PhantomData);
 
-        let fri_proof = prove(&folding, &self.fri_params, fri_input, challenger, |index| {
-            // CircleFriFolder asks for an extra query index bit, so we use that here to index
-            // the first layer fold.
+        let fri_proof = prove(
+            &folding,
+            &self.fri_params,
+            fri_input,
+            challenger,
+            |indices| {
+                // CircleFriFolder asks for an extra query index bit, so we use that here to index
+                // the first layer fold.
 
-            // Open the input (big opening, lots of columns) at the full index...
-            let input_openings = rounds
-                .iter()
-                .map(|(data, _)| {
-                    let log_max_batch_height = log2_strict_usize(self.mmcs.get_max_height(data));
-                    let reduced_index = index >> (log_max_height - log_max_batch_height);
-                    self.mmcs.open_batch(reduced_index, data)
-                })
-                .collect();
+                // Open the input (big opening, lots of columns) at every full index. Queries into
+                // one committed tree share a single proof, so overlapping paths ship once.
+                let input_openings = rounds
+                    .iter()
+                    .map(|(data, _)| {
+                        let log_max_batch_height =
+                            log2_strict_usize(self.mmcs.get_max_height(data));
+                        let bits_reduced = log_max_height - log_max_batch_height;
+                        let reduced_indices: Vec<usize> =
+                            indices.iter().map(|&index| index >> bits_reduced).collect();
+                        let (opened_values, opening_proof) =
+                            self.mmcs.open_multi_batch(&reduced_indices, data);
+                        BatchMultiOpening {
+                            opened_values,
+                            opening_proof,
+                        }
+                    })
+                    .collect();
 
-            // We committed to first_layer in pairs, so open the reduced index and include the sibling
-            // as part of the input proof.
-            let (first_layer_values, first_layer_proof) = self
-                .fri_params
-                .mmcs
-                .open_batch(index >> 1, &first_layer_data)
-                .unpack();
-            let first_layer_siblings = izip!(&first_layer_values, &log_heights)
-                .map(|(v, log_height)| {
-                    let reduced_index = index >> (log_max_height - log_height);
-                    let sibling_index = (reduced_index & 1) ^ 1;
-                    v[sibling_index]
-                })
-                .collect();
-            CircleInputProof {
-                input_openings,
-                first_layer_siblings,
-                first_layer_proof,
-            }
-        });
+                // We committed to first_layer in pairs, so open the reduced index and include the sibling
+                // as part of the input proof.
+                let paired_indices: Vec<usize> = indices.iter().map(|&index| index >> 1).collect();
+                let (first_layer_values, first_layer_proof) = self
+                    .fri_params
+                    .mmcs
+                    .open_multi_batch(&paired_indices, &first_layer_data);
+                let first_layer_siblings = izip!(indices, first_layer_values)
+                    .map(|(&index, values)| {
+                        izip!(&values, &log_heights)
+                            .map(|(v, log_height)| {
+                                let reduced_index = index >> (log_max_height - log_height);
+                                let sibling_index = (reduced_index & 1) ^ 1;
+                                v[sibling_index]
+                            })
+                            .collect()
+                    })
+                    .collect();
+                CircleInputProof {
+                    input_openings,
+                    first_layer_siblings,
+                    first_layer_proof,
+                }
+            },
+        );
 
         (
             values,
@@ -627,16 +648,25 @@ where
             &self.fri_params,
             &proof.fri_proof,
             challenger,
-            |index, input_proof| {
-                // log_height -> (alpha_offset, ro)
-                let mut reduced_openings = BTreeMap::new();
-
+            |indices, input_proof| {
                 let CircleInputProof {
                     input_openings,
                     first_layer_siblings,
                     first_layer_proof,
                 } = input_proof;
 
+                // One sibling set per query, one opened-row set per query per batch.
+                if first_layer_siblings.len() != indices.len() {
+                    return Err(InputError::InputShapeError);
+                }
+                for batch_opening in input_openings {
+                    if batch_opening.opened_values.len() != indices.len() {
+                        return Err(InputError::InputShapeError);
+                    }
+                }
+
+                // Check every input commitment's shared multi-opening once, before the
+                // per-query arithmetic reads any opened value.
                 for (batch, (batch_opening, (batch_commit, mats))) in
                     zip_eq(input_openings, &rounds, InputError::InputShapeError)?.enumerate()
                 {
@@ -645,178 +675,216 @@ where
                         .map(|(domain, _)| domain.size() << self.fri_params.log_blowup)
                         .collect_vec();
                     // The opened rows must pair one-to-one with the committed matrices.
-                    let batch_dims: Vec<Dimensions> = zip_eq(
-                        batch_heights.iter().zip(mats),
-                        &batch_opening.opened_values,
-                        InputError::InputShapeError,
-                    )?
-                    .enumerate()
-                    .map(|(matrix, ((&height, (_, points_and_values)), _))| {
-                        // Invariant: a matrix's width is fixed by its first opening point.
-                        //
-                        //     >= 1 point  ->  width = number of claimed evaluations
-                        //     no points   ->  reject
-                        //
-                        // Why reject the no-points case:
-                        //   - row boundaries in the flattened leaf hash are authenticated only from claimed widths
-                        //   - a matrix opened at no points claims no width
-                        //   - its width could then come only from the unverified proof
-                        let (_, values) = points_and_values
-                            .first()
-                            .ok_or(InputError::MatrixWithoutOpeningPoints { batch, matrix })?;
-                        Ok(Dimensions {
-                            width: values.len(),
-                            height,
+                    for opened_values in &batch_opening.opened_values {
+                        if opened_values.len() != mats.len() {
+                            return Err(InputError::InputShapeError);
+                        }
+                    }
+                    let batch_dims: Vec<Dimensions> = batch_heights
+                        .iter()
+                        .zip(mats)
+                        .enumerate()
+                        .map(|(matrix, (&height, (_, points_and_values)))| {
+                            // Invariant: a matrix's width is fixed by its first opening point.
+                            //
+                            //     >= 1 point  ->  width = number of claimed evaluations
+                            //     no points   ->  reject
+                            //
+                            // Why reject the no-points case:
+                            //   - row boundaries in the flattened leaf hash are authenticated only from claimed widths
+                            //   - a matrix opened at no points claims no width
+                            //   - its width could then come only from the unverified proof
+                            let (_, values) = points_and_values
+                                .first()
+                                .ok_or(InputError::MatrixWithoutOpeningPoints { batch, matrix })?;
+                            Ok(Dimensions {
+                                width: values.len(),
+                                height,
+                            })
                         })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                        .collect::<Result<Vec<_>, _>>()?;
 
-                    let (dims, idx) = batch_heights
+                    let (dims, reduced_indices) = batch_heights
                         .iter()
                         .max()
                         .map(|x| log2_strict_usize(*x))
                         .map_or_else(
                             ||
                             // Empty batch?
-                            (&[][..], 0),
+                            (&[][..], vec![0; indices.len()]),
                             |log_batch_max_height| {
+                                let bits_reduced = log_global_max_height - log_batch_max_height;
                                 (
                                     &batch_dims[..],
-                                    index >> (log_global_max_height - log_batch_max_height),
+                                    indices.iter().map(|&i| i >> bits_reduced).collect_vec(),
                                 )
                             },
                         );
 
                     self.mmcs
-                        .verify_batch(batch_commit, dims, idx, batch_opening.into())
+                        .verify_multi_batch(
+                            batch_commit,
+                            dims,
+                            &reduced_indices,
+                            &batch_opening.opened_values,
+                            &batch_opening.opening_proof,
+                        )
                         .map_err(InputError::InputMmcsError)?;
-
-                    for (matrix, (ps_at_x, (mat_domain, mat_points_and_values))) in zip_eq(
-                        &batch_opening.opened_values,
-                        mats,
-                        InputError::InputShapeError,
-                    )?
-                    .enumerate()
-                    {
-                        let log_height = mat_domain.log_n + self.fri_params.log_blowup;
-                        let bits_reduced = log_global_max_height - log_height;
-                        let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
-
-                        let committed_domain = CircleDomain::standard(log_height);
-                        let x = committed_domain.nth_point(orig_idx);
-
-                        let (alpha_offset, ro) = reduced_openings
-                            .entry(log_height)
-                            .or_insert((Challenge::ONE, Challenge::ZERO));
-                        let (alpha_pow_width, alpha_pow_width_2) = matrix_alpha_pows[batch][matrix];
-
-                        for (zeta_uni, ps_at_zeta) in mat_points_and_values {
-                            // The claimed opening must have exactly as many
-                            // values as the committed row has columns.
-                            if ps_at_zeta.len() != ps_at_x.len() {
-                                return Err(InputError::InputShapeError);
-                            }
-                            let zeta = Point::from_projective_line(*zeta_uni);
-
-                            // A vanishing denominator means this opening point lands on the
-                            // query point; reject the proof rather than dividing by zero.
-                            *ro += *alpha_offset
-                                * deep_quotient_reduce_row(
-                                    alpha_pow_width,
-                                    &alpha_powers,
-                                    x,
-                                    zeta,
-                                    ps_at_x,
-                                    ps_at_zeta,
-                                )
-                                .ok_or(InputError::OpeningPointMatchesQueryPoint)?;
-
-                            *alpha_offset *= alpha_pow_width_2;
-                        }
-                    }
                 }
 
-                // Verify bivariate fold and lambda correction
+                // Per query, reduce the (now authenticated) opened rows into the FRI inputs
+                // and rebuild the first-layer leaves that the shared proof will authenticate.
+                let mut all_fri_inputs = Vec::with_capacity(indices.len());
+                let mut fl_leaves_by_query = Vec::with_capacity(indices.len());
+                let mut fl_dims: Vec<Dimensions> = Vec::new();
 
-                // First pass: derive the lambda-corrected leaf values and each height's
-                // first-layer (y) twiddle, without folding yet. The fold pairs a point with
-                // its negation, so the canonical (b=0) twiddle is `p.y` (sign-flipped when
-                // this query landed on the b=1 member) - the same point `p` already computed
-                // for the lambda correction, with no separate `nth_y_twiddle` scalar
-                // multiplication. All these per-height twiddles are then inverted in a single
-                // batch instead of one inversion per height.
-                let per_height: Vec<_> = zip_eq(
-                    zip_eq(
-                        reduced_openings,
-                        first_layer_siblings,
+                for (query, &index) in indices.iter().enumerate() {
+                    // log_height -> (alpha_offset, ro)
+                    let mut reduced_openings = BTreeMap::new();
+
+                    for (batch, (batch_opening, (_, mats))) in
+                        zip_eq(input_openings, &rounds, InputError::InputShapeError)?.enumerate()
+                    {
+                        for (matrix, (ps_at_x, (mat_domain, mat_points_and_values))) in zip_eq(
+                            &batch_opening.opened_values[query],
+                            mats,
+                            InputError::InputShapeError,
+                        )?
+                        .enumerate()
+                        {
+                            let log_height = mat_domain.log_n + self.fri_params.log_blowup;
+                            let bits_reduced = log_global_max_height - log_height;
+                            let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
+
+                            let committed_domain = CircleDomain::standard(log_height);
+                            let x = committed_domain.nth_point(orig_idx);
+
+                            let (alpha_offset, ro) = reduced_openings
+                                .entry(log_height)
+                                .or_insert((Challenge::ONE, Challenge::ZERO));
+                            let (alpha_pow_width, alpha_pow_width_2) =
+                                matrix_alpha_pows[batch][matrix];
+
+                            for (zeta_uni, ps_at_zeta) in mat_points_and_values {
+                                // The claimed opening must have exactly as many
+                                // values as the committed row has columns.
+                                if ps_at_zeta.len() != ps_at_x.len() {
+                                    return Err(InputError::InputShapeError);
+                                }
+                                let zeta = Point::from_projective_line(*zeta_uni);
+
+                                // A vanishing denominator means this opening point lands on the
+                                // query point; reject the proof rather than dividing by zero.
+                                *ro += *alpha_offset
+                                    * deep_quotient_reduce_row(
+                                        alpha_pow_width,
+                                        &alpha_powers,
+                                        x,
+                                        zeta,
+                                        ps_at_x,
+                                        ps_at_zeta,
+                                    )
+                                    .ok_or(InputError::OpeningPointMatchesQueryPoint)?;
+
+                                *alpha_offset *= alpha_pow_width_2;
+                            }
+                        }
+                    }
+
+                    // Verify bivariate fold and lambda correction
+
+                    // First pass: derive the lambda-corrected leaf values and each height's
+                    // first-layer (y) twiddle, without folding yet. The fold pairs a point with
+                    // its negation, so the canonical (b=0) twiddle is `p.y` (sign-flipped when
+                    // this query landed on the b=1 member) - the same point `p` already computed
+                    // for the lambda correction, with no separate `nth_y_twiddle` scalar
+                    // multiplication. All these per-height twiddles are then inverted in a single
+                    // batch instead of one inversion per height.
+                    let per_height: Vec<_> = zip_eq(
+                        zip_eq(
+                            reduced_openings,
+                            &first_layer_siblings[query],
+                            InputError::InputShapeError,
+                        )?,
+                        &proof.lambdas,
                         InputError::InputShapeError,
-                    )?,
-                    &proof.lambdas,
-                    InputError::InputShapeError,
-                )?
-                .map(|(((log_height, (_, ro)), &fl_sib), &lambda)| {
-                    assert!(log_height > 0);
+                    )?
+                    .map(|(((log_height, (_, ro)), &fl_sib), &lambda)| {
+                        assert!(log_height > 0);
 
-                    let orig_size = log_height - self.fri_params.log_blowup;
-                    let bits_reduced = log_global_max_height - log_height;
-                    let b = (index >> bits_reduced) & 1;
-                    let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
+                        let orig_size = log_height - self.fri_params.log_blowup;
+                        let bits_reduced = log_global_max_height - log_height;
+                        let b = (index >> bits_reduced) & 1;
+                        let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
 
-                    let lde_domain = CircleDomain::standard(log_height);
-                    let p: Point<Val> = lde_domain.nth_point(orig_idx);
+                        let lde_domain = CircleDomain::standard(log_height);
+                        let p: Point<Val> = lde_domain.nth_point(orig_idx);
 
-                    let lambda_corrected = ro - lambda * p.v_n(orig_size);
+                        let lambda_corrected = ro - lambda * p.v_n(orig_size);
 
-                    let mut fl_values = vec![lambda_corrected; 2];
-                    fl_values[b ^ 1] = fl_sib;
+                        let mut fl_values = vec![lambda_corrected; 2];
+                        fl_values[b ^ 1] = fl_sib;
 
-                    let y_twiddle = if b == 0 { p.y } else { -p.y };
+                        let y_twiddle = if b == 0 { p.y } else { -p.y };
 
-                    let fl_dims = Dimensions {
-                        // First-layer leaves hold the queried value and its sibling.
-                        width: 2,
-                        height: 1 << (log_height - 1),
-                    };
+                        let dims = Dimensions {
+                            // First-layer leaves hold the queried value and its sibling.
+                            width: 2,
+                            height: 1 << (log_height - 1),
+                        };
 
-                    (log_height, y_twiddle, fl_values, fl_dims)
-                })
-                .collect();
-
-                let y_twiddles_inv = batch_multiplicative_inverse(
-                    &per_height.iter().map(|&(_, t, _, _)| t).collect_vec(),
-                );
-
-                let (mut fri_input, fl_dims, fl_leaves): (Vec<_>, Vec<_>, Vec<_>) = per_height
-                    .into_iter()
-                    .zip(y_twiddles_inv)
-                    .map(|((log_height, _, fl_values, fl_dims), y_twiddle_inv)| {
-                        let fri_input = (
-                            // - 1 here is because we have already folded a layer.
-                            log_height - 1,
-                            fold_row_with_inv_twiddle(
-                                y_twiddle_inv,
-                                bivariate_beta,
-                                fl_values.iter().copied(),
-                            ),
-                        );
-                        (fri_input, fl_dims, fl_values)
+                        (log_height, y_twiddle, fl_values, dims)
                     })
-                    .multiunzip();
+                    .collect();
 
-                // sort descending
-                fri_input.reverse();
+                    let y_twiddles_inv = batch_multiplicative_inverse(
+                        &per_height.iter().map(|&(_, t, _, _)| t).collect_vec(),
+                    );
 
+                    let (mut fri_input, query_fl_dims, fl_leaves): (Vec<_>, Vec<_>, Vec<_>) =
+                        per_height
+                            .into_iter()
+                            .zip(y_twiddles_inv)
+                            .map(|((log_height, _, fl_values, dims), y_twiddle_inv)| {
+                                let fri_input = (
+                                    // - 1 here is because we have already folded a layer.
+                                    log_height - 1,
+                                    fold_row_with_inv_twiddle(
+                                        y_twiddle_inv,
+                                        bivariate_beta,
+                                        fl_values.iter().copied(),
+                                    ),
+                                );
+                                (fri_input, dims, fl_values)
+                            })
+                            .multiunzip();
+
+                    // sort descending
+                    fri_input.reverse();
+
+                    // The committed first-layer shape is the same for every query.
+                    if query == 0 {
+                        fl_dims = query_fl_dims;
+                    }
+
+                    all_fri_inputs.push(fri_input);
+                    fl_leaves_by_query.push(fl_leaves);
+                }
+
+                // One shared check for every query's first-layer row.
+                let paired_indices = indices.iter().map(|&i| i >> 1).collect_vec();
                 self.fri_params
                     .mmcs
-                    .verify_batch(
+                    .verify_multi_batch(
                         &proof.first_layer_commitment,
                         &fl_dims,
-                        index >> 1,
-                        BatchOpeningRef::new(&fl_leaves, first_layer_proof),
+                        &paired_indices,
+                        &fl_leaves_by_query,
+                        first_layer_proof,
                     )
                     .map_err(InputError::FirstLayerMmcsError)?;
 
-                Ok(fri_input)
+                Ok(all_fri_inputs)
             },
         )
     }
@@ -835,6 +903,7 @@ where
 mod tests {
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_fri::FriParameters;
     use p3_fri::verifier::FriError;
@@ -1076,25 +1145,33 @@ mod tests {
     }
 
     #[test]
-    fn reject_query_proof_count_mismatch() {
-        // Invariant: the proof must contain exactly num_queries query proofs.
-        // The verifier rejects if the count is wrong.
+    fn reject_commit_phase_query_count_mismatch() {
+        // Invariant: every commit-phase round must open every query. The round's
+        // shared proof carries one sibling set per query.
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
 
-        // Mutation: remove one query proof so the count falls short.
+        // Mutation: drop one query's siblings from round 0.
         //
-        //     before: query_proofs = [q_0, q_1, ..., q_{n-1}]   (n = num_queries)
-        //     after:  query_proofs = [q_0, q_1, ..., q_{n-2}]   (n - 1)
-        //     → expected n, got n - 1 → error
-        proof.fri_proof.query_proofs.pop();
+        //     before: sibling_values = [s_0, s_1, ..., s_{n-1}]   (n = num_queries)
+        //     after:  sibling_values = [s_0, s_1, ..., s_{n-2}]   (n - 1)
+        //     → expected n, got n - 1 → error on round 0
+        proof.fri_proof.commit_phase_openings[0]
+            .sibling_values
+            .pop();
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
-            .expect_err("expected QueryProofCountMismatch");
+            .expect_err("expected CommitPhaseQueryCountMismatch");
 
         // Destructure for precise field assertions (better diagnostics than matches!).
-        let FriError::QueryProofCountMismatch { expected, got } = err else {
-            panic!("expected QueryProofCountMismatch, got {err:?}");
+        let FriError::CommitPhaseQueryCountMismatch {
+            round,
+            expected,
+            got,
+        } = err
+        else {
+            panic!("expected CommitPhaseQueryCountMismatch, got {err:?}");
         };
+        assert_eq!(round, 0);
         assert_eq!(expected, pcs.fri_params.num_queries);
         assert_eq!(got, pcs.fri_params.num_queries - 1);
     }
@@ -1213,36 +1290,29 @@ mod tests {
     }
 
     #[test]
-    fn reject_query_commit_phase_openings_count_mismatch() {
-        // Invariant: each query proof must carry exactly one opening per
-        // commit-phase round. If a query has fewer (or more) openings than
-        // there are commitments, the proof shape is invalid.
+    fn reject_commit_phase_openings_count_mismatch() {
+        // Invariant: the proof must carry exactly one opening set per
+        // commit-phase round. Fewer (or more) than there are commitments
+        // makes the proof shape invalid.
         let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
 
         // We need the original proof to assert against its commitment count,
         // so clone before mutating.
         let mut bad = proof.clone();
 
-        // Mutation: remove the last opening from query 0.
+        // Mutation: remove the last round's openings.
         //
-        //     commit_phase_commits:                [c_0, ..., c_{n-1}]   (n rounds)
-        //     query 0 commit_phase_openings:       [o_0, ..., o_{n-2}]   (n - 1 after pop)
-        //     → n != n - 1 → error on query 0
-        bad.fri_proof.query_proofs[0].commit_phase_openings.pop();
+        //     commit_phase_commits:   [c_0, ..., c_{n-1}]   (n rounds)
+        //     commit_phase_openings:  [o_0, ..., o_{n-2}]   (n - 1 after pop)
+        //     → n != n - 1 → error
+        bad.fri_proof.commit_phase_openings.pop();
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &bad)
-            .expect_err("expected QueryCommitPhaseOpeningsCountMismatch");
+            .expect_err("expected CommitPhaseOpeningsCountMismatch");
 
-        let FriError::QueryCommitPhaseOpeningsCountMismatch {
-            query,
-            expected,
-            got,
-        } = err
-        else {
-            panic!("expected QueryCommitPhaseOpeningsCountMismatch, got {err:?}");
+        let FriError::CommitPhaseOpeningsCountMismatch { expected, got } = err else {
+            panic!("expected CommitPhaseOpeningsCountMismatch, got {err:?}");
         };
-        // Error must identify query 0 as the offender.
-        assert_eq!(query, 0);
         assert_eq!(expected, proof.fri_proof.commit_phase_commits.len());
         assert_eq!(got, expected - 1);
     }
@@ -1255,11 +1325,10 @@ mod tests {
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
 
         // Capture the original sibling count and arity before mutating.
-        let log_arity = proof.fri_proof.query_proofs[0].commit_phase_openings[0].log_arity as usize;
+        let log_arity = proof.fri_proof.commit_phase_openings[0].log_arity as usize;
         let arity = 1usize << log_arity;
-        let original_sibling_count = proof.fri_proof.query_proofs[0].commit_phase_openings[0]
-            .sibling_values
-            .len();
+        let original_sibling_count =
+            proof.fri_proof.commit_phase_openings[0].sibling_values[0].len();
 
         // Mutation: remove one sibling value from query 0, round 0.
         //
@@ -1267,9 +1336,7 @@ mod tests {
         //     before: sibling_values = [s_0, ..., s_{arity-2}]   (arity - 1 elements)
         //     after:  sibling_values = [s_0, ..., s_{arity-3}]   (arity - 2 elements)
         //     → expected arity - 1, got arity - 2 → error at round 0
-        proof.fri_proof.query_proofs[0].commit_phase_openings[0]
-            .sibling_values
-            .pop();
+        proof.fri_proof.commit_phase_openings[0].sibling_values[0].pop();
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
             .expect_err("expected SiblingValuesLengthMismatch");
@@ -1306,58 +1373,98 @@ mod tests {
     // in depth in the low-level verifier.
 
     #[test]
-    fn reject_query_log_arities_mismatch() {
-        // Invariant: all query proofs must use the same per-round folding
-        // arity schedule. The verifier takes the first query proof's
-        // schedule as a reference and rejects any that differ.
-        let (mut pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
-        // Allow arity 2 so this mutation remains a schedule mismatch rather
-        // than being rejected as an out-of-range arity.
-        pcs.fri_params.max_log_arity = 2;
-
-        // This check compares query 1 against query 0, so we need at least
-        // two query proofs. With testing parameters this is always true, but
-        // guard defensively.
-        if proof.fri_proof.query_proofs.len() < 2 {
-            return;
-        }
-
-        // Capture the reference arity schedule from query 0 before mutating.
-        let reference_arities: Vec<usize> = proof.fri_proof.query_proofs[0]
-            .commit_phase_openings
-            .iter()
-            .map(|o| o.log_arity as usize)
-            .collect();
-
-        // Mutation: bump the log_arity of query 1's first round by 1.
+    fn reject_input_openings_query_count_mismatch() {
+        // Invariant: the shared input openings must cover every query. The
+        // first-layer siblings carry one entry per query, so dropping one
+        // leaves a query without its opened row.
         //
-        //     query 0 arities: [a_0, a_1, ..., a_{n-1}]       (reference)
-        //     query 1 arities: [a_0 + 1, a_1, ..., a_{n-1}]   (corrupted)
-        //     → schedules differ → error on query 1
-        let original = proof.fri_proof.query_proofs[1].commit_phase_openings[0].log_arity;
-        proof.fri_proof.query_proofs[1].commit_phase_openings[0].log_arity = original + 1;
+        // The cross-query arity-schedule check this test used to perform is
+        // now unrepresentable: `log_arity` lives once per round, not once per
+        // query, so no two queries can disagree.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
 
-        // Build the expected corrupted schedule for query 1.
-        let mut corrupted_arities = reference_arities.clone();
-        corrupted_arities[0] = original as usize + 1;
+        // Mutation: drop the last query's first-layer siblings.
+        //
+        //     before: first_layer_siblings = [f_0, ..., f_{n-1}]   (n = num_queries)
+        //     after:  first_layer_siblings = [f_0, ..., f_{n-2}]   (n - 1)
+        //     → the shape gate rejects before any Merkle work
+        proof.fri_proof.input_openings.first_layer_siblings.pop();
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
-            .expect_err("expected QueryLogAritiesMismatch");
+            .expect_err("expected InputShapeError");
 
-        let FriError::QueryLogAritiesMismatch {
-            query,
-            expected,
-            got,
-        } = err
-        else {
-            panic!("expected QueryLogAritiesMismatch, got {err:?}");
-        };
-        // Error must identify query 1 (the first one compared against the reference).
-        assert_eq!(query, 1);
-        // The expected schedule is query 0's (the reference).
-        assert_eq!(expected, reference_arities);
-        // The got schedule is query 1's corrupted version.
-        assert_eq!(got, corrupted_arities);
+        assert!(
+            matches!(err, FriError::InputError(InputError::InputShapeError)),
+            "expected InputShapeError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn reject_tampered_commit_phase_sibling_value() {
+        // Invariant: a tampered sibling cannot survive, whichever check reaches
+        // it first. A sibling feeds the fold, so flipping one diverges the
+        // folded constant and the final-polynomial check fires. Tampering that
+        // preserves the fold is caught instead by the shared per-round Merkle
+        // check, because the reconstructed row stops matching the committed
+        // leaf (see `reject_tampered_commit_phase_opening_proof`). Together the
+        // two paths cover both shapes of attack; the accepted set is their
+        // conjunction, so the order in which they run does not widen it.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        proof.fri_proof.commit_phase_openings[0].sibling_values[0][0] += Challenge::ONE;
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("a tampered sibling value must be rejected");
+
+        assert!(
+            matches!(err, FriError::FinalPolyMismatch),
+            "expected FinalPolyMismatch, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn reject_tampered_commit_phase_opening_proof() {
+        // The round's shared multiproof carries every deduplicated sibling
+        // digest. Corrupting one makes the recomputed root diverge from the
+        // round commitment.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        proof.fri_proof.commit_phase_openings[0]
+            .opening_proof
+            .sibling_hashes[0] = Default::default();
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("a tampered commit-phase digest must be rejected");
+
+        assert!(
+            matches!(err, FriError::CommitPhaseMmcsError(_)),
+            "expected CommitPhaseMmcsError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn reject_tampered_first_layer_proof() {
+        // The first-layer tree is opened once for every query through a single
+        // shared multiproof; a corrupted digest there must fail before any
+        // reduced opening is trusted.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        proof
+            .fri_proof
+            .input_openings
+            .first_layer_proof
+            .sibling_hashes[0] = Default::default();
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("a tampered first-layer digest must be rejected");
+
+        assert!(
+            matches!(
+                err,
+                FriError::InputError(InputError::FirstLayerMmcsError(_))
+            ),
+            "expected FirstLayerMmcsError, got {err:?}"
+        );
     }
 
     #[test]
@@ -1366,7 +1473,7 @@ mod tests {
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
 
         // Mutation: force an invalid zero arity in query 0, round 0.
-        proof.fri_proof.query_proofs[0].commit_phase_openings[0].log_arity = 0;
+        proof.fri_proof.commit_phase_openings[0].log_arity = 0;
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
             .expect_err("expected InvalidLogArity");
@@ -1411,11 +1518,9 @@ mod tests {
         {
             proof.fri_proof.commit_phase_commits.push(commit.clone());
             proof.fri_proof.commit_pow_witnesses.push(witness);
-            // Each query proof needs one opening per round.
-            for qp in &mut proof.fri_proof.query_proofs {
-                let opening = qp.commit_phase_openings[0].clone();
-                qp.commit_phase_openings.push(opening);
-            }
+            // Each round needs its own opening set.
+            let opening = proof.fri_proof.commit_phase_openings[0].clone();
+            proof.fri_proof.commit_phase_openings.push(opening);
         }
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
