@@ -140,3 +140,8 @@ fn prove_circle_transition_deg4() -> Result<(), impl Debug> {
 fn prove_circle_transition_deg5() -> Result<(), impl Debug> {
     prove_circle_transition(5, 7)
 }
+
+#[test]
+fn prove_circle_transition_deg9() -> Result<(), impl Debug> {
+    prove_circle_transition(9, 8)
+}

@@ -6,6 +6,33 @@ use p3_field::{ExtensionField, Field};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
+/// The exact number of regular-size quotient chunks implied by the AIR's constraint degree,
+/// i.e. `constraint_degree - 1`, before any power-of-two rounding.
+///
+/// Circle STARKs need this unrounded count to decide whether Remark 22's extension chunk is
+/// required (eprint 2024/278): that only happens when this count is itself an exact power of
+/// two, i.e. exactly the boundary [`get_log_num_quotient_chunks`]'s rounding-up would otherwise
+/// hide by construction.
+#[instrument(skip_all, level = "debug")]
+pub fn get_num_regular_quotient_chunks<F, A>(
+    air: &A,
+    layout: AirLayout,
+    trace_len: usize,
+    is_zk: usize,
+) -> usize
+where
+    F: Field,
+    A: Air<SymbolicAirBuilder<F>>,
+{
+    assert!(is_zk <= 1, "is_zk must be either 0 or 1");
+
+    if let Some(degree_hint) = air.max_constraint_degree() {
+        return (degree_hint + is_zk).max(2) - 1;
+    }
+
+    (get_max_constraint_degree_extension::<F, F, A>(air, layout, trace_len) + is_zk).max(2) - 1
+}
+
 #[instrument(skip_all, level = "debug")]
 pub fn get_log_num_quotient_chunks<F, A>(
     air: &A,

@@ -16,7 +16,7 @@ use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
 use crate::error::{InvalidProofShapeError, PeriodicColumnError, VerificationError};
-use crate::symbolic::get_log_num_quotient_chunks;
+use crate::symbolic::{get_log_num_quotient_chunks, get_num_regular_quotient_chunks};
 use crate::{
     AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
@@ -360,7 +360,29 @@ where
             maximum: pcs.log_max_lde_height(),
             got: quotient_domain_log_size,
         })?;
-    let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
+
+    // Circle STARKs (eprint 2024/278, Remark 22): the tangent-functional transition
+    // selector (Remark 17) puts the quotient in `L_{(d-1)*N+2}` exactly when the raw
+    // (unrounded) chunk count sits on a power-of-two boundary the standard rounding-up
+    // would otherwise absorb for free. Independently re-derive that decision from public
+    // data, mirroring the prover.
+    let num_regular_chunks =
+        get_num_regular_quotient_chunks::<Val<SC>, A>(air, layout, base_degree, config.is_zk());
+    let quotient_extension_size = init_trace_domain.quotient_extension_size(num_regular_chunks);
+    let mut quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
+    let total_quotient_chunks = if let Some(ext_size) = quotient_extension_size {
+        let extension_domain = quotient_domain
+            .try_create_disjoint_domain(ext_size)
+            .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
+                air: None,
+                maximum: pcs.log_max_lde_height(),
+                got: quotient_domain_log_size,
+            })?;
+        quotient_chunks_domains.push(extension_domain);
+        num_quotient_chunks + 1
+    } else {
+        num_quotient_chunks
+    };
 
     let randomized_quotient_chunks_domains = quotient_chunks_domains
         .iter()
@@ -397,7 +419,7 @@ where
     };
     let valid_shape = opened_values.trace_local.len() == air_width
         && trace_next_ok
-        && opened_values.quotient_chunks.len() == num_quotient_chunks
+        && opened_values.quotient_chunks.len() == total_quotient_chunks
         && opened_values
             .quotient_chunks
             .iter()
@@ -520,11 +542,27 @@ where
     pcs.verify(coms_to_verify, opening_proof, &mut challenger)
         .map_err(VerificationError::InvalidOpeningArgument)?;
 
+    // The regular chunks alone recompose `Q'`, the plain (d-1)-chunk reconstruction; the
+    // extension chunk (if any) is *not* folded into this the way a same-size chunk would be,
+    // since `v_{H_0}` is not constant over the regular `H_k`'s (see the prover's derivation).
     let quotient = recompose_quotient_from_chunks::<SC>(
-        &quotient_chunks_domains,
-        &opened_values.quotient_chunks,
+        &quotient_chunks_domains[..num_quotient_chunks],
+        &opened_values.quotient_chunks[..num_quotient_chunks],
         zeta,
     );
+    // Circle STARKs (eprint 2024/278, Remark 22): `Q(zeta) = Q'(zeta) + q_0(zeta) * v'(zeta)`,
+    // where `v'` is `quotient_domain`'s own vanishing polynomial (the product of the regular
+    // `v_{H_k}`'s).
+    let quotient = if quotient_extension_size.is_some() {
+        let q0_zeta = SC::Challenge::from_ext_basis_coefficients(
+            &opened_values.quotient_chunks[num_quotient_chunks],
+        )
+        .expect("quotient chunk length checked in valid_shape");
+        let v_prime_zeta = quotient_domain.vanishing_poly_at_point(zeta);
+        quotient + q0_zeta * v_prime_zeta
+    } else {
+        quotient
+    };
 
     let zeros;
     let trace_next_slice = match &opened_values.trace_next {

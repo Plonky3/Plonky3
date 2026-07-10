@@ -105,6 +105,16 @@ pub trait PolynomialSpace: Copy {
     /// this function will panic.
     fn split_domains(&self, num_chunks: usize) -> Vec<Self>;
 
+    /// The size of an additional quotient-chunk domain needed alongside `num_regular_chunks`
+    /// equal-size chunks, when that count sits exactly on a degree boundary the standard
+    /// Lemma-12-style decomposition does not provision for (Circle STARKs, eprint 2024/278,
+    /// Remark 22). Returns `None` when the `num_regular_chunks`-way decomposition already has
+    /// enough capacity, which holds unconditionally for spaces with no analogous gap.
+    fn quotient_extension_size(&self, num_regular_chunks: usize) -> Option<usize> {
+        let _ = num_regular_chunks;
+        None
+    }
+
     /// Split a set of polynomial evaluations over this `PolynomialSpace` into a vector
     /// of polynomial evaluations over each `PolynomialSpace` generated from `split_domains`.
     ///

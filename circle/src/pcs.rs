@@ -1433,4 +1433,74 @@ mod tests {
         // The rejecting width is at least that bound.
         assert!(log_global_max_height >= two_adicity);
     }
+
+    #[test]
+    fn evaluate_at_domain_with_next_matches_per_point_evaluation() {
+        let mut rng = SmallRng::seed_from_u64(7);
+        let log_n = 4;
+        let width = 3;
+        let domain = CircleDomain::<Val>::standard(log_n);
+        let evals = RowMajorMatrix::new(
+            (0..(1usize << log_n) * width)
+                .map(|_| rng.random())
+                .collect(),
+            width,
+        );
+
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        let pcs = TestPcs {
+            mmcs: val_mmcs,
+            fri_params: FriParameters::new_testing(challenge_mmcs, 0),
+            _phantom: PhantomData,
+        };
+
+        let target = domain.try_create_disjoint_domain(2).unwrap();
+        assert_eq!(target.log_n, 1);
+
+        let got = <TestPcs as Pcs<Challenge, Challenger>>::evaluate_at_domain_with_next(
+            &pcs, &evals, domain, target,
+        );
+        assert_eq!(got.height(), 4);
+
+        // Independent cross-check: evaluate each column at each of `target`'s own points
+        // (via the public single-point `evaluate_polynomial_at`) and at their
+        // `domain`-successor, using the same point source (`target.points()`) that
+        // `selectors_on_coset` uses internally, so a real mismatch here would also be a
+        // real mismatch against the selectors `quotient_values` combines this matrix with.
+        let pts = target.points().collect_vec();
+        let next_shift = Point::generator(domain.log_n);
+        let mut expected = Vec::with_capacity(4 * width);
+        for &p in &pts {
+            let t = p.to_projective_line().unwrap();
+            for c in 0..width {
+                let col: Vec<Val> = (0..evals.height())
+                    .map(|r| evals.get(r, c).unwrap())
+                    .collect();
+                expected.push(domain.evaluate_polynomial_at(&col, t));
+            }
+        }
+        for &p in &pts {
+            let t = (p + next_shift).to_projective_line().unwrap();
+            for c in 0..width {
+                let col: Vec<Val> = (0..evals.height())
+                    .map(|r| evals.get(r, c).unwrap())
+                    .collect();
+                expected.push(domain.evaluate_polynomial_at(&col, t));
+            }
+        }
+
+        for r in 0..4 {
+            for c in 0..width {
+                assert_eq!(
+                    got.get(r, c).unwrap(),
+                    expected[r * width + c],
+                    "mismatch at row {r}, col {c}"
+                );
+            }
+        }
+    }
 }

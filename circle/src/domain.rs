@@ -193,6 +193,26 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .collect()
     }
 
+    /// The tangent-functional transition selector (Remark 17) puts the overall quotient `Q` in
+    /// `L_{(d-1)*N+2}` rather than `L_{(d-1)*N}` (Remark 22). This is invisible whenever the
+    /// `num_regular_chunks`-way decomposition already has slack, i.e. whenever rounding
+    /// `num_regular_chunks` up to a power of two would add a chunk. It is only exposed when
+    /// `num_regular_chunks` is itself an exact power of two greater than one (the degenerate
+    /// `num_regular_chunks == 1` case has no cross-chunk decomposition to exceed), in which case
+    /// an extra disjoint twin-coset carries the excess.
+    ///
+    /// That excess is the residual `q_0 = (Q - Q') / v` on the extra coset, where `Q'` is the
+    /// plain `num_regular_chunks`-way reconstruction (in the FFT space over `quotient_domain`) and
+    /// `v` is `quotient_domain`'s vanishing polynomial. Since `Q` overshoots `Q'` by two degrees
+    /// and `v` has degree `(d-1)*N/2`, `q_0` has degree at most `1`: it lies in `L_2`, i.e.
+    /// `span{1, x, y}` (dimension `3`). A size-2 twin-coset's interpolation space is only
+    /// `span{1, y}` and would silently drop `q_0`'s `x` component; the size-4 FFT space
+    /// `span{1, y, x, x*y}` contains all of `L_2`, so a size-4 twin-coset is the smallest that
+    /// represents `q_0` exactly.
+    fn quotient_extension_size(&self, num_regular_chunks: usize) -> Option<usize> {
+        (num_regular_chunks > 1 && num_regular_chunks.is_power_of_two()).then_some(4)
+    }
+
     fn split_evals(
         &self,
         num_chunks: usize,
@@ -563,5 +583,117 @@ mod tests {
             let d = CircleDomain::<F>::standard(log_n);
             assert_eq!(d.points_vec(), d.points().collect_vec());
         }
+    }
+
+    /// Sanity check for the Lemma-12 chunk reconstruction math used by
+    /// `recompose_quotient_from_chunks`: splitting a random array over `quotient_domain`
+    /// into `num_chunks` equal chunks, then recombining via
+    /// `sum_k q_k(zeta) * prod_{j!=k} v_Hj(zeta)/v_Hj(rep_k)`, should equal directly
+    /// interpolating the whole array and evaluating at `zeta`.
+    #[test]
+    fn chunk_recompose_matches_direct_interpolation() {
+        use p3_field::Field;
+        use p3_field::extension::BinomialExtensionField;
+        use rand::RngExt;
+
+        type F = Mersenne31;
+        type EF = BinomialExtensionField<Mersenne31, 3>;
+
+        let mut rng = SmallRng::seed_from_u64(123);
+        let log_n = 3;
+        let num_chunks = 4;
+        let quotient_domain = CircleDomain::<F>::standard(log_n);
+        let values: Vec<F> = (0..quotient_domain.size()).map(|_| rng.random()).collect();
+
+        let zeta: EF = rng.random();
+
+        // Direct interpolation of the whole array.
+        let direct = quotient_domain.evaluate_polynomial_at(&values, zeta);
+
+        // Chunk-based reconstruction, mirroring `recompose_quotient_from_chunks`.
+        let chunk_domains = quotient_domain.split_domains(num_chunks);
+        let evals_matrix = RowMajorMatrix::new(values.clone(), 1);
+        let chunk_evals = quotient_domain.split_evals(num_chunks, evals_matrix);
+        let chunk_vals_at_zeta: Vec<EF> = chunk_domains
+            .iter()
+            .zip(&chunk_evals)
+            .map(|(&d, m)| {
+                CircleEvaluations::from_natural_order(d, m.as_view())
+                    .evaluate_at_point(Point::from_projective_line(zeta))[0]
+            })
+            .collect();
+
+        let zps: Vec<EF> = chunk_domains
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                chunk_domains
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .map(|(_, other)| {
+                        other.vanishing_poly_at_point(zeta)
+                            * other.vanishing_poly_at_point(d.first_point()).inverse()
+                    })
+                    .product::<EF>()
+            })
+            .collect_vec();
+
+        let reconstructed: EF = chunk_vals_at_zeta
+            .iter()
+            .zip(&zps)
+            .map(|(&v, &zp)| v * zp)
+            .sum();
+
+        assert_eq!(direct, reconstructed);
+    }
+
+    /// The Remark 22 extension chunk carries the residual `q_0 = (Q - Q') / v`, which lies in
+    /// `L_2 = span{1, x, y}`. This locks in why [`CircleDomain::quotient_extension_size`] reports a
+    /// size-4 (not size-2) twin-coset: the size-2 FFT space is only `span{1, y}` and drops the `x`
+    /// component of a residual, whereas the size-4 FFT space `span{1, y, x, x*y}` reproduces every
+    /// element of `L_2` exactly.
+    #[test]
+    fn size_four_extension_reproduces_l2_but_size_two_drops_x() {
+        use p3_field::extension::BinomialExtensionField;
+        use rand::RngExt;
+
+        type F = Mersenne31;
+        type EF = BinomialExtensionField<Mersenne31, 3>;
+
+        let mut rng = SmallRng::seed_from_u64(99);
+        // Mirror how the extension domain is actually built: a bigger standard domain's own
+        // `try_create_disjoint_domain`, at both candidate sizes.
+        let big = CircleDomain::<F>::standard(8);
+        let size_two: CircleDomain<F> = big.try_create_disjoint_domain(2).unwrap();
+        let size_four: CircleDomain<F> = big.try_create_disjoint_domain(4).unwrap();
+        assert_eq!(size_two.size(), 2);
+        assert_eq!(size_four.size(), 4);
+
+        // A residual `q_0(x, y) = a + b*x + c*y in L_2` with a nonzero `x` component.
+        let (a, b, c): (F, F, F) = (rng.random(), rng.random(), rng.random());
+        assert_ne!(b, F::ZERO);
+        let q0 = |p: Point<F>| a + b * p.x + c * p.y;
+
+        let target: EF = rng.random();
+        let target_point = Point::<EF>::from_projective_line(target);
+        let expected = EF::from(a) + EF::from(b) * target_point.x + EF::from(c) * target_point.y;
+
+        let interpolate_at = |domain: CircleDomain<F>| {
+            let values: Vec<F> = domain.points().map(&q0).collect();
+            CircleEvaluations::from_natural_order(domain, RowMajorMatrix::new(values, 1))
+                .evaluate_at_point(target_point)[0]
+        };
+
+        assert_eq!(
+            interpolate_at(size_four),
+            expected,
+            "size-4 interpolation must reproduce every element of L_2"
+        );
+        assert_ne!(
+            interpolate_at(size_two),
+            expected,
+            "size-2 interpolation drops the x component, so it cannot carry the residual"
+        );
     }
 }

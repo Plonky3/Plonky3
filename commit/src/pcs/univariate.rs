@@ -135,6 +135,66 @@ where
         ldes: Vec<RowMajorMatrix<Val<Self::Domain>>>,
     ) -> (Self::Commitment, Self::ProverData);
 
+    /// Evaluate `evals` (a matrix of evaluations over `domain`) at every point of `target`, a
+    /// space possibly smaller than `domain` with no LDE alignment to it, and at each of those
+    /// points' `domain`-successor (as `Self::Domain::next_point` would give). Returns a matrix
+    /// of `2 * target.size()` rows: the first `target.size()` are the "current" evaluations in
+    /// `target`'s own canonical point order (the order `Self::Domain::split_evals`/
+    /// `selectors_on_coset` use for `target` when it plays that role elsewhere), and the next
+    /// `target.size()` are the "next-row" evaluations in the same point order — i.e. the same
+    /// `[current rows, next rows]` layout `quotient_values` expects.
+    ///
+    /// Only needed by PCS implementations that report a non-`None`
+    /// [`PolynomialSpace::quotient_extension_size`] (Circle STARKs, eprint 2024/278, Remark 22),
+    /// to evaluate trace values at the small extension domain, which has no LDE alignment with
+    /// `domain` for `get_evaluations_on_domain` to exploit. Other PCS implementations never
+    /// report an extension, so never need this.
+    ///
+    /// The default reconstructs each column independently from its evaluations over `domain` and
+    /// evaluates it at each `target` point (and that point's `domain`-successor) via the
+    /// [`PolynomialSpace`] primitives. Implementations with a batched extrapolation may override
+    /// this for speed.
+    fn evaluate_at_domain_with_next(
+        &self,
+        evals: &RowMajorMatrix<Val<Self::Domain>>,
+        domain: Self::Domain,
+        target: Self::Domain,
+    ) -> RowMajorMatrix<Val<Self::Domain>> {
+        let width = evals.width();
+        let height = evals.height();
+
+        // `target`'s points in canonical order, walked via `first_point`/`next_point`.
+        let mut pts = Vec::with_capacity(target.size());
+        let mut point = target.first_point();
+        for _ in 0..target.size() {
+            pts.push(point);
+            point = target
+                .next_point(point)
+                .expect("target domain must expose successors via next_point");
+        }
+
+        // Extract each column once so every evaluation point reuses the same source vector.
+        let cols: Vec<Vec<Val<Self::Domain>>> = (0..width)
+            .map(|c| (0..height).map(|r| evals.get(r, c).unwrap()).collect())
+            .collect();
+
+        let mut rows = Vec::with_capacity(2 * pts.len() * width);
+        for &p in &pts {
+            for col in &cols {
+                rows.push(domain.evaluate_polynomial_at(col, p));
+            }
+        }
+        for &p in &pts {
+            let next = domain
+                .next_point(p)
+                .expect("domain must expose successors via next_point");
+            for col in &cols {
+                rows.push(domain.evaluate_polynomial_at(col, next));
+            }
+        }
+        RowMajorMatrix::new(rows, width)
+    }
+
     /// Given prover data corresponding to a commitment to a collection of evaluation matrices,
     /// return the evaluations of those matrices on the given domain.
     ///

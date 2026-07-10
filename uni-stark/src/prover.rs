@@ -6,7 +6,9 @@ use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_symbolic_constraints};
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_field::{
+    BasedVectorSpace, ExtensionField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
@@ -16,7 +18,7 @@ use tracing::{debug_span, info_span, instrument};
 use crate::{
     Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData, Proof,
     ProverConstraintFolder, StarkGenericConfig, Val, get_constraint_layout,
-    get_log_num_quotient_chunks,
+    get_log_num_quotient_chunks, get_num_regular_quotient_chunks,
 };
 
 #[instrument(skip_all)]
@@ -126,6 +128,10 @@ where
 
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
 
+    // The exact (unrounded) chunk count, used only to detect the Remark 22 boundary below.
+    let num_regular_chunks =
+        get_num_regular_quotient_chunks::<Val<SC>, A>(air, layout, degree, config.is_zk());
+
     // Initialize the PCS and the Challenger.
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
@@ -135,9 +141,42 @@ where
     // (In the Circle STARK case `H` is instead a standard position twin coset of size `N`)
     let trace_domain = pcs.natural_domain_for_degree(degree);
 
+    // Circle STARKs (eprint 2024/278, Remark 22): the tangent-functional transition
+    // selector (Remark 17) puts the quotient in `L_{(d-1)*N+2}`. This is absorbed for
+    // free whenever rounding `num_regular_chunks` up to a power of two adds a chunk;
+    // it is only exposed exactly at the boundary where `num_regular_chunks` is already
+    // an exact power of two, in which case `quotient_extension_size` reports the size
+    // of a small additional disjoint chunk needed to carry the excess.
+    let quotient_extension_size = trace_domain.quotient_extension_size(num_regular_chunks);
+    if quotient_extension_size.is_some() {
+        // The extension decomposition below reads the raw, un-randomized trace, so it is sound
+        // only for a non-ZK PCS. Only circle domains report an extension, and every circle PCS is
+        // non-ZK (`CirclePcs::ZK == false`), so this holds by construction today; the assertion
+        // is defense-in-depth against a future hiding circle PCS silently receiving an
+        // unrandomized extension chunk.
+        assert_eq!(
+            config.is_zk(),
+            0,
+            "the Remark 22 quotient extension assumes a non-ZK PCS"
+        );
+        assert_eq!(
+            preprocessed_width, 0,
+            "the Remark 22 quotient extension is not yet supported together with preprocessed columns"
+        );
+        assert!(
+            air.periodic_columns().is_empty(),
+            "the Remark 22 quotient extension is not yet supported together with periodic columns"
+        );
+    }
+
     // When ZK is enabled, we need to use an extended domain of size `2N` as we will
     // add random values to the trace.
     let ext_trace_domain = pcs.natural_domain_for_degree(degree * (config.is_zk() + 1));
+
+    // The Remark 22 extension chunk needs the raw (pre-commitment) trace values to evaluate
+    // trace polynomials at points outside the LDE table (see below); keep a copy before
+    // `trace` is moved into the commitment call.
+    let trace_for_extension = quotient_extension_size.is_some().then(|| trace.clone());
 
     // Let `g` denote a generator of the multiplicative group of `F` and `H'` the unique
     // subgroup of `F` of size `N << (pcs.config.log_blowup + config.is_zk())`.
@@ -213,7 +252,8 @@ where
     //          `C(T_1(x), ..., T_w(x), T_1(hx), ..., T_w(hx), selectors(x)) / Z_H(x)`
     // at every point in the quotient domain. The degree of `Q(x)` is `<= deg(C(x)) - N = 2N - 2` in the case
     // where `deg(C) = 3`. (See the discussion above constraint_degree for more details.)
-    let quotient_values = quotient_values(
+    let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
+    let main_quotient_values = quotient_values(
         pcs,
         air,
         public_values,
@@ -223,6 +263,7 @@ where
         &trace_on_quotient_domain,
         preprocessed_on_quotient_domain.as_ref(),
         alpha,
+        1 << qdb,
     );
 
     // Due to `alpha`, evaluations of `Q` all lie in the extension field `E`.
@@ -232,7 +273,68 @@ where
     // This is valid to do because our domain lies in the base field `F`. Hence we can split
     // `Q(x)` into `e + 1` polynomials `Q_0(x), ... , Q_e(x)` each contained in `F`.
     // such that `Q(x) = [Q_0(x), ... ,Q_e(x)]` holds for all `x` in `F`.
-    let quotient_flat = RowMajorMatrix::new_col(quotient_values).flatten_to_base();
+    let quotient_flat = RowMajorMatrix::new_col(main_quotient_values).flatten_to_base();
+
+    // Circle STARKs (eprint 2024/278, Remark 22): derive the extension chunk `q_0` via the
+    // "alternative decomposition" from issue #586, rather than treating the extension domain
+    // as an additional symmetric chunk of the direct decomposition. `v_{H_0}` is not constant over
+    // the regular chunks `H_1, ..., H_{d-1}` (unlike the `v_{H_k}`, k >= 1, among themselves), so the
+    // usual "chunk = Q's raw values, normalize by evaluating the shared vanishing factor at one
+    // representative point" trick is unsound if `H_0` is folded symmetrically into that product.
+    // Instead: `q_0 = (Q - Q') / v'` on `H_0`, where `Q'` is the plain (d-1)-chunk
+    // reconstruction (i.e. what `main_quotient_values` already encodes, extrapolated to `H_0`)
+    // and `v' = quotient_domain`'s own vanishing polynomial (the product of the regular
+    // `v_{H_k}`'s, which needs no such evaluation over `H_0` to combine with `Q'` at the
+    // verifier).
+    let extension_chunk = quotient_extension_size.map(|ext_size| {
+        let trace_ext = trace_for_extension
+            .as_ref()
+            .expect("trace_for_extension is Some whenever quotient_extension_size is Some");
+        let extension_domain = quotient_domain
+            .try_create_disjoint_domain(ext_size)
+            .expect("quotient domain should admit a small disjoint extension domain");
+        assert_eq!(extension_domain.size(), ext_size);
+
+        let trace_on_extension =
+            pcs.evaluate_at_domain_with_next(trace_ext, trace_domain, extension_domain);
+
+        let raw_extension_values = quotient_values(
+            pcs,
+            air,
+            public_values,
+            layout,
+            trace_domain,
+            extension_domain,
+            &trace_on_extension,
+            None,
+            alpha,
+            ext_size,
+        );
+
+        // `Q'` on `H_0`: the (d-1)-chunk reconstruction's own natural extrapolation, computed
+        // by extrapolating each of its base-field basis-coefficient columns independently
+        // (interpolation is linear, so this recombines correctly) and only keeping the
+        // "current" half (the quotient has no transition/"next row" semantics).
+        let quotient_flat_on_extension =
+            pcs.evaluate_at_domain_with_next(&quotient_flat, quotient_domain, extension_domain);
+        let dim = <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION;
+        let inv_vanishing_prime = quotient_domain
+            .selectors_on_coset(extension_domain)
+            .inv_vanishing;
+        let extension_values: Vec<SC::Challenge> = (0..ext_size)
+            .map(|i| {
+                let coeffs: Vec<SC::Challenge> = (0..dim)
+                    .map(|c| quotient_flat_on_extension.get(i, c).unwrap().into())
+                    .collect();
+                let q_prime = SC::Challenge::from_ext_basis_coefficients(&coeffs)
+                    .expect("quotient basis-coefficient width matches challenge dimension");
+                (raw_extension_values[i] - q_prime) * inv_vanishing_prime[i]
+            })
+            .collect();
+
+        let extension_flat = RowMajorMatrix::new_col(extension_values).flatten_to_base();
+        (extension_domain, extension_flat)
+    });
 
     // Currently each polynomial `Q_i(x)` is of degree `<= 2(N - 1)` and
     // we have it's evaluations over a the coset `gK of size `2N`. Let `k` be the chosen
@@ -252,8 +354,26 @@ where
     //      quotient_commit contains the root of the tree
     //      quotient_data contains the entire tree.
     //          - quotient_data.leaves is a pair of matrices containing the `q_i0(x)` and `q_i1(x)`.
-    let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
-        .in_scope(|| pcs.commit_quotient(quotient_domain, quotient_flat, num_quotient_chunks));
+    let total_quotient_chunks = num_quotient_chunks + extension_chunk.is_some() as usize;
+    let (quotient_commit, quotient_data) =
+        info_span!("commit to quotient poly chunks").in_scope(|| match extension_chunk {
+            // Circle STARKs (eprint 2024/278, Remark 22): commit the regular chunks and the
+            // extension chunk together in one batch, following the same manual
+            // `get_quotient_ldes` + `commit_ldes` pattern `batch-stark` uses for heterogeneous
+            // per-instance chunk counts, since `commit_quotient`'s default implementation
+            // assumes a single uniformly-split domain.
+            Some((extension_domain, extension_flat)) => {
+                let chunk_domains = quotient_domain.split_domains(num_quotient_chunks);
+                let chunk_mats = quotient_domain.split_evals(num_quotient_chunks, quotient_flat);
+                let evals = chunk_domains
+                    .into_iter()
+                    .zip(chunk_mats)
+                    .chain(core::iter::once((extension_domain, extension_flat)));
+                let ldes = pcs.get_quotient_ldes(evals, total_quotient_chunks);
+                pcs.commit_ldes(ldes)
+            }
+            None => pcs.commit_quotient(quotient_domain, quotient_flat, num_quotient_chunks),
+        });
     challenger.observe(quotient_commit.clone());
 
     // If zk is enabled, we generate random extension field values of the size of the randomized trace. If `n` is the degree of the initial trace,
@@ -312,7 +432,7 @@ where
             vec![zeta]
         };
         let round1 = (&trace_data, vec![round1_points]);
-        let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks]); // open every chunk at zeta
+        let round2 = (&quotient_data, vec![vec![zeta]; total_quotient_chunks]); // open every chunk at zeta
         let round3 = preprocessed_data_ref.map(|data| {
             let pre_points = if pre_next {
                 vec![zeta, zeta_next]
@@ -406,6 +526,7 @@ pub fn quotient_values<SC, A, Mat>(
     trace_on_quotient_domain: &Mat,
     preprocessed_on_quotient_domain: Option<&Mat>,
     alpha: SC::Challenge,
+    next_step: usize,
 ) -> Vec<SC::Challenge>
 where
     SC: StarkGenericConfig,
@@ -416,9 +537,6 @@ where
     let width = trace_on_quotient_domain.width();
     let mut sels = debug_span!("Compute Selectors")
         .in_scope(|| trace_domain.selectors_on_coset(quotient_domain));
-
-    let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
-    let next_step = 1 << qdb;
 
     // We take PackedVal::<SC>::WIDTH worth of values at a time from a quotient_size slice, so we need to
     // pad with default values in the case where quotient_size is smaller than PackedVal::<SC>::WIDTH.
