@@ -14,8 +14,8 @@
 //! representatives), so `mul`/`square` follow the scalar contract: inputs are arbitrary `u64`, the
 //! output is the correct residue reduced to `< 2^64` but not necessarily `< P`.
 //!
-//! `WIDTH` is fixed at compile time (256-bit vector length); the governing predicate covers exactly
-//! the first `WIDTH` lanes so loads/stores never run past the backing array.
+//! `WIDTH` matches the target vector length (256-bit by default, 128-bit under SVE2); the governing
+//! predicate covers exactly the first `WIDTH` lanes so loads/stores never run past the backing array.
 
 use alloc::vec::Vec;
 use core::arch::asm;
@@ -39,8 +39,14 @@ use rand::{Rng, RngExt};
 
 use crate::Goldilocks;
 
-/// Number of `Goldilocks` elements per packed vector (256-bit vector length).
+/// Number of `Goldilocks` elements per packed vector.
+///
+/// 4 lanes (256-bit, Graviton3 / Neoverse V1) by default, or 2 lanes (128-bit, Graviton4 /
+/// Neoverse V2) when SVE2 is enabled.
+#[cfg(not(target_feature = "sve2"))]
 const WIDTH: usize = 4;
+#[cfg(target_feature = "sve2")]
+const WIDTH: usize = 2;
 
 /// `2^64 mod P = 2^32 - 1`. The fold constant for Goldilocks reduction (and the low-32-bit mask).
 const EPSILON: u64 = Goldilocks::ORDER_U64.wrapping_neg();
@@ -337,25 +343,41 @@ mod tests {
 
     use super::{Goldilocks, PackedGoldilocksSve, WIDTH};
 
+    #[cfg(not(target_feature = "sve2"))]
     const SPECIAL_VALS: [Goldilocks; WIDTH] = Goldilocks::new_array([
         0xFFFF_FFFF_0000_0000,
         0xFFFF_FFFF_FFFF_FFFF,
         0x0000_0000_0000_0000,
         0xFFFF_FFFF_0000_0001, // = P, canonicalizes to 0
     ]);
+    #[cfg(target_feature = "sve2")]
+    const SPECIAL_VALS: [Goldilocks; WIDTH] =
+        Goldilocks::new_array([0xFFFF_FFFF_0000_0000, 0xFFFF_FFFF_FFFF_FFFF]);
 
+    #[cfg(not(target_feature = "sve2"))]
     const ZEROS: PackedGoldilocksSve = PackedGoldilocksSve(Goldilocks::new_array([
         0x0000_0000_0000_0000,
         0xFFFF_FFFF_0000_0001, // = P, canonicalizes to 0
         0x0000_0000_0000_0000,
         0xFFFF_FFFF_0000_0001,
     ]));
+    #[cfg(target_feature = "sve2")]
+    const ZEROS: PackedGoldilocksSve = PackedGoldilocksSve(Goldilocks::new_array([
+        0x0000_0000_0000_0000,
+        0xFFFF_FFFF_0000_0001, // = P, canonicalizes to 0
+    ]));
 
+    #[cfg(not(target_feature = "sve2"))]
     const ONES: PackedGoldilocksSve = PackedGoldilocksSve(Goldilocks::new_array([
         0x0000_0000_0000_0001,
         0xFFFF_FFFF_0000_0002, // = P + 1, canonicalizes to 1
         0x0000_0000_0000_0001,
         0xFFFF_FFFF_0000_0002,
+    ]));
+    #[cfg(target_feature = "sve2")]
+    const ONES: PackedGoldilocksSve = PackedGoldilocksSve(Goldilocks::new_array([
+        0x0000_0000_0000_0001,
+        0xFFFF_FFFF_0000_0002, // = P + 1, canonicalizes to 1
     ]));
 
     test_packed_field!(

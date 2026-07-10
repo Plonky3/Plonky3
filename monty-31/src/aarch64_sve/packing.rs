@@ -39,10 +39,13 @@ use crate::{FieldParameters, MontyField31, PackedMontyParameters, RelativelyPrim
 
 /// Number of `MontyField31` elements per packed vector.
 ///
-/// Fixed at 8, i.e. a 256-bit vector length (Graviton3 / Neoverse V1). For a 512-bit part set this
-/// to 16; the runtime guard in [`debug_assert_vl`] ensures the hardware vector length is large
-/// enough.
+/// Matches the target vector length: 8 lanes (256-bit, Graviton3 / Neoverse V1) by default, or 4
+/// lanes (128-bit, Graviton4 / Neoverse V2) when SVE2 is enabled. The runtime guard in
+/// [`debug_assert_vl`] checks the hardware vector length covers `WIDTH`.
+#[cfg(not(target_feature = "sve2"))]
 const WIDTH: usize = 8;
+#[cfg(target_feature = "sve2")]
+const WIDTH: usize = 4;
 
 /// Hardware vector length expressed as a count of 32-bit words (`VL / 32`).
 #[inline(always)]
@@ -67,13 +70,15 @@ fn debug_assert_vl() {
     );
 }
 
-/// Emit the Montgomery reduction of an *unsigned* product `a * b` into `dst`.
-///
-/// Register contract, shared by every caller: the governing predicate is `p0`, `p1` is a scratch
-/// predicate, `z30` holds a broadcast `P`, and `z31` holds a broadcast `MONTY_MU`. `a` and `b` are
-/// left unchanged (so callers may reuse them), which requires both to be distinct from `dst` and
-/// `tmp`; `tmp` is clobbered. Given `a, b` in `[0, P)`, `dst` receives `a * b * R^{-1} mod P` in
-/// `[0, P)` (`R = 2^32`); see [`vec_mul`] for the derivation.
+// Montgomery-reduction macros shared by every multiply kernel. Register contract: `p0` is the
+// governing predicate, `p1` a scratch predicate, `z30` a broadcast `P`, and `z31` a broadcast
+// `MONTY_MU`. `a` and `b` are left unchanged (callers may reuse them), which requires both to be
+// distinct from `dst` and `tmp`; `tmp` is clobbered. `dst` receives the canonical Montgomery product
+// in `[0, P)` (see [`vec_mul`] for the derivation). SVE1 uses the predicated, destructive multiplies
+// preceded by `movprfx`; SVE2 uses the shorter unpredicated three-operand forms.
+
+/// Unsigned Montgomery reduction of `a * b` into `dst` (`a, b` in `[0, P)`).
+#[cfg(not(target_feature = "sve2"))]
 #[rustfmt::skip]
 macro_rules! sve_montmul {
     ($dst:literal, $tmp:literal, $a:literal, $b:literal) => {
@@ -91,10 +96,26 @@ macro_rules! sve_montmul {
     };
 }
 
-/// Emit the Montgomery reduction of a *signed* product `a * b` (both in `[-P, P]`) into `dst`.
-///
-/// Same register contract as [`sve_montmul`]. `SMULH` gives the true high word, so no
-/// doubling/halving correction is needed; `dst` receives the canonical result in `[0, P)`.
+/// Unsigned Montgomery reduction of `a * b` into `dst`, SVE2 unpredicated form.
+#[cfg(target_feature = "sve2")]
+#[rustfmt::skip]
+macro_rules! sve_montmul {
+    ($dst:literal, $tmp:literal, $a:literal, $b:literal) => {
+        concat!(
+            "umulh ", $dst, ".s, ", $a, ".s, ", $b, ".s\n",   // hi = high(a * b)
+            "mul ", $tmp, ".s, ", $a, ".s, ", $b, ".s\n",     // lo = low(a * b)
+            "mul ", $tmp, ".s, ", $tmp, ".s, z31.s\n",        // t = low(lo * MONTY_MU)
+            "umulh ", $tmp, ".s, ", $tmp, ".s, z30.s\n",      // u_hi = high(t * P)
+            "cmphi p1.s, p0/z, ", $tmp, ".s, ", $dst, ".s\n", // borrow = u_hi > hi
+            "sub ", $dst, ".s, ", $dst, ".s, ", $tmp, ".s\n", // hi - u_hi
+            "add ", $dst, ".s, p1/m, ", $dst, ".s, z30.s\n",  // + P on borrow
+        )
+    };
+}
+
+/// Signed Montgomery reduction of `a * b` into `dst` (`a, b` in `[-P, P]`); `SMULH` gives the true
+/// high word, so no doubling/halving correction is needed.
+#[cfg(not(target_feature = "sve2"))]
 #[rustfmt::skip]
 macro_rules! sve_montmul_signed {
     ($dst:literal, $tmp:literal, $a:literal, $b:literal) => {
@@ -108,6 +129,23 @@ macro_rules! sve_montmul_signed {
             "cmpgt p1.s, p0/z, ", $tmp, ".s, ", $dst, ".s\n",       // underflow = qp_hi > c_hi
             "sub ", $dst, ".s, ", $dst, ".s, ", $tmp, ".s\n",       // c_hi - qp_hi
             "add ", $dst, ".s, p1/m, ", $dst, ".s, z30.s\n",        // + P on underflow
+        )
+    };
+}
+
+/// Signed Montgomery reduction of `a * b` into `dst`, SVE2 unpredicated form.
+#[cfg(target_feature = "sve2")]
+#[rustfmt::skip]
+macro_rules! sve_montmul_signed {
+    ($dst:literal, $tmp:literal, $a:literal, $b:literal) => {
+        concat!(
+            "smulh ", $dst, ".s, ", $a, ".s, ", $b, ".s\n",   // c_hi = high(a * b), signed
+            "mul ", $tmp, ".s, ", $b, ".s, z31.s\n",          // mu_b = low(b * MONTY_MU)
+            "mul ", $tmp, ".s, ", $tmp, ".s, ", $a, ".s\n",   // q = low(a * mu_b)
+            "smulh ", $tmp, ".s, ", $tmp, ".s, z30.s\n",      // qp_hi = high(q * P), signed
+            "cmpgt p1.s, p0/z, ", $tmp, ".s, ", $dst, ".s\n", // underflow = qp_hi > c_hi
+            "sub ", $dst, ".s, ", $dst, ".s, ", $tmp, ".s\n", // c_hi - qp_hi
+            "add ", $dst, ".s, p1/m, ", $dst, ".s, z30.s\n",  // + P on underflow
         )
     };
 }
