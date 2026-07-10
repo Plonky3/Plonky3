@@ -1,8 +1,10 @@
+use alloc::vec;
 use alloc::vec::Vec;
+use core::iter;
 
-use itertools::Itertools;
+use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpeningRef, Mmcs};
+use p3_commit::Mmcs;
 use p3_field::ExtensionField;
 use p3_field::extension::ComplexExtendable;
 use p3_fri::verifier::FriError;
@@ -10,17 +12,20 @@ use p3_fri::{FriFoldingStrategy, FriParameters};
 use p3_matrix::Dimensions;
 
 use crate::folding::{fold_row_with_inv_twiddle, query_x_twiddles_inv};
-use crate::{CircleCommitPhaseProofStep, CircleFriProof};
+use crate::{CircleCommitPhaseMultiStep, CircleFriProof};
 
+/// Arguments:
+/// - `open_inputs`: checks every input commitment's shared multi-opening and returns,
+///   for each query, its reduced openings sorted by height descending.
 pub fn verify<Folding, Val, Challenge, M, Challenger>(
     folding: &Folding,
     params: &FriParameters<M>,
     proof: &CircleFriProof<Challenge, M, Challenger::Witness, Folding::InputProof>,
     challenger: &mut Challenger,
-    open_input: impl Fn(
-        usize,
+    open_inputs: impl FnOnce(
+        &[usize],
         &Folding::InputProof,
-    ) -> Result<Vec<(usize, Challenge)>, Folding::InputError>,
+    ) -> Result<Vec<Vec<(usize, Challenge)>>, Folding::InputError>,
 ) -> Result<(), FriError<M::Error, Folding::InputError>>
 where
     Val: ComplexExtendable,
@@ -74,88 +79,68 @@ where
     //
     // Before doing any expensive cryptographic work, validate that the proof
     // has the right shape. A malicious prover could submit too few (or too
-    // many) query proofs, mismatched opening counts, or inconsistent arity
-    // schedules. Catching these early avoids wasted work and gives precise
+    // many) round openings, mismatched query counts, or an invalid arity
+    // schedule. Catching these early avoids wasted work and gives precise
     // error variants.
 
-    // The number of query proofs must match the security parameter.
-    if proof.query_proofs.len() != params.num_queries {
-        return Err(FriError::QueryProofCountMismatch {
-            expected: params.num_queries,
-            got: proof.query_proofs.len(),
+    // One commit-phase opening set per commitment.
+    let expected_rounds = proof.commit_phase_commits.len();
+    if proof.commit_phase_openings.len() != expected_rounds {
+        return Err(FriError::CommitPhaseOpeningsCountMismatch {
+            expected: expected_rounds,
+            got: proof.commit_phase_openings.len(),
         });
+    }
+
+    // In variable-arity FRI, each round folds by 2^{log_arity_i} points. The
+    // schedule is a protocol-wide constant, so it lives once per round.
+    let log_arities: Vec<usize> = proof
+        .commit_phase_openings
+        .iter()
+        .enumerate()
+        .map(|(round, opening)| {
+            opening
+                .checked_log_arity(params.max_log_arity)
+                .ok_or(FriError::InvalidLogArity {
+                    round,
+                    log_arity: opening.log_arity as usize,
+                    max: params.max_log_arity,
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Every round must open every query, and each opening must carry exactly
+    // arity - 1 sibling values.
+    //
+    //     sibling_values[query]: [s_0, ..., s_{arity-2}]   (arity - 1 elements)
+    //     queried value:         folded_eval                (1 element)
+    //     full group:            arity elements
+    for (round, (opening, &log_arity)) in
+        izip!(&proof.commit_phase_openings, &log_arities).enumerate()
+    {
+        if opening.sibling_values.len() != params.num_queries {
+            return Err(FriError::CommitPhaseQueryCountMismatch {
+                round,
+                expected: params.num_queries,
+                got: opening.sibling_values.len(),
+            });
+        }
+        let arity = 1 << log_arity;
+        for siblings in &opening.sibling_values {
+            if siblings.len() != arity - 1 {
+                return Err(FriError::SiblingValuesLengthMismatch {
+                    round,
+                    expected: arity - 1,
+                    got: siblings.len(),
+                });
+            }
+        }
     }
 
     // Verify proof-of-work: a grinding witness that the prover must compute
     // to raise the cost of brute-forcing query positions.
     if !challenger.check_witness(params.query_proof_of_work_bits, proof.pow_witness) {
         return Err(FriError::InvalidPowWitness);
-    }
-
-    // Each query proof must carry exactly one opening per commit-phase round.
-    //
-    //     commit_phase_commits:       [c_0, c_1, ..., c_{n-1}]   (n rounds)
-    //     qp.commit_phase_openings:   [o_0, o_1, ..., o_{n-1}]   (must also be n)
-    //
-    // A mismatch means the prover omitted or duplicated round data.
-    let expected_rounds = proof.commit_phase_commits.len();
-    for (query, qp) in proof.query_proofs.iter().enumerate() {
-        let got_rounds = qp.commit_phase_openings.len();
-        if got_rounds != expected_rounds {
-            return Err(FriError::QueryCommitPhaseOpeningsCountMismatch {
-                query,
-                expected: expected_rounds,
-                got: got_rounds,
-            });
-        }
-    }
-
-    // In variable-arity FRI, each round folds by 2^{log_arity_i} points.
-    // All query proofs must agree on the per-round arity schedule, otherwise
-    // different queries would fold through incompatible domain decompositions.
-    //
-    // We take the first query proof's schedule as the reference:
-    let log_arities: Vec<usize> = if let Some(qp) = proof.query_proofs.first() {
-        qp.commit_phase_openings
-            .iter()
-            .enumerate()
-            .map(|(round, opening)| {
-                opening
-                    .checked_log_arity(params.max_log_arity)
-                    .ok_or(FriError::InvalidLogArity {
-                        round,
-                        log_arity: opening.log_arity as usize,
-                        max: params.max_log_arity,
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        Vec::new()
-    };
-
-    // Compare every subsequent query proof against the reference schedule.
-    for (query, qp) in proof.query_proofs.iter().enumerate().skip(1) {
-        let got_log_arities: Vec<usize> = qp
-            .commit_phase_openings
-            .iter()
-            .enumerate()
-            .map(|(round, opening)| {
-                opening
-                    .checked_log_arity(params.max_log_arity)
-                    .ok_or(FriError::InvalidLogArity {
-                        round,
-                        log_arity: opening.log_arity as usize,
-                        max: params.max_log_arity,
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if got_log_arities != log_arities {
-            return Err(FriError::QueryLogAritiesMismatch {
-                query,
-                expected: log_arities,
-                got: got_log_arities,
-            });
-        }
     }
 
     // Phase 3: Query verification
@@ -182,31 +167,35 @@ where
         });
     }
 
-    for qp in &proof.query_proofs {
-        // Sample a random query index uniformly from the initial domain.
-        let index = challenger.sample_bits(num_index_bits);
+    // Sample every query index. The transcript is identical to sampling one
+    // index per query proof: nothing is observed between samples.
+    let indices: Vec<usize> = iter::repeat_with(|| challenger.sample_bits(num_index_bits))
+        .take(params.num_queries)
+        .collect();
 
-        // Open the input polynomials at this query index.
-        // Returns (log_height, evaluation) pairs sorted by height descending.
-        let ro = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
+    // Check the input commitments' shared multi-openings and reduce each query's
+    // opened rows to (log_height, evaluation) pairs sorted by height descending.
+    let reduced_openings =
+        open_inputs(&indices, &proof.input_openings).map_err(FriError::InputError)?;
 
+    // Walk every query's fold chain (pure arithmetic), reconstructing the full
+    // evaluation row the prover committed to at each round. The rows are
+    // authenticated afterwards, one shared check per round.
+    let mut group_indices_by_round: Vec<Vec<usize>> =
+        vec![Vec::with_capacity(params.num_queries); expected_rounds];
+    // `rows_by_round[round][query]` holds the opened rows of the round's single
+    // committed matrix, in the `opened_values[query][matrix]` shape that the
+    // multi-opening verification expects.
+    let mut rows_by_round: Vec<Vec<Vec<Vec<Challenge>>>> =
+        vec![Vec::with_capacity(params.num_queries); expected_rounds];
+
+    for (query, (&index, ro)) in izip!(&indices, reduced_openings).enumerate() {
         // Sanity check: reduced openings must arrive in strictly descending
         // height order so they are folded in at the correct domain sizes.
         debug_assert!(
             ro.iter().tuple_windows().all(|((l, _), (r, _))| l > r),
             "reduced openings sorted by height descending"
         );
-
-        // Zip the challenges, commitments, and openings together for folding.
-        //
-        // Invariant: all three iterators have the same length here.
-        // - The challenges are derived from the commitments (one per round).
-        // - The openings count was validated to match the commitment count.
-        // Plain zip is safe; it cannot silently truncate.
-        let fold_data_iter = betas
-            .iter()
-            .zip(proof.commit_phase_commits.iter())
-            .zip(qp.commit_phase_openings.iter());
 
         // The whole x-fold chain for this query is index-derived (no Merkle or proof data
         // needed), so it is precomputed and batch-inverted once up front instead of each
@@ -215,16 +204,18 @@ where
         let x_twiddle_inv =
             query_x_twiddles_inv::<Val>(top_level_index, log_max_height, log_arities.len());
 
-        // Walk the FRI folding chain: at each round, verify the Merkle
-        // opening against the commitment, then fold the sibling evaluations
-        // using the challenge beta to produce the next-round evaluation.
-        let folded_eval = verify_query(
+        let folded_eval = fold_query(
             params,
+            query,
             top_level_index,
-            fold_data_iter,
+            &betas,
+            &log_arities,
+            &proof.commit_phase_openings,
             ro,
             log_max_height,
             &x_twiddle_inv,
+            &mut group_indices_by_round,
+            &mut rows_by_round,
         )?;
 
         // After all rounds, the polynomial has been folded to a constant.
@@ -234,21 +225,42 @@ where
         }
     }
 
+    // Verify the commitment to the evaluations of every queried group, one shared
+    // amortized check per round. Paths that share a parent reuse a single
+    // compression instead of recomputing it once per query.
+    let mut log_current_height = log_max_height;
+    for (round, ((comm, opening), &log_arity)) in izip!(
+        proof
+            .commit_phase_commits
+            .iter()
+            .zip(&proof.commit_phase_openings),
+        &log_arities
+    )
+    .enumerate()
+    {
+        let arity = 1 << log_arity;
+        let log_folded_height = log_current_height - log_arity;
+        let dims = &[Dimensions {
+            width: arity,
+            height: 1 << log_folded_height,
+        }];
+        params
+            .mmcs
+            .verify_multi_batch(
+                comm,
+                dims,
+                &group_indices_by_round[round],
+                &rows_by_round[round],
+                &opening.opening_proof,
+            )
+            .map_err(FriError::CommitPhaseMmcsError)?;
+        log_current_height = log_folded_height;
+    }
+
     Ok(())
 }
 
-/// One round's worth of data needed to verify a Circle-FRI fold.
-///
-/// Groups together:
-/// - The random folding challenge for this round.
-/// - The Merkle commitment to the evaluations on this round's domain.
-/// - The prover-supplied sibling values and Merkle opening proof.
-type CommitStep<'a, F, M> = (
-    (&'a F, &'a <M as Mmcs<F>>::Commitment),
-    &'a CircleCommitPhaseProofStep<F, M>,
-);
-
-/// Verify one query chain in the Circle-FRI proof.
+/// Fold one query chain in the Circle-FRI proof.
 ///
 /// Starting from a leaf in the initial evaluation domain, this walks
 /// up the folding tree one round at a time:
@@ -262,29 +274,35 @@ type CommitStep<'a, F, M> = (
 /// - Roll in any reduced openings whose height matches the current domain.
 /// - Reconstruct the full sibling group from the queried evaluation
 ///   plus the (arity - 1) sibling values provided by the prover.
-/// - Verify the Merkle opening against the round commitment.
+/// - Record the group index and reconstructed row for the round's shared
+///   authentication, performed once by the caller.
 /// - Fold the sibling group with the challenge beta to produce the
 ///   parent evaluation for the next round.
 ///
-/// With variable arity, each round may fold by a different factor
-/// (2^{log_arity_i} siblings per group).
+/// This pass is pure arithmetic; nothing here reads a Merkle proof.
 ///
 /// # Returns
 ///
 /// The final folded evaluation, which the caller checks against
 /// the prover's claimed constant.
-fn verify_query<'a, F, EF, M, InputError>(
+#[expect(clippy::too_many_arguments)]
+fn fold_query<F, EF, M, InputError>(
     params: &FriParameters<M>,
+    query: usize,
     mut index: usize,
-    steps: impl ExactSizeIterator<Item = CommitStep<'a, EF, M>>,
+    betas: &[EF],
+    log_arities: &[usize],
+    commit_phase_openings: &[CircleCommitPhaseMultiStep<EF, M>],
     reduced_openings: Vec<(usize, EF)>,
     log_max_height: usize,
     x_twiddle_inv: &[F],
+    group_indices_by_round: &mut [Vec<usize>],
+    rows_by_round: &mut [Vec<Vec<Vec<EF>>>],
 ) -> Result<EF, FriError<M::Error, InputError>>
 where
     F: ComplexExtendable,
     EF: ExtensionField<F>,
-    M: Mmcs<EF> + 'a,
+    M: Mmcs<EF>,
     InputError: core::fmt::Debug,
 {
     // Running accumulator: starts at zero and accumulates reduced openings
@@ -298,32 +316,10 @@ where
     // Current domain size is 2^{log_current_height}; decreases each round.
     let mut log_current_height = log_max_height;
 
-    for (round, ((&beta, comm), opening)) in steps.enumerate() {
-        // This round folds 2^{log_arity} siblings into one parent.
-        let max_log_arity = core::cmp::min(params.max_log_arity, log_current_height);
-        let Some(log_arity) = opening.checked_log_arity(max_log_arity) else {
-            return Err(FriError::InvalidLogArity {
-                round,
-                log_arity: opening.log_arity as usize,
-                max: max_log_arity,
-            });
-        };
+    for (round, (&beta, &log_arity, opening)) in
+        izip!(betas, log_arities, commit_phase_openings).enumerate()
+    {
         let arity = 1 << log_arity;
-
-        // Shape check: the prover must supply exactly (arity - 1) siblings.
-        // The queried evaluation itself is the remaining one, so the full
-        // group has arity elements total.
-        //
-        //     sibling_values: [s_0, s_1, ..., s_{arity-2}]   (arity - 1 elements)
-        //     queried value:  folded_eval                     (1 element)
-        //     full group:     arity elements
-        if opening.sibling_values.len() != arity - 1 {
-            return Err(FriError::SiblingValuesLengthMismatch {
-                round,
-                expected: arity - 1,
-                got: opening.sibling_values.len(),
-            });
-        }
 
         // If there are input polynomials evaluated at this domain height,
         // add their contribution before folding. This is the "roll-in" step
@@ -338,15 +334,19 @@ where
         //
         //     arity = 4, index_in_group = 1:
         //     evals = [sibling_0, folded_eval, sibling_1, sibling_2]
+        //
+        // The row is authenticated by the round's shared opening proof, which
+        // binds this query's folded value to the committed codeword.
         let index_in_group = index % arity;
         let mut evals = EF::zero_vec(arity);
         evals[index_in_group] = folded_eval;
 
         // Fill in siblings at every position except the queried one.
+        let siblings = &opening.sibling_values[query];
         let mut sibling_idx = 0;
         for (j, eval) in evals.iter_mut().enumerate() {
             if j != index_in_group {
-                *eval = opening.sibling_values[sibling_idx];
+                *eval = siblings[sibling_idx];
                 sibling_idx += 1;
             }
         }
@@ -354,27 +354,13 @@ where
         // After folding, the domain halves (or shrinks by 2^{log_arity}).
         let log_folded_height = log_current_height - log_arity;
 
-        // Dimensions for the MMCS verification: one matrix of width = arity
-        // at the folded height. This tells the Merkle tree the expected shape.
-        let dims = &[Dimensions {
-            width: arity,
-            height: 1 << log_folded_height,
-        }];
-
         // Move from the leaf index to its parent in the folding tree.
         index >>= log_arity;
 
-        // Verify the Merkle opening: the sibling evaluations the prover
-        // gave us must be consistent with the round commitment.
-        params
-            .mmcs
-            .verify_batch(
-                comm,
-                dims,
-                index,
-                BatchOpeningRef::new(&[evals.clone()], &opening.opening_proof),
-            )
-            .map_err(FriError::CommitPhaseMmcsError)?;
+        // Record the group index and reconstructed row for the round's shared
+        // verification. `evals` is tiny, so the clone is cheap.
+        group_indices_by_round[round].push(index);
+        rows_by_round[round].push(vec![evals.clone()]);
 
         // Fold the full sibling group down to a single evaluation using the random
         // challenge beta. Circle PCS only ever folds by arity 2 (`CircleFriFolding::fold_row`
