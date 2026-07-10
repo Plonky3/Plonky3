@@ -67,6 +67,51 @@ fn debug_assert_vl() {
     );
 }
 
+/// Emit the Montgomery reduction of an *unsigned* product `a * b` into `dst`.
+///
+/// Register contract, shared by every caller: the governing predicate is `p0`, `p1` is a scratch
+/// predicate, `z30` holds a broadcast `P`, and `z31` holds a broadcast `MONTY_MU`. `a` and `b` are
+/// left unchanged (so callers may reuse them), which requires both to be distinct from `dst` and
+/// `tmp`; `tmp` is clobbered. Given `a, b` in `[0, P)`, `dst` receives `a * b * R^{-1} mod P` in
+/// `[0, P)` (`R = 2^32`); see [`vec_mul`] for the derivation.
+#[rustfmt::skip]
+macro_rules! sve_montmul {
+    ($dst:literal, $tmp:literal, $a:literal, $b:literal) => {
+        concat!(
+            "movprfx ", $dst, ", ", $a, "\n",
+            "umulh ", $dst, ".s, p0/m, ", $dst, ".s, ", $b, ".s\n", // hi = high(a * b)
+            "movprfx ", $tmp, ", ", $a, "\n",
+            "mul ", $tmp, ".s, p0/m, ", $tmp, ".s, ", $b, ".s\n",   // lo = low(a * b)
+            "mul ", $tmp, ".s, p0/m, ", $tmp, ".s, z31.s\n",        // t = low(lo * MONTY_MU)
+            "umulh ", $tmp, ".s, p0/m, ", $tmp, ".s, z30.s\n",      // u_hi = high(t * P)
+            "cmphi p1.s, p0/z, ", $tmp, ".s, ", $dst, ".s\n",       // borrow = u_hi > hi
+            "sub ", $dst, ".s, ", $dst, ".s, ", $tmp, ".s\n",       // hi - u_hi
+            "add ", $dst, ".s, p1/m, ", $dst, ".s, z30.s\n",        // + P on borrow
+        )
+    };
+}
+
+/// Emit the Montgomery reduction of a *signed* product `a * b` (both in `[-P, P]`) into `dst`.
+///
+/// Same register contract as [`sve_montmul`]. `SMULH` gives the true high word, so no
+/// doubling/halving correction is needed; `dst` receives the canonical result in `[0, P)`.
+#[rustfmt::skip]
+macro_rules! sve_montmul_signed {
+    ($dst:literal, $tmp:literal, $a:literal, $b:literal) => {
+        concat!(
+            "movprfx ", $dst, ", ", $a, "\n",
+            "smulh ", $dst, ".s, p0/m, ", $dst, ".s, ", $b, ".s\n", // c_hi = high(a * b), signed
+            "movprfx ", $tmp, ", ", $b, "\n",
+            "mul ", $tmp, ".s, p0/m, ", $tmp, ".s, z31.s\n",        // mu_b = low(b * MONTY_MU)
+            "mul ", $tmp, ".s, p0/m, ", $tmp, ".s, ", $a, ".s\n",   // q = low(a * mu_b)
+            "smulh ", $tmp, ".s, p0/m, ", $tmp, ".s, z30.s\n",      // qp_hi = high(q * P), signed
+            "cmpgt p1.s, p0/z, ", $tmp, ".s, ", $dst, ".s\n",       // underflow = qp_hi > c_hi
+            "sub ", $dst, ".s, ", $dst, ".s, ", $tmp, ".s\n",       // c_hi - qp_hi
+            "add ", $dst, ".s, p1/m, ", $dst, ".s, z30.s\n",        // + P on underflow
+        )
+    };
+}
+
 /// Fixed-length SVE implementation of `MontyField31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
@@ -87,10 +132,44 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Sve<PMP> {
     /// signed Montgomery multiply. This skips the modular reduction on `x - y`.
     #[inline]
     pub(crate) fn forward_butterfly(self, y: Self, roots: Self) -> (Self, Self) {
-        let sum = vec_add(&self, &y);
-        let diff = vec_sub_raw(&self, &y);
-        let product = vec_mul_signed(&diff, &roots);
-        (sum, product)
+        debug_assert_vl();
+        let mut sum = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+        let mut product = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+        // SAFETY: the predicate bounds every access to the `WIDTH`-lane arrays and every lane of
+        // both outputs is written. `sum` is the canonical `x + y`; the raw `x - y` (in `(-P, P)`)
+        // feeds the signed Montgomery multiply, which returns a canonical `product`.
+        unsafe {
+            asm!(
+                "whilelt p0.s, xzr, {w}",
+                "dup z30.s, {p:w}",
+                "dup z31.s, {mu:w}",
+                "ld1w {{z0.s}}, p0/z, [{x}]",
+                "ld1w {{z1.s}}, p0/z, [{y}]",
+                "ld1w {{z2.s}}, p0/z, [{r}]",
+                // sum = (x + y) mod P
+                "add z3.s, z0.s, z1.s",
+                "sub z4.s, z3.s, z30.s",
+                "umin z3.s, p0/m, z3.s, z4.s",
+                // diff = x - y (raw two's-complement, in (-P, P))
+                "sub z4.s, z0.s, z1.s",
+                // product = signed_montmul(diff, roots)
+                sve_montmul_signed!("z5", "z6", "z4", "z2"),
+                "st1w {{z3.s}}, p0, [{sum}]",
+                "st1w {{z5.s}}, p0, [{prod}]",
+                w = in(reg) WIDTH as u64,
+                p = in(reg) PMP::PRIME,
+                mu = in(reg) PMP::MONTY_MU,
+                x = in(reg) self.0.as_ptr().cast::<u32>(),
+                y = in(reg) y.0.as_ptr().cast::<u32>(),
+                r = in(reg) roots.0.as_ptr().cast::<u32>(),
+                sum = in(reg) sum.as_mut_ptr().cast::<u32>(),
+                prod = in(reg) product.as_mut_ptr().cast::<u32>(),
+                out("z0") _, out("z1") _, out("z2") _, out("z3") _, out("z4") _, out("z5") _,
+                out("z6") _, out("z30") _, out("z31") _, out("p0") _, out("p1") _,
+                options(nostack),
+            );
+            (Self(sum.assume_init()), Self(product.assume_init()))
+        }
     }
 }
 
@@ -180,36 +259,6 @@ fn vec_sub<PMP: PackedMontyParameters>(
     }
 }
 
-/// Unreduced signed subtraction used by the fused butterfly: returns the raw wrapping `a - b` bit
-/// pattern, which for canonical `a, b` is the two's-complement of a value in `(-P, P)`.
-#[inline]
-#[must_use]
-fn vec_sub_raw<PMP: PackedMontyParameters>(
-    a: &PackedMontyField31Sve<PMP>,
-    b: &PackedMontyField31Sve<PMP>,
-) -> [u32; WIDTH] {
-    debug_assert_vl();
-    let mut out = MaybeUninit::<[u32; WIDTH]>::uninit();
-    // SAFETY: the predicate bounds every access to the `WIDTH`-lane arrays and all lanes of `out`
-    // are written.
-    unsafe {
-        asm!(
-            "whilelt p0.s, xzr, {w}",
-            "ld1w {{z0.s}}, p0/z, [{a}]",
-            "ld1w {{z1.s}}, p0/z, [{b}]",
-            "sub z0.s, z0.s, z1.s",
-            "st1w {{z0.s}}, p0, [{o}]",
-            w = in(reg) WIDTH as u64,
-            a = in(reg) a.0.as_ptr().cast::<u32>(),
-            b = in(reg) b.0.as_ptr().cast::<u32>(),
-            o = in(reg) out.as_mut_ptr().cast::<u32>(),
-            out("z0") _, out("z1") _, out("p0") _,
-            options(nostack),
-        );
-        out.assume_init()
-    }
-}
-
 /// Negate a vector in canonical form: returns `0` where `a == 0` and `P - a` otherwise.
 #[inline]
 fn vec_neg<PMP: PackedMontyParameters>(
@@ -266,72 +315,115 @@ fn vec_mul<PMP: PackedMontyParameters>(
     unsafe {
         asm!(
             "whilelt p0.s, xzr, {w}",
-            "dup z2.s, {p:w}",
-            "dup z3.s, {mu:w}",
+            "dup z30.s, {p:w}",
+            "dup z31.s, {mu:w}",
             "ld1w {{z0.s}}, p0/z, [{a}]",
             "ld1w {{z1.s}}, p0/z, [{b}]",
-            "movprfx z4, z0",
-            "umulh z4.s, p0/m, z4.s, z1.s", // x_hi = high(a * b)
-            "mul z0.s, p0/m, z0.s, z1.s",   // x_lo = low(a * b)
-            "mul z0.s, p0/m, z0.s, z3.s",   // t = low(x_lo * MONTY_MU)
-            "umulh z0.s, p0/m, z0.s, z2.s", // u_hi = high(t * P)
-            "cmphi p1.s, p0/z, z0.s, z4.s", // borrow = u_hi > x_hi
-            "sub z4.s, z4.s, z0.s",         // x_hi - u_hi
-            "add z4.s, p1/m, z4.s, z2.s",   // + P on the lanes that borrowed
-            "st1w {{z4.s}}, p0, [{o}]",
+            sve_montmul!("z2", "z3", "z0", "z1"),
+            "st1w {{z2.s}}, p0, [{o}]",
             w = in(reg) WIDTH as u64,
             p = in(reg) PMP::PRIME,
             mu = in(reg) PMP::MONTY_MU,
             a = in(reg) a.0.as_ptr().cast::<u32>(),
             b = in(reg) b.0.as_ptr().cast::<u32>(),
             o = in(reg) out.as_mut_ptr().cast::<u32>(),
-            out("z0") _, out("z1") _, out("z2") _, out("z3") _, out("z4") _,
-            out("p0") _, out("p1") _,
+            out("z0") _, out("z1") _, out("z2") _, out("z3") _,
+            out("z30") _, out("z31") _, out("p0") _, out("p1") _,
             options(nostack),
         );
         PackedMontyField31Sve(out.assume_init())
     }
 }
 
-/// Signed Montgomery multiplication: `lhs, rhs` are signed values in `[-P, P]`, output is canonical
-/// `[0, P)`. Used by the fused forward butterfly, which feeds an unreduced `x - y`.
-///
-/// `SMULH` gives the true high word of each signed product, so `D = ⌊C/2³²⌋ − ⌊Q·P/2³²⌋` needs no
-/// doubling/halving correction (the low words of `C = lhs·rhs` and `Q·P` are congruent mod `2³²`, so
-/// they cancel exactly). `Q = (lhs·rhs·MONTY_MU) mod 2³²`.
+/// `x^3` (fused): keeps both Montgomery products in registers instead of round-tripping through
+/// memory between them.
 #[inline]
-fn vec_mul_signed<PMP: PackedMontyParameters>(
-    lhs: &[u32; WIDTH],
-    rhs: &PackedMontyField31Sve<PMP>,
+fn vec_cube<PMP: PackedMontyParameters>(
+    x: &PackedMontyField31Sve<PMP>,
 ) -> PackedMontyField31Sve<PMP> {
     debug_assert_vl();
     let mut out = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
     // SAFETY: the predicate bounds every access to the `WIDTH`-lane arrays and all lanes of `out`
-    // are written; the reduced result lands in `[0, P)`.
+    // are written; each `sve_montmul` step is canonical given canonical inputs.
     unsafe {
         asm!(
             "whilelt p0.s, xzr, {w}",
-            "dup z2.s, {p:w}",
-            "dup z3.s, {mu:w}",
-            "ld1w {{z0.s}}, p0/z, [{a}]", // lhs
-            "ld1w {{z1.s}}, p0/z, [{b}]", // rhs
-            "movprfx z4, z0",
-            "smulh z4.s, p0/m, z4.s, z1.s", // c_hi = high(lhs * rhs), signed
-            "mul z1.s, p0/m, z1.s, z3.s",   // mu_rhs = low(rhs * MONTY_MU)
-            "mul z0.s, p0/m, z0.s, z1.s",   // q = low(lhs * mu_rhs)
-            "smulh z0.s, p0/m, z0.s, z2.s", // qp_hi = high(q * P), signed
-            "cmpgt p1.s, p0/z, z0.s, z4.s", // underflow = qp_hi > c_hi (signed)
-            "sub z4.s, z4.s, z0.s",         // c_hi - qp_hi
-            "add z4.s, p1/m, z4.s, z2.s",   // + P on the lanes that underflowed
+            "dup z30.s, {p:w}",
+            "dup z31.s, {mu:w}",
+            "ld1w {{z0.s}}, p0/z, [{x}]",
+            sve_montmul!("z1", "z2", "z0", "z0"), // x^2
+            sve_montmul!("z2", "z3", "z1", "z0"), // x^3 = x^2 * x
+            "st1w {{z2.s}}, p0, [{o}]",
+            w = in(reg) WIDTH as u64,
+            p = in(reg) PMP::PRIME,
+            mu = in(reg) PMP::MONTY_MU,
+            x = in(reg) x.0.as_ptr().cast::<u32>(),
+            o = in(reg) out.as_mut_ptr().cast::<u32>(),
+            out("z0") _, out("z1") _, out("z2") _, out("z3") _,
+            out("z30") _, out("z31") _, out("p0") _, out("p1") _,
+            options(nostack),
+        );
+        PackedMontyField31Sve(out.assume_init())
+    }
+}
+
+/// `x^5` (fused): `x^4 * x` with all intermediates kept in registers.
+#[inline]
+fn vec_exp5<PMP: PackedMontyParameters>(
+    x: &PackedMontyField31Sve<PMP>,
+) -> PackedMontyField31Sve<PMP> {
+    debug_assert_vl();
+    let mut out = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+    // SAFETY: as in `vec_cube`.
+    unsafe {
+        asm!(
+            "whilelt p0.s, xzr, {w}",
+            "dup z30.s, {p:w}",
+            "dup z31.s, {mu:w}",
+            "ld1w {{z0.s}}, p0/z, [{x}]",
+            sve_montmul!("z1", "z2", "z0", "z0"), // x^2
+            sve_montmul!("z2", "z3", "z1", "z1"), // x^4 = x^2 * x^2
+            sve_montmul!("z3", "z4", "z2", "z0"), // x^5 = x^4 * x
+            "st1w {{z3.s}}, p0, [{o}]",
+            w = in(reg) WIDTH as u64,
+            p = in(reg) PMP::PRIME,
+            mu = in(reg) PMP::MONTY_MU,
+            x = in(reg) x.0.as_ptr().cast::<u32>(),
+            o = in(reg) out.as_mut_ptr().cast::<u32>(),
+            out("z0") _, out("z1") _, out("z2") _, out("z3") _, out("z4") _,
+            out("z30") _, out("z31") _, out("p0") _, out("p1") _,
+            options(nostack),
+        );
+        PackedMontyField31Sve(out.assume_init())
+    }
+}
+
+/// `x^7` (fused): `x^4 * x^3` with all intermediates kept in registers.
+#[inline]
+fn vec_exp7<PMP: PackedMontyParameters>(
+    x: &PackedMontyField31Sve<PMP>,
+) -> PackedMontyField31Sve<PMP> {
+    debug_assert_vl();
+    let mut out = MaybeUninit::<[MontyField31<PMP>; WIDTH]>::uninit();
+    // SAFETY: as in `vec_cube`.
+    unsafe {
+        asm!(
+            "whilelt p0.s, xzr, {w}",
+            "dup z30.s, {p:w}",
+            "dup z31.s, {mu:w}",
+            "ld1w {{z0.s}}, p0/z, [{x}]",
+            sve_montmul!("z1", "z2", "z0", "z0"), // x^2
+            sve_montmul!("z2", "z3", "z1", "z0"), // x^3 = x^2 * x
+            sve_montmul!("z3", "z4", "z1", "z1"), // x^4 = x^2 * x^2
+            sve_montmul!("z4", "z5", "z3", "z2"), // x^7 = x^4 * x^3
             "st1w {{z4.s}}, p0, [{o}]",
             w = in(reg) WIDTH as u64,
             p = in(reg) PMP::PRIME,
             mu = in(reg) PMP::MONTY_MU,
-            a = in(reg) lhs.as_ptr(),
-            b = in(reg) rhs.0.as_ptr().cast::<u32>(),
+            x = in(reg) x.0.as_ptr().cast::<u32>(),
             o = in(reg) out.as_mut_ptr().cast::<u32>(),
-            out("z0") _, out("z1") _, out("z2") _, out("z3") _, out("z4") _,
-            out("p0") _, out("p1") _,
+            out("z0") _, out("z1") _, out("z2") _, out("z3") _, out("z4") _, out("z5") _,
+            out("z30") _, out("z31") _, out("p0") _, out("p1") _,
             options(nostack),
         );
         PackedMontyField31Sve(out.assume_init())
@@ -391,35 +483,26 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Sve<FP> 
 
     #[inline]
     fn cube(&self) -> Self {
-        let x2 = vec_mul(self, self);
-        vec_mul(&x2, self)
+        vec_cube(self)
     }
 
     #[inline]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
-        // Specialise the small powers that dominate Poseidon2 / Rescue S-boxes (D = 3, 5, 7). Each
-        // chains `vec_mul`; larger powers fall back to the generic square-and-multiply.
+        // The S-box degrees (D = 3, 5, 7) that dominate Poseidon2 / Rescue are single fused asm
+        // blocks; the remaining small powers compose `vec_mul`, and larger powers fall back to the
+        // generic square-and-multiply.
         match POWER {
             0 => Self::ONE,
             1 => *self,
             2 => vec_mul(self, self),
-            3 => self.cube(),
+            3 => vec_cube(self),
             4 => {
                 let x2 = vec_mul(self, self);
                 vec_mul(&x2, &x2)
             }
-            5 => {
-                let x2 = vec_mul(self, self);
-                let x4 = vec_mul(&x2, &x2);
-                vec_mul(&x4, self)
-            }
+            5 => vec_exp5(self),
             6 => self.square().cube(),
-            7 => {
-                let x2 = vec_mul(self, self);
-                let x3 = vec_mul(&x2, self);
-                let x4 = vec_mul(&x2, &x2);
-                vec_mul(&x4, &x3)
-            }
+            7 => vec_exp7(self),
             _ => self.exp_u64(POWER),
         }
     }
