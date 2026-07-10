@@ -159,10 +159,6 @@ where
             0,
             "the Remark 22 quotient extension assumes a non-ZK PCS"
         );
-        assert_eq!(
-            preprocessed_width, 0,
-            "the Remark 22 quotient extension is not yet supported together with preprocessed columns"
-        );
         assert!(
             air.periodic_columns().is_empty(),
             "the Remark 22 quotient extension is not yet supported together with periodic columns"
@@ -177,6 +173,14 @@ where
     // trace polynomials at points outside the LDE table (see below); keep a copy before
     // `trace` is moved into the commitment call.
     let trace_for_extension = quotient_extension_size.is_some().then(|| trace.clone());
+
+    // Preprocessed columns feed the same quotient evaluation, so the extension chunk needs their
+    // raw values at the extension domain too. They are regenerated deterministically from the AIR,
+    // matching the committed preprocessed trace `main_quotient_values` already folded in.
+    let preprocessed_for_extension = quotient_extension_size
+        .is_some()
+        .then(|| air.preprocessed_trace())
+        .flatten();
 
     // Let `g` denote a generator of the multiplicative group of `F` and `H'` the unique
     // subgroup of `F` of size `N << (pcs.config.log_blowup + config.is_zk())`.
@@ -298,6 +302,10 @@ where
         let trace_on_extension =
             pcs.evaluate_at_domain_with_next(trace_ext, trace_domain, extension_domain);
 
+        let preprocessed_on_extension = preprocessed_for_extension.as_ref().map(|preprocessed| {
+            pcs.evaluate_at_domain_with_next(preprocessed, trace_domain, extension_domain)
+        });
+
         let raw_extension_values = quotient_values(
             pcs,
             air,
@@ -306,7 +314,7 @@ where
             trace_domain,
             extension_domain,
             &trace_on_extension,
-            None,
+            preprocessed_on_extension.as_ref(),
             alpha,
             ext_size,
         );
