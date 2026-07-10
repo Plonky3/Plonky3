@@ -104,6 +104,19 @@ pub(super) struct Instances<'a, C, A>(Vec<Instance<'a, C, A>>)
 where
     C: MultiStarkConfig;
 
+/// A prover-side batch split into the parts the proving flow consumes.
+pub(super) struct ProverParts<'a, C, A>
+where
+    C: MultiStarkConfig,
+{
+    /// Proving key shared by every instance in the batch.
+    pub(super) proving_key: &'a ProvingKey<C>,
+    /// Owned main trace tables, in batch order, ready to commit.
+    pub(super) tables: Vec<Table<C::Val>>,
+    /// Per-instance metadata retained for the zerocheck and openings.
+    pub(super) instances: Instances<'a, C, A>,
+}
+
 impl<'a, C, A> ProverInstance<'a, C, A>
 where
     C: MultiStarkConfig,
@@ -195,37 +208,41 @@ where
     }
 
     pub(super) fn proving_key(&self) -> &'a ProvingKey<C> {
-        let proving_key = self
-            .0
-            .first()
-            .expect("prover instances cannot be empty")
-            .proving_key;
+        // Every instance must reference one shared proving key.
+        // Adjacent-pair equality is transitively all-equal.
         assert!(
             self.0
-                .iter()
-                .all(|instance| core::ptr::eq(instance.proving_key, proving_key)),
+                .windows(2)
+                .all(|pair| core::ptr::eq(pair[0].proving_key, pair[1].proving_key)),
             "all prover instances must use the same proving key"
         );
-        proving_key
+        self.0
+            .first()
+            .expect("prover instances cannot be empty")
+            .proving_key
     }
 
-    #[allow(clippy::type_complexity)]
-    pub(super) fn into_parts(self) -> (&'a ProvingKey<C>, Vec<Table<C::Val>>, Instances<'a, C, A>) {
+    pub(super) fn into_parts(self) -> ProverParts<'a, C, A> {
         let proving_key = self.proving_key();
+
+        // One pass over the owned instances.
+        // Read the borrowed metadata, then move the table out.
         let mut instances = Vec::with_capacity(self.0.len());
-        for instance in self.0.iter() {
+        let mut tables = Vec::with_capacity(self.0.len());
+        for instance in self.0 {
             instances.push(Instance {
                 air: instance.air,
                 public_values: instance.public_values,
                 num_variables: instance.table.num_variables(),
             });
-        }
-        let mut tables = Vec::with_capacity(self.0.len());
-        for instance in self.0 {
             tables.push(instance.table);
         }
 
-        (proving_key, tables, Instances(instances))
+        ProverParts {
+            proving_key,
+            tables,
+            instances: Instances(instances),
+        }
     }
 }
 
@@ -242,18 +259,18 @@ where
     }
 
     pub(super) fn verifying_key(&self) -> &'a VerifyingKey<C> {
-        let verifying_key = self
-            .0
-            .first()
-            .expect("verifier instances cannot be empty")
-            .verifying_key;
+        // Every instance must reference one shared verifying key.
+        // Adjacent-pair equality is transitively all-equal.
         assert!(
             self.0
-                .iter()
-                .all(|instance| core::ptr::eq(instance.verifying_key, verifying_key)),
+                .windows(2)
+                .all(|pair| core::ptr::eq(pair[0].verifying_key, pair[1].verifying_key)),
             "all verifier instances must use the same verifying key"
         );
-        verifying_key
+        self.0
+            .first()
+            .expect("verifier instances cannot be empty")
+            .verifying_key
     }
 
     pub(super) fn into_parts(self) -> (&'a VerifyingKey<C>, Instances<'a, C, A>) {

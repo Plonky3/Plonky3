@@ -11,6 +11,7 @@ use p3_sumcheck::PrescribedPointPcs;
 use crate::ProverInstances;
 use crate::config::{Commitment, MultiStarkConfig, ProverData};
 use crate::folder::MultilinearFolder;
+use crate::instance::ProverParts;
 use crate::packed_ext::PackedExt;
 use crate::proof::MultiStarkProof;
 use crate::zerocheck::AirZerocheck;
@@ -89,7 +90,11 @@ where
 {
     assert!(!instances.is_empty());
 
-    let (proving_key, tables, instances) = instances.into_parts();
+    let ProverParts {
+        proving_key,
+        tables,
+        instances,
+    } = instances.into_parts();
 
     // Every committed table must meet the scheme's padding floor.
     //
@@ -120,34 +125,25 @@ where
         .map(|table_index| config.committed_table(&prover_data, table_index))
         .collect::<Vec<_>>();
 
-    // Match the instance list: `None` for AIRs with no preprocessed columns,
-    // otherwise the next committed preprocessed table from setup order.
-    let preprocessed_tables = proving_key.preprocessed.as_ref().map_or_else(
-        || {
-            assert!(
-                instances
-                    .iter()
-                    .all(|instance| instance.air.preprocessed_width() == 0),
-                "preprocessed proving key is missing for an AIR with preprocessed columns"
-            );
-            (0..num_instances).map(|_| None).collect::<Vec<_>>()
-        },
-        |preprocessed| {
-            let mut table_index = 0;
-            instances
-                .iter()
-                .map(|instance| {
-                    if instance.air.preprocessed_width() == 0 {
-                        None
-                    } else {
-                        let table = config.committed_table(&preprocessed.prover_data, table_index);
-                        table_index += 1;
-                        Some(table)
-                    }
-                })
-                .collect::<Vec<_>>()
-        },
-    );
+    // One entry per instance, in instance order.
+    // An AIR with preprocessed columns takes the next committed table in setup order.
+    // An AIR without them takes `None`.
+    // A missing preprocessed key is valid only when no AIR declares preprocessed columns.
+    let preprocessed_data = proving_key.preprocessed.as_ref().map(|p| &p.prover_data);
+    let mut next_table = 0;
+    let preprocessed_tables = instances
+        .iter()
+        .map(|instance| {
+            (instance.air.preprocessed_width() != 0).then(|| {
+                let data = preprocessed_data.expect(
+                    "preprocessed proving key is missing for an AIR with preprocessed columns",
+                );
+                let table = config.committed_table(data, next_table);
+                next_table += 1;
+                table
+            })
+        })
+        .collect::<Vec<_>>();
 
     // 3. Reduce all AIR constraints to one batched sumcheck and one bound point.
     // The committed prover opens columns through the commitment schemes below, so
