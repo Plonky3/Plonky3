@@ -1,9 +1,8 @@
 //! Throughput comparison of the SVE packed backend against scalar `BabyBear`.
 //!
-//! Requires an SVE host (Graviton3 / Neoverse V1) and nightly:
+//! Requires an SVE host (Graviton3 / Neoverse V1):
 //! ```text
-//! RUSTFLAGS="-C target-cpu=neoverse-v1 -C target-feature=+sve" \
-//!     cargo +nightly bench -p p3-baby-bear --bench sve_packing
+//! RUSTFLAGS="-C target-cpu=neoverse-v1" cargo bench -p p3-baby-bear --bench sve_packing
 //! ```
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -90,8 +89,8 @@ fn bench_sve_packing(c: &mut Criterion) {
 #[cfg(not(all(target_arch = "aarch64", target_feature = "sve")))]
 fn bench_sve_packing(_c: &mut Criterion) {
     eprintln!(
-        "SVE backend disabled. Rebuild on nightly with \
-         RUSTFLAGS=\"-C target-cpu=neoverse-v1 -C target-feature=+sve\" on an SVE (Graviton3) host."
+        "SVE backend disabled. Rebuild with \
+         RUSTFLAGS=\"-C target-cpu=neoverse-v1\" on an SVE (Graviton3) host."
     );
 }
 

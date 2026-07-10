@@ -1,10 +1,9 @@
 //! Throughput comparison of the SVE packed backend against scalar `Goldilocks`.
 //!
 //! Goldilocks is the interesting case: NEON has no 64×64→128 multiply and falls back to scalar asm,
-//! whereas SVE's `UMULH` vectorises it. Requires an SVE host (Graviton3) and nightly:
+//! whereas SVE's `UMULH` vectorises it. Requires an SVE host (Graviton3):
 //! ```text
-//! RUSTFLAGS="-C target-cpu=neoverse-v1 -C target-feature=+sve" \
-//!     cargo +nightly bench -p p3-goldilocks --bench sve_packing
+//! RUSTFLAGS="-C target-cpu=neoverse-v1" cargo bench -p p3-goldilocks --bench sve_packing
 //! ```
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -79,8 +78,8 @@ fn bench_sve_packing(c: &mut Criterion) {
 #[cfg(not(all(target_arch = "aarch64", target_feature = "sve")))]
 fn bench_sve_packing(_c: &mut Criterion) {
     eprintln!(
-        "SVE backend disabled. Rebuild on nightly with \
-         RUSTFLAGS=\"-C target-cpu=neoverse-v1 -C target-feature=+sve\" on an SVE (Graviton3) host."
+        "SVE backend disabled. Rebuild with \
+         RUSTFLAGS=\"-C target-cpu=neoverse-v1\" on an SVE (Graviton3) host."
     );
 }
 
