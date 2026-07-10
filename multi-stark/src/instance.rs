@@ -1,9 +1,8 @@
 //! Public instance wrappers for batched multi-STARK proving and verification.
 //!
-//! Setup intentionally takes only AIR references, since public values and main
-//! trace tables are proof-time data. Proving instances add the committed main
-//! trace table, shared proving key, and public values. Verifying instances add
-//! the shared verifying key, trace height, and public values.
+//! Setup takes only AIR references, since public values and main trace tables are proof-time data.
+//! A proving instance adds the committed main trace table, the shared proving key, and public values.
+//! A verifying instance adds the shared verifying key, the trace height, and public values.
 
 use alloc::vec::Vec;
 use core::ops::Deref;
