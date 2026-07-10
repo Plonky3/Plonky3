@@ -1,8 +1,12 @@
 //! Closed-form multilinear extensions used by the multilinear AIR prover.
 
+use alloc::vec::Vec;
 use core::ops::{AddAssign, Sub};
 
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
+use p3_util::log2_strict_usize;
 
 /// Boundary selectors evaluated at a sumcheck challenge.
 #[derive(Copy, Clone, Debug)]
@@ -317,6 +321,48 @@ where
         self.last += rhs.last;
         self.transition += rhs.transition;
     }
+}
+
+/// Evaluate every periodic column's multilinear extension at the bound point, in closed form.
+///
+/// A periodic column of period `p = 2^j` repeats every `p` rows.
+/// On the `k`-variable hypercube it therefore depends only on the low `j` bits of the row index.
+///
+/// The layout is big-endian.
+/// So coordinate `0` is the most significant bit.
+/// Those low bits are therefore the last `j` coordinates of the point:
+/// ```text
+///     periodic_col(r_0, ..., r_{k-1}) = MLE_v(r_{k-j}, ..., r_{k-1})
+/// ```
+/// where `v` is the length-`p` period vector.
+///
+/// This matches the prover, which folds the full-height column `col[i mod p]` to the same point.
+/// The verifier computes it unaided: periodic columns are public parameters, never committed.
+///
+/// # Arguments
+///
+/// - `periodic_columns`: one period vector per declared periodic column, in declaration order.
+/// - `point`: the bound sumcheck point, one coordinate per trace variable.
+///
+/// # Panics
+///
+/// - Panics if a period is not a power of two.
+/// - Panics if a period exceeds the number of point coordinates.
+pub(super) fn periodic_evals_at<F, EF>(periodic_columns: &[Vec<F>], point: &[EF]) -> Vec<EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let k = point.len();
+    periodic_columns
+        .iter()
+        .map(|col| {
+            // Number of low-order row bits the column depends on.
+            let j = log2_strict_usize(col.len());
+            // The last j coordinates carry those low-order bits, in order.
+            Poly::new(col.clone()).eval_base(&Point::new(point[k - j..].to_vec()))
+        })
+        .collect()
 }
 
 #[cfg(test)]

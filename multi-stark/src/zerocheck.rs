@@ -26,7 +26,7 @@ use crate::folder::MultilinearFolder;
 use crate::opening::{OpeningClaims, TableOpening};
 use crate::packed_ext::PackedExt;
 use crate::rounds::{RoundStateBase, RoundStateExt, Stage};
-use crate::selectors::BoundaryEvals;
+use crate::selectors::{BoundaryEvals, periodic_evals_at};
 
 /// Reasons the zerocheck verifier rejects a proof.
 #[derive(Debug, Error)]
@@ -158,7 +158,10 @@ where
     let layout = AirLayout::from_air::<F>(air);
 
     // Largest per-variable degree among the asserted constraints, scored at domain size two.
-    // No periodic columns reach this point, so the periodic-column lengths are empty.
+    //
+    // A periodic column is materialized as a full-height multilinear polynomial.
+    // So it scores per-variable degree one, just like any trace column.
+    // Passing empty periodic lengths yields exactly that at domain size two.
     let symbolic_constraint_degree = || {
         let (base, ext) = get_all_symbolic_constraints::<F, EF, A>(air, layout);
         let base_degree = base
@@ -199,10 +202,12 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// The caller must observe every trace commitment into the challenger before this call.
     /// The public values are observed here, so the caller need not observe them.
     ///
+    /// Periodic columns, if any, are folded into the sumcheck but produce no opening claim.
+    ///
     /// # Panics
     ///
     /// Panics if the input lengths disagree with the number of AIRs.
-    /// Panics if any AIR declares periodic columns, which this version does not support.
+    /// Panics if a periodic column's period is not a power of two dividing the trace height.
     /// Panics if any trace height is less than two.
     #[tracing::instrument(skip_all)]
     pub fn prove<F, EF, Challenger>(
@@ -248,10 +253,6 @@ impl<'a, A> AirZerocheck<'a, A> {
             .zip(public_values.iter())
             .map(|(((&air, table), preprocessed), public_values)| {
                 let layout = AirLayout::from_air::<F>(air);
-                assert_eq!(
-                    layout.num_periodic_columns, 0,
-                    "zerocheck does not support periodic columns yet"
-                );
                 // A height-1 trace has zero variables and never activates a stage.
                 // Reject it here, matching the verifier's `log_height > 0` guard.
                 assert!(
@@ -486,6 +487,10 @@ impl<'a, A> AirZerocheck<'a, A> {
                     .collect();
                 column_offset = preprocessed_end;
 
+                // Periodic columns come last in this AIR's block.
+                // They carry no opening claim, so skip past them to reach the next AIR.
+                column_offset += air.num_periodic_columns();
+
                 openings[air_index] = Some(AirOpenings {
                     local: local[main_offset..main_end].to_vec(),
                     next,
@@ -544,10 +549,6 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// - the claimed sum is nonzero,
     /// - the inner sumcheck transcript fails to verify,
     /// - the reduced sum does not match the constraints at the random point.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any AIR declares periodic columns, which this version does not support.
     pub fn verify<F, EF, Challenger>(
         &self,
         proof: &ZerocheckProof<F, EF>,
@@ -568,10 +569,6 @@ impl<'a, A> AirZerocheck<'a, A> {
 
         for (&air, public_values) in self.airs.iter().zip(public_values.iter()) {
             let layout = AirLayout::from_air::<F>(air);
-            assert_eq!(
-                layout.num_periodic_columns, 0,
-                "zerocheck does not support periodic columns yet"
-            );
             assert_ne!(layout.main_width, 0);
             assert_eq!(public_values.len(), air.num_public_values());
         }
@@ -770,10 +767,6 @@ impl<'a, A> AirZerocheck<'a, A> {
             .enumerate()
         {
             let layout = AirLayout::from_air::<F>(air);
-            assert_eq!(
-                layout.num_periodic_columns, 0,
-                "zerocheck does not support periodic columns yet"
-            );
             assert_ne!(layout.main_width, 0);
             assert_eq!(public_values[air_index].len(), air.num_public_values());
 
@@ -819,6 +812,12 @@ impl<'a, A> AirZerocheck<'a, A> {
                 preprocessed.next_values,
             );
             let preprocessed_next_row = preprocessed_claims.next_row(layout.preprocessed_width);
+
+            // Periodic columns are not committed.
+            // Recompute each column's multilinear extension at the bound point, in closed form.
+            let periodic_columns = air.periodic_columns();
+            let periodic = periodic_evals_at::<F, EF>(&periodic_columns, claims.point.as_slice());
+
             let air_g = MultilinearFolder::new(
                 &claims.local,
                 &next_row,
@@ -827,6 +826,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                 reduction.alpha,
             )
             .with_preprocessed(&preprocessed_claims.local, &preprocessed_next_row)
+            .with_periodic(&periodic)
             .eval_air(air);
             g += beta * air_g;
         }
@@ -972,6 +972,8 @@ where
 mod tests {
     extern crate std;
 
+    use alloc::borrow::Cow;
+    use alloc::vec;
     use alloc::vec::Vec;
     use core::borrow::Borrow;
 
@@ -2049,5 +2051,154 @@ mod tests {
         let public_values = [&pis[..]];
         let mut challenger = fresh_challenger();
         let _ = prove_traces(&zerocheck, &traces, &public_values, &mut challenger);
+    }
+
+    /// Period of the first periodic column.
+    const PERIOD_A: usize = 2;
+    /// Period of the second periodic column.
+    const PERIOD_B: usize = 4;
+
+    /// The two periodic period vectors, of different lengths.
+    ///
+    /// Column A repeats every two rows.
+    /// Column B repeats every four rows.
+    fn periodic_columns() -> Vec<Vec<F>> {
+        vec![
+            vec![F::from_u64(10), F::from_u64(20)],
+            vec![
+                F::from_u64(1),
+                F::from_u64(2),
+                F::from_u64(3),
+                F::from_u64(4),
+            ],
+        ]
+    }
+
+    /// Width-1 main AIR tied to two current-row periodic columns of different periods.
+    ///
+    /// Every row asserts `main[0] == periodic[0] + periodic[1]`.
+    /// The AIR reads no next row.
+    /// So it declares an empty main next-row set.
+    struct PeriodicAir;
+
+    impl BaseAir<F> for PeriodicAir {
+        fn width(&self) -> usize {
+            1
+        }
+        fn num_periodic_columns(&self) -> usize {
+            periodic_columns().len()
+        }
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            Cow::Owned(periodic_columns())
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            // Current-row only: no successor claim is needed.
+            Vec::new()
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for PeriodicAir {
+        fn eval(&self, builder: &mut AB) {
+            // Read the single main column and both periodic values at the current row.
+            let main = builder.main().current_slice()[0];
+            let periodic = builder.periodic_values();
+            let sum: AB::Expr = periodic[0].into() + periodic[1].into();
+            builder.assert_eq(main, sum);
+        }
+    }
+
+    /// A satisfying trace: `main[i] = periodic_A[i mod 2] + periodic_B[i mod 4]`.
+    fn periodic_trace(n: usize) -> RowMajorMatrix<F> {
+        let cols = periodic_columns();
+        let values = (0..n)
+            .map(|i| cols[0][i % PERIOD_A] + cols[1][i % PERIOD_B])
+            .collect();
+        RowMajorMatrix::new(values, 1)
+    }
+
+    #[test]
+    fn zerocheck_accepts_periodic() {
+        // Invariant on the periodic AIR, swept over trace heights that both periods divide:
+        //   - the closed-form periodic value equals the materialized full-column MLE at the point;
+        //   - periodic columns produce no opening claim;
+        //   - a satisfying trace proves and verifies.
+        //
+        // num_vars starts at 2 so the height is a multiple of the larger period (4).
+        let air = PeriodicAir;
+        let airs = [&air];
+        let empty: &[F] = &[];
+        let public_values: [&[F]; 1] = [empty];
+
+        for num_vars in 2..10 {
+            let n = 1 << num_vars;
+            let trace = periodic_trace(n);
+            let zerocheck = AirZerocheck::new(&airs, 0);
+
+            let mut prover_challenger = fresh_challenger();
+            let (proof, point) = prove_traces(
+                &zerocheck,
+                &[&trace],
+                &public_values,
+                &mut prover_challenger,
+            );
+
+            // Periodic columns are uncommitted, and this AIR reads no next row.
+            // So the single opening group carries no preprocessed and no next-row values.
+            assert!(proof.preprocessed_local[0].is_empty());
+            assert!(proof.next[0].is_empty());
+
+            // The closed-form value must equal the full-height column folded to the same point.
+            let cols = periodic_columns();
+            let closed = periodic_evals_at::<F, EF>(&cols, point.as_slice());
+            for (col, &value) in cols.iter().zip(closed.iter()) {
+                let full = Poly::new((0..n).map(|i| col[i % col.len()]).collect::<Vec<_>>());
+                assert_eq!(full.eval_base(&point), value);
+            }
+
+            let mut verifier_challenger = fresh_challenger();
+            zerocheck
+                .verify::<F, EF, _>(
+                    &proof,
+                    &[num_vars],
+                    &public_values,
+                    &mut verifier_challenger,
+                )
+                .expect("periodic AIR must verify");
+        }
+    }
+
+    #[test]
+    fn zerocheck_rejects_violated_periodic_constraint() {
+        // Break one row so `main == periodic[0] + periodic[1]` no longer holds.
+        // The claimed sum of zero is then false.
+        // So the final check must reject.
+        let num_vars = 3;
+        let n = 1 << num_vars;
+        let mut trace = periodic_trace(n);
+        trace.values[0] += F::ONE;
+        let air = PeriodicAir;
+        let airs = [&air];
+        let empty: &[F] = &[];
+        let public_values: [&[F]; 1] = [empty];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+
+        let mut prover_challenger = fresh_challenger();
+        let (proof, _) = prove_traces(
+            &zerocheck,
+            &[&trace],
+            &public_values,
+            &mut prover_challenger,
+        );
+
+        let mut verifier_challenger = fresh_challenger();
+        let err = zerocheck
+            .verify::<F, EF, _>(
+                &proof,
+                &[num_vars],
+                &public_values,
+                &mut verifier_challenger,
+            )
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch));
     }
 }
