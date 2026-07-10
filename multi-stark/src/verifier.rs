@@ -1,17 +1,18 @@
-//! Verify a multilinear AIR SNARK against a trace commitment.
+//! Verify multilinear AIR SNARKs against trace commitments.
 
+use alloc::vec::Vec;
 use core::fmt::Debug;
 
-use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder};
+use p3_air::{Air, BaseAir, SymbolicAirBuilder};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_sumcheck::PrescribedPointPcs;
 use thiserror::Error;
 
+use crate::VerifierInstances;
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::MultilinearFolder;
-use crate::keys::VerifyingKey;
 use crate::opening::TableOpening;
-use crate::proof::{MultiStarkProof, single_table_protocol};
+use crate::proof::MultiStarkProof;
 use crate::zerocheck::{AirZerocheck, ZerocheckError};
 
 /// Reasons the multilinear AIR verifier rejects a proof.
@@ -32,28 +33,41 @@ where
     /// The proof carries a preprocessed opening, but the verifying key expects none.
     #[error("preprocessed opening present but not expected")]
     UnexpectedPreprocessedOpening,
+    /// The proof carries the wrong number of preprocessed opening slots.
+    #[error("preprocessed opening count mismatch: expected {expected}, got {actual}")]
+    PreprocessedOpeningCountMismatch {
+        /// Number of verifier instances.
+        expected: usize,
+        /// Number of proof slots.
+        actual: usize,
+    },
     /// The preprocessed key height disagrees with the proof's trace height.
     #[error("preprocessed height mismatch: expected {expected}, got {actual}")]
     PreprocessedHeightMismatch {
         /// Trace arity the preprocessed commitment was built for.
         expected: usize,
-        /// Trace arity the proof's sumcheck fixes.
+        /// Trace arity the proof's instance fixes.
         actual: usize,
     },
 }
 
-/// Verify a complete multilinear AIR proof.
+/// Verify a complete batched multilinear AIR proof.
 ///
 /// The verifier replays the prover's transcript in the same order:
 ///
 /// ```text
-///     1. absorb preprocessed commitment (if any)
+///     1. absorb batched preprocessed commitment (if any)
 ///     2. absorb main commitment
-///     3. verify zerocheck sumcheck -> bound point r, reduced sum
-///     4. open main at r            -> main values bound to the main commitment
-///     5. open preprocessed at r    -> preprocessed values bound to its commitment
+///     3. verify zerocheck sumcheck -> common bound point r, reduced sum
+///     4. open main tables at r     -> main values bound to the main commitment
+///     5. open preprocessed tables at r (if any)
+///                                  -> values bound to the preprocessed commitment
 ///     6. recompute g at r          -> match the reduced sum
 /// ```
+///
+/// Each AIR instance is evaluated at the suffix of the common point matching its
+/// trace height. Main openings are returned in instance order. Preprocessed
+/// openings are returned in setup order, skipping AIRs with no preprocessed columns.
 ///
 /// # Soundness
 ///
@@ -64,31 +78,28 @@ where
 ///
 /// # Arguments
 ///
-/// - Proof configuration selecting the commitment schemes.
-/// - Verifying key carrying the reusable preprocessed commitment.
-/// - AIR whose constraints are checked.
-/// - Proof to verify.
-/// - Public inputs forwarded to the AIR.
-/// - Grinding difficulty per sumcheck round.
-/// - Fiat-Shamir transcript.
+/// - `config`: proof configuration selecting the commitment schemes.
+/// - `instances`: AIRs, shared verifying key, trace heights, and public inputs.
+/// - `proof`: batched proof to verify.
+/// - `pow_bits`: grinding difficulty per sumcheck round.
+/// - `challenger`: Fiat-Shamir transcript.
 ///
 /// # Errors
 ///
 /// Returns an error when the sumcheck fails.
 /// Returns an error when the closing check fails.
 /// Returns an error when either commitment opening fails.
-/// Returns an error when the proof and key disagree on the preprocessed trace.
+/// Returns an error when the proof and key disagree on whether preprocessed data is opened.
 ///
 /// # Panics
 ///
-/// Panics if the preprocessed key width disagrees with the AIR's declared preprocessed width.
-/// Panics if the AIR declares periodic columns.
-pub fn verify<C, A>(
+/// Panics if the instance list is empty.
+/// Panics if the verifier instances do not all use the same verifying key.
+#[tracing::instrument(skip_all)]
+pub fn verify<'a, C, A>(
     config: &C,
-    verifying_key: &VerifyingKey<C>,
-    air: &A,
+    instances: VerifierInstances<'a, C, A>,
     proof: &MultiStarkProof<C>,
-    public_values: &[C::Val],
     pow_bits: usize,
     challenger: &mut C::Challenger,
 ) -> Result<(), VerificationError<PcsError<C>>>
@@ -104,50 +115,40 @@ where
         + Air<SymbolicAirBuilder<C::Val, C::Challenge>>
         + BaseAir<C::Val>,
 {
-    // The sumcheck has one round per trace variable, so it fixes the trace arity.
-    let log_height = proof.sumcheck.num_rounds();
-    let width = AirLayout::from_air::<C::Val>(air).main_width;
-    let next_columns = air.main_next_row_columns();
-    let preprocessed = verifying_key.preprocessed.as_ref();
+    assert!(!instances.is_empty());
 
-    // Invariant: committed preprocessed column count == AIR's declared preprocessed width.
-    // A key with no preprocessed data pairs with an AIR that declares none (width 0).
-    assert_eq!(
-        preprocessed.map_or(0, |p| p.width),
-        air.preprocessed_width(),
-        "preprocessed key width must match the AIR's declared preprocessed width"
-    );
+    let (verifying_key, instances) = instances.into_parts();
+    let preprocessed_commitment = verifying_key.preprocessed.as_ref();
 
     // The proof's preprocessed opening must match what the key expects.
-    match (preprocessed, &proof.preprocessed_opening) {
+    match (preprocessed_commitment, proof.preprocessed_opening.as_ref()) {
         (Some(_), None) => return Err(VerificationError::MissingPreprocessedOpening),
         (None, Some(_)) => return Err(VerificationError::UnexpectedPreprocessedOpening),
         _ => {}
     }
 
-    // The preprocessed commitment was built for a fixed height.
-    // That height must match the height this proof fixes.
-    if let Some(preprocessed) = preprocessed
-        && preprocessed.log_height != log_height
+    // 1. Absorb the reusable batched preprocessed commitment before any challenge
+    // depends on it.
+    if let Some(commitment) = preprocessed_commitment {
+        challenger.observe(commitment.clone());
+    } else if instances
+        .iter()
+        .any(|instance| instance.air.preprocessed_width() != 0)
     {
-        return Err(VerificationError::PreprocessedHeightMismatch {
-            expected: preprocessed.log_height,
-            actual: log_height,
+        return Err(VerificationError::PreprocessedOpeningCountMismatch {
+            expected: instances.len(),
+            actual: 0,
         });
-    }
-
-    // 1. Absorb the preprocessed commitment, matching the prover's first absorption.
-    if let Some(preprocessed) = preprocessed {
-        challenger.observe(preprocessed.commitment.clone());
     }
 
     // 2. Absorb the main commitment, matching the prover's commit phase.
     challenger.observe(proof.commitment.clone());
 
-    // 3. Verify the zerocheck sumcheck, yielding the bound point and the reduced sum.
-    let airs = [air];
-    let log_heights = [log_height];
-    let public_values = [public_values];
+    // 3. Verify the batched zerocheck sumcheck, yielding the common bound point
+    // and the reduced sum.
+    let airs = instances.airs();
+    let log_heights = instances.num_variables();
+    let public_values = instances.public_values();
     let zerocheck = AirZerocheck::new(&airs, pow_bits);
     let reduction = zerocheck
         .verify_reduction::<C::Val, C::Challenge, _>(
@@ -158,69 +159,81 @@ where
         )
         .map_err(VerificationError::Zerocheck)?;
 
-    // 4. Open the committed main columns at the bound point.
-    // The returned values are bound to the main commitment.
-    let protocol = single_table_protocol(log_height, width, &next_columns);
+    // 4. Open the committed main trace tables at their suffixes of the bound
+    // point. The returned values are bound to the main commitment.
     let main_evals = config
         .pcs()
         .verify_at(
             &proof.commitment,
             &proof.opening,
-            &protocol,
-            core::slice::from_ref(&reduction.point),
+            &instances.opening_protocol(),
+            &instances.main_points(&reduction.point),
             challenger,
         )
         .map_err(VerificationError::Opening)?;
 
-    // Single table, single point: one batch of current values then successor values.
-    let main = &main_evals[0];
-
-    // 5. Open the preprocessed columns at the same point against the reused commitment.
-    // The owned batch is bound to a local so the closing check can borrow its values.
-    let preprocessed_evals = match (preprocessed, &proof.preprocessed_opening) {
-        (Some(preprocessed), Some(opening)) => {
-            let protocol = single_table_protocol(
-                preprocessed.log_height,
-                preprocessed.width,
-                &preprocessed.next_columns,
-            );
-            let evals = config
+    // 5. Open the preprocessed tables at their suffixes of the same bound point.
+    // The owned batches are kept local so the closing check can borrow them.
+    let preprocessed_evals = if let Some(preprocessed_commitment) = preprocessed_commitment {
+        let opening = proof
+            .preprocessed_opening
+            .as_ref()
+            .expect("missing preprocessed opening rejected before verification");
+        Some(
+            config
                 .preprocessed_pcs()
                 .verify_at(
-                    &preprocessed.commitment,
+                    preprocessed_commitment,
                     opening,
-                    &protocol,
-                    core::slice::from_ref(&reduction.point),
+                    &instances.preprocessed_opening_protocol(),
+                    &instances.preprocessed_points(&reduction.point),
                     challenger,
                 )
-                .map_err(VerificationError::Opening)?;
-            Some(evals)
-        }
-        _ => None,
+                .map_err(VerificationError::Opening)?,
+        )
+    } else {
+        None
     };
 
-    // Build the preprocessed table view, borrowing the opened values.
-    // The view is empty when the AIR declares no preprocessed trace.
-    let preprocessed_opening = match (preprocessed, &preprocessed_evals) {
-        (Some(preprocessed), Some(evals)) => {
-            let batch = &evals[0];
-            TableOpening::new(batch.current(), &preprocessed.next_columns, batch.next())
-        }
-        _ => TableOpening::empty(),
-    };
+    let preprocessed_next_columns = instances.preprocessed_next_columns();
+    let next_columns = instances.next_columns();
+    let main_openings = main_evals
+        .iter()
+        .zip(next_columns.iter())
+        .map(|(batch, next_columns)| TableOpening::new(batch.current(), next_columns, batch.next()))
+        .collect::<Vec<_>>();
 
-    // 6. Close the zerocheck: recompute g from the commitment-bound values and match the sum.
-    let main_opening = [TableOpening::new(
-        main.current(),
-        &next_columns,
-        main.next(),
-    )];
-    let preprocessed_opening = [preprocessed_opening];
+    // Build preprocessed table views in instance order. AIRs with no preprocessed
+    // columns get an empty view; the table index advances only for non-empty AIRs.
+    let mut table_index = 0;
+    let preprocessed_openings = instances
+        .iter()
+        .map(|instance| {
+            if instance.air.preprocessed_width() == 0 {
+                TableOpening::empty()
+            } else {
+                let evals = preprocessed_evals
+                    .as_ref()
+                    .expect("missing preprocessed evals rejected before verification");
+                let current_table_index = table_index;
+                let batch = &evals[current_table_index];
+                table_index += 1;
+                TableOpening::new(
+                    batch.current(),
+                    &preprocessed_next_columns[current_table_index],
+                    batch.next(),
+                )
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // 6. Close the zerocheck: recompute g from commitment-bound values and match
+    // the reduced sum.
     zerocheck
         .check_constraint(
             &reduction,
-            &main_opening,
-            &preprocessed_opening,
+            &main_openings,
+            &preprocessed_openings,
             &log_heights,
             &public_values,
         )

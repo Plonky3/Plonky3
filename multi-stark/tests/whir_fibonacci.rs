@@ -12,7 +12,10 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::zerocheck::ZerocheckError;
-use p3_multi_stark::{VerificationError, prove, setup, verify};
+use p3_multi_stark::{
+    ProverInstance, ProverInstances, VerificationError, VerifierInstance, VerifierInstances, prove,
+    setup, verify,
+};
 use p3_sumcheck::OpeningBatch;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -63,16 +66,16 @@ impl MultiStarkConfig for WhirConfigForTest {
         FOLDING
     }
 
-    fn build_witness(&self, table: Table<F>) -> Witness<F> {
-        // Version one commits a single table: the whole trace.
-        L::new_witness(vec![table], FOLDING)
+    fn build_witness(&self, tables: Vec<Table<F>>) -> Witness<F> {
+        L::new_witness(tables, FOLDING)
     }
 
     fn committed_table<'a>(
         &self,
         prover_data: &'a p3_whir::WhirProverData<F, EF, MyMmcs, L>,
+        table_index: usize,
     ) -> &'a Table<F> {
-        prover_data.table(0)
+        prover_data.table(table_index)
     }
 }
 
@@ -103,6 +106,17 @@ fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFac
 /// The WHIR configuration must match that stacked arity.
 fn config_for(log_height: usize, width: usize) -> WhirConfigForTest {
     let stacked_num_variables = log_height + log2_ceil_usize(width);
+    config_for_stacked(stacked_num_variables)
+}
+
+/// Build a configuration sized for a batch of same-shape trace tables.
+fn batch_config_for(log_height: usize, width: usize, num_tables: usize) -> WhirConfigForTest {
+    let stacked_num_variables = log2_ceil_usize(num_tables * width * (1 << log_height));
+    config_for_stacked(stacked_num_variables)
+}
+
+/// Build a configuration sized for an already-stacked polynomial arity.
+fn config_for_stacked(stacked_num_variables: usize) -> WhirConfigForTest {
     let folding_factor = FoldingFactor::Constant(FOLDING);
 
     let mmcs = MyMmcs::new(MyHash::new(perm()), MyCompress::new(perm()), 0);
@@ -184,8 +198,11 @@ impl<AB: AirBuilder> Air<AB> for FibAir {
 
 /// Build a Fibonacci trace seeded with zero and one.
 fn fib_trace(n: usize) -> RowMajorMatrix<F> {
-    let mut left = F::ZERO;
-    let mut right = F::ONE;
+    fib_trace_with(n, F::ZERO, F::ONE)
+}
+
+/// Build a Fibonacci trace from arbitrary first-row values.
+fn fib_trace_with(n: usize, mut left: F, mut right: F) -> RowMajorMatrix<F> {
     let mut values = Vec::with_capacity(NUM_COLS * n);
     for _ in 0..n {
         values.push(left);
@@ -201,8 +218,14 @@ fn fib_trace(n: usize) -> RowMajorMatrix<F> {
 /// Public inputs for the first row and final output.
 fn fib_public_values(n: usize) -> [F; 3] {
     let trace = fib_trace(n);
+    fib_public_values_for_trace(&trace)
+}
+
+/// Public inputs matching an already-built Fibonacci trace.
+fn fib_public_values_for_trace(trace: &RowMajorMatrix<F>) -> [F; 3] {
+    let n = trace.values.len() / NUM_COLS;
     let last = trace.values[(n - 1) * NUM_COLS + 1];
-    [F::ZERO, F::ONE, last]
+    [trace.values[0], trace.values[1], last]
 }
 
 #[test]
@@ -211,31 +234,73 @@ fn prove_verify_fibonacci_roundtrips() {
     let n = 256;
     let trace = fib_trace(n);
     let pis = fib_public_values(n);
-    let config = config_for(log2_strict_usize(n), NUM_COLS);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let airs = [&FibAir];
 
     // Fibonacci has no preprocessed trace, so setup yields empty keys.
-    let (pk, vk) = setup(&config, &FibAir, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
 
     let proof = prove(
         &config,
-        &pk,
-        &FibAir,
-        &trace,
-        &pis,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
         0,
         &mut challenger(&config),
     );
 
     verify(
         &config,
-        &vk,
-        &FibAir,
+        VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, log_height, &pis)]),
         &proof,
-        &pis,
         0,
         &mut challenger(&config),
     )
     .expect("honest Fibonacci proof must verify");
+}
+
+#[test]
+fn prove_verify_batched_fibonacci_roundtrips() {
+    // Two same-height traces share one main commitment, one zerocheck, and one main opening.
+    let n = 256;
+    let log_height = log2_strict_usize(n);
+    let air = FibAir;
+    let trace_a = fib_trace(n);
+    let trace_b = fib_trace_with(n, F::ONE, F::ONE);
+    let pis_a = fib_public_values_for_trace(&trace_a);
+    let pis_b = fib_public_values_for_trace(&trace_b);
+    let config = batch_config_for(log_height, NUM_COLS, 2);
+    let airs = [&air, &air];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&air, Table::new(trace_a.transpose()), &pk, &pis_a),
+            ProverInstance::new(&air, Table::new(trace_b.transpose()), &pk, &pis_b),
+        ]),
+        0,
+        &mut challenger(&config),
+    );
+
+    assert!(proof.preprocessed_opening.is_none());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&air, &vk, log_height, &pis_a),
+            VerifierInstance::new(&air, &vk, log_height, &pis_b),
+        ]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("honest batched Fibonacci proof must verify");
 }
 
 #[test]
@@ -244,16 +309,20 @@ fn verify_rejects_tampered_opening() {
     let n = 256;
     let trace = fib_trace(n);
     let pis = fib_public_values(n);
-    let config = config_for(log2_strict_usize(n), NUM_COLS);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let airs = [&FibAir];
 
-    let (pk, vk) = setup(&config, &FibAir, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
 
     let mut proof = prove(
         &config,
-        &pk,
-        &FibAir,
-        &trace,
-        &pis,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
         0,
         &mut challenger(&config),
     );
@@ -270,10 +339,8 @@ fn verify_rejects_tampered_opening() {
     //   -> failure reports a batched placeholder position, not a per-query index.
     let err = verify(
         &config,
-        &vk,
-        &FibAir,
+        VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, log_height, &pis)]),
         &proof,
-        &pis,
         0,
         &mut challenger(&config),
     )
@@ -295,16 +362,20 @@ fn verify_rejects_violated_constraint() {
     // Mutation: shift one row value used by the transition constraints.
     trace.values[2 * NUM_COLS] += F::ONE;
     let pis = fib_public_values(n);
-    let config = config_for(log2_strict_usize(n), NUM_COLS);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let airs = [&FibAir];
 
-    let (pk, vk) = setup(&config, &FibAir, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
 
     let proof = prove(
         &config,
-        &pk,
-        &FibAir,
-        &trace,
-        &pis,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
         0,
         &mut challenger(&config),
     );
@@ -312,10 +383,8 @@ fn verify_rejects_violated_constraint() {
     // Expected rejection: the zerocheck closes on a nonzero constraint value.
     let err = verify(
         &config,
-        &vk,
-        &FibAir,
+        VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, log_height, &pis)]),
         &proof,
-        &pis,
         0,
         &mut challenger(&config),
     )
@@ -335,16 +404,20 @@ fn verify_rejects_tampered_public_values() {
     let n = 256;
     let trace = fib_trace(n);
     let pis = fib_public_values(n);
-    let config = config_for(log2_strict_usize(n), NUM_COLS);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let airs = [&FibAir];
 
-    let (pk, vk) = setup(&config, &FibAir, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
 
     let proof = prove(
         &config,
-        &pk,
-        &FibAir,
-        &trace,
-        &pis,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
         0,
         &mut challenger(&config),
     );
@@ -358,10 +431,10 @@ fn verify_rejects_tampered_public_values() {
     //   -> failure reports a batched placeholder position, not a per-query index.
     let err = verify(
         &config,
-        &vk,
-        &FibAir,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &FibAir, &vk, log_height, &wrong,
+        )]),
         &proof,
-        &wrong,
         0,
         &mut challenger(&config),
     )
