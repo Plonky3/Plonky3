@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 
 use p3_field::Field;
+use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use rand::Rng;
 
 /// A randomized encoding such that any `t` codeword positions reveal nothing about the message.
@@ -66,6 +68,76 @@ pub trait ZkEncoding<F: Field> {
 pub trait ZkEncodingWithRandomness<F: Field>: ZkEncoding<F> {
     /// Encodes a message using an explicitly provided randomness array.
     fn encode_with_randomness(&self, msg: &[F], randomness: &[F]) -> Self::Codeword;
+
+    /// Encodes same-shape messages as a single width-`k` matrix.
+    ///
+    /// The default preserves the scalar semantics by encoding each column
+    /// independently, then interleaving the resulting codewords by row.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the batch is empty, if the message and randomness batch
+    /// lengths differ, or if any member has an invalid shape for this encoding.
+    fn encode_batch_with_randomness<Msg, Rand>(
+        &self,
+        messages: &[Msg],
+        randomness: &[Rand],
+    ) -> RowMajorMatrix<F>
+    where
+        Msg: AsRef<[F]>,
+        Rand: AsRef<[F]>,
+        Self::Codeword: Matrix<F>,
+    {
+        assert!(
+            !messages.is_empty(),
+            "batch must contain at least one message"
+        );
+        assert_eq!(
+            messages.len(),
+            randomness.len(),
+            "batch message/randomness counts must match"
+        );
+        let codewords: Vec<Self::Codeword> = messages
+            .iter()
+            .zip(randomness)
+            .map(|(message, randomness)| {
+                self.encode_with_randomness(message.as_ref(), randomness.as_ref())
+            })
+            .collect();
+        stack_codewords(&codewords)
+    }
+}
+
+/// Interleaves same-domain codewords into one width-`k` matrix.
+///
+/// ```text
+///     row z = ( cw_1(z), cw_2(z), ..., cw_k(z) )
+/// ```
+///
+/// # Panics
+///
+/// Panics if the batch is empty, if any codeword is not a single column, or if
+/// the codewords do not all have the same height.
+pub fn stack_codewords<F: Field, Cw: Matrix<F>>(codewords: &[Cw]) -> RowMajorMatrix<F> {
+    assert!(
+        !codewords.is_empty(),
+        "batch must contain at least one codeword"
+    );
+    let height = codewords[0].height();
+    let width = codewords.len();
+    let mut values = F::zero_vec(height * width);
+    for (column, codeword) in codewords.iter().enumerate() {
+        assert_eq!(codeword.width(), 1, "each codeword must be a column");
+        assert_eq!(
+            codeword.height(),
+            height,
+            "all codewords must have the same height"
+        );
+        for (row, value) in codeword.rows().enumerate() {
+            values[row * width + column] = value.into_iter().next().unwrap();
+        }
+    }
+    RowMajorMatrix::new(values, width)
 }
 
 /// A zero-knowledge encoding whose generator matrix rows can be accessed.
