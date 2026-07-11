@@ -5,6 +5,46 @@ use p3_matrix::dense::RowMajorMatrix;
 
 use crate::builder::AirBuilder;
 
+/// Which end of the trace a public boundary cell lives on.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BoundaryEnd {
+    /// The first trace row, the all-zeros hypercube corner (index `0`).
+    First,
+    /// The last trace row, the all-ones hypercube corner (index `2^num_variables - 1`).
+    Last,
+}
+
+/// One main-trace cell exposed as a public input at a boundary corner.
+///
+/// This drives Borgeaud's boundary-IO handling of public inputs:
+/// - the prover commits the column with this cell forced to zero,
+/// - the verifier restores the true value from the public input by a Lagrange-at-corner correction.
+///
+/// A matching corner-zero constraint pins the committed cell to zero.
+/// The restored value is then exactly the public input.
+///
+/// See <https://solvable.group/posts/super-air/> ("Handling public inputs").
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct BoundaryPublic {
+    /// Main-trace column holding the public cell.
+    pub column: usize,
+    /// Trace end the cell sits on.
+    pub end: BoundaryEnd,
+    /// Index into the AIR's public values supplying the cell's value.
+    pub public_value: usize,
+}
+
+impl BoundaryPublic {
+    /// Bundle a column, a trace end, and a public-value index into a boundary cell.
+    pub const fn new(column: usize, end: BoundaryEnd, public_value: usize) -> Self {
+        Self {
+            column,
+            end,
+            public_value,
+        }
+    }
+}
+
 /// The underlying structure of an AIR.
 pub trait BaseAir<F>: Sync {
     /// The number of columns (a.k.a. registers) in this AIR.
@@ -190,6 +230,24 @@ pub trait BaseAir<F>: Sync {
     /// Return the number of expected public values.
     fn num_public_values(&self) -> usize {
         0
+    }
+
+    /// Main-trace boundary cells bound as public inputs via boundary IO.
+    ///
+    /// Each returned cell is committed as zero.
+    /// The verifier restores it from the public input by a Lagrange-at-corner correction.
+    /// See [`BoundaryPublic`] for the mechanism and its soundness pin.
+    ///
+    /// Defaults to none, so public inputs are bound by ordinary constraints unless an AIR opts in.
+    ///
+    /// # Correctness
+    ///
+    /// The multilinear prover asserts a corner-zero pin for each cell.
+    /// A listed cell therefore need not be pinned by the AIR's own evaluation.
+    /// Every referenced column must be a real main column.
+    /// Every public-value index must address a declared public value.
+    fn public_boundary_io(&self) -> Vec<BoundaryPublic> {
+        Vec::new()
     }
 }
 

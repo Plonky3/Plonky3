@@ -157,6 +157,17 @@ where
 {
     let layout = AirLayout::from_air::<F>(air);
 
+    // Boundary-IO public cells each add one corner-zero pin.
+    // The pins are asserted while the constraints run, but the symbolic pass never sees them.
+    // Fold their degree in by hand.
+    // A pin is `selector * (column - public)`.
+    // The selector and the column each score degree one at domain size two, so the product scores two.
+    let boundary_io_degree = if air.public_boundary_io().is_empty() {
+        0
+    } else {
+        2
+    };
+
     // Largest per-variable degree among the asserted constraints, scored at domain size two.
     // No periodic columns reach this point, so the periodic-column lengths are empty.
     let symbolic_constraint_degree = || {
@@ -177,11 +188,11 @@ where
             degree >= symbolic_constraint_degree(),
             "max_constraint_degree hint is below the symbolic constraint degree"
         );
-        return degree;
+        return degree.max(boundary_io_degree);
     }
 
     // No hint: fall back to the symbolic constraint degree.
-    symbolic_constraint_degree()
+    symbolic_constraint_degree().max(boundary_io_degree)
 }
 
 impl<'a, A> AirZerocheck<'a, A> {

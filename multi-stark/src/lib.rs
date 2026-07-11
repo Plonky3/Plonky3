@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+mod boundary;
 pub mod config;
 pub mod folder;
 pub mod instance;

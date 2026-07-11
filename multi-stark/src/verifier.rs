@@ -153,13 +153,14 @@ where
 
     // 4. Open the committed main trace tables at their suffixes of the bound
     // point. The returned values are bound to the main commitment.
+    let main_points = instances.main_points(&reduction.point);
     let main_evals = config
         .pcs()
         .verify_at(
             &proof.commitment,
             &proof.opening,
             &instances.opening_protocol(),
-            &instances.main_points(&reduction.point),
+            &main_points,
             challenger,
         )
         .map_err(VerificationError::Opening)?;
@@ -189,10 +190,29 @@ where
 
     let preprocessed_next_columns = instances.preprocessed_next_columns();
     let next_columns = instances.next_columns();
-    let main_openings = main_evals
+
+    // Restore the true opened values from the committed corner-zeroed openings.
+    // An AIR without boundary IO declares no cells, so its openings pass through unchanged.
+    // The restored values equal what the prover folded.
+    // The closing constraint recompute below therefore closes against the same value.
+    let reconstructed = main_evals
+        .iter()
+        .enumerate()
+        .map(|(i, batch)| {
+            let cells = airs[i].public_boundary_io();
+            crate::boundary::BoundaryIo::new(&cells).reconstruct(
+                batch.current(),
+                batch.next(),
+                &next_columns[i],
+                main_points[i].as_slice(),
+                public_values[i],
+            )
+        })
+        .collect::<Vec<_>>();
+    let main_openings = reconstructed
         .iter()
         .zip(next_columns.iter())
-        .map(|(batch, next_columns)| TableOpening::new(batch.current(), next_columns, batch.next()))
+        .map(|((current, next), next_columns)| TableOpening::new(current, next_columns, next))
         .collect::<Vec<_>>();
 
     // Build one preprocessed opening view per instance, in instance order.
