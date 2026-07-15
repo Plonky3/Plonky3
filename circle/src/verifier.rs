@@ -357,18 +357,19 @@ where
         // Move from the leaf index to its parent in the folding tree.
         index >>= log_arity;
 
-        // Record the group index and reconstructed row for the round's shared
-        // verification. `evals` is tiny, so the clone is cheap.
-        group_indices_by_round[round].push(index);
-        rows_by_round[round].push(vec![evals.clone()]);
-
         // Fold the full sibling group down to a single evaluation using the random
-        // challenge beta. Circle PCS only ever folds by arity 2 (`CircleFriFolding::fold_row`
+        // challenge beta. Borrowing the row leaves it owned for the collector below.
+        // Circle PCS only ever folds by arity 2 (`CircleFriFolding::fold_row`
         // asserts this too); the twiddle for this round was already precomputed for the
         // whole query chain, so this is now pure arithmetic with no domain construction,
         // scalar multiplication, or inversion left to do.
         assert_eq!(log_arity, 1, "Circle PCS currently only supports arity 2");
-        folded_eval = fold_row_with_inv_twiddle(x_twiddle_inv[round], beta, evals.into_iter());
+        folded_eval = fold_row_with_inv_twiddle(x_twiddle_inv[round], beta, evals.iter().copied());
+
+        // Hand this query's group index and reconstructed row to the round's shared
+        // verification; the round's single proof authenticates every query at once.
+        group_indices_by_round[round].push(index);
+        rows_by_round[round].push(vec![evals]);
 
         // Advance to the next (smaller) domain.
         log_current_height = log_folded_height;
