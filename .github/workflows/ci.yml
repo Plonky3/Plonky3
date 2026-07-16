@@ -62,6 +62,25 @@ jobs:
           RUSTFLAGS: -C debuginfo=0 -C target-feature=-sha3
         run: cargo test -p p3-keccak
 
+  bench_smoke:
+    name: Bench smoke test
+    runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: rs-stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `--test` runs every benchmark body once instead of the full statistical
+      # sample, so this catches setup/panic regressions in `[[bench]]` targets
+      # without paying for a real `cargo bench` run.
+      - name: Run each benchmark once
+        run: cargo bench --workspace -- --test
+
   check_embedded:
     name: Build embedded
     runs-on: ubuntu-latest
