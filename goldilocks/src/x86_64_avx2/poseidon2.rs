@@ -191,7 +191,7 @@ fn internal_round_goldilocks_16(state: &mut [PackedGoldilocksAVX2; 16], rc: Pack
 }
 
 /// The internal layers of the Poseidon2 permutation, specialized for `PackedGoldilocksAVX2`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Poseidon2InternalLayerGoldilocksAVX2 {
     /// Scalar fallback, used for `Permutation<[Goldilocks; WIDTH]>`.
     inner: Poseidon2InternalLayerGoldilocks,
@@ -235,6 +235,31 @@ impl InternalLayer<Goldilocks, 16, GOLDILOCKS_S_BOX_DEGREE>
 {
     fn permute_state(&self, state: &mut [Goldilocks; 16]) {
         InternalLayer::<Goldilocks, 16, GOLDILOCKS_S_BOX_DEGREE>::permute_state(&self.inner, state);
+    }
+}
+
+// `MATRIX_DIAG_20_GOLDILOCKS` holds opaque full field elements rather than small
+// integers/powers of two (see its doc comment in the crate root `poseidon2` module), so it
+// doesn't admit the same cheap-add fast path as widths 8/12/16. Width 20 is otherwise
+// unused in this crate (no default constructor, no known-answer test), so both the scalar
+// and packed cases simply delegate to the existing generic implementation for correctness
+// parity with every other Goldilocks Poseidon2 backend, rather than leaving it unsupported.
+impl InternalLayer<Goldilocks, 20, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocksAVX2
+{
+    fn permute_state(&self, state: &mut [Goldilocks; 20]) {
+        InternalLayer::<Goldilocks, 20, GOLDILOCKS_S_BOX_DEGREE>::permute_state(&self.inner, state);
+    }
+}
+
+impl InternalLayer<PackedGoldilocksAVX2, 20, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocksAVX2
+{
+    fn permute_state(&self, state: &mut [PackedGoldilocksAVX2; 20]) {
+        InternalLayer::<PackedGoldilocksAVX2, 20, GOLDILOCKS_S_BOX_DEGREE>::permute_state(
+            &self.inner,
+            state,
+        );
     }
 }
 
@@ -402,6 +427,25 @@ mod tests {
     fn packed_matches_scalar_width_16() {
         let mut rng = SmallRng::seed_from_u64(3);
         let perm = default_goldilocks_poseidon2_16();
+        assert_packed_matches_scalar(&perm, &perm, &mut rng);
+    }
+
+    /// Width 20 has no default constructor or known-answer test anywhere in this crate (its
+    /// diagonal constants are undocumented), so there is no `default_goldilocks_poseidon2_20`
+    /// to call here. This only exercises that the scalar and packed `InternalLayer`/
+    /// `ExternalLayer` impls agree with each other for width 20 (i.e. that delegating to the
+    /// generic implementation was wired correctly), not that the round numbers used are
+    /// cryptographically appropriate.
+    #[test]
+    fn packed_matches_scalar_width_20() {
+        let mut rng = SmallRng::seed_from_u64(4);
+        let perm: p3_poseidon2::Poseidon2<
+            Goldilocks,
+            Poseidon2ExternalLayerGoldilocksAVX2<20>,
+            Poseidon2InternalLayerGoldilocksAVX2,
+            20,
+            GOLDILOCKS_S_BOX_DEGREE,
+        > = p3_poseidon2::Poseidon2::new_from_rng(8, 22, &mut rng);
         assert_packed_matches_scalar(&perm, &perm, &mut rng);
     }
 }
