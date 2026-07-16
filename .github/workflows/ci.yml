@@ -79,7 +79,7 @@ jobs:
       # sample, so this catches setup/panic regressions in `[[bench]]` targets
       # without paying for a real `cargo bench` run.
       - name: Run each benchmark once
-        run: cargo bench --workspace -- --test
+        run: cargo bench --workspace --features parallel -- --test
 
   check_embedded:
     name: Build embedded
