@@ -56,8 +56,15 @@ fn add_rc_and_sbox(val: &mut PackedGoldilocksAVX2, rc: PackedGoldilocksAVX2) {
 #[inline(always)]
 fn sbox_array<const WIDTH: usize>(state: &mut [PackedGoldilocksAVX2; WIDTH]) {
     let x2: [PackedGoldilocksAVX2; WIDTH] = core::array::from_fn(|i| state[i].square());
-    let x3: [PackedGoldilocksAVX2; WIDTH] = core::array::from_fn(|i| x2[i] * state[i]);
-    let x4: [PackedGoldilocksAVX2; WIDTH] = core::array::from_fn(|i| x2[i].square());
+    // `x3`/`x4` start as copies of `x2` (a plain register/array copy, no computation) so that
+    // computing `x3[i] = x2[i] * state[i]` and `x4[i] = x2[i]^2` can share a single loop over
+    // `i`, instead of two separate full-width passes.
+    let mut x3 = x2;
+    let mut x4 = x2;
+    for i in 0..WIDTH {
+        x3[i] *= state[i];
+        x4[i] = x4[i].square();
+    }
     for i in 0..WIDTH {
         state[i] = x3[i] * x4[i];
     }
