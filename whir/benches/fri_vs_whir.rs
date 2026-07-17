@@ -127,8 +127,8 @@ const SECURITY_LEVEL: usize = 100;
 ///
 /// # Why this value
 ///
-/// - The WHIR side needs every per-round grinding requirement to fit under this budget. `20` is the smallest budget that clears that floor.
-const POW_BITS: usize = 20;
+/// - The WHIR side needs every per-round grinding requirement to fit under this budget. `21` is the smallest budget that clears that ceiling.
+const POW_BITS: usize = 21;
 
 /// log_2 of the inverse code rate.
 ///
