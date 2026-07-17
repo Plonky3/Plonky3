@@ -30,6 +30,11 @@ jobs:
           - os: ubuntu-latest
           - os: ubuntu-latest
             features: "+avx2"
+          - os: ubuntu-latest
+            features: "+avx512f"
+            # GitHub-hosted runners aren't guaranteed to have AVX-512 hardware,
+            # so this leg only verifies the AVX-512 paths compile.
+            compile_only: true
           - os: macos-latest
           - os: windows-latest
     runs-on: ${{ matrix.os }}
@@ -44,17 +49,27 @@ jobs:
       - name: Set flags
         if: ${{ matrix.features }}
         run: |
-          # Append AVX2 to existing flags so we keep -C debuginfo=0.
+          # Append AVX2/AVX-512 to existing flags so we keep -C debuginfo=0.
           echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
 
       # Smarter cache for Rust builds; avoids overfilling the runner disk.
       - uses: Swatinem/rust-cache@v2
 
       - name: Test
+        if: ${{ !matrix.compile_only }}
         run: cargo test
 
       - name: Test with parallel
+        if: ${{ !matrix.compile_only }}
         run: cargo test --features parallel
+
+      - name: Build
+        if: ${{ matrix.compile_only }}
+        run: cargo build --all-targets
+
+      - name: Build with parallel
+        if: ${{ matrix.compile_only }}
+        run: cargo build --all-targets --features parallel
 
       - name: Test keccak (aarch64, no SHA3)
         if: ${{ matrix.os == 'macos-latest' }}

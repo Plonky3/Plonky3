@@ -54,8 +54,44 @@ pub type Poseidon2Goldilocks<const WIDTH: usize> = crate::Poseidon2GoldilocksFus
 
 /// An implementation of the Poseidon2 hash function for the Goldilocks field.
 ///
+/// It acts on arrays of the form `[Goldilocks; WIDTH]` and `[PackedGoldilocksAVX2; WIDTH]`,
+/// with round constants pre-broadcast into packed vectors at construction time. See
+/// [`crate::x86_64_avx2::Poseidon2ExternalLayerGoldilocksAVX2`] for details.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(target_feature = "avx512f")
+))]
+pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
+    Goldilocks,
+    crate::x86_64_avx2::Poseidon2ExternalLayerGoldilocksAVX2<WIDTH>,
+    crate::x86_64_avx2::Poseidon2InternalLayerGoldilocksAVX2,
+    WIDTH,
+    GOLDILOCKS_S_BOX_DEGREE,
+>;
+
+/// An implementation of the Poseidon2 hash function for the Goldilocks field.
+///
+/// It acts on arrays of the form `[Goldilocks; WIDTH]` and `[PackedGoldilocksAVX512; WIDTH]`,
+/// with round constants pre-broadcast into packed vectors at construction time. See
+/// [`crate::x86_64_avx512::Poseidon2ExternalLayerGoldilocksAVX512`] for details.
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
+    Goldilocks,
+    crate::x86_64_avx512::Poseidon2ExternalLayerGoldilocksAVX512<WIDTH>,
+    crate::x86_64_avx512::Poseidon2InternalLayerGoldilocksAVX512,
+    WIDTH,
+    GOLDILOCKS_S_BOX_DEGREE,
+>;
+
+/// An implementation of the Poseidon2 hash function for the Goldilocks field.
+///
 /// It acts on arrays of the form `[Goldilocks; WIDTH]`.
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(target_arch = "x86_64", target_feature = "avx2"),
+    all(target_arch = "x86_64", target_feature = "avx512f"),
+)))]
 pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     Goldilocks,
     Poseidon2ExternalLayerGoldilocks<WIDTH>,
