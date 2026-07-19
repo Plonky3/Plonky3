@@ -155,16 +155,126 @@ impl_packed_field_div!(PackedGoldilocksNeon);
 impl_sum_prod_base_field!(PackedGoldilocksNeon, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksNeon {
+    // With the delayed-reduction dot product below, one 192-bit reduction is
+    // amortized over the whole chunk, so larger chunks win.
+    #[cfg(target_feature = "sve2")]
+    const BATCHED_LC_CHUNK: usize = 64;
     // Benchmarked on AArch64 NEON: chunk=2 ≈ 182ns, chunk=4 ≈ 198ns, chunk=8 ≈ 221ns.
+    #[cfg(not(target_feature = "sve2"))]
     const BATCHED_LC_CHUNK: usize = 2;
 
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
+        #[cfg(target_feature = "sve2")]
+        {
+            sve2_mixed_dot_delayed(a, f)
+        }
+        #[cfg(not(target_feature = "sve2"))]
         Self::from_fn(|lane| {
             let a_lane: [Goldilocks; N] = core::array::from_fn(|i| a[i].as_slice()[lane]);
             Goldilocks::dot_product(&a_lane, f)
         })
     }
+}
+
+/// `Σ a[i]·f[i]` with delayed reduction: 128-bit products accumulate unreduced
+/// per lane, and a single 192-bit reduction runs at the end. Coefficients
+/// broadcast via `ld1rd`; products via SVE2 vector 64-bit `mul`/`umulh`.
+///
+/// The loop keeps four per-lane accumulators: `lo` (Σ products mod 2^64), `hi`
+/// (Σ high halves mod 2^64), and exact wrap counts for each (`lo_w`, `hi_w`;
+/// both ≤ N, so they cannot themselves wrap). Folding `lo_w` into `hi` with
+/// checked scalar arithmetic afterwards makes the accumulation exact for any
+/// `N` and any inputs — no probabilistic carry argument.
+///
+/// All loads, stores, and pointer steps are fixed to the low two lanes
+/// (`ptrue vl2`, 16-byte steps), so the routine is correct at any SVE vector
+/// length; wider lanes are loaded as zero and never stored.
+#[cfg(target_feature = "sve2")]
+#[inline]
+fn sve2_mixed_dot_delayed<const N: usize>(
+    a: &[PackedGoldilocksNeon; N],
+    f: &[Goldilocks; N],
+) -> PackedGoldilocksNeon {
+    if N == 0 {
+        return PackedGoldilocksNeon::ZERO;
+    }
+    let mut acc = [0u64; 8]; // [lo, hi, hi_wraps, lo_wraps] × 2 lanes
+    unsafe {
+        core::arch::asm!(
+            "ptrue p7.d, vl2",
+            "dup   z0.d, #0",
+            "dup   z1.d, #0",
+            "dup   z2.d, #0",
+            "dup   z3.d, #0",
+            "dup   z31.d, #1",
+            "2:",
+            "ld1d  {{ z4.d }}, p7/z, [{ap}]",
+            "ld1rd {{ z5.d }}, p7/z, [{fp}]",
+            "mul   z6.d, z4.d, z5.d",
+            "umulh z7.d, z4.d, z5.d",
+            "add   z0.d, z0.d, z6.d",
+            "cmplo p1.d, p7/z, z0.d, z6.d",
+            "add   z3.d, p1/m, z3.d, z31.d",
+            "add   z1.d, z1.d, z7.d",
+            "cmplo p2.d, p7/z, z1.d, z7.d",
+            "add   z2.d, p2/m, z2.d, z31.d",
+            "add   {ap}, {ap}, #16",
+            "add   {fp}, {fp}, #8",
+            "subs  {cnt}, {cnt}, #1",
+            "b.ne  2b",
+            "st1d  {{ z0.d }}, p7, [{op}]",
+            "add   {op}, {op}, #16",
+            "st1d  {{ z1.d }}, p7, [{op}]",
+            "add   {op}, {op}, #16",
+            "st1d  {{ z2.d }}, p7, [{op}]",
+            "add   {op}, {op}, #16",
+            "st1d  {{ z3.d }}, p7, [{op}]",
+            ap = inout(reg) a.as_ptr() as *const u64 => _,
+            fp = inout(reg) f.as_ptr() as *const u64 => _,
+            op = inout(reg) acc.as_mut_ptr() => _,
+            cnt = inout(reg) N => _,
+            out("v0") _, out("v1") _, out("v2") _, out("v3") _, out("v4") _,
+            out("v5") _, out("v6") _, out("v7") _, out("v31") _,
+            out("p1") _, out("p2") _, out("p7") _,
+            options(nostack),
+        );
+    }
+    PackedGoldilocksNeon::from_fn(|lane| {
+        let (lo, hi_raw) = (acc[lane], acc[2 + lane]);
+        let (hi_wraps, lo_wraps) = (acc[4 + lane], acc[6 + lane]);
+        let (hi, c) = hi_raw.overflowing_add(lo_wraps);
+        reduce192(lo, hi, hi_wraps + c as u64)
+    })
+}
+
+/// Reduce `carry·2^128 + hi·2^64 + lo` to a Goldilocks element, using
+/// `2^64 ≡ ε` and `2^128 ≡ ε² ≡ P − 2^32 (mod P)` — two shift-epsilon folds,
+/// no 128-bit division.
+#[cfg(target_feature = "sve2")]
+#[inline]
+fn reduce192(lo: u64, hi: u64, carry: u64) -> Goldilocks {
+    const EPS2_MOD_P: u64 = P - (1 << 32); // ε² mod P
+    // Fold hi: t ≡ hi·2^64 + lo (mod P), t < 2^96.
+    let t = (hi as u128) * (EPSILON as u128) + lo as u128;
+    let (t_lo, t_hi) = (t as u64, (t >> 64) as u64); // t_hi ≤ ε
+    // r ≡ t_hi·2^64 + t_lo (mod P); t_hi·ε ≤ ε², so the wrap fix cannot re-wrap.
+    let (mut r, c) = t_lo.overflowing_add(t_hi * EPSILON);
+    if c {
+        r = r.wrapping_add(EPSILON);
+    }
+    // Fold carry the same way via carry·2^128 ≡ carry·(ε² mod P). Here
+    // u_hi ≤ carry, so the wrap fix cannot re-wrap while carry < 2^32 − 1
+    // (callers pass carry ≤ N + 1, a slice length).
+    debug_assert!(carry < (1 << 32) - 1, "reduce192 carry bound violated");
+    let u = (carry as u128) * (EPS2_MOD_P as u128) + r as u128;
+    let (u_lo, u_hi) = (u as u64, (u >> 64) as u64);
+    let (mut v, c2) = u_lo.overflowing_add(u_hi * EPSILON);
+    if c2 {
+        v = v.wrapping_add(EPSILON);
+    }
+    // v is a valid, not necessarily canonical, representative.
+    Goldilocks::new(v)
 }
 
 impl_packed_value!(PackedGoldilocksNeon, Goldilocks, WIDTH);
@@ -220,7 +330,48 @@ pub(crate) fn halve(input: uint64x2_t) -> uint64x2_t {
     }
 }
 
+/// Goldilocks modular multiplication staying in the vector domain (SVE2).
+///
+/// The 128-bit products come from SVE2 unpredicated `MUL.d`/`UMULH.d`, which
+/// NEON lacks; the low 128 bits of the `z` registers alias the `v` registers,
+/// so no lane extraction is needed. The reduction runs on plain NEON
+/// intrinsics, letting LLVM schedule it across neighboring multiplications.
+#[cfg(target_feature = "sve2")]
+#[inline]
+fn mul(x: uint64x2_t, y: uint64x2_t) -> uint64x2_t {
+    unsafe {
+        use core::arch::aarch64::{vcgtq_u64, vmlal_n_u32, vmovn_u64, vsraq_n_u64};
+        use core::arch::asm;
+        let lo: uint64x2_t;
+        let hi: uint64x2_t;
+        asm!(
+            "mul   z2.d, z0.d, z1.d",
+            "umulh z3.d, z0.d, z1.d",
+            in("v0") x,
+            in("v1") y,
+            out("v2") lo,
+            out("v3") hi,
+            options(pure, nomem, nostack),
+        );
+
+        // Reduction with the plonky2-NEON idioms: `vmlal_n_u32` folds hi_lo·ε into
+        // the accumulator in one op; `vsraq` (mask ≫ 32 = ε) applies each rare
+        // wraparound correction in one op. ~9 vector ops vs 13 for the naive form.
+        // t1 = lo − hi_hi, minus ε on per-lane borrow (2^64 ≡ ε mod P).
+        let hi_hi = vshrq_n_u64::<32>(hi);
+        let borrow = vcgtq_u64(hi_hi, lo);
+        let t1 = vsubq_u64(vsubq_u64(lo, hi_hi), vshrq_n_u64::<32>(borrow));
+        // res = t1 + hi_lo·ε via widening multiply-accumulate.
+        let hi_lo32 = vmovn_u64(hi);
+        let res = vmlal_n_u32(t1, hi_lo32, EPSILON as u32);
+        // += ε on per-lane overflow (res wrapped iff res < t1).
+        let ovf = vcgtq_u64(t1, res);
+        vsraq_n_u64::<32>(res, ovf)
+    }
+}
+
 /// Goldilocks modular multiplication using interleaved dual-lane ASM.
+#[cfg(not(target_feature = "sve2"))]
 #[inline]
 fn mul(x: uint64x2_t, y: uint64x2_t) -> uint64x2_t {
     unsafe {
@@ -237,6 +388,7 @@ fn mul(x: uint64x2_t, y: uint64x2_t) -> uint64x2_t {
 
 /// Interleaved dual-lane multiplication and reduction using scalar ASM.
 /// Uses shift-based EPSILON multiplication: hi_lo * EPSILON = (hi_lo << 32) - hi_lo
+#[cfg(not(target_feature = "sve2"))]
 #[inline(always)]
 unsafe fn mul_reduce_dual_asm(a0: u64, b0: u64, a1: u64, b1: u64) -> (u64, u64) {
     use core::arch::asm;
@@ -311,7 +463,15 @@ unsafe fn mul_reduce_dual_asm(a0: u64, b0: u64, a1: u64, b1: u64) -> (u64, u64) 
     (result0, result1)
 }
 
+/// Goldilocks modular square — SVE2 path shares the vector-domain mul.
+#[cfg(target_feature = "sve2")]
+#[inline]
+fn square(x: uint64x2_t) -> uint64x2_t {
+    mul(x, x)
+}
+
 /// Goldilocks modular square using interleaved dual-lane ASM.
+#[cfg(not(target_feature = "sve2"))]
 #[inline]
 fn square(x: uint64x2_t) -> uint64x2_t {
     unsafe {
@@ -349,4 +509,144 @@ mod tests {
         &[super::ONES],
         crate::PackedGoldilocksNeon(super::SPECIAL_VALS)
     );
+}
+
+#[cfg(test)]
+mod mixed_dot_tests {
+    use p3_field::PrimeField64;
+    use proptest::prelude::*;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+
+    /// Raw value patterns stressing the accumulator and the final reduction:
+    /// field extremes, the epsilon window, and non-canonical values up to
+    /// u64::MAX. `mixed_dot_product` accepts any u64 residues.
+    const EDGE: [u64; 8] = [0, 1, (1 << 32) - 1, 1 << 32, 1 << 63, P - 1, P, u64::MAX];
+
+    /// Reference: canonicalize inputs, accumulate mod P in u128.
+    fn dot_ref<const N: usize>(
+        a: &[PackedGoldilocksNeon; N],
+        f: &[Goldilocks; N],
+        lane: usize,
+    ) -> u64 {
+        let mut acc: u128 = 0;
+        for i in 0..N {
+            let ai = a[i].as_slice()[lane].as_canonical_u64() as u128;
+            let fi = f[i].as_canonical_u64() as u128;
+            acc = (acc + ai * fi) % (P as u128);
+        }
+        acc as u64
+    }
+
+    fn check_mixed_dot<const N: usize>(
+        a_raw: &dyn Fn(usize, usize) -> u64,
+        f_raw: &dyn Fn(usize) -> u64,
+    ) {
+        let a: [PackedGoldilocksNeon; N] = core::array::from_fn(|i| {
+            PackedGoldilocksNeon(Goldilocks::new_array([a_raw(i, 0), a_raw(i, 1)]))
+        });
+        let f: [Goldilocks; N] = core::array::from_fn(|i| Goldilocks::new(f_raw(i)));
+        let got = PackedGoldilocksNeon::mixed_dot_product(&a, &f);
+        for lane in 0..WIDTH {
+            assert_eq!(
+                got.as_slice()[lane].as_canonical_u64(),
+                dot_ref(&a, &f, lane),
+                "lane {lane}, N={N}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_dot_product_edge_values() {
+        // All 64 (a, f) edge pairs in lane 0; lane 1 pinned to u64::MAX.
+        check_mixed_dot::<64>(
+            &|i, lane| if lane == 0 { EDGE[i / 8] } else { u64::MAX },
+            &|i| EDGE[i % 8],
+        );
+    }
+
+    #[test]
+    fn mixed_dot_product_max_values() {
+        // Maximum-magnitude accumulation: stresses both wrap counters and the
+        // carry fold of the final reduction.
+        check_mixed_dot::<200>(&|_, _| u64::MAX, &|_| u64::MAX);
+    }
+
+    #[test]
+    fn mixed_dot_product_lengths() {
+        fn case<const N: usize>(seed: u64) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let a_vals: [[u64; 2]; N] = core::array::from_fn(|_| [rng.random(), rng.random()]);
+            let f_vals: [u64; N] = core::array::from_fn(|_| rng.random());
+            check_mixed_dot::<N>(&|i, lane| a_vals[i][lane], &|i| f_vals[i]);
+        }
+        // Around the chunk boundary and both parities.
+        case::<0>(0);
+        case::<1>(1);
+        case::<2>(2);
+        case::<3>(3);
+        case::<5>(5);
+        case::<63>(63);
+        case::<64>(64);
+        case::<65>(65);
+        case::<129>(129);
+    }
+
+    proptest! {
+        #[test]
+        fn mixed_dot_product_prop(
+            a in prop::array::uniform16(any::<u64>()),
+            f in prop::array::uniform8(any::<u64>()),
+        ) {
+            let packed: [PackedGoldilocksNeon; 8] = core::array::from_fn(|i| {
+                PackedGoldilocksNeon(Goldilocks::new_array([a[2 * i], a[2 * i + 1]]))
+            });
+            let coeffs: [Goldilocks; 8] = core::array::from_fn(|i| Goldilocks::new(f[i]));
+            let got = PackedGoldilocksNeon::mixed_dot_product(&packed, &coeffs);
+            for lane in 0..WIDTH {
+                prop_assert_eq!(
+                    got.as_slice()[lane].as_canonical_u64(),
+                    dot_ref(&packed, &coeffs, lane)
+                );
+            }
+        }
+    }
+
+    #[cfg(target_feature = "sve2")]
+    #[test]
+    fn reduce192_matches_reference() {
+        fn reference(lo: u64, hi: u64, carry: u64) -> u64 {
+            const P128: u128 = P as u128;
+            let two64 = (u64::MAX as u128 + 1) % P128;
+            let two128 = two64 * two64 % P128;
+            let total =
+                lo as u128 % P128 + (hi as u128) * two64 % P128 + (carry as u128) * two128 % P128;
+            (total % P128) as u64
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x192);
+        for _ in 0..100_000 {
+            let (lo, hi): (u64, u64) = (rng.random(), rng.random());
+            // Callers pass carry ≤ N + 1; test the documented domain boundary.
+            let carry = rng.random::<u64>() % ((1 << 32) - 1);
+            assert_eq!(
+                reduce192(lo, hi, carry).as_canonical_u64(),
+                reference(lo, hi, carry),
+                "lo={lo:#x} hi={hi:#x} carry={carry:#x}"
+            );
+        }
+        for &(lo, hi, carry) in &[
+            (0, 0, 0),
+            (u64::MAX, u64::MAX, (1 << 32) - 2),
+            (P, P, 1),
+            (u64::MAX, 0, 0),
+        ] {
+            assert_eq!(
+                reduce192(lo, hi, carry).as_canonical_u64(),
+                reference(lo, hi, carry)
+            );
+        }
+    }
 }

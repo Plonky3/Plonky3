@@ -5,7 +5,7 @@ use core::arch::asm;
 use super::packing::PackedGoldilocksNeon;
 use crate::{Goldilocks, P};
 
-const EPSILON: u64 = P.wrapping_neg(); // 2^32 - 1
+pub(super) const EPSILON: u64 = P.wrapping_neg(); // 2^32 - 1
 
 // ---------------------------------------------------------------------------
 // Scalar field arithmetic (inline assembly)
