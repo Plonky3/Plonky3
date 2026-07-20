@@ -14,4 +14,3 @@ pub mod config;
 pub mod folder;
 pub mod metadata;
 pub mod selectors;
-pub mod zerocheck;

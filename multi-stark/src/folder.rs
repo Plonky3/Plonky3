@@ -122,33 +122,6 @@ where
     pub const fn into_accumulator(self) -> EF {
         self.accumulator
     }
-
-    /// Run the AIR through this folder and return its alpha-batched constraint value.
-    ///
-    /// This is the terminal step of the builder: it consumes the folder.
-    /// Attach preprocessed and periodic columns before calling, if the AIR reads them.
-    ///
-    /// # Arguments
-    ///
-    /// - `air`: the AIR whose constraints are evaluated at this point.
-    ///
-    /// # Returns
-    ///
-    /// The Horner fold `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
-    ///
-    /// - `C_0, ..., C_{n-1}` are the constraints asserted by the AIR in declaration order.
-    /// - `n` is the total number of asserted constraints.
-    #[inline]
-    #[must_use]
-    pub fn eval_air<A>(mut self, air: &A) -> EF
-    where
-        A: Air<Self>,
-    {
-        // Drive every asserted constraint into the accumulator.
-        air.eval(&mut self);
-        // The accumulator now holds the alpha-batched constraint value.
-        self.into_accumulator()
-    }
 }
 
 impl<'a, F, EF> AirBuilder for MultilinearFolder<'a, F, EF>
@@ -210,6 +183,39 @@ where
     fn periodic_values(&self) -> &[Self::PeriodicVar] {
         self.periodic_values
     }
+}
+
+/// Run the AIR at one row and return the alpha-batched constraint value.
+///
+/// # Arguments
+///
+/// - `air`: AIR whose constraints should be evaluated.
+/// - `local`: column values at the current row.
+/// - `next`: column values at the shifted-by-one row.
+/// - `boundary`: selector values at the same evaluation point.
+/// - `public_values`: public inputs forwarded to the AIR.
+/// - `alpha`: random scalar driving constraint batching.
+///
+/// # Returns
+///
+/// The Horner-folded value `sum_i alpha^(n - 1 - i) * C_i(local, next, ...)`.
+#[inline]
+pub fn evaluate_at_row<A, F, EF>(
+    air: &A,
+    local: &[EF],
+    next: &[EF],
+    boundary: BoundaryEvals<EF>,
+    public_values: &[F],
+    alpha: EF,
+) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: for<'b> Air<MultilinearFolder<'b, F, EF>>,
+{
+    let mut folder = MultilinearFolder::new(local, next, boundary, public_values, alpha);
+    air.eval(&mut folder);
+    folder.into_accumulator()
 }
 
 #[cfg(test)]
@@ -350,7 +356,7 @@ mod tests {
             let boundary = boundary_at_row(i, n);
 
             let value =
-                MultilinearFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&FibAir);
+                evaluate_at_row::<FibAir, F, EF>(&FibAir, &local, &next, boundary, &pis, alpha);
             assert_eq!(value, EF::ZERO, "row {i}: folder returned {value:?}");
         }
     }
@@ -375,7 +381,7 @@ mod tests {
         let boundary = boundary_at_row(0, n);
 
         let value =
-            MultilinearFolder::new(&local, &next, boundary, &bad_pis, alpha).eval_air(&FibAir);
+            evaluate_at_row::<FibAir, F, EF>(&FibAir, &local, &next, boundary, &bad_pis, alpha);
         assert_ne!(value, EF::ZERO);
     }
 
@@ -409,7 +415,7 @@ mod tests {
             transition: EF::ONE,
         };
 
-        let value = MultilinearFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&FibAir);
+        let value = evaluate_at_row::<FibAir, F, EF>(&FibAir, &local, &next, boundary, &pis, alpha);
 
         // Active constraints (the two transition checks), in declaration order:
         //
@@ -475,26 +481,29 @@ mod tests {
         let periodic = [EF::from_u64(5)];
 
         // Matching auxiliary columns -> both constraints are zero.
-        let value = MultilinearFolder::new(&main_local, &main_next, boundary, &[] as &[F], alpha)
-            .with_preprocessed(&prep_local, &prep_next)
-            .with_periodic(&periodic)
-            .eval_air(&AuxAir);
-        assert_eq!(value, EF::ZERO);
+        let mut folder: MultilinearFolder<'_, F, EF> =
+            MultilinearFolder::new(&main_local, &main_next, boundary, &[], alpha)
+                .with_preprocessed(&prep_local, &prep_next)
+                .with_periodic(&periodic);
+        AuxAir.eval(&mut folder);
+        assert_eq!(folder.into_accumulator(), EF::ZERO);
 
         // Perturbed preprocessed column -> the first constraint is non-zero.
         let bad_prep = [EF::from_u64(6)];
-        let value = MultilinearFolder::new(&main_local, &main_next, boundary, &[] as &[F], alpha)
-            .with_preprocessed(&bad_prep, &prep_next)
-            .with_periodic(&periodic)
-            .eval_air(&AuxAir);
-        assert_ne!(value, EF::ZERO);
+        let mut folder: MultilinearFolder<'_, F, EF> =
+            MultilinearFolder::new(&main_local, &main_next, boundary, &[], alpha)
+                .with_preprocessed(&bad_prep, &prep_next)
+                .with_periodic(&periodic);
+        AuxAir.eval(&mut folder);
+        assert_ne!(folder.into_accumulator(), EF::ZERO);
 
         // Perturbed periodic column -> the second constraint is non-zero.
         let bad_periodic = [EF::from_u64(6)];
-        let value = MultilinearFolder::new(&main_local, &main_next, boundary, &[] as &[F], alpha)
-            .with_preprocessed(&prep_local, &prep_next)
-            .with_periodic(&bad_periodic)
-            .eval_air(&AuxAir);
-        assert_ne!(value, EF::ZERO);
+        let mut folder: MultilinearFolder<'_, F, EF> =
+            MultilinearFolder::new(&main_local, &main_next, boundary, &[], alpha)
+                .with_preprocessed(&prep_local, &prep_next)
+                .with_periodic(&bad_periodic);
+        AuxAir.eval(&mut folder);
+        assert_ne!(folder.into_accumulator(), EF::ZERO);
     }
 }
