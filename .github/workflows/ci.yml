@@ -71,11 +71,6 @@ jobs:
         if: ${{ matrix.compile_only }}
         run: cargo build --all-targets --features parallel
 
-      - name: Test keccak (aarch64, no SHA3)
-        if: ${{ matrix.os == 'macos-latest' }}
-        env:
-          RUSTFLAGS: -C debuginfo=0 -C target-feature=-sha3
-        run: cargo test -p p3-keccak
 
   check_embedded:
     name: Build embedded

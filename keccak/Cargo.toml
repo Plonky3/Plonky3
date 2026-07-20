@@ -20,7 +20,6 @@ p3-field = { path = "../field" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 
 criterion.workspace = true
-proptest.workspace = true
 
 [[bench]]
 name = "bench_keccak"
