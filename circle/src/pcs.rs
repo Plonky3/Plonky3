@@ -80,11 +80,6 @@ where
     FirstLayerMmcsError(FriMmcsError),
     #[error("input shape error: mismatched dimensions")]
     InputShapeError,
-    /// The opening point coincides with a queried domain point.
-    ///
-    /// The DEEP-quotient denominator vanishes there, so the row cannot be reduced.
-    #[error("opening point coincides with a query point")]
-    OpeningPointMatchesQueryPoint,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -708,8 +703,6 @@ where
                             }
                             let zeta = Point::from_projective_line(*zeta_uni);
 
-                            // A vanishing denominator means this opening point lands on the
-                            // query point; reject the proof rather than dividing by zero.
                             *ro += *alpha_offset
                                 * deep_quotient_reduce_row(
                                     alpha_pow_width,
@@ -718,8 +711,7 @@ where
                                     zeta,
                                     ps_at_x,
                                     ps_at_zeta,
-                                )
-                                .ok_or(InputError::OpeningPointMatchesQueryPoint)?;
+                                );
 
                             *alpha_offset *= alpha_pow_width_2;
                         }
