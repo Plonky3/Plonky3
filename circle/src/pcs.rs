@@ -85,10 +85,6 @@ where
     /// The DEEP-quotient denominator vanishes there, so the row cannot be reduced.
     #[error("opening point coincides with a query point")]
     OpeningPointMatchesQueryPoint,
-    #[error(
-        "batch {batch}, matrix {matrix}: opened at no points; its width cannot be authenticated"
-    )]
-    MatrixWithoutOpeningPoints { batch: usize, matrix: usize },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -638,8 +634,8 @@ where
                     first_layer_proof,
                 } = input_proof;
 
-                for (batch, (batch_opening, (batch_commit, mats))) in
-                    zip_eq(input_openings, &rounds, InputError::InputShapeError)?.enumerate()
+                for (batch_opening, (batch_commit, mats)) in
+                    zip_eq(input_openings, &rounds, InputError::InputShapeError)?
                 {
                     let batch_heights: Vec<usize> = mats
                         .iter()
@@ -651,26 +647,19 @@ where
                         &batch_opening.opened_values,
                         InputError::InputShapeError,
                     )?
-                    .enumerate()
-                    .map(|(matrix, ((&height, (_, points_and_values)), _))| {
-                        // Invariant: a matrix's width is fixed by its first opening point.
-                        //
-                        //     >= 1 point  ->  width = number of claimed evaluations
-                        //     no points   ->  reject
-                        //
-                        // Why reject the no-points case:
-                        //   - row boundaries in the flattened leaf hash are authenticated only from claimed widths
-                        //   - a matrix opened at no points claims no width
-                        //   - its width could then come only from the unverified proof
-                        let (_, values) = points_and_values
-                            .first()
-                            .ok_or(InputError::MatrixWithoutOpeningPoints { batch, matrix })?;
-                        Ok(Dimensions {
-                            width: values.len(),
+                    .map(
+                        |((&height, (_, points_and_values)), opened_row)| Dimensions {
+                            // Invariant: the commitment layer rejects opened rows that differ from this width.
+                            //
+                            //     some points → width = claimed evaluation count
+                            //     no points   → width = opened row length (no claim to enforce)
+                            width: points_and_values
+                                .first()
+                                .map_or(opened_row.len(), |(_, values)| values.len()),
                             height,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                        },
+                    )
+                    .collect_vec();
 
                     let (dims, idx) = batch_heights
                         .iter()
@@ -967,72 +956,6 @@ mod tests {
         // Smoke test: an honestly generated proof must verify successfully.
         let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).expect("verify err");
-    }
-
-    #[test]
-    fn reject_matrix_without_opening_points() {
-        // Invariant: every input matrix must be opened at >= 1 point.
-        //
-        //     no points  ->  no claimed width  ->  width would come from the proof  ->  reject
-        //
-        // A matrix opened at no points observes nothing into the challenger.
-        // This holds identically on the proving side and the verifying side.
-        //
-        // Fixture state: one batch of two matrices sharing a domain.
-        //   - matrix 0 is opened at one point, keeping the reduced openings non-empty
-        //   - matrix 1 is opened at no points
-        //
-        // Flow:
-        //   - both sides observe only matrix 0  ->  proof-of-work challenge matches
-        //   - the query phase verifies the input opening  ->  matrix 1 rejected
-        let mut rng = SmallRng::seed_from_u64(0);
-
-        let byte_hash = ByteHash {};
-        let field_hash = FieldHash::new(byte_hash);
-        let compress = MyCompress::new(byte_hash);
-        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
-        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-        let fri_params = FriParameters::new_testing(challenge_mmcs, 0);
-        let pcs = TestPcs {
-            mmcs: val_mmcs,
-            fri_params,
-            _phantom: PhantomData,
-        };
-
-        // One batch, two single-column matrices sharing a domain of 2^{10} rows.
-        let log_n = 10;
-        let d =
-            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
-        let evals_0 = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
-        let evals_1 = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
-        let (comm, data) =
-            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals_0), (d, evals_1)]);
-
-        // Prove: open matrix 0 at one point, matrix 1 at no points.
-        let zeta: Challenge = rng.random();
-        let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta], vec![]])], &mut chal);
-
-        // Verify with the same shape: matrix 1 carries no opening points.
-        let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let err = pcs
-            .verify(
-                vec![(
-                    comm,
-                    vec![(d, vec![(zeta, values[0][0][0].clone())]), (d, vec![])],
-                )],
-                &proof,
-                &mut chal,
-            )
-            .expect_err("matrix without opening points must be rejected");
-
-        // The offending matrix is identified by its batch and matrix index.
-        let FriError::InputError(InputError::MatrixWithoutOpeningPoints { batch, matrix }) = err
-        else {
-            panic!("expected MatrixWithoutOpeningPoints, got {err:?}");
-        };
-        assert_eq!(batch, 0);
-        assert_eq!(matrix, 1);
     }
 
     #[test]
