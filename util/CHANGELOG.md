@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.2] - 2026-07-20
+### Merged PRs
+- Refactor(util): replace `transpose` crate with portable engine (#1874)
+- Refactor: use p3-maybe-rayon instead of rayon for p3-util (#1880)
+- Perf(util): stripe parallel transpose along the longer dimension (#1888)
+- Perf(util): stripe the 8-byte parallel transpose along the longer dimension (#1889)
+- Perf(mersenne-31,circle): defer M31 mixed_dot_product reduction; truncate circle LDE interpolation (#1903)
+- Fix: doc and light tweaks (#1920)
+- Revert "refactor: use p3-maybe-rayon instead of rayon for p3-util (#1880)"
+
 ## [0.6.1] - 2026-06-13
 ## [0.6.0] - 2026-06-11
 ### Merged PRs

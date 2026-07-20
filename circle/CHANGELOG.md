@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.2] - 2026-07-20
+### Merged PRs
+- Fix(circle): allow quotient domain smaller than committed LDE (#1834)
+- Chore: move some tracing spans to debug level (#1845)
+- Fix(circle): reject opening point equal to a query point instead of panicking (#1849)
+- Fix(circle): reject input matrices opened at zero points (#1853)
+- Perf(mersenne-31,circle): defer M31 mixed_dot_product reduction; truncate circle LDE interpolation (#1903)
+- Perf(circle): precompute per-query FRI twiddle chain, hoist verifier-side redundant work (#1922)
+- Revert "fix(circle): reject input matrices opened at zero points (#1853)"
+- Revert "fix(circle): reject opening point equal to a query point instead of panicking (#1849)"
+
 ## [0.6.1] - 2026-06-13
 ### Merged PRs
 - Perf(circle): parallelize the FRI fold kernels (#1809)

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.2] - 2026-07-20
+### Merged PRs
+- Perf(whir): drop redundant to_row_major_matrix after dft_algebra_batch (#1840)
+- Fix(whir): round proof-of-work bits up instead of down (#1851)
+- Fix(whir): reject non-redundant code rates in WhirConfig::new (#1850)
+- Perf(whir): commit folded rounds straight from the live sumcheck buffer (#1804)
+- Fix: make bench run and add benches to CI (#1952)
+- Revert "fix(whir): reject non-redundant code rates in WhirConfig::new (#1850)"
+
 ## [0.6.1] - 2026-06-13
 ## [0.6.0] - 2026-06-11
 ### Merged PRs
