@@ -27,14 +27,14 @@ use p3_field::{
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::constraints::statement::EqStatement;
-use p3_sumcheck::constraints::{Constraint, Statements};
+use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
+use p3_sumcheck::constraints::Constraint;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{
     SumcheckProver, VariableOrder, sumcheck_coefficients_prefix, sumcheck_coefficients_suffix,
 };
-use p3_sumcheck::{OpeningBatch, SumcheckData};
+use p3_sumcheck::SumcheckData;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -410,8 +410,11 @@ where
         eq.add_evaluated_constraint(Point::<B::EF>::rand(rng, k), rng.random());
     }
 
+    // No selection constraints for this bench.
+    let sel = SelectStatement::<B::F, B::EF>::initialize(k);
+
     // Bundle the group under a random batching challenge.
-    Constraint::new(rng.random(), k, vec![Statements::Eq(eq)])
+    Constraint::new(rng.random(), eq, sel)
 }
 
 /// Benches the multi-round driver folding every variable to a constant.
@@ -552,7 +555,7 @@ where
     let mut challenger = B::challenger();
 
     // Open the single column directly, matching the protocol's claim setup.
-    prover.eval(0, &OpeningBatch::new(vec![0], Vec::new()), &mut challenger);
+    prover.eval(0, &[0], &mut challenger);
     (prover, challenger)
 }
 
