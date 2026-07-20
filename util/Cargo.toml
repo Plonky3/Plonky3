@@ -10,10 +10,10 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-parallel = ["p3-maybe-rayon/parallel"]
+parallel = ["rayon"]
 
 [dependencies]
-p3-maybe-rayon.workspace = true
+rayon = { workspace = true, optional = true }
 serde.workspace = true
 
 [dev-dependencies]

@@ -471,10 +471,10 @@ fn transpose_parallel<T: Copy + Send + Sync>(
     width: usize,
     height: usize,
 ) {
-    use p3_maybe_rayon::prelude::*;
+    use rayon::prelude::*;
 
     // One band per worker; round up so the final band is the only short one.
-    let num_threads = current_num_threads();
+    let num_threads = rayon::current_num_threads();
     let cols_per_task = width.div_ceil(num_threads).max(1);
 
     // Each band is `cols_per_task` output rows of `height` columns.

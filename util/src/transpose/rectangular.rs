@@ -389,10 +389,10 @@ unsafe fn transpose_neon_4b_parallel(
     width: usize,
     height: usize,
 ) {
-    use p3_maybe_rayon::prelude::*;
+    use rayon::prelude::*;
 
     // Number of available threads in the rayon thread pool.
-    let num_threads = current_num_threads();
+    let num_threads = rayon::current_num_threads();
 
     // We use `AtomicUsize` to pass pointer addresses to threads.
     //
@@ -1314,10 +1314,10 @@ unsafe fn transpose_neon_8b_parallel(
     width: usize,
     height: usize,
 ) {
-    use p3_maybe_rayon::prelude::*;
+    use rayon::prelude::*;
 
     // Number of available threads in the rayon thread pool.
-    let num_threads = current_num_threads();
+    let num_threads = rayon::current_num_threads();
 
     // We use `AtomicUsize` to pass pointer addresses to threads.
     //

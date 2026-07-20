@@ -2,9 +2,6 @@ use core::ptr::{swap, swap_nonoverlapping};
 #[cfg(feature = "parallel")]
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-#[cfg(feature = "parallel")]
-use p3_maybe_rayon::prelude::join;
-
 /// Log2 of the matrix dimension below which we use the base-case direct swap loop.
 /// e.g. BASE_CASE_LOG = 3 means base case is used for ≤ 8×8 submatrices
 const BASE_CASE_LOG: usize = 3;
@@ -100,7 +97,7 @@ pub(super) unsafe fn transpose_swap<T: Copy>(
             if rows > cols {
                 let top = rows / 2;
                 let bottom = rows - top;
-                join(
+                rayon::join(
                     || {
                         let a = a.load(Ordering::Relaxed);
                         let b = b.load(Ordering::Relaxed);
@@ -124,7 +121,7 @@ pub(super) unsafe fn transpose_swap<T: Copy>(
             } else {
                 let left = cols / 2;
                 let right = cols - left;
-                join(
+                rayon::join(
                     || {
                         let a = a.load(Ordering::Relaxed);
                         let b = b.load(Ordering::Relaxed);
@@ -263,10 +260,10 @@ unsafe fn transpose_in_place_square_ptr<T>(
             // Shared base pointer for parallel recursion
             let base = AtomicPtr::new(ptr);
 
-            // Coordinate each quadrant via `join`:
+            // Coordinate each quadrant via `rayon::join`:
             // - TL and BR are recursive calls
             // - TR and BL are swapped directly
-            join(
+            rayon::join(
                 || unsafe {
                     transpose_in_place_square_ptr(
                         base.load(Ordering::Relaxed),
@@ -276,7 +273,7 @@ unsafe fn transpose_in_place_square_ptr<T>(
                     );
                 },
                 || {
-                    join(
+                    rayon::join(
                         // TR: starts at (x, x + half)
                         // BL: starts at (x + half, x)
                         || unsafe {
