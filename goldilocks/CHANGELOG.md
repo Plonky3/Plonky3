@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.2] - 2026-07-20
+### Merged PRs
+- Perf(mersenne-31): complex-squaring scalar QM31 square (#1831)
+- Fix: correct MAX_SINGLE_SAMPLE_BITS for Goldilocks (#1914)
+- Fix: doc and light tweaks (#1920)
+- Perf: speed-up NEON Poseidon2 lanes and remove MdsMatrixGoldilocks redundant DFT (#1927)
+- Perf(Goldilocks): add support for AVX vectorization for Poseidon2 (#1953)
+
 ## [0.6.1] - 2026-06-13
 ## [0.6.0] - 2026-06-11
 ### Merged PRs

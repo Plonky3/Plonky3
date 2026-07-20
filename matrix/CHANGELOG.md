@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.2] - 2026-07-20
+### Merged PRs
+- Perf(matrix): gather packed rows without per-call allocation in the non-wrapping case (#1830)
+- Perf(matrix): no-alloc `vertically_packed_row` for `RowIndexMappedView` (#1904)
+- Perf(matrix): pack rows through composition wrappers (#1911)
+- Fix: doc and light tweaks (#1920)
+
 ## [0.6.1] - 2026-06-13
 ### Merged PRs
 - Perf(m31): widening NEON MACs for the mixed base×extension dot-product kernels (#1822)

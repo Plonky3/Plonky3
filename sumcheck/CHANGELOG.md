@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.2] - 2026-07-20
+### Merged PRs
+- Bench(sumcheck): add generic Criterion benchmark suite (#1835)
+- Docs(sumcheck): document Fiat-Shamir binding contract on Constraint::new (#1838)
+- Perf(sumcheck): reuse Poly::unpack for packed-to-scalar conversion (#1844)
+- Docs(sumcheck): fix inverted batch_pows ordering and complete SelectStatement panics doc (#1859)
+- Perf(sumcheck): hoist invariant alpha exponentiation out of the SVO round loop (#1861)
+- Fix(sumcheck): assert accumulator length in scalar combine paths (#1860)
+- Perf(whir): commit folded rounds straight from the live sumcheck buffer (#1804)
+- Fix: doc and light tweaks (#1920)
+
 ## [0.6.1] - 2026-06-13
 ## [0.6.0] - 2026-06-11
 ### Merged PRs

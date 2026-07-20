@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.2] - 2026-07-20
+### Merged PRs
+- Perf(mersenne-31): complex-squaring scalar QM31 square (#1831)
+- Perf(mersenne-31): add deferred-reduction `dot_product` for AVX2/AVX-512 (#1855)
+- Perf(mersenne-31): specialize PackedMersenne31Neon dot_product with deferred reduction (#1894)
+- Perf(mersenne-31,circle): defer M31 mixed_dot_product reduction; truncate circle LDE interpolation (#1903)
+- Perf(circle): cache exponentiation for two_adic_generator (#1934)
+
 ## [0.6.1] - 2026-06-13
 ### Merged PRs
 - Perf(m31): use the degree-4 extension field for `Mersenne31` Circle proofs (#1817)
