@@ -27,14 +27,14 @@ use p3_field::{
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
+use p3_sumcheck::SumcheckData;
 use p3_sumcheck::constraints::Constraint;
+use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{
     SumcheckProver, VariableOrder, sumcheck_coefficients_prefix, sumcheck_coefficients_suffix,
 };
-use p3_sumcheck::SumcheckData;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
