@@ -629,8 +629,8 @@ where
                     first_layer_proof,
                 } = input_proof;
 
-                for (batch_opening, (batch_commit, mats)) in
-                    zip_eq(input_openings, &rounds, InputError::InputShapeError)?
+                for (batch, (batch_opening, (batch_commit, mats))) in
+                    zip_eq(input_openings, &rounds, InputError::InputShapeError)?.enumerate()
                 {
                     let batch_heights: Vec<usize> = mats
                         .iter()
