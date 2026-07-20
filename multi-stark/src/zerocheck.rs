@@ -13,7 +13,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder, get_all_symbolic_constraints};
+use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
@@ -25,6 +25,7 @@ use p3_util::log2_strict_usize;
 use thiserror::Error;
 
 use crate::folder::MultilinearFolder;
+use crate::metadata::ConstraintMetadata;
 use crate::selectors::BoundaryEvals;
 
 /// Reasons the zerocheck verifier rejects a proof.
@@ -120,15 +121,13 @@ impl<'a, A> AirZerocheck<'a, A> {
 
     /// Per-round degree of the zerocheck sumcheck.
     ///
-    /// The summed integrand `eq(tau, x) * g(x)` has per-variable degree
-    /// `deg(g) + 1`, where the `+ 1` is the multilinear `eq(tau, x)`.
+    /// The summed integrand `eq(tau, x) * g(x)` has per-variable degree `max_constraint_degree + 2`.
     ///
-    /// `deg(g)` is the largest per-variable degree among the asserted constraints,
-    /// read from `poly_degree` at domain size two. At that domain size every leaf
-    /// scores its per-variable degree, so each column and each selector — including
-    /// the transition selector, which `degree_multiple` undercounts as zero — is
-    /// degree one. This is exact, provided columns and selectors are per-variable
-    /// degree at most one, which standard AIRs satisfy.
+    /// The `+ 2` is two single-degree corrections:
+    /// - `eq(tau, x)` is multilinear, so it adds one,
+    /// - the transition selector is degree one but counts as zero symbolically, so it adds one.
+    ///
+    /// Sound only while every column and selector has per-variable degree at most one, which standard AIRs satisfy.
     ///
     /// # Arguments
     ///
@@ -139,17 +138,9 @@ impl<'a, A> AirZerocheck<'a, A> {
         EF: ExtensionField<F>,
         A: Air<SymbolicAirBuilder<F, EF>>,
     {
-        // Per-variable degree of g from the symbolic constraints (domain size two),
-        // then the `+ 1` for the multilinear eq weight. No periodic columns reach
-        // this point (the layout check rejects them), so the periods are empty.
-        let (base, ext) = get_all_symbolic_constraints::<F, EF, A>(self.air, layout);
-        let base_degree = base
-            .iter()
-            .map(|c| c.poly_degree(2, &[]))
-            .max()
-            .unwrap_or(0);
-        let ext_degree = ext.iter().map(|c| c.poly_degree(2, &[])).max().unwrap_or(0);
-        base_degree.max(ext_degree) + 1
+        // Symbolic max constraint degree, then the plus-two integrand correction.
+        let metadata = ConstraintMetadata::from_air::<F, EF, A>(self.air, layout);
+        metadata.max_constraint_degree + 2
     }
 
     /// Prove that the AIR's alpha-batched constraint vanishes on every trace row.
@@ -437,9 +428,6 @@ where
 
     fn round_poly(&self) -> Vec<EF> {
         let width = self.local.len();
-        // Each table currently spans `2 * half` evaluations; `half` is the residual
-        // hypercube once the active variable is dropped.
-        let half = self.eq.num_evals() / 2;
 
         // Reused per-row buffers handed to the folder.
         let mut local_row = EF::zero_vec(width);
@@ -450,17 +438,25 @@ where
         for node in core::iter::once(0).chain(2..=self.degree) {
             let z = EF::from_usize(node);
 
+            // Bind the current variable to z in every table.
+            let eq_z = self.eq.fix_prefix_var(z);
+            let first_z = self.first.fix_prefix_var(z);
+            let last_z = self.last.fix_prefix_var(z);
+            let transition_z = self.transition.fix_prefix_var(z);
+            let local_z: Vec<Poly<EF>> = self.local.iter().map(|p| p.fix_prefix_var(z)).collect();
+            let next_z: Vec<Poly<EF>> = self.next.iter().map(|p| p.fix_prefix_var(z)).collect();
+
             // Sum the weighted constraint over the remaining hypercube.
             let mut acc = EF::ZERO;
-            for s in 0..half {
+            for s in 0..eq_z.num_evals() {
                 for c in 0..width {
-                    local_row[c] = self.local[c].fix_prefix_var_at(z, s);
-                    next_row[c] = self.next[c].fix_prefix_var_at(z, s);
+                    local_row[c] = local_z[c].as_slice()[s];
+                    next_row[c] = next_z[c].as_slice()[s];
                 }
                 let boundary = BoundaryEvals {
-                    first: self.first.fix_prefix_var_at(z, s),
-                    last: self.last.fix_prefix_var_at(z, s),
-                    transition: self.transition.fix_prefix_var_at(z, s),
+                    first: first_z.as_slice()[s],
+                    last: last_z.as_slice()[s],
+                    transition: transition_z.as_slice()[s],
                 };
                 let g = MultilinearFolder::new(
                     &local_row,
@@ -470,7 +466,7 @@ where
                     self.alpha,
                 )
                 .eval_air(self.air);
-                acc += self.eq.fix_prefix_var_at(z, s) * g;
+                acc += eq_z.as_slice()[s] * g;
             }
             out.push(acc);
         }
@@ -611,11 +607,10 @@ mod tests {
         let mut challenger = fresh_challenger();
         let proof = AirZerocheck::new(&FibAir, 0).prove::<F, EF, _>(&trace, &pis, &mut challenger);
 
-        // Each Fibonacci constraint is per-variable degree 2 (a degree-1 selector
-        // times a degree-1 column), so the eq-weighted integrand is degree 3.
+        // Fibonacci has symbolic max degree 2, so the per-round degree is 4.
         let layout = AirLayout::from_air::<F>(&FibAir);
         let degree = AirZerocheck::new(&FibAir, 0).sumcheck_degree::<F, EF>(layout);
-        assert_eq!(degree, 3);
+        assert_eq!(degree, 4);
         assert_eq!(proof.sumcheck.num_rounds(), log2_strict_usize(n));
         for round in &proof.sumcheck.round_polys {
             assert_eq!(round.len(), degree);
