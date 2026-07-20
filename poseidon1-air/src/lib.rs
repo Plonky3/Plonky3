@@ -62,7 +62,6 @@ extern crate alloc;
 mod air;
 mod columns;
 mod generation;
-mod mds_dispatch;
 mod vectorized;
 
 pub use air::*;
