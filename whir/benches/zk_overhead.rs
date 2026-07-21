@@ -25,7 +25,7 @@ use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape,
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
-use p3_whir::pcs::proof::{PcsProof, QueryOpenings, SharedProofOpening};
+use p3_whir::pcs::proof::{PcsProof, QueryOpenings, SharedBatchOpening, SharedProofOpening};
 use p3_whir::pcs::prover::WhirProver;
 use p3_whir::pcs::zk::{HidingWhirPcs, ZkParameters, ZkWhirConfig, ZkWhirProof};
 use rand::SeedableRng;
@@ -530,6 +530,23 @@ fn extension_opening_shape<Ext>(
     }
 }
 
+fn extension_batch_opening_shape<Ext>(
+    opening: &SharedBatchOpening<Ext, MerkleMultiProof>,
+) -> OpeningShape {
+    OpeningShape {
+        multiproofs: 1,
+        authenticated_rows: opening.rows.iter().map(Vec::len).sum(),
+        base_values: 0,
+        extension_values: opening
+            .rows
+            .iter()
+            .flat_map(|rows| rows.iter())
+            .map(Vec::len)
+            .sum(),
+        sibling_digests: opening.proof.sibling_hashes.len(),
+    }
+}
+
 fn postcard_len<T: serde::Serialize>(value: &T) -> usize {
     postcard::to_allocvec(value)
         .expect("proof component serializes")
@@ -584,15 +601,17 @@ fn report_octic_proof_shape(_c: &mut Criterion) {
         zk_shape.merge(extension_opening_shape(
             &zk_proof.base_case.fresh_main_openings,
         ));
-        for pair in &zk_proof.base_case.mask_openings {
-            zk_shape.merge(extension_opening_shape(&pair.carried));
-            zk_shape.merge(extension_opening_shape(&pair.fresh));
+        for opening in &zk_proof.base_case.carried_mask_openings {
+            zk_shape.merge(extension_opening_shape(opening));
+        }
+        if let Some(opening) = &zk_proof.base_case.fresh_mask_opening {
+            zk_shape.merge(extension_batch_opening_shape(opening));
         }
         let zk_roots = 1
             + zk_proof.sumcheck_mask_commitments.len()
             + 2 * zk_proof.rounds.len()
             + 1
-            + zk_proof.base_case.fresh_mask_commitments.len();
+            + usize::from(zk_proof.base_case.fresh_mask_commitment.is_some());
 
         eprintln!(
             "{:>5} {:>6} {:>12} {:>7} {:>7} {:>10} {:>11} {:>12} {:>15}",
@@ -625,13 +644,14 @@ fn report_octic_proof_shape(_c: &mut Criterion) {
             .map(|mask| mask.message.len() + mask.randomness.len())
             .sum();
         eprintln!(
-            "      zk components: rounds={} sumchecks={} base_case={} mask_openings={} blinded_masks={} mask_groups={} blinded_mask_elements={}",
+            "      zk components: rounds={} sumchecks={} base_case={} carried_mask_openings={} fresh_mask_opening={} blinded_masks={} mask_groups={} blinded_mask_elements={}",
             postcard_len(&zk_proof.rounds),
             postcard_len(&zk_proof.sumchecks),
             postcard_len(&zk_proof.base_case),
-            postcard_len(&zk_proof.base_case.mask_openings),
+            postcard_len(&zk_proof.base_case.carried_mask_openings),
+            postcard_len(&zk_proof.base_case.fresh_mask_opening),
             postcard_len(&zk_proof.base_case.blinded_masks),
-            zk_proof.base_case.mask_openings.len(),
+            zk_proof.base_case.carried_mask_openings.len(),
             blinded_mask_elements,
         );
     }

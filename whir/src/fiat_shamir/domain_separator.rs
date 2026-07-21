@@ -496,10 +496,12 @@ where
         let folded_domain_size = final_config.domain_size >> final_config.folding_factor;
         let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
         let randomness_len = config.oracle_randomness[config.n_rounds()];
+        let mask_groups = config.mask_groups();
 
-        // Fresh main mask plus one fresh blind group per carried mask group.
+        // Fresh main mask plus one mixed-dimension commitment containing all
+        // fresh mask groups.
         self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
-        for _ in 0..config.mask_groups().len() {
+        if !mask_groups.is_empty() {
             self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
         }
         self.observe(1, Observe::ZkBaseCaseClaim);
@@ -509,7 +511,7 @@ where
             (1 << final_config.num_variables) + randomness_len,
             Observe::ZkBaseCaseReveal,
         );
-        for group in config.mask_groups() {
+        for group in &mask_groups {
             for _ in 0..group.width {
                 self.observe(
                     group.shape.message_len + group.shape.randomness_len,
@@ -518,7 +520,7 @@ where
             }
         }
 
-        // Spot checks: source positions, then per-mask positions.
+        // Spot checks: source positions, then one global mask-query vector.
         self.pow(config.final_pow_bits);
         self.sample(
             config.final_queries * domain_size_bytes,
@@ -526,9 +528,18 @@ where
         );
         self.hint(Hint::StirAnswers);
         self.hint(Hint::MerkleProof);
-        for group in config.mask_groups() {
-            let mask_bytes = ((group.shape.domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
+        if let Some(max_mask_domain) = mask_groups
+            .iter()
+            .map(|group| group.shape.domain_size)
+            .max()
+        {
+            let mask_bytes = ((max_mask_domain * 2 - 1).ilog2() as usize).div_ceil(8);
             self.sample(config.mask_queries * mask_bytes, Sample::StirQueries);
+            // One carried multiproof per group, then one mixed fresh proof.
+            for _ in &mask_groups {
+                self.hint(Hint::StirAnswers);
+                self.hint(Hint::MerkleProof);
+            }
             self.hint(Hint::StirAnswers);
             self.hint(Hint::MerkleProof);
         }

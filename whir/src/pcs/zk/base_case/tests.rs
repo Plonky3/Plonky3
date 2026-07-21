@@ -5,7 +5,6 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
-use core::slice::from_ref;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
@@ -106,34 +105,41 @@ fn honest_run(
     let source_codeword = code.encode_column(&dft, &committed_source, &source_randomness);
     let (source_commitment, source_data) = extension_mmcs.commit_matrix(source_codeword);
 
-    // Carried masks as width-one groups with their own RS-ZK codes.
+    // Carried masks use mixed widths and domain heights. This exercises the
+    // same heterogeneous geometry as the integrated ZK-WHIR pipeline.
     let mask_groups: Vec<MaskGroupShape> = (0..num_masks)
         .map(|i| MaskGroupShape {
-            shape: MaskCodeShape::new(4 + i, 2, 1),
-            width: 1,
+            shape: MaskCodeShape::new(4 + 8 * i, 2, 1),
+            width: if i == 0 { 2 } else { 1 },
         })
         .collect();
     let mut mask_messages = Vec::new();
     let mut mask_randomness = Vec::new();
-    let mut mask_covectors = Vec::new();
+    let mut grouped_mask_covectors = Vec::new();
     let mut mask_commitments = Vec::new();
     let mut mask_data = Vec::new();
     for (i, group) in mask_groups.iter().enumerate() {
         let encoding = group.shape.encoding::<EF>();
-        let message = encoding.sample_message(&mut rng);
-        let randomness = encoding.sample_randomness(&mut rng);
+        let messages: Vec<Vec<EF>> = (0..group.width)
+            .map(|_| encoding.sample_message(&mut rng))
+            .collect();
+        let randomness: Vec<Vec<EF>> = (0..group.width)
+            .map(|_| encoding.sample_randomness(&mut rng))
+            .collect();
         // Under MaskMessage the first committed mask encodes a shifted
         // message, while the reveals and target keep the original.
-        let mut committed = message.clone();
+        let mut committed = messages.clone();
         if tamper == Tamper::MaskMessage && i == 0 {
-            committed[0] += EF::ONE;
+            committed[0][0] += EF::ONE;
         }
-        let codeword = encoding.encode_with_randomness(&committed, &randomness);
+        let codeword = encoding.encode_batch_with_randomness(&committed, &randomness);
         let (commitment, data) = extension_mmcs.commit_matrix(codeword);
-        let covector: Vec<EF> = (0..group.shape.message_len).map(|_| rng.random()).collect();
-        mask_messages.push(vec![message]);
-        mask_randomness.push(vec![randomness]);
-        mask_covectors.push(covector);
+        let covectors: Vec<Vec<EF>> = (0..group.width)
+            .map(|_| (0..group.shape.message_len).map(|_| rng.random()).collect())
+            .collect();
+        mask_messages.push(messages);
+        mask_randomness.push(randomness);
+        grouped_mask_covectors.push(covectors);
         mask_commitments.push(commitment);
         mask_data.push(data);
     }
@@ -144,9 +150,12 @@ fn honest_run(
         source_message.iter().copied(),
         source_covector.iter().copied(),
     );
-    for (messages, covector) in mask_messages.iter().zip(&mask_covectors) {
-        target += dot_product::<EF, _, _>(messages[0].iter().copied(), covector.iter().copied());
+    for (messages, covectors) in mask_messages.iter().zip(&grouped_mask_covectors) {
+        for (message, covector) in messages.iter().zip(covectors) {
+            target += dot_product::<EF, _, _>(message.iter().copied(), covector.iter().copied());
+        }
     }
+    let mask_covectors: Vec<Vec<EF>> = grouped_mask_covectors.iter().flatten().cloned().collect();
 
     let config = BaseCaseZkConfig {
         code,
@@ -163,13 +172,13 @@ fn honest_run(
     let witnesses: Vec<MaskGroupWitness<'_, F, EF, MyMmcs>> = mask_messages
         .iter()
         .zip(&mask_randomness)
-        .zip(&mask_covectors)
+        .zip(&grouped_mask_covectors)
         .zip(&mask_data)
         .map(
-            |(((messages, randomness), covector), data)| MaskGroupWitness {
+            |(((messages, randomness), covectors), data)| MaskGroupWitness {
                 messages,
                 randomness,
-                covectors: from_ref(covector),
+                covectors,
                 data,
             },
         )
@@ -264,6 +273,131 @@ proptest! {
 }
 
 #[test]
+fn base_case_batches_mixed_fresh_mask_groups() {
+    let (config, mmcs, proof, w, u, commits, target, source, challenger) =
+        honest_run(0xBA7C, 3, 0, Tamper::None, None);
+
+    assert_eq!(
+        config
+            .mask_groups
+            .iter()
+            .map(|group| (group.shape.domain_size, group.width))
+            .collect::<Vec<_>>(),
+        vec![(16, 2), (32, 1), (64, 1)],
+    );
+    assert!(proof.fresh_mask_commitment.is_some());
+    assert_eq!(proof.carried_mask_openings.len(), 3);
+    let fresh = proof.fresh_mask_opening.as_ref().unwrap();
+    assert_eq!(fresh.rows.len(), config.mask_queries);
+    for rows in &fresh.rows {
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.iter().map(Vec::len).collect::<Vec<_>>(), vec![2, 1, 1]);
+    }
+    assert!(
+        verify_run(
+            &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn base_case_rejects_tampered_shared_fresh_row() {
+    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
+        honest_run(0xBAD5EED, 2, 0, Tamper::None, None);
+    proof.fresh_mask_opening.as_mut().unwrap().rows[0][0][0] += EF::ONE;
+    let err = verify_run(
+        &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        BaseCaseZkError::MerkleVerificationFailed {
+            kind: "fresh masks"
+        }
+    );
+}
+
+#[test]
+fn base_case_rejects_truncated_shared_fresh_matrix_axis() {
+    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
+        honest_run(0xBADDA7A, 2, 0, Tamper::None, None);
+    proof.fresh_mask_opening.as_mut().unwrap().rows[0].pop();
+    let err = verify_run(
+        &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        BaseCaseZkError::MerkleVerificationFailed {
+            kind: "fresh masks"
+        }
+    );
+}
+
+#[test]
+fn base_case_rejects_missing_shared_fresh_commitment() {
+    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
+        honest_run(0xBAD_C011, 2, 0, Tamper::None, None);
+    proof.fresh_mask_commitment = None;
+    let err = verify_run(
+        &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        BaseCaseZkError::MaskCountMismatch {
+            expected: 1,
+            actual: 0,
+        }
+    );
+}
+
+#[test]
+fn base_case_rejects_missing_shared_fresh_opening() {
+    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
+        honest_run(0xBAD_0E11, 2, 0, Tamper::None, None);
+    proof.fresh_mask_opening = None;
+    let err = verify_run(
+        &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        BaseCaseZkError::MaskCountMismatch {
+            expected: 1,
+            actual: 0,
+        }
+    );
+}
+
+#[test]
+fn base_case_rejects_truncated_shared_fresh_query_axis() {
+    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
+        honest_run(0xBAD_A115, 2, 0, Tamper::None, None);
+    proof.fresh_mask_opening.as_mut().unwrap().rows.pop();
+    let err = verify_run(
+        &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        BaseCaseZkError::OpeningCountMismatch {
+            kind: "fresh masks",
+            expected: config.mask_queries,
+            actual: config.mask_queries - 1,
+        }
+    );
+}
+
+#[test]
+fn mixed_mask_positions_follow_mmcs_projection() {
+    let global = [0, 1, 3, 4, 31];
+    assert_eq!(project_mask_positions(&global, 32, 32), global);
+    assert_eq!(project_mask_positions(&global, 32, 8), vec![0, 0, 0, 1, 7]);
+}
+
+#[test]
 fn base_case_rejects_wrong_target() {
     // The joint linear identity pins the carried target.
     let (config, mmcs, proof, w, u, commits, target, source, challenger) =
@@ -347,9 +481,9 @@ fn base_case_rejects_unbound_source_reveal() {
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
-    // The committed source genuinely differs from the reveal, so the source
-    // spot check fails. The failing position is fixed by the test seed.
-    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 1 });
+    // The committed source genuinely differs from the reveal, so a source
+    // spot check fails at one of the transcript-derived positions.
+    assert!(matches!(err, BaseCaseZkError::SourceSpotCheckFailed { .. }));
 }
 
 #[test]
@@ -368,15 +502,12 @@ fn base_case_rejects_unbound_mask_reveal() {
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
-    // The committed mask genuinely differs from the reveal, so the mask
-    // spot check fails in group 0. The failing position is fixed by the seed.
-    assert_eq!(
+    // The committed mask genuinely differs from the reveal, so a mask spot
+    // check fails in group 0 at a transcript-derived position.
+    assert!(matches!(
         err,
-        BaseCaseZkError::MaskSpotCheckFailed {
-            group: 0,
-            position: 3
-        }
-    );
+        BaseCaseZkError::MaskSpotCheckFailed { group: 0, .. }
+    ));
 }
 
 #[test]
