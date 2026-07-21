@@ -65,11 +65,12 @@ jobs:
 
       - name: Build
         if: ${{ matrix.compile_only }}
-        run: cargo build --all-targets
+        # Keep AVX-512 RUSTFLAGS off host build scripts and proc macros.
+        run: cargo build --target x86_64-unknown-linux-gnu --all-targets
 
       - name: Build with parallel
         if: ${{ matrix.compile_only }}
-        run: cargo build --all-targets --features parallel
+        run: cargo build --target x86_64-unknown-linux-gnu --all-targets --features parallel
 
       - name: Test keccak (aarch64, no SHA3)
         if: ${{ matrix.os == 'macos-latest' }}
