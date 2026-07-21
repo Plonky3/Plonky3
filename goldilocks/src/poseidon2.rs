@@ -754,7 +754,7 @@ pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = Goldilocks::new_array([
     0x0b3694a940bd2394,
 ]);
 
-fn internal_layer_mat_mul_goldilocks_8<A: Algebra<Goldilocks>>(state: &mut [A; 8]) {
+pub(crate) fn internal_layer_mat_mul_goldilocks_8<A: Algebra<Goldilocks>>(state: &mut [A; 8]) {
     let sum: A = state.iter().map(|r| r.dup()).sum();
 
     let s0 = state[0].dup();
@@ -799,7 +799,7 @@ fn internal_layer_mat_mul_goldilocks_8<A: Algebra<Goldilocks>>(state: &mut [A; 8
     state[7] = sum - four_s7;
 }
 
-fn internal_layer_mat_mul_goldilocks_12<A: Algebra<Goldilocks>>(state: &mut [A; 12]) {
+pub(crate) fn internal_layer_mat_mul_goldilocks_12<A: Algebra<Goldilocks>>(state: &mut [A; 12]) {
     let sum: A = state.iter().map(|r| r.dup()).sum();
 
     let s0 = state[0].dup();
