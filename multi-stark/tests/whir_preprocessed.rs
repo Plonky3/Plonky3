@@ -16,7 +16,10 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::zerocheck::ZerocheckError;
-use p3_multi_stark::{VerificationError, prove, setup, verify};
+use p3_multi_stark::{
+    ProverInstance, ProverInstances, VerificationError, VerifierInstance, VerifierInstances, prove,
+    setup, verify,
+};
 use p3_sumcheck::OpeningBatch;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -82,16 +85,16 @@ impl MultiStarkConfig for WhirConfigForTest {
         FOLDING
     }
 
-    fn build_witness(&self, table: Table<F>) -> Witness<F> {
-        // Each trace, main or preprocessed, commits as a single stacked table.
-        L::new_witness(vec![table], FOLDING)
+    fn build_witness(&self, tables: Vec<Table<F>>) -> Witness<F> {
+        L::new_witness(tables, FOLDING)
     }
 
     fn committed_table<'a>(
         &self,
         prover_data: &'a p3_whir::WhirProverData<F, EF, MyMmcs, L>,
+        table_index: usize,
     ) -> &'a Table<F> {
-        prover_data.table(0)
+        prover_data.table(table_index)
     }
 }
 
@@ -119,6 +122,11 @@ fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFac
 /// Build a WHIR scheme sized for a stacked polynomial of a given column count.
 fn pcs_for(log_height: usize, width: usize) -> TestPcs {
     let stacked_num_variables = log_height + log2_ceil_usize(width);
+    pcs_for_stacked(stacked_num_variables)
+}
+
+/// Build a WHIR scheme sized for an already-stacked polynomial arity.
+fn pcs_for_stacked(stacked_num_variables: usize) -> TestPcs {
     let folding_factor = FoldingFactor::Constant(FOLDING);
 
     let mmcs = MyMmcs::new(MyHash::new(perm()), MyCompress::new(perm()), 0);
@@ -139,6 +147,17 @@ fn config_for(log_height: usize) -> WhirConfigForTest {
     WhirConfigForTest {
         pcs: pcs_for(log_height, MAIN_WIDTH),
         preprocessed_pcs: pcs_for(log_height, PREPROCESSED_WIDTH),
+    }
+}
+
+/// Build a configuration whose main PCS commits several same-shape trace tables.
+fn batch_config_for(log_height: usize, num_tables: usize) -> WhirConfigForTest {
+    let main_stacked_num_variables = log2_ceil_usize(num_tables * MAIN_WIDTH * (1 << log_height));
+    let preprocessed_stacked_num_variables =
+        log2_ceil_usize(num_tables * PREPROCESSED_WIDTH * (1 << log_height));
+    WhirConfigForTest {
+        pcs: pcs_for_stacked(main_stacked_num_variables),
+        preprocessed_pcs: pcs_for_stacked(preprocessed_stacked_num_variables),
     }
 }
 
@@ -237,17 +256,131 @@ fn prove_verify_preprocessed_roundtrips() {
     let fixed = fixed_column(n);
     let air = PreprocessedAir { height: n };
     let trace = main_trace(&fixed);
-    let config = config_for(log2_strict_usize(n));
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height);
+    let airs = [&air];
 
     // Commit the preprocessed trace once, so both keys carry its commitment.
-    let (pk, vk) = setup(&config, &air, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
 
-    let proof = prove(&config, &pk, &air, &trace, &[], 0, &mut challenger(&config));
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(&config),
+    );
     // The preprocessed opening is present, matching the AIR's declared trace.
     assert!(proof.preprocessed_opening.is_some());
 
-    verify(&config, &vk, &air, &proof, &[], 0, &mut challenger(&config))
-        .expect("honest preprocessed proof must verify");
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("honest preprocessed proof must verify");
+}
+
+#[test]
+fn prove_verify_batched_preprocessed_roundtrips() {
+    // Main traces share one commitment; each reused preprocessed key still opens separately.
+    let n = 256;
+    let log_height = log2_strict_usize(n);
+    let fixed = fixed_column(n);
+    let air = PreprocessedAir { height: n };
+    let trace = main_trace(&fixed);
+    let config = batch_config_for(log_height, 2);
+    let airs = [&air, &air];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&air, Table::new(trace.transpose()), &pk, &[]),
+            ProverInstance::new(&air, Table::new(trace.transpose()), &pk, &[]),
+        ]),
+        0,
+        &mut challenger(&config),
+    );
+
+    assert!(proof.preprocessed_opening.is_some());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&air, &vk, log_height, &[]),
+            VerifierInstance::new(&air, &vk, log_height, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("honest batched preprocessed proof must verify");
+}
+
+#[test]
+fn prove_verify_mixed_height_preprocessed_roundtrips() {
+    // Invariant: two AIRs of different heights, each with a preprocessed trace,
+    //   batch into one main commitment and one preprocessed commitment, and the
+    //   honest proof verifies.
+    //
+    // Fixture state:
+    //
+    //     air a: height 256 -> 8 variables, 1 preprocessed column
+    //     air b: height 128 -> 7 variables, 1 preprocessed column
+    //
+    // The main and preprocessed openings of the height-7 AIR both drop the
+    //   leading coordinate before opening.
+    let n_a = 256;
+    let n_b = 128;
+    let log_a = log2_strict_usize(n_a);
+    let log_b = log2_strict_usize(n_b);
+    let air_a = PreprocessedAir { height: n_a };
+    let air_b = PreprocessedAir { height: n_b };
+    let trace_a = main_trace(&fixed_column(n_a));
+    let trace_b = main_trace(&fixed_column(n_b));
+
+    // Size each scheme for the stacked cell count the layout planner computes.
+    let main_cells = MAIN_WIDTH * n_a + MAIN_WIDTH * n_b;
+    let preprocessed_cells = PREPROCESSED_WIDTH * n_a + PREPROCESSED_WIDTH * n_b;
+    let config = WhirConfigForTest {
+        pcs: pcs_for_stacked(log2_ceil_usize(main_cells)),
+        preprocessed_pcs: pcs_for_stacked(log2_ceil_usize(preprocessed_cells)),
+    };
+    let airs = [&air_a, &air_b];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&air_a, Table::new(trace_a.transpose()), &pk, &[]),
+            ProverInstance::new(&air_b, Table::new(trace_b.transpose()), &pk, &[]),
+        ]),
+        0,
+        &mut challenger(&config),
+    );
+
+    assert!(proof.preprocessed_opening.is_some());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&air_a, &vk, log_a, &[]),
+            VerifierInstance::new(&air_b, &vk, log_b, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("honest mixed-height batched preprocessed proof must verify");
 }
 
 #[test]
@@ -257,15 +390,33 @@ fn setup_is_reusable_across_proofs() {
     let fixed = fixed_column(n);
     let air = PreprocessedAir { height: n };
     let trace = main_trace(&fixed);
-    let config = config_for(log2_strict_usize(n));
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height);
+    let airs = [&air];
 
-    let (pk, vk) = setup(&config, &air, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
 
     // Each proof clones the committed preprocessed data and opens it at its own point.
     for _ in 0..2 {
-        let proof = prove(&config, &pk, &air, &trace, &[], 0, &mut challenger(&config));
-        verify(&config, &vk, &air, &proof, &[], 0, &mut challenger(&config))
-            .expect("each proof reusing the preprocessed key must verify");
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &air,
+                Table::new(trace.transpose()),
+                &pk,
+                &[],
+            )]),
+            0,
+            &mut challenger(&config),
+        );
+        verify(
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+            &proof,
+            0,
+            &mut challenger(&config),
+        )
+        .expect("each proof reusing the preprocessed key must verify");
     }
 }
 
@@ -278,14 +429,33 @@ fn verify_rejects_violated_main_constraint() {
     let mut trace = main_trace(&fixed);
     // Mutation: break column 1 of the first row so `b != 2 * a`.
     trace.values[1] += F::ONE;
-    let config = config_for(log2_strict_usize(n));
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height);
+    let airs = [&air];
 
-    let (pk, vk) = setup(&config, &air, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
 
-    let proof = prove(&config, &pk, &air, &trace, &[], 0, &mut challenger(&config));
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(&config),
+    );
 
     // Expected rejection: the zerocheck closes on a nonzero constraint value.
-    let err = verify(&config, &vk, &air, &proof, &[], 0, &mut challenger(&config)).unwrap_err();
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .unwrap_err();
     assert!(
         matches!(
             err,
@@ -302,11 +472,23 @@ fn verify_rejects_tampered_preprocessed_opening() {
     let fixed = fixed_column(n);
     let air = PreprocessedAir { height: n };
     let trace = main_trace(&fixed);
-    let config = config_for(log2_strict_usize(n));
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height);
+    let airs = [&air];
 
-    let (pk, vk) = setup(&config, &air, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
 
-    let mut proof = prove(&config, &pk, &air, &trace, &[], 0, &mut challenger(&config));
+    let mut proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(&config),
+    );
 
     // Mutation: shift the first preprocessed current-row value by one field element.
     let opening = proof.preprocessed_opening.as_mut().unwrap();
@@ -319,7 +501,14 @@ fn verify_rejects_tampered_preprocessed_opening() {
     // Why: the verifier samples query positions from the absorbed value.
     //   the round verifies as one pruned multiproof
     //   -> failure reports a batched placeholder position, not a per-query index.
-    let err = verify(&config, &vk, &air, &proof, &[], 0, &mut challenger(&config)).unwrap_err();
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .unwrap_err();
     match err {
         VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position, reason }) => {
             assert_eq!(position, 0);
