@@ -100,6 +100,24 @@ pub struct SharedProofOpening<T, P> {
     pub proof: P,
 }
 
+/// Rows opened from a mixed batch of matrices, plus one proof shared across
+/// every matrix and queried position.
+///
+/// `rows[q][m]` is the row of matrix `m` selected by global query `q`.
+/// The MMCS projects a global index onto shorter matrices according to its
+/// mixed-height index semantics.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(bound(
+    serialize = "T: Serialize, P: Serialize",
+    deserialize = "T: Deserialize<'de>, P: Deserialize<'de>"
+))]
+pub struct SharedBatchOpening<T, P> {
+    /// Opened rows in `[query][matrix][column]` order.
+    pub rows: Vec<Vec<Vec<T>>>,
+    /// Compact multiproof authenticating every row at once.
+    pub proof: P,
+}
+
 impl<T: Send + Sync + Clone, P> SharedProofOpening<T, P> {
     /// Opens `indices` on a commitment holding exactly one matrix.
     pub(crate) fn open<MT, M>(mmcs: &MT, indices: &[usize], prover_data: &MT::ProverData<M>) -> Self
@@ -145,6 +163,38 @@ impl<T: Send + Sync + Clone, P> SharedProofOpening<T, P> {
         // - The slice borrows the row, copying no field data.
         let opened_values: Vec<Vec<&[T]>> =
             self.rows.iter().map(|row| vec![row.as_slice()]).collect();
+        mmcs.verify_multi_batch(commit, dimensions, indices, &opened_values, &self.proof)
+    }
+}
+
+impl<T: Send + Sync + Clone, P> SharedBatchOpening<T, P> {
+    /// Opens `indices` against every matrix in one mixed MMCS commitment.
+    pub(crate) fn open<MT, M>(mmcs: &MT, indices: &[usize], prover_data: &MT::ProverData<M>) -> Self
+    where
+        MT: Mmcs<T, MultiProof = P>,
+        M: Matrix<T>,
+    {
+        let (rows, proof) = mmcs.open_multi_batch(indices, prover_data);
+        Self { rows, proof }
+    }
+
+    /// Verifies all mixed-matrix rows at the verifier-derived indices.
+    pub(crate) fn verify<MT>(
+        &self,
+        mmcs: &MT,
+        commit: &MT::Commitment,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+    ) -> Result<(), MT::Error>
+    where
+        MT: Mmcs<T, MultiProof = P>,
+        T: PartialEq,
+    {
+        let opened_values: Vec<Vec<&[T]>> = self
+            .rows
+            .iter()
+            .map(|rows| rows.iter().map(Vec::as_slice).collect())
+            .collect();
         mmcs.verify_multi_batch(commit, dimensions, indices, &opened_values, &self.proof)
     }
 }

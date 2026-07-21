@@ -55,9 +55,29 @@
 //! # Mask groups
 //!
 //! - Masks committed together form one interleaved oracle.
-//! - A group shares its evaluation domain, spot-check positions, and Merkle
-//!   paths.
-//! - The fresh blinds mirror that grouping.
+//! - The carried commitments retain their original group-specific domains.
+//! - Every fresh blind group is committed in one mixed-dimension MMCS tree.
+//! - One global query vector is projected onto each shorter mask domain.
+//! - Each projection remains independent and uniform for its group. Group-to-
+//!   group correlation does not affect the soundness union bound.
+//!
+//! # Shared-query security argument
+//!
+//! Let `M` be the largest mask domain and `m_i` one group's domain. Both are
+//! powers of two. MMCS maps a global query `q` to that group by
+//! `q >> log2(M / m_i)`. Every group index has exactly `M / m_i` preimages,
+//! so an independent uniform `q` projects to an independent uniform group
+//! query. Consequently:
+//!
+//! - every mask exposes at most `t_zk` distinct positions, preserving its
+//!   Reed-Solomon ZK query budget;
+//! - a bad set in any group lifts to a global bad set of the same density, so
+//!   its miss probability remains `(1 - delta_i)^t_zk`;
+//! - correlations between different groups do not invalidate the union bound.
+//!
+//! This is a concrete extension of Construction 7.2 from one common `C_zk`
+//! to heterogeneous power-of-two mask domains and requires protocol-level
+//! review before the optimization is treated as production-ready.
 //!
 //! # Source oracle abstraction
 //!
@@ -70,6 +90,34 @@ mod config;
 mod error;
 mod prover;
 mod verifier;
+
+use alloc::vec::Vec;
+
+use crate::pcs::zk::mask::MaskGroupShape;
+
+/// Largest mask-code domain represented by a mixed fresh-mask commitment.
+fn max_mask_domain_size(groups: &[MaskGroupShape]) -> Option<usize> {
+    groups.iter().map(|group| group.shape.domain_size).max()
+}
+
+/// Project global mixed-MMCS indices onto one mask group's domain.
+///
+/// All mask domains are powers of two. This is the same high-bit projection
+/// specified by [`p3_commit::Mmcs`] for matrices shorter than the tallest one.
+fn project_mask_positions(
+    global_positions: &[usize],
+    max_domain_size: usize,
+    group_domain_size: usize,
+) -> Vec<usize> {
+    assert!(max_domain_size.is_power_of_two());
+    assert!(group_domain_size.is_power_of_two());
+    assert!(group_domain_size <= max_domain_size);
+    let shift = max_domain_size.ilog2() - group_domain_size.ilog2();
+    global_positions
+        .iter()
+        .map(|&position| position >> shift)
+        .collect()
+}
 
 pub use config::{BaseCaseZkConfig, MaskGroupWitness, MaskProverData};
 pub use error::BaseCaseZkError;

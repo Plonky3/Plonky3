@@ -118,6 +118,33 @@ where
     queries
 }
 
+/// Sample independent, exactly uniform query indices with replacement.
+///
+/// Unlike [`get_challenge_stir_queries`], this preserves duplicate draws and
+/// never caps the requested count. It is used when one global query is
+/// projected onto several mixed-height MMCS matrices: independence on the
+/// largest domain implies independence and uniformity after every power-of-two
+/// projection, while each matrix still reveals at most `num_queries` distinct
+/// positions.
+pub(crate) fn get_challenge_iid_queries<Challenger, F>(
+    domain_size: usize,
+    num_queries: usize,
+    challenger: &mut Challenger,
+) -> Vec<usize>
+where
+    Challenger: FieldChallenger<F> + CanSampleUniformBits<F>,
+    F: Field,
+{
+    let domain_size_bits = log2_strict_usize(domain_size);
+    (0..num_queries)
+        .map(|_| {
+            challenger
+                .sample_uniform_bits::<true>(domain_size_bits)
+                .expect("RESAMPLE = true: rejection loops internally, never errors")
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::collections::BTreeSet;
@@ -308,5 +335,20 @@ mod tests {
                 "bucket {bucket}: count {count} deviates from {expected} by {deviation} > {TOLERANCE}; counts = {counts:?}"
             );
         }
+    }
+
+    #[test]
+    fn iid_queries_keep_duplicates_and_replay() {
+        // Two bins and many draws force duplicates. They must remain in the
+        // transcript order rather than being deduplicated or capped.
+        let mut challenger_a = challenger_with_seed(0x51A2ED);
+        let queries_a = get_challenge_iid_queries::<MyChallenger, F>(2, 8, &mut challenger_a);
+        assert_eq!(queries_a.len(), 8);
+        assert!(queries_a.iter().all(|&query| query < 2));
+        assert!(queries_a.iter().copied().collect::<BTreeSet<_>>().len() < queries_a.len());
+
+        let mut challenger_b = challenger_with_seed(0x51A2ED);
+        let queries_b = get_challenge_iid_queries::<MyChallenger, F>(2, 8, &mut challenger_b);
+        assert_eq!(queries_a, queries_b);
     }
 }

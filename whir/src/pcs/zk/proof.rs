@@ -6,7 +6,7 @@ use p3_commit::Mmcs;
 use p3_sumcheck::zk::ZkSumcheckData;
 use serde::{Deserialize, Serialize};
 
-use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
+use crate::pcs::proof::{QueryOpenings, SharedBatchOpening, SharedProofOpening};
 
 /// Complete HVZK-WHIR opening proof.
 #[derive(Serialize, Deserialize, Clone)]
@@ -59,8 +59,10 @@ pub struct ZkRoundProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
 pub struct BaseCaseZkProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Commitment to the fresh main mask `g`, in the folded source code.
     pub fresh_main_commitment: MT::Commitment,
-    /// Commitments to the fresh blinds, one per carried mask group, in chronological group order.
-    pub fresh_mask_commitments: Vec<MT::Commitment>,
+    /// One mixed-dimension commitment to every fresh mask blind.
+    ///
+    /// `None` is used only by a standalone base case with no carried masks.
+    pub fresh_mask_commitment: Option<MT::Commitment>,
     /// Fresh-side claim `mu_g = <g~, W> + sum_i <s~'_i, u_i>`.
     pub masked_claim: EF,
     /// Blinded source message `f* = g~ + gamma . f`.
@@ -75,9 +77,12 @@ pub struct BaseCaseZkProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     pub source_openings: QueryOpenings<F, EF, MT::MultiProof>,
     /// Spot-check openings of the fresh main mask `g` at the same positions.
     pub fresh_main_openings: SharedProofOpening<EF, MT::MultiProof>,
-    /// Per group: paired openings of the carried oracle and its fresh blind.
-    /// Each opened row spans the whole group.
-    pub mask_openings: Vec<MaskOpeningPair<EF, MT::MultiProof>>,
+    /// One opening per carried mask-group commitment.
+    pub carried_mask_openings: Vec<SharedProofOpening<EF, MT::MultiProof>>,
+    /// One mixed-matrix opening shared by every fresh mask group.
+    ///
+    /// `None` iff there are no carried masks.
+    pub fresh_mask_opening: Option<SharedBatchOpening<EF, MT::MultiProof>>,
 }
 
 /// One mask oracle's blinded reveal.
@@ -87,20 +92,4 @@ pub struct BlindedMask<EF> {
     pub message: Vec<EF>,
     /// `r*_i = r'_i + gamma . r_i`.
     pub randomness: Vec<EF>,
-}
-
-/// Paired openings of one carried mask group and its fresh blind.
-///
-/// Both oracles open at the same shared spot-check positions,
-/// each under its own multiproof.
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(bound(
-    serialize = "EF: Serialize, P: Serialize",
-    deserialize = "EF: Deserialize<'de>, P: Deserialize<'de>"
-))]
-pub struct MaskOpeningPair<EF, P> {
-    /// Openings of the carried mask oracle `xi_i`.
-    pub carried: SharedProofOpening<EF, P>,
-    /// Openings of the fresh blind `s'_i`.
-    pub fresh: SharedProofOpening<EF, P>,
 }
