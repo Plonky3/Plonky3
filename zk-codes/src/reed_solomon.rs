@@ -537,8 +537,6 @@ mod tests {
     fn test_batch_encode_matches_stacked_single_encodes() {
         // The reference DFT backend.
         assert_batch_matches_stacked(Radix2Dit::default());
-        // The backend the threaded prover actually ships.
-        // Pinning the identity here guards the production path, not just the reference.
         assert_batch_matches_stacked(Radix2DFTSmallBatch::default());
     }
 
