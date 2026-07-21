@@ -202,13 +202,18 @@ where
         Msg: AsRef<[F]>,
         Rand: AsRef<[F]>,
     {
+        // An empty batch has no column to encode, so reject it first.
+        assert!(
+            !messages.is_empty(),
+            "batch must contain at least one message"
+        );
+        // Every message is encoded with exactly one randomness vector.
         assert_eq!(
             messages.len(),
             randomness.len(),
             "batch message/randomness counts must match"
         );
         let width = messages.len();
-        assert!(width > 0, "batch must contain at least one message");
 
         let mut coeffs = F::zero_vec(self.m * width);
         for (column, (msg, randomness)) in messages.iter().zip(randomness).enumerate() {
@@ -287,7 +292,7 @@ mod tests {
     use core::cell::Cell;
 
     use p3_baby_bear::BabyBear;
-    use p3_dft::Radix2Dit;
+    use p3_dft::{Radix2DFTSmallBatch, Radix2Dit};
     use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
     use p3_goldilocks::Goldilocks;
     use p3_koala_bear::KoalaBear;
@@ -497,13 +502,16 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    #[test]
-    fn test_batch_encode_matches_stacked_single_encodes() {
+    /// Encode a random width-5 batch two ways under the given DFT and assert equality.
+    ///
+    /// - Field DFT is exact arithmetic, with no rounding.
+    /// - So the batched matrix is bit-identical to stacking the single encodes.
+    /// - The identity must hold for every conforming DFT backend.
+    fn assert_batch_matches_stacked<Dft: TwoAdicSubgroupDft<F>>(dft: Dft) {
         let msg_len = 4;
         let t = 3;
         let m = 16;
         let width = 5;
-        let dft = Radix2Dit::default();
         let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
 
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(20260709);
@@ -523,6 +531,13 @@ mod tests {
         let batched = encoding.encode_batch_with_randomness(&messages, &randomness);
 
         assert_eq!(batched, stacked);
+    }
+
+    #[test]
+    fn test_batch_encode_matches_stacked_single_encodes() {
+        // The reference DFT backend.
+        assert_batch_matches_stacked(Radix2Dit::default());
+        assert_batch_matches_stacked(Radix2DFTSmallBatch::default());
     }
 
     #[test]
@@ -553,6 +568,17 @@ mod tests {
         let encoding = ReedSolomonZkEncoding::<F, _>::new(2, 4, 8, Radix2Dit::default());
         let messages: Vec<&[F]> = Vec::new();
         let randomness: Vec<&[F]> = Vec::new();
+
+        let _ = encoding.encode_batch_with_randomness(&messages, &randomness);
+    }
+
+    #[test]
+    #[should_panic(expected = "batch message/randomness counts must match")]
+    fn test_batch_encode_rejects_length_mismatch() {
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(2, 4, 8, Radix2Dit::default());
+        // Two messages but one randomness vector: the counts disagree.
+        let messages = vec![vec![F::ZERO; 4], vec![F::ZERO; 4]];
+        let randomness = vec![vec![F::ZERO; 2]];
 
         let _ = encoding.encode_batch_with_randomness(&messages, &randomness);
     }
