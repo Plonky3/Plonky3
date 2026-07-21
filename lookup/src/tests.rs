@@ -86,6 +86,7 @@ fn create_dummy_lookup(
         multiplicities,
         count_weight: 0,
         column: 0,
+        flags: None,
     }
 }
 
@@ -234,6 +235,63 @@ fn from_air_extracts_one_local_lookup_per_declaration() {
         assert_eq!(lookup.elements.len(), 2);
         assert_eq!(lookup.multiplicities.len(), 2);
     }
+}
+
+/// AIR emitting one mutually-exclusive query on a bus.
+///
+/// Main layout per row is `[flag0, key0, flag1, key1]`.
+/// Exactly one branch is meant to fire, selected by its flag.
+struct ExclusiveQueryAir;
+
+impl<F: Field> BaseAir<F> for ExclusiveQueryAir {
+    fn width(&self) -> usize {
+        4
+    }
+}
+
+impl<AB> Air<AB> for ExclusiveQueryAir
+where
+    AB: AirBuilder<F: Field> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        // The window is an owned value, so reading it does not borrow the builder.
+        let main = builder.main();
+        let local = main.current_slice();
+
+        // Two branches, each gated by its own flag.
+        let branches = [
+            (local[0].into(), vec![local[1].into()]),
+            (local[2].into(), vec![local[3].into()]),
+        ];
+
+        // Record the group on a shared bus through the convenience API.
+        let bus = crate::bus::LookupBus::new("rc");
+        bus.lookup_key_exclusive(builder, branches);
+    }
+}
+
+#[test]
+fn from_air_extracts_exclusive_lookup_from_bus_api() {
+    // The bus convenience records a single exclusive group spanning both branches.
+    let air = ExclusiveQueryAir;
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+
+    // One column carries the whole group.
+    assert_eq!(lookups.len(), 1);
+    let lookup = &lookups[0];
+
+    // It lives on the named bus and is marked exclusive.
+    assert!(matches!(lookup.kind, Kind::Global(_)));
+    assert!(lookup.flags.is_some());
+
+    // Two branches: two flags, two payloads, two multiplicities.
+    assert_eq!(lookup.flags.as_ref().unwrap().len(), 2);
+    assert_eq!(lookup.elements.len(), 2);
+    assert_eq!(lookup.multiplicities.len(), 2);
+
+    // Exclusive weight is the per-branch max, and each unit query weighs 1.
+    assert_eq!(lookup.count_weight, 1);
+    assert_eq!(lookup.column, 0);
 }
 
 /// A mock `AirBuilder` for testing purposes that simulates constraint evaluation.
@@ -505,6 +563,7 @@ fn generate_permutation_multi_element_combine_matches_reference() {
         multiplicities: vec![cols[2].into()],
         count_weight: 0,
         column: 0,
+        flags: None,
     };
     let lookups = vec![lookup];
 
@@ -656,6 +715,7 @@ fn debug_util_detects_unbalanced_multiset() {
         multiplicities: vec![SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE))],
         count_weight: 0,
         column: 0,
+        flags: None,
     };
 
     let instance: LookupDebugInstance<'_, F> = LookupDebugInstance {
@@ -706,6 +766,7 @@ fn eval_all_global_lookup_carries_terminal_through_permutation_values() {
         }],
         count_weight: 1,
         column: 0,
+        flags: None,
     };
 
     let builder_r = SymbolicAirBuilder::<F>::new(AirLayout {
@@ -719,6 +780,7 @@ fn eval_all_global_lookup_carries_terminal_through_permutation_values() {
         multiplicities: vec![SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE))],
         count_weight: 1,
         column: 0,
+        flags: None,
     };
 
     let gadget = LogUpGadget::new();
@@ -1135,4 +1197,359 @@ fn test_tuple_lookup() {
         builder.for_row(r);
         gadget.eval_all(&mut builder, &lookups);
     }
+}
+
+/// Build a mutually-exclusive lookup with `num_branches` width-1 branches.
+///
+/// - Each flag and element has degree 1.
+/// - Each multiplicity is the constant `+1`, so it has degree 0.
+fn exclusive_dummy(num_branches: usize) -> Lookup<F> {
+    // One degree-1 selector flag per branch.
+    let flags = (0..num_branches)
+        .map(|_| create_symbolic_with_degree(1))
+        .collect();
+    // One degree-1 payload element per branch.
+    let elements = (0..num_branches)
+        .map(|_| vec![create_symbolic_with_degree(1)])
+        .collect();
+    // Constant unit multiplicity, so its degree is 0.
+    let multiplicities = (0..num_branches)
+        .map(|_| SymbolicExpression::from(F::ONE))
+        .collect();
+
+    Lookup {
+        kind: Kind::Local,
+        elements,
+        multiplicities,
+        count_weight: 1,
+        column: 0,
+        flags: Some(flags),
+    }
+}
+
+#[test]
+fn constraint_degree_exclusive_is_flat_in_branch_count() {
+    let gadget = LogUpGadget::new();
+
+    // Invariant: an exclusive column multiplexes to one branch.
+    //            Its degree is the per-branch maximum, not the per-branch sum.
+    //
+    //     D = sum_k flag_k*(alpha - e_k) + (1 - sum_k flag_k)   deg = 1 + 1 = 2
+    //     N = sum_k flag_k*mult_k                               deg = 1 + 0 = 1
+    //     constraint degree = max(1 + 2, 1) = 3
+    //
+    // The result is 3 whether there are 2 branches or 8.
+    assert_eq!(gadget.constraint_degree(&exclusive_dummy(2)), 3);
+    assert_eq!(gadget.constraint_degree(&exclusive_dummy(8)), 3);
+
+    // Contrast: folding 8 tuples additively would pin at degree 8 + 1 = 9.
+    //
+    //     8 width-1 degree-1 tuples → product denominator of degree 8.
+    let additive = create_dummy_lookup(&[1; 8], &vec![vec![1]; 8], &[1; 8]);
+    assert_eq!(gadget.constraint_degree(&additive), 9);
+}
+
+#[test]
+fn compute_exclusive_terms_matches_definition() {
+    let gadget = LogUpGadget::new();
+    let alpha = EF::from_u32(17);
+    let beta = EF::from_u32(2);
+
+    // Two width-1 branches with distinct payloads and multiplicities.
+    let elements = vec![vec![EF::from_u32(5)], vec![EF::from_u32(9)]];
+    let multiplicities = vec![EF::from_u32(3), EF::from_u32(4)];
+
+    // Branch 0 active: flags = [1, 0].
+    //
+    //     N = 1*3 + 0*4               = 3
+    //     D = 1*(alpha - 5) + 0*(...) = alpha - 5
+    let (num, den) = gadget.compute_exclusive_terms::<MockAirBuilder>(
+        &[EF::ONE, EF::ZERO],
+        &elements,
+        &multiplicities,
+        &alpha,
+        &beta,
+    );
+    assert_eq!(num, EF::from_u32(3));
+    assert_eq!(den, alpha - EF::from_u32(5));
+
+    // No branch active: flags = [0, 0].
+    //
+    //     N = 0
+    //     D = (1 - 0) = 1   so the fraction is 0
+    let (num, den) = gadget.compute_exclusive_terms::<MockAirBuilder>(
+        &[EF::ZERO, EF::ZERO],
+        &elements,
+        &multiplicities,
+        &alpha,
+        &beta,
+    );
+    assert_eq!(num, EF::ZERO);
+    assert_eq!(den, EF::ONE);
+}
+
+#[test]
+fn generate_permutation_exclusive_selects_active_branch() {
+    // Invariant: an exclusive column's fraction is the active branch's m/(alpha - key).
+    //            An all-inactive row contributes 0.
+    //
+    // Fixture: main layout [flag0, key0, flag1, key1].
+    //          Even rows fire one branch; odd rows fire none.
+    let height = 8;
+    let mut rng = SmallRng::seed_from_u64(0xE5C1);
+
+    // Symbolic handles for the four main columns.
+    let sb = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 4,
+        ..Default::default()
+    });
+    let cols = sb.main();
+    let cols = cols.current_slice();
+
+    // Branch 0 reads (flag0, key0); branch 1 reads (flag1, key1).
+    let lookup = Lookup {
+        kind: Kind::Local,
+        elements: vec![vec![cols[1].into()], vec![cols[3].into()]],
+        multiplicities: vec![
+            SymbolicExpression::from(F::ONE),
+            SymbolicExpression::from(F::ONE),
+        ],
+        count_weight: 1,
+        column: 0,
+        flags: Some(vec![cols[0].into(), cols[2].into()]),
+    };
+    let lookups = vec![lookup];
+
+    // Build the trace, recording which branch each row fires.
+    //
+    //     even row r: branch (r/2) % 2 active, the other flag 0
+    //     odd  row r: both flags 0  (inactive)
+    let mut flat = Vec::with_capacity(height * 4);
+    let mut active: Vec<Option<usize>> = Vec::with_capacity(height);
+    for r in 0..height {
+        let key0 = F::from_u32(rng.random::<u32>() % (1 << 27));
+        let key1 = F::from_u32(rng.random::<u32>() % (1 << 27));
+        if r % 2 == 0 {
+            // Fire exactly one branch on even rows.
+            let which = (r / 2) % 2;
+            let (flag0, flag1) = if which == 0 {
+                (F::ONE, F::ZERO)
+            } else {
+                (F::ZERO, F::ONE)
+            };
+            flat.extend([flag0, key0, flag1, key1]);
+            active.push(Some(which));
+        } else {
+            // No branch fires on odd rows.
+            flat.extend([F::ZERO, key0, F::ZERO, key1]);
+            active.push(None);
+        }
+    }
+    let main = RowMajorMatrix::new(flat, 4);
+
+    let gadget = LogUpGadget::new();
+    // alpha carries a nonzero extension coefficient, so alpha - key is never zero.
+    let alpha = EF::new([F::from_u32(7), F::ONE, F::ZERO, F::ZERO]);
+    let beta = EF::from_u32(11);
+    let challenges = vec![alpha, beta];
+
+    let (aux, terminal) =
+        gadget.generate_permutation::<TestConfig>(&main, &None, &[], &lookups, &challenges);
+
+    // The fraction column equals the selected branch's value, or 0 when inactive.
+    for (r, &which) in active.iter().enumerate() {
+        let row = main.row_slice(r).unwrap();
+        let expected = match which {
+            // Active branch 0: key sits at column 1, multiplicity +1.
+            Some(0) => (alpha - row[1]).inverse(),
+            // Active branch 1: key sits at column 3, multiplicity +1.
+            Some(1) => (alpha - row[3]).inverse(),
+            // Inactive row: numerator 0, denominator 1 → fraction 0.
+            _ => EF::ZERO,
+        };
+        assert_eq!(aux.row_slice(r).unwrap()[1], expected, "fraction row {r}");
+    }
+
+    // The pin and accumulator constraints accept the generated trace.
+    let mut builder = MockAirBuilder::new(main, aux, challenges, vec![terminal.unwrap().0]);
+    for r in 0..builder.height {
+        builder.for_row(r);
+        gadget.eval_all(&mut builder, &lookups);
+    }
+}
+
+/// Build a 2-branch exclusive lookup over a 4-column main `[flag0, key0, flag1, key1]`.
+///
+/// - Branch 0 reads `(flag0, key0)`, branch 1 reads `(flag1, key1)`.
+/// - The caller supplies the raw trace cells, so a test can plant a malformed witness.
+fn exclusive_two_branch_lookup() -> Vec<Lookup<F>> {
+    // Symbolic handles for the four main columns.
+    let sb = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 4,
+        ..Default::default()
+    });
+    let cols = sb.main();
+    let cols = cols.current_slice();
+
+    // Branch 0 reads (flag0, key0); branch 1 reads (flag1, key1).
+    vec![Lookup {
+        kind: Kind::Local,
+        elements: vec![vec![cols[1].into()], vec![cols[3].into()]],
+        multiplicities: vec![
+            SymbolicExpression::from(F::ONE),
+            SymbolicExpression::from(F::ONE),
+        ],
+        count_weight: 1,
+        column: 0,
+        flags: Some(vec![cols[0].into(), cols[2].into()]),
+    }]
+}
+
+#[test]
+#[should_panic = "exclusive flag must be boolean"]
+fn generate_permutation_exclusive_rejects_non_boolean_flag() {
+    // Soundness contract: an exclusive selector flag must be 0 or 1.
+    //            The prover checks the concrete witness so a violating trace fails loudly.
+    //
+    // Fixture: row 0 sets flag0 = 2, a non-boolean value.
+    //
+    //     main row 0: [flag0=2, key0, flag1=0, key1]
+    //                  ^^^^^^^^ neither 0 nor 1 → debug_assert fires
+    let lookups = exclusive_two_branch_lookup();
+    let main = RowMajorMatrix::new(
+        vec![
+            // Row 0: flag0 = 2 is not boolean.
+            F::from_u32(2),
+            F::from_u32(5),
+            F::ZERO,
+            F::from_u32(9),
+            // Row 1: both branches idle, a valid row.
+            F::ZERO,
+            F::from_u32(6),
+            F::ZERO,
+            F::from_u32(7),
+        ],
+        4,
+    );
+
+    let gadget = LogUpGadget::new();
+    let challenges = vec![EF::from_u32(17), EF::from_u32(11)];
+    let _ = gadget.generate_permutation::<TestConfig>(&main, &None, &[], &lookups, &challenges);
+}
+
+#[test]
+#[should_panic = "exclusive flags must sum to at most one per row"]
+fn generate_permutation_exclusive_rejects_two_active_flags() {
+    // Soundness contract: at most one branch fires per row.
+    //            Two simultaneous flags mean the multiplexed fraction matches no single message.
+    //
+    // Fixture: row 0 fires both branches at once.
+    //
+    //     main row 0: [flag0=1, key0, flag1=1, key1]
+    //                  both active → flag_sum = 2 → debug_assert fires
+    let lookups = exclusive_two_branch_lookup();
+    let main = RowMajorMatrix::new(
+        vec![
+            // Row 0: both flags fire, violating mutual exclusivity.
+            F::ONE,
+            F::from_u32(5),
+            F::ONE,
+            F::from_u32(9),
+            // Row 1: both branches idle, a valid row.
+            F::ZERO,
+            F::from_u32(6),
+            F::ZERO,
+            F::from_u32(7),
+        ],
+        4,
+    );
+
+    let gadget = LogUpGadget::new();
+    let challenges = vec![EF::from_u32(17), EF::from_u32(11)];
+    let _ = gadget.generate_permutation::<TestConfig>(&main, &None, &[], &lookups, &challenges);
+}
+
+#[test]
+fn exclusive_query_balances_against_provider() {
+    use crate::debug_util::*;
+
+    // Invariant: an exclusive query of the active key each row stays balanced.
+    //            A provider supplies exactly those keys with multiplicity -1.
+    //
+    // Fixture: querying AIR fires key 5 on row 0 and key 7 on row 1.
+    //          providing AIR supplies key 5 then key 7, each with count -1.
+    //
+    //     bus "b":  {5: +1, 7: +1}  +  {5: -1, 7: -1}  =  balanced
+
+    // Querying AIR main: [flag0, key0, flag1, key1].
+    let query_main = RowMajorMatrix::new(
+        vec![
+            // row 0: branch 0 active, key 5; branch 1 idle, key 9
+            F::ONE,
+            F::from_u32(5),
+            F::ZERO,
+            F::from_u32(9),
+            // row 1: branch 0 idle, key 3; branch 1 active, key 7
+            F::ZERO,
+            F::from_u32(3),
+            F::ONE,
+            F::from_u32(7),
+        ],
+        4,
+    );
+
+    // Symbolic handles for the querying AIR's four columns.
+    let sb_q = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 4,
+        ..Default::default()
+    });
+    let cols_q = sb_q.main();
+    let cols_q = cols_q.current_slice();
+    let query_lookup = Lookup {
+        kind: Kind::Global("b".to_string()),
+        elements: vec![vec![cols_q[1].into()], vec![cols_q[3].into()]],
+        multiplicities: vec![
+            SymbolicExpression::from(F::ONE),
+            SymbolicExpression::from(F::ONE),
+        ],
+        count_weight: 1,
+        column: 0,
+        flags: Some(vec![cols_q[0].into(), cols_q[2].into()]),
+    };
+
+    // Providing AIR main: one key per row, matching the queried keys.
+    let provider_main = RowMajorMatrix::new(vec![F::from_u32(5), F::from_u32(7)], 1);
+    let sb_p = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 1,
+        ..Default::default()
+    });
+    let cols_p = sb_p.main();
+    let cols_p = cols_p.current_slice();
+    let provider_lookup = Lookup {
+        kind: Kind::Global("b".to_string()),
+        elements: vec![vec![cols_p[0].into()]],
+        // Provide each key once, so the count is -1.
+        multiplicities: vec![SymbolicExpression::from(-F::ONE)],
+        count_weight: 0,
+        column: 0,
+        flags: None,
+    };
+
+    let query_instance = LookupDebugInstance {
+        main_trace: &query_main,
+        preprocessed_trace: &None,
+        public_values: &[],
+        lookups: core::slice::from_ref(&query_lookup),
+        permutation_challenges: &[],
+    };
+    let provider_instance = LookupDebugInstance {
+        main_trace: &provider_main,
+        preprocessed_trace: &None,
+        public_values: &[],
+        lookups: core::slice::from_ref(&provider_lookup),
+        permutation_challenges: &[],
+    };
+
+    // Balanced multiset across the two AIRs: no panic.
+    check_lookups(&[query_instance, provider_instance]);
 }

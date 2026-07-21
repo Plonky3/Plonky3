@@ -57,6 +57,48 @@ pub struct SymbolicLocalInteraction<F> {
     pub tuples: Vec<LocalTuple<F>>,
 }
 
+/// One mutually-exclusive group of cross-AIR messages on a named bus.
+///
+/// - Every branch sits on the same bus.
+/// - Every branch shares that bus's single challenge pair.
+/// - At most one branch is active on any row, selected by its flag.
+/// - Only the active branch contributes a fraction.
+/// - Every other branch vanishes.
+/// - The group occupies a single auxiliary column.
+/// - That column's degree is the per-branch maximum, not the sum.
+///
+/// # Soundness
+///
+/// - The flags must be boolean.
+/// - The flags must sum to at most one on every row.
+/// - The AIR must enforce both rules.
+/// - This record only carries the flags.
+/// - Non-exclusive flags make the fraction match no single message.
+#[derive(Clone, Debug)]
+pub struct SymbolicExclusiveInteraction<F> {
+    /// Name of the bus this group sends on.
+    pub bus_name: String,
+
+    /// One branch per mutually-exclusive case.
+    pub branches: Vec<SymbolicExclusiveBranch<F>>,
+}
+
+/// One branch of a mutually-exclusive group.
+#[derive(Clone, Debug)]
+pub struct SymbolicExclusiveBranch<F> {
+    /// Boolean selector: `1` when this branch is the active one, else `0`.
+    pub flag: SymbolicExpression<F>,
+
+    /// Signed multiplicity contributed when this branch is active.
+    pub count: SymbolicExpression<F>,
+
+    /// Message payload for this branch.
+    pub fields: Vec<SymbolicExpression<F>>,
+
+    /// Per-row upper bound on the magnitude of the count.
+    pub count_weight: u32,
+}
+
 /// Opt-in extension to the AIR builder for AIRs that speak on buses.
 ///
 /// - AIRs that emit messages bound their builder on this trait.
@@ -97,6 +139,35 @@ pub trait InteractionBuilder: AirBuilder {
         tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
     );
 
+    /// Record one mutually-exclusive group of messages on a named bus.
+    ///
+    /// - Each branch is a `(flag, count, fields)` triple.
+    /// - The flags select at most one active branch per row.
+    /// - The group occupies a single auxiliary column.
+    /// - Its constraint degree is the per-branch maximum, not the sum.
+    ///
+    /// # Arguments
+    ///
+    /// - `bus_name` — shared identifier linking all AIRs on the same bus.
+    /// - `branches` — one `(flag, count, fields)` triple per exclusive case.
+    ///
+    /// # Soundness
+    ///
+    /// - The flags must be boolean and mutually exclusive.
+    /// - The AIR must enforce that.
+    /// - Otherwise the multiplexed fraction matches no single message.
+    ///
+    /// Recording builders override this.
+    /// Other builders inherit a no-op default.
+    fn push_exclusive_interaction(
+        &mut self,
+        _bus_name: &str,
+        branches: impl IntoIterator<Item = (Self::Expr, Count<Self::Expr>, Vec<Self::Expr>)>,
+    ) {
+        // Drain the iterator so side effects in a wrapping adapter still fire.
+        branches.into_iter().for_each(drop);
+    }
+
     /// Global interactions pushed so far.
     fn num_global_interactions(&self) -> usize {
         0
@@ -104,6 +175,11 @@ pub trait InteractionBuilder: AirBuilder {
 
     /// Local interactions pushed so far.
     fn num_local_interactions(&self) -> usize {
+        0
+    }
+
+    /// Exclusive interactions pushed so far.
+    fn num_exclusive_interactions(&self) -> usize {
         0
     }
 }
