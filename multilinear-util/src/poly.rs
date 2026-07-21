@@ -484,6 +484,51 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         self.0.truncate(mid);
     }
 
+    /// Fixes the prefix variable at a challenge value in the *monomial* basis,
+    /// in place.
+    ///
+    /// The table is interpreted as monomial coefficients (the projective
+    /// `{0, inf}` representation of eprint 2026/762). Writing the polynomial as
+    /// `p(X_0, x') = a0(x') + X_0 * a1(x')`, with `a0` the low half (monomials
+    /// without `X_0`) and `a1` the high half (monomials with `X_0`), binding
+    /// `X_0 = r` gives, by Corollary 3.2:
+    ///
+    /// ```text
+    /// out = p(0, x') + r * p(inf, x') = a0 + r * a1
+    /// ```
+    ///
+    /// Unlike [`Self::fix_prefix_var_mut`], this costs no subtraction per pair.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
+    pub fn fix_prefix_var_mut_projective<F: Copy + Send + Sync>(&mut self, r: F)
+    where
+        A: Algebra<F>,
+    {
+        assert!(self.as_constant().is_none(), "no free variables");
+        let num_evals = self.num_evals();
+        let mid = num_evals / 2;
+        // Low half: monomials without x_0 (the constant part a0).
+        // High half: monomials with x_0 (the leading-coefficient part a1).
+        let (p0, p1) = self.0.split_at_mut(mid);
+
+        if num_evals >= PARALLEL_THRESHOLD {
+            // Parallel: fold each pair in place.
+            p0.par_iter_mut()
+                .zip(p1.par_iter())
+                .for_each(|(a0, &a1)| *a0 += a1 * r);
+        } else {
+            // Sequential: fold each pair in place.
+            p0.iter_mut()
+                .zip(p1.iter())
+                .for_each(|(a0, &a1)| *a0 += a1 * r);
+        }
+
+        // Discard the second half; the first half now holds the folded result.
+        self.0.truncate(mid);
+    }
+
     /// In-place version of the suffix-variable fix.
     ///
     /// Folds adjacent pairs and truncates to the first half. The sequential
@@ -1965,6 +2010,46 @@ pub(crate) mod test {
             for s in 0..folded.num_evals() {
                 assert_eq!(poly.fix_prefix_var_at(z, s), folded.as_slice()[s]);
             }
+        }
+    }
+
+    proptest! {
+        /// Projective binding fixes a variable in the *monomial* basis: the table
+        /// holds monomial coefficients (Proposition 3.1, eprint 2026/762), and
+        /// binding x_0 = r maps each pair (a0, a1) to a0 + r * a1, with no
+        /// subtraction. Applied across every variable it evaluates the monomial
+        /// polynomial sum_S a_S * prod_{i in S} z_i at the point z.
+        #[test]
+        fn prop_fix_prefix_var_mut_projective_evaluates_monomial_basis(
+            k in 1usize..=12,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            // Interpret the random table as monomial coefficients.
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let point: Point<F> = Point::rand(&mut rng, k);
+            let z = point.as_slice();
+
+            // Reference: evaluate the monomial polynomial directly. Prefix binding
+            // fixes the most-significant variable first, so bit position p of the
+            // index corresponds to challenge z[k - 1 - p].
+            let mut expected = F::ZERO;
+            for (s, &coeff) in poly.as_slice().iter().enumerate() {
+                let mut term = coeff;
+                for p in 0..k {
+                    if (s >> p) & 1 == 1 {
+                        term *= z[k - 1 - p];
+                    }
+                }
+                expected += term;
+            }
+
+            // Projective binding across all variables must agree.
+            let mut compressed = Poly::new(poly.as_slice().to_vec());
+            for &zi in z {
+                compressed.fix_prefix_var_mut_projective(zi);
+            }
+            prop_assert_eq!(compressed.as_constant().unwrap(), expected);
         }
     }
 

@@ -84,27 +84,70 @@ fn round_reduce<A: Copy + PrimeCharacteristicRing>(a: (A, A), b: (A, A)) -> (A, 
     (a.0 + b.0, a.1 + b.1)
 }
 
-/// Computes `(h(0), h(inf))` for a prefix-binding sumcheck round.
+/// Projective per-tile MAC (eprint 2026/762, Fig. 3).
 ///
-/// # Inputs
+/// Like [`chunk_round_step`], but the tables are interpreted as monomial
+/// coefficients, so the round message is `[s(1), s(inf)]` and the verifier
+/// derives `s(0) := C - s(inf)` from the projective round identity. The
+/// `X = 1` evaluation of a coefficient pair is `lo + hi`, so the differences
+/// of the evaluation basis become sums:
 ///
-/// - `evals`   — multilinear evaluations of `f(X)` over the hypercube.
-/// - `weights` — multilinear evaluations of `w(X)` over the hypercube.
+/// ```text
+///     at_one  += sum_i  (w_lo[i] + w_hi[i]) * (e_lo[i] + e_hi[i])
+///     leading += sum_i  w_hi[i] * e_hi[i]
+/// ```
+#[inline(always)]
+fn chunk_round_step_projective<B, A>(
+    e_lo: &[B; K],
+    e_hi: &[B; K],
+    w_lo: &[A; K],
+    w_hi: &[A; K],
+) -> (A, A)
+where
+    B: PrimeCharacteristicRing + Copy,
+    A: Algebra<B> + Copy,
+{
+    // Materialise the X = 1 evaluations (lo + hi) tile-locally so they can
+    // feed the same delayed-reduction primitive. `K` base adds, no reductions.
+    let ones_e: [B; K] = core::array::from_fn(|i| e_lo[i] + e_hi[i]);
+    let ones_w: [A; K] = core::array::from_fn(|i| w_lo[i] + w_hi[i]);
+
+    let acc1 = A::mixed_dot_product::<K>(&ones_w, &ones_e);
+
+    // Leading coefficient: dot product of the high (coefficient) faces.
+    let acc_inf = A::mixed_dot_product::<K>(w_hi, e_hi);
+
+    (acc1, acc_inf)
+}
+
+/// Projective per-pair MAC for the streaming tail (no subtraction).
+#[inline(always)]
+fn round_step_projective<B, A>((acc1, acc_inf): (A, A), e0: B, e1: B, w0: A, w1: A) -> (A, A)
+where
+    B: PrimeCharacteristicRing + Copy,
+    A: Algebra<B> + Copy,
+{
+    (acc1 + (w0 + w1) * (e0 + e1), acc_inf + w1 * e1)
+}
+
+/// Shared prefix round-coefficient scaffold, parameterised over the basis steps.
 ///
-/// # Returns
-///
-/// - `h(0)`   = sum_{b in {0,1}^{n-1}} f(0, b) * w(0, b)
-/// - `h(inf)` = sum_{b} (f(1, b) - f(0, b)) * (w(1, b) - w(0, b))
-///
-/// # Complexity
-///
-/// O(2^n). Parallelised above a 2^14 threshold. The main loop is tiled by
-/// `K` over a delayed-reduction dot product; the `half mod K` tail uses a
-/// streaming fold.
-pub fn sumcheck_coefficients_prefix<B, A>(evals: &[B], weights: &[A]) -> (A, A)
+/// The tiling, `PAR_THRESHOLD` par-vs-serial split, and `K`-tail fold are
+/// identical across bases; only the per-tile and per-pair MAC differ. The
+/// evaluation and projective kernels supply their `chunk_step` / `pair_step`
+/// pair so this delicate delayed-reduction loop exists exactly once.
+#[inline]
+fn sumcheck_coefficients_prefix_with<B, A, Chunk, Pair>(
+    evals: &[B],
+    weights: &[A],
+    chunk_step: Chunk,
+    pair_step: Pair,
+) -> (A, A)
 where
     B: PrimeCharacteristicRing + Copy + Send + Sync,
     A: Algebra<B> + Copy + Send + Sync,
+    Chunk: Fn(&[B; K], &[B; K], &[A; K], &[A; K]) -> (A, A) + Sync,
+    Pair: Fn((A, A), B, B, A, A) -> (A, A),
 {
     // Precondition: paired slices must be aligned; half-and-half split addresses the prefix bit.
     assert_eq!(evals.len(), weights.len());
@@ -132,7 +175,7 @@ where
             .par_fold_reduce(
                 || (A::ZERO, A::ZERO),
                 |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
-                    let chunk = chunk_round_step::<B, A>(
+                    let chunk = chunk_step(
                         e_lo_c.try_into().unwrap(),
                         e_hi_c.try_into().unwrap(),
                         w_lo_c.try_into().unwrap(),
@@ -150,7 +193,7 @@ where
             .fold(
                 (A::ZERO, A::ZERO),
                 |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
-                    let chunk = chunk_round_step::<B, A>(
+                    let chunk = chunk_step(
                         e_lo_c.try_into().unwrap(),
                         e_hi_c.try_into().unwrap(),
                         w_lo_c.try_into().unwrap(),
@@ -167,10 +210,60 @@ where
         .zip(e_hi_tail.iter())
         .zip(w_lo_tail.iter().zip(w_hi_tail.iter()))
         .fold((A::ZERO, A::ZERO), |acc, ((&e0, &e1), (&w0, &w1))| {
-            round_step(acc, e0, e1, w0, w1)
+            pair_step(acc, e0, e1, w0, w1)
         });
 
     round_reduce(main, tail)
+}
+
+/// Computes `(h(0), h(inf))` for a prefix-binding sumcheck round.
+///
+/// # Inputs
+///
+/// - `evals`   — multilinear evaluations of `f(X)` over the hypercube.
+/// - `weights` — multilinear evaluations of `w(X)` over the hypercube.
+///
+/// # Returns
+///
+/// - `h(0)`   = sum_{b in {0,1}^{n-1}} f(0, b) * w(0, b)
+/// - `h(inf)` = sum_{b} (f(1, b) - f(0, b)) * (w(1, b) - w(0, b))
+///
+/// # Complexity
+///
+/// O(2^n). Parallelised above a 2^14 threshold. The main loop is tiled by
+/// `K` over a delayed-reduction dot product; the `half mod K` tail uses a
+/// streaming fold.
+pub fn sumcheck_coefficients_prefix<B, A>(evals: &[B], weights: &[A]) -> (A, A)
+where
+    B: PrimeCharacteristicRing + Copy + Send + Sync,
+    A: Algebra<B> + Copy + Send + Sync,
+{
+    sumcheck_coefficients_prefix_with(evals, weights, chunk_round_step::<B, A>, round_step::<B, A>)
+}
+
+/// Projective (monomial-basis) variant of [`sumcheck_coefficients_prefix`]
+/// (eprint 2026/762, Fig. 3).
+///
+/// The tables are interpreted as monomial coefficients. The round message is
+/// `[s(1), s(inf)]`; the verifier derives `s(0) := C - s(inf)` from the
+/// projective round identity `s(0) + s(inf) = C`. Returned as:
+///
+/// - `s(1)`   = sum_{b} (w(0,b) + w(inf,b)) * (f(0,b) + f(inf,b))
+/// - `s(inf)` = sum_{b} w(inf, b) * f(inf, b)   (leading coefficient)
+///
+/// The evaluation-basis kernel's per-pair subtractions (`hi - lo`) become
+/// additions (`lo + hi`); same `K`-tiled, delayed-reduction structure.
+pub fn sumcheck_coefficients_prefix_projective<B, A>(evals: &[B], weights: &[A]) -> (A, A)
+where
+    B: PrimeCharacteristicRing + Copy + Send + Sync,
+    A: Algebra<B> + Copy + Send + Sync,
+{
+    sumcheck_coefficients_prefix_with(
+        evals,
+        weights,
+        chunk_round_step_projective::<B, A>,
+        round_step_projective::<B, A>,
+    )
 }
 
 /// Computes `(h(0), h(inf))` for a suffix-binding sumcheck round.
@@ -670,6 +763,35 @@ mod tests {
                 VariableOrder::Suffix.eval_constraints_poly(&constraints, &challenge),
                 eval_constraints_poly_reference(VariableOrder::Suffix, &constraints, &challenge),
             );
+        }
+    }
+
+    proptest! {
+        // Projective (monomial-basis) prefix round message (eprint 2026/762,
+        // Fig. 3) is [s(1), s(inf)] = [dot(lo + hi, lo + hi), dot(hi, hi)];
+        // the per-pair subtractions of the evaluation basis become additions.
+        #[test]
+        fn prop_sumcheck_coefficients_prefix_projective_matches_reference(
+            k in 1usize..=12,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let n = 1usize << k;
+            let evals: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+
+            let (h1, h_inf) = super::sumcheck_coefficients_prefix_projective(&evals, &weights);
+
+            let half = n / 2;
+            // s(1): the X = 1 evaluation of each coefficient pair is lo + hi.
+            let h1_ref: EF = (0..half)
+                .map(|i| (weights[i] + weights[half + i]) * (evals[i] + evals[half + i]))
+                .sum();
+            // s(inf): dot product of the high (leading-coefficient) faces.
+            let h_inf_ref: EF = (0..half).map(|i| weights[half + i] * evals[half + i]).sum();
+
+            prop_assert_eq!(h1, h1_ref);
+            prop_assert_eq!(h_inf, h_inf_ref);
         }
     }
 }
