@@ -38,8 +38,8 @@
 //! - Masks committed together share an evaluation domain.
 //! - They stack into one interleaved oracle: one commitment per sumcheck
 //!   batch, one per code-switching round.
-//! - Base-case spot checks authenticate a whole group with a single Merkle
-//!   path per position.
+//! - Base-case spot checks keep one carried proof per group while every fresh
+//!   blind group shares one mixed-dimension commitment and multiproof.
 //! - The proof-size overhead stays an additive constant in the witness size.
 //!
 //! # Differences from the non-ZK pipeline
@@ -71,7 +71,7 @@ pub use base_case::BaseCaseZkError;
 pub use code_switch::CodeSwitchError;
 pub use config::{ZkConfigError, ZkParameters, ZkWhirConfig};
 pub use mask::{MaskCodeShape, MaskGroupShape};
-pub use proof::{BaseCaseZkProof, BlindedMask, MaskOpeningPair, ZkRoundProof, ZkWhirProof};
+pub use proof::{BaseCaseZkProof, BlindedMask, ZkRoundProof, ZkWhirProof};
 pub use prover::HidingWhirProverData;
 pub use verifier::ZkVerifierError;
 
