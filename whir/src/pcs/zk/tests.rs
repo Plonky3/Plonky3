@@ -13,7 +13,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 use rand::{RngExt, SeedableRng};
 
 use super::adapter::HidingWhirPcs;
@@ -34,7 +34,7 @@ type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
 type PackedF = <F as Field>::Packing;
 type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
 type MyDft = Radix2DFTSmallBatch<F>;
-type TestZkPcs = HidingWhirPcs<EF, F, MyDft, MyMmcs, MyChallenger, SmallRng>;
+type TestZkPcs = HidingWhirPcs<EF, F, MyDft, MyMmcs, MyChallenger, StdRng>;
 
 /// Commitment type of the test PCS.
 type TestCommitment = <TestZkPcs as MultilinearPcs<EF, MyChallenger>>::Commitment;
@@ -130,7 +130,7 @@ impl Setup {
             config,
             MyDft::default(),
             mmcs,
-            SmallRng::seed_from_u64(self.seed),
+            StdRng::seed_from_u64(self.seed),
         )
     }
 
