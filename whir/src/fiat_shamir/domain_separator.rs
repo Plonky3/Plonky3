@@ -236,6 +236,12 @@ where
     /// Binds the protocol configuration into the pattern.
     fn bind_config_params<Challenger>(&mut self, config: &WhirConfig<EF, F, Challenger>) {
         // Bind the transcript to the protocol configuration.
+        //
+        // The basis changes the meaning of every sumcheck round message, so
+        // the two bases are domain-separated structurally: an
+        // evaluation-basis proof cannot share a transcript prefix with a
+        // projective verifier (or vice versa).
+        self.protocol_param(config.basis as usize);
         self.protocol_param(config.num_variables);
         self.protocol_param(config.security_level);
         self.protocol_param(config.starting_log_inv_rate);

@@ -32,7 +32,8 @@ use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{
-    SumcheckProver, VariableOrder, sumcheck_coefficients_prefix, sumcheck_coefficients_suffix,
+    Basis, SumcheckProver, VariableOrder, sumcheck_coefficients_prefix,
+    sumcheck_coefficients_prefix_projective, sumcheck_coefficients_suffix,
 };
 use p3_sumcheck::{OpeningBatch, SumcheckData};
 use rand::distr::{Distribution, StandardUniform};
@@ -251,6 +252,19 @@ where
             );
         }
 
+        group.bench_with_input(
+            BenchmarkId::new("base_ext_prefix_projective", &label),
+            &label,
+            |b, _| {
+                b.iter(|| {
+                    black_box(sumcheck_coefficients_prefix_projective(
+                        &base_packed,
+                        round_zero_weights.as_slice(),
+                    ))
+                });
+            },
+        );
+
         // Later-round operands: both sides are packed extension elements.
         let packed_evals = rand_ext_packed::<B>(&mut rng, k);
         let packed_weights = rand_ext_packed::<B>(&mut rng, k);
@@ -269,6 +283,19 @@ where
                 },
             );
         }
+
+        group.bench_with_input(
+            BenchmarkId::new("ext_ext_packed_prefix_projective", &label),
+            &label,
+            |b, _| {
+                b.iter(|| {
+                    black_box(sumcheck_coefficients_prefix_projective(
+                        packed_evals.as_slice(),
+                        packed_weights.as_slice(),
+                    ))
+                });
+            },
+        );
     }
 
     for &k in SCALAR_SIZES {
@@ -288,6 +315,19 @@ where
                 },
             );
         }
+
+        group.bench_with_input(
+            BenchmarkId::new("ext_ext_scalar_prefix_projective", &label),
+            &label,
+            |b, _| {
+                b.iter(|| {
+                    black_box(sumcheck_coefficients_prefix_projective(
+                        evals.as_slice(),
+                        weights.as_slice(),
+                    ))
+                });
+            },
+        );
     }
 
     group.finish();
@@ -326,6 +366,23 @@ where
                 );
             });
         }
+
+        // Projective (monomial-basis) binding: the subtraction-free
+        // a0 + a1 * r of eprint 2026/762, prefix only.
+        group.bench_with_input(
+            BenchmarkId::new("prefix_projective", &label),
+            &(),
+            |b, ()| {
+                b.iter_batched_ref(
+                    || template.clone(),
+                    |poly| {
+                        poly.fix_prefix_var_mut_projective(black_box(r));
+                        black_box(&*poly);
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
     }
 
     group.finish();
@@ -605,7 +662,7 @@ where
     let mut data = SumcheckData::<B::F, B::EF>::default();
 
     // Consume the prover, yielding the residual prover and the sampled challenges.
-    let (residual, randomness) = prover.into_sumcheck(&mut data, 0, challenger);
+    let (residual, randomness) = prover.into_sumcheck(&mut data, 0, challenger, Basis::Evaluation);
     black_box((data, residual, randomness));
 }
 

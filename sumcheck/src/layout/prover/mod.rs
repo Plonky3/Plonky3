@@ -24,7 +24,7 @@ pub use suffix::SuffixProver;
 use crate::SumcheckData;
 use crate::commit::commit_base;
 use crate::layout::{LayoutStrategy, Table, Witness};
-use crate::strategy::{SumcheckProver, VariableOrder};
+use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 use crate::table::{OpeningEvals, OpeningRequest};
 
 /// Stacked-sumcheck prover layout
@@ -182,6 +182,7 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
         sumcheck_data: &mut SumcheckData<F, EF>,
         pow_bits: usize,
         challenger: &mut Ch,
+        basis: Basis,
     ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
@@ -207,7 +208,7 @@ pub(super) mod test_utils {
 
     use crate::SumcheckData;
     use crate::layout::{Layout, LayoutStrategy, Table, TableShape, Verifier, Witness};
-    use crate::strategy::VariableOrder;
+    use crate::strategy::{Basis, VariableOrder};
     use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
     use crate::tests::*;
 
@@ -324,7 +325,13 @@ pub(super) mod test_utils {
         let mut verifier_challenge = Point::new(vec![]);
         verifier_challenge.extend(
             &proof0
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    0,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
 
@@ -339,7 +346,13 @@ pub(super) mod test_utils {
         constraints.push(intermediate_constraint);
         verifier_challenge.extend(
             &proof1
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, POW_BITS)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    POW_BITS,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
         verifier_challenge.extend(
@@ -349,6 +362,7 @@ pub(super) mod test_utils {
                     &mut sum,
                     stacked_num_variables - 2 * FOLDING,
                     0,
+                    Basis::Evaluation,
                 )
                 .unwrap(),
         );
@@ -357,9 +371,11 @@ pub(super) mod test_utils {
         //     - Prover and verifier agreed on the same randomness.
         //     - Batched sum equals the final folded value times the batched weights.
         assert_eq!(expected_randomness, &verifier_challenge);
-        let weights = strategy
-            .variable_order
-            .eval_constraints_poly(&constraints, &verifier_challenge);
+        let weights = strategy.variable_order.eval_constraints_poly(
+            &constraints,
+            &verifier_challenge,
+            Basis::Evaluation,
+        );
         assert_eq!(sum, final_folded_value * weights);
     }
 
@@ -465,7 +481,7 @@ pub(super) mod test_utils {
         // Preprocessing: consume FOLDING rounds, hand off the residual prover.
         let mut proof0 = SumcheckData::<F, EF>::default();
         let (mut prover, mut prover_randomness) =
-            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
+            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger, Basis::Evaluation);
         assert_eq!(proof0.num_rounds(), FOLDING);
         assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
 
@@ -637,6 +653,7 @@ mod tests {
         FOLDING, build_tables, run_roundtrip_test, table_shapes, tables_from_shape,
     };
     use crate::layout::{Layout, Verifier};
+    use crate::strategy::Basis;
     use crate::table::OpeningBatch;
     use crate::tests::*;
 
@@ -800,7 +817,7 @@ mod tests {
         // First sumcheck stage folds the SVO rounds and writes their proof.
         let mut proof0 = SumcheckData::<F, EF>::default();
         let (mut prover, mut prover_randomness) =
-            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
+            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger, Basis::Evaluation);
         // The first stage consumes exactly the folding-depth rounds.
         assert_eq!(proof0.num_rounds(), FOLDING);
         assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
@@ -840,7 +857,13 @@ mod tests {
         let mut verifier_challenge = Point::new(vec![]);
         verifier_challenge.extend(
             &proof0
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    0,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
 
@@ -857,7 +880,13 @@ mod tests {
         // The grinding stage carries proof-of-work bits; the final stage none.
         verifier_challenge.extend(
             &proof1
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, POW_BITS)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    POW_BITS,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
         verifier_challenge.extend(
@@ -867,6 +896,7 @@ mod tests {
                     &mut sum,
                     stacked_num_variables - 2 * FOLDING,
                     0,
+                    Basis::Evaluation,
                 )
                 .unwrap(),
         );
@@ -874,9 +904,11 @@ mod tests {
         // Both sides must have folded the identical challenge vector.
         assert_eq!(prover_randomness, verifier_challenge);
         // Final identity: running sum equals folded value times the constraint weights.
-        let weights = strategy
-            .variable_order
-            .eval_constraints_poly(&constraints, &verifier_challenge);
+        let weights = strategy.variable_order.eval_constraints_poly(
+            &constraints,
+            &verifier_challenge,
+            Basis::Evaluation,
+        );
         assert_eq!(sum, final_folded_value * weights);
     }
 
@@ -917,7 +949,7 @@ mod tests {
         // First sumcheck stage folds the SVO rounds and writes their proof.
         let mut proof0 = SumcheckData::<F, EF>::default();
         let (mut prover, mut prover_randomness) =
-            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
+            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger, Basis::Evaluation);
         assert_eq!(proof0.num_rounds(), FOLDING);
         assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
 
@@ -956,7 +988,13 @@ mod tests {
         let mut verifier_challenge = Point::new(vec![]);
         verifier_challenge.extend(
             &proof0
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    0,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
 
@@ -973,7 +1011,13 @@ mod tests {
         // The grinding stage carries proof-of-work bits; the final stage none.
         verifier_challenge.extend(
             &proof1
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, POW_BITS)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    POW_BITS,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
         verifier_challenge.extend(
@@ -983,6 +1027,7 @@ mod tests {
                     &mut sum,
                     stacked_num_variables - 2 * FOLDING,
                     0,
+                    Basis::Evaluation,
                 )
                 .unwrap(),
         );
@@ -990,9 +1035,11 @@ mod tests {
         // Both sides must have folded the identical challenge vector.
         assert_eq!(prover_randomness, verifier_challenge);
         // Final identity: running sum equals folded value times the constraint weights.
-        let weights = strategy
-            .variable_order
-            .eval_constraints_poly(&constraints, &verifier_challenge);
+        let weights = strategy.variable_order.eval_constraints_poly(
+            &constraints,
+            &verifier_challenge,
+            Basis::Evaluation,
+        );
         assert_eq!(sum, final_folded_value * weights);
     }
 

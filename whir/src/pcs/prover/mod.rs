@@ -16,10 +16,10 @@ use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
 use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::Layout;
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 use crate::fiat_shamir::domain_separator::DomainSeparator;
-use crate::parameters::WhirConfig;
+use crate::parameters::{Basis, WhirConfig};
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{
     QueryOpenings, SharedProofOpening, SumcheckData, WhirProof, WhirRoundProof,
@@ -113,6 +113,13 @@ where
     /// The extension-field MMCS is constructed by wrapping the base-field one,
     /// so callers never have to thread it through manually.
     pub fn new(config: WhirConfig<EF, F, Challenger>, dft: Dft, mmcs: MT) -> Self {
+        // The projective basis is prefix-only; reject the pairing before any
+        // protocol work.
+        assert!(
+            config.basis == Basis::Evaluation
+                || matches!(L::variable_order(), VariableOrder::Prefix),
+            "the projective basis is prefix-only"
+        );
         let extension_mmcs = ExtensionMmcs::new(mmcs.clone());
         Self {
             config,
@@ -158,11 +165,14 @@ where
         let variable_order = L::variable_order();
 
         let mut initial_sumcheck = SumcheckData::default();
-        let (sumcheck_prover, folding_randomness) = layout.into_sumcheck(
-            &mut initial_sumcheck,
-            self.starting_folding_pow_bits,
-            challenger,
-        );
+        let (sumcheck_prover, folding_randomness) = info_span!("initial sumcheck").in_scope(|| {
+            layout.into_sumcheck(
+                &mut initial_sumcheck,
+                self.starting_folding_pow_bits,
+                challenger,
+                self.basis,
+            )
+        });
 
         let mut round_state = RoundState {
             sumcheck_prover,
@@ -211,14 +221,16 @@ where
         let inv_rate = self.inv_rate(round_index);
 
         // Commit straight from the live sumcheck buffer; no scalar copy is materialized.
-        let (root, prover_data) = commit_extension(
-            variable_order,
-            &self.dft,
-            &self.extension_mmcs,
-            round_state.sumcheck_prover.evals_view(),
-            folding_factor_next,
-            inv_rate,
-        );
+        let (root, prover_data) = info_span!("commit").in_scope(|| {
+            commit_extension(
+                variable_order,
+                &self.dft,
+                &self.extension_mmcs,
+                round_state.sumcheck_prover.evals_view(),
+                folding_factor_next,
+                inv_rate,
+            )
+        });
 
         // Observe the round commitment.
         challenger.observe(root.clone());
@@ -227,14 +239,18 @@ where
         // OOD sampling.
         let mut ood_statement = EqStatement::initialize(num_variables);
         let mut ood_answers = Vec::with_capacity(round_params.ood_samples);
-        (0..round_params.ood_samples).for_each(|_| {
-            let point =
-                Point::expand_from_univariate(challenger.sample_algebra_element(), num_variables);
-            let eval = round_state.sumcheck_prover.eval(&point);
-            challenger.observe_algebra_element(eval);
+        info_span!("ood sampling").in_scope(|| {
+            (0..round_params.ood_samples).for_each(|_| {
+                let point = Point::expand_from_univariate(
+                    challenger.sample_algebra_element(),
+                    num_variables,
+                );
+                let eval = round_state.sumcheck_prover.eval(&point);
+                challenger.observe_algebra_element(eval);
 
-            ood_answers.push(eval);
-            ood_statement.add_evaluated_constraint(point, eval);
+                ood_answers.push(eval);
+                ood_statement.add_evaluated_constraint(point, eval);
+            });
         });
 
         // PoW grinding: prevents query manipulation by forcing work after committing.
@@ -262,13 +278,19 @@ where
 
         // Open all queried positions in one multiproof.
         // Each row folds in place; the same allocation then travels into the proof.
+        let stir_span = info_span!("stir openings").entered();
         let openings = match &round_state.round_data {
             RoundData::Base(data) => {
                 let mut opening =
                     SharedProofOpening::open(&self.mmcs, &stir_challenges_indexes, data);
                 for (row, &challenge) in opening.rows.iter_mut().zip(&stir_challenges_indexes) {
                     let poly = Poly::new(mem::take(row));
-                    let eval = poly.eval_base(&query_randomness);
+                    // Fold the opened row in the configured basis, matching
+                    // the sumcheck bind and the verifier's leaf fold.
+                    let eval = match self.basis {
+                        Basis::Evaluation => poly.eval_base(&query_randomness),
+                        Basis::Projective => poly.eval_monomial_base(&query_randomness),
+                    };
                     let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
                     stir_statement.add_constraint(var, eval);
                     *row = poly.into_evals();
@@ -280,7 +302,10 @@ where
                     SharedProofOpening::open(&self.extension_mmcs, &stir_challenges_indexes, data);
                 for (row, &challenge) in opening.rows.iter_mut().zip(&stir_challenges_indexes) {
                     let poly = Poly::new(mem::take(row));
-                    let eval = poly.eval_ext::<F>(&query_randomness);
+                    let eval = match self.basis {
+                        Basis::Evaluation => poly.eval_ext::<F>(&query_randomness),
+                        Basis::Projective => poly.eval_monomial(&query_randomness),
+                    };
                     let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
                     stir_statement.add_constraint(var, eval);
                     *row = poly.into_evals();
@@ -288,6 +313,7 @@ where
                 QueryOpenings::Extension(opening)
             }
         };
+        drop(stir_span);
 
         // Batch the two statement groups into one constraint over the same cube.
         // The out-of-domain claims form the equality group.
@@ -306,13 +332,15 @@ where
 
         // Run sumcheck and fold the polynomial.
         let mut sumcheck_data: SumcheckData<F, EF> = SumcheckData::default();
-        let folding_randomness = round_state.sumcheck_prover.compute_sumcheck_polynomials(
-            &mut sumcheck_data,
-            challenger,
-            folding_factor_next,
-            round_params.folding_pow_bits,
-            Some(constraint),
-        );
+        let folding_randomness = info_span!("sumcheck").in_scope(|| {
+            round_state.sumcheck_prover.compute_sumcheck_polynomials(
+                &mut sumcheck_data,
+                challenger,
+                folding_factor_next,
+                round_params.folding_pow_bits,
+                Some(constraint),
+            )
+        });
 
         // Update round state for next iteration.
         round_state.folding_randomness = folding_randomness;
@@ -384,13 +412,15 @@ where
         // Optional final sumcheck.
         let final_sumcheck = (self.final_sumcheck_rounds > 0).then(|| {
             let mut sumcheck_data: SumcheckData<F, EF> = SumcheckData::default();
-            round_state.sumcheck_prover.compute_sumcheck_polynomials(
-                &mut sumcheck_data,
-                challenger,
-                self.final_sumcheck_rounds,
-                self.final_folding_pow_bits,
-                None,
-            );
+            info_span!("sumcheck").in_scope(|| {
+                round_state.sumcheck_prover.compute_sumcheck_polynomials(
+                    &mut sumcheck_data,
+                    challenger,
+                    self.final_sumcheck_rounds,
+                    self.final_folding_pow_bits,
+                    None,
+                )
+            });
             sumcheck_data
         });
 

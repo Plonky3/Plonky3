@@ -17,7 +17,9 @@ use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
-use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+use p3_whir::parameters::{
+    Basis, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
+};
 use p3_whir::pcs::proof::{PcsProof, QueryOpenings};
 use p3_whir::pcs::prover::WhirProver;
 use rand::SeedableRng;
@@ -57,6 +59,12 @@ const NUM_EVALUATIONS: usize = 1;
 /// One benchmark configuration.
 #[derive(Clone, Copy)]
 struct Options {
+    /// Polynomial basis the protocol runs in.
+    basis: Basis,
+    /// Target security level in bits.
+    security_level: usize,
+    /// Proof-of-work grinding budget in bits.
+    pow_bits: usize,
     /// Log-2 of the polynomial coefficient count.
     num_variables: usize,
     /// Variables eliminated per WHIR round.
@@ -71,6 +79,9 @@ impl Options {
     /// Default configuration sized to a polynomial of the given variable count.
     const fn sized(num_variables: usize) -> Self {
         Self {
+            basis: Basis::Evaluation,
+            security_level: SECURITY_LEVEL,
+            pow_bits: 20,
             num_variables,
             folding: FOLDING,
             log_inv_rate: LOG_INV_RATE,
@@ -79,6 +90,21 @@ impl Options {
     }
 
     /// Override the soundness assumption.
+    const fn with_basis(mut self, basis: Basis) -> Self {
+        self.basis = basis;
+        self
+    }
+
+    /// Grind-free low-security configuration: identical query structure in
+    /// both bases and zero proof-of-work noise. Grinding work is fixed per
+    /// transcript, and the two bases produce different transcripts, so a
+    /// grinding-enabled comparison carries an irreducible luck bias.
+    const fn grind_free(mut self) -> Self {
+        self.security_level = 32;
+        self.pow_bits = 0;
+        self
+    }
+
     const fn with_soundness(mut self, soundness: SecurityAssumption) -> Self {
         self.soundness = soundness;
         self
@@ -155,8 +181,8 @@ impl<L: Layout<F, EF>> Bench<L> {
         // Translate user options into the protocol's parameter struct.
         let folding_factor = FoldingFactor::Constant(opts.folding);
         let params = ProtocolParameters {
-            security_level: SECURITY_LEVEL,
-            pow_bits: 20,
+            security_level: opts.security_level,
+            pow_bits: opts.pow_bits,
             round_log_inv_rates: default_round_log_inv_rates(opts.num_variables, &folding_factor),
             folding_factor,
             soundness_type: opts.soundness,
@@ -164,7 +190,9 @@ impl<L: Layout<F, EF>> Bench<L> {
         };
 
         // Derive the per-round configuration and pre-allocate FFT twiddles.
-        let config = WhirConfig::<EF, F, Challenger>::new(opts.num_variables, params).unwrap();
+        let config = WhirConfig::<EF, F, Challenger>::new(opts.num_variables, params)
+            .unwrap()
+            .with_basis(opts.basis);
         let dft = Dft::new(1 << config.max_fft_size());
         let pcs = Pcs::<L>::new(config, dft, mmcs);
 
@@ -389,6 +417,52 @@ fn bench_scaling(c: &mut Criterion) {
     }
 }
 
+/// The basis comparison: evaluation vs projective (eprint 2026/762), prove
+/// phase, prefix layout (the projective basis is prefix-only).
+///
+/// This is the deciding benchmark of the projective-WHIR experiment: the
+/// pre-registered close condition compares these pairs per size.
+fn bench_basis(c: &mut Criterion) {
+    type L = PrefixProver<F, EF>;
+    // Primary: grind-free, so the comparison measures arithmetic and hashing
+    // rather than per-transcript grinding luck.
+    {
+        let mut group = c.benchmark_group("whir_pcs/basis/prove");
+        group.sample_size(10);
+        group.warm_up_time(Duration::from_secs(5));
+        group.measurement_time(Duration::from_secs(10));
+        for k in [14_usize, 18, 20, 22] {
+            for (tag, basis) in [
+                ("eval", Basis::Evaluation),
+                ("projective", Basis::Projective),
+            ] {
+                Bench::<L>::new(Options::sized(k).grind_free().with_basis(basis))
+                    .bench_prove(&mut group, &format!("k{k}_{tag}"));
+            }
+        }
+        group.finish();
+    }
+
+    // Secondary: the production-like grinding configuration, reported with
+    // the grinding-luck caveat.
+    {
+        let mut group = c.benchmark_group("whir_pcs/basis_pow20/prove");
+        group.sample_size(10);
+        group.warm_up_time(Duration::from_secs(5));
+        group.measurement_time(Duration::from_secs(10));
+        for k in [20_usize, 22] {
+            for (tag, basis) in [
+                ("eval", Basis::Evaluation),
+                ("projective", Basis::Projective),
+            ] {
+                Bench::<L>::new(Options::sized(k).with_basis(basis))
+                    .bench_prove(&mut group, &format!("k{k}_{tag}"));
+            }
+        }
+        group.finish();
+    }
+}
+
 /// Options sweep at the medium size, prove phase only.
 fn bench_options(c: &mut Criterion) {
     let base = Options::sized(MEDIUM);
@@ -455,6 +529,6 @@ fn report_proof_size(_c: &mut Criterion) {
     eprintln!();
 }
 
-criterion_group!(benches, bench_scaling, bench_options);
+criterion_group!(benches, bench_scaling, bench_options, bench_basis);
 criterion_group!(reports, report_proof_size);
 criterion_main!(benches, reports);

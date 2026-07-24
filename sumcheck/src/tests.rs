@@ -9,13 +9,14 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
 use proptest::prelude::*;
-use rand::SeedableRng;
 use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::constraints::{Constraint, Statements};
 use crate::layout::{Layout, PrefixProver, SuffixProver, TableShape, Verifier};
-use crate::strategy::VariableOrder;
+use crate::product_polynomial::ProductPolynomial;
+use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 use crate::test_util::{stacked_num_variables, table_point_schedule, table_specs_to_tables};
 use crate::{
     OpeningBatch, OpeningEvals, OpeningProtocol, SumcheckData, SumcheckError, TableSpec,
@@ -281,8 +282,12 @@ where
         .map(|(table_idx, batch)| layout.eval(table_idx, batch, &mut prover_challenger))
         .collect();
 
-    let (mut sumcheck, mut prover_randomness) =
-        layout.into_sumcheck(proof.first_mut().unwrap(), 0, &mut prover_challenger);
+    let (mut sumcheck, mut prover_randomness) = layout.into_sumcheck(
+        proof.first_mut().unwrap(),
+        0,
+        &mut prover_challenger,
+        Basis::Evaluation,
+    );
     let mut num_variables_inter = num_variables - FOLDING;
 
     for sumcheck_data in proof.iter_mut().take(num_rounds + 1).skip(1) {
@@ -348,7 +353,13 @@ where
 
         verifier_randomness.extend(
             &proof[0]
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    0,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
         num_variables_inter -= FOLDING;
@@ -367,7 +378,13 @@ where
 
         verifier_randomness.extend(
             &proof[round]
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    0,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
         num_variables_inter -= FOLDING;
@@ -377,14 +394,22 @@ where
         &proof
             .last()
             .unwrap()
-            .verify_rounds(&mut verifier_challenger, &mut sum, num_variables_inter, 0)
+            .verify_rounds(
+                &mut verifier_challenger,
+                &mut sum,
+                num_variables_inter,
+                0,
+                Basis::Evaluation,
+            )
             .unwrap(),
     );
 
     assert_eq!(prover_randomness, verifier_randomness);
-    let weights = strategy
-        .variable_order
-        .eval_constraints_poly(&constraints, &verifier_randomness);
+    let weights = strategy.variable_order.eval_constraints_poly(
+        &constraints,
+        &verifier_randomness,
+        Basis::Evaluation,
+    );
     assert_eq!(sum, final_folded_value * weights);
 }
 
@@ -437,8 +462,15 @@ fn test_zero_rounds_returns_empty_point() {
     // Case 1: no data.
     let mut chal = challenger();
     let mut sum = EF::ZERO;
-    let point = verify_final_sumcheck_rounds::<F, EF, _>(None, &mut chal, &mut sum, 0, 0)
-        .expect("0 rounds + None must succeed");
+    let point = verify_final_sumcheck_rounds::<F, EF, _>(
+        None,
+        &mut chal,
+        &mut sum,
+        0,
+        0,
+        Basis::Evaluation,
+    )
+    .expect("0 rounds + None must succeed");
     assert!(point.as_slice().is_empty());
 
     // Case 2: data supplied but ignored.
@@ -448,8 +480,9 @@ fn test_zero_rounds_returns_empty_point() {
     };
     let mut chal = challenger();
     let mut sum = EF::ZERO;
-    let point = verify_final_sumcheck_rounds(Some(&data), &mut chal, &mut sum, 0, 0)
-        .expect("0 rounds + Some must succeed");
+    let point =
+        verify_final_sumcheck_rounds(Some(&data), &mut chal, &mut sum, 0, 0, Basis::Evaluation)
+            .expect("0 rounds + Some must succeed");
     assert!(point.as_slice().is_empty());
 }
 
@@ -460,8 +493,15 @@ fn test_missing_sumcheck_data() {
     let mut sum = EF::ZERO;
     let rounds = 3;
 
-    let err = verify_final_sumcheck_rounds::<F, EF, _>(None, &mut chal, &mut sum, rounds, 0)
-        .expect_err("None + rounds > 0 must error");
+    let err = verify_final_sumcheck_rounds::<F, EF, _>(
+        None,
+        &mut chal,
+        &mut sum,
+        rounds,
+        0,
+        Basis::Evaluation,
+    )
+    .expect_err("None + rounds > 0 must error");
 
     match err {
         // Inner field must echo the requested round count.
@@ -487,8 +527,15 @@ fn test_round_count_mismatch() {
         pow_witnesses: vec![],
     };
 
-    let err = verify_final_sumcheck_rounds(Some(&data), &mut chal, &mut sum, expected_rounds, 0)
-        .expect_err("length mismatch must error");
+    let err = verify_final_sumcheck_rounds(
+        Some(&data),
+        &mut chal,
+        &mut sum,
+        expected_rounds,
+        0,
+        Basis::Evaluation,
+    )
+    .expect_err("length mismatch must error");
 
     match err {
         SumcheckError::RoundCountMismatch { expected, actual } => {
@@ -515,7 +562,7 @@ fn test_verify_rounds_rejects_wrong_round_count() {
     };
 
     let err = data
-        .verify_rounds(&mut chal, &mut sum, expected_rounds, 0)
+        .verify_rounds(&mut chal, &mut sum, expected_rounds, 0, Basis::Evaluation)
         .expect_err("wrong round count must error");
 
     match err {
@@ -540,7 +587,7 @@ fn test_pow_witness_count_mismatch() {
     };
 
     let err = data
-        .verify_rounds(&mut chal, &mut sum, expected, 20)
+        .verify_rounds(&mut chal, &mut sum, expected, 20, Basis::Evaluation)
         .expect_err("witness-count mismatch must error before indexing");
 
     match err {
@@ -569,8 +616,124 @@ fn test_invalid_pow_witness() {
     };
 
     let err = data
-        .verify_rounds(&mut chal, &mut sum, data.num_rounds(), pow_bits)
+        .verify_rounds(
+            &mut chal,
+            &mut sum,
+            data.num_rounds(),
+            pow_bits,
+            Basis::Evaluation,
+        )
         .expect_err("zeroed witness must fail");
 
     assert!(matches!(err, SumcheckError::InvalidPowWitness));
+}
+
+/// Full projective sum-check round trip: prove with the projective
+/// `ProductPolynomial`, verify the transcript with the projective round
+/// identity, and check the reduced claim against monomial evaluations of the
+/// original tables (the final oracle check).
+///
+/// This drives the production kernels through a real prover AND a real
+/// verifier, the end-to-end evidence the Stage-1 equivalence test lacked.
+#[test]
+fn test_projective_sumcheck_round_trip() {
+    let mut rng = SmallRng::seed_from_u64(7);
+    let k = 6;
+    let n = 1usize << k;
+    let evals: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+    let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+    let evals_poly = Poly::new(evals.clone());
+    let weights_poly = Poly::new(weights.clone());
+
+    // The claim is the same dot product in both bases.
+    let claim: EF = evals.iter().zip(&weights).map(|(&e, &w)| e * w).sum();
+
+    // Prover: k full projective rounds.
+    let poly = ProductPolynomial::<F, EF>::new_unpacked(
+        VariableOrder::Prefix,
+        evals_poly.clone(),
+        weights_poly.clone(),
+    )
+    .with_basis(Basis::Projective);
+    let mut prover = SumcheckProver::new(poly, claim);
+    let mut data = SumcheckData::default();
+    let mut prover_challenger = challenger();
+    let prover_randomness =
+        prover.compute_sumcheck_polynomials(&mut data, &mut prover_challenger, k, 0, None);
+
+    // Verifier: same transcript, projective derivation s(0) := C - s(inf).
+    let mut verifier_challenger = challenger();
+    let mut claimed = claim;
+    let verifier_randomness = data
+        .verify_rounds(
+            &mut verifier_challenger,
+            &mut claimed,
+            k,
+            0,
+            Basis::Projective,
+        )
+        .expect("honest projective transcript must verify");
+    assert_eq!(prover_randomness, verifier_randomness);
+
+    // Final oracle check: the reduced claim equals f(r) * w(r), both tables
+    // read as monomial polynomials.
+    let f_r = evals_poly.eval_monomial(&verifier_randomness);
+    let w_r = weights_poly.eval_monomial(&verifier_randomness);
+    assert_eq!(claimed, f_r * w_r);
+
+    // The prover's fully bound table agrees with the monomial evaluation.
+    assert_eq!(prover.evals().as_constant().unwrap(), f_r);
+    assert_eq!(prover.claimed_sum(), claimed);
+}
+
+/// Any perturbed projective round message breaks the final oracle check.
+#[test]
+fn test_projective_sumcheck_rejects_tampering() {
+    let mut rng = SmallRng::seed_from_u64(8);
+    let k = 5;
+    let n = 1usize << k;
+    let evals: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+    let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+    let evals_poly = Poly::new(evals.clone());
+    let weights_poly = Poly::new(weights.clone());
+    let claim: EF = evals.iter().zip(&weights).map(|(&e, &w)| e * w).sum();
+
+    // One honest transcript, reused for every tampering position.
+    let poly = ProductPolynomial::<F, EF>::new_unpacked(
+        VariableOrder::Prefix,
+        evals_poly.clone(),
+        weights_poly.clone(),
+    )
+    .with_basis(Basis::Projective);
+    let mut prover = SumcheckProver::new(poly, claim);
+    let mut honest = SumcheckData::default();
+    let _ = prover.compute_sumcheck_polynomials(&mut honest, &mut challenger(), k, 0, None);
+
+    for round in 0..k {
+        for slot in 0..2 {
+            let mut tampered = honest.clone();
+            tampered.polynomial_evaluations[round][slot] += EF::ONE;
+
+            let mut verifier_challenger = challenger();
+            let mut claimed = claim;
+            let randomness = tampered
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut claimed,
+                    k,
+                    0,
+                    Basis::Projective,
+                )
+                .expect("structure is intact; rejection happens at the oracle check");
+
+            // The final oracle check must fail for every tampering position.
+            let f_r = evals_poly.eval_monomial(&randomness);
+            let w_r = weights_poly.eval_monomial(&randomness);
+            assert_ne!(
+                claimed,
+                f_r * w_r,
+                "tampering round {round} slot {slot} must be rejected"
+            );
+        }
+    }
 }

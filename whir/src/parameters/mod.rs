@@ -8,6 +8,7 @@ pub mod whir;
 
 pub use folding::{FoldingFactor, FoldingFactorError};
 pub use p3_security::whir::SecurityAssumption;
+pub use p3_sumcheck::strategy::Basis;
 pub use whir::{RoundConfig, WhirConfig, WhirConfigError};
 
 /// Fallback proof-of-work difficulty when the user does not specify one.
