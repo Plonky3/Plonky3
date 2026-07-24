@@ -183,7 +183,7 @@ impl Setup {
 struct Proven {
     /// The hiding PCS the proof was produced with.
     pcs: TestZkPcs,
-    /// Commitment to the (possibly simulated) witness.
+    /// Commitment to the witness used by the honest prover.
     commitment: TestCommitment,
     /// The opening proof; tamper tests mutate it in place.
     proof: ZkWhirProof<F, EF, MyMmcs>,
@@ -559,7 +559,7 @@ fn zk_whir_rejects_wrong_commitment() {
 /// - The system is solved jointly via Gaussian elimination over the
 ///   extension field.
 /// - Base-field inputs keep the solution in the base field.
-fn condition_witness(
+fn sample_witness_conditioned_on_claims(
     rng: &mut SmallRng,
     num_variables: usize,
     claims: &[(Point<EF>, EF)],
@@ -619,15 +619,15 @@ fn condition_witness(
 }
 
 #[test]
-fn zk_whir_simulator_witness_free_transcript_accepts() {
-    // Completeness direction of the simulator.
+fn zk_whir_conditioned_witness_round_trip_accepts() {
+    // Same-claim-fiber completeness check.
     //
-    //     witness-free transcript  ->  verifies
-    //                              ->  exposes exactly the public claims
+    // This samples a complete alternate witness conditioned on the public
+    // claims, then runs the honest prover against a fresh commitment to that
+    // witness. It does not construct a witness-free transcript simulator or
+    // establish transcript indistinguishability (Theorem 4.5).
     //
-    // The message is random, conditioned only on those claims.
-    // This is not the composed-distribution argument (Theorem 4.5).
-    // The per-component distribution proofs live where the masks are drawn:
+    // The per-component simulation tests live where the masks are drawn:
     //
     //     masked sumcheck wires  ->  p3-sumcheck simulator tests
     //     private OOD answers    ->  code_switch programmability tests
@@ -651,29 +651,30 @@ fn zk_whir_simulator_witness_free_transcript_accepts() {
         .map(|point| (point.clone(), witness.eval_base(point)))
         .collect();
 
-    // Simulator side: garbage witness agreeing exactly on the claims.
-    let mut simulator_rng = SmallRng::seed_from_u64(22);
-    let simulated_witness = condition_witness(&mut simulator_rng, num_variables, &claims);
+    // Alternate witness agreeing exactly on the claims.
+    let mut alternate_rng = SmallRng::seed_from_u64(22);
+    let alternate_witness =
+        sample_witness_conditioned_on_claims(&mut alternate_rng, num_variables, &claims);
     for (point, value) in &claims {
-        assert_eq!(simulated_witness.eval_base(point), *value);
+        assert_eq!(alternate_witness.eval_base(point), *value);
     }
     assert_ne!(
-        simulated_witness.as_slice(),
+        alternate_witness.as_slice(),
         witness.as_slice(),
-        "the simulated witness must differ from the real one off the claims",
+        "the alternate witness must differ from the original off the claims",
     );
 
-    // The simulated transcript verifies against the simulated commitment
-    // with the real public claims.
-    let proven = Setup::new(23).prove_with(simulated_witness, points);
+    // The honest transcript verifies against the alternate witness's own
+    // commitment while carrying the original public claims.
+    let proven = Setup::new(23).prove_with(alternate_witness, points);
     assert_eq!(
         proven.proof.evals,
         claims.iter().map(|(_, value)| *value).collect::<Vec<_>>(),
-        "the simulated transcript must expose exactly the public claims",
+        "the proof evaluation payload must match the public claims",
     );
     proven
         .verify()
-        .expect("simulated HVZK transcript must verify");
+        .expect("the conditioned-witness proof must verify");
 }
 
 #[test]
