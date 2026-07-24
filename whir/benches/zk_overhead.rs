@@ -27,7 +27,7 @@ use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption,
 use p3_whir::pcs::prover::WhirProver;
 use p3_whir::pcs::zk::{HidingWhirPcs, ZkParameters, ZkWhirConfig};
 use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 
 type F = KoalaBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -43,8 +43,8 @@ type Mmcs = MerkleTreeMmcs<PackedF, PackedF, MerkleHash, MerkleCompress, 2, 8>;
 type Dft = Radix2DFTSmallBatch<F>;
 
 type PlainPcs = WhirProver<EF, F, Dft, Mmcs, Challenger, PrefixProver<F, EF>>;
-type ZkPcs = HidingWhirPcs<EF, F, Dft, Mmcs, Challenger, SmallRng>;
-type OcticZkPcs = HidingWhirPcs<OcticEF, F, Dft, Mmcs, Challenger, SmallRng>;
+type ZkPcs = HidingWhirPcs<EF, F, Dft, Mmcs, Challenger, StdRng>;
+type OcticZkPcs = HidingWhirPcs<OcticEF, F, Dft, Mmcs, Challenger, StdRng>;
 
 // Polynomial sizes (log_2 of coefficient count) and shared knobs.
 const SIZES: [usize; 2] = [16, 18];
@@ -143,7 +143,7 @@ fn bench_zk(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
         },
     )
     .unwrap();
-    let pcs = ZkPcs::new(config, Dft::default(), mmcs(), SmallRng::seed_from_u64(4));
+    let pcs = ZkPcs::new(config, Dft::default(), mmcs(), StdRng::seed_from_u64(4));
 
     let mut rng = SmallRng::seed_from_u64(3);
     let witness = Poly::<F>::rand(&mut rng, num_variables);
@@ -199,7 +199,7 @@ fn report_proof_sizes(num_variables: usize) {
         },
     )
     .unwrap();
-    let pcs = ZkPcs::new(config, Dft::default(), mmcs(), SmallRng::seed_from_u64(4));
+    let pcs = ZkPcs::new(config, Dft::default(), mmcs(), StdRng::seed_from_u64(4));
     let mut rng = SmallRng::seed_from_u64(3);
     let witness = Poly::<F>::rand(&mut rng, num_variables);
     let points = vec![Point::<EF>::rand(&mut rng, num_variables)];
@@ -247,7 +247,7 @@ fn bench_octic_zk_open_no_pow(c: &mut Criterion) {
             octic_no_pow_config(num_variables),
             Dft::default(),
             mmcs(),
-            SmallRng::seed_from_u64(4),
+            StdRng::seed_from_u64(4),
         );
         let mut rng = SmallRng::seed_from_u64(3);
         let witness = Poly::<F>::rand(&mut rng, num_variables);
