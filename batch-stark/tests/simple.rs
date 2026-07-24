@@ -838,6 +838,116 @@ fn test_two_instances() -> Result<(), impl Debug> {
     verify_batch(&config, &airs, &proof, &pvs, common)
 }
 
+/// Showcases `p3-security`: prove a real batch sharing a LogUp bus, then
+/// estimate its proven soundness with and without accounting for the lookup
+/// argument. The batch config above uses toy sizes for speed, so the estimate
+/// uses representative deployment-scale parameters.
+#[test]
+fn security_estimate_with_and_without_lookups() {
+    use p3_security::logup::{self, LOGUP_LABEL, LogUpAir};
+    use p3_security::shape::{InstanceShape, StarkAirParams};
+    use p3_security::stark::proven_security_report;
+
+    // A real batch: MulAir sends (a, b) on a bus, FibAir receives it.
+    let config = make_config(1337);
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4);
+    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2);
+    let instances = vec![
+        StarkInstance {
+            air: &air_fib,
+            trace: &fib_trace,
+            public_values: fib_pis.clone(),
+        },
+        StarkInstance {
+            air: &air_mul,
+            trace: &mul_trace,
+            public_values: mul_pis.clone(),
+        },
+    ];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+    verify_batch(
+        &config,
+        &[air_fib, air_mul],
+        &proof,
+        &[fib_pis, mul_pis],
+        common,
+    )
+    .unwrap();
+
+    // Deployment-scale FRI parameters. `security_regime()` mirrors the runtime
+    // FRI config into the soundness model with no hand-copying.
+    let deployment_fri: FriParameters<()> = FriParameters {
+        log_blowup: 1,
+        log_final_poly_len: 0,
+        max_log_arity: 3,
+        num_queries: 256,
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 16,
+        mmcs: (),
+    };
+    let regime = deployment_fri.security_regime();
+
+    // AIR shape and instance shape. The challenge field is the degree-4
+    // BabyBear extension; Keccak commitments give 128-bit collision resistance;
+    // the batch random-linear-combines several committed matrices into one FRI
+    // instance.
+    let air = StarkAirParams {
+        num_constraints: 3,
+        max_constraint_degree: 2,
+        max_combo: 2,
+    };
+    let shape = InstanceShape {
+        log_trace_length: 22,
+        modulus_bits: <Challenge as Field>::bits(),
+        collision_resistance: 128,
+        num_batched_functions: 8,
+    };
+
+    // The shared bus carries width-2 messages; a lookup-heavy deployment issues
+    // many such interactions per row (range checks, memory, …).
+    let lookups = LogUpAir {
+        num_interactions: 256,
+        max_message_width: 16,
+    };
+
+    let without = proven_security_report(&regime, &air, &shape, &[]);
+    let lookup_term = logup::security_term(&lookups, &shape).expect("batch uses a LogUp bus");
+    let with = proven_security_report(&regime, &air, &shape, &[lookup_term]);
+    let lookup_bits = logup::fingerprint_error(&lookups, &shape).bits();
+
+    let (wo_regime, wo_bind) = without.binding();
+    let (wi_regime, wi_bind) = with.binding();
+    println!(
+        "batch-stark proven security @ deployment params ({}-bit field, {} committed fns):",
+        shape.modulus_bits, shape.num_batched_functions
+    );
+    println!(
+        "  without lookups: {:.1} bits (binds: {} in {wo_regime:?})",
+        without.security_bits(),
+        wo_bind.label
+    );
+    println!(
+        "  with lookups:    {:.1} bits (binds: {} in {wi_regime:?})",
+        with.security_bits(),
+        wi_bind.label
+    );
+    println!("  logup fingerprint term: {lookup_bits:.1} bits");
+
+    // The lookup argument is an extra independent soundness term: it can only
+    // hold or lower the reported security, and never exceeds its own fingerprint.
+    assert!(with.security_bits() <= without.security_bits());
+    assert!(with.security_bits() <= lookup_bits + 1e-9);
+    assert!(with.udr.terms().iter().any(|t| t.label == LOGUP_LABEL));
+    // At these parameters the fingerprint sits below the lookup-free bound, so
+    // accounting for lookups strictly lowers security and the term binds.
+    if lookup_bits < without.security_bits() {
+        assert!(with.security_bits() < without.security_bits());
+        assert_eq!(with.binding().1.label, LOGUP_LABEL);
+    }
+}
+
 #[test]
 fn test_periodic_air() -> Result<(), impl Debug> {
     let config = make_config(42);
