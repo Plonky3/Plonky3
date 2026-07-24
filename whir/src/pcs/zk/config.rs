@@ -73,7 +73,14 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
-    /// Plain WHIR round structure (folding factors, domains, queries, PoW).
+    /// Plain WHIR round structure reused by the hiding pipeline.
+    ///
+    /// Folding factors, outer domains, query counts, and the active PoW
+    /// phases carry over. Commitment OOD samples are omitted by HVZK-WHIR,
+    /// while the plain final folding sumcheck is replaced by the masked base
+    /// case. Consequently, `commitment_ood_samples` and
+    /// `final_folding_pow_bits` are not transcript steps here;
+    /// `final_sumcheck_rounds` still determines the terminal message length.
     pub inner: WhirConfig<EF, F, Challenger>,
     /// ZK extension parameters.
     pub zk: ZkParameters,
@@ -82,6 +89,12 @@ where
     ///
     /// Budget rule: at least the spot checks ever opened against the oracle.
     /// Every opening is then simulatable.
+    ///
+    /// For an oracle with `M` message rows and outer height `H`, a randomized
+    /// limb occupies `M + t_i` coefficient slots. The inherited
+    /// `log_inv_rate` fixes the outer geometry `H / M`, not that coefficient
+    /// occupancy. [`ZkWhirConfig::new`] therefore enforces `M + t_i <= H` for
+    /// every oracle.
     pub oracle_randomness: Vec<usize>,
     /// Mask code for the HVZK sumcheck rounds.
     pub sumcheck_mask: MaskCodeShape,
@@ -162,9 +175,13 @@ where
             })
             .collect();
 
-        // Randomness rows must fit inside each oracle's rate slack:
+        // Randomness rows must fit inside each oracle's coefficient slack:
         //
-        //     height - message_rows = (2^rate - 1) * message_rows >= t_i
+        //     H - M = (2^log_inv_rate - 1) * M >= t_i
+        //     equivalently, M + t_i <= H
+        //
+        // The inherited log-inverse rate fixes the outer geometry H / M.
+        // Randomized encoding instead occupies M + t_i coefficient slots.
         //
         // This is load-bearing for zero knowledge, not just a layout fit.
         // The base case opens at most `randomness` distinct positions per
@@ -349,6 +366,31 @@ mod tests {
         };
         let err = ZkWhirConfig::<EF, F, MyChallenger>::new(16, params(), zk).unwrap_err();
         assert!(matches!(err, ZkConfigError::MaskRateTooHigh));
+    }
+
+    #[test]
+    fn config_rejects_randomness_that_exceeds_oracle_slack() {
+        // n = 8, k = 3, and log inverse rate 1 give the initial oracle
+        //
+        //     M = 2^(8 - 3) = 32 message rows
+        //     H = 2 * M       = 64 outer rows
+        //     t = 35          = CapacityBound queries at 32-bit security.
+        //
+        // The randomized limb would occupy M + t = 67 > H coefficients.
+        let protocol = ProtocolParameters {
+            folding_factor: FoldingFactor::Constant(3),
+            ..params()
+        };
+        let err = ZkWhirConfig::<EF, F, MyChallenger>::new(8, protocol, zk_params()).unwrap_err();
+        let ZkConfigError::RandomnessExceedsSlack {
+            round,
+            randomness,
+            slack,
+        } = err
+        else {
+            panic!("expected RandomnessExceedsSlack, got {err:?}");
+        };
+        assert_eq!((round, randomness, slack), (0, 35, 32));
     }
 
     #[test]
