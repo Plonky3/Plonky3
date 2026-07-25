@@ -106,10 +106,12 @@ fn honest_run(
     let (source_commitment, source_data) = extension_mmcs.commit_matrix(source_codeword);
 
     // Carried masks use mixed widths and domain heights. This exercises the
-    // same heterogeneous geometry as the integrated ZK-WHIR pipeline.
+    // same heterogeneous geometry as the integrated ZK-WHIR pipeline. The
+    // final two groups deliberately have equal height and width but different
+    // code dimensions, pinning their order inside one MMCS height bucket.
     let mask_groups: Vec<MaskGroupShape> = (0..num_masks)
         .map(|i| MaskGroupShape {
-            shape: MaskCodeShape::new(4 + 8 * i, 2, 1),
+            shape: MaskCodeShape::new(4 + 4 * i, 2, 1),
             width: if i == 0 { 2 } else { 1 },
         })
         .collect();
@@ -283,7 +285,7 @@ fn base_case_batches_mixed_fresh_mask_groups() {
             .iter()
             .map(|group| (group.shape.domain_size, group.width))
             .collect::<Vec<_>>(),
-        vec![(16, 2), (32, 1), (64, 1)],
+        vec![(16, 2), (32, 1), (32, 1)],
     );
     assert!(proof.fresh_mask_commitment.is_some());
     assert_eq!(proof.carried_mask_openings.len(), 3);
@@ -395,6 +397,60 @@ fn mixed_mask_positions_follow_mmcs_projection() {
     let global = [0, 1, 3, 4, 31];
     assert_eq!(project_mask_positions(&global, 32, 32), global);
     assert_eq!(project_mask_positions(&global, 32, 8), vec![0, 0, 0, 1, 7]);
+}
+
+#[test]
+fn mixed_mask_projection_has_balanced_power_of_two_fibers() {
+    for max_log in 0..=10 {
+        let max_domain = 1 << max_log;
+        let global_positions: Vec<_> = (0..max_domain).collect();
+        for group_log in 0..=max_log {
+            let group_domain = 1 << group_log;
+            let stride = max_domain / group_domain;
+            let projected = project_mask_positions(&global_positions, max_domain, group_domain);
+            let mut fiber_sizes = vec![0; group_domain];
+
+            for (&global, &local) in global_positions.iter().zip(&projected) {
+                assert!(local < group_domain);
+                assert_eq!(local, global / stride);
+                fiber_sizes[local] += 1;
+            }
+            assert!(fiber_sizes.iter().all(|&size| size == stride));
+        }
+    }
+}
+
+#[test]
+fn base_case_rejects_swapped_equal_height_fresh_groups() {
+    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
+        honest_run(0xE0A1, 3, 0, Tamper::None, None);
+    assert_eq!(
+        config
+            .mask_groups
+            .iter()
+            .map(|group| (group.shape.domain_size, group.width))
+            .collect::<Vec<_>>(),
+        vec![(16, 2), (32, 1), (32, 1)],
+    );
+
+    // Equal-height rows are flattened in stable configuration order. Swapping
+    // the two equal-width groups preserves every public axis, so rejection
+    // specifically exercises binding of that group order rather than a width
+    // or matrix-count check.
+    for rows in &mut proof.fresh_mask_opening.as_mut().unwrap().rows {
+        rows.swap(1, 2);
+    }
+
+    let err = verify_run(
+        &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        BaseCaseZkError::MerkleVerificationFailed {
+            kind: "fresh masks"
+        }
+    );
 }
 
 #[test]

@@ -58,8 +58,8 @@
 //! - The carried commitments retain their original group-specific domains.
 //! - Every fresh blind group is committed in one mixed-dimension MMCS tree.
 //! - One global query vector is projected onto each shorter mask domain.
-//! - Each projection remains independent and uniform for its group. Group-to-
-//!   group correlation does not affect the soundness union bound.
+//! - Each fixed group receives independent uniform draws. Different groups
+//!   are correlated, but that does not worsen the query-round maximum bound.
 //!
 //! # Shared-query security argument
 //!
@@ -73,11 +73,38 @@
 //!   Reed-Solomon ZK query budget;
 //! - a bad set in any group lifts to a global bad set of the same density, so
 //!   its miss probability remains `(1 - delta_i)^t_zk`;
-//! - correlations between different groups do not invalidate the union bound.
+//! - after the pre-query transcript fixes a bad group, accepting every group
+//!   implies missing that selected group's bad set. Thus the query-round error
+//!   is the maximum group miss probability, not a union bound.
 //!
-//! This is a concrete extension of Construction 7.2 from one common `C_zk`
-//! to heterogeneous power-of-two mask domains and requires protocol-level
-//! review before the optimization is treated as production-ready.
+//! Groups with the same code, radius, domain, query count, and exact projected
+//! query vector may additionally be analyzed as one wider interleaved
+//! component. Its disagreement set is the union of the constituent row
+//! disagreement sets; no alignment assumption is made. Without exact row
+//! synchronization, their candidate-list factors must remain separate.
+//!
+//! # Heterogeneous Construction 7.2 contract
+//!
+//! At the ideal-oracle layer, let `M_0` be the source-code MCA error and `M_i`
+//! the MCA error of mask group `i`. Let `L_0` and `L_i` bound the corresponding
+//! old/fresh interleaved lists. The inherited two-round bounds have the shape
+//!
+//! ```text
+//! epsilon_gamma <= M_0 + sum_i M_i + L_0 * product_i L_i / |EF|
+//! epsilon_query <= max(source_miss, max_i group_miss_i)
+//! ```
+//!
+//! MCA errors add because every group uses the same `gamma`; candidate lists
+//! multiply because complete candidates form a Cartesian product. The query
+//! maximum follows because a bad component can be selected from the fixed
+//! pre-query transcript. This contract requires linear injective randomized
+//! encodings, fresh independent encoding randomness, and radii strictly below
+//! the corresponding code distances.
+//!
+//! The concrete Merkle and Fiat-Shamir compilation additionally relies on the
+//! mixed MMCS binding the verifier-shaped, height-stratified row streams. The
+//! configuration retains its conservative query surcharge until the complete
+//! MCA/list/field accounting is reviewed.
 //!
 //! # Source oracle abstraction
 //!
