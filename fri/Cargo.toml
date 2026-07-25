@@ -20,7 +20,7 @@ p3-security.workspace = true
 p3-util.workspace = true
 
 itertools.workspace = true
-rand.workspace = true
+rand = { workspace = true, features = ["std_rng"] }
 serde = { workspace = true, features = ["derive", "alloc"] }
 spin.workspace = true
 thiserror.workspace = true

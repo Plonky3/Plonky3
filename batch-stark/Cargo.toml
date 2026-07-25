@@ -43,7 +43,7 @@ p3-symmetric = { path = "../symmetric" }
 
 criterion.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
-rand.workspace = true
+rand = { workspace = true, features = ["std_rng"] }
 
 [[bench]]
 name = "prove_batch"

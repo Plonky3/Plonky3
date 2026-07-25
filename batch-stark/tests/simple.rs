@@ -30,7 +30,7 @@ use p3_symmetric::{
 use p3_uni_stark::{InvalidProofShapeError, PeriodicColumnError, StarkConfig};
 use p3_util::{assert_clone, assert_send, assert_sync, log2_strict_usize};
 use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 
 const TWO_ADIC_FIXTURE: &str = "tests/fixtures/batch_stark_two_adic_v1.postcard";
 const CIRCLE_FIXTURE: &str = "tests/fixtures/batch_stark_circle_v1.postcard";
@@ -507,7 +507,7 @@ type HidingValMmcs = MerkleTreeHidingMmcs<
     <Val as Field>::Packing,
     MyHash,
     MyCompress,
-    SmallRng,
+    StdRng,
     2,
     8,
     4,
@@ -519,7 +519,7 @@ type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel<Val>;
 type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 type MyPcsWide = TwoAdicFriPcs<Val, Dft, ValMmcsWide, ChallengeMmcsWide>;
-type HidingPcs = HidingFriPcs<Val, Dft, HidingValMmcs, HidingChallengeMmcs, SmallRng>;
+type HidingPcs = HidingFriPcs<Val, Dft, HidingValMmcs, HidingChallengeMmcs, StdRng>;
 type MyConfig = StarkConfig<MyPcs, Challenge, Challenger>;
 type MyConfigWide = StarkConfig<MyPcsWide, Challenge, Challenger>;
 type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
@@ -610,11 +610,11 @@ fn make_config_zk(seed: u64) -> MyHidingConfig {
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let val_mmcs = HidingValMmcs::new(hash, compress, 2, rng.clone());
+    let val_mmcs = HidingValMmcs::new(hash, compress, 2, StdRng::seed_from_u64(1));
     let challenge_mmcs = HidingChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, rng);
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, StdRng::seed_from_u64(2));
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
 }
