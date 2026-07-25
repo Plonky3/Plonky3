@@ -53,8 +53,9 @@ pub enum ZkConfigError {
 /// - The mask spot-check count `t_zk` is not a knob.
 /// - [`ZkWhirConfig::new`] derives it from `security_level` and
 ///   `mask_log_inv_rate`.
-/// - The mask code then always reaches the configured security on its
-///   spot-check branch.
+/// - This budgets the mask query-miss branch only. It does not certify the
+///   randomized source geometry or the shared-challenge MCA/list terms; inspect
+///   [`ZkWhirConfig::hiding_base_case_security_report`] for those diagnostics.
 #[derive(Debug, Clone)]
 pub struct ZkParameters {
     /// Mask code message length `ell_zk` for the HVZK sumcheck (at least 3).
