@@ -15,7 +15,7 @@ use p3_uni_stark::{
     StarkConfig, prove_with_preprocessed, setup_preprocessed, verify_with_preprocessed,
 };
 use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 
 pub struct MulFibPAir {
     num_rows: usize,
@@ -179,7 +179,7 @@ type HidingValMmcs = MerkleTreeHidingMmcs<
     <Val as Field>::Packing,
     MyHash,
     MyCompress,
-    SmallRng,
+    StdRng,
     2,
     8,
     4,
@@ -190,7 +190,7 @@ type HidingChallengeMmcs = ExtensionMmcs<Val, Challenge, HidingValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel<Val>;
 type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-type HidingPcs = HidingFriPcs<Val, Dft, HidingValMmcs, HidingChallengeMmcs, SmallRng>;
+type HidingPcs = HidingFriPcs<Val, Dft, HidingValMmcs, HidingChallengeMmcs, StdRng>;
 type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
 
@@ -212,10 +212,16 @@ fn setup_zk_test_config() -> MyHidingConfig {
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let val_mmcs = HidingValMmcs::new(hash, compress, 0, rng.clone());
+    let val_mmcs = HidingValMmcs::new(hash, compress, 0, StdRng::seed_from_u64(1));
     let challenge_mmcs = HidingChallengeMmcs::new(val_mmcs.clone());
     let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
-    let pcs = HidingPcs::new(Dft::default(), val_mmcs, fri_params, 4, rng);
+    let pcs = HidingPcs::new(
+        Dft::default(),
+        val_mmcs,
+        fri_params,
+        4,
+        StdRng::seed_from_u64(2),
+    );
     let challenger = Challenger::new(perm);
     MyHidingConfig::new(pcs, challenger)
 }

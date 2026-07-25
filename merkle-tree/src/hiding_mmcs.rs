@@ -8,8 +8,8 @@ use p3_matrix::stack::HorizontalPair;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 use p3_util::zip_eq::zip_eq;
-use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use rand::{CryptoRng, SeedableRng};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
@@ -27,9 +27,10 @@ use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 /// `SALT_ELEMS` should be set such that the product of `SALT_ELEMS` with the size of the value
 /// (`P::Value`) is at least the target security parameter.
 ///
-/// `R` should be an appropriately seeded cryptographically secure pseudorandom number generator
-/// (CSPRNG). Something like `ThreadRng` may work, although it relies on the operating system to
-/// provide sufficient entropy.
+/// `R` is bounded by [`CryptoRng`], which rules out generators known to be unsuitable for
+/// cryptographic use. The bound does not replace proper seeding: the salts only hide the leaves
+/// if the generator is also seeded from unpredictable entropy, so production callers should seed
+/// from the operating system.
 ///
 /// Generics:
 /// - `P`: a leaf value
@@ -77,16 +78,19 @@ impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS
     }
 }
 
+/// Cloning forks the RNG stream by drawing a fresh seed from the source RNG, so the clone and the
+/// original never salt two commitments with the same sequence. This mirrors `HidingFriPcs`, and it
+/// is also what lets `R` be a generator that deliberately withholds `Clone`.
 impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize> Clone
     for MerkleTreeHidingMmcs<P, PW, H, C, R, N, DIGEST_ELEMS, SALT_ELEMS>
 where
     MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>: Clone,
-    R: Clone,
+    R: CryptoRng + SeedableRng,
 {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            rng: Mutex::new(self.rng.lock().clone()),
+            rng: Mutex::new(R::from_rng(&mut *self.rng.lock())),
         }
     }
 }
@@ -103,7 +107,7 @@ where
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
         + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
         + Sync,
-    R: Rng + Clone + Send,
+    R: CryptoRng + SeedableRng + Send,
     PW::Value: Eq + Clone,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
     StandardUniform: Distribution<P::Value>,
@@ -284,7 +288,7 @@ mod tests {
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use p3_util::assert_sync;
     use rand::SeedableRng;
-    use rand::rngs::SmallRng;
+    use rand::rngs::{SmallRng, StdRng};
 
     use super::MerkleTreeHidingMmcs;
     use crate::MerkleTreeError;
@@ -300,7 +304,7 @@ mod tests {
         <F as Field>::Packing,
         MyHash,
         MyCompress,
-        SmallRng,
+        StdRng,
         2,
         8,
         SALT_ELEMS,
@@ -313,12 +317,38 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, 0, rng);
+        let mmcs = MyMmcs::new(hash, compress, 0, StdRng::seed_from_u64(0));
 
         // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
         let large_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7, 8].map(F::from_u8).to_vec(), 1);
         let small_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7].map(F::from_u8).to_vec(), 1);
         let _ = mmcs.commit(vec![large_mat, small_mat]);
+    }
+
+    /// Invariant: cloning forks the salt stream.
+    ///
+    /// The usual wiring hands a clone of the value MMCS to the extension MMCS, so a clone that
+    /// copied the generator would salt two commitments with the same sequence and undo the
+    /// hiding. Committing the same matrix through the original and through its clone must
+    /// therefore land on different commitments.
+    #[test]
+    fn clone_forks_the_salt_stream() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 16, 3);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        let mmcs = MyMmcs::new(hash, compress, 0, StdRng::seed_from_u64(0));
+        let forked = mmcs.clone();
+
+        let (commit, _) = mmcs.commit(vec![mat.clone()]);
+        let (forked_commit, _) = forked.commit(vec![mat]);
+
+        assert_ne!(
+            commit, forked_commit,
+            "a clone must not reuse the original's salt stream",
+        );
     }
 
     #[test]
@@ -331,7 +361,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, 0, rng);
+        let mmcs = MyMmcs::new(hash, compress, 0, StdRng::seed_from_u64(0));
 
         let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
 
@@ -350,7 +380,7 @@ mod tests {
         // Commit to one matrix of width 4 through the hiding wrapper.
         let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
         let dims = vec![mat.dimensions()];
-        let mmcs = MyMmcs::new(hash, compress, 0, rng);
+        let mmcs = MyMmcs::new(hash, compress, 0, StdRng::seed_from_u64(0));
         let (commit, prover_data) = mmcs.commit(vec![mat]);
 
         // Mutation: append one extra element to the opened row.
@@ -392,7 +422,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, 0, rng);
+        let mmcs = MyMmcs::new(hash, compress, 0, StdRng::seed_from_u64(0));
         let (commit, prover_data) = mmcs.commit(mats);
 
         // Open four leaves at once.
@@ -425,7 +455,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, 0, rng);
+        let mmcs = MyMmcs::new(hash, compress, 0, StdRng::seed_from_u64(0));
         let (commit, prover_data) = mmcs.commit(vec![mat]);
 
         let indices = vec![2usize, 5];
