@@ -25,15 +25,21 @@ use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use serde::Serialize;
 
-use crate::parameters::SecurityAssumption;
-
 use super::config::ZkWhirConfig;
+use crate::parameters::SecurityAssumption;
 
 /// How much theorem support a reported bound has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub enum HidingBoundClassification {
-    /// The displayed ideal-IOP term follows from the selected coding theorem.
+    /// The displayed component or ideal-IOP composition follows from a theorem.
+    ///
+    /// This label is local to the term and its documented branch premise.  For
+    /// example, a query-miss term is proven when the oracle is at least the
+    /// reported radius from its code; that does not upgrade a conditional
+    /// close-word list or MCA branch in the Capacity regime.  Likewise, a
+    /// proven aggregate covers only the ideal-IOP composition reported here,
+    /// not the reductions and compiler steps excluded by this module.
     Proven,
     /// The term depends on an additional coding or compiler assumption.
     ///
@@ -84,7 +90,10 @@ impl HidingErrorBound {
         }
     }
 
-    /// Returns bits only for an unconditional, proven ideal-IOP bound.
+    /// Returns bits only for a theorem-backed term in its documented branch.
+    ///
+    /// This does not assert that sibling terms, a selected coding regime, or
+    /// the compiled PCS are proven end to end.
     #[must_use]
     pub const fn proven_bits(&self) -> Option<f64> {
         match (self.classification, self.bits) {
@@ -158,7 +167,11 @@ pub struct HidingCodeSecurityReport {
     /// Conservative query-miss error before the shared final PoW.
     ///
     /// At saturation this keeps the IID expression instead of reporting the
-    /// exact zero miss probability.
+    /// exact zero miss probability. The sampling bound is proven under the
+    /// premise that the pre-query component is at least `analysis_radius`
+    /// from its code. Under `CapacityBound`, the separate list/MCA terms
+    /// remain conditional; this field does not promote the full regime to
+    /// proven.
     pub query_miss: HidingErrorBound,
     /// MCA error for this component.  Interleaved groups include the
     /// conservative factor equal to `width`.
@@ -179,6 +192,9 @@ pub struct HidingQueryRoundReport {
     /// Minimum component bits, corresponding to the maximum miss probability.
     pub weakest_before_pow_bits: Option<f64>,
     /// Ideal-IOP query coordinate before any Fiat--Shamir grinding credit.
+    ///
+    /// This composes the proven far-word sampling branches.  It does not
+    /// classify the corresponding close-word list/MCA branches.
     pub before_pow: HidingErrorBound,
     /// The one final grind shared by all source and mask queries.
     pub shared_pow_bits: usize,
@@ -232,9 +248,15 @@ pub struct HidingBaseCaseSecurityReport {
     /// The weaker of the two Construction 7.2 RBR error coordinates.
     ///
     /// This is `min(gamma_round, query_round.before_pow)` in security-bit
-    /// notation. It does not include the compiler-conditional PoW estimate,
-    /// sum the coordinates into a single protocol failure probability, or
-    /// compose them with other WHIR or compiler errors.
+    /// notation, not `-log2` of a union of the coordinate errors. Its
+    /// classification conservatively combines both coordinates' provenance,
+    /// even when the less-proven coordinate is not numerically binding,
+    /// because certifying the reported RBR level requires both bounds. It
+    /// deliberately excludes `query_round.with_pow`, which assumes the
+    /// Fiat--Shamir grinding model, and does not compose with other WHIR or
+    /// compiler errors. A `Proven` classification here says only that both
+    /// coordinates and this ideal-IOP RBR composition are theorem-backed
+    /// within that scope.
     pub round_by_round: HidingErrorBound,
 }
 
@@ -755,10 +777,15 @@ mod tests {
             unique.round_by_round.classification,
             HidingBoundClassification::Proven
         );
+        assert!(unique.round_by_round.proven_bits().is_some());
         assert!(!unique.round_by_round.vacuous);
 
         let johnson = classification_config(SecurityAssumption::JohnsonBound)
             .hiding_base_case_security_report();
+        assert_eq!(
+            johnson.query_round.before_pow.classification,
+            HidingBoundClassification::Proven
+        );
         assert_eq!(
             johnson.source.mca.classification,
             HidingBoundClassification::Approximation
@@ -771,11 +798,130 @@ mod tests {
             johnson.gamma_round.combined.classification,
             HidingBoundClassification::Approximation
         );
+        assert_eq!(
+            johnson.round_by_round.classification,
+            HidingBoundClassification::Approximation
+        );
+        assert_eq!(johnson.round_by_round.proven_bits(), None);
 
         let capacity =
             stock_config(SecurityAssumption::CapacityBound).hiding_base_case_security_report();
         assert_eq!(
+            capacity.source.query_miss.classification,
+            HidingBoundClassification::Proven
+        );
+        assert!(
+            capacity.mask_groups.iter().all(|group| {
+                group.query_miss.classification == HidingBoundClassification::Proven
+            })
+        );
+        assert_eq!(
+            capacity.query_round.before_pow.classification,
+            HidingBoundClassification::Proven
+        );
+        assert_eq!(
             capacity.gamma_round.combined.classification,
+            HidingBoundClassification::Conditional
+        );
+        assert_eq!(
+            capacity.round_by_round.classification,
+            HidingBoundClassification::Conditional
+        );
+        assert_eq!(capacity.round_by_round.proven_bits(), None);
+    }
+
+    #[test]
+    fn aggregate_provenance_includes_a_nonbinding_coordinate() {
+        for classification in [
+            HidingBoundClassification::Conditional,
+            HidingBoundClassification::Approximation,
+        ] {
+            let gamma = HidingErrorBound::available(120., classification);
+            let query = HidingErrorBound::available(80., HidingBoundClassification::Proven);
+            let combined = combine_classifications(gamma.classification, query.classification);
+            let round_by_round =
+                HidingErrorBound::available(gamma.bits.unwrap().min(query.bits.unwrap()), combined);
+
+            assert_eq!(round_by_round.bits, Some(80.));
+            assert_eq!(round_by_round.classification, classification);
+            assert_eq!(round_by_round.proven_bits(), None);
+        }
+    }
+
+    #[test]
+    fn proximity_radius_matches_query_error_radius() {
+        for (assumption, expected_radius, expected_log) in [
+            (
+                SecurityAssumption::UniqueDecoding,
+                0.375,
+                -0.678_071_905_112_637_7,
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                0.475,
+                -0.929_610_672_108_602,
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                0.7375,
+                -1.929_610_672_108_602_4,
+            ),
+        ] {
+            let radius = proximity_radius(assumption, 2);
+            let log_miss = libm::log2(1. - radius);
+            assert!((radius - expected_radius).abs() < 1e-15);
+            assert!((log_miss - expected_log).abs() < 1e-12);
+            assert!((log_miss - assumption.log_1_delta(2)).abs() < 1e-12);
+        }
+
+        for log_inv_rate in 1..=16 {
+            for assumption in [
+                SecurityAssumption::UniqueDecoding,
+                SecurityAssumption::JohnsonBound,
+                SecurityAssumption::CapacityBound,
+            ] {
+                let radius = proximity_radius(assumption, log_inv_rate);
+                assert!(
+                    (libm::log2(1. - radius) - assumption.log_1_delta(log_inv_rate)).abs() < 1e-12
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn interleaved_list_uses_stable_lemma_3_13_bound() {
+        let assumption = SecurityAssumption::JohnsonBound;
+        let log_degree = 3;
+        let log_inv_rate = 2;
+        let interleaving = 4;
+
+        let base = assumption.list_size_bits(log_degree, log_inv_rate);
+        let crude = interleaving as f64 * base;
+        let actual = interleaved_list_bits(assumption, log_degree, log_inv_rate, interleaving);
+
+        assert!((actual - 13.228_818_690_495_881).abs() < 1e-12);
+        assert!((crude - 21.287_712_379_549_45).abs() < 1e-12);
+        assert!(actual < crude);
+    }
+
+    #[test]
+    fn stock_capacity_gamma_coordinate_is_pinned() {
+        let report =
+            stock_config(SecurityAssumption::CapacityBound).hiding_base_case_security_report();
+        let product_list_bits = report.gamma_round.product_list.log2_size.unwrap();
+        let raw_product_list_over_field_bits =
+            report.field_order_log2_floor as f64 - product_list_bits;
+
+        assert!((report.gamma_round.mca_sum.bits.unwrap() - 92.123_483_053_435).abs() < 1e-10);
+        assert!((product_list_bits - 617.657_842_846_621).abs() < 1e-10);
+        assert_eq!(report.field_order_log2_floor, 123);
+        assert!((raw_product_list_over_field_bits + 494.657_842_846_621).abs() < 1e-10);
+        assert_eq!(report.gamma_round.product_list_over_field.bits, Some(0.));
+        assert!(report.gamma_round.product_list_over_field.vacuous);
+        assert_eq!(report.gamma_round.combined.bits, Some(0.));
+        assert!(report.gamma_round.combined.vacuous);
+        assert_eq!(
+            report.gamma_round.combined.classification,
             HidingBoundClassification::Conditional
         );
     }
