@@ -2,6 +2,8 @@
 
 use core::arch::asm;
 
+use p3_util::branch_hint;
+
 use super::packing::PackedGoldilocksNeon;
 use crate::{Goldilocks, P};
 
@@ -121,6 +123,85 @@ pub(super) unsafe fn mul_add_asm(a: u64, b: u64, c: u64) -> u64 {
     }
 
     result
+}
+
+// Scalar Goldilocks multiply after 0xPolygonZero/plonky2's
+// `poseidon_goldilocks_neon.rs` (MIT/Apache-2.0). Unlike `mul_asm`, whose
+// single asm block is opaque to the scheduler, these helpers are mostly plain
+// Rust, so LLVM can interleave independent multiply chains across calls. The
+// wraparound correction after the `lo - (hi >> 32)` step is a branch rather
+// than two ALU ops: it is taken with probability ~2^-32. Structurally this
+// mirrors `goldilocks.rs`'s `reduce128` with aarch64 micro-tunings (asm
+// barrier, `umull` w-form).
+
+/// Add with `2^64 ≡ ε` folding; only correct if `a + b < 2^64 + ORDER = 0x1ffffffff00000001`.
+#[inline(always)]
+unsafe fn add_with_wraparound(a: u64, b: u64) -> u64 {
+    let res: u64;
+    let adj: u64;
+    unsafe {
+        asm!(
+            "adds  {res}, {a}, {b}",
+            "csetm {adj:w}, cs",
+            a = in(reg) a,
+            b = in(reg) b,
+            res = lateout(reg) res,
+            adj = lateout(reg) adj,
+            options(pure, nomem, nostack),
+        );
+    }
+    res + adj
+}
+
+#[inline(always)]
+unsafe fn sub_with_wraparound_lsr32(a: u64, b: u64) -> u64 {
+    let mut b_hi = b >> 32;
+    // Optimization barrier (plonky2 idiom): keeps LLVM from folding the shift
+    // into the comparison below, which would lose the single-`lsr` form.
+    unsafe {
+        asm!(
+            "/* {0} */",
+            inlateout(reg) b_hi,
+            options(nomem, nostack, preserves_flags, pure),
+        );
+    }
+    let (mut t, borrow) = a.overflowing_sub(b_hi);
+    if borrow {
+        branch_hint(); // A borrow is exceedingly rare. It is faster to branch.
+        t -= EPSILON; // Cannot underflow.
+    }
+    t
+}
+
+/// Deliberately multiplies only the LOW 32 bits of `x` by EPSILON: `umull`'s
+/// `w`-register operands give the reduction's `hi & EPSILON` masking for free.
+#[inline(always)]
+unsafe fn mul_epsilon_scalar(x: u64) -> u64 {
+    let res;
+    unsafe {
+        asm!(
+            "umull {res}, {x:w}, {epsilon:w}",
+            x = in(reg) x,
+            epsilon = in(reg) EPSILON,
+            res = lateout(reg) res,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    res
+}
+
+/// Scalar Goldilocks multiply; result is a valid (not necessarily canonical)
+/// representative for any `u64` inputs.
+#[inline(always)]
+pub(super) unsafe fn multiply_p2(x: u64, y: u64) -> u64 {
+    let xy = (x as u128) * (y as u128);
+    let xy_lo = xy as u64;
+    let xy_hi = (xy >> 64) as u64;
+    unsafe {
+        let res0 = sub_with_wraparound_lsr32(xy_lo, xy_hi);
+        let xy_hi_lo_mul_epsilon = mul_epsilon_scalar(xy_hi);
+        add_with_wraparound(res0, xy_hi_lo_mul_epsilon)
+    }
 }
 
 /// Add two Goldilocks elements with overflow handling using inline assembly.
@@ -276,6 +357,11 @@ pub(super) mod tests {
     fn canon(x: u64) -> u64 {
         F::new(x).as_canonical_u64()
     }
+
+    /// Raw value patterns stressing every wraparound correction: field
+    /// extremes, the epsilon window, and non-canonical values up to
+    /// `u64::MAX`. Shared by the aarch64 field-op and S-box tests.
+    pub const EDGE: [u64; 8] = [0, 1, (1 << 32) - 1, 1 << 32, 1 << 63, P - 1, P, u64::MAX];
 
     /// Boundary u64s probed against every scalar ASM op.
     pub const EDGE_VALUES: &[u64] = &[

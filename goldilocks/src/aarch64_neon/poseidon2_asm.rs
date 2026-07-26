@@ -6,9 +6,7 @@
 use core::arch::aarch64::*;
 use core::arch::asm;
 
-use p3_util::branch_hint;
-
-use super::utils::{EPSILON, add_asm, add_canonical_asm, mul_add_asm, mul_asm};
+use super::utils::{add_asm, add_canonical_asm, mul_add_asm, mul_asm, multiply_p2};
 use crate::P;
 
 /// Compute x / 2 in the Goldilocks field, matching `halve_u64::<P>`.
@@ -1395,85 +1393,6 @@ pub fn internal_permute_neon_w12(state: &mut [uint64x2_t; 12], constants: &[u64]
     state[0] = s0;
 }
 
-// Scalar Goldilocks multiply after 0xPolygonZero/plonky2's
-// `poseidon_goldilocks_neon.rs` (MIT/Apache-2.0). Unlike `mul_asm`, whose
-// single asm block is opaque to the scheduler, these helpers are mostly plain
-// Rust, so LLVM interleaves the four s0 chains of the internal rounds. The
-// wraparound correction after the `lo - (hi >> 32)` step is a branch rather
-// than two ALU ops: it is taken with probability ~2^-32.
-// Structurally this mirrors `goldilocks.rs`'s `reduce128` with aarch64
-// micro-tunings (asm barrier, `umull` w-form); kept local pending upstream discussion.
-
-/// Add with `2^64 ≡ ε` folding; only correct if `a + b < 2^64 + ORDER = 0x1ffffffff00000001`.
-#[inline(always)]
-unsafe fn add_with_wraparound(a: u64, b: u64) -> u64 {
-    let res: u64;
-    let adj: u64;
-    unsafe {
-        asm!(
-            "adds  {res}, {a}, {b}",
-            "csetm {adj:w}, cs",
-            a = in(reg) a,
-            b = in(reg) b,
-            res = lateout(reg) res,
-            adj = lateout(reg) adj,
-            options(pure, nomem, nostack),
-        );
-    }
-    res + adj
-}
-
-#[inline(always)]
-unsafe fn sub_with_wraparound_lsr32(a: u64, b: u64) -> u64 {
-    let mut b_hi = b >> 32;
-    // Optimization barrier (plonky2 idiom): keeps LLVM from folding the shift
-    // into the comparison below, which would lose the single-`lsr` form.
-    unsafe {
-        asm!(
-            "/* {0} */",
-            inlateout(reg) b_hi,
-            options(nomem, nostack, preserves_flags, pure),
-        );
-    }
-    let (mut t, borrow) = a.overflowing_sub(b_hi);
-    if borrow {
-        branch_hint(); // A borrow is exceedingly rare. It is faster to branch.
-        t -= EPSILON; // Cannot underflow.
-    }
-    t
-}
-
-/// Deliberately multiplies only the LOW 32 bits of `x` by EPSILON: `umull`'s
-/// `w`-register operands give the reduction's `hi & EPSILON` masking for free.
-#[inline(always)]
-unsafe fn mul_epsilon_scalar(x: u64) -> u64 {
-    let res;
-    unsafe {
-        asm!(
-            "umull {res}, {x:w}, {epsilon:w}",
-            x = in(reg) x,
-            epsilon = in(reg) EPSILON,
-            res = lateout(reg) res,
-            options(pure, nomem, nostack, preserves_flags),
-        );
-    }
-    res
-}
-
-/// Scalar Goldilocks multiply; result is a valid (not necessarily canonical)
-/// representative for any `u64` inputs.
-#[inline(always)]
-unsafe fn multiply_p2(x: u64, y: u64) -> u64 {
-    let xy = (x as u128) * (y as u128);
-    let xy_lo = xy as u64;
-    let xy_hi = (xy >> 64) as u64;
-    unsafe {
-        let res0 = sub_with_wraparound_lsr32(xy_lo, xy_hi);
-        let xy_hi_lo_mul_epsilon = mul_epsilon_scalar(xy_hi);
-        add_with_wraparound(res0, xy_hi_lo_mul_epsilon)
-    }
-}
-
 #[inline]
 pub fn internal_permute_neon_w16(state: &mut [uint64x2_t; 16], constants: &[u64]) {
     let mut s0 = state[0];
@@ -1616,6 +1535,21 @@ pub fn internal_permute_neon<const WIDTH: usize>(
 /// wraparound corrections use predicated add/sub. Contract with the enclosing
 /// asm block: `p7` holds `ptrue.d`, `z30` holds the EPSILON splat, and
 /// `z24`–`z26` and `p1` are clobbered (all declared by the callers below).
+///
+/// Callers predicate with unrestricted `ptrue p7.d` (all lanes), not `vl2`,
+/// so this is safe at any SVE vector length only because of two invariants:
+/// AArch64 guarantees that writing a NEON (`Vn`) register zeroes the upper
+/// bits of the aliased `Zn` register, so every lane above the low 128 bits is
+/// always zero on entry; and the per-lane mod-`P` reduction maps zero to
+/// zero, so those lanes stay zero and are simply never read back (callers
+/// only extract the low 128 bits via `out("vN")`).
+///
+/// A related caveat: Rust's inline-asm register classes expose only the
+/// 128-bit `vreg` alias, so the `out("vN") _` clobbers below tell the
+/// compiler nothing about bits above 127. That is sound today because stable
+/// Rust has no SVE register class or intrinsics that could keep data live in
+/// those upper lanes across this asm block — revisit this reasoning if/when
+/// SVE inline-asm support or intrinsics stabilize.
 #[cfg(target_feature = "sve2")]
 #[rustfmt::skip]
 macro_rules! sve2_fm {
@@ -1767,15 +1701,15 @@ unsafe fn sbox6_sve2(state: &mut [uint64x2_t; 6]) {
 #[cfg(target_feature = "sve2")]
 #[inline(always)]
 unsafe fn sbox_neon<const WIDTH: usize>(state: &mut [uint64x2_t; WIDTH]) {
-    const { assert!(WIDTH % 6 == 0 || WIDTH % 4 == 0) }
+    const { assert!(WIDTH.is_multiple_of(6) || WIDTH.is_multiple_of(4)) }
     unsafe {
-        if WIDTH % 6 == 0 {
-            for chunk in state.chunks_exact_mut(6) {
-                sbox6_sve2(chunk.try_into().unwrap());
+        if WIDTH.is_multiple_of(6) {
+            for chunk in state.as_chunks_mut::<6>().0 {
+                sbox6_sve2(chunk);
             }
         } else {
-            for chunk in state.chunks_exact_mut(4) {
-                sbox4_sve2(chunk.try_into().unwrap());
+            for chunk in state.as_chunks_mut::<4>().0 {
+                sbox4_sve2(chunk);
             }
         }
     }
@@ -3459,11 +3393,7 @@ mod field_op_tests {
 
     use super::*;
     use crate::Goldilocks;
-
-    /// Raw operand patterns stressing every wraparound correction: field
-    /// extremes, the epsilon window, and non-canonical values up to u64::MAX.
-    /// The ops under test accept any u64 residue.
-    const EDGE: [u64; 8] = [0, 1, (1 << 32) - 1, 1 << 32, 1 << 63, P - 1, P, u64::MAX];
+    use crate::aarch64_neon::EDGE;
 
     fn mul_ref(x: u64, y: u64) -> u64 {
         ((x as u128 % P as u128) * (y as u128 % P as u128) % P as u128) as u64

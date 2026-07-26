@@ -16,18 +16,16 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, PrimeField64,
+    PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
+use super::utils::EPSILON;
 use crate::{Goldilocks, P};
 
 const WIDTH: usize = 2;
-
-/// Equal to `2^32 - 1 = 2^64 mod P`.
-const EPSILON: u64 = Goldilocks::ORDER_U64.wrapping_neg();
 
 /// Width-2 packed `Goldilocks` for aarch64.
 ///
@@ -519,11 +517,7 @@ mod mixed_dot_tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-
-    /// Raw value patterns stressing the accumulator and the final reduction:
-    /// field extremes, the epsilon window, and non-canonical values up to
-    /// u64::MAX. `mixed_dot_product` accepts any u64 residues.
-    const EDGE: [u64; 8] = [0, 1, (1 << 32) - 1, 1 << 32, 1 << 63, P - 1, P, u64::MAX];
+    use crate::aarch64_neon::EDGE;
 
     /// Reference: canonicalize inputs, accumulate mod P in u128.
     fn dot_ref<const N: usize>(
