@@ -296,6 +296,52 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
         #[test]
+        fn prop_two_ood_answers_are_jointly_programmable_with_two_pad_slots(
+            seed in any::<u64>(),
+        ) {
+            // Invariant: two fresh pad coordinates can program two private
+            // OOD answers jointly at distinct, nonzero points.
+            //
+            // After removing the committed prefix and dividing by rho_i^L,
+            // solve
+            //
+            //     s_0 + rho_1 * s_1 = b_1
+            //     s_0 + rho_2 * s_1 = b_2.
+            //
+            // The determinant is rho_2 - rho_1, so distinct points give a
+            // unique pad for every target pair.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let message_len = 1 + (seed % 7) as usize;
+            let randomness_len = ((seed / 7) % 4) as usize;
+            let message: Vec<EF> = (0..message_len).map(|_| rng.random()).collect();
+            let source_randomness: Vec<EF> =
+                (0..randomness_len).map(|_| rng.random()).collect();
+            let committed = [message.clone(), source_randomness.clone()].concat();
+            let targets: [EF; 2] = core::array::from_fn(|_| rng.random());
+            let mut points: [EF; 2] = core::array::from_fn(|_| rng.random());
+            while points[0] == EF::ZERO {
+                points[0] = rng.random();
+            }
+            while points[1] == EF::ZERO || points[1] == points[0] {
+                points[1] = rng.random();
+            }
+
+            let shift = committed.len() as u64;
+            let residuals: [EF; 2] = core::array::from_fn(|i| {
+                let point = points[i];
+                let committed_eval = eval_ze_star_n(point, &committed);
+                let pad_scale = point.exp_u64(shift);
+                (targets[i] - committed_eval) / pad_scale
+            });
+            let pad_1 = (residuals[1] - residuals[0]) / (points[1] - points[0]);
+            let pad_0 = residuals[0] - points[0] * pad_1;
+            let mask = [source_randomness, vec![pad_0, pad_1]].concat();
+
+            let answers = points.map(|point| padded_ood_t1(point, &message, &mask));
+            prop_assert_eq!(answers, targets);
+        }
+
+        #[test]
         fn prop_switch_mask_covector_matches_slotwise_reference(seed in any::<u64>()) {
             // Invariant: for every shape, slot s of the mask covector is
             //
