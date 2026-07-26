@@ -6,6 +6,8 @@
 use core::arch::aarch64::*;
 use core::arch::asm;
 
+#[cfg(target_feature = "sve2")]
+use super::utils::EPSILON;
 use super::utils::{add_asm, add_canonical_asm, mul_add_asm, mul_asm, multiply_p2};
 use crate::P;
 
@@ -1574,15 +1576,19 @@ macro_rules! sve2_fm {
 /// x^7 S-box for 4 state elements (both lanes each) entirely in the vector
 /// domain: 16 field-muls, register-resident, no lane extraction. States arrive
 /// in z0–z3; x² in z4–z7, x³ in z8–z11, x⁴ in z12–z15, x⁷ back into z0–z3.
+///
+/// `eps` holds EPSILON in its low 128 bits (upper SVE lanes may be anything):
+/// every `sve2_fm!` read of `z30` is merge-predicated on a comparison that is
+/// provably false wherever the operands' upper lanes are zero, so callers can
+/// materialize `eps` once per round and share it across every block instead
+/// of re-splatting it per block.
 #[cfg(target_feature = "sve2")]
 #[inline(always)]
-unsafe fn sbox4_sve2(state: &mut [uint64x2_t; 4]) {
+unsafe fn sbox4_sve2(state: &mut [uint64x2_t; 4], eps: uint64x2_t) {
     unsafe {
         let (s0, s1, s2, s3): (uint64x2_t, uint64x2_t, uint64x2_t, uint64x2_t);
         asm!(
             "ptrue p7.d",
-            "mov   {tmp}, #0xFFFFFFFF",
-            "dup   z30.d, {tmp}",
             // x^2
             sve2_fm!("4", "0", "0"),
             sve2_fm!("5", "1", "1"),
@@ -1603,15 +1609,15 @@ unsafe fn sbox4_sve2(state: &mut [uint64x2_t; 4]) {
             sve2_fm!("1", "9", "13"),
             sve2_fm!("2", "10", "14"),
             sve2_fm!("3", "11", "15"),
-            tmp = out(reg) _,
             inout("v0") state[0] => s0,
             inout("v1") state[1] => s1,
             inout("v2") state[2] => s2,
             inout("v3") state[3] => s3,
+            in("v30") eps,
             out("v4") _, out("v5") _, out("v6") _, out("v7") _,
             out("v8") _, out("v9") _, out("v10") _, out("v11") _,
             out("v12") _, out("v13") _, out("v14") _, out("v15") _,
-            out("v24") _, out("v25") _, out("v26") _, out("v30") _,
+            out("v24") _, out("v25") _, out("v26") _,
             out("p1") _, out("p7") _,
             options(pure, nomem, nostack),
         );
@@ -1626,9 +1632,12 @@ unsafe fn sbox4_sve2(state: &mut [uint64x2_t; 4]) {
 /// chains per stage (vs 4) to cover the SVE mul latency, and one fewer block
 /// boundary. Register budget: states z0–z5, x² z6–z11, x³ z12–z17, x⁴ z18–z23,
 /// temps z24–z26, EPSILON z30 — 28 of 32.
+///
+/// See `sbox4_sve2` for why `eps` can be materialized once per round and
+/// shared across blocks instead of re-splatting it here.
 #[cfg(target_feature = "sve2")]
 #[inline(always)]
-unsafe fn sbox6_sve2(state: &mut [uint64x2_t; 6]) {
+unsafe fn sbox6_sve2(state: &mut [uint64x2_t; 6], eps: uint64x2_t) {
     unsafe {
         let (s0, s1, s2, s3, s4, s5): (
             uint64x2_t,
@@ -1640,8 +1649,6 @@ unsafe fn sbox6_sve2(state: &mut [uint64x2_t; 6]) {
         );
         asm!(
             "ptrue p7.d",
-            "mov   {tmp}, #0xFFFFFFFF",
-            "dup   z30.d, {tmp}",
             // x^2
             sve2_fm!("6", "0", "0"),
             sve2_fm!("7", "1", "1"),
@@ -1670,19 +1677,19 @@ unsafe fn sbox6_sve2(state: &mut [uint64x2_t; 6]) {
             sve2_fm!("3", "15", "21"),
             sve2_fm!("4", "16", "22"),
             sve2_fm!("5", "17", "23"),
-            tmp = out(reg) _,
             inout("v0") state[0] => s0,
             inout("v1") state[1] => s1,
             inout("v2") state[2] => s2,
             inout("v3") state[3] => s3,
             inout("v4") state[4] => s4,
             inout("v5") state[5] => s5,
+            in("v30") eps,
             out("v6") _, out("v7") _, out("v8") _, out("v9") _,
             out("v10") _, out("v11") _, out("v12") _, out("v13") _,
             out("v14") _, out("v15") _, out("v16") _, out("v17") _,
             out("v18") _, out("v19") _, out("v20") _, out("v21") _,
             out("v22") _, out("v23") _, out("v24") _, out("v25") _,
-            out("v26") _, out("v30") _,
+            out("v26") _,
             out("p1") _, out("p7") _,
             options(pure, nomem, nostack),
         );
@@ -1703,13 +1710,14 @@ unsafe fn sbox6_sve2(state: &mut [uint64x2_t; 6]) {
 unsafe fn sbox_neon<const WIDTH: usize>(state: &mut [uint64x2_t; WIDTH]) {
     const { assert!(WIDTH.is_multiple_of(6) || WIDTH.is_multiple_of(4)) }
     unsafe {
+        let eps = vdupq_n_u64(EPSILON);
         if WIDTH.is_multiple_of(6) {
             for chunk in state.as_chunks_mut::<6>().0 {
-                sbox6_sve2(chunk);
+                sbox6_sve2(chunk, eps);
             }
         } else {
             for chunk in state.as_chunks_mut::<4>().0 {
-                sbox4_sve2(chunk);
+                sbox4_sve2(chunk, eps);
             }
         }
     }
