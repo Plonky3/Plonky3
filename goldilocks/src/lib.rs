@@ -15,6 +15,12 @@ pub use poseidon2::*;
 
 pub mod poseidon1;
 
+#[cfg(all(
+    target_arch = "x86_64",
+    any(target_feature = "avx2", target_feature = "avx512f")
+))]
+mod poseidon2_packed_common;
+
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 mod aarch64_neon;
 
