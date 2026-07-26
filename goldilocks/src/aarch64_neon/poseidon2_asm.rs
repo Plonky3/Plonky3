@@ -1396,13 +1396,13 @@ pub fn internal_permute_neon_w12(state: &mut [uint64x2_t; 12], constants: &[u64]
 }
 
 // Scalar Goldilocks multiply after 0xPolygonZero/plonky2's
-// `poseidon_goldilocks_neon.rs` (MIT/Apache-2.0). Unlike `mul_asm`, whose
+// `poseidon_goldilocks_neon.rs`. Unlike `mul_asm`, whose
 // single asm block is opaque to the scheduler, these helpers are mostly plain
 // Rust, so LLVM interleaves the four s0 chains of the internal rounds. The
 // wraparound correction after the `lo - (hi >> 32)` step is a branch rather
 // than two ALU ops: it is taken with probability ~2^-32.
 // Structurally this mirrors `goldilocks.rs`'s `reduce128` with aarch64
-// micro-tunings (asm barrier, `umull` w-form); kept local pending upstream discussion.
+// micro-tunings (asm barrier, `umull` w-form).
 
 /// Add with `2^64 ≡ ε` folding; only correct if `a + b < 2^64 + ORDER = 0x1ffffffff00000001`.
 #[inline(always)]
@@ -1767,15 +1767,19 @@ unsafe fn sbox6_sve2(state: &mut [uint64x2_t; 6]) {
 #[cfg(target_feature = "sve2")]
 #[inline(always)]
 unsafe fn sbox_neon<const WIDTH: usize>(state: &mut [uint64x2_t; WIDTH]) {
-    const { assert!(WIDTH % 6 == 0 || WIDTH % 4 == 0) }
+    // Unlike the scalar fallback below, which is per-element and handles any
+    // width, this path processes fixed-size blocks, so the width must divide.
+    const { assert!(WIDTH.is_multiple_of(6) || WIDTH.is_multiple_of(4)) }
     unsafe {
-        if WIDTH % 6 == 0 {
-            for chunk in state.chunks_exact_mut(6) {
-                sbox6_sve2(chunk.try_into().unwrap());
+        if WIDTH.is_multiple_of(6) {
+            let (chunks, _) = state.as_chunks_mut::<6>();
+            for chunk in chunks {
+                sbox6_sve2(chunk);
             }
         } else {
-            for chunk in state.chunks_exact_mut(4) {
-                sbox4_sve2(chunk.try_into().unwrap());
+            let (chunks, _) = state.as_chunks_mut::<4>();
+            for chunk in chunks {
+                sbox4_sve2(chunk);
             }
         }
     }
@@ -3457,13 +3461,9 @@ mod field_op_tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
+    use super::super::utils::tests::EDGE;
     use super::*;
     use crate::Goldilocks;
-
-    /// Raw operand patterns stressing every wraparound correction: field
-    /// extremes, the epsilon window, and non-canonical values up to u64::MAX.
-    /// The ops under test accept any u64 residue.
-    const EDGE: [u64; 8] = [0, 1, (1 << 32) - 1, 1 << 32, 1 << 63, P - 1, P, u64::MAX];
 
     fn mul_ref(x: u64, y: u64) -> u64 {
         ((x as u128 % P as u128) * (y as u128 % P as u128) % P as u128) as u64

@@ -277,6 +277,11 @@ pub(super) mod tests {
         F::new(x).as_canonical_u64()
     }
 
+    /// Raw operand patterns stressing every wraparound correction: field
+    /// extremes, the epsilon window, and non-canonical values up to
+    /// `u64::MAX`. The ops probed with these accept any u64 residue.
+    pub const EDGE: [u64; 8] = [0, 1, (1 << 32) - 1, 1 << 32, 1 << 63, P - 1, P, u64::MAX];
+
     /// Boundary u64s probed against every scalar ASM op.
     pub const EDGE_VALUES: &[u64] = &[
         0,
