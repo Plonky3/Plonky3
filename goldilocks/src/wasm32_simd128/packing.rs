@@ -166,11 +166,17 @@ impl PrimeCharacteristicRing for PackedGoldilocksWasmSimd128 {
 
     #[inline]
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
-        Self::from_fn(|lane| {
-            let lhs_lane: [Goldilocks; N] = core::array::from_fn(|i| lhs[i].as_slice()[lane]);
-            let rhs_lane: [Goldilocks; N] = core::array::from_fn(|i| rhs[i].as_slice()[lane]);
-            Goldilocks::dot_product(&lhs_lane, &rhs_lane)
-        })
+        const {
+            assert!((N as u32) <= (1 << 31));
+        }
+        match N {
+            0 => Self::ZERO,
+            1 => lhs[0] * rhs[0],
+            _ => Self::from_vector(dot_product_delayed_reduce::<N>(
+                &core::array::from_fn(|i| lhs[i].to_vector()),
+                &core::array::from_fn(|i| rhs[i].to_vector()),
+            )),
+        }
     }
 }
 
@@ -421,6 +427,59 @@ fn reduce128(hi: v128, lo: v128) -> v128 {
     shift(lo2_s)
 }
 
+/// `1` in each lane where `a < b` (unsigned), else `0`. Used to detect unsigned-add
+/// overflow when accumulating 128-bit-per-lane values across `v128` pairs, via the same
+/// sign-bit-shift trick as [`canonicalize_s`] and friends.
+#[inline(always)]
+fn unsigned_lt_as_carry(a: v128, b: v128) -> v128 {
+    let mask = i64x2_gt(shift(b), shift(a));
+    u64x2_shr(mask, 63)
+}
+
+/// Delayed-reduction dot product: `sum(lhs[i] * rhs[i])` with a single final [`reduce128`]
+/// instead of one reduction per term. Mirrors the scalar `Goldilocks::dot_product`'s
+/// `N > 2` algorithm (see `goldilocks.rs`), vectorized to 2 lanes.
+///
+/// Each 128-bit product `val` is split at bit 96 (not bit 64) into `lo96 + hi32 * 2^96`:
+/// `hi32 = val >> 96` is bounded by `2^32 - 1` per term, so up to `N <= 2^31` terms can be
+/// summed into a single 64-bit-per-lane accumulator (`acc_hi96`) without overflow. The full
+/// 128-bit `val` is separately accumulated with wrapping 128-bit-per-lane addition
+/// (`acc_lo`); at the end, `acc_lo - (acc_hi96 << 96)` recovers `sum(lo96_i)` exactly modulo
+/// `2^128`, because that sum is itself `< 2^127` (`N <= 2^31` terms, each `lo96_i < 2^96`).
+/// Finally `2^96 ≡ -1 (mod P)` folds `acc_hi96` back in before the single [`reduce128`] call.
+#[inline]
+fn dot_product_delayed_reduce<const N: usize>(lhs: &[v128; N], rhs: &[v128; N]) -> v128 {
+    let mut acc_lo_hi = u64x2_splat(0);
+    let mut acc_lo_lo = u64x2_splat(0);
+    let mut acc_hi96 = u64x2_splat(0);
+
+    for i in 0..N {
+        let (term_hi, term_lo) = mul64_64(lhs[i], rhs[i]);
+        let term_hi96 = u64x2_shr(term_hi, 32);
+
+        let new_lo_lo = i64x2_add(acc_lo_lo, term_lo);
+        let carry = unsigned_lt_as_carry(new_lo_lo, acc_lo_lo);
+        acc_lo_hi = i64x2_add(i64x2_add(acc_lo_hi, term_hi), carry);
+        acc_lo_lo = new_lo_lo;
+
+        acc_hi96 = i64x2_add(acc_hi96, term_hi96);
+    }
+
+    // `lo = acc_lo - (acc_hi96 << 96)`. The subtrahend's low 64 bits are always 0, so
+    // subtracting it never borrows into the low word.
+    let hi96_shifted = i64x2_shl(acc_hi96, 32);
+    let lo_hi = i64x2_sub(acc_lo_hi, hi96_shifted);
+    let lo_lo = acc_lo_lo;
+
+    // `sum = lo + (P - acc_hi96)`, a 128-bit + 64-bit add with carry into the high word.
+    let p_minus_hi = i64x2_sub(u64x2_splat(P), acc_hi96);
+    let sum_lo = i64x2_add(lo_lo, p_minus_hi);
+    let carry2 = unsigned_lt_as_carry(sum_lo, lo_lo);
+    let sum_hi = i64x2_add(lo_hi, carry2);
+
+    reduce128(sum_hi, sum_lo)
+}
+
 /// Goldilocks modular multiplication. Computes `x * y mod FIELD_ORDER`.
 ///
 /// Inputs can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
@@ -487,4 +546,109 @@ mod tests {
         &[super::ONES],
         crate::PackedGoldilocksWasmSimd128(super::SPECIAL_VALS)
     );
+
+    /// Adversarial + random coverage for `dot_product`'s delayed-reduction path (`N > 1`),
+    /// across every lane independently, for `N` both below and (via repeated calls) well
+    /// above the width the scalar `match` arms special-case.
+    #[test]
+    fn dot_product_delayed_reduction_matches_scalar() {
+        use p3_field::{PackedValue, PrimeCharacteristicRing, PrimeField64};
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        const EDGE_VALUES: [u64; 5] = [
+            0,
+            1,
+            Goldilocks::ORDER_U64 - 1,
+            0xFFFF_FFFF_0000_0000, // = 2^64 - 2^32, one below the field order
+            u64::MAX,              // maximal non-canonical representative
+        ];
+
+        /// Checks lane 0 against `(lhs0, rhs0)` and lane 1 against `(lhs1, rhs1)`
+        /// independently, so a bug that crosses lanes is caught, not just one that's
+        /// uniform across both.
+        fn check<const N: usize>(
+            lhs0: [Goldilocks; N],
+            rhs0: [Goldilocks; N],
+            lhs1: [Goldilocks; N],
+            rhs1: [Goldilocks; N],
+        ) {
+            let packed_lhs: [PackedGoldilocksWasmSimd128; N] =
+                core::array::from_fn(|i| PackedGoldilocksWasmSimd128([lhs0[i], lhs1[i]]));
+            let packed_rhs: [PackedGoldilocksWasmSimd128; N] =
+                core::array::from_fn(|i| PackedGoldilocksWasmSimd128([rhs0[i], rhs1[i]]));
+
+            let expected0 = Goldilocks::dot_product(&lhs0, &rhs0);
+            let expected1 = Goldilocks::dot_product(&lhs1, &rhs1);
+            let actual = PackedGoldilocksWasmSimd128::dot_product(&packed_lhs, &packed_rhs);
+
+            assert_eq!(
+                actual.as_slice()[0].as_canonical_u64(),
+                expected0.as_canonical_u64(),
+                "N={N} mismatch at lane 0: lhs={lhs0:?} rhs={rhs0:?}"
+            );
+            assert_eq!(
+                actual.as_slice()[1].as_canonical_u64(),
+                expected1.as_canonical_u64(),
+                "N={N} mismatch at lane 1: lhs={lhs1:?} rhs={rhs1:?}"
+            );
+        }
+
+        // All-maximal-value products in lane 0, all-zero in lane 1, every N from 2 to 32:
+        // the densest possible adversarial case for the bit-96 split (every term's top-32-bit
+        // contribution is maximal), paired against the opposite extreme in the other lane.
+        macro_rules! check_edge_n {
+            ($n:literal) => {
+                check::<$n>(
+                    [Goldilocks::new(u64::MAX); $n],
+                    [Goldilocks::new(u64::MAX); $n],
+                    [Goldilocks::ZERO; $n],
+                    [Goldilocks::new(u64::MAX); $n],
+                );
+            };
+        }
+        check_edge_n!(2);
+        check_edge_n!(3);
+        check_edge_n!(4);
+        check_edge_n!(5);
+        check_edge_n!(8);
+        check_edge_n!(12);
+        check_edge_n!(16);
+        check_edge_n!(32);
+
+        // Edge-value permutations for small N, same pattern reversed between lanes.
+        for &a in &EDGE_VALUES {
+            for &b in &EDGE_VALUES {
+                for &c in &EDGE_VALUES {
+                    check::<3>(
+                        [Goldilocks::new(a), Goldilocks::new(b), Goldilocks::new(c)],
+                        [Goldilocks::new(c), Goldilocks::new(b), Goldilocks::new(a)],
+                        [Goldilocks::new(c), Goldilocks::new(b), Goldilocks::new(a)],
+                        [Goldilocks::new(a), Goldilocks::new(b), Goldilocks::new(c)],
+                    );
+                }
+            }
+        }
+
+        // Random stress across a range of N, including N well above what a single loop
+        // iteration bound might be expected to special-case.
+        let mut rng = SmallRng::seed_from_u64(0xD07_9A0D_7CE);
+        macro_rules! check_random_n {
+            ($n:literal, $count:literal) => {
+                for _ in 0..$count {
+                    let lhs0: [Goldilocks; $n] = core::array::from_fn(|_| rng.random());
+                    let rhs0: [Goldilocks; $n] = core::array::from_fn(|_| rng.random());
+                    let lhs1: [Goldilocks; $n] = core::array::from_fn(|_| rng.random());
+                    let rhs1: [Goldilocks; $n] = core::array::from_fn(|_| rng.random());
+                    check::<$n>(lhs0, rhs0, lhs1, rhs1);
+                }
+            };
+        }
+        check_random_n!(2, 32);
+        check_random_n!(3, 32);
+        check_random_n!(4, 32);
+        check_random_n!(7, 32);
+        check_random_n!(16, 16);
+        check_random_n!(64, 8);
+    }
 }
