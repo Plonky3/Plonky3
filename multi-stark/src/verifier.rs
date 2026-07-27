@@ -9,6 +9,7 @@ use p3_sumcheck::PrescribedPointPcs;
 use thiserror::Error;
 
 use crate::VerifierInstances;
+use crate::boundary::{self, BoundaryIo, BoundaryIoError};
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::MultilinearFolder;
 use crate::opening::TableOpening;
@@ -40,6 +41,14 @@ where
         expected: usize,
         /// Number of proof slots.
         actual: usize,
+    },
+    /// An AIR names a public boundary cell or public value it does not have.
+    #[error("instance {instance} boundary IO: {error}")]
+    BoundaryIo {
+        /// Index of the offending instance in verifier-instance order.
+        instance: usize,
+        /// What is wrong with the declaration.
+        error: BoundaryIoError,
     },
 }
 
@@ -82,6 +91,7 @@ where
 /// Returns an error when the closing check fails.
 /// Returns an error when either commitment opening fails.
 /// Returns an error when the proof and key disagree on whether preprocessed data is opened.
+/// Returns an error when an AIR names a public boundary cell it does not have.
 ///
 /// # Panics
 ///
@@ -141,6 +151,14 @@ where
     let airs = instances.airs();
     let log_heights = instances.num_variables();
     let public_values = instances.public_values();
+
+    // Reject a malformed public boundary declaration before any opening work.
+    // The reconstruction below indexes columns and public values by those numbers.
+    for (instance, air) in airs.iter().enumerate() {
+        boundary::validate::<C::Val, _>(*air)
+            .map_err(|error| VerificationError::BoundaryIo { instance, error })?;
+    }
+
     let zerocheck = AirZerocheck::new(&airs, pow_bits);
     let reduction = zerocheck
         .verify_reduction::<C::Val, C::Challenge, _>(
@@ -191,21 +209,24 @@ where
     let preprocessed_next_columns = instances.preprocessed_next_columns();
     let next_columns = instances.next_columns();
 
-    // Restore the true opened values from the committed corner-zeroed openings.
-    // An AIR without boundary IO declares no cells, so its openings pass through unchanged.
-    // The restored values equal what the prover folded.
-    // The closing constraint recompute below therefore closes against the same value.
+    // Add each public value back to the openings of the blanked commitment.
+    //
+    //     no declared cells : openings borrowed through untouched
+    //     declared cells    : one Lagrange correction per cell and view
+    //
+    // The result equals what the prover folded.
+    // The closing recompute below therefore lands on the same value.
     let reconstructed = main_evals
         .iter()
+        .zip(airs.iter())
         .enumerate()
-        .map(|(i, batch)| {
-            let cells = airs[i].public_boundary_io();
-            crate::boundary::BoundaryIo::new(&cells).reconstruct(
+        .map(|(instance, (batch, air))| {
+            BoundaryIo::new(air.public_boundary_io()).reconstruct(
                 batch.current(),
                 batch.next(),
-                &next_columns[i],
-                main_points[i].as_slice(),
-                public_values[i],
+                &next_columns[instance],
+                main_points[instance].as_slice(),
+                public_values[instance],
             )
         })
         .collect::<Vec<_>>();

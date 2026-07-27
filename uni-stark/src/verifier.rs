@@ -295,6 +295,13 @@ where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        air.public_boundary_io().is_empty(),
+        "uni-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     let Proof {
         commitments,
         opened_values,

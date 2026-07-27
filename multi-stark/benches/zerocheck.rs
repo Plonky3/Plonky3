@@ -130,12 +130,24 @@ fn wide_fib_trace(n: usize) -> RowMajorMatrix<F> {
     RowMajorMatrix::new(values, WIDE_COLS)
 }
 
-/// Fibonacci AIR binding its public inputs by boundary IO instead of constraints.
+/// Fibonacci AIR binding its public inputs by position instead of by constraint.
 ///
-/// The transition recurrence is asserted here.
-/// The two seeds and the output are declared as public boundary cells.
-/// The prover asserts corner-zero pins in place of first/last-row constraints.
+/// Only the transition recurrence is asserted here.
+/// The folder injects one pin per declared cell in place of the boundary constraints.
 struct FibIoAir;
+
+/// The seed and output cells the AIR above binds by position.
+///
+/// ```text
+///     column 0, first row -> public value 0
+///     column 1, first row -> public value 1
+///     column 1, last  row -> public value 2
+/// ```
+const FIB_IO_CELLS: [BoundaryPublic; 3] = [
+    BoundaryPublic::new(0, BoundaryEnd::First, 0),
+    BoundaryPublic::new(1, BoundaryEnd::First, 1),
+    BoundaryPublic::new(1, BoundaryEnd::Last, 2),
+];
 
 impl<X> BaseAir<X> for FibIoAir {
     fn width(&self) -> usize {
@@ -144,20 +156,22 @@ impl<X> BaseAir<X> for FibIoAir {
     fn num_public_values(&self) -> usize {
         3
     }
-    fn public_boundary_io(&self) -> Vec<BoundaryPublic> {
-        vec![
-            BoundaryPublic::new(0, BoundaryEnd::First, 0),
-            BoundaryPublic::new(1, BoundaryEnd::First, 1),
-            BoundaryPublic::new(1, BoundaryEnd::Last, 2),
-        ]
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &FIB_IO_CELLS
     }
 }
 
 impl<AB: AirBuilder> Air<AB> for FibIoAir {
     fn eval(&self, builder: &mut AB) {
+        // Read the current row and the row after it.
         let main = builder.main();
         let local: &FibRow<AB::Var> = main.current_slice().borrow();
         let next: &FibRow<AB::Var> = main.next_slice().borrow();
+
+        // Advance the recurrence on every row but the last.
+        //
+        //     next.left  = right
+        //     next.right = left + right
         let mut trans = builder.when_transition();
         trans.assert_eq(local.right, next.left);
         trans.assert_eq(local.left + local.right, next.right);
@@ -239,13 +253,16 @@ fn bench_wide_zerocheck(c: &mut Criterion) {
 
 /// Compare the two ways to bind a Fibonacci AIR's public inputs, at equal size.
 ///
-/// - `constraint`: first/last-row boundary constraints on the committed trace.
-/// - `boundary_io`: corner-zero pins on the same trace, folded as in the real prover.
+/// ```text
+///     constraint  : first-row and last-row boundary constraints
+///     boundary_io : one injected pin per declared cell
+/// ```
 ///
-/// Both assert the same number of degree-2 constraints, so this isolates the
-/// per-round fold cost of the two bindings.
-/// The one extra cost of boundary IO, a single trace clone before commitment,
-/// lives in the committed prover and is not exercised here.
+/// Both arms assert the same number of degree-two constraints.
+/// This therefore isolates the per-round fold cost of the two bindings.
+///
+/// Binding by position also clones each committed table that carries a cell.
+/// That cost lives in the committed prover and is not exercised here.
 fn bench_public_input_binding(c: &mut Criterion) {
     let mut group = c.benchmark_group("public_input_binding");
     group.sample_size(10);
@@ -271,7 +288,7 @@ fn bench_public_input_binding(c: &mut Criterion) {
             });
         });
 
-        // Boundary-IO binding: the folder asserts corner-zero pins instead.
+        // Position binding: the folder injects one pin per declared cell instead.
         let io_air = FibIoAir;
         let io_airs = vec![&io_air];
         let io = AirZerocheck::new(&io_airs, 0);

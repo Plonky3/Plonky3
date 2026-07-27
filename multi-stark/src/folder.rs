@@ -117,7 +117,7 @@ where
     ///
     /// This is the terminal step of the builder: it consumes the folder.
     /// Attach preprocessed and periodic columns before calling, if the AIR reads them.
-    /// Any public boundary cells add corner-zero pins after the AIR's own constraints.
+    /// Cells the AIR lists as public inputs add one pin each, after its own constraints.
     ///
     /// # Arguments
     ///
@@ -127,7 +127,7 @@ where
     ///
     /// The Horner fold `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
     ///
-    /// - `C_0, ..., C_{n-1}` are the asserted constraints, boundary-IO pins last.
+    /// - `C_0, ..., C_{n-1}` are the asserted constraints, public boundary pins last.
     /// - `n` is the total number of asserted constraints.
     #[inline]
     #[must_use]
@@ -141,19 +141,27 @@ where
         self.into_accumulator()
     }
 
-    /// Assert the corner-zero pins for the AIR's boundary-IO public cells.
+    /// Assert that each cell the AIR lists as a public input holds that public value.
     ///
-    /// Each declared cell is asserted equal to its public input on its corner row:
     /// ```text
-    ///     first cell:  is_first_row * (column - public) = 0
-    ///     last  cell:  is_last_row  * (column - public) = 0
+    ///     first-end cell:  is_first_row * (column - public) = 0
+    ///     last-end  cell:  is_last_row  * (column - public) = 0
     /// ```
     ///
-    /// On the true trace the column already carries the public value, so the pin vanishes.
-    /// On a committed corner-zeroed trace the pin forces the restored value to equal the public input.
+    /// This is what makes the verifier's reconstruction of a blanked commitment binding:
     ///
-    /// The pins batch into the accumulator with the same alpha as the AIR's own constraints.
-    /// The prover fold and the verifier recompute therefore agree on the batched value.
+    /// ```text
+    ///     folded   = committed + eq_cell * cell_value    (the prover's side)
+    ///     restored = committed + eq_cell * public        (the verifier's side)
+    /// ```
+    ///
+    /// The two sides coincide exactly when the cell value equals the public value.
+    /// Without the pin a prover could commit any cell and let the public value absorb into it.
+    ///
+    /// An honest trace already carries the public value, leaving the pin at zero.
+    ///
+    /// The pins batch into the accumulator with the same scalar as the AIR's own constraints.
+    /// Prover fold and verifier recompute therefore agree on the batched value.
     #[inline]
     fn eval_boundary_io<A>(&mut self, air: &A)
     where
@@ -161,12 +169,15 @@ where
         Self: AirBuilder,
     {
         for cell in air.public_boundary_io() {
-            // Copy the corner column value and its public input out before the mutable assert.
+            // Read both operands out first.
+            // Asserting takes a mutable borrow of the folder.
             let value = self.main().current_slice()[cell.column];
             let public = self.public_values()[cell.public_value];
 
-            // Gate the equality by the matching corner selector.
-            //   first end -> is_first_row, last end -> is_last_row.
+            // Gate the equality by the selector for this cell's end.
+            //
+            //     first end -> is_first_row
+            //     last  end -> is_last_row
             match cell.end {
                 BoundaryEnd::First => self.when_first_row().assert_eq(value, public),
                 BoundaryEnd::Last => self.when_last_row().assert_eq(value, public),

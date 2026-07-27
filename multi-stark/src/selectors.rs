@@ -110,23 +110,27 @@ impl<EF: Field> BoundaryEvals<EF> {
         }
     }
 
-    /// Successor-view Lagrange weight of the last-row corner at a challenge point.
+    /// Successor-view Lagrange weight of the last row at a challenge point.
     ///
-    /// The repeat-last successor map sends each row to the next one and repeats the final row.
-    /// The final row therefore collects weight from its predecessor and from itself:
+    /// The successor map advances each row by one and repeats the final row.
+    /// The final row therefore collects weight from two places:
+    ///
     /// ```text
-    ///     weight = eq(rs, last - 1) + eq(rs, last) = prod_{j < k - 1} rs_j
+    ///     weight = eq(rs, last - 1) + eq(rs, last)
+    ///            = prod_{j < k - 1} rs_j
     /// ```
-    /// the product of every coordinate except the low-order one.
     ///
-    /// The first-row corner has successor weight zero, since the first row has no predecessor.
-    /// Only the last row needs this weight.
+    /// That is the product of every coordinate except the low-order one.
+    ///
+    /// The first row has no predecessor, leaving its successor weight at zero.
+    /// Only the last row needs this.
     ///
     /// # Arguments
     ///
     /// - `rs`: challenge coordinates, one per binary trace variable.
     pub(super) fn last_row_successor_weight(rs: &[EF]) -> EF {
-        // Drop the low-order coordinate; a single-variable trace leaves the empty product one.
+        // Multiply every coordinate but the low-order one.
+        // A single-variable trace leaves an empty product of one.
         rs[..rs.len().saturating_sub(1)].iter().copied().product()
     }
 
@@ -390,11 +394,10 @@ mod tests {
 
     #[test]
     fn last_row_successor_weight_matches_materialized_table() {
-        // Invariant: the closed form equals the last entry of the materialized
-        //   repeat-last successor weight table, at a random point.
+        // Invariant: the closed form matches the dense successor weight table.
         //
-        // The materialized table places the successor weight of row i at index i,
-        //   so index 2^k - 1 holds the last-row corner's successor weight.
+        //     dense table index i -> successor weight of row i
+        //     index 2^k - 1       -> the last row's successor weight
         let mut rng = SmallRng::seed_from_u64(0xB0);
         for k in 1..=6usize {
             // Random k-variable point, then the dense successor weight table for it.

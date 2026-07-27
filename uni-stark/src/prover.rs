@@ -39,6 +39,13 @@ where
     #[cfg(debug_assertions)]
     p3_air::check_constraints(air, &trace, public_values);
 
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        air.public_boundary_io().is_empty(),
+        "uni-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     // Compute the height `N = 2^n` and `log_2(height)`, `n`, of the trace.
     let degree = trace.height();
     let log_degree = log2_strict_usize(degree);
