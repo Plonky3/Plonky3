@@ -12,7 +12,7 @@ use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use rand::distr::{Distribution, StandardUniform};
-use rand::{Rng, RngExt, SeedableRng};
+use rand::{CryptoRng, RngExt, SeedableRng};
 use spin::Mutex;
 use tracing::info_span;
 
@@ -21,6 +21,11 @@ use crate::{BatchMultiOpening, FriParameters, FriProof, TwoAdicFriPcs};
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
+///
+/// The random codewords that blind the committed trace come from the caller-supplied `R`, so it is
+/// bounded by [`CryptoRng`]. That rules out generators known to be unsuitable for cryptographic
+/// use, but it does not replace proper seeding: a caller who seeds from a predictable source lets
+/// an observer reproduce the stream and strip the masks.
 #[derive(Debug)]
 pub struct HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> {
     inner: TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>,
@@ -36,7 +41,7 @@ where
     Dft: Clone,
     InputMmcs: Clone,
     FriMmcs: Clone,
-    R: Rng + SeedableRng,
+    R: CryptoRng + SeedableRng,
 {
     fn clone(&self) -> Self {
         Self {
@@ -75,7 +80,7 @@ where
     Challenge: TwoAdicField + ExtensionField<Val>,
     Challenger:
         FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
-    R: Rng + Send + Sync,
+    R: CryptoRng + Send + Sync,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
@@ -506,7 +511,7 @@ mod tests {
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::SeedableRng;
-    use rand::rngs::SmallRng;
+    use rand::rngs::{SmallRng, StdRng};
 
     use super::*;
 
@@ -520,7 +525,7 @@ mod tests {
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     type Dft = Radix2Dit<Val>;
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
-    type MyPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
+    type MyPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
 
     type Commitment = <ValMmcs as Mmcs<Val>>::Commitment;
     type Domain = TwoAdicMultiplicativeCoset<Val>;
@@ -579,7 +584,7 @@ mod tests {
             val_mmcs,
             fri_params,
             NUM_RANDOM_CODEWORDS,
-            SmallRng::seed_from_u64(2),
+            StdRng::seed_from_u64(2),
         );
 
         // The wrapper interleaves the trace with random rows, doubling its

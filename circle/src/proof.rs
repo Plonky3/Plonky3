@@ -12,38 +12,39 @@ use serde::{Deserialize, Serialize};
 pub struct CircleFriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
     pub commit_phase_commits: Vec<M::Commitment>,
     pub commit_pow_witnesses: Vec<Witness>,
-    pub query_proofs: Vec<CircleQueryProof<F, M, InputProof>>,
+    /// Openings of the input commitments at every query index, sharing one proof
+    /// per committed tree.
+    pub input_openings: InputProof,
+    /// For each commit phase commitment, the openings of the commit phase codeword
+    /// at every queried location, all authenticated by one shared proof per round.
+    pub commit_phase_openings: Vec<CircleCommitPhaseMultiStep<F, M>>,
     // This could become Vec<FC::Challenge> if this library was generalized to support non-constant
     // final polynomials.
     pub final_poly: F,
     pub pow_witness: Witness,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(bound(
-    serialize = "InputProof: Serialize",
-    deserialize = "InputProof: Deserialize<'de>",
-))]
-pub struct CircleQueryProof<F: Field, M: Mmcs<F>, InputProof> {
-    pub input_proof: InputProof,
-    /// For each commit phase commitment, this contains openings of a commit phase codeword at the
-    /// queried location, along with an opening proof.
-    pub commit_phase_openings: Vec<CircleCommitPhaseProofStep<F, M>>,
-}
-
+/// All queries' openings of one commit-phase codeword, sharing one proof.
+///
+/// The per-query equivalent shipped one full authentication path per query;
+/// queries into the same tree overlap heavily, so shared sibling digests are
+/// deduplicated by the multiproof.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
-pub struct CircleCommitPhaseProofStep<F: Field, M: Mmcs<F>> {
-    /// The log2 of the folding arity used for this step.
+pub struct CircleCommitPhaseMultiStep<F: Field, M: Mmcs<F>> {
+    /// The log2 of the folding arity used for this round.
+    ///
+    /// The schedule is a protocol-wide constant, so it lives once per round
+    /// rather than once per query.
     pub log_arity: u8,
-    /// The openings of the commit phase codeword at the sibling locations.
-    /// For arity k, this contains k-1 sibling values.
-    pub sibling_values: Vec<F>,
-
-    pub opening_proof: M::Proof,
+    /// For each query, the openings of the commit phase codeword at the sibling
+    /// locations. For arity k, each entry contains k-1 sibling values.
+    pub sibling_values: Vec<Vec<F>>,
+    /// One shared proof authenticating every query's row in this round's tree.
+    pub opening_proof: M::MultiProof,
 }
 
-impl<F: Field, M: Mmcs<F>> CircleCommitPhaseProofStep<F, M> {
+impl<F: Field, M: Mmcs<F>> CircleCommitPhaseMultiStep<F, M> {
     /// Convert `log_arity` to `usize` and enforce the protocol bounds.
     ///
     /// Returns `None` when `log_arity` is zero or exceeds `max_log_arity`.

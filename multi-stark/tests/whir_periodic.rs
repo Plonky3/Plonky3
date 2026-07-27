@@ -17,7 +17,10 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::zerocheck::ZerocheckError;
-use p3_multi_stark::{VerificationError, prove, setup, verify};
+use p3_multi_stark::{
+    ProverInstance, ProverInstances, VerificationError, VerifierInstance, VerifierInstances,
+    prove, setup, verify,
+};
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -73,16 +76,17 @@ impl MultiStarkConfig for WhirConfigForTest {
         FOLDING
     }
 
-    fn build_witness(&self, table: Table<F>) -> Witness<F> {
+    fn build_witness(&self, tables: Vec<Table<F>>) -> Witness<F> {
         // The main trace commits as a single stacked table; periodic columns are never committed.
-        L::new_witness(vec![table], FOLDING)
+        L::new_witness(tables, FOLDING)
     }
 
     fn committed_table<'a>(
         &self,
         prover_data: &'a p3_whir::WhirProverData<F, EF, MyMmcs, L>,
+        table_index: usize,
     ) -> &'a Table<F> {
-        prover_data.table(0)
+        prover_data.table(table_index)
     }
 }
 
@@ -203,14 +207,16 @@ fn prove_verify_periodic_roundtrips() {
 
     // Periodic columns are not committed.
     // So setup yields empty keys.
-    let (pk, vk) = setup(&config, &PeriodicAir, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger(&config));
 
     let proof = prove(
         &config,
-        &pk,
-        &PeriodicAir,
-        &trace,
-        &[],
+        ProverInstances::new(vec![ProverInstance::new(
+            &PeriodicAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
         0,
         &mut challenger(&config),
     );
@@ -219,10 +225,13 @@ fn prove_verify_periodic_roundtrips() {
 
     verify(
         &config,
-        &vk,
-        &PeriodicAir,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &PeriodicAir,
+            &vk,
+            log2_strict_usize(n),
+            &[],
+        )]),
         &proof,
-        &[],
         0,
         &mut challenger(&config),
     )
@@ -238,14 +247,16 @@ fn verify_rejects_violated_periodic_constraint() {
     trace.values[0] += F::ONE;
     let config = config_for(log2_strict_usize(n), MAIN_WIDTH);
 
-    let (pk, vk) = setup(&config, &PeriodicAir, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger(&config));
 
     let proof = prove(
         &config,
-        &pk,
-        &PeriodicAir,
-        &trace,
-        &[],
+        ProverInstances::new(vec![ProverInstance::new(
+            &PeriodicAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
         0,
         &mut challenger(&config),
     );
@@ -253,10 +264,13 @@ fn verify_rejects_violated_periodic_constraint() {
     // Expected rejection: the zerocheck closes on a nonzero constraint value.
     let err = verify(
         &config,
-        &vk,
-        &PeriodicAir,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &PeriodicAir,
+            &vk,
+            log2_strict_usize(n),
+            &[],
+        )]),
         &proof,
-        &[],
         0,
         &mut challenger(&config),
     )

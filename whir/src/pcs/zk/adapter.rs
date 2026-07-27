@@ -10,7 +10,7 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{CryptoRng, SeedableRng};
 use spin::Mutex;
 
 use super::config::ZkWhirConfig;
@@ -44,6 +44,7 @@ impl<EF, F, Dft, MT, Challenger, R> HidingWhirPcs<EF, F, Dft, MT, Challenger, R>
 where
     F: TwoAdicField,
     EF: ExtensionField<F>,
+    R: CryptoRng,
 {
     /// Bundles the PCS dependencies.
     ///
@@ -54,7 +55,10 @@ where
     /// Zero knowledge holds only if `rng` is a cryptographically secure
     /// generator; a predictable stream lets an observer strip every mask and
     /// recover the witness from the reveals.
-    /// Tests seed a deterministic generator on purpose.
+    /// The [`CryptoRng`] bound rules out known non-cryptographic generators,
+    /// but production callers must still seed their generator from
+    /// unpredictable entropy. Tests use a deterministic seed only for
+    /// reproducibility.
     ///
     /// `rng` itself is only ever used to seed a fresh `StdRng` (a CSPRNG) for
     /// each `commit`/`open` call, under a briefly-held lock; the forked generator
@@ -96,7 +100,7 @@ where
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>
         + CanObserve<MT::Commitment>,
-    R: Rng + Send + Sync,
+    R: CryptoRng + Send + Sync,
     StandardUniform: Distribution<EF> + Distribution<F>,
 {
     type Commitment = MT::Commitment;

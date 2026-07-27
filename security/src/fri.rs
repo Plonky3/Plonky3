@@ -101,7 +101,7 @@ pub fn commit_phase_error_udr(regime: &FriRegime, shape: &InstanceShape) -> Opti
 }
 
 /// FRI commit-phase per-round error in LDR with explicit proximity
-/// parameter `m`. BCHKS25 Theorem 4.2 (`error_powers`):
+/// parameter `m`. BCHKS25 Theorem 1.5 (Equation (1)):
 ///
 /// ε_lin   = ((2·m'⁵ + 3·m'·γρ)·n / (3·ρ^{3/2}) + m'/√ρ) / |F|,
 /// ε_round = ε_lin · (folding − 1).

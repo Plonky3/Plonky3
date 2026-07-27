@@ -25,22 +25,6 @@ where
 {
     #[error("commit phase opening count mismatch: expected {expected}, got {got}")]
     CommitPhaseOpeningsCountMismatch { expected: usize, got: usize },
-    #[error("query {query}: commit phase opening count mismatch: expected {expected}, got {got}")]
-    QueryCommitPhaseOpeningsCountMismatch {
-        query: usize,
-        expected: usize,
-        got: usize,
-    },
-    #[error(
-        "query {query}: commit phase log-arity schedule mismatch: expected {expected:?}, got {got:?}"
-    )]
-    QueryLogAritiesMismatch {
-        query: usize,
-        expected: Vec<usize>,
-        got: Vec<usize>,
-    },
-    #[error("query proof count mismatch: expected {expected}, got {got}")]
-    QueryProofCountMismatch { expected: usize, got: usize },
     #[error("round {round}: opened query count mismatch: expected {expected}, got {got}")]
     CommitPhaseQueryCountMismatch {
         round: usize,

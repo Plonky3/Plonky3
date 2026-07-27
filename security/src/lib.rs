@@ -44,6 +44,7 @@ pub mod shape;
 pub mod air;
 pub mod deep;
 pub mod grinding;
+pub mod logup;
 
 pub mod ldt;
 

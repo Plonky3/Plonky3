@@ -9,6 +9,7 @@ mod masks;
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use core::mem;
 
 pub use data::HidingWhirProverData;
 use data::ZkRoundData;
@@ -529,20 +530,33 @@ where
     ) -> (QueryOpenings<F, EF, MT::MultiProof>, Vec<EF>) {
         match round_data {
             ZkRoundData::Base(data) => {
-                let opening = SharedProofOpening::open(self.mmcs, indices, data);
+                let mut opening = SharedProofOpening::open(self.mmcs, indices, data);
                 let folded = opening
                     .rows
-                    .iter()
-                    .map(|row| Poly::new(row.clone()).eval_base(randomness))
+                    .iter_mut()
+                    .map(|row| {
+                        // Fold from the owned row, then move it back. The row itself is what
+                        // travels into the proof, so cloning it just to satisfy `Poly::new`
+                        // is pure allocation. Mirrors the non-ZK prover's fold.
+                        let poly = Poly::new(mem::take(row));
+                        let eval = poly.eval_base(randomness);
+                        *row = poly.into_evals();
+                        eval
+                    })
                     .collect();
                 (QueryOpenings::Base(opening), folded)
             }
             ZkRoundData::Ext(data) => {
-                let opening = SharedProofOpening::open(&self.extension_mmcs, indices, data);
+                let mut opening = SharedProofOpening::open(&self.extension_mmcs, indices, data);
                 let folded = opening
                     .rows
-                    .iter()
-                    .map(|row| Poly::new(row.clone()).eval_ext::<F>(randomness))
+                    .iter_mut()
+                    .map(|row| {
+                        let poly = Poly::new(mem::take(row));
+                        let eval = poly.eval_ext::<F>(randomness);
+                        *row = poly.into_evals();
+                        eval
+                    })
                     .collect();
                 (QueryOpenings::Extension(opening), folded)
             }

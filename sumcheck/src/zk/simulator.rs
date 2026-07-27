@@ -12,7 +12,6 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::data::ZkSumcheckData;
-use super::prover::stack_codewords;
 use super::verifier::ZkVerifier;
 
 /// Witness-free HVZK simulator (Lemma 6.4).
@@ -25,6 +24,13 @@ use super::verifier::ZkVerifier;
 /// - Sample and commit fresh masks just like the prover.
 /// - Sample each wire coordinate uniformly over `EF` (the honest joint distribution).
 /// - Reconstruct the dropped `c_1` from the affine identity, so every simulated wire verifies by construction.
+///
+/// # Scope
+///
+/// This simulates one Construction 6.3 sumcheck batch, not the composed
+/// HVZK-WHIR protocol. It discards the mask oracle's prover data and does not
+/// return the mask messages or encoding randomness needed for later
+/// code-switch and base-case openings.
 ///
 /// # Wire distribution
 ///
@@ -92,16 +98,14 @@ where
 
     let masks: Vec<Vec<EF>> = (0..k).map(|_| encoding.sample_message(rng)).collect();
 
-    // Encode with the same explicit draw order as the prover, stack the
-    // batch column-wise, and commit once.
-    let codewords: Vec<Enc::Codeword> = masks
+    // Draw explicit randomness in the same order as the prover, batch encode
+    // the masks into one width-`k` matrix, and commit once.
+    let mask_randomness: Vec<Vec<EF>> = masks
         .iter()
-        .map(|mask| {
-            let randomness = encoding.sample_randomness(rng);
-            encoding.encode_with_randomness(mask, &randomness)
-        })
+        .map(|_| encoding.sample_randomness(rng))
         .collect();
-    let (mask_commitment, _prover_data) = mmcs.commit_matrix(stack_codewords(&codewords));
+    let (mask_commitment, _prover_data) =
+        mmcs.commit_matrix(encoding.encode_batch_with_randomness(&masks, &mask_randomness));
     challenger.observe(mask_commitment.clone());
 
     // Phase 3: mu_tilde via the closed form (Construction 6.3 step 2 replay).
@@ -210,7 +214,8 @@ mod tests {
         coeffs[1..].iter().any(|c| *c != F::ZERO)
     }
 
-    /// Lemma 6.4 view-match driver for Reed-Solomon mask encoding.
+    /// Lemma 6.4 acceptance and mask-prelude coupling driver for
+    /// Reed-Solomon mask encoding.
     ///
     /// # Invariants per `(binding, n_vars, folding, ell_zk, num_eqs)` case
     ///
@@ -220,7 +225,7 @@ mod tests {
     /// 4. The mask encoding's own simulator returns the correct shape (RS simulator error = 0).
     ///
     /// The binding parameter only affects the real run; the simulator output depends only on the wire schema, which both binding modes share.
-    fn run_view_match_rs(
+    fn run_acceptance_and_mask_prelude_coupling(
         binding: VariableOrder,
         n_vars: usize,
         folding_factor: usize,
@@ -368,17 +373,18 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(16))]
 
         #[test]
-        fn prop_simulator_view_matches_real_rs_prefix(
+        fn prop_simulator_accepts_and_couples_mask_prelude_rs_prefix(
             n_vars in 3usize..=8,
             ell_zk in 3usize..=5,
             num_eqs in 1usize..=3,
             seed in 0u64..1024,
         ) {
-            // Invariant: simulator view matches honest view across the
-            //            (n_vars, folding, ell_zk, num_eqs) cube for RS mask
-            //            encoding on the prefix path.
+            // Invariant: both transcripts accept and their mask preludes
+            // couple under matched RNG seeds across the parameter cube for
+            // RS mask encoding on the prefix path.
             //
-            // Per-case invariants pinned by run_view_match_rs (see docstring).
+            // Per-case invariants pinned by
+            // run_acceptance_and_mask_prelude_coupling (see docstring).
 
             // Compression step requires the folded polynomial to retain at
             // least one full packed lane. Packing width depends on the ISA.
@@ -387,12 +393,19 @@ mod tests {
             let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
 
             prop_assert!(
-                run_view_match_rs(VariableOrder::Prefix, n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
+                run_acceptance_and_mask_prelude_coupling(
+                    VariableOrder::Prefix,
+                    n_vars,
+                    folding_factor,
+                    ell_zk,
+                    num_eqs,
+                    seed,
+                ).is_ok()
             );
         }
 
         #[test]
-        fn prop_simulator_view_matches_real_rs_suffix(
+        fn prop_simulator_accepts_and_couples_mask_prelude_rs_suffix(
             n_vars in 3usize..=8,
             ell_zk in 3usize..=5,
             num_eqs in 1usize..=3,
@@ -404,7 +417,14 @@ mod tests {
             let folding_factor = 1 + (seed as usize % (n_vars - 1).max(1));
 
             prop_assert!(
-                run_view_match_rs(VariableOrder::Suffix, n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
+                run_acceptance_and_mask_prelude_coupling(
+                    VariableOrder::Suffix,
+                    n_vars,
+                    folding_factor,
+                    ell_zk,
+                    num_eqs,
+                    seed,
+                ).is_ok()
             );
         }
     }
@@ -452,7 +472,7 @@ mod tests {
             //
             //     coverage source                 | what it pins
             //     --------------------------------+----------------------------------
-            //     view-match proptests (both)     | prefix + suffix coupling
+            //     acceptance/coupling tests       | prefix + suffix coverage
             //     this test (prefix only)         | shape + stratification invariants
             let mut verifier = ZkVerifier::<F, EF>::new_prefix(&[TableShape::new(n_vars, 1)]);
             for _ in 0..num_eqs {
@@ -543,5 +563,45 @@ mod tests {
                 replay.err(),
             );
         }
+    }
+
+    #[test]
+    fn simulator_with_pow_replays() {
+        // The simulator must emit one valid grinding witness per round when
+        // the sumcheck configuration enables PoW.
+        let seed = 0x5eed;
+        let n_vars = 4;
+        let folding_factor = 2;
+        let ell_zk = 4;
+        let pow_bits = 4;
+        let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
+
+        let mut simulator_challenger = MyChallenger::new(perm);
+        let mut verifier = ZkVerifier::<F, EF>::new_prefix(&[TableShape::new(n_vars, 1)]);
+        verifier.add_virtual_eval(EF::from_u64(7), &mut simulator_challenger);
+        let mut verifier_challenger = simulator_challenger.clone();
+        let mut rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+
+        let (zk_data, mask_commitment, _) = simulate_classic_unpacked::<F, EF, _, _, _, _>(
+            &mut simulator_challenger,
+            &verifier,
+            folding_factor,
+            pow_bits,
+            &encoding,
+            &mmcs,
+            &mut rng,
+        );
+
+        assert_eq!(zk_data.pow_witnesses.len(), folding_factor);
+        verifier
+            .into_sumcheck::<MyMmcs, _>(
+                &zk_data,
+                &mask_commitment,
+                ell_zk,
+                folding_factor,
+                pow_bits,
+                &mut verifier_challenger,
+            )
+            .expect("verifier must accept the simulator's PoW witnesses");
     }
 }

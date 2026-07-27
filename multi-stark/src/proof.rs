@@ -1,33 +1,29 @@
 //! Proof data and opening shapes for multilinear AIR verification.
 
-use alloc::vec;
-use alloc::vec::Vec;
-
 use p3_sumcheck::generic_degree::GenericDegreeProof;
-use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Commitment, MultiStarkConfig, PcsProof};
 
-/// A complete multilinear AIR proof.
+/// A complete proof for AIR instances sharing one zerocheck.
 ///
 /// The parts are checked in order against one shared transcript:
-/// - the commitment binds the main trace columns.
+/// - the commitment binds all main trace tables.
 /// - the sumcheck reduces the AIR constraint to one bound-point claim.
-/// - the main opening proves the main trace columns at that point.
-/// - the preprocessed opening, when present, proves the preprocessed columns at the same point.
+/// - the main opening proves all main trace tables at that point.
+/// - the preprocessed opening, when present, proves all preprocessed tables at that point.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct MultiStarkProof<C: MultiStarkConfig> {
-    /// Commitment to the main trace columns.
+    /// Commitment to all main trace tables in input-instance order.
     pub commitment: Commitment<C>,
-    /// Zerocheck sumcheck transcript for the alpha-batched constraint.
+    /// Zerocheck sumcheck transcript for the beta-batched AIR constraints.
     pub sumcheck: GenericDegreeProof<C::Val, C::Challenge>,
-    /// Main-trace commitment opening at the bound sumcheck point.
+    /// Main-trace opening for every committed main table.
     pub opening: PcsProof<C>,
-    /// Preprocessed-trace commitment opening at the same point.
+    /// Batched preprocessed-trace opening.
     ///
-    /// `None` when the AIR declares no preprocessed columns.
+    /// `None` when no AIR in the batch declares preprocessed columns.
     pub preprocessed_opening: Option<PcsProof<C>>,
 }
 
@@ -45,34 +41,4 @@ where
             .field("opening", &self.opening)
             .finish()
     }
-}
-
-/// Build the single-table opening protocol shared by the prover and verifier.
-///
-/// Version one commits a single table.
-/// That table is the whole execution trace.
-///
-/// It opens at the bound sumcheck point:
-/// - every current-row column.
-/// - every successor-view column read by the AIR.
-///
-/// The prover and verifier build this identically, so their opening transcripts agree.
-///
-/// # Arguments
-///
-/// - Trace arity, with one variable per row bit.
-/// - Number of trace columns.
-/// - Column indices read through the successor view.
-pub(crate) fn single_table_protocol(
-    log_height: usize,
-    width: usize,
-    next_columns: &[usize],
-) -> OpeningProtocol {
-    OpeningProtocol::new(vec![TableSpec::new(
-        TableShape::new(log_height, width),
-        vec![OpeningBatch::new(
-            (0..width).collect::<Vec<_>>(),
-            next_columns.to_vec(),
-        )],
-    )])
 }
