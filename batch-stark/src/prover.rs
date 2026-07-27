@@ -123,6 +123,15 @@ where
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::ProverData: Sync,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Commitment: Sync,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        instances
+            .iter()
+            .all(|instance| instance.air.public_boundary_io().is_empty()),
+        "batch-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     let common = &prover_data.common;
     // TODO: Extend if additional lookup gadgets are added.
     let lookup_gadget = LogUpGadget::new();

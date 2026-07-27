@@ -5,6 +5,71 @@ use p3_matrix::dense::RowMajorMatrix;
 
 use crate::builder::AirBuilder;
 
+/// Which end of the trace a boundary cell lives on.
+///
+/// These are the two rows a first-row and a last-row selector single out.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BoundaryEnd {
+    /// The first trace row, index `0`.
+    First,
+    /// The last trace row, index `height - 1`.
+    Last,
+}
+
+/// One main-trace cell whose value is a public input, named by its position.
+///
+/// A cell pairs a trace position with one of the AIR's public values:
+///
+/// ```text
+///     (column, end) holds public_values[public_value]
+/// ```
+///
+/// This is a declaration, not a constraint.
+/// Binding the cell to the value is the proving backend's job.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct BoundaryPublic {
+    /// Main-trace column holding the cell.
+    pub column: usize,
+    /// Trace end the cell sits on.
+    pub end: BoundaryEnd,
+    /// Index into the AIR's public values supplying the cell's value.
+    pub public_value: usize,
+}
+
+impl BoundaryPublic {
+    /// Bundle a column, a trace end, and a public-value index into a boundary cell.
+    pub const fn new(column: usize, end: BoundaryEnd, public_value: usize) -> Self {
+        Self {
+            column,
+            end,
+            public_value,
+        }
+    }
+
+    /// Row index this cell sits on in a trace of `height` rows.
+    ///
+    /// ```text
+    ///     first end -> 0
+    ///     last  end -> height - 1
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics when `height` is zero.
+    /// An empty trace has no boundary row to name.
+    #[must_use]
+    pub const fn row(&self, height: usize) -> usize {
+        // A zero-height trace has no row to address at all.
+        assert!(height > 0, "a boundary cell needs at least one trace row");
+
+        // The two ends are the low and high rows of the trace.
+        match self.end {
+            BoundaryEnd::First => 0,
+            BoundaryEnd::Last => height - 1,
+        }
+    }
+}
+
 /// The underlying structure of an AIR.
 pub trait BaseAir<F>: Sync {
     /// The number of columns (a.k.a. registers) in this AIR.
@@ -182,6 +247,9 @@ pub trait BaseAir<F>: Sync {
     /// A value that is too small will cause the prover to produce an
     /// invalid proof.
     ///
+    /// The hint covers only what this AIR asserts during its own evaluation.
+    /// A backend that injects extra constraints scores their degree separately.
+    ///
     /// Returns `None` by default, which falls back to symbolic evaluation.
     fn max_constraint_degree(&self) -> Option<usize> {
         None
@@ -190,6 +258,36 @@ pub trait BaseAir<F>: Sync {
     /// Return the number of expected public values.
     fn num_public_values(&self) -> usize {
         0
+    }
+
+    /// Main-trace cells whose values are public inputs, named by position.
+    ///
+    /// A public input reaches a proof through one of two routes:
+    ///
+    /// ```text
+    ///     boundary constraint : asserted by the AIR, honored by every backend
+    ///     cell listed here    : bound by the backend, honored by some backends
+    /// ```
+    ///
+    /// Listing a cell is therefore not by itself a binding.
+    /// Support across this workspace:
+    ///
+    /// ```text
+    ///     multilinear multi-STARK : binds every listed cell, needs no AIR constraint
+    ///     univariate STARKs       : reject an AIR that lists any cell
+    ///     debug constraint check  : compares each listed cell against the trace
+    /// ```
+    ///
+    /// The default is the empty slice.
+    /// An AIR that overrides nothing keeps binding its public inputs by constraint.
+    ///
+    /// # Correctness
+    ///
+    /// - Every column index is less than the main width.
+    /// - Every public-value index is less than the declared public-value count.
+    /// - No two cells name the same column and trace end.
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &[]
     }
 }
 

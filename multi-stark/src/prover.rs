@@ -9,6 +9,7 @@ use p3_field::{ExtensionField, Field};
 use p3_sumcheck::PrescribedPointPcs;
 
 use crate::ProverInstances;
+use crate::boundary::{self, BoundaryIo};
 use crate::config::{Commitment, MultiStarkConfig, ProverData};
 use crate::folder::MultilinearFolder;
 use crate::instance::ProverParts;
@@ -51,6 +52,7 @@ use crate::zerocheck::AirZerocheck;
 /// Panics if any trace arity is below the commitment scheme's padding floor.
 /// Panics if the prover instances do not all use the same proving key.
 /// Panics if an AIR declares preprocessed columns but the proving key has none.
+/// Panics if an AIR's public boundary declaration names a cell or value it does not have.
 #[tracing::instrument(skip_all)]
 pub fn prove<'a, C, A>(
     config: &C,
@@ -92,7 +94,7 @@ where
 
     let ProverParts {
         proving_key,
-        tables,
+        mut tables,
         instances,
     } = instances.into_parts();
 
@@ -116,13 +118,72 @@ where
 
     // 2. Commit all main trace tables in instance order. The scheme absorbs its
     // commitment into the transcript.
-    let num_instances = instances.len();
+    let num_variables = instances.num_variables();
+
+    // Public boundary cells per instance: committed as zero, restored on the verifier.
+    //
+    // Invariant: every cell names a real column and a real public value.
+    //   Blanking and folding index by those numbers with no further check.
+    let airs = instances.airs();
+    let boundary_io = airs
+        .iter()
+        .map(|air| {
+            boundary::validate::<C::Val, _>(*air).expect("invalid boundary-IO declaration");
+            BoundaryIo::new(air.public_boundary_io())
+        })
+        .collect::<Vec<_>>();
+
+    // Blank each declared cell in place, keeping its true value aside.
+    // A table with no declared cells is left exactly as the caller supplied it.
+    let cell_values = tables
+        .iter_mut()
+        .zip(boundary_io.iter())
+        .map(|(table, boundary)| boundary.take_cells(table))
+        .collect::<Vec<_>>();
+
+    // The commitment therefore never carries data the verifier already holds.
     let witness = config.build_witness(tables);
     let (commitment, prover_data) = config.pcs().commit(witness, challenger);
 
-    // Keep commitment-bound table views for zerocheck, one per instance.
-    let tables = (0..num_instances)
-        .map(|table_index| config.committed_table(&prover_data, table_index))
+    // Tables the zerocheck folds, every one derived from a committed view.
+    //
+    //     no declared cells : folded as committed, nothing copied
+    //     declared cells    : folded as committed with the true values written back
+    //
+    // Writing the values back leaves the fold one Lagrange bump above the commitment:
+    //
+    //     folded   = committed + sum_cells eq_cell * true_value
+    //     restored = committed + sum_cells eq_cell * public       (the verifier's side)
+    //
+    // The pin the folder asserts forces those two lines to agree.
+    let restored = boundary_io
+        .iter()
+        .zip(cell_values.iter())
+        .enumerate()
+        .map(|(table_index, (boundary, values))| {
+            (!boundary.is_empty()).then(|| {
+                let mut table = config.committed_table(&prover_data, table_index).clone();
+
+                // Cells are addressed by row index.
+                // The padding-floor assert above keeps the committed arity unchanged.
+                assert_eq!(table.num_variables(), num_variables[table_index]);
+
+                // Writing back asserts each target cell is still blank.
+                // The commit path is thereby held to leaving the cells in place.
+                boundary.restore_cells(&mut table, values);
+                table
+            })
+        })
+        .collect::<Vec<_>>();
+    let tables = restored
+        .iter()
+        .enumerate()
+        .map(|(table_index, restored)| {
+            // Fall back to the committed view for any table that needed no edit.
+            restored
+                .as_ref()
+                .unwrap_or_else(|| config.committed_table(&prover_data, table_index))
+        })
         .collect::<Vec<_>>();
 
     // One entry per instance, in instance order.
@@ -148,7 +209,6 @@ where
     // 3. Reduce all AIR constraints to one batched sumcheck and one bound point.
     // The committed prover opens columns through the commitment schemes below, so
     // the zerocheck's own opened values are not used as the final proof openings.
-    let airs = instances.airs();
     let zerocheck = AirZerocheck::new(&airs, pow_bits);
     let (zerocheck_proof, point) = zerocheck.prove::<C::Val, C::Challenge, _>(
         &preprocessed_tables,
@@ -159,6 +219,7 @@ where
     let sumcheck = zerocheck_proof.sumcheck;
 
     drop(tables);
+    drop(restored);
     drop(preprocessed_tables);
 
     // 4. Open each main trace table at its suffix of the common bound point.

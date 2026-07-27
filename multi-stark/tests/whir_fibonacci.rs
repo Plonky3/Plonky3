@@ -2,7 +2,7 @@
 
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
@@ -13,8 +13,8 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::zerocheck::ZerocheckError;
 use p3_multi_stark::{
-    ProverInstance, ProverInstances, VerificationError, VerifierInstance, VerifierInstances, prove,
-    setup, verify,
+    BoundaryIoError, ProverInstance, ProverInstances, VerificationError, VerifierInstance,
+    VerifierInstances, prove, setup, verify,
 };
 use p3_sumcheck::OpeningBatch;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
@@ -193,6 +193,59 @@ impl<AB: AirBuilder> Air<AB> for FibAir {
         trans.assert_eq(local.left + local.right, next.right);
 
         builder.when_last_row().assert_eq(local.right, x);
+    }
+}
+
+/// Fibonacci AIR that binds its public inputs by position instead of by constraint.
+///
+/// Only the transition recurrence is asserted here:
+///
+/// ```text
+///     prover  : commits the seed and output cells as zero
+///     verifier: adds the public values back to the opened cells
+///     folder  : pins each cell to its public value, keeping the two in step
+/// ```
+struct FibIoAir;
+
+/// The cells the AIR above binds by position.
+///
+/// ```text
+///     column 0, first row -> public value 0
+///     column 1, first row -> public value 1
+///     column 1, last  row -> public value 2
+/// ```
+const FIB_IO_CELLS: [BoundaryPublic; 3] = [
+    BoundaryPublic::new(0, BoundaryEnd::First, 0),
+    BoundaryPublic::new(1, BoundaryEnd::First, 1),
+    BoundaryPublic::new(1, BoundaryEnd::Last, 2),
+];
+
+impl<X> BaseAir<X> for FibIoAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &FIB_IO_CELLS
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for FibIoAir {
+    fn eval(&self, builder: &mut AB) {
+        // Read the current row and the row after it.
+        let main = builder.main();
+        let local: &FibRow<AB::Var> = main.current_slice().borrow();
+        let next: &FibRow<AB::Var> = main.next_slice().borrow();
+
+        // Advance the recurrence, and assert nothing at either end.
+        //
+        //     next.left  = right
+        //     next.right = left + right
+        let mut trans = builder.when_transition();
+        trans.assert_eq(local.right, next.left);
+        trans.assert_eq(local.left + local.right, next.right);
     }
 }
 
@@ -560,4 +613,251 @@ fn verify_rejects_tampered_public_values() {
         }
         other => panic!("expected a Merkle opening rejection, got {other:?}"),
     }
+}
+
+#[test]
+fn prove_verify_fibonacci_boundary_io_roundtrips() {
+    // Invariant: a satisfying trace binding its public inputs by position round-trips.
+    //
+    //     prover  : commits the seed and output cells as zero
+    //     verifier: adds the public values back to the opened cells
+    let n = 256;
+    let trace = fib_trace(n);
+    let pis = fib_public_values(n);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let airs = [&FibIoAir];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibIoAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
+        0,
+        &mut challenger(&config),
+    );
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &FibIoAir, &vk, log_height, &pis,
+        )]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("honest boundary-IO Fibonacci proof must verify");
+}
+
+#[test]
+fn verify_rejects_tampered_public_value_boundary_io() {
+    // Invariant: prover and verifier must agree on every public value.
+    //
+    // Fixture state: an honest proof whose output public value is the final trace row.
+    let n = 256;
+    let trace = fib_trace(n);
+    let pis = fib_public_values(n);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let airs = [&FibIoAir];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibIoAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
+        0,
+        &mut challenger(&config),
+    );
+
+    // Mutation: shift the claimed output by one field element at verify time only.
+    //
+    //     public values absorbed  -> transcript diverges from the prover's
+    //     Lagrange correction     -> lands on the wrong column
+    //                                → the opened values no longer bind
+    let mut wrong = pis;
+    wrong[2] += F::ONE;
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &FibIoAir, &vk, log_height, &wrong,
+        )]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .unwrap_err();
+    match err {
+        VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position, reason }) => {
+            assert_eq!(position, 0);
+            assert_eq!(reason, "Base field Merkle multiproof verification failed");
+        }
+        other => panic!("expected a Merkle opening rejection, got {other:?}"),
+    }
+}
+
+#[test]
+fn verify_rejects_wrong_claimed_output_boundary_io() {
+    // Invariant: an honest trace is rejected when the claimed output is not the one it ends on.
+    //
+    // Two mechanisms reject it, and this end-to-end test separates neither:
+    //
+    //     pin            : the folded trace violates it
+    //     reconstruction : lands on a cell the prover never folded
+    //
+    // The zerocheck test module isolates the pin on its own.
+    //
+    // Fixture state: a valid length-256 trace, output claim shifted by one.
+    let n = 256;
+    let trace = fib_trace(n);
+    let mut pis = fib_public_values(n);
+    // Mutation: claim an output one off from the trace's true final value.
+    pis[2] += F::ONE;
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let airs = [&FibIoAir];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    // Both sides share the wrong public value, keeping the transcript in sync.
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibIoAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
+        0,
+        &mut challenger(&config),
+    );
+
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &FibIoAir, &vk, log_height, &pis,
+        )]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerificationError::Zerocheck(ZerocheckError::FinalSumMismatch)
+        ),
+        "expected zerocheck final-sum mismatch, got {err:?}"
+    );
+}
+
+/// A cell naming a column one past the last real column.
+///
+/// Setup rejects a declaration like this.
+/// Only a verifier handed a different AIR than setup saw can reach it.
+const OUT_OF_RANGE_CELLS: [BoundaryPublic; 1] =
+    [BoundaryPublic::new(NUM_COLS, BoundaryEnd::Last, 2)];
+
+/// The same Fibonacci recurrence, carrying the out-of-range declaration above.
+struct FibIoAirBadColumn;
+
+impl<X> BaseAir<X> for FibIoAirBadColumn {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &OUT_OF_RANGE_CELLS
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for FibIoAirBadColumn {
+    fn eval(&self, builder: &mut AB) {
+        // Identical constraints, with only the declaration differing.
+        FibIoAir.eval(builder);
+    }
+}
+
+#[test]
+fn verify_rejects_an_invalid_boundary_io_declaration() {
+    // Invariant: a malformed declaration is reported, not indexed past an end.
+    //
+    // Fixture state: an honest proof replayed against an AIR with a bad declaration.
+    //
+    //     columns present : 0, 1
+    //     column named    : 2
+    //                       → rejected before any opening work
+    let n = 256;
+    let trace = fib_trace(n);
+    let pis = fib_public_values(n);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let airs = [&FibIoAir];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibIoAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
+        0,
+        &mut challenger(&config),
+    );
+
+    // The keys carry no AIR of their own.
+    // The verifier can therefore be handed a different one than setup saw.
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &FibIoAirBadColumn,
+            &vk,
+            log_height,
+            &pis,
+        )]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerificationError::BoundaryIo {
+                instance: 0,
+                error: BoundaryIoError::ColumnOutOfRange {
+                    column: NUM_COLS,
+                    width: NUM_COLS
+                }
+            }
+        ),
+        "expected an out-of-range boundary-IO column, got {err:?}"
+    );
+}
+
+#[test]
+#[should_panic = "boundary-IO column"]
+fn setup_rejects_an_invalid_boundary_io_declaration() {
+    // Invariant: a bad declaration is caught before any proof exists.
+    //
+    //     column named : 2, one past the last real column
+    //                    → panic during key generation
+    let config = config_for(8, NUM_COLS);
+    let airs = [&FibIoAirBadColumn];
+    let _ = setup(&config, &airs, &mut challenger(&config));
 }

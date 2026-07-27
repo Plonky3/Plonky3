@@ -110,6 +110,30 @@ impl<EF: Field> BoundaryEvals<EF> {
         }
     }
 
+    /// Successor-view Lagrange weight of the last row at a challenge point.
+    ///
+    /// The successor map advances each row by one and repeats the final row.
+    /// The final row therefore collects weight from two places:
+    ///
+    /// ```text
+    ///     weight = eq(rs, last - 1) + eq(rs, last)
+    ///            = prod_{j < k - 1} rs_j
+    /// ```
+    ///
+    /// That is the product of every coordinate except the low-order one.
+    ///
+    /// The first row has no predecessor, leaving its successor weight at zero.
+    /// Only the last row needs this.
+    ///
+    /// # Arguments
+    ///
+    /// - `rs`: challenge coordinates, one per binary trace variable.
+    pub(super) fn last_row_successor_weight(rs: &[EF]) -> EF {
+        // Multiply every coordinate but the low-order one.
+        // A single-variable trace leaves an empty product of one.
+        rs[..rs.len().saturating_sub(1)].iter().copied().product()
+    }
+
     /// Fold one more bound coordinate into the running prefix accumulator.
     ///
     /// The accumulator tracks the partial products over the coordinates bound so far:
@@ -364,6 +388,28 @@ mod tests {
                 evals.transition,
                 if idx == last_idx { EF::ZERO } else { EF::ONE },
                 "transition idx={idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn last_row_successor_weight_matches_materialized_table() {
+        // Invariant: the closed form matches the dense successor weight table.
+        //
+        //     dense table index i -> successor weight of row i
+        //     index 2^k - 1       -> the last row's successor weight
+        let mut rng = SmallRng::seed_from_u64(0xB0);
+        for k in 1..=6usize {
+            // Random k-variable point, then the dense successor weight table for it.
+            let point = Point::<EF>::rand(&mut rng, k);
+            let table = Poly::new_next_from_point(point.as_slice());
+            let expected = table.as_slice()[(1 << k) - 1];
+
+            // The closed form must match the dense table's last entry.
+            assert_eq!(
+                BoundaryEvals::<EF>::last_row_successor_weight(point.as_slice()),
+                expected,
+                "k={k}"
             );
         }
     }

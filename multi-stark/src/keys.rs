@@ -13,6 +13,7 @@ use p3_air::BaseAir;
 use p3_commit::MultilinearPcs;
 use p3_sumcheck::layout::Table;
 
+use crate::boundary;
 use crate::config::{Commitment, MultiStarkConfig, ProverData};
 
 /// Batched preprocessed data the prover reuses across proofs.
@@ -61,6 +62,7 @@ pub struct VerifyingKey<C: MultiStarkConfig> {
 /// # Panics
 ///
 /// Panics if an AIR declares preprocessed columns but does not return a preprocessed trace.
+/// Panics if an AIR's public boundary declaration names a cell or value it does not have.
 pub fn setup<C, A>(
     config: &C,
     airs: &[&A],
@@ -71,6 +73,13 @@ where
     A: BaseAir<C::Val>,
     Commitment<C>: Clone,
 {
+    // A public boundary declaration is fixed by the AIR, never by the witness.
+    // Checking it once here spares prover and verifier from re-deriving it per proof.
+    for (air_index, air) in airs.iter().enumerate() {
+        boundary::validate::<C::Val, _>(*air)
+            .unwrap_or_else(|error| panic!("AIR {air_index}: {error}"));
+    }
+
     let mut tables = Vec::new();
 
     for air in airs.iter().filter(|air| air.preprocessed_width() != 0) {
