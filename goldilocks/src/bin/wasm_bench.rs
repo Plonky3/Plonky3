@@ -220,6 +220,73 @@ fn bench_dot_product() {
     bench_n!(8);
     bench_n!(16);
     bench_n!(32);
+
+    bench_batched_linear_combination();
+}
+
+/// Sweeps `chunked_linear_combination::<CHUNK, ...>` over every `CHUNK` size
+/// `Algebra::BATCHED_LC_CHUNK` is allowed to take (1, 2, 4, 8, 16, 32, 64), for a
+/// realistic runtime-length slice, to pick the best chunk size for the now-vectorized
+/// `mixed_dot_product` (previously tuned to chunk=2 for the old per-lane fallback).
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn bench_batched_linear_combination() {
+    use core::hint::black_box;
+    use std::time::Instant;
+
+    use p3_field::{PrimeCharacteristicRing, chunked_linear_combination};
+    use p3_goldilocks::{Goldilocks, PackedGoldilocksWasmSimd128};
+
+    const M: u64 = 20_000;
+
+    fn report(name: &str, n: u64, elapsed_ns: u128) {
+        let per_op = elapsed_ns as f64 / n as f64;
+        println!("{name:>28}: {per_op:>8.2} ns/op   ({n} ops in {elapsed_ns} ns)");
+    }
+
+    macro_rules! bench_len {
+        ($len:literal) => {{
+            let values: [PackedGoldilocksWasmSimd128; $len] = core::array::from_fn(|i| {
+                PackedGoldilocksWasmSimd128([
+                    Goldilocks::new((i as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ 0x1234),
+                    Goldilocks::new((i as u64).wrapping_mul(0xBF58476D1CE4E5B9) ^ 0x5678),
+                ])
+            });
+            let coeffs: [Goldilocks; $len] = core::array::from_fn(|i| {
+                Goldilocks::new((i as u64).wrapping_mul(0x94D049BB133111EB) ^ 0x9abc)
+            });
+
+            macro_rules! bench_chunk {
+                ($chunk:literal) => {{
+                    let mut acc = PackedGoldilocksWasmSimd128::ZERO;
+                    let t0 = Instant::now();
+                    for _ in 0..M {
+                        acc += chunked_linear_combination::<
+                            $chunk,
+                            PackedGoldilocksWasmSimd128,
+                            Goldilocks,
+                        >(black_box(&values), black_box(&coeffs));
+                    }
+                    let dt = t0.elapsed().as_nanos();
+                    let _ = black_box(acc);
+                    report(concat!("batched_lc_len", $len, "_chunk", $chunk), M, dt);
+                }};
+            }
+
+            bench_chunk!(1);
+            bench_chunk!(2);
+            bench_chunk!(4);
+            bench_chunk!(8);
+            bench_chunk!(16);
+            bench_chunk!(32);
+            bench_chunk!(64);
+        }};
+    }
+
+    bench_len!(8);
+    bench_len!(16);
+    bench_len!(33);
+    bench_len!(64);
+    bench_len!(256);
 }
 
 /// Compares the specialized `Poseidon2ExternalLayerGoldilocksWasmSimd128`/

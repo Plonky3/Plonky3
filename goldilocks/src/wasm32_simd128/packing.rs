@@ -199,15 +199,28 @@ impl_packed_field_div!(PackedGoldilocksWasmSimd128);
 impl_sum_prod_base_field!(PackedGoldilocksWasmSimd128, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksWasmSimd128 {
-    // Matches the aarch64 NEON chunk for the same WIDTH=2 lane layout.
-    const BATCHED_LC_CHUNK: usize = 2;
+    // Benchmarked on wasm32+simd128 under wasmtime across slice lengths 8, 16, 33, 64, 256:
+    // chunk=4 is consistently the fastest or near-fastest choice at every length (8-15%
+    // faster than chunk=2 throughout), while chunk=8/16 are consistently *worse* than
+    // chunk=2 for most lengths, and chunk=32/64 only win when the length happens to be a
+    // multiple of them (e.g. 256) — otherwise the leftover falls into the unvectorized
+    // per-element remainder path in `chunked_linear_combination`, which dominates for
+    // realistic (non-power-of-two) constraint counts.
+    const BATCHED_LC_CHUNK: usize = 4;
 
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
-        Self::from_fn(|lane| {
-            let a_lane: [Goldilocks; N] = core::array::from_fn(|i| a[i].as_slice()[lane]);
-            Goldilocks::dot_product(&a_lane, f)
-        })
+        const {
+            assert!((N as u32) <= (1 << 31));
+        }
+        match N {
+            0 => Self::ZERO,
+            1 => a[0] * f[0],
+            _ => Self::from_vector(dot_product_delayed_reduce::<N>(
+                &core::array::from_fn(|i| a[i].to_vector()),
+                &core::array::from_fn(|i| Self::from(f[i]).to_vector()),
+            )),
+        }
     }
 }
 
@@ -650,5 +663,66 @@ mod tests {
         check_random_n!(7, 32);
         check_random_n!(16, 16);
         check_random_n!(64, 8);
+    }
+
+    /// Adversarial coverage for `mixed_dot_product`, which reuses the same
+    /// `dot_product_delayed_reduce` machinery with the coefficients broadcast per term
+    /// instead of genuinely packed — the new risk is specifically in that broadcast wiring.
+    #[test]
+    fn mixed_dot_product_delayed_reduction_matches_scalar() {
+        use p3_field::{Algebra, PackedValue, PrimeCharacteristicRing, PrimeField64};
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        fn check<const N: usize>(a0: [Goldilocks; N], a1: [Goldilocks; N], f: [Goldilocks; N]) {
+            let packed_a: [PackedGoldilocksWasmSimd128; N] =
+                core::array::from_fn(|i| PackedGoldilocksWasmSimd128([a0[i], a1[i]]));
+
+            let expected0 = Goldilocks::dot_product(&a0, &f);
+            let expected1 = Goldilocks::dot_product(&a1, &f);
+            let actual = PackedGoldilocksWasmSimd128::mixed_dot_product(&packed_a, &f);
+
+            assert_eq!(
+                actual.as_slice()[0].as_canonical_u64(),
+                expected0.as_canonical_u64(),
+                "N={N} mismatch at lane 0"
+            );
+            assert_eq!(
+                actual.as_slice()[1].as_canonical_u64(),
+                expected1.as_canonical_u64(),
+                "N={N} mismatch at lane 1"
+            );
+        }
+
+        macro_rules! check_edge_n {
+            ($n:literal) => {
+                check::<$n>(
+                    [Goldilocks::new(u64::MAX); $n],
+                    [Goldilocks::ZERO; $n],
+                    [Goldilocks::new(u64::MAX); $n],
+                );
+            };
+        }
+        check_edge_n!(2);
+        check_edge_n!(5);
+        check_edge_n!(8);
+        check_edge_n!(16);
+        check_edge_n!(32);
+
+        let mut rng = SmallRng::seed_from_u64(0x11ED_D07_9A0D);
+        macro_rules! check_random_n {
+            ($n:literal, $count:literal) => {
+                for _ in 0..$count {
+                    let a0: [Goldilocks; $n] = core::array::from_fn(|_| rng.random());
+                    let a1: [Goldilocks; $n] = core::array::from_fn(|_| rng.random());
+                    let f: [Goldilocks; $n] = core::array::from_fn(|_| rng.random());
+                    check::<$n>(a0, a1, f);
+                }
+            };
+        }
+        check_random_n!(2, 16);
+        check_random_n!(3, 16);
+        check_random_n!(8, 16);
+        check_random_n!(16, 8);
     }
 }
