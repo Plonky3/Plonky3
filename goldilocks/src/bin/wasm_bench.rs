@@ -137,6 +137,65 @@ fn main() {
     bench_poseidon2();
     bench_dot_product();
     bench_sum_array();
+    bench_quadratic_extension_mul();
+}
+
+/// Times the packed Goldilocks quadratic-extension multiplication and squaring
+/// (`quadratic_mul`/`binomial_square` in `p3_field::extension`, applied to
+/// `[PackedGoldilocksWasmSimd128; 2]`), which route through the vectorized `dot_product`.
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn bench_quadratic_extension_mul() {
+    use core::hint::black_box;
+    use std::time::Instant;
+
+    use p3_field::extension::{binomial_mul, binomial_square};
+    use p3_field::{PrimeCharacteristicRing, PrimeField64};
+    use p3_goldilocks::{Goldilocks, PackedGoldilocksWasmSimd128};
+
+    const N: u64 = 200_000;
+    const W: Goldilocks = Goldilocks::new(7);
+
+    fn report(name: &str, n: u64, elapsed_ns: u128) {
+        let per_op = elapsed_ns as f64 / n as f64;
+        println!("{name:>28}: {per_op:>8.2} ns/op   ({n} ops in {elapsed_ns} ns)");
+    }
+
+    let a: [PackedGoldilocksWasmSimd128; 2] = core::array::from_fn(|i| {
+        PackedGoldilocksWasmSimd128([
+            Goldilocks::new((i as u64 + 1).wrapping_mul(0x9E3779B97F4A7C15) ^ 0x1234),
+            Goldilocks::new((i as u64 + 1).wrapping_mul(0xBF58476D1CE4E5B9) ^ 0x5678),
+        ])
+    });
+    let b: [PackedGoldilocksWasmSimd128; 2] = core::array::from_fn(|i| {
+        PackedGoldilocksWasmSimd128([
+            Goldilocks::new((i as u64 + 1).wrapping_mul(0x94D049BB133111EB) ^ 0x9abc),
+            Goldilocks::new((i as u64 + 1).wrapping_mul(0x2545F4914F6CDD1D) ^ 0xdef0),
+        ])
+    });
+
+    {
+        let mut acc = a;
+        let t0 = Instant::now();
+        for _ in 0..N {
+            let mut res = [PackedGoldilocksWasmSimd128::ZERO; 2];
+            binomial_mul(black_box(&acc), black_box(&b), &mut res, W);
+            acc = res;
+        }
+        let _ = black_box(acc[0].0[0].as_canonical_u64());
+        report("ext2_mul", N, t0.elapsed().as_nanos());
+    }
+
+    {
+        let mut acc = a;
+        let t0 = Instant::now();
+        for _ in 0..N {
+            let mut res = [PackedGoldilocksWasmSimd128::ZERO; 2];
+            binomial_square(black_box(&acc), &mut res, W);
+            acc = res;
+        }
+        let _ = black_box(acc[0].0[0].as_canonical_u64());
+        report("ext2_square", N, t0.elapsed().as_nanos());
+    }
 }
 
 /// Compares the vectorized delayed-reduction `sum_array` (one `reduce128` for the whole
