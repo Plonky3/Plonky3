@@ -102,7 +102,7 @@ fn internal_round_goldilocks_8(
     let s5 = state[5];
     let s6 = state[6];
     let s7 = state[7];
-    let sum_tail = s1 + s2 + s3 + s4 + s5 + s6 + s7;
+    let sum_tail = PackedGoldilocksWasmSimd128::sum_array::<7>(&[s1, s2, s3, s4, s5, s6, s7]);
 
     add_rc_and_sbox(&mut state[0], rc);
     let s0 = state[0];
@@ -146,7 +146,9 @@ fn internal_round_goldilocks_12(
     let s9 = state[9];
     let s10 = state[10];
     let s11 = state[11];
-    let sum_tail = s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11;
+    let sum_tail = PackedGoldilocksWasmSimd128::sum_array::<11>(&[
+        s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11,
+    ]);
 
     add_rc_and_sbox(&mut state[0], rc);
     let s0 = state[0];
@@ -203,7 +205,9 @@ fn internal_round_goldilocks_16(
     let s13 = state[13];
     let s14 = state[14];
     let s15 = state[15];
-    let sum_tail = s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15;
+    let sum_tail = PackedGoldilocksWasmSimd128::sum_array::<15>(&[
+        s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15,
+    ]);
 
     add_rc_and_sbox(&mut state[0], rc);
     let s0 = state[0];

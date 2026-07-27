@@ -136,6 +136,72 @@ fn main() {
 
     bench_poseidon2();
     bench_dot_product();
+    bench_sum_array();
+}
+
+/// Compares the vectorized delayed-reduction `sum_array` (one `reduce128` for the whole
+/// sum) against a naive `+`-chain (what the generic tree-sum default reduces to for a
+/// packed type — every `+` is a full modular add, ~9 ops including a canonicalize step),
+/// for the `N` values that matter most: Poseidon2's internal-round `sum_tail` at widths
+/// 8/12/16 sums 7/11/15 terms.
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn bench_sum_array() {
+    use core::hint::black_box;
+    use std::time::Instant;
+
+    use p3_field::PrimeCharacteristicRing;
+    use p3_goldilocks::{Goldilocks, PackedGoldilocksWasmSimd128};
+
+    const M: u64 = 200_000;
+
+    fn report(name: &str, n: u64, elapsed_ns: u128) {
+        let per_op = elapsed_ns as f64 / n as f64;
+        println!("{name:>28}: {per_op:>8.2} ns/op   ({n} ops in {elapsed_ns} ns)");
+    }
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            let terms: [PackedGoldilocksWasmSimd128; $n] = core::array::from_fn(|i| {
+                PackedGoldilocksWasmSimd128([
+                    Goldilocks::new((i as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ 0x1234),
+                    Goldilocks::new((i as u64).wrapping_mul(0xBF58476D1CE4E5B9) ^ 0x5678),
+                ])
+            });
+
+            {
+                let mut acc = PackedGoldilocksWasmSimd128::ZERO;
+                let t0 = Instant::now();
+                for _ in 0..M {
+                    acc += PackedGoldilocksWasmSimd128::sum_array::<$n>(black_box(&terms));
+                }
+                let dt = t0.elapsed().as_nanos();
+                let _ = black_box(acc);
+                report(concat!("sum_array_", $n, "_vectorized"), M, dt);
+            }
+
+            {
+                let mut acc = PackedGoldilocksWasmSimd128::ZERO;
+                let t0 = Instant::now();
+                for _ in 0..M {
+                    let sum = black_box(&terms)
+                        .iter()
+                        .copied()
+                        .reduce(|x, y| x + y)
+                        .unwrap();
+                    acc += sum;
+                }
+                let dt = t0.elapsed().as_nanos();
+                let _ = black_box(acc);
+                report(concat!("sum_array_", $n, "_chain"), M, dt);
+            }
+        }};
+    }
+
+    bench_n!(3);
+    bench_n!(7);
+    bench_n!(11);
+    bench_n!(15);
+    bench_n!(32);
 }
 
 /// Compares the vectorized delayed-reduction `dot_product` (one `reduce128` for the whole

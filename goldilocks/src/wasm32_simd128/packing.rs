@@ -165,6 +165,23 @@ impl PrimeCharacteristicRing for PackedGoldilocksWasmSimd128 {
     }
 
     #[inline]
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
+        assert_eq!(N, input.len());
+        const {
+            assert!((N as u32) <= (1 << 31));
+        }
+        match N {
+            0 => Self::ZERO,
+            1 => input[0],
+            2 => input[0] + input[1],
+            _ => {
+                let vectors: [v128; N] = core::array::from_fn(|i| input[i].to_vector());
+                Self::from_vector(sum_delayed_reduce::<N>(&vectors))
+            }
+        }
+    }
+
+    #[inline]
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
         const {
             assert!((N as u32) <= (1 << 31));
@@ -495,6 +512,30 @@ fn dot_product_delayed_reduce<const N: usize>(lhs: &[v128; N], rhs: &[v128; N]) 
     reduce128(sum_hi, sum_lo)
 }
 
+/// Delayed-reduction sum: `sum(terms)` with a single final [`reduce128`] instead of one
+/// reduction per term (the generic `sum_array`/`+`-chain default pays a full `add`, ~9 ops
+/// including a canonicalize step, for every term).
+///
+/// Each term is a single (arbitrary, possibly non-canonical) 64-bit value, i.e. a 128-bit
+/// value with a zero high half, so — unlike [`dot_product_delayed_reduce`] — no bit-96 split
+/// is needed: accumulating with plain wrapping 128-bit-per-lane addition (carry from the low
+/// word into the high word on overflow) gives the *exact* sum as long as `N < 2^64`, which
+/// always holds. `reduce128` finishes it.
+#[inline]
+fn sum_delayed_reduce<const N: usize>(terms: &[v128; N]) -> v128 {
+    let mut acc_hi = u64x2_splat(0);
+    let mut acc_lo = u64x2_splat(0);
+
+    for &term in terms {
+        let new_lo = i64x2_add(acc_lo, term);
+        let carry = unsigned_lt_as_carry(new_lo, acc_lo);
+        acc_hi = i64x2_add(acc_hi, carry);
+        acc_lo = new_lo;
+    }
+
+    reduce128(acc_hi, acc_lo)
+}
+
 /// Goldilocks modular multiplication. Computes `x * y mod FIELD_ORDER`.
 ///
 /// Inputs can be arbitrary, output is not guaranteed to be less than `FIELD_ORDER`.
@@ -561,6 +602,70 @@ mod tests {
         &[super::ONES],
         crate::PackedGoldilocksWasmSimd128(super::SPECIAL_VALS)
     );
+
+    /// Adversarial + random coverage for `sum_array`'s delayed-reduction path (`N > 2`),
+    /// across every lane independently.
+    #[test]
+    fn sum_array_delayed_reduction_matches_scalar() {
+        use p3_field::{PackedValue, PrimeCharacteristicRing, PrimeField64};
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        fn check<const N: usize>(terms0: [Goldilocks; N], terms1: [Goldilocks; N]) {
+            let packed: [PackedGoldilocksWasmSimd128; N] =
+                core::array::from_fn(|i| PackedGoldilocksWasmSimd128([terms0[i], terms1[i]]));
+
+            let expected0 = Goldilocks::sum_array::<N>(&terms0);
+            let expected1 = Goldilocks::sum_array::<N>(&terms1);
+            let actual = PackedGoldilocksWasmSimd128::sum_array::<N>(&packed);
+
+            assert_eq!(
+                actual.as_slice()[0].as_canonical_u64(),
+                expected0.as_canonical_u64(),
+                "N={N} mismatch at lane 0: terms={terms0:?}"
+            );
+            assert_eq!(
+                actual.as_slice()[1].as_canonical_u64(),
+                expected1.as_canonical_u64(),
+                "N={N} mismatch at lane 1: terms={terms1:?}"
+            );
+        }
+
+        // Every term at the maximal non-canonical representative, in lane 0, paired against
+        // zero in lane 1: the densest possible carry chain for the wrapping 128-bit
+        // accumulator, at every N from 3 (first delayed-reduction arm) to 32.
+        macro_rules! check_edge_n {
+            ($n:literal) => {
+                check::<$n>([Goldilocks::new(u64::MAX); $n], [Goldilocks::ZERO; $n]);
+            };
+        }
+        check_edge_n!(3);
+        check_edge_n!(4);
+        check_edge_n!(5);
+        check_edge_n!(7);
+        check_edge_n!(8);
+        check_edge_n!(11);
+        check_edge_n!(12);
+        check_edge_n!(15);
+        check_edge_n!(16);
+        check_edge_n!(32);
+
+        let mut rng = SmallRng::seed_from_u64(0x5A_A0_D1CA_7E);
+        macro_rules! check_random_n {
+            ($n:literal, $count:literal) => {
+                for _ in 0..$count {
+                    let terms0: [Goldilocks; $n] = core::array::from_fn(|_| rng.random());
+                    let terms1: [Goldilocks; $n] = core::array::from_fn(|_| rng.random());
+                    check::<$n>(terms0, terms1);
+                }
+            };
+        }
+        check_random_n!(3, 32);
+        check_random_n!(7, 32);
+        check_random_n!(11, 16);
+        check_random_n!(15, 16);
+        check_random_n!(64, 8);
+    }
 
     /// Adversarial + random coverage for `dot_product`'s delayed-reduction path (`N > 1`),
     /// across every lane independently, for `N` both below and (via repeated calls) well
