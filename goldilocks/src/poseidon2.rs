@@ -96,11 +96,26 @@ pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
 
 /// An implementation of the Poseidon2 hash function for the Goldilocks field.
 ///
+/// It acts on arrays of the form `[Goldilocks; WIDTH]` and `[PackedGoldilocksWasmSimd128; WIDTH]`,
+/// with round constants pre-broadcast into packed vectors at construction time. See
+/// [`crate::wasm32_simd128::Poseidon2ExternalLayerGoldilocksWasmSimd128`] for details.
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
+    Goldilocks,
+    crate::wasm32_simd128::Poseidon2ExternalLayerGoldilocksWasmSimd128<WIDTH>,
+    crate::wasm32_simd128::Poseidon2InternalLayerGoldilocksWasmSimd128,
+    WIDTH,
+    GOLDILOCKS_S_BOX_DEGREE,
+>;
+
+/// An implementation of the Poseidon2 hash function for the Goldilocks field.
+///
 /// It acts on arrays of the form `[Goldilocks; WIDTH]`.
 #[cfg(not(any(
     all(target_arch = "aarch64", target_feature = "neon"),
     all(target_arch = "x86_64", target_feature = "avx2"),
     all(target_arch = "x86_64", target_feature = "avx512f"),
+    all(target_arch = "wasm32", target_feature = "simd128"),
 )))]
 pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     Goldilocks,
