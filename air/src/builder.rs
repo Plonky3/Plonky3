@@ -45,6 +45,19 @@ pub trait AirBuilder: Sized {
     /// Variable type for public values.
     type PublicVar: Into<Self::Expr> + Copy;
 
+    /// Variable type for periodic column values at the current row.
+    ///
+    /// - Periodic columns are commitment-free witness data.
+    /// - Their values repeat with a fixed period.
+    /// - Builders without periodic data still pick a concrete type, so
+    ///   the trait can be implemented uniformly.
+    type PeriodicVar: Into<Self::Expr> + Copy;
+
+    /// Number of consecutive trace rows a constraint may reference (the window arity).
+    ///
+    /// Only two-row windows (current + next) are currently supported.
+    const WINDOW: usize = 2;
+
     /// Return the current and next row slices of the main (primary) trace.
     fn main(&self) -> Self::MainWindow;
 
@@ -60,17 +73,22 @@ pub trait AirBuilder: Sized {
     fn is_last_row(&self) -> Self::Expr;
 
     /// Expression evaluating to zero only on the last row.
-    fn is_transition(&self) -> Self::Expr {
-        self.is_transition_window(2)
-    }
+    fn is_transition(&self) -> Self::Expr;
 
     /// Expression evaluating to zero only on the last `size - 1` rows.
     ///
     /// # Panics
     ///
-    /// Implementations should panic if `size > 2`, since only two-row
-    /// windows are currently supported.
-    fn is_transition_window(&self, size: usize) -> Self::Expr;
+    /// Panics if `size > Self::WINDOW`, since only two-row windows are
+    /// currently supported.
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        assert!(
+            size <= Self::WINDOW,
+            "window size {size} exceeds supported arity {}",
+            Self::WINDOW
+        );
+        self.is_transition()
+    }
 
     /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.
     fn when<I: Into<Self::Expr>>(&mut self, condition: I) -> FilteredAirBuilder<'_, Self> {
@@ -167,6 +185,15 @@ pub trait AirBuilder: Sized {
         &[]
     }
 
+    /// Values of every periodic column at the current row.
+    ///
+    /// - One entry per periodic column declared by the AIR.
+    /// - Ordering matches the AIR's declared column order.
+    /// - Default is empty for builders without periodic data.
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        &[]
+    }
+
     /// Assert that `x` is a boolean, i.e. either `0` or `1`.
     ///
     /// Where possible, batching multiple assert_bool calls
@@ -174,15 +201,6 @@ pub trait AirBuilder: Sized {
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into().bool_check());
     }
-}
-
-/// Extension of [`AirBuilder`] for builders that supply periodic column values.
-pub trait PeriodicAirBuilder: AirBuilder {
-    /// Variable type for periodic column values.
-    type PeriodicVar: Into<Self::Expr> + Copy;
-
-    /// Periodic column values at the current row.
-    fn periodic_values(&self) -> &[Self::PeriodicVar];
 }
 
 /// Extension trait for builders that carry additional runtime context.

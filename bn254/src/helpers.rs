@@ -28,10 +28,10 @@ pub(crate) fn to_biguint<const N: usize>(value: [u64; N]) -> BigUint {
     BigUint::from_bytes_le(&bytes)
 }
 
-/// Basically copied the implementation here: https://doc.rust-lang.org/std/primitive.u32.html#method.carrying_add
+/// Basically copied the implementation here: <https://doc.rust-lang.org/std/primitive.u32.html#method.carrying_add>
 ///
 /// Once this moves to standard rust (currently nightly) we can use that directly.
-/// Tracking Issue is here: https://github.com/rust-lang/rust/issues/85532
+/// Tracking Issue is here: <https://github.com/rust-lang/rust/issues/85532>
 #[inline]
 const fn carrying_add(lhs: u64, rhs: u64, carry: bool) -> (u64, bool) {
     let (a, c1) = lhs.overflowing_add(rhs);
@@ -58,10 +58,10 @@ pub(crate) const fn wrapping_add(lhs: [u64; 4], rhs: [u64; 4]) -> ([u64; 4], boo
     (output, carry)
 }
 
-/// Basically copied the implementation here: https://doc.rust-lang.org/std/primitive.u32.html#method.borrowing_sub
+/// Basically copied the implementation here: <https://doc.rust-lang.org/std/primitive.u32.html#method.borrowing_sub>
 ///
 /// Once this moves to standard rust (currently nightly) we can use that directly.
-/// Tracking Issue is here: https://github.com/rust-lang/rust/issues/85532
+/// Tracking Issue is here: <https://github.com/rust-lang/rust/issues/85532>.
 #[inline]
 const fn borrowing_sub(lhs: u64, rhs: u64, borrow: bool) -> (u64, bool) {
     let (a, c1) = lhs.overflowing_sub(rhs);
@@ -446,7 +446,7 @@ pub(crate) const BN254_2_POW_1030: [u64; 4] = [
 ///
 /// The following approach to a GCD based inversion algorithm is taken from the paper:
 /// Optimized Binary GCD for Modular Inversion by Thomas Pornin.
-/// It can be found here: https://eprint.iacr.org/2020/972.pdf
+/// It can be found here: <https://eprint.iacr.org/2020/972.pdf>.
 ///
 /// Explicitly, we implement Algorithm 2, roughly following the C implementation linked in that paper (in section 3).
 /// The algorithm is a variant of the Binary Extended Euclidean Algorithm which allows for most of the iterations to

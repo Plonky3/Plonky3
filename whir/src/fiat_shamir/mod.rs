@@ -1,5 +1,4 @@
 pub mod domain_separator;
-pub mod errors;
-pub mod pattern;
+pub(crate) mod pattern;
 #[cfg(test)]
 mod tests;

@@ -18,7 +18,7 @@
 use p3_field::PrimeField32;
 use p3_field::integers::QuotientMap;
 use p3_mersenne_31::Mersenne31;
-use sha3::Shake128Reader;
+use shake::Shake128Reader;
 
 use super::MonolithBars;
 use crate::util::get_random_u32;

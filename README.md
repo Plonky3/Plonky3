@@ -36,7 +36,7 @@ Polynomial commitment schemes
 
 PIOPs
 - [x] univariate STARK
-- [ ] multivariate STARK
+- [x] multivariate STARK
 - [ ] PLONK
 
 Codes
@@ -88,10 +88,27 @@ Plonky3 contains optimizations that rely on newer CPU instructions unavailable i
 RUSTFLAGS="-Ctarget-cpu=native" cargo test
 ```
 
+## Configuration
+
+### Cargo features
+
+| Feature | Where | What it does |
+| --- | --- | --- |
+| `parallel` | Most crates | Routes hot loops through `rayon` instead of the sequential fallback. Off by default. Activate at the workspace root with `cargo … --features parallel`. |
+| `neon` | `p3-blake3` | Forwards to the upstream `blake3/neon` feature for aarch64. Off by default. |
+| `test-utils` | `p3-commit` (on by default), `p3-sumcheck` (off) | Compiles in-crate test helpers used by integration tests. |
+
+There is no `nightly`, `asm`, or `simd` Cargo feature — SIMD code paths are gated by `cfg(target_feature = …)` and enabled through `RUSTFLAGS`, not features. See [CPU features](#cpu-features) above.
+
+### Recommended `RUSTFLAGS`
+
+- `-Ctarget-cpu=native` — enables every SIMD instruction set the host supports (AVX2 / AVX-512 / NEON / SIMD128 fallbacks for Mersenne31, BabyBear, KoalaBear, Goldilocks). Required to get parity with the published benchmark numbers.
+- `lto = "fat"` in `[profile.release]` of the workspace `Cargo.toml` (or your downstream) for a some release-mode speedup, at the cost of longer compile times.
+- `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` for repeated-proof workloads (see [Benchmarks](#benchmarks)).
+
 ## Known issues
 
-The verifier might panic upon receiving certain invalid proofs.
-
+- **The verifier may panic on certain malformed proofs.** Downstream integrators that accept untrusted proofs should wrap `verify` in `catch_unwind` out of caution.
 
 ## License
 

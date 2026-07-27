@@ -1,12 +1,14 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::ops::Div;
 
 use p3_field::extension::{
     BinomialExtensionField, BinomiallyExtendable, PackedBinomialExtensionField,
 };
+use p3_field::integers::QuotientMap;
 use p3_field::{
     Algebra, BasedVectorSpace, ExtensionField, Field, PackedField, PackedFieldExtension,
-    PackedFieldPow2, PackedValue, PrimeCharacteristicRing,
+    PackedFieldPow2, PackedValue, PrimeCharacteristicRing, PrimeField32,
 };
 use proptest::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
@@ -233,6 +235,46 @@ where
     }
 }
 
+/// Pin the fast `add_assign_lane` override against its default.
+///
+/// - The default rebuilds a full packed element and adds it.
+/// - The override touches only the `D` base lanes at the target lane.
+/// - Both must agree on every lane.
+/// - Only the target lane may change.
+pub fn test_add_assign_lane_ext<BF, EF, PE>()
+where
+    BF: Field,
+    EF: ExtensionField<BF, ExtensionPacking = PE>,
+    PE: PackedFieldExtension<BF, EF> + Copy + Eq,
+    StandardUniform: Distribution<PE> + Distribution<EF>,
+{
+    let mut rng = SmallRng::seed_from_u64(0xa55e_3b1c);
+    let width = BF::Packing::WIDTH;
+
+    // Random starting register and the scalar to inject, over several trials.
+    for _ in 0..32 {
+        let start: PE = rng.random();
+        let value: EF = rng.random();
+        // Inject into each lane in turn.
+        for lane in 0..width {
+            // Fast path: the per-type override.
+            let mut fast = start;
+            fast.add_assign_lane(lane, value);
+
+            // Reference: add `value` only to the target lane via the public constructor.
+            let reference = start + PE::from_ext_fn(|l| if l == lane { value } else { EF::ZERO });
+            assert_eq!(fast, reference, "lane {lane} mismatch");
+
+            // The target lane gains exactly `value`.
+            // Every other lane is untouched.
+            for other in 0..width {
+                let expected = start.extract(other) + if other == lane { value } else { EF::ZERO };
+                assert_eq!(fast.extract(other), expected, "leaked into lane {other}");
+            }
+        }
+    }
+}
+
 /// Verify packed binomial extension division against scalar reference results.
 ///
 /// Tests four operations:
@@ -324,6 +366,75 @@ where
             extract_lane(&quot_scalar_assign, lane),
             extract_lane(&quot_scalar, lane),
             "packed/scalar div_assign mismatch at lane {lane}"
+        );
+    }
+}
+
+/// Verify that packed divide agrees with scalar divide on every SIMD lane.
+///
+/// # Invariant
+///
+/// For every lane `i`:
+///
+/// ```text
+/// (a / b).lane(i) == a.lane(i) / b.lane(i)
+/// ```
+pub fn test_packed_extension_div_consistency<F, EF, PEF>()
+where
+    F: Field,
+    EF: ExtensionField<F, ExtensionPacking = PEF>,
+    PEF: PackedFieldExtension<F, EF> + Div<Output = PEF> + Copy,
+    StandardUniform: Distribution<EF>,
+{
+    // SIMD lane count.
+    // - Goldilocks NEON → 2.
+    // - KoalaBear NEON → 4.
+    // - Scalar → 1.
+    let width = F::Packing::WIDTH;
+
+    // Fixed seed → reproducible bytes on any failure.
+    let mut rng = SmallRng::seed_from_u64(0x_d1ef_d1ef_d1ef_d1ef);
+
+    // Numerator lane fixture: any value, zeros are fine.
+    //
+    //     lane:   0    1    …    W-1
+    //     nums:  [n0,  n1,  …,   n_{W-1}]
+    let nums: Vec<EF> = (0..width).map(|_| rng.random()).collect();
+
+    // Denominator lane fixture: reject-sample so every lane is invertible.
+    //
+    //     lane:   0       1       …    W-1
+    //     dens:  [d0 ≠ 0, d1 ≠ 0, …,   d_{W-1} ≠ 0]
+    let dens: Vec<EF> = (0..width)
+        .map(|_| {
+            loop {
+                let x: EF = rng.random();
+                if !x.is_zero() {
+                    break x;
+                }
+            }
+        })
+        .collect();
+
+    // Pack the per-lane scalars into one SIMD value each.
+    //
+    //     lanes [n0, n1, …, n_{W-1}]  →  one packed extension value
+    //     lanes [d0, d1, …, d_{W-1}]  →  one packed extension value
+    let pef_n: PEF = PEF::from_ext_slice(&nums);
+    let pef_d: PEF = PEF::from_ext_slice(&dens);
+
+    // Run the packed divide. Each lane must independently compute n_i / d_i.
+    let pef_q = pef_n / pef_d;
+
+    // Per-lane invariant:
+    //
+    //     packed quotient at lane i  ==  nums[i] / dens[i]
+    for lane in 0..width {
+        let expected = nums[lane] / dens[lane];
+        let got = pef_q.extract(lane);
+        assert_eq!(
+            got, expected,
+            "lane {lane}: packed Div disagrees with scalar Div (W = {width})"
         );
     }
 }
@@ -497,7 +608,7 @@ where
     );
 }
 
-/// Test that [`PackedField::broadcast`] sets all lanes to the same scalar.
+/// Test that [`PackedValue::broadcast`] sets all lanes to the same scalar.
 pub fn test_broadcast<PF>()
 where
     PF: PackedField + Eq,
@@ -645,6 +756,142 @@ where
     test_dot_n!(16);
 }
 
+/// Eight canonical edge values that probe carry propagation in dot products.
+///
+/// - `0`: additive identity.
+/// - `1`, `2`: small coefficients.
+/// - `p / 4`, `p / 2`, `p / 2 + 1`: mid-range, straddle `2^32` after squaring.
+/// - `p - 2`, `p - 1`: maximum canonical band, products near `(p - 1)^2`.
+const fn boundary_u32_values<F: PrimeField32>() -> [u32; 8] {
+    // `ORDER_U32 > 4`, so every entry is canonical.
+    let p = F::ORDER_U32;
+    [0, 1, 2, p / 4, p / 2, p / 2 + 1, p - 2, p - 1]
+}
+
+/// Map a length-`N` array of canonical `u32`s through the field's quotient map.
+fn u32_array_to_field<F, const N: usize>(values: [u32; N]) -> [F; N]
+where
+    F: PrimeField32 + QuotientMap<u32>,
+{
+    values.map(F::from_int)
+}
+
+/// Compare a broadcast packed dot product against the scalar reference.
+///
+/// Each input is replicated across every SIMD lane, so all lanes must agree
+/// with the scalar result.
+///
+/// # Panics
+///
+/// On lane mismatch. The message echoes the raw inputs for replay.
+pub fn assert_packed_broadcast_dot_product_matches_scalar<PF, const N: usize>(
+    lhs_raw: [u32; N],
+    rhs_raw: [u32; N],
+) where
+    PF: PackedField + Eq,
+    PF::Scalar: PrimeField32 + QuotientMap<u32>,
+{
+    // Lift raw u32 inputs into the field.
+    let lhs = u32_array_to_field::<PF::Scalar, N>(lhs_raw);
+    let rhs = u32_array_to_field::<PF::Scalar, N>(rhs_raw);
+
+    // Scalar reference.
+    let scalar_ref = PF::Scalar::dot_product::<N>(&lhs, &rhs);
+
+    // Packed path with each scalar broadcast over all lanes.
+    let packed_lhs: [PF; N] = lhs.map(PF::broadcast);
+    let packed_rhs: [PF; N] = rhs.map(PF::broadcast);
+    let packed = PF::dot_product::<N>(&packed_lhs, &packed_rhs);
+
+    // Every lane must equal the scalar reference.
+    for (lane, got) in packed.as_slice().iter().enumerate() {
+        assert_eq!(
+            *got, scalar_ref,
+            "lane {lane}: packed dot_product::<{N}> mismatch — lhs={lhs_raw:?} rhs={rhs_raw:?}",
+        );
+    }
+}
+
+/// Run `dot_product::<N>` against every (left, right) pair from the edge table.
+///
+/// Eight edges → 64 invocations per `N`. Deterministic.
+pub fn test_packed_dot_product_broadcast_boundary_sweep<PF, const N: usize>()
+where
+    PF: PackedField + Eq,
+    PF::Scalar: PrimeField32 + QuotientMap<u32>,
+{
+    let edges = boundary_u32_values::<PF::Scalar>();
+
+    for &v in &edges {
+        for &w in &edges {
+            // Broadcast (v, w) into both length-N input arrays.
+            assert_packed_broadcast_dot_product_matches_scalar::<PF, N>([v; N], [w; N]);
+        }
+    }
+}
+
+/// Per-lane edge-biased random stress for `dot_product::<N>`.
+///
+/// Each SIMD lane gets independently sampled inputs to expose lane-cross bugs
+/// that broadcast tests miss.
+pub fn test_packed_dot_product_lanes_random<PF, const N: usize>()
+where
+    PF: PackedField + Eq,
+    PF::Scalar: PrimeField32 + QuotientMap<u32>,
+{
+    // 1024 iterations × WIDTH lanes × N elements stays under a second per N.
+    const ITERS: usize = 1024;
+
+    let p = PF::Scalar::ORDER_U32;
+    let edges = boundary_u32_values::<PF::Scalar>();
+
+    // Fixed seed so failures replay verbatim.
+    let mut rng = SmallRng::seed_from_u64(0xD07B_0571_0DDE_DEAD);
+
+    for _ in 0..ITERS {
+        // One length-N array per lane, sampled independently per side.
+        let lhs_per_lane: Vec<[PF::Scalar; N]> = (0..PF::WIDTH)
+            .map(|_| {
+                u32_array_to_field::<PF::Scalar, N>(core::array::from_fn(|_| {
+                    sample_edge_or_uniform(&mut rng, &edges, p)
+                }))
+            })
+            .collect();
+        let rhs_per_lane: Vec<[PF::Scalar; N]> = (0..PF::WIDTH)
+            .map(|_| {
+                u32_array_to_field::<PF::Scalar, N>(core::array::from_fn(|_| {
+                    sample_edge_or_uniform(&mut rng, &edges, p)
+                }))
+            })
+            .collect();
+
+        // Transpose lane-major rows to N packed columns.
+        let packed_lhs = PF::pack_columns_fn::<N>(|lane| lhs_per_lane[lane]);
+        let packed_rhs = PF::pack_columns_fn::<N>(|lane| rhs_per_lane[lane]);
+
+        let result = PF::dot_product::<N>(&packed_lhs, &packed_rhs);
+
+        // Per-lane scalar reference.
+        for lane in 0..PF::WIDTH {
+            let expected = PF::Scalar::dot_product::<N>(&lhs_per_lane[lane], &rhs_per_lane[lane]);
+            assert_eq!(
+                result.as_slice()[lane],
+                expected,
+                "lane {lane}: packed dot_product::<{N}> mismatch (random seed)",
+            );
+        }
+    }
+}
+
+/// 50/50 draw between the eight-element edge table and uniform `[0, p)`.
+fn sample_edge_or_uniform(rng: &mut SmallRng, edges: &[u32; 8], prime: u32) -> u32 {
+    if rng.random::<bool>() {
+        edges[(rng.random::<u32>() as usize) % edges.len()]
+    } else {
+        rng.random::<u32>() % prime
+    }
+}
+
 /// Test packed field operations vs scalar with 256 random packed vectors via proptest.
 ///
 /// Verifies add, sub, mul, neg match lane-by-lane scalar results.
@@ -745,6 +992,106 @@ macro_rules! test_packed_field {
     };
 }
 
+/// Run the dot-product carry / boundary stress suite on a packed `PrimeField32`.
+///
+/// Two test functions per `N`:
+/// - boundary-pair sweep over an 8-value edge table,
+/// - per-lane edge-biased random.
+///
+/// `N` covers every SIMD dispatch arm:
+/// - tiny (`1`),
+/// - specialized (`2`, `4`, `5`, `8`),
+/// - chunk-of-4 fallbacks (`3`, `6`, `7`),
+/// - longer loops (`9`, `16`).
+#[macro_export]
+macro_rules! test_packed_field_dot_product_boundary {
+    ($packedfield:ty) => {
+        mod packed_dot_product_boundary_tests {
+            // Exhaustive sweep of (v, w) edge pairs.
+
+            #[test]
+            fn boundary_sweep_n1() {
+                $crate::test_packed_dot_product_broadcast_boundary_sweep::<$packedfield, 1>();
+            }
+            #[test]
+            fn boundary_sweep_n2() {
+                $crate::test_packed_dot_product_broadcast_boundary_sweep::<$packedfield, 2>();
+            }
+            #[test]
+            fn boundary_sweep_n3() {
+                $crate::test_packed_dot_product_broadcast_boundary_sweep::<$packedfield, 3>();
+            }
+            #[test]
+            fn boundary_sweep_n4() {
+                $crate::test_packed_dot_product_broadcast_boundary_sweep::<$packedfield, 4>();
+            }
+            #[test]
+            fn boundary_sweep_n5() {
+                $crate::test_packed_dot_product_broadcast_boundary_sweep::<$packedfield, 5>();
+            }
+            #[test]
+            fn boundary_sweep_n6() {
+                $crate::test_packed_dot_product_broadcast_boundary_sweep::<$packedfield, 6>();
+            }
+            #[test]
+            fn boundary_sweep_n7() {
+                $crate::test_packed_dot_product_broadcast_boundary_sweep::<$packedfield, 7>();
+            }
+            #[test]
+            fn boundary_sweep_n8() {
+                $crate::test_packed_dot_product_broadcast_boundary_sweep::<$packedfield, 8>();
+            }
+            #[test]
+            fn boundary_sweep_n9() {
+                $crate::test_packed_dot_product_broadcast_boundary_sweep::<$packedfield, 9>();
+            }
+            #[test]
+            fn boundary_sweep_n16() {
+                $crate::test_packed_dot_product_broadcast_boundary_sweep::<$packedfield, 16>();
+            }
+
+            // Independent per-lane inputs catch shuffle / lane-cross bugs.
+
+            #[test]
+            fn lanes_random_n2() {
+                $crate::test_packed_dot_product_lanes_random::<$packedfield, 2>();
+            }
+            #[test]
+            fn lanes_random_n3() {
+                $crate::test_packed_dot_product_lanes_random::<$packedfield, 3>();
+            }
+            #[test]
+            fn lanes_random_n4() {
+                $crate::test_packed_dot_product_lanes_random::<$packedfield, 4>();
+            }
+            #[test]
+            fn lanes_random_n5() {
+                $crate::test_packed_dot_product_lanes_random::<$packedfield, 5>();
+            }
+            #[test]
+            fn lanes_random_n6() {
+                $crate::test_packed_dot_product_lanes_random::<$packedfield, 6>();
+            }
+            #[test]
+            fn lanes_random_n7() {
+                $crate::test_packed_dot_product_lanes_random::<$packedfield, 7>();
+            }
+            #[test]
+            fn lanes_random_n8() {
+                $crate::test_packed_dot_product_lanes_random::<$packedfield, 8>();
+            }
+            #[test]
+            fn lanes_random_n9() {
+                $crate::test_packed_dot_product_lanes_random::<$packedfield, 9>();
+            }
+            #[test]
+            fn lanes_random_n16() {
+                $crate::test_packed_dot_product_lanes_random::<$packedfield, 16>();
+            }
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! test_packed_extension_field {
     ($basefield:ty, $extfield:ty, $packedextfield:ty, $zeros:expr, $ones:expr) => {
@@ -774,6 +1121,18 @@ macro_rules! test_packed_extension_field {
                     $extfield,
                     $packedextfield,
                 >();
+            }
+            #[test]
+            fn test_packed_extension_div_consistency() {
+                $crate::test_packed_extension_div_consistency::<
+                    $basefield,
+                    $extfield,
+                    $packedextfield,
+                >();
+            }
+            #[test]
+            fn test_add_assign_lane_ext() {
+                $crate::test_add_assign_lane_ext::<$basefield, $extfield, $packedextfield>();
             }
         }
     };

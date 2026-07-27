@@ -1,4 +1,4 @@
-use alloc::vec;
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
 use p3_matrix::dense::RowMajorMatrix;
@@ -13,6 +13,16 @@ pub trait BaseAir<F>: Sync {
     /// Return an optional preprocessed trace matrix to be included in the prover's trace.
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
+    }
+
+    /// Width of the preprocessed trace, in columns.
+    ///
+    /// Defaults to `0`, matching the default [`Self::preprocessed_trace`] of
+    /// `None`. Implementors that override [`Self::preprocessed_trace`] **must**
+    /// also override this method to return a matching width — callers use this
+    /// to size symbolic builders without materializing the preprocessed matrix.
+    fn preprocessed_width(&self) -> usize {
+        0
     }
 
     /// Return the number of periodic columns.
@@ -44,8 +54,11 @@ pub trait BaseAir<F>: Sync {
     /// Periodic columns are public parameters and must be committed during initialization of
     /// the Fiat-Shamir transcript. The values returned are evaluations over a subgroup;
     /// callers may convert to coefficient form for efficient evaluation if needed.
-    fn periodic_columns(&self) -> Vec<Vec<F>> {
-        vec![]
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]>
+    where
+        F: Clone,
+    {
+        Cow::Borrowed(&[])
     }
 
     /// Return the periodic values for the given row index.
@@ -123,9 +136,7 @@ pub trait BaseAir<F>: Sync {
     /// access an offset-1 preprocessed entry) can override this to return an
     /// empty vector to allow the prover and verifier to open only at `zeta`.
     fn preprocessed_next_row_columns(&self) -> Vec<usize> {
-        self.preprocessed_trace()
-            .map(|t| (0..t.width).collect())
-            .unwrap_or_default()
+        (0..self.preprocessed_width()).collect()
     }
 
     /// Optional hint for the number of constraints in this AIR.

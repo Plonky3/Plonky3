@@ -15,7 +15,7 @@ impl InternalLayerParametersNeon<BabyBearParameters, 16> for BabyBearInternalLay
     /// The inputs must be in canonical form, otherwise the result is undefined.
     ///
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
-    /// the output is piped directly into add_sum the vector will be modified such that x[i] = D[i]*x[i] + sum.
+    /// the output is piped directly into add_sum the vector will be modified such that `x[i] = D[i]*x[i] + sum`.
     #[inline(always)]
     unsafe fn diagonal_mul_remainder(input: &mut [uint32x4_t; 15]) {
         unsafe {
@@ -54,7 +54,7 @@ impl InternalLayerParametersNeon<BabyBearParameters, 24> for BabyBearInternalLay
     /// The inputs must be in canonical form, otherwise the result is undefined.
     ///
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
-    /// the output is piped directly into add_sum, the vector will be modified such that x[i] = D[i]*x[i] + sum.
+    /// the output is piped directly into add_sum, the vector will be modified such that `x[i] = D[i]*x[i] + sum`.
     #[inline(always)]
     unsafe fn diagonal_mul_remainder(input: &mut [uint32x4_t; 23]) {
         unsafe {
@@ -111,7 +111,7 @@ impl InternalLayerParametersNeon<BabyBearParameters, 32> for BabyBearInternalLay
     /// The inputs must be in canonical form, otherwise the result is undefined.
     ///
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
-    /// the output is piped directly into add_sum, the vector will be modified such that x[i] = D[i]*x[i] + sum.
+    /// the output is piped directly into add_sum, the vector will be modified such that `x[i] = D[i]*x[i] + sum`.
     #[inline(always)]
     unsafe fn diagonal_mul_remainder(input: &mut [uint32x4_t; 31]) {
         unsafe {

@@ -63,6 +63,15 @@ pub const BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16: usize = 13;
 /// With the +7.5% security margin: ⌈1.075 × 18.824⌉ = 21.
 pub const BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_24: usize = 21;
 
+const _: () = assert!(
+    BABYBEAR_POSEIDON1_RC_16.len()
+        == 2 * BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS + BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16
+);
+const _: () = assert!(
+    BABYBEAR_POSEIDON1_RC_24.len()
+        == 2 * BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS + BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_24
+);
+
 /// The Poseidon1 permutation for BabyBear.
 ///
 /// Acts on arrays of the form `[BabyBear; WIDTH]` or `[BabyBear::Packing; WIDTH]`.
@@ -424,11 +433,56 @@ pub fn default_babybear_poseidon1_24() -> Poseidon1BabyBear<24> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
+    use alloc::format;
+    use alloc::string::{String, ToString};
+    use alloc::vec::Vec;
+    use std::path::PathBuf;
+    use std::process::Command;
+
     use p3_symmetric::Permutation;
 
     use super::*;
 
     type F = BabyBear;
+
+    /// Run `generate_constants.py --check-rust-only` for `(field, width)` and panic on mismatch.
+    ///
+    /// Tries `python3`, `python`, then `py -3` to cover Linux, macOS, and Windows.
+    fn assert_constants_match_generator(field: &str, width: usize) {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let script = manifest.join("../poseidon1/generate_constants.py");
+        let repo_root = manifest.join("..");
+        let width_str = width.to_string();
+
+        let launchers: &[(&str, &[&str])] = &[("python3", &[]), ("python", &[]), ("py", &["-3"])];
+        let mut errors = Vec::new();
+
+        for &(bin, prefix) in launchers {
+            let result = Command::new(bin)
+                .args(prefix)
+                .arg(&script)
+                .args(["--field", field, "--width", &width_str])
+                .args(["--skip-mds", "--check-rust-only", "--repo-root"])
+                .arg(&repo_root)
+                .output();
+            match result {
+                Ok(out) if out.status.success() => return,
+                Ok(out) => errors.push(format!(
+                    "{bin}: exit {:?}\nstdout: {}\nstderr: {}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr),
+                )),
+                Err(e) => errors.push(format!("{bin}: {e}")),
+            }
+        }
+        panic!(
+            "Failed to verify {field} Poseidon1 width {width}:\n{}",
+            errors.join("\n")
+        );
+    }
 
     #[test]
     fn test_poseidon_width_16() {
@@ -464,5 +518,15 @@ mod tests {
 
         perm.permute_mut(&mut input);
         assert_eq!(input, expected);
+    }
+
+    #[test]
+    fn test_poseidon_constants_match_generator_width_16() {
+        assert_constants_match_generator("babybear", 16);
+    }
+
+    #[test]
+    fn test_poseidon_constants_match_generator_width_24() {
+        assert_constants_match_generator("babybear", 24);
     }
 }

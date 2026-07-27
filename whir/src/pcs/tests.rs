@@ -1,0 +1,1213 @@
+//! End-to-end tests exercising the WHIR PCS through the multilinear trait.
+
+use alloc::vec;
+use alloc::vec::Vec;
+
+use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+use p3_challenger::{CanObserve, DuplexChallenger};
+use p3_commit::MultilinearPcs;
+use p3_dft::Radix2DFTSmallBatch;
+use p3_field::extension::BinomialExtensionField;
+use p3_field::{Field, PrimeCharacteristicRing};
+use p3_merkle_tree::MerkleTreeMmcs;
+use p3_multilinear_util::point::Point;
+use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, Witness};
+use p3_sumcheck::test_util::{random_table_specs, table_specs_to_tables};
+use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
+
+use crate::fiat_shamir::domain_separator::DomainSeparator;
+use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+use crate::pcs::prover::WhirProver;
+use crate::pcs::verifier::errors::VerifierError;
+
+type F = BabyBear;
+type EF = BinomialExtensionField<F, 4>;
+type Perm = Poseidon2BabyBear<16>;
+
+type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+type PackedF = <F as Field>::Packing;
+type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+
+type MyDft = Radix2DFTSmallBatch<F>;
+type TestWhirPcs<L> = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, L>;
+
+pub(crate) fn challenger() -> MyChallenger {
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    MyChallenger::new(perm)
+}
+
+fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFactor) -> Vec<usize> {
+    let folding_schedule = folding_factor
+        .compute_folding_schedule(num_variables)
+        .expect("valid folding schedule");
+    let num_rounds = folding_schedule.len() - 1;
+    let mut rates = Vec::with_capacity(num_rounds);
+    let mut rate = 1;
+    for &folding in folding_schedule.iter().take(num_rounds) {
+        rate += folding - 1;
+        rates.push(rate);
+    }
+    rates
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_whir_pcs<L: Layout<F, EF>>(
+    specs: &[TableSpec],
+    folding_factor: FoldingFactor,
+    soundness_type: SecurityAssumption,
+    pow_bits: usize,
+) {
+    let folding = folding_factor.at_round(0);
+    let tables = table_specs_to_tables(specs);
+    let witness = L::new_witness(tables, folding);
+    let protocol = OpeningProtocol::new(specs.to_vec()).pad_to_min_num_variables(folding);
+    assert_eq!(witness.table_shapes(), protocol.table_shapes());
+
+    run_whir_pcs_lifecycle_with_witness::<L>(
+        witness,
+        protocol,
+        folding_factor,
+        soundness_type,
+        pow_bits,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
+    witness: Witness<F>,
+    protocol: OpeningProtocol,
+    folding_factor: FoldingFactor,
+    soundness_type: SecurityAssumption,
+    pow_bits: usize,
+) {
+    // Build Poseidon2-based hash and compression for the Merkle tree.
+    let num_variables = witness.num_variables();
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let merkle_hash = MyHash::new(perm.clone());
+    let merkle_compress = MyCompress::new(perm);
+    let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+    // Assemble the protocol parameters.
+    // Security level 32 keeps the test fast; production would use 100-128.
+    let params = ProtocolParameters {
+        security_level: 32,
+        pow_bits,
+        round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+        folding_factor,
+        soundness_type,
+        starting_log_inv_rate: 1,
+    };
+
+    // Instantiate the PCS through the trait.
+    let dft = MyDft::default();
+    let config = WhirConfig::new(num_variables, params).unwrap();
+    let pcs = TestWhirPcs::<L>::new(config, dft, mmcs);
+
+    // Prover
+    let (commitment, proof) = {
+        let mut challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut challenger);
+
+        let (commitment, prover_data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs,
+                witness,
+                &mut challenger,
+            );
+        let proof = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::open(
+            &pcs,
+            prover_data,
+            protocol.clone(),
+            &mut challenger,
+        );
+        (commitment, proof)
+    };
+
+    // Verifier
+    {
+        let mut challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut challenger);
+
+        <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
+            &pcs,
+            &commitment,
+            &proof,
+            &mut challenger,
+            protocol,
+        )
+        .expect("verification failed");
+    }
+}
+
+/// How a prescribed-point run deviates from the honest transcript.
+///
+/// Each non-honest mode attacks one opening binding.
+#[derive(Clone, Copy)]
+enum Tamper {
+    /// Verify honestly, at the prover's points and claimed values.
+    None,
+    /// Verify at a point the prover never opened.
+    ///
+    /// The claimed value belongs to the prover's point, so the WHIR proof must reject.
+    VerifierPoint,
+    /// Corrupt a claimed opened value before verifying.
+    ///
+    /// The commitment fixes the true value, so the WHIR proof must reject.
+    ProofEval,
+}
+
+/// Drive the prescribed-point opening path: open and verify at caller-chosen points.
+///
+/// Returns the verifier result so a test can assert acceptance.
+/// Optionally applies one mutation to check that the broken binding is rejected.
+fn run_whir_pcs_at_prescribed_points<L: Layout<F, EF>>(
+    specs: &[TableSpec],
+    folding_factor: FoldingFactor,
+    soundness_type: SecurityAssumption,
+    pow_bits: usize,
+    tamper: Tamper,
+) -> Result<(), VerifierError> {
+    let folding = folding_factor.at_round(0);
+    let tables = table_specs_to_tables(specs);
+    let witness = L::new_witness(tables, folding);
+    let protocol = OpeningProtocol::new(specs.to_vec()).pad_to_min_num_variables(folding);
+    let shapes = protocol.table_shapes();
+
+    // One arbitrary non-boolean point per opening batch, sized to its table's local frame.
+    // A frame or ordering mistake would change the opened values, so the test would catch it.
+    let points: Vec<Point<EF>> = protocol
+        .iter_openings()
+        .enumerate()
+        .map(|(b, (table_idx, _batch))| {
+            let n = shapes[table_idx].num_variables();
+            Point::new(
+                (0..n)
+                    .map(|c| EF::from_u64((7 + b * 13 + c * 3) as u64))
+                    .collect(),
+            )
+        })
+        .collect();
+
+    // Merkle and protocol parameters mirror the sampled-point lifecycle runner.
+    let num_variables = witness.num_variables();
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+    let params = ProtocolParameters {
+        security_level: 32,
+        pow_bits,
+        round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+        folding_factor,
+        soundness_type,
+        starting_log_inv_rate: 1,
+    };
+    let config = WhirConfig::new(num_variables, params).unwrap();
+    let pcs = TestWhirPcs::<L>::new(config, MyDft::default(), mmcs);
+
+    // Prover: commit, then open every batch at its prescribed point.
+    let (commitment, mut proof) = {
+        let mut challenger = challenger();
+        let mut ds = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut ds);
+        ds.observe_domain_separator(&mut challenger);
+
+        let (commitment, prover_data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs,
+                witness,
+                &mut challenger,
+            );
+        let proof = pcs.open_at(prover_data, &protocol, &points, &mut challenger);
+        (commitment, proof)
+    };
+
+    // Verifier: replay the transcript and check the openings at the same points,
+    // unless a tamper variant breaks one of the bindings first.
+    let verify_points = if matches!(tamper, Tamper::VerifierPoint) {
+        // Shift the first batch's first coordinate so the claimed value no longer matches.
+        let mut perturbed = points;
+        let mut coords = perturbed[0].as_slice().to_vec();
+        coords[0] += EF::ONE;
+        perturbed[0] = Point::new(coords);
+        perturbed
+    } else {
+        points
+    };
+
+    if matches!(tamper, Tamper::ProofEval) {
+        // Bump the first claimed current-point value off the committed one.
+        let batch = &proof.evals[0];
+        let mut current = batch.current().to_vec();
+        current[0] += EF::ONE;
+        proof.evals[0] = OpeningBatch::new(current, batch.next().to_vec());
+    }
+
+    let mut challenger = challenger();
+    let mut ds = DomainSeparator::new(vec![]);
+    pcs.add_domain_separator::<8>(&mut ds);
+    ds.observe_domain_separator(&mut challenger);
+    // The prescribed-point verifier does not absorb the commitment.
+    // The caller absorbs it once, matching the prover's commit phase.
+    challenger.observe(commitment.clone());
+    pcs.verify_at(
+        &commitment,
+        &proof,
+        &protocol,
+        &verify_points,
+        &mut challenger,
+    )
+    .map(|_evals| ())
+}
+
+#[test]
+fn prescribed_point_open_verify_roundtrips() {
+    // Fixture state: one arity-8 table with two columns, opened at two prescribed points.
+    //
+    //     point 0: current columns {0, 1}
+    //     point 1: current column  {0}
+    //
+    // The arity is kept comfortably above the SIMD packing width.
+    // A polynomial smaller than the packing width cannot drive the packed sumcheck.
+    //
+    // Opening at caller-chosen points and verifying at the same points must accept.
+    let specs = [TableSpec::new(
+        TableShape::new(8, 2),
+        vec![
+            OpeningBatch::new(vec![0, 1], Vec::new()),
+            OpeningBatch::new(vec![0], Vec::new()),
+        ],
+    )];
+    run_whir_pcs_at_prescribed_points::<PrefixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(2),
+        SecurityAssumption::CapacityBound,
+        0,
+        Tamper::None,
+    )
+    .expect("prescribed-point round-trip must verify");
+}
+
+#[test]
+fn prescribed_point_verify_rejects_wrong_point() {
+    // Fixture state: one batch opens current and successor values.
+    let specs = [TableSpec::new(
+        TableShape::new(8, 2),
+        vec![OpeningBatch::new(vec![0, 1], vec![0])],
+    )];
+    // Mutation: verify at a point the prover did not open.
+    let err = run_whir_pcs_at_prescribed_points::<PrefixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(2),
+        SecurityAssumption::CapacityBound,
+        0,
+        Tamper::VerifierPoint,
+    )
+    .unwrap_err();
+    match err {
+        VerifierError::SumcheckFailed {
+            round,
+            expected,
+            actual,
+        } => {
+            // The opening sumcheck binds the claim to the prover's point.
+            // Verifying at a different point first disagrees at round 5.
+            // The exact coefficients are transcript-derived and not pinned here,
+            // since any Fiat-Shamir transcript change would otherwise force an
+            // update to this test despite the property under test being unaffected.
+            assert_eq!(round, 5);
+            assert_ne!(expected, actual);
+        }
+        other => panic!("expected round-polynomial mismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn prescribed_point_verify_rejects_tampered_eval() {
+    // Fixture state: one batch opens current and successor values.
+    let specs = [TableSpec::new(
+        TableShape::new(8, 2),
+        vec![OpeningBatch::new(vec![0, 1], vec![0])],
+    )];
+    // Mutation: shift one claimed current value by one field element.
+    let err = run_whir_pcs_at_prescribed_points::<PrefixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(2),
+        SecurityAssumption::CapacityBound,
+        0,
+        Tamper::ProofEval,
+    )
+    .unwrap_err();
+    match err {
+        VerifierError::MerkleProofInvalid { position, reason } => {
+            // Why: the tampered eval desyncs the sampled positions from the authenticated set.
+            //   the round verifies as one pruned multiproof
+            //   -> failure reports a batched placeholder position, not a per-query index.
+            assert_eq!(position, 0);
+            assert_eq!(reason, "Base field Merkle multiproof verification failed");
+        }
+        other => panic!("expected a Merkle opening rejection, got {other:?}"),
+    }
+}
+
+/// Smoke matrix covering each WHIR parameter axis at least once.
+///
+/// The full randomized sweep runs from the Heavy CI workflow.
+#[test]
+fn test_whir_end_to_end() {
+    let table_spec_sets = [
+        vec![
+            TableSpec::new(
+                TableShape::new(12, 3),
+                vec![
+                    OpeningBatch::new(vec![0, 1, 2], Default::default()),
+                    OpeningBatch::new(vec![0, 2], Default::default()),
+                    OpeningBatch::new(vec![1], Default::default()),
+                ],
+            ),
+            TableSpec::new(
+                TableShape::new(10, 2),
+                vec![
+                    OpeningBatch::new(vec![0, 1], Default::default()),
+                    OpeningBatch::new(vec![1], Default::default()),
+                ],
+            ),
+        ],
+        vec![TableSpec::new(
+            TableShape::new(14, 4),
+            vec![
+                OpeningBatch::new(vec![0, 1, 2, 3], Default::default()),
+                OpeningBatch::new(vec![0, 3], Default::default()),
+            ],
+        )],
+    ];
+
+    let smoke_cases = [
+        (
+            FoldingFactor::Constant(1),
+            SecurityAssumption::JohnsonBound,
+            0,
+        ),
+        (
+            FoldingFactor::Constant(2),
+            SecurityAssumption::CapacityBound,
+            5,
+        ),
+        (
+            FoldingFactor::Constant(3),
+            SecurityAssumption::UniqueDecoding,
+            10,
+        ),
+        (
+            FoldingFactor::Constant(4),
+            SecurityAssumption::JohnsonBound,
+            5,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(2, 1),
+            SecurityAssumption::CapacityBound,
+            10,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(3, 1),
+            SecurityAssumption::UniqueDecoding,
+            0,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(3, 2),
+            SecurityAssumption::JohnsonBound,
+            10,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(5, 2),
+            SecurityAssumption::CapacityBound,
+            5,
+        ),
+        (
+            FoldingFactor::Constant(2),
+            SecurityAssumption::UniqueDecoding,
+            0,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(5, 2),
+            SecurityAssumption::JohnsonBound,
+            10,
+        ),
+    ];
+
+    for (i, (folding_factor, soundness_type, pow_bits)) in smoke_cases.into_iter().enumerate() {
+        let specs = &table_spec_sets[i % table_spec_sets.len()];
+        run_whir_pcs::<PrefixProver<F, EF>>(
+            specs,
+            folding_factor.clone(),
+            soundness_type,
+            pow_bits,
+        );
+        run_whir_pcs::<SuffixProver<F, EF>>(specs, folding_factor, soundness_type, pow_bits);
+    }
+}
+
+#[test]
+fn test_whir_end_to_end_partial_final_fold() {
+    // Regression for Constant(8) on 15 variables:
+    // the concrete folding schedule is [8, 7], so prover, verifier, and
+    // transcript shape must all use the smaller final pre-direct fold.
+    let specs = vec![TableSpec::new(
+        TableShape::new(15, 2),
+        vec![
+            OpeningBatch::new(vec![0], Vec::new()),
+            OpeningBatch::new(vec![1], Vec::new()),
+        ],
+    )];
+
+    run_whir_pcs::<PrefixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(8),
+        SecurityAssumption::UniqueDecoding,
+        0,
+    );
+    run_whir_pcs::<SuffixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(8),
+        SecurityAssumption::UniqueDecoding,
+        0,
+    );
+}
+
+#[test]
+fn test_whir_end_to_end_mixed_current_next_openings() {
+    fn run<L: Layout<F, EF>>() {
+        const NUM_VARIABLES: usize = 12;
+        const FOLDING: usize = 3;
+
+        let mut rng = SmallRng::seed_from_u64(42);
+        let table = Table::rand(&mut rng, 2, NUM_VARIABLES);
+        let witness = L::new_witness(vec![table], FOLDING);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 2),
+            vec![OpeningBatch::new(vec![0], vec![1])],
+        )]);
+        assert_eq!(witness.table_shapes(), protocol.table_shapes());
+
+        let folding_factor = FoldingFactor::Constant(FOLDING);
+        let num_variables = witness.num_variables();
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+            folding_factor,
+            soundness_type: SecurityAssumption::JohnsonBound,
+            starting_log_inv_rate: 1,
+        };
+
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+        let dft = MyDft::default();
+        let config = WhirConfig::new(num_variables, params).expect("valid WHIR config");
+        let pcs = TestWhirPcs::<L>::new(config, dft, mmcs);
+
+        let (commitment, proof) = {
+            let mut challenger = challenger();
+            let mut domain_separator = DomainSeparator::new(vec![]);
+            pcs.add_domain_separator::<8>(&mut domain_separator);
+            domain_separator.observe_domain_separator(&mut challenger);
+
+            let (commitment, prover_data) =
+                <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                    &pcs,
+                    witness,
+                    &mut challenger,
+                );
+            let proof = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::open(
+                &pcs,
+                prover_data,
+                protocol.clone(),
+                &mut challenger,
+            );
+            (commitment, proof)
+        };
+
+        assert_eq!(proof.evals.len(), 1);
+        assert_eq!(proof.evals[0].len(), 2);
+        assert_eq!(proof.evals[0].current().len(), 1);
+        assert_eq!(proof.evals[0].next().len(), 1);
+
+        let mut challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut challenger);
+
+        <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
+            &pcs,
+            &commitment,
+            &proof,
+            &mut challenger,
+            protocol,
+        )
+        .expect("verification failed");
+    }
+
+    run::<PrefixProver<F, EF>>();
+    run::<SuffixProver<F, EF>>();
+}
+
+#[test]
+#[ignore = "exhaustive WHIR configuration sweep; run from heavy CI"]
+fn test_whir_end_to_end_exhaustive() {
+    const N: usize = 5;
+
+    let folding_factors = [
+        FoldingFactor::Constant(1),
+        FoldingFactor::Constant(2),
+        FoldingFactor::Constant(3),
+        FoldingFactor::Constant(4),
+        FoldingFactor::ConstantFromSecondRound(2, 1),
+        FoldingFactor::ConstantFromSecondRound(3, 1),
+        FoldingFactor::ConstantFromSecondRound(3, 2),
+        FoldingFactor::ConstantFromSecondRound(5, 2),
+    ];
+    let soundness_type = [
+        SecurityAssumption::JohnsonBound,
+        SecurityAssumption::CapacityBound,
+        SecurityAssumption::UniqueDecoding,
+    ];
+    let pow_bits = [0, 5, 10];
+    let mut rng = SmallRng::seed_from_u64(7);
+
+    for folding_factor in folding_factors {
+        for soundness_type in soundness_type {
+            for pow_bits in pow_bits {
+                for _ in 0..N {
+                    let specs = random_table_specs(&mut rng, folding_factor.at_round(0));
+                    run_whir_pcs::<PrefixProver<F, EF>>(
+                        &specs,
+                        folding_factor.clone(),
+                        soundness_type,
+                        pow_bits,
+                    );
+                    run_whir_pcs::<SuffixProver<F, EF>>(
+                        &specs,
+                        folding_factor.clone(),
+                        soundness_type,
+                        pow_bits,
+                    );
+                }
+            }
+        }
+    }
+}
+
+mod error_variant_tests {
+    //! Lock the precise error variant emitted on each opening-shape mismatch.
+    use alloc::vec;
+
+    use p3_commit::{Mmcs, MultilinearPcs};
+    use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::layout::{Layout, SuffixProver, Table};
+    use p3_sumcheck::{OpeningBatch, OpeningProtocol, SumcheckError, TableShape, TableSpec};
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::{
+        EF, F, MyChallenger, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, challenger,
+    };
+    use crate::fiat_shamir::domain_separator::DomainSeparator;
+    use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+    use crate::pcs::proof::{PcsProof, QueryOpenings};
+    use crate::pcs::verifier::errors::VerifierError;
+
+    /// Suffix-mode prover used for every shape-mismatch scenario.
+    type L = SuffixProver<F, EF>;
+
+    /// Drops the last opened row from a round's multi-opening.
+    ///
+    /// Returns the original row count, so the caller can assert the mismatch.
+    fn drop_last_opened_row(
+        openings: &mut QueryOpenings<F, EF, <MyMmcs as Mmcs<F>>::MultiProof>,
+    ) -> usize {
+        match openings {
+            QueryOpenings::Base(opening) => {
+                let original = opening.rows.len();
+                opening.rows.pop();
+                original
+            }
+            QueryOpenings::Extension(opening) => {
+                let original = opening.rows.len();
+                opening.rows.pop();
+                original
+            }
+        }
+    }
+
+    /// Stacked-polynomial arity: large enough for one intermediate STIR round.
+    const NUM_VARIABLES: usize = 12;
+    /// Variables eliminated per WHIR fold.
+    const FOLDING: usize = 4;
+
+    /// Builds a working PCS plus an honest commitment and proof for two batches.
+    ///
+    /// # Layout
+    ///
+    /// - Single table of arity 12 with two columns.
+    /// - Two opening batches: first opens both columns; second opens column 0.
+    ///
+    /// The fixture has two opening batches.
+    /// The inner batch sizes are two and one.
+    /// Both axes can be tampered independently.
+    #[allow(clippy::type_complexity)]
+    fn commit_and_open() -> (
+        TestWhirPcs<L>,
+        <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::Commitment,
+        PcsProof<F, EF, MyMmcs>,
+        OpeningProtocol,
+    ) {
+        // Random table of two columns; deterministic seed for reproducibility.
+        let mut rng = SmallRng::seed_from_u64(1);
+        let table = Table::rand(&mut rng, 2, NUM_VARIABLES);
+        let witness = L::new_witness(vec![table], FOLDING);
+        // Two opening batches: (cols [0, 1]) and (col [0]).
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 2),
+            vec![
+                OpeningBatch::new(vec![0, 1], vec![]),
+                OpeningBatch::new(vec![0], vec![]),
+            ],
+        )]);
+
+        // Same Poseidon2 seed as elsewhere for byte-for-byte reproducibility.
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![4],
+            folding_factor: FoldingFactor::Constant(FOLDING),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+        let pcs = TestWhirPcs::<L>::new(
+            WhirConfig::new(witness.num_variables(), params).unwrap(),
+            MyDft::default(),
+            mmcs,
+        );
+
+        let mut prover_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut prover_challenger);
+
+        let (commitment, prover_data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs,
+                witness,
+                &mut prover_challenger,
+            );
+        let proof = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::open(
+            &pcs,
+            prover_data,
+            protocol.clone(),
+            &mut prover_challenger,
+        );
+
+        (pcs, commitment, proof, protocol)
+    }
+
+    /// Replays the verifier on a (possibly tampered) proof and returns the result.
+    fn verify(
+        pcs: &TestWhirPcs<L>,
+        commitment: &<TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::Commitment,
+        proof: &PcsProof<F, EF, MyMmcs>,
+        protocol: OpeningProtocol,
+    ) -> Result<(), VerifierError> {
+        // Verifier needs the same transcript prefix the prover absorbed.
+        let mut verifier_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut verifier_challenger);
+
+        <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
+            pcs,
+            commitment,
+            proof,
+            &mut verifier_challenger,
+            protocol,
+        )
+    }
+
+    #[test]
+    fn rejects_with_batch_count_mismatch_when_a_batch_is_missing() {
+        // Domain note: protocol.num_openings() must equal proof.evals.len().
+        // The adapter checks this before any sumcheck or Merkle work, so the
+        // failure mode is structural — the variant carries the two integers
+        // verbatim.
+        //
+        // Fixture state: protocol declares 2 batches; honest proof has 2.
+        //
+        // Mutation: drop the trailing batch from the proof.
+        //
+        //     protocol batches:  2
+        //     proof.evals:       2  ->  1
+        //     -> expected = 2, actual = 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert_eq!(proof.evals.len(), 2);
+        proof.evals.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::OpeningBatchCountMismatch { expected, actual } => {
+                assert_eq!(expected, 2);
+                assert_eq!(actual, 1);
+            }
+            other => panic!("expected OpeningBatchCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_batch_size_mismatch_when_an_eval_is_dropped() {
+        // Domain note: every batch i must carry exactly batch[i].len()
+        // evaluations. The check runs per batch in protocol order, so the
+        // first offender wins.
+        //
+        // Fixture state: batch 0 opens current columns [0, 1] -> 2 evaluations expected.
+        //
+        // Mutation: drop one evaluation from batch 0.
+        //
+        //     protocol batch 0 current:  [0, 1]   (len 2)
+        //     proof.evals[0]:            [v0, v1] -> [v0]
+        //     -> table_idx = 0, expected = 2, actual = 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert_eq!(proof.evals[0].len(), 2);
+        proof.evals[0] = OpeningBatch::new(vec![proof.evals[0].current()[0]], vec![]);
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::OpeningBatchSizeMismatch {
+                table_idx,
+                expected,
+                actual,
+            } => {
+                assert_eq!(table_idx, 0);
+                assert_eq!(expected, 2);
+                assert_eq!(actual, 1);
+            }
+            other => panic!("expected OpeningBatchSizeMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_round_count_mismatch_when_a_round_is_dropped() {
+        // Invariant: round count is fixed by the protocol config.
+        //
+        // Fixture state: N honest rounds → expected = N.
+        //
+        // Mutation: drop the trailing round.
+        //
+        //     proof.whir.rounds:  [r_0, r_1, ..., r_{N-1}]  ->  [r_0, ..., r_{N-2}]
+        //     expected:           N
+        //     actual:             N - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert!(
+            !proof.whir.rounds.is_empty(),
+            "fixture should produce at least one WHIR round"
+        );
+        let expected = proof.whir.rounds.len();
+        proof.whir.rounds.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::RoundCountMismatch {
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected RoundCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_missing_round_commitment_when_a_root_is_cleared() {
+        // Invariant: every round must expose a Merkle root.
+        //
+        // Fixture state: round 0 carries Some(root).
+        //
+        // Mutation: clear the slot.
+        //
+        //     proof.whir.rounds[0].commitment:  Some(root)  ->  None
+        //     -> error identifies round = 0
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert!(
+            !proof.whir.rounds.is_empty(),
+            "fixture should produce at least one WHIR round"
+        );
+        proof.whir.rounds[0].commitment = None;
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::MissingRoundCommitment { round } => {
+                assert_eq!(round, 0);
+            }
+            other => panic!("expected MissingRoundCommitment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_missing_final_poly_when_cleared() {
+        // Invariant: the tail polynomial is required for the final identity check.
+        //
+        // Fixture state: final_poly = Some(tail).
+        //
+        // Mutation: clear the slot.
+        //
+        //     proof.whir.final_poly:  Some(tail)  ->  None
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        proof.whir.final_poly = None;
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        assert!(
+            matches!(err, VerifierError::MissingFinalPoly),
+            "expected MissingFinalPoly, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_with_final_poly_length_mismatch_when_tail_has_extra_evals() {
+        // Invariant: the final polynomial must have exactly the verifier-expected
+        // number of evaluations before it is absorbed into the transcript.
+        //
+        // Mutation: duplicate the honest tail, preserving Poly's power-of-two
+        // shape but changing the WHIR-level final length.
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let final_poly = proof
+            .whir
+            .final_poly
+            .as_ref()
+            .expect("honest fixture should contain final_poly");
+        let expected = final_poly.num_evals();
+        let mut evals = final_poly.as_slice().to_vec();
+        let duplicate = evals.clone();
+        evals.extend_from_slice(&duplicate);
+        proof.whir.final_poly = Some(Poly::new(evals));
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::FinalPolyLengthMismatch {
+                expected: e,
+                actual,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(actual, expected * 2);
+            }
+            other => panic!("expected FinalPolyLengthMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_round_ood_answer_count_mismatch_when_answer_is_dropped() {
+        // Invariant: each round carries exactly the verifier-expected OOD answers.
+        //
+        // Fixture state: round 0 has N OOD answers.
+        //
+        // Mutation: drop one answer.
+        //
+        //     proof.whir.rounds[0].ood_answers:  N  ->  N - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let expected = proof.whir.rounds[0].ood_answers.len();
+        assert!(
+            expected > 0,
+            "fixture should produce at least one round-0 OOD answer"
+        );
+        proof.whir.rounds[0].ood_answers.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::RoundOodAnswerCountMismatch {
+                round,
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(round, 0);
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected RoundOodAnswerCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_stir_query_count_mismatch_when_intermediate_query_is_dropped() {
+        // Invariant: the opened-row count == verifier-sampled indices for the round.
+        //
+        // Mutation: drop the trailing opened row from round 0.
+        //
+        //     proof.whir.rounds[0].openings.rows:  n  ->  n - 1
+        //     -> round_index = 0, expected = n, actual = n - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let expected = drop_last_opened_row(&mut proof.whir.rounds[0].openings);
+        assert!(
+            expected > 0,
+            "fixture should produce at least one STIR query"
+        );
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::StirQueryCountMismatch {
+                round_index,
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(round_index, 0);
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected StirQueryCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_stir_query_count_mismatch_when_final_query_is_dropped() {
+        // Invariant: the final opened-row count == verifier-sampled indices for the final round.
+        //
+        // Mutation: drop the trailing opened row from the final openings.
+        //
+        //     proof.whir.final_openings.rows:  n  ->  n - 1
+        //     -> round_index = n_rounds, expected = n, actual = n - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let n_rounds = pcs.n_rounds();
+        let expected = drop_last_opened_row(&mut proof.whir.final_openings);
+        assert!(
+            expected > 0,
+            "fixture should produce at least one final query"
+        );
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::StirQueryCountMismatch {
+                round_index,
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(round_index, n_rounds);
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected StirQueryCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_initial_ood_answer_count_mismatch_when_answer_is_dropped() {
+        // Invariant: the proof must carry exactly the committed number of initial OOD answers.
+        // Each answer drives a transcript draw, so a wrong count desyncs Fiat-Shamir.
+        //
+        // Fixture state: N initial OOD answers.
+        //
+        // Mutation: drop one answer.
+        //
+        //     proof.whir.initial_ood_answers:  N  ->  N - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let expected = proof.whir.initial_ood_answers.len();
+        assert!(
+            expected > 0,
+            "fixture should produce at least one initial OOD answer"
+        );
+        proof.whir.initial_ood_answers.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::InitialOodAnswerCountMismatch {
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected InitialOodAnswerCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_round_count_mismatch_when_intermediate_sumcheck_is_short() {
+        // Invariant: an intermediate round's sumcheck sends one polynomial per folded variable.
+        // That count is the next round's folding factor.
+        // A wrong count desyncs Fiat-Shamir.
+        //
+        // Fixture state: round 0 sumcheck has FOLDING = 4 polynomial evaluations.
+        //
+        // Mutation: drop the trailing evaluation.
+        //
+        //     proof.whir.rounds[0].sumcheck.polynomial_evaluations:  4  ->  3
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert!(
+            !proof.whir.rounds.is_empty(),
+            "fixture should produce at least one WHIR round"
+        );
+        let expected = proof.whir.rounds[0].sumcheck.polynomial_evaluations().len();
+        assert!(
+            expected > 0,
+            "fixture round-0 sumcheck should send at least one polynomial"
+        );
+        proof.whir.rounds[0].sumcheck.polynomial_evaluations.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::Sumcheck(SumcheckError::RoundCountMismatch {
+                expected: e,
+                actual: a,
+            }) => {
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected Sumcheck(RoundCountMismatch), got {other:?}"),
+        }
+    }
+}
+
+mod keccak_tests {
+    //! Same lifecycle test using Keccak-based Merkle trees over a different field.
+
+    use alloc::vec;
+
+    use p3_challenger::{HashChallenger, SerializingChallenger32};
+    use p3_commit::MultilinearPcs;
+    use p3_dft::Radix2DFTSmallBatch;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_keccak::{Keccak256Hash, KeccakF};
+    use p3_koala_bear::KoalaBear;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
+    use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
+    use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use crate::fiat_shamir::domain_separator::DomainSeparator;
+    use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+    use crate::pcs::prover::WhirProver;
+
+    type F = KoalaBear;
+    type EF = BinomialExtensionField<F, 4>;
+
+    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+    type KeccakFieldHash = SerializingHasher<U64Hash>;
+    type KeccakCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
+
+    type KeccakChallenger = SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>;
+    type MyMmcs = MerkleTreeMmcs<F, u64, KeccakFieldHash, KeccakCompress, 2, 4>;
+    type MyDft = Radix2DFTSmallBatch<F>;
+    type TestWhirPcs<L> = WhirProver<EF, F, MyDft, MyMmcs, KeccakChallenger, L>;
+
+    fn challenger() -> KeccakChallenger {
+        KeccakChallenger::new(HashChallenger::<u8, Keccak256Hash, 32>::new(
+            vec![],
+            Keccak256Hash {},
+        ))
+    }
+
+    /// Runs the full commit + open + verify lifecycle with Keccak Merkle trees.
+    fn run_keccak_end_to_end<L: Layout<F, EF>>() {
+        // Fixture: a single-table polynomial of arity 16 folded 4 vars at a time.
+        const NUM_VARIABLES: usize = 16;
+        const FOLDING: usize = 4;
+
+        // Build one random table, stack it through the chosen layout mode.
+        let mut rng = SmallRng::seed_from_u64(1);
+        let table = Table::rand(&mut rng, 1, NUM_VARIABLES);
+        let witness = L::new_witness(vec![table], FOLDING);
+        // Public protocol: open the single column at one point.
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 1),
+            vec![OpeningBatch::new(vec![0], vec![])],
+        )]);
+        assert_eq!(witness.table_shapes(), protocol.table_shapes());
+
+        // Wire Keccak-f as both the leaf-hash sponge and the 2-to-1 compressor.
+        let u64_hash = U64Hash::new(KeccakF {});
+        let merkle_hash = KeccakFieldHash::new(u64_hash);
+        let merkle_compress = KeccakCompress::new(u64_hash);
+        let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        // Security level 32 keeps the test fast; not a production setting.
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![4, 7],
+            folding_factor: FoldingFactor::Constant(FOLDING),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+        let pcs = TestWhirPcs::<L>::new(
+            WhirConfig::new(witness.num_variables(), params).unwrap(),
+            MyDft::default(),
+            mmcs,
+        );
+
+        // Prover side: seed the transcript with the protocol description, commit, open.
+        let (commitment, proof) = {
+            let mut prover_challenger = challenger();
+            let mut domain_separator = DomainSeparator::new(vec![]);
+            pcs.add_domain_separator::<4>(&mut domain_separator);
+            domain_separator.observe_domain_separator(&mut prover_challenger);
+
+            let (commitment, prover_data) = <TestWhirPcs<L> as MultilinearPcs<
+                EF,
+                KeccakChallenger,
+            >>::commit(
+                &pcs, witness, &mut prover_challenger
+            );
+            let proof = <TestWhirPcs<L> as MultilinearPcs<EF, KeccakChallenger>>::open(
+                &pcs,
+                prover_data,
+                protocol.clone(),
+                &mut prover_challenger,
+            );
+            (commitment, proof)
+        };
+
+        // Verifier side: replay the same transcript prefix from a fresh challenger.
+        let mut verifier_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<4>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut verifier_challenger);
+
+        // Final assertion: the honest proof must verify under both layout modes.
+        <TestWhirPcs<L> as MultilinearPcs<EF, KeccakChallenger>>::verify(
+            &pcs,
+            &commitment,
+            &proof,
+            &mut verifier_challenger,
+            protocol,
+        )
+        .expect("keccak verification failed");
+    }
+
+    #[test]
+    fn test_whir_keccak_end_to_end_suffix() {
+        // Suffix mode binds the SVO suffix variables first.
+        run_keccak_end_to_end::<SuffixProver<F, EF>>();
+    }
+
+    #[test]
+    fn test_whir_keccak_end_to_end_prefix() {
+        // Prefix mode binds the SVO prefix variables first; covers the other layout path.
+        run_keccak_end_to_end::<PrefixProver<F, EF>>();
+    }
+}

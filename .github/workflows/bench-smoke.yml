@@ -1,0 +1,32 @@
+name: Bench Smoke Test
+
+on:
+  schedule:
+    # Weekly. GitHub only runs scheduled workflows off the default branch (main).
+    - cron: "0 6 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -C debuginfo=0
+
+jobs:
+  bench_smoke:
+    name: Bench smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: rs-stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `--test` runs every benchmark body once instead of the full statistical
+      # sample, so this catches setup/panic regressions in `[[bench]]` targets
+      # without paying for a real `cargo bench` run. `p3-dft` is excluded: its
+      # field x algorithm x size sweep produces thousands of benchmark ids that
+      # make even a single pass too slow.
+      - name: Run each benchmark once
+        run: cargo bench --workspace --exclude p3-dft --features parallel -- --test

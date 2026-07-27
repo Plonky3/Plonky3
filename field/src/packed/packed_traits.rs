@@ -89,6 +89,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         );
         let buf_ptr = buf.as_ptr().cast::<Self>();
         let n = buf.len() / Self::WIDTH;
+        // SAFETY: `buf_ptr` is valid for `n * WIDTH` values of `Self::Value`, which is
+        // the same region as `n` values of `Self` given the alignment and length checks above.
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
 
@@ -110,6 +112,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         );
         let buf_ptr = buf.as_mut_ptr().cast::<Self>();
         let n = buf.len() / Self::WIDTH;
+        // SAFETY: `buf_ptr` is valid for `n * WIDTH` values of `Self::Value`, which is
+        // the same region as `n` values of `Self` given the alignment and length checks above.
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
@@ -134,6 +138,9 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         );
         let buf_ptr = buf.as_mut_ptr().cast::<MaybeUninit<Self>>();
         let n = buf.len() / Self::WIDTH;
+        // SAFETY: `buf_ptr` is valid for `n * WIDTH` values of `MaybeUninit<Self::Value>`,
+        // which is the same region as `n` values of `MaybeUninit<Self>` given the
+        // alignment and length checks above.
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
@@ -218,9 +225,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     #[inline]
     fn unpack_into<const N: usize>(packed: &[Self; N], rows: &mut [[Self::Value; N]]) {
         assert_eq!(rows.len(), Self::WIDTH);
-        #[allow(clippy::needless_range_loop)]
-        for lane in 0..Self::WIDTH {
-            rows[lane] = array::from_fn(|col| packed[col].extract(lane));
+        for (lane, row) in rows.iter_mut().enumerate() {
+            *row = array::from_fn(|col| packed[col].extract(lane));
         }
     }
 
@@ -309,6 +315,36 @@ pub unsafe trait PackedField:
             current,
         }
     }
+
+    /// Accumulate the products of `d` coefficient streams against a shared stream of
+    /// packed base values.
+    ///
+    /// For each `(coeffs, base)` pair produced by the iterator, performs
+    /// `acc[k] += coeffs[k] * base` for all `k < d`, and returns the accumulators
+    /// (entries at `d..` are zero). Coefficient slices shorter than `d` only
+    /// contribute their available entries.
+    ///
+    /// This is the inner kernel of mixed base-times-extension dot products, where each
+    /// extension element contributes `d` base-field coefficient words. Implementations
+    /// may override it to defer modular reductions across iterations.
+    ///
+    /// # Panics
+    /// Debug builds panic if `d > 8`.
+    #[must_use]
+    fn coeffwise_dot_product<'a, I>(d: usize, pairs: I) -> [Self; 8]
+    where
+        Self: 'a,
+        I: Iterator<Item = (&'a [Self], Self)>,
+    {
+        debug_assert!(d <= 8, "Extension degree > 8 not supported");
+        let mut acc = [Self::ZERO; 8];
+        for (coeffs, base) in pairs {
+            for (acc_k, &coeff) in acc[..d].iter_mut().zip(coeffs) {
+                *acc_k += coeff * base;
+            }
+        }
+        acc
+    }
 }
 
 /// # Safety
@@ -367,11 +403,59 @@ pub trait PackedFieldExtension<
     ExtField: ExtensionField<BaseField, ExtensionPacking = Self>,
 >: Algebra<ExtField> + Algebra<BaseField::Packing> + BasedVectorSpace<BaseField::Packing>
 {
-    /// Given a slice of extension field `EF` elements of length `W`,
-    /// convert into the array `[[F; D]; W]` transpose to
-    /// `[[F; W]; D]` and then pack to get `[PF; D]`.
+    /// Construct a packed extension by applying `f` to each lane.
+    ///
+    /// This is the extension-field analog of [`PackedValue::from_fn`] and the canonical
+    /// primitive constructor for packed extensions: every other constructor in this
+    /// trait (`from_ext_slice`, `pack_ext_columns`, etc.) routes through it.
+    ///
+    /// `f` is called once per `(basis_coefficient, lane)` pair (`D * W` calls total),
+    /// hence the [`Fn`] bound — closures with side effects are unsuitable.
+    ///
+    /// The default impl uses only the [`BasedVectorSpace`] machinery the trait already
+    /// requires. Concrete impls should override when the extension struct exposes its
+    /// base packings directly, e.g. `Self::new(F::Packing::pack_columns_fn(|l| f(l).value))`.
+    #[inline]
     #[must_use]
-    fn from_ext_slice(ext_slice: &[ExtField]) -> Self;
+    fn from_ext_fn(f: impl Fn(usize) -> ExtField) -> Self {
+        Self::from_basis_coefficients_fn(|d| {
+            BaseField::Packing::from_fn(|lane| f(lane).as_basis_coefficients_slice()[d])
+        })
+    }
+
+    /// Pack a length-`WIDTH` slice of extension field elements into one packed extension.
+    ///
+    /// ## Panics
+    /// Panics if `slice.len() != BaseField::Packing::WIDTH`.
+    #[inline]
+    #[must_use]
+    fn from_ext_slice(slice: &[ExtField]) -> Self {
+        assert_eq!(slice.len(), BaseField::Packing::WIDTH);
+        Self::from_ext_fn(|lane| slice[lane])
+    }
+
+    /// Pack `N` columns from `W` rows of extension field elements into `N` packed extensions.
+    ///
+    /// This is the extension-field analog of [`PackedValue::pack_columns`]: given `W` rows
+    /// of `N` extension elements, lane `lane` of output column `col` is `rows[lane][col]`.
+    ///
+    /// ## Panics
+    /// Panics if `rows.len() != BaseField::Packing::WIDTH`.
+    #[inline]
+    #[must_use]
+    fn pack_ext_columns<const N: usize>(rows: &[[ExtField; N]]) -> [Self; N] {
+        assert_eq!(rows.len(), BaseField::Packing::WIDTH);
+        array::from_fn(|col| Self::from_ext_fn(|lane| rows[lane][col]))
+    }
+
+    /// Pack `N` columns using a closure that produces each row.
+    ///
+    /// Analog of [`PackedValue::pack_columns_fn`].
+    #[inline]
+    #[must_use]
+    fn pack_ext_columns_fn<const N: usize>(row_fn: impl Fn(usize) -> [ExtField; N]) -> [Self; N] {
+        array::from_fn(|col| Self::from_ext_fn(|lane| row_fn(lane)[col]))
+    }
 
     /// Extract the extension field element at the given SIMD lane.
     #[inline]
@@ -382,15 +466,135 @@ pub trait PackedFieldExtension<
         })
     }
 
-    /// Convert an iterator of packed extension field elements to an iterator of
-    /// extension field elements.
+    /// Accumulate `value` into a single SIMD lane, leaving the other `W - 1` lanes unchanged.
     ///
-    /// This performs the inverse transformation to `from_ext_slice`.
+    /// This is the accumulating dual of the per-lane read [`PackedFieldExtension::extract`].
+    /// It scatters one scalar extension element into a packed buffer, one lane at a time.
+    ///
+    /// The default rebuilds a full packed element and adds it.
+    /// Concrete types override it to touch only the `D` base lanes at the target lane.
+    #[inline]
+    fn add_assign_lane(&mut self, lane: usize, value: ExtField) {
+        *self += Self::from_ext_fn(|l| if l == lane { value } else { ExtField::ZERO });
+    }
+
+    /// Write all `W` lanes into the given slice.
+    ///
+    /// This is the extension-field analog of [`PackedValue::as_slice`], but the lanes of
+    /// a packed extension are not contiguous in memory (the layout is `[[F; W]; D]`,
+    /// indexed first by basis coefficient), so the lanes must be copied rather than
+    /// borrowed.
+    ///
+    /// ## Panics
+    /// Panics if `out.len() != BaseField::Packing::WIDTH`.
+    #[inline]
+    fn to_ext_slice(&self, out: &mut [ExtField]) {
+        assert_eq!(out.len(), BaseField::Packing::WIDTH);
+        for (lane, slot) in out.iter_mut().enumerate() {
+            *slot = self.extract(lane);
+        }
+    }
+
+    /// Unpack `N` packed extensions into `W` rows of `N` extension elements.
+    ///
+    /// Inverse of [`PackedFieldExtension::pack_ext_columns`]. Lane `lane` of input
+    /// column `col` is written to `rows[lane][col]`.
+    ///
+    /// ## Panics
+    /// Panics if `rows.len() != BaseField::Packing::WIDTH`.
+    #[inline]
+    fn unpack_ext_into<const N: usize>(packed: &[Self; N], rows: &mut [[ExtField; N]]) {
+        assert_eq!(rows.len(), BaseField::Packing::WIDTH);
+        for (lane, row) in rows.iter_mut().enumerate() {
+            *row = array::from_fn(|col| {
+                ExtField::from_basis_coefficients_fn(|d| {
+                    packed[col].as_basis_coefficients_slice()[d].as_slice()[lane]
+                })
+            });
+        }
+    }
+
+    /// Iterator equivalent of [`PackedFieldExtension::unpack_ext_into`].
+    ///
+    /// Yields `WIDTH` rows of `N` extension elements without requiring a pre-allocated
+    /// buffer. Analog of [`PackedValue::unpack_iter`].
+    #[inline]
+    fn unpack_ext_iter<const N: usize>(packed: [Self; N]) -> impl Iterator<Item = [ExtField; N]> {
+        (0..BaseField::Packing::WIDTH).map(move |lane| {
+            array::from_fn(|col| {
+                ExtField::from_basis_coefficients_fn(|d| {
+                    packed[col].as_basis_coefficients_slice()[d].as_slice()[lane]
+                })
+            })
+        })
+    }
+
+    /// Convert an iterator of packed extension field elements to an iterator of
+    /// extension field elements (flat — one `ExtField` per lane per packed value).
     #[inline]
     #[must_use]
     fn to_ext_iter(iter: impl IntoIterator<Item = Self>) -> impl Iterator<Item = ExtField> {
         iter.into_iter()
             .flat_map(|x| (0..BaseField::Packing::WIDTH).map(move |lane| x.extract(lane)))
+    }
+
+    /// Unpacks a packed row-major matrix into its scalar transpose, in one pass.
+    ///
+    /// `src` is a row-major matrix of logical scalars, `src_width` columns wide.
+    /// `WIDTH` consecutive logical scalars share one packed element:
+    ///
+    /// ```text
+    ///     src_logical[i] = src[i / WIDTH].extract(i % WIDTH)
+    /// ```
+    ///
+    /// The scalar transpose lands in `dst`, now `src_height` columns wide:
+    ///
+    /// ```text
+    ///     dst[c * src_height + r] = src_logical[r * src_width + c]
+    /// ```
+    ///
+    /// Every scalar is read once and written once: half the traffic of unpack-then-transpose.
+    ///
+    /// ## Panics
+    /// - `dst.len()` must equal `src.len() * WIDTH`.
+    /// - `src_width` must divide `dst.len()`.
+    fn unpack_transpose_into(src: &[Self], dst: &mut [ExtField], src_width: usize) {
+        let w = BaseField::Packing::WIDTH;
+        assert!(src_width != 0);
+        assert_eq!(dst.len(), src.len() * w);
+        assert!(
+            dst.len().is_multiple_of(src_width),
+            "src_width must divide the scalar count"
+        );
+        let src_height = dst.len() / src_width;
+
+        // Fast path: both dimensions split into whole `W`-blocks.
+        //   src_width  % W == 0  ->  every row starts on a packed boundary
+        //   src_height % W == 0  ->  every dst run is exactly `W` long, no overrun
+        if w > 1 && src_width.is_multiple_of(w) && src_height.is_multiple_of(w) {
+            let packed_width = src_width / w;
+            // Walk `W x W` scalar blocks; reads stream `W` rows, writes are contiguous runs.
+            for r0 in (0..src_height).step_by(w) {
+                for cp in 0..packed_width {
+                    for l in 0..w {
+                        // Lane `l` of packed (row r0+j, packed-col cp) = src_logical[r0+j][cp*W + l].
+                        // It lands at column `cp*W + l`, row `r0+j`.
+                        let run = &mut dst[(cp * w + l) * src_height + r0..][..w];
+                        for (j, slot) in run.iter_mut().enumerate() {
+                            *slot = src[(r0 + j) * packed_width + cp].extract(l);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback: gather each scalar straight to its transposed slot.
+            for r in 0..src_height {
+                for c in 0..src_width {
+                    let idx = r * src_width + c;
+                    dst[c * src_height + r] = src[idx / w].extract(idx % w);
+                }
+            }
+        }
     }
 
     /// Similar to `packed_powers`, construct an iterator which returns
@@ -461,13 +665,24 @@ unsafe impl<F: Field> PackedFieldPow2 for F {
 
 impl<F: Field> PackedFieldExtension<F, F> for F::Packing {
     #[inline]
-    fn from_ext_slice(ext_slice: &[F]) -> Self {
-        *F::Packing::from_slice(ext_slice)
+    fn from_ext_fn(f: impl Fn(usize) -> F) -> Self {
+        F::Packing::from_fn(f)
+    }
+
+    #[inline]
+    fn from_ext_slice(slice: &[F]) -> Self {
+        *F::Packing::from_slice(slice)
     }
 
     #[inline]
     fn packed_ext_powers(base: F) -> Powers<Self> {
         F::Packing::packed_powers(base)
+    }
+
+    #[inline]
+    fn add_assign_lane(&mut self, lane: usize, value: F) {
+        // Degree-1 case: the lane is a single base element.
+        self.as_slice_mut()[lane] += value;
     }
 }
 

@@ -22,11 +22,13 @@ impl<F, Mds, const WIDTH: usize, const ALPHA: u64> Rescue<F, Mds, WIDTH, ALPHA>
 where
     F: PrimeField + PermutationMonomial<ALPHA>,
 {
-    pub const fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
+    /// `round_constants` must have length `2 * WIDTH * num_rounds`.
+    pub fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
         const {
             assert!(WIDTH > 0);
             assert!(ALPHA > 1);
         }
+        assert_eq!(round_constants.len(), 2 * WIDTH * num_rounds);
         Self {
             num_rounds,
             mds,
@@ -40,7 +42,9 @@ where
     /// Rescue Prime paper in Section 2.5 and following. See the paper
     /// for justifications.
     pub fn num_rounds(capacity: usize, sec_level: usize) -> usize {
-        let rate = (WIDTH - capacity) as u64;
+        let rate = WIDTH
+            .checked_sub(capacity)
+            .expect("Rescue::num_rounds requires capacity <= WIDTH") as u64;
         // This iterator produces pairs (dcon, v) increasing by a fixed
         // amount (determined by the formula in the paper) each iteration,
         // together with the value log2(binomial(v + dcon, v)). These values
@@ -77,7 +81,8 @@ where
             .collect()
     }
 
-    fn get_round_constants_rescue_prime(
+    // For a general field, derive the Rescue Prime constants from SHAKE-256.
+    pub fn get_round_constants_rescue_prime(
         num_rounds: usize,
         capacity: usize,
         sec_level: usize,
@@ -87,6 +92,7 @@ where
     {
         let num_constants = 2 * WIDTH * num_rounds;
         let bytes_per_constant = F::bits().div_ceil(8) + 1;
+        assert!((1..=16).contains(&bytes_per_constant));
         let num_bytes = bytes_per_constant * num_constants;
 
         let seed_string = format!(
@@ -104,8 +110,8 @@ where
                 let integer = chunk
                     .iter()
                     .rev()
-                    .fold(0, |acc, &byte| (acc << 8) + byte as u64);
-                F::from_u64(integer)
+                    .fold(0u128, |acc, &byte| (acc << 8) | byte as u128);
+                F::from_u128(integer)
             })
             .collect()
     }
@@ -241,5 +247,11 @@ mod tests {
 
         let actual = rescue_sponge.hash_iter(input);
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity <= WIDTH")]
+    fn test_num_rounds_panics_when_capacity_exceeds_width() {
+        let _ = RescuePrimeM31Default::num_rounds(WIDTH + 1, 128);
     }
 }

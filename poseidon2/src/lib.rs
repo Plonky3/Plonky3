@@ -132,7 +132,7 @@ impl<F, A, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64> Permuta
     for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField + InjectiveMonomial<D>,
-    A: Algebra<F> + Sync + InjectiveMonomial<D>,
+    A: Algebra<F> + InjectiveMonomial<D>,
     ExternalPerm: ExternalLayer<A, WIDTH, D>,
     InternalPerm: InternalLayer<A, WIDTH, D>,
 {
@@ -147,7 +147,7 @@ impl<F, A, ExternalPerm, InternalPerm, const WIDTH: usize, const D: u64>
     CryptographicPermutation<[A; WIDTH]> for Poseidon2<F, ExternalPerm, InternalPerm, WIDTH, D>
 where
     F: PrimeField + InjectiveMonomial<D>,
-    A: Algebra<F> + Sync + InjectiveMonomial<D>,
+    A: Algebra<F> + InjectiveMonomial<D>,
     ExternalPerm: ExternalLayer<A, WIDTH, D>,
     InternalPerm: InternalLayer<A, WIDTH, D>,
 {

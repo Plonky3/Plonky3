@@ -9,13 +9,18 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
 [dependencies]
+libm.workspace = true
 p3-air.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
+p3-security.workspace = true
 p3-util.workspace = true
 
 itertools.workspace = true
@@ -37,10 +42,7 @@ p3-mersenne-31 = { path = "../mersenne-31" }
 p3-symmetric = { path = "../symmetric" }
 
 postcard = { workspace = true, features = ["alloc"] }
-rand.workspace = true
-
-[features]
-parallel = ["p3-maybe-rayon/parallel"]
+rand = { workspace = true, features = ["std_rng"] }
 
 [lints]
 workspace = true

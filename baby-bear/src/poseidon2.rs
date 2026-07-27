@@ -1,4 +1,4 @@
-//! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+//! Implementation of Poseidon2, see: <https://eprint.iacr.org/2023/323>
 //!
 //! For the diffusion matrix, 1 + Diag(V), we perform a search to find an optimized
 //! vector V composed of elements with efficient multiplication algorithms in AVX2/AVX512/NEON.
@@ -60,6 +60,25 @@ pub const BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_24: usize = 21;
 /// The official round number script yields R_P = 30 for this configuration
 /// (matching the Grain LFSR parameters used to generate the round constants below).
 pub const BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_32: usize = 30;
+
+const _: () =
+    assert!(BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL.len() == BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS);
+const _: () =
+    assert!(BABYBEAR_POSEIDON2_RC_16_EXTERNAL_FINAL.len() == BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS);
+const _: () =
+    assert!(BABYBEAR_POSEIDON2_RC_16_INTERNAL.len() == BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16);
+const _: () =
+    assert!(BABYBEAR_POSEIDON2_RC_24_EXTERNAL_INITIAL.len() == BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS);
+const _: () =
+    assert!(BABYBEAR_POSEIDON2_RC_24_EXTERNAL_FINAL.len() == BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS);
+const _: () =
+    assert!(BABYBEAR_POSEIDON2_RC_24_INTERNAL.len() == BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_24);
+const _: () =
+    assert!(BABYBEAR_POSEIDON2_RC_32_EXTERNAL_INITIAL.len() == BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS);
+const _: () =
+    assert!(BABYBEAR_POSEIDON2_RC_32_EXTERNAL_FINAL.len() == BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS);
+const _: () =
+    assert!(BABYBEAR_POSEIDON2_RC_32_INTERNAL.len() == BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_32);
 
 /// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
 ///

@@ -74,7 +74,7 @@ fn bench_eval_eq_batch(c: &mut Criterion) {
     for &(num_vars, batch_size) in &test_cases {
         let (eval_points_data, scalars) = generate_batch_input(num_vars, batch_size);
         let eval_points = RowMajorMatrixView::new(&eval_points_data, batch_size);
-        let out = vec![EF4::ZERO; 1 << num_vars];
+        let out = EF4::zero_vec(1 << num_vars);
 
         let bench_name = format!("n{}_b{}", num_vars, batch_size);
 
@@ -123,7 +123,7 @@ fn bench_eval_eq_base_batch(c: &mut Criterion) {
     for &(num_vars, batch_size) in &test_cases {
         let (eval_points_data, scalars) = generate_base_batch_input(num_vars, batch_size);
         let eval_points = RowMajorMatrixView::new(&eval_points_data, batch_size);
-        let out = vec![EF4::ZERO; 1 << num_vars];
+        let out = EF4::zero_vec(1 << num_vars);
 
         let bench_name = format!("n{}_b{}", num_vars, batch_size);
 

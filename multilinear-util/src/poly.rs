@@ -1,5 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::borrow::Borrow;
+use core::marker::PhantomData;
 
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
@@ -17,8 +19,24 @@ use crate::split_eq::SplitEq;
 
 pub(crate) const PARALLEL_THRESHOLD: usize = 4096;
 
-/// Number of variables at which we switch from recursive to chunk-based MLE evaluation.
-const MLE_RECURSION_THRESHOLD: usize = 10;
+/// Number of variables at which we switch from recursive scalar evaluation to the
+/// SIMD-packed `SplitEq` path.
+///
+/// Crossover depends on the base-field byte width (smaller base ⇒ wider packing
+/// ⇒ `SplitEq` wins earlier), measured on aarch64 (NEON) and x86-64 (AVX2):
+///
+/// - 4-byte bases (BabyBear, KoalaBear, Mersenne31): `SplitEq` wins from n=9.
+/// - 8-byte bases (Goldilocks): recursive still wins at n=9, crosses at n=10.
+///
+/// Wider bases (e.g. BN254) keep the default 10.
+#[inline]
+const fn mle_recursion_threshold<B>() -> usize {
+    if core::mem::size_of::<B>() <= 4 {
+        9
+    } else {
+        10
+    }
+}
 
 /// Returns a vector of uninitialized elements of type `A` with the specified length.
 ///
@@ -42,73 +60,66 @@ unsafe fn uninitialized_vec<A>(len: usize) -> Vec<A> {
 /// order. The number of variables `n` is inferred from the length of this vector, where
 /// `self.len() = 2^n`.
 #[allow(clippy::unsafe_derive_deserialize)]
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[must_use]
-pub struct Poly<F>(pub(crate) Vec<F>);
+pub struct Poly<F, S = Vec<F>>(pub(crate) S, PhantomData<F>);
 
-impl<F> Poly<F> {
-    /// Initializes the zero polynomial in `num_variables` variables.
-    #[inline]
-    pub fn zero(num_variables: usize) -> Self
-    where
-        F: PrimeCharacteristicRing,
-    {
-        Self(F::zero_vec(1 << num_variables))
-    }
+/// Borrowed view of a multilinear polynomial's evaluation table.
+pub type PolyView<'a, F> = Poly<F, &'a [F]>;
 
-    /// Constructs a polynomial from a vector of evaluations.
+impl<F, S> Poly<F, S>
+where
+    S: Borrow<[F]>,
+{
+    /// Constructs a polynomial from a backing store of evaluations.
     ///
-    /// The `evals` vector must adhere to the following constraints:
-    /// - Its length must be a power of two, as it represents evaluations over a
-    ///   binary hypercube of some dimension `n`.
-    /// - The evaluations must be ordered lexicographically corresponding to the points
-    ///   on the hypercube.
+    /// The evaluations must be ordered lexicographically over the boolean hypercube.
     ///
     /// # Panics
-    /// Panics if `evals.len()` is not a power of two.
+    ///
+    /// Panics if the number of evaluations is not a power of two.
     #[inline]
-    pub const fn new(evals: Vec<F>) -> Self {
+    pub fn new(evals: S) -> Self {
         assert!(
-            evals.len().is_power_of_two(),
+            evals.borrow().len().is_power_of_two(),
             "Evaluation list length must be a power of two."
         );
 
-        Self(evals)
+        Self(evals, PhantomData)
     }
 
     /// Returns the total number of stored evaluations.
     #[must_use]
     #[inline]
-    pub const fn num_evals(&self) -> usize {
-        self.0.len()
+    pub fn num_evals(&self) -> usize {
+        self.as_slice().len()
     }
 
     /// Returns the number of variables in the multilinear polynomial.
     #[must_use]
     #[inline]
-    pub const fn num_vars(&self) -> usize {
+    pub fn num_variables(&self) -> usize {
         // Safety: The length is guaranteed to be a power of two.
-        self.0.len().ilog2() as usize
+        log2_strict_usize(self.num_evals())
+    }
+
+    /// Returns a borrowed polynomial view over these evaluations.
+    #[inline]
+    pub fn as_view(&self) -> PolyView<'_, F> {
+        PolyView::new(self.as_slice())
     }
 
     /// Returns a reference to the underlying slice of evaluations.
     #[inline]
     #[must_use]
     pub fn as_slice(&self) -> &[F] {
-        &self.0
-    }
-
-    /// Returns a mutable reference to the underlying slice of evaluations.
-    #[inline]
-    #[must_use]
-    pub fn as_mut_slice(&mut self) -> &mut [F] {
-        &mut self.0
+        self.0.borrow()
     }
 
     /// Returns an iterator over the evaluations.
     #[inline]
     pub fn iter(&self) -> core::slice::Iter<'_, F> {
-        self.0.iter()
+        self.as_slice().iter()
     }
 
     /// Evaluates the polynomial as a constant.
@@ -122,7 +133,46 @@ impl<F> Poly<F> {
     where
         F: Copy,
     {
-        (self.num_evals() == 1).then_some(self.0[0])
+        (self.as_slice().len() == 1).then_some(self.as_slice()[0])
+    }
+}
+
+impl<F> Poly<F> {
+    /// Initializes the zero polynomial in `num_variables` variables.
+    #[inline]
+    pub fn zero(num_variables: usize) -> Self
+    where
+        F: PrimeCharacteristicRing,
+    {
+        Self(F::zero_vec(1 << num_variables), PhantomData)
+    }
+
+    /// Returns a mutable reference to the underlying slice of evaluations.
+    #[inline]
+    #[must_use]
+    pub fn as_mut_slice(&mut self) -> &mut [F] {
+        &mut self.0
+    }
+
+    /// Consumes the polynomial and returns the owned evaluation table.
+    #[inline]
+    #[must_use]
+    pub fn into_evals(self) -> Vec<F> {
+        self.0
+    }
+
+    /// Pads the evaluation vector with zeros up to `num_variables`.
+    ///
+    /// # Panics
+    ///
+    /// - `num_variables` must be at least the current number of variables.
+    #[inline]
+    pub fn pad_zeros(&mut self, num_variables: usize)
+    where
+        F: PrimeCharacteristicRing,
+    {
+        assert!(num_variables >= self.num_variables());
+        self.0.resize(1 << num_variables, F::ZERO);
     }
 
     /// Samples all `2^k` evaluations independently at random.
@@ -130,7 +180,7 @@ impl<F> Poly<F> {
     where
         StandardUniform: Distribution<F>,
     {
-        Self(rng.random_iter().take(1 << k).collect())
+        Self(rng.random_iter().take(1 << k).collect(), PhantomData)
     }
 }
 
@@ -144,12 +194,15 @@ impl<Packed> Poly<Packed> {
     ///
     /// ## Returns
     /// A packed polynomial containing `scale * eq(point, X)` for all `X` in `{0,1}^n`.
+    ///
+    /// The last `log2(W)` variables fold into one packed seed (filling the SIMD lanes).
+    /// The remaining variables expand across the thread pool, one output chunk per worker.
     #[inline]
     pub fn new_packed_from_point<F, EF>(point: &[EF], scale: EF) -> Self
     where
         F: Field,
         EF: ExtensionField<F, ExtensionPacking = Packed>,
-        Packed: PackedFieldExtension<F, EF> + Copy,
+        Packed: PackedFieldExtension<F, EF> + Copy + Send + Sync,
     {
         /// Computes eq(point, X) * scale for all X in {0,1}^n, writing results into `out`.
         ///
@@ -176,25 +229,95 @@ impl<Packed> Poly<Packed> {
 
         let (point_rest, point_init) = point.split_at(n - n_pack);
 
-        // COMPUTE SUFFIX (Inside the SIMD lanes)
+        // COMPUTE SUFFIX (inside the SIMD lanes)
         //
         // We compute the equality polynomial for the last `n_pack` variables.
         // This forms a single `Packed` element which acts as the seed for the next stage.
         let mut init: Vec<EF> = EF::zero_vec(1 << n_pack);
         eq_serial(&mut init, point_init, scale);
+        let seed = Packed::from_ext_slice(&init);
 
-        // COMPUTE PREFIX (Vector Expansion)
+        // COMPUTE PREFIX (vector expansion over `point_rest`)
         //
         // We expand the seed across the remaining variables using Packed arithmetic.
-        let mut packed = unsafe { uninitialized_vec::<Packed>(1 << (n - n_pack)) };
-        eq_serial(
-            &mut packed,
-            point_rest,
-            // Initialize the first element with the seed computed above
-            Packed::from_ext_slice(&init),
-        );
+        let mut packed = unsafe { uninitialized_vec::<Packed>(1 << point_rest.len()) };
 
-        Self(packed)
+        // Split the prefix into [leading `log_chunks` vars | middle vars].
+        //
+        // The leading vars index the output chunks; the middle vars expand within each chunk.
+        // eq factorizes across this split:
+        //     eq(point_rest, c·2^|mid| + y) = eq(leading, c) * eq(middle, y).
+        let log_chunks = log2_strict_usize(current_num_threads().next_power_of_two());
+        if point_rest.len() <= log_chunks + 1 {
+            // Too small to be worth fanning out: expand serially.
+            eq_serial(&mut packed, point_rest, seed);
+        } else {
+            let (leading, middle) = point_rest.split_at(log_chunks);
+
+            // One packed seed per chunk: buffer[c] = seed * eq(leading, c).
+            let mut buffer = unsafe { uninitialized_vec::<Packed>(1 << log_chunks) };
+            eq_serial(&mut buffer, leading, seed);
+
+            // Each chunk holds 2^|middle| entries and expands independently from its seed.
+            let chunk_size = 1 << middle.len();
+            packed
+                .par_chunks_mut(chunk_size)
+                .zip(buffer.par_iter())
+                .for_each(|(chunk, &chunk_seed)| eq_serial(chunk, middle, chunk_seed));
+        }
+
+        Self(packed, PhantomData)
+    }
+}
+
+impl<Packed, S> Poly<Packed, S>
+where
+    S: Borrow<[Packed]>,
+{
+    /// Converts a SIMD-packed polynomial back to scalar extension-field form.
+    ///
+    /// Expands each packed element into W scalar evaluations,
+    /// producing a polynomial with log_2(W) additional variables.
+    pub fn unpack<F, EF>(&self) -> Poly<EF>
+    where
+        F: Field,
+        EF: ExtensionField<F, ExtensionPacking = Packed>,
+        Packed: PackedFieldExtension<F, EF> + Copy,
+    {
+        // Allocate uninitialized output; every entry will be written by the unpacking.
+        let num_variables = self.num_variables();
+        let mut out = Poly(
+            unsafe {
+                uninitialized_vec(1 << (num_variables + log2_strict_usize(F::Packing::WIDTH)))
+            },
+            PhantomData,
+        );
+        self.unpack_into(&mut out);
+        out
+    }
+
+    /// Unpacks into a pre-allocated scalar polynomial buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the output has the wrong number of variables.
+    pub fn unpack_into<F, EF>(&self, out: &mut Poly<EF>)
+    where
+        F: Field,
+        EF: ExtensionField<F, ExtensionPacking = Packed>,
+        Packed: PackedFieldExtension<F, EF> + Copy,
+    {
+        assert_eq!(
+            out.num_variables(),
+            self.num_variables() + log2_strict_usize(F::Packing::WIDTH)
+        );
+        // Expand each packed element into W scalar extension-field elements.
+        out.0
+            .iter_mut()
+            .zip(Packed::to_ext_iter(self.iter().copied()))
+            .for_each(|(out, packed)| {
+                *out = packed;
+            });
     }
 
     /// Evaluates the multilinear polynomial at `point ∈ EF^n`.
@@ -214,49 +337,7 @@ impl<Packed> Poly<Packed> {
         EF: ExtensionField<F, ExtensionPacking = Packed>,
         Packed: PackedFieldExtension<F, EF>,
     {
-        SplitEq::new_packed(point, EF::ONE).eval_packed(self)
-    }
-
-    /// Converts a SIMD-packed polynomial back to scalar extension-field form.
-    ///
-    /// Expands each packed element into W scalar evaluations,
-    /// producing a polynomial with log_2(W) additional variables.
-    pub fn unpack<F, EF>(&self) -> Poly<EF>
-    where
-        F: Field,
-        EF: ExtensionField<F, ExtensionPacking = Packed>,
-        Packed: PackedFieldExtension<F, EF> + Copy,
-    {
-        // Allocate uninitialized output; every entry will be written by the unpacking.
-        let mut out = Poly(unsafe {
-            uninitialized_vec(1 << (self.num_vars() + log2_strict_usize(F::Packing::WIDTH)))
-        });
-        self.unpack_into(&mut out);
-        out
-    }
-
-    /// Unpacks into a pre-allocated scalar polynomial buffer.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the output has the wrong number of variables.
-    pub fn unpack_into<F, EF>(&self, out: &mut Poly<EF>)
-    where
-        F: Field,
-        EF: ExtensionField<F, ExtensionPacking = Packed>,
-        Packed: PackedFieldExtension<F, EF> + Copy,
-    {
-        assert_eq!(
-            out.num_vars(),
-            self.num_vars() + log2_strict_usize(F::Packing::WIDTH)
-        );
-        // Expand each packed element into W scalar extension-field elements.
-        out.0
-            .iter_mut()
-            .zip(Packed::to_ext_iter(self.iter().copied()))
-            .for_each(|(out, packed)| {
-                *out = packed;
-            });
+        SplitEq::new_packed(point, EF::ONE).eval_packed(self.as_view())
     }
 }
 
@@ -274,7 +355,7 @@ impl<F: Field> Poly<F> {
     pub fn new_from_point(point: &[F], scale: F) -> Self {
         let n = point.len();
         if n == 0 {
-            return Self(vec![scale]);
+            return Self(vec![scale], PhantomData);
         }
         let len: usize = 1_usize
             .checked_shl(n as u32)
@@ -285,9 +366,331 @@ impl<F: Field> Poly<F> {
         );
         let mut evals = F::zero_vec(len);
         eval_eq_batch::<_, _, false>(RowMajorMatrixView::new_col(point), &mut evals, &[scale]);
-        Self(evals)
+        Self(evals, PhantomData)
     }
 
+    /// Materializes the dense repeat-last successor weight table for a point.
+    ///
+    /// Start from the equality table `eq[i] = Eq(point, i)`.
+    /// The successor table shifts each weight to the next row and repeats the maximal row:
+    /// ```text
+    /// table = [0, eq[0], eq[1], ..., eq[last - 1]] + Omega
+    /// Omega = [0, ..., 0, eq[last]]
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// This allocates the full dense table over the hypercube.
+    /// It backs the dense constraint-combination path.
+    /// The WHIR opening path avoids it via the non-materializing shifted views.
+    pub fn new_next_from_point(point: &[F]) -> Self {
+        // Start from the plain equality table eq[i] = Eq(point, i).
+        let mut res = Self::new_from_point(point, F::ONE).0;
+        let n = res.len();
+
+        // Save the maximal-row weight before shifting overwrites it.
+        // This is the boundary weight Omega that the repeated last row keeps.
+        let last = res[n - 1];
+        // Shift every weight one row up: row i receives the old weight of row i - 1.
+        //
+        //     before: [ eq0, eq1, eq2, ..., eq_{n-1} ]
+        //     after : [  *  , eq0, eq1, ..., eq_{n-2} ]
+        res.copy_within(0..n - 1, 1);
+        // Row 0 has no predecessor, so its successor weight is zero.
+        res[0] = F::ZERO;
+        // The maximal row maps to itself, so add back its own equality weight.
+        res[n - 1] += last;
+
+        Self::new(res)
+    }
+}
+
+impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
+    /// In-place version of the prefix-variable fix.
+    ///
+    /// Folds the first half in place using:
+    /// ```text
+    /// p[i] = p[i] + (p[i + mid] - p[i]) * r
+    /// ```
+    ///
+    /// Then truncates to the first half. No allocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
+    pub fn fix_prefix_var_mut<F: Copy + Send + Sync>(&mut self, r: F)
+    where
+        A: Algebra<F>,
+    {
+        assert!(self.as_constant().is_none(), "no free variables");
+        let num_evals = self.num_evals();
+        let mid = num_evals / 2;
+        // Split into x_0 = 0 (mutable) and x_0 = 1 (read-only) halves.
+        let (p0, p1) = self.0.split_at_mut(mid);
+
+        if num_evals >= PARALLEL_THRESHOLD {
+            // Parallel: fold each pair in place.
+            p0.par_iter_mut()
+                .zip(p1.par_iter())
+                .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * r);
+        } else {
+            // Sequential: fold each pair in place.
+            p0.iter_mut()
+                .zip(p1.iter())
+                .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * r);
+        }
+
+        // Discard the second half; the first half now holds the folded result.
+        self.0.truncate(mid);
+    }
+
+    /// Sums out the prefix variable, reducing the polynomial by one variable.
+    ///
+    /// Computes:
+    /// ```text
+    /// p'(x') = p(0, x') + p(1, x')
+    /// ```
+    ///
+    /// This is the prefix-variable fix evaluated at `r = 0` and `r = 1` and added.
+    ///
+    /// One use is dropping the leading factor of an equality table.
+    /// Summing the boolean values of the leading variable collapses its factor to one:
+    /// ```text
+    /// sum over x of Eq((a, tail), (x, y)) = Eq(tail, y)
+    /// ```
+    ///
+    /// A constant polynomial has no prefix variable, so this is a no-op.
+    pub fn sum_prefix_var_mut(&mut self) {
+        let num_evals = self.num_evals();
+        if num_evals == 1 {
+            return;
+        }
+
+        let mid = num_evals / 2;
+        // Split into x_0 = 0 (mutable) and x_0 = 1 (read-only) halves.
+        let (p0, p1) = self.0.split_at_mut(mid);
+
+        if num_evals >= PARALLEL_THRESHOLD {
+            // Parallel: sum each low/high pair in place.
+            p0.par_iter_mut()
+                .zip(p1.par_iter())
+                .for_each(|(a0, &a1)| *a0 += a1);
+        } else {
+            // Sequential: sum each low/high pair in place.
+            p0.iter_mut().zip(p1.iter()).for_each(|(a0, &a1)| *a0 += a1);
+        }
+
+        // Discard the second half; the first half now holds the summed result.
+        self.0.truncate(mid);
+    }
+
+    /// In-place version of the suffix-variable fix.
+    ///
+    /// Folds adjacent pairs and truncates to the first half. The sequential
+    /// path folds in place; the parallel path collects the folded pairs into a
+    /// half-size buffer that replaces the backing storage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
+    pub fn fix_suffix_var_mut<F: Copy + Send + Sync>(&mut self, r: F)
+    where
+        A: Algebra<F>,
+    {
+        assert!(self.as_constant().is_none(), "no free variables");
+        let mid = self.num_evals() / 2;
+        if self.num_evals() < PARALLEL_THRESHOLD {
+            // Output index `i` reads inputs `2i` and `2i + 1`, both at or ahead
+            // of the write position, so no slot is overwritten before it is read.
+            for i in 0..mid {
+                let lo = self.0[2 * i];
+                let hi = self.0[2 * i + 1];
+                self.0[i] = (hi - lo) * r + lo;
+            }
+            self.0.truncate(mid);
+        } else {
+            let folded: Vec<_> = self
+                .0
+                .par_chunks(2)
+                .map(|a| (a[1] - a[0]) * r + a[0])
+                .collect();
+            self.0 = folded;
+        }
+    }
+}
+
+impl<A, S> Poly<A, S>
+where
+    A: Copy + Send + Sync + PrimeCharacteristicRing,
+    S: Borrow<[A]>,
+{
+    /// Fixes the prefix variable at a challenge value, returning a folded polynomial.
+    ///
+    /// Computes:
+    /// ```text
+    /// p'(x') = (1 - r) * p(0, x') + r * p(1, x')
+    /// ```
+    ///
+    /// The result has one fewer variable (n - 1).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
+    pub fn fix_prefix_var<F>(&self, r: F) -> Poly<F>
+    where
+        F: Algebra<A> + Copy + Send + Sync,
+    {
+        let evals = self.as_slice();
+        assert!(evals.len() > 1, "no free variables");
+
+        let (p0, p1) = evals.split_at(evals.len() / 2);
+        if evals.len() >= PARALLEL_THRESHOLD {
+            Poly::new(
+                p0.par_iter()
+                    .zip(p1.par_iter())
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                    .collect(),
+            )
+        } else {
+            Poly::new(
+                p0.iter()
+                    .zip(p1.iter())
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                    .collect(),
+            )
+        }
+    }
+
+    /// Evaluates the prefix-variable fix at a single residual index, without
+    /// allocating the folded polynomial.
+    ///
+    /// Equivalent to `self.fix_prefix_var(r)[index]`:
+    /// ```text
+    /// out = (1 - r) * p(0, index) + r * p(1, index)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of range for the residual hypercube
+    /// (`index >= self.num_evals() / 2`).
+    pub fn fix_prefix_var_at<F>(&self, r: F, index: usize) -> F
+    where
+        F: Algebra<A> + Copy,
+    {
+        let evals = self.as_slice();
+        // The residual hypercube is the x_0 = 0 half; the x_0 = 1 half starts at `half`.
+        let half = evals.len() / 2;
+        let lo = evals[index];
+        let hi = evals[index + half];
+        r * (hi - lo) + lo
+    }
+
+    /// Fixes the prefix variable at a challenge value, returning a folded polynomial
+    /// in SIMD-packed form.
+    ///
+    /// Computes:
+    /// ```text
+    ///     p'(x') = (1 - r) * p(0, x') + r * p(1, x')
+    /// ```
+    ///
+    /// The result has one fewer variable (n - 1).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
+    pub fn fix_prefix_var_to_packed<Ext>(&self, r: Ext) -> Poly<Ext::ExtensionPacking>
+    where
+        A: Field,
+        Ext: ExtensionField<A>,
+    {
+        let evals = self.as_slice();
+        assert!(evals.len() > 1, "no free variables");
+
+        let r = Ext::ExtensionPacking::from(r);
+        let poly = A::Packing::pack_slice(evals);
+        let (p0, p1) = poly.split_at(poly.len() / 2);
+        if evals.len() >= PARALLEL_THRESHOLD {
+            Poly::new(
+                p0.par_iter()
+                    .zip(p1.par_iter())
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                    .collect(),
+            )
+        } else {
+            Poly::new(
+                p0.iter()
+                    .zip(p1.iter())
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                    .collect(),
+            )
+        }
+    }
+
+    /// Fixes the suffix variable at a challenge value, returning a folded polynomial.
+    ///
+    /// Computes:
+    /// ```text
+    /// p'(x') = (1 - r) * p(x', 0) + r * p(x', 1)
+    /// ```
+    ///
+    /// The result has one fewer variable (n - 1).
+    /// Unlike the prefix-variable version, consecutive pairs are adjacent in memory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
+    pub fn fix_suffix_var<F>(&self, r: F) -> Poly<F>
+    where
+        F: Algebra<A> + Copy + Send + Sync,
+    {
+        assert!(self.as_constant().is_none(), "no free variables");
+        let evals = self.as_slice();
+        if evals.len() >= PARALLEL_THRESHOLD {
+            // Parallel: interpolate each adjacent pair [p(x',0), p(x',1)].
+            Poly::new(
+                evals
+                    .par_chunks(2)
+                    .map(|a| r * (a[1] - a[0]) + a[0])
+                    .collect(),
+            )
+        } else {
+            // Sequential: same interpolation over adjacent pairs.
+            Poly::new(evals.chunks(2).map(|a| r * (a[1] - a[0]) + a[0]).collect())
+        }
+    }
+
+    /// Converts a scalar extension-field polynomial into SIMD-packed form.
+    ///
+    /// Groups consecutive W evaluations into packed elements,
+    /// reducing the entry count from 2^k to 2^{k - log_2(W)}.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial has fewer variables than log_2(W).
+    pub fn pack<F, EF>(&self) -> Poly<A::ExtensionPacking>
+    where
+        F: Field,
+        A: ExtensionField<F>,
+    {
+        let evals = self.as_slice();
+        // Require at least W evaluations to fill one packed element.
+        assert!(self.num_variables() >= log2_strict_usize(F::Packing::WIDTH));
+        // Group W consecutive extension-field elements into each packed element.
+        Poly(
+            evals
+                .par_chunks(F::Packing::WIDTH)
+                .map(|ext| A::ExtensionPacking::from_ext_slice(ext))
+                .collect(),
+            PhantomData,
+        )
+    }
+}
+
+impl<F, S> Poly<F, S>
+where
+    F: Field,
+    S: Borrow<[F]>,
+{
     /// Evaluates the multilinear polynomial at `point ∈ F^n`.
     ///
     /// Computes
@@ -301,11 +704,25 @@ impl<F: Field> Poly<F> {
     #[must_use]
     #[inline]
     pub fn eval_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
-        if point.num_vars() < MLE_RECURSION_THRESHOLD {
-            eval_multilinear_recursive(&self.0, point.as_slice())
+        if point.num_variables() < mle_recursion_threshold::<F>() {
+            eval_multilinear_recursive(self.as_slice(), point.as_slice())
         } else {
-            SplitEq::new_packed(point, EF::ONE).eval_base(self)
+            SplitEq::new_packed(point, EF::ONE).eval_base(self.as_view())
         }
+    }
+
+    /// Evaluates this polynomial against the repeat-last successor weights at a point.
+    ///
+    /// Each hypercube row is read at its successor, with the maximal row repeating itself:
+    /// ```text
+    ///     sum_{x in {0,1}^n} eq(point, x) * self(succ_repeat_last(x))
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn eval_next_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
+        // Build the factored equality table for the point and let the split form
+        // contract it against the successor view without materializing the dense table.
+        SplitEq::new_packed(point, EF::ONE).eval_next_base(self.as_view())
     }
 
     /// Evaluates the multilinear polynomial at `point ∈ F^n`.
@@ -324,35 +741,35 @@ impl<F: Field> Poly<F> {
     where
         F: ExtensionField<BaseField>,
     {
-        if point.num_vars() < MLE_RECURSION_THRESHOLD {
-            eval_multilinear_recursive(&self.0, point.as_slice())
+        if point.num_variables() < mle_recursion_threshold::<BaseField>() {
+            eval_multilinear_recursive(self.as_slice(), point.as_slice())
         } else {
-            SplitEq::new_packed(point, F::ONE).eval_ext(self)
+            SplitEq::new_packed(point, F::ONE).eval_ext(self.as_view())
         }
     }
 
-    /// Fixes the low variables of a multilinear polynomial using the split eq
-    /// tables, returning a reduced polynomial over the remaining high variables.
+    /// Fixes the prefix variables of a multilinear polynomial using the split eq
+    /// tables, returning a reduced polynomial over the remaining suffix variables.
     ///
     /// Given `poly` with `n` variables and split eq with `m ≤ n` variables, computes:
     /// ```text
-    ///   out(x_hi) = Σ_{y_lo ∈ {0,1}^m} eq(point, y_lo) · poly(y_lo, x_hi)
+    ///   out(x_suffix) = Σ_{y_prefix ∈ {0,1}^m} eq(point, y_prefix) · poly(y_prefix, x_suffix)
     /// ```
-    pub fn compress_lo<EF>(&self, point: &Point<EF>, scale: EF) -> Poly<EF>
+    pub fn compress_prefix<EF>(&self, point: &Point<EF>, scale: EF) -> Poly<EF>
     where
         EF: ExtensionField<F>,
     {
-        SplitEq::<F, EF>::new_packed(point, scale).compress_lo(self)
+        SplitEq::<F, EF>::new_packed(point, scale).compress_prefix(self.as_view())
     }
 
-    /// Like [`compress_lo`](Self::compress_lo), but returns the result in packed
+    /// Like [`compress_prefix`](Self::compress_prefix), but returns the result in packed
     /// extension-field representation. Requires that `poly` has enough variables
     /// to fill at least one packed element after compression.
     ///
     /// ```text
-    ///   out(x_hi) = Σ_{y_lo ∈ {0,1}^m} eq(point, y_lo) · poly(y_lo, x_hi)
+    ///   out(x_suffix) = Σ_{y_prefix ∈ {0,1}^m} eq(point, y_prefix) · poly(y_prefix, x_suffix)
     /// ```
-    pub fn compress_lo_to_packed<EF>(
+    pub fn compress_prefix_to_packed<EF>(
         &self,
         point: &Point<EF>,
         scale: EF,
@@ -360,200 +777,21 @@ impl<F: Field> Poly<F> {
     where
         EF: ExtensionField<F>,
     {
-        SplitEq::<F, EF>::new_packed(point, scale).compress_lo_to_packed(self)
+        SplitEq::<F, EF>::new_packed(point, scale).compress_prefix_to_packed(self.as_view())
     }
 
-    /// Fixes the high variables of a multilinear polynomial using the split eq
-    /// tables, returning a reduced polynomial over the remaining low variables.
+    /// Fixes the suffix variables of a multilinear polynomial using the split eq
+    /// tables, returning a reduced polynomial over the remaining prefix variables.
     ///
     /// Given `poly` with `n` variables and split eq with `m ≤ n` variables, computes:
     /// ```text
-    ///   out(x_lo) = Σ_{y_hi ∈ {0,1}^m} eq(point, y_hi) · poly(x_lo, y_hi)
+    ///   out(x_prefix) = Σ_{y_suffix ∈ {0,1}^m} eq(point, y_suffix) · poly(x_prefix, y_suffix)
     /// ```
-    pub fn compress_hi<EF>(&self, point: &Point<EF>, scale: EF) -> Poly<EF>
+    pub fn compress_suffix<EF>(&self, point: &Point<EF>, scale: EF) -> Poly<EF>
     where
         EF: ExtensionField<F>,
     {
-        SplitEq::<F, EF>::new_packed(point, scale).compress_hi(self)
-    }
-
-    /// Like [`compress_hi`](Self::compress_hi), but writes into a pre-allocated buffer.
-    pub fn compress_hi_into<EF>(&self, out: &mut [EF], point: &Point<EF>, scale: EF)
-    where
-        EF: ExtensionField<F>,
-    {
-        SplitEq::<F, EF>::new_packed(point, scale).compress_hi_into(out, self);
-    }
-}
-
-impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
-    /// Fixes the lowest variable at a challenge value, returning a folded polynomial.
-    ///
-    /// Computes:
-    /// ```text
-    /// p'(x') = (1 - zi) * p(0, x') + zi * p(1, x')
-    /// ```
-    ///
-    /// The result has one fewer variable (n - 1).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the polynomial is constant (zero free variables).
-    pub fn fix_lo_var<F>(&self, zi: F) -> Poly<F>
-    where
-        F: Algebra<A> + Copy + Send + Sync,
-    {
-        assert!(self.as_constant().is_none(), "no free variables");
-        // Split evaluations into the x_0 = 0 half (p0) and x_0 = 1 half (p1).
-        let (p0, p1) = self.0.split_at(self.num_evals() / 2);
-        if self.num_evals() >= PARALLEL_THRESHOLD {
-            // Parallel: linear interpolation between each (p0, p1) pair.
-            Poly::new(
-                p0.par_iter()
-                    .zip(p1.par_iter())
-                    .map(|(&a0, &a1)| zi * (a1 - a0) + a0)
-                    .collect(),
-            )
-        } else {
-            // Sequential: same linear interpolation.
-            Poly::new(
-                p0.iter()
-                    .zip(p1.iter())
-                    .map(|(&a0, &a1)| zi * (a1 - a0) + a0)
-                    .collect(),
-            )
-        }
-    }
-
-    /// In-place version of the low-variable fix.
-    ///
-    /// Folds the first half in place using:
-    /// ```text
-    /// p[i] = p[i] + (p[i + mid] - p[i]) * zi
-    /// ```
-    ///
-    /// Then truncates to the first half. No allocation.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the polynomial is constant (zero free variables).
-    pub fn fix_lo_var_mut<F: Copy + Send + Sync>(&mut self, zi: F)
-    where
-        A: Algebra<F>,
-    {
-        assert!(self.as_constant().is_none(), "no free variables");
-        let num_evals = self.num_evals();
-        let mid = num_evals / 2;
-        // Split into x_0 = 0 (mutable) and x_0 = 1 (read-only) halves.
-        let (p0, p1) = self.0.split_at_mut(mid);
-
-        if num_evals >= PARALLEL_THRESHOLD {
-            // Parallel: fold each pair in place.
-            p0.par_iter_mut()
-                .zip(p1.par_iter())
-                .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * zi);
-        } else {
-            // Sequential: fold each pair in place.
-            p0.iter_mut()
-                .zip(p1.iter())
-                .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * zi);
-        }
-
-        // Discard the second half; the first half now holds the folded result.
-        self.0.truncate(mid);
-    }
-
-    /// Fixes the highest variable at a challenge value, returning a folded polynomial.
-    ///
-    /// Computes:
-    /// ```text
-    /// p'(x') = (1 - zi) * p(x', 0) + zi * p(x', 1)
-    /// ```
-    ///
-    /// The result has one fewer variable (n - 1).
-    /// Unlike the low-variable version, consecutive pairs are adjacent in memory.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the polynomial is constant (zero free variables).
-    pub fn fix_hi_var<F>(&self, zi: F) -> Poly<F>
-    where
-        F: Algebra<A> + Copy + Send + Sync,
-    {
-        assert!(self.as_constant().is_none(), "no free variables");
-        if self.num_evals() >= PARALLEL_THRESHOLD {
-            // Parallel: interpolate each adjacent pair [p(x',0), p(x',1)].
-            Poly::new(
-                self.0
-                    .par_chunks(2)
-                    .map(|a| zi * (a[1] - a[0]) + a[0])
-                    .collect(),
-            )
-        } else {
-            // Sequential: same interpolation over adjacent pairs.
-            Poly::new(
-                self.0
-                    .chunks(2)
-                    .map(|a| zi * (a[1] - a[0]) + a[0])
-                    .collect(),
-            )
-        }
-    }
-
-    /// In-place version of the high-variable fix.
-    ///
-    /// Folds adjacent pairs, collects into a temporary buffer,
-    /// then truncates and overwrites.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the polynomial is constant (zero free variables).
-    pub fn fix_hi_var_mut<F: Copy + Send + Sync>(&mut self, zi: F)
-    where
-        A: Algebra<F>,
-    {
-        assert!(self.as_constant().is_none(), "no free variables");
-        // Fold adjacent pairs into a temporary buffer.
-        // Cannot fold in place because pairs overlap with the output layout.
-        let src = if self.num_evals() < PARALLEL_THRESHOLD {
-            self.0
-                .chunks(2)
-                .map(|a| (a[1] - a[0]) * zi + a[0])
-                .collect::<Vec<_>>()
-        } else {
-            self.0
-                .par_chunks(2)
-                .map(|a| (a[1] - a[0]) * zi + a[0])
-                .collect::<Vec<_>>()
-        };
-        // Truncate to half size and copy the folded values back.
-        let mid = self.num_evals() / 2;
-        self.0.truncate(mid);
-        self.0.copy_from_slice(&src);
-    }
-
-    /// Converts a scalar extension-field polynomial into SIMD-packed form.
-    ///
-    /// Groups consecutive W evaluations into packed elements,
-    /// reducing the entry count from 2^k to 2^{k - log_2(W)}.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the polynomial has fewer variables than log_2(W).
-    pub fn pack<F, EF>(&self) -> Poly<A::ExtensionPacking>
-    where
-        F: Field,
-        A: ExtensionField<F>,
-    {
-        // Require at least W evaluations to fill one packed element.
-        assert!(self.num_vars() >= log2_strict_usize(F::Packing::WIDTH));
-        // Group W consecutive extension-field elements into each packed element.
-        Poly(
-            self.0
-                .par_chunks(F::Packing::WIDTH)
-                .map(|ext| A::ExtensionPacking::from_ext_slice(ext))
-                .collect(),
-        )
+        SplitEq::<F, EF>::new_packed(point, scale).compress_suffix(self.as_view())
     }
 }
 
@@ -651,24 +889,12 @@ where
             // Split the evaluations into two halves, corresponding to the first variable being 0 or 1.
             let (f0, f1) = evals.split_at(evals.len() / 2);
 
-            // Recursively evaluate on the two smaller hypercubes.
-            let (f0_eval, f1_eval) = {
-                // Only spawn parallel tasks if the subproblem is large enough to overcome
-                // the overhead of threading.
-                let work_size: usize = (1 << 15) / core::mem::size_of::<F>();
-                if evals.len() > work_size {
-                    join(
-                        || eval_multilinear_recursive(f0, sub_point),
-                        || eval_multilinear_recursive(f1, sub_point),
-                    )
-                } else {
-                    // For smaller subproblems, execute sequentially.
-                    (
-                        eval_multilinear_recursive(f0, sub_point),
-                        eval_multilinear_recursive(f1, sub_point),
-                    )
-                }
-            };
+            // Sequential recurse: callers gate this function with `num_variables <
+            // mle_recursion_threshold`, so `evals.len()` is always small enough that
+            // Rayon `join` overhead would dominate.
+            let f0_eval = eval_multilinear_recursive(f0, sub_point);
+            let f1_eval = eval_multilinear_recursive(f1, sub_point);
+
             // Perform the final linear interpolation for the first variable `x`.
             f0_eval + (f1_eval - f0_eval) * *x
         }
@@ -700,6 +926,47 @@ pub(crate) mod test {
     type PackedF = <F as p3_field::Field>::Packing;
     type EF = BinomialExtensionField<F, 4>;
 
+    #[test]
+    fn new_next_from_point_shifts_and_repeats_last_row() {
+        // The empty point has a single row, so the successor table is just [1].
+        assert_eq!(Poly::<F>::new_next_from_point(&[]).as_slice(), &[F::ONE]);
+
+        // One variable: the equality table for [a] is [1 - a, a].
+        // The successor table zeroes row 0, shifts up, and folds the maximal
+        // weight back into the last row: [0, (1 - a) + a] = [0, 1].
+        let a = F::from_u64(5);
+        assert_eq!(
+            Poly::new_next_from_point(&[a]).as_slice(),
+            &[F::ZERO, F::ONE],
+        );
+    }
+
+    #[test]
+    fn eval_next_base_matches_shifted_table_evaluation() {
+        // The successor view reads each row at the next index, with the maximal
+        // row repeating itself.
+        //
+        //     rows    [2, 3, 5, 7]
+        //     succ -> [3, 5, 7, 7]   (row x -> x + 1; the last row repeats)
+        let poly = Poly::new(vec![
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(5),
+            F::from_u64(7),
+        ]);
+        let shifted = Poly::new(vec![
+            F::from_u64(3),
+            F::from_u64(5),
+            F::from_u64(7),
+            F::from_u64(7),
+        ]);
+        let point = Point::new(vec![F::from_u64(11), F::from_u64(13)]);
+
+        // Evaluating through the successor view must equal evaluating the
+        // explicit shifted table at the same point.
+        assert_eq!(poly.eval_next_base(&point), shifted.eval_base(&point));
+    }
+
     /// Naive method to evaluate a multilinear polynomial for testing.
     pub(crate) fn eval_reference<F: Field, EF: ExtensionField<F>>(evals: &[F], point: &[EF]) -> EF {
         let eq = Poly::new_from_point(point, EF::ONE);
@@ -712,7 +979,7 @@ pub(crate) mod test {
         let evaluations_list = Poly::new(evals.clone());
 
         assert_eq!(evaluations_list.num_evals(), evals.len());
-        assert_eq!(evaluations_list.num_vars(), 2);
+        assert_eq!(evaluations_list.num_variables(), 2);
         assert_eq!(evaluations_list.as_slice(), &evals);
     }
 
@@ -760,6 +1027,27 @@ pub(crate) mod test {
     }
 
     #[test]
+    fn test_sum_prefix_var_mut() {
+        let mut evals = Poly::new((1..=8).map(F::from_u64).collect::<Vec<_>>());
+
+        evals.sum_prefix_var_mut();
+
+        assert_eq!(
+            evals.as_slice(),
+            &[
+                F::from_u64(1 + 5),
+                F::from_u64(2 + 6),
+                F::from_u64(3 + 7),
+                F::from_u64(4 + 8),
+            ],
+        );
+
+        let mut constant = Poly::new(vec![F::from_u64(11)]);
+        constant.sum_prefix_var_mut();
+        assert_eq!(constant.as_slice(), &[F::from_u64(11)]);
+    }
+
+    #[test]
     fn test_evaluate_edge_cases() {
         let e1 = F::from_u64(7);
         let e2 = F::from_u64(8);
@@ -780,7 +1068,7 @@ pub(crate) mod test {
         for k in 0..5 {
             let poly = Poly::<F>::zero(k);
             assert_eq!(poly.num_evals(), 1 << k);
-            assert_eq!(poly.num_vars(), k);
+            assert_eq!(poly.num_variables(), k);
         }
     }
 
@@ -1115,7 +1403,9 @@ pub(crate) mod test {
     #[test]
     fn test_folding_and_evaluation() {
         let num_variables = 10;
-        let evals = (0..(1 << num_variables)).map(F::from_u64).collect();
+        let evals = (0..(1 << num_variables))
+            .map(F::from_u64)
+            .collect::<Vec<_>>();
         let evals_list = Poly::new(evals);
         let randomness: Vec<_> = (0..num_variables)
             .map(|i| F::from_u64(35 * i as u64))
@@ -1126,10 +1416,10 @@ pub(crate) mod test {
             let eval_part = Point::new(randomness[k..randomness.len()].to_vec());
             let fold_random = Point::new(fold_part.clone());
             let eval_point1 = Point::new([fold_part.clone(), eval_part.0.clone()].concat());
-            let folded_evals = evals_list.compress_lo(&fold_random, F::ONE);
-            assert_eq!(folded_evals.num_vars(), num_variables - k);
-            let folded_coeffs = evals_list.compress_lo(&fold_random, F::ONE);
-            assert_eq!(folded_coeffs.num_vars(), num_variables - k);
+            let folded_evals = evals_list.compress_prefix(&fold_random, F::ONE);
+            assert_eq!(folded_evals.num_variables(), num_variables - k);
+            let folded_coeffs = evals_list.compress_prefix(&fold_random, F::ONE);
+            assert_eq!(folded_coeffs.num_variables(), num_variables - k);
             assert_eq!(
                 folded_evals.eval_base(&eval_part),
                 evals_list.eval_base(&eval_point1)
@@ -1148,7 +1438,7 @@ pub(crate) mod test {
         let poly = Poly::new(evals);
         let evals_list: Poly<F> = poly;
         let r1 = EF::from_u64(5);
-        let folded = evals_list.compress_lo(&Point::new(vec![r1]), EF::ONE);
+        let folded = evals_list.compress_prefix(&Point::new(vec![r1]), EF::ONE);
 
         for x0_f in 0..10 {
             let x0 = EF::from_u64(x0_f);
@@ -1167,13 +1457,13 @@ pub(crate) mod test {
             evals_raw in prop::collection::vec(0u64..F::ORDER_U64, 5),
         ) {
             let evals: Vec<F> = evals_raw[..n].iter().map(|&x| F::from_u64(x)).collect();
-            let mut out = vec![F::ZERO; 1 << n];
+            let mut out = F::zero_vec(1 << n);
             eval_eq_batch::<F, F, false>(
                 RowMajorMatrixView::new_col(&evals),
                 &mut out,
                 &[F::ONE],
             );
-            let mut expected = vec![F::ZERO; 1 << n];
+            let mut expected = F::zero_vec(1 << n);
             for (i, e) in expected.iter_mut().enumerate().take(1 << n) {
                 let mut weight = F::ONE;
                 for (j, &val) in evals.iter().enumerate() {
@@ -1195,7 +1485,7 @@ pub(crate) mod test {
         let point = Point::<F>::new(vec![]);
         let value = F::from_u64(42);
         let evals_list = Poly::new_from_point(point.as_slice(), value);
-        assert_eq!(evals_list.num_vars(), 0);
+        assert_eq!(evals_list.num_variables(), 0);
         assert_eq!(evals_list.as_slice(), &[value]);
         assert_eq!(evals_list.as_constant(), Some(value));
     }
@@ -1207,7 +1497,7 @@ pub(crate) mod test {
         let value = F::from_u64(3);
         let evals_list = Poly::new_from_point(point.as_slice(), value);
         let expected = vec![value * (F::ONE - p0), value * p0];
-        assert_eq!(evals_list.num_vars(), 1);
+        assert_eq!(evals_list.num_variables(), 1);
         assert_eq!(evals_list.as_slice(), &expected);
     }
 
@@ -1227,7 +1517,7 @@ pub(crate) mod test {
             let term2 = if b2 == 1 { p[2] } else { F::ONE - p[2] };
             expected.push(value * term0 * term1 * term2);
         }
-        assert_eq!(evals_list.num_vars(), 3);
+        assert_eq!(evals_list.num_variables(), 3);
         assert_eq!(evals_list.as_slice(), &expected);
     }
 
@@ -1235,14 +1525,14 @@ pub(crate) mod test {
     fn test_as_constant_for_constant_poly() {
         let constant_value = F::from_u64(42);
         let evals = Poly::new(vec![constant_value]);
-        assert_eq!(evals.num_vars(), 0);
+        assert_eq!(evals.num_variables(), 0);
         assert_eq!(evals.as_constant(), Some(constant_value));
     }
 
     #[test]
     fn test_as_constant_for_non_constant_poly() {
         let evals = Poly::new(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
-        assert_ne!(evals.num_vars(), 0);
+        assert_ne!(evals.num_variables(), 0);
         assert_eq!(evals.as_constant(), None);
     }
 
@@ -1250,7 +1540,7 @@ pub(crate) mod test {
     #[should_panic]
     fn test_compress_panics_on_constant() {
         let mut evals_list = Poly::new(vec![F::from_u64(42)]);
-        evals_list.fix_hi_var_mut(F::ONE);
+        evals_list.fix_suffix_var_mut(F::ONE);
     }
 
     #[test]
@@ -1272,10 +1562,10 @@ pub(crate) mod test {
             r * (p_110 - p_010) + p_010,
             r * (p_111 - p_011) + p_011,
         ];
-        assert_eq!(evals_list.num_vars(), 3);
+        assert_eq!(evals_list.num_variables(), 3);
         assert_eq!(evals_list.num_evals(), 8);
-        evals_list.fix_lo_var_mut(r);
-        assert_eq!(evals_list.num_vars(), 2);
+        evals_list.fix_prefix_var_mut(r);
+        assert_eq!(evals_list.num_variables(), 2);
         assert_eq!(evals_list.num_evals(), 4);
         assert_eq!(evals_list.as_slice(), &expected);
     }
@@ -1291,9 +1581,9 @@ pub(crate) mod test {
         let initial_evals: Vec<F> = (0..num_evals).map(|i| F::from_usize(i + 1)).collect();
         let mut evals_list = Poly::new(initial_evals);
         let r = F::from_u64(3);
-        let num_variables_before = evals_list.num_vars();
-        evals_list.fix_lo_var_mut(r);
-        assert_eq!(evals_list.num_vars(), num_variables_before - 1);
+        let num_variables_before = evals_list.num_variables();
+        evals_list.fix_prefix_var_mut(r);
+        assert_eq!(evals_list.num_variables(), num_variables_before - 1);
         assert_eq!(evals_list.num_evals(), mid);
         assert_eq!(
             evals_list.as_slice()[0],
@@ -1311,9 +1601,9 @@ pub(crate) mod test {
         let mut evals_list = Poly::new(initial_evals);
         let challenges = vec![F::from_u64(3), F::from_u64(7), F::from_u64(11)];
         for &r in &challenges {
-            evals_list.fix_lo_var_mut(r);
+            evals_list.fix_prefix_var_mut(r);
         }
-        assert_eq!(evals_list.num_vars(), 1);
+        assert_eq!(evals_list.num_variables(), 1);
         assert_eq!(evals_list.num_evals(), 2);
     }
 
@@ -1323,8 +1613,8 @@ pub(crate) mod test {
         let p_1 = F::from_u64(9);
         let mut evals_list = Poly::new(vec![p_0, p_1]);
         let r = F::from_u64(7);
-        evals_list.fix_lo_var_mut(r);
-        assert_eq!(evals_list.num_vars(), 0);
+        evals_list.fix_prefix_var_mut(r);
+        assert_eq!(evals_list.num_variables(), 0);
         assert_eq!(evals_list.num_evals(), 1);
         let expected = r * (p_1 - p_0) + p_0;
         assert_eq!(evals_list.as_slice(), vec![expected]);
@@ -1343,7 +1633,7 @@ pub(crate) mod test {
         let mut evals_list =
             Poly::new(vec![p_000, p_001, p_010, p_011, p_100, p_101, p_110, p_111]);
         let r = F::ZERO;
-        evals_list.fix_lo_var_mut(r);
+        evals_list.fix_prefix_var_mut(r);
         let expected = vec![p_000, p_001, p_010, p_011];
         assert_eq!(evals_list.as_slice(), &expected);
     }
@@ -1361,7 +1651,7 @@ pub(crate) mod test {
         let mut evals_list =
             Poly::new(vec![p_000, p_001, p_010, p_011, p_100, p_101, p_110, p_111]);
         let r = F::ONE;
-        evals_list.fix_lo_var_mut(r);
+        evals_list.fix_prefix_var_mut(r);
         let expected = vec![p_100, p_101, p_110, p_111];
         assert_eq!(evals_list.as_slice(), &expected);
     }
@@ -1378,9 +1668,9 @@ pub(crate) mod test {
             let r: F = rng.random();
 
             let mut list = Poly::new(evals);
-            list.fix_lo_var_mut(r);
+            list.fix_prefix_var_mut(r);
 
-            prop_assert_eq!(list.num_vars(), n - 1);
+            prop_assert_eq!(list.num_variables(), n - 1);
             prop_assert_eq!(list.num_evals(), num_evals / 2);
         }
 
@@ -1394,11 +1684,11 @@ pub(crate) mod test {
             let evals: Vec<F> = (0..num_evals).map(|_| rng.random()).collect();
 
             let mut list_zero = Poly::new(evals.clone());
-            list_zero.fix_lo_var_mut(F::ZERO);
+            list_zero.fix_prefix_var_mut(F::ZERO);
             prop_assert_eq!(list_zero.num_evals(), num_evals / 2);
 
             let mut list_one = Poly::new(evals);
-            list_one.fix_lo_var_mut(F::ONE);
+            list_one.fix_prefix_var_mut(F::ONE);
             prop_assert_eq!(list_one.num_evals(), num_evals / 2);
 
             if list_zero.as_slice() != list_one.as_slice() {
@@ -1421,10 +1711,10 @@ pub(crate) mod test {
 
             let mut list = Poly::new(evals);
             for &r in &challenges {
-                list.fix_lo_var_mut(r);
+                list.fix_prefix_var_mut(r);
             }
 
-            prop_assert_eq!(list.num_vars(), n - actual_rounds);
+            prop_assert_eq!(list.num_variables(), n - actual_rounds);
             prop_assert_eq!(list.num_evals(), 1 << (n - actual_rounds));
         }
     }
@@ -1441,7 +1731,7 @@ pub(crate) mod test {
             F::from_u64(7),
             F::from_u64(8),
         ]);
-        let result = poly.compress_lo(&Point::new(vec![]), EF::ONE);
+        let result = poly.compress_prefix(&Point::new(vec![]), EF::ONE);
         assert_eq!(result.0.len(), 8, "Result should have 8 evaluations");
         let expected_poly = Poly::new(vec![
             EF::from_u64(1),
@@ -1461,10 +1751,10 @@ pub(crate) mod test {
 
     #[test]
     fn test_fold_batch_single_variable() {
-        let poly = Poly::new((1..=8).map(F::from_u64).collect());
+        let poly = Poly::new((1..=8).map(F::from_u64).collect::<Vec<_>>());
         let r2 = EF::from_u64(3);
         let challenges = vec![r2];
-        let result = poly.compress_lo(&Point::new(challenges), EF::ONE);
+        let result = poly.compress_prefix(&Point::new(challenges), EF::ONE);
         assert_eq!(
             result.0.len(),
             4,
@@ -1505,7 +1795,7 @@ pub(crate) mod test {
         let r2 = EF::from_u64(2);
         let r1 = EF::from_u64(3);
         let challenges = vec![r2, r1];
-        let result = poly.compress_lo(&Point::new(challenges), EF::ONE);
+        let result = poly.compress_prefix(&Point::new(challenges), EF::ONE);
         assert_eq!(
             result.0.len(),
             2,
@@ -1544,7 +1834,7 @@ pub(crate) mod test {
         let r1 = EF::from_u64(5);
         let r0 = EF::from_u64(7);
         let challenges = vec![r1, r0];
-        let result = poly.compress_lo(&Point::new(challenges), EF::ONE);
+        let result = poly.compress_prefix(&Point::new(challenges), EF::ONE);
         assert_eq!(
             result.0.len(),
             1,
@@ -1567,7 +1857,7 @@ pub(crate) mod test {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed: self.num_vars() <= poly.num_vars()")]
+    #[should_panic(expected = "assertion failed: self.num_variables() <= poly.num_variables()")]
     fn test_fold_batch_too_many_challenges() {
         let poly = Poly::new(vec![
             F::from_u64(1),
@@ -1576,7 +1866,7 @@ pub(crate) mod test {
             F::from_u64(4),
         ]);
         let challenges = vec![EF::from_u64(2), EF::from_u64(3), EF::from_u64(5)];
-        let _ = poly.compress_lo(&Point::new(challenges), EF::ONE);
+        let _ = poly.compress_prefix(&Point::new(challenges), EF::ONE);
     }
 
     #[test]
@@ -1585,7 +1875,7 @@ pub(crate) mod test {
         for k in 1..=20 {
             let poly = Poly::<F>::rand(&mut rng, k);
             assert_eq!(poly.num_evals(), 1 << k);
-            assert_eq!(poly.num_vars(), k);
+            assert_eq!(poly.num_variables(), k);
             let point: Point<EF> = Point::rand(&mut rng, k);
             assert_eq!(
                 eval_reference(poly.as_slice(), point.as_slice()),
@@ -1600,7 +1890,7 @@ pub(crate) mod test {
         for k in 1..=20 {
             let poly = Poly::<EF>::rand(&mut rng, k);
             assert_eq!(poly.num_evals(), 1 << k);
-            assert_eq!(poly.num_vars(), k);
+            assert_eq!(poly.num_variables(), k);
             let point: Point<EF> = Point::rand(&mut rng, k);
 
             assert_eq!(
@@ -1623,12 +1913,12 @@ pub(crate) mod test {
         for k in k_pack..=20 {
             let poly = Poly::<EF>::rand(&mut rng, k);
             assert_eq!(poly.num_evals(), 1 << k);
-            assert_eq!(poly.num_vars(), k);
+            assert_eq!(poly.num_variables(), k);
 
             let point: Point<EF> = Point::rand(&mut rng, k);
             let packed_poly = poly.pack::<F, EF>();
             assert_eq!(packed_poly.num_evals(), 1 << (k - k_pack));
-            assert_eq!(packed_poly.num_vars(), k - k_pack);
+            assert_eq!(packed_poly.num_variables(), k - k_pack);
 
             assert_eq!(
                 eval_reference(poly.as_slice(), point.as_slice()),
@@ -1638,7 +1928,7 @@ pub(crate) mod test {
     }
 
     #[test]
-    fn test_fix_lo_var() {
+    fn test_fix_prefix_var() {
         let mut rng = SmallRng::seed_from_u64(0);
         for k in 1..=20 {
             let poly = Poly::<F>::rand(&mut rng, k);
@@ -1646,24 +1936,40 @@ pub(crate) mod test {
 
             // returning variant
             let z0 = point.as_slice().first().copied().unwrap();
-            let mut compressed = poly.fix_lo_var(z0);
+            let mut compressed = poly.fix_prefix_var(z0);
             for &zi in point.as_slice().iter().skip(1) {
-                compressed = compressed.fix_lo_var(zi);
+                compressed = compressed.fix_prefix_var(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
 
             // mutable variant
             let z0 = point.as_slice().first().copied().unwrap();
-            let mut compressed = poly.fix_lo_var(z0);
+            let mut compressed = poly.fix_prefix_var(z0);
             for &zi in point.as_slice().iter().skip(1) {
-                compressed.fix_lo_var_mut(zi);
+                compressed.fix_prefix_var_mut(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
         }
     }
 
     #[test]
-    fn test_fix_hi_var() {
+    fn test_fix_prefix_var_at() {
+        let mut rng = SmallRng::seed_from_u64(0);
+        for k in 1..=12 {
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let point: Point<EF> = Point::rand(&mut rng, 1);
+            let z = point.as_slice()[0];
+
+            // The pointwise variant must agree with the full folded table.
+            let folded = poly.fix_prefix_var(z);
+            for s in 0..folded.num_evals() {
+                assert_eq!(poly.fix_prefix_var_at(z, s), folded.as_slice()[s]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_fix_suffix_var() {
         let mut rng = SmallRng::seed_from_u64(0);
         for k in 1..=20 {
             let poly = Poly::<F>::rand(&mut rng, k);
@@ -1671,24 +1977,117 @@ pub(crate) mod test {
 
             // returning variant
             let z0 = point.as_slice().last().copied().unwrap();
-            let mut compressed = poly.fix_hi_var(z0);
+            let mut compressed = poly.fix_suffix_var(z0);
             for &zi in point.as_slice().iter().rev().skip(1) {
-                compressed = compressed.fix_hi_var(zi);
+                compressed = compressed.fix_suffix_var(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
 
             // mutable variant
             let z0 = point.as_slice().last().copied().unwrap();
-            let mut compressed = poly.fix_hi_var(z0);
+            let mut compressed = poly.fix_suffix_var(z0);
             for &zi in point.as_slice().iter().rev().skip(1) {
-                compressed.fix_hi_var_mut(zi);
+                compressed.fix_suffix_var_mut(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
         }
     }
 
     #[test]
-    fn test_compress_hi() {
+    fn test_fix_prefix_var_to_packed_matches_scalar() {
+        // Invariant: packed fold == scalar fold after unpacking.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let k_pack = log2_strict_usize(PackedF::WIDTH);
+
+        // Need k >= k_pack + 1 so the output holds >= 1 packed entry.
+        for k in (k_pack + 1)..=14 {
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let r: EF = rng.random();
+
+            let scalar = poly.fix_prefix_var::<EF>(r);
+            let packed = poly.fix_prefix_var_to_packed::<EF>(r).unpack::<F, EF>();
+
+            assert_eq!(scalar.num_variables(), packed.num_variables());
+            assert_eq!(scalar, packed);
+        }
+    }
+
+    #[test]
+    fn test_fix_prefix_var_to_packed_boundary_values() {
+        // r = 0 → keep x_0 = 0 half.
+        // r = 1 → keep x_0 = 1 half.
+        let k_pack = log2_strict_usize(PackedF::WIDTH);
+        let k = k_pack + 1;
+        let n = 1 << k;
+
+        // i-th eval = i, so halves are identifiable by inspection.
+        let evals: Vec<F> = (0..n).map(|i| F::from_u64(i as u64)).collect();
+        let poly = Poly::new(evals.clone());
+        let lift = |s: &[F]| -> Vec<EF> { s.iter().copied().map(EF::from).collect() };
+
+        let folded_zero = poly
+            .fix_prefix_var_to_packed::<EF>(EF::ZERO)
+            .unpack::<F, EF>();
+        assert_eq!(folded_zero.as_slice(), lift(&evals[..n / 2]).as_slice());
+
+        let folded_one = poly
+            .fix_prefix_var_to_packed::<EF>(EF::ONE)
+            .unpack::<F, EF>();
+        assert_eq!(folded_one.as_slice(), lift(&evals[n / 2..]).as_slice());
+    }
+
+    #[test]
+    fn test_fix_prefix_var_to_packed_reduces_to_eval_at_point() {
+        // Invariant: folding every variable of p yields p at the full point.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let k_pack = log2_strict_usize(PackedF::WIDTH);
+
+        for k in (k_pack + 1)..=10 {
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let point: Point<EF> = Point::rand(&mut rng, k);
+
+            // Round 1: packed fold of x_0.
+            let r0 = point.as_slice()[0];
+            let mut folded = poly.fix_prefix_var_to_packed::<EF>(r0).unpack::<F, EF>();
+
+            // Rounds 2..n: scalar folds for remaining variables.
+            for &ri in point.as_slice().iter().skip(1) {
+                folded.fix_prefix_var_mut(ri);
+            }
+
+            assert_eq!(folded.as_constant().unwrap(), poly.eval_base(&point));
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_fix_prefix_var_to_packed_panics_on_constant() {
+        // Fixture: zero-variable polynomial.
+        // Expected: panic — no variable to fold.
+        let poly = Poly::<F>::new(vec![F::from_u64(42)]);
+        let _ = poly.fix_prefix_var_to_packed::<EF>(EF::ZERO);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_fix_prefix_var_to_packed_agrees_with_scalar(
+            k in (log2_strict_usize(PackedF::WIDTH) + 1)..=12usize,
+            seed in any::<u64>(),
+        ) {
+            // Random cross-check over many (k, r, poly) triples.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let r: EF = rng.random();
+
+            let scalar = poly.fix_prefix_var::<EF>(r);
+            let packed = poly.fix_prefix_var_to_packed::<EF>(r).unpack::<F, EF>();
+
+            prop_assert_eq!(scalar, packed);
+        }
+    }
+
+    #[test]
+    fn test_compress_suffix() {
         let mut rng = SmallRng::seed_from_u64(0);
         for k in 1..=20 {
             let poly = Poly::<F>::rand(&mut rng, k);
@@ -1696,19 +2095,19 @@ pub(crate) mod test {
                 let point: Point<EF> = Point::rand(&mut rng, point_k);
 
                 let z0 = point.as_slice().first().copied().unwrap();
-                let mut compressed0 = poly.fix_lo_var(z0);
+                let mut compressed0 = poly.fix_prefix_var(z0);
                 for &zi in point.as_slice().iter().skip(1) {
-                    compressed0.fix_lo_var_mut(zi);
+                    compressed0.fix_prefix_var_mut(zi);
                 }
-                let compressed1 = poly.compress_lo(&point, EF::ONE);
-                assert_eq!(compressed0.num_vars(), compressed1.num_vars());
+                let compressed1 = poly.compress_prefix(&point, EF::ONE);
+                assert_eq!(compressed0.num_variables(), compressed1.num_variables());
                 assert_eq!(compressed0, compressed1);
 
                 if k > point_k + log2_strict_usize(PackedF::WIDTH) {
                     let compressed1 = poly
-                        .compress_lo_to_packed(&point, EF::ONE)
+                        .compress_prefix_to_packed(&point, EF::ONE)
                         .unpack::<F, EF>();
-                    assert_eq!(compressed0.num_vars(), compressed1.num_vars());
+                    assert_eq!(compressed0.num_variables(), compressed1.num_variables());
                     assert_eq!(compressed0, compressed1);
                 }
             }
@@ -1716,7 +2115,7 @@ pub(crate) mod test {
     }
 
     #[test]
-    fn test_compress_lo() {
+    fn test_compress_prefix() {
         let mut rng = SmallRng::seed_from_u64(0);
         for k in 1..=20 {
             let poly = Poly::<F>::rand(&mut rng, k);
@@ -1724,14 +2123,162 @@ pub(crate) mod test {
                 let point: Point<EF> = Point::rand(&mut rng, point_k);
 
                 let z0 = point.as_slice().last().copied().unwrap();
-                let mut compressed0 = poly.fix_hi_var(z0);
+                let mut compressed0 = poly.fix_suffix_var(z0);
                 for &zi in point.as_slice().iter().rev().skip(1) {
-                    compressed0.fix_hi_var_mut(zi);
+                    compressed0.fix_suffix_var_mut(zi);
                 }
-                let compressed1 = poly.compress_hi(&point, EF::ONE);
-                assert_eq!(compressed0.num_vars(), compressed1.num_vars());
+                let compressed1 = poly.compress_suffix(&point, EF::ONE);
+                assert_eq!(compressed0.num_variables(), compressed1.num_variables());
                 assert_eq!(compressed0, compressed1);
             }
+        }
+    }
+
+    #[test]
+    fn pad_zeros_to_same_arity_is_a_no_op() {
+        // Invariant:
+        //     Padding to the current arity must leave the buffer unchanged.
+        //
+        // Fixture state:
+        //     2-variable polynomial → 4 evaluations.
+        let mut poly = Poly::new(vec![
+            F::from_u64(1),
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(4),
+        ]);
+        let original = poly.as_slice().to_vec();
+
+        // Pad to the same arity.
+        poly.pad_zeros(2);
+
+        // Check: arity and contents are identical to the input.
+        assert_eq!(poly.num_variables(), 2);
+        assert_eq!(poly.as_slice(), original.as_slice());
+    }
+
+    #[test]
+    fn pad_zeros_extends_with_zeros_and_preserves_prefix() {
+        // Invariant:
+        //     Padding to a strictly larger arity grows the buffer to 2^k entries,
+        //     keeps every original evaluation in place, and zero-fills the tail.
+        //
+        // Fixture state:
+        //     1-variable polynomial → 2 evaluations.
+        //     pad to 3 variables → 8 entries; entries [2..8] must be zero.
+        let mut poly = Poly::new(vec![F::from_u64(7), F::from_u64(11)]);
+
+        poly.pad_zeros(3);
+
+        // Check: arity matches the requested target.
+        assert_eq!(poly.num_variables(), 3);
+        // Check: entry count equals 2^arity.
+        assert_eq!(poly.as_slice().len(), 8);
+        // Check: original evaluations sit at the head of the buffer.
+        assert_eq!(poly.as_slice()[0], F::from_u64(7));
+        assert_eq!(poly.as_slice()[1], F::from_u64(11));
+        // Check: every padded slot is zero.
+        for &value in &poly.as_slice()[2..] {
+            assert_eq!(value, F::ZERO);
+        }
+    }
+
+    #[test]
+    fn pad_zeros_idempotent_when_called_twice() {
+        // Invariant:
+        //     Calling pad_zeros twice with the same target is the same as once.
+        //
+        // Fixture state:
+        //     2-variable polynomial padded twice to arity 4.
+        let mut once = Poly::new(vec![
+            F::from_u64(5),
+            F::from_u64(6),
+            F::from_u64(7),
+            F::from_u64(8),
+        ]);
+        once.pad_zeros(4);
+
+        let mut twice = Poly::new(vec![
+            F::from_u64(5),
+            F::from_u64(6),
+            F::from_u64(7),
+            F::from_u64(8),
+        ]);
+        twice.pad_zeros(4);
+        twice.pad_zeros(4);
+
+        // Check: the two paths produce identical buffers.
+        assert_eq!(once.num_variables(), twice.num_variables());
+        assert_eq!(once.as_slice(), twice.as_slice());
+    }
+
+    #[test]
+    #[should_panic]
+    fn pad_zeros_panics_when_target_is_smaller_than_current() {
+        // Invariant:
+        //     pad_zeros refuses to shrink the polynomial — it is strictly an
+        //     upward-padding helper.
+        //
+        // Fixture state:
+        //     3-variable polynomial; ask to pad to arity 2 → must panic.
+        let mut poly = Poly::<F>::zero(3);
+        poly.pad_zeros(2);
+    }
+
+    #[test]
+    fn test_next_closed_forms() {
+        // Invariant: four different routes to the successor opening must agree.
+        //   1. closed-form carry recurrence over the two points
+        //   2. dense successor table dotted with the equality table
+        //   3. dense successor table evaluated at the first point
+        //   4. plain equality table evaluated through the successor view
+        let mut rng = SmallRng::seed_from_u64(0);
+        // Fixture state: sweep variable counts 0..14 to cover all base-case branches.
+        for k in 0..14 {
+            let p0 = Point::<F>::rand(&mut rng, k);
+            let p1 = Point::<F>::rand(&mut rng, k);
+
+            // Route 1: closed form. Full fold yields completed plus boundary mass.
+            let (_carry, done, omega) = Point::eval_next(p1.as_slice(), p0.as_slice());
+            let e0 = done + omega;
+
+            // Route 2: materialize the successor table, then dot with the equality table.
+            let next = Poly::new_next_from_point(p1.as_slice());
+            let eq = Poly::new_from_point(p0.as_slice(), F::ONE);
+            let e1 = dot_product(eq.iter().copied(), next.iter().copied());
+            assert_eq!(e0, e1);
+
+            // Route 3: evaluate the same successor table directly at the first point.
+            let e1 = next.eval_base(&p0);
+            assert_eq!(e0, e1);
+
+            // Route 4: keep the plain equality table and apply the successor view at eval time.
+            let next = Poly::new_from_point(p0.as_slice(), F::ONE);
+            let e1 = next.eval_next_base(&p1);
+            assert_eq!(e0, e1);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn new_packed_from_point_matches_scalar_reference(
+            // Sweep across the serial/parallel boundary: the parallel fan-out engages
+            // once `n - log2(W) > log_chunks + 1`, so cover small and large `n`.
+            k in (log2_strict_usize(PackedF::WIDTH))..=18usize,
+            scale_raw in 1u64..F::ORDER_U64,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let point: Vec<EF> = (0..k).map(|_| rng.random()).collect();
+            let scale = EF::from(F::from_u64(scale_raw));
+
+            // Packed builder, unpacked back to scalar extension form.
+            let packed = Poly::new_packed_from_point::<F, EF>(&point, scale).unpack::<F, EF>();
+
+            // Scalar reference: the same eq table built directly.
+            let reference = Poly::new_from_point(&point, scale);
+
+            prop_assert_eq!(packed, reference);
         }
     }
 }

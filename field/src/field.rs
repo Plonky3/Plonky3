@@ -548,6 +548,51 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     }
 }
 
+/// Values that can act as sponge lanes for delimiter padding.
+///
+/// This is used by symmetric sponge adapters that need canonical `0` and `1` symbols while
+/// supporting both field/ring-based lanes and `u64`-based Keccak lanes behind one API.
+pub trait SpongePaddingValue: Copy {
+    /// The empty-lane value.
+    const PAD_ZERO: Self;
+
+    /// The delimiter value injected after the final absorbed element.
+    const PAD_ONE: Self;
+}
+
+impl<T: PrimeCharacteristicRing + Copy> SpongePaddingValue for T {
+    const PAD_ZERO: Self = Self::ZERO;
+    const PAD_ONE: Self = Self::ONE;
+}
+
+impl SpongePaddingValue for u64 {
+    const PAD_ZERO: Self = 0;
+    const PAD_ONE: Self = 1;
+}
+
+impl<const N: usize> SpongePaddingValue for [u64; N] {
+    const PAD_ZERO: Self = [0; N];
+    const PAD_ONE: Self = [1; N];
+}
+
+/// Trait for fields that support uniform bit sampling optimizations.
+pub trait UniformSamplingField {
+    /// Maximum number of bits we can sample at negligible (~1/field prime) probability of
+    /// triggering an error / requiring a resample.
+    const MAX_SINGLE_SAMPLE_BITS: usize;
+    /// An array storing the largest value `m_k` for each `k` in [0, 31], such that `m_k`
+    /// is a multiple of `2^k` and less than P. `m_k` is defined as:
+    ///
+    /// \( m_k = ⌊P / 2^k⌋ · 2^k \)
+    ///
+    /// This is used as a rejection sampling threshold (or error trigger), when sampling
+    /// random bits from uniformly sampled field elements. As long as we sample up to the `k`
+    /// least significant bits in the range [0, m_k), we sample from exactly `m_k` elements. As
+    /// `m_k` is divisible by 2^k, each of the least significant `k` bits has exactly the same
+    /// number of zeroes and ones, leading to a uniform sampling.
+    const SAMPLING_BITS_M: [u64; 64];
+}
+
 impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     const DIMENSION: usize = 1;
 
@@ -693,6 +738,103 @@ pub trait Algebra<F>:
             64 => chunked_linear_combination::<64, Self, F>(values, coeffs),
             _ => unreachable!(),
         }
+    }
+}
+
+/// Compute `Σ values[i] * coeffs[i]` over `N` pairs.
+///
+/// A single long sum forces every add to wait for the previous one. Instead,
+/// we split the pairs into groups of `CHUNK`, sum each group on its own, and
+/// add up the group totals. Several partial sums run in parallel on the CPU,
+/// so the total latency is shorter than one straight chain.
+///
+/// The result is the same for every valid `CHUNK` — only the speed changes.
+///
+/// # Layout
+///
+/// For `N = q * CHUNK + r` with `0 <= r < CHUNK`:
+///
+/// ```text
+///     ┌── group 0 ──┬── group 1 ──┬─ ... ─┬── tail (r) ──┐
+///     │   CHUNK     │   CHUNK     │       │   r pairs    │
+///     └──────┬──────┴──────┬──────┴───────┴──────┬───────┘
+///            ▼             ▼                     ▼
+///       tree-sum      tree-sum             scalar adds
+///            └──► acc ◄────┴──────► acc ◄────────┘
+/// ```
+///
+/// # Panics
+///
+/// Compile-time panic if `CHUNK` is zero.
+#[must_use]
+#[inline]
+pub fn chunked_mixed_dot_product<
+    const CHUNK: usize,
+    A: Algebra<F> + Dup,
+    F: Dup,
+    const N: usize,
+>(
+    values: &[A; N],
+    coeffs: &[F; N],
+) -> A {
+    // CHUNK = 0 would make the group count undefined.
+    const { assert!(CHUNK != 0, "chunked_mixed_dot_product requires CHUNK > 0") }
+
+    // Fast path: N fits in one group → single balanced tree, no outer loop.
+    if N <= CHUNK {
+        let products: [A; N] = core::array::from_fn(|i| values[i].dup() * coeffs[i].dup());
+        return A::sum_array::<N>(&products);
+    }
+
+    // Split off q complete groups; r leftover pairs go to the tail.
+    let (val_chunks, val_rem) = values.as_slice().as_chunks::<CHUNK>();
+    let (coeff_chunks, coeff_rem) = coeffs.as_slice().as_chunks::<CHUNK>();
+    debug_assert_eq!(val_chunks.len(), coeff_chunks.len());
+
+    // One add per group; runs in parallel with the next group's multiplies.
+    let mut acc = A::ZERO;
+    for (vc, cc) in zip(val_chunks, coeff_chunks) {
+        let products: [A; CHUNK] = core::array::from_fn(|i| vc[i].dup() * cc[i].dup());
+        // Balanced tree of depth log2(CHUNK), folded into acc.
+        acc += A::sum_array::<CHUNK>(&products);
+    }
+
+    // Tail: at most CHUNK - 1 pairs as a serial multiply-add chain.
+    debug_assert_eq!(val_rem.len(), coeff_rem.len());
+    for (v, c) in zip(val_rem, coeff_rem) {
+        acc += v.dup() * c.dup();
+    }
+    acc
+}
+
+/// Lower a runtime chunk size into a const-generic call to the fixed-chunk dot product.
+///
+/// Each backend picks its preferred chunk size at runtime; the inner routine
+/// needs it as a const for unrolling. This wrapper bridges the gap.
+///
+/// Supported sizes: `1, 2, 4, 8, 16, 32, 64` — powers of two only, so the
+/// inner balanced tree stays balanced.
+///
+/// # Panics
+///
+/// Runtime panic if `chunk` is outside the supported set.
+#[must_use]
+#[inline]
+pub fn dispatch_chunked_mixed_dot_product<A: Algebra<F> + Dup, F: Dup, const N: usize>(
+    values: &[A; N],
+    coeffs: &[F; N],
+    chunk: usize,
+) -> A {
+    match chunk {
+        1 => chunked_mixed_dot_product::<1, A, F, N>(values, coeffs),
+        2 => chunked_mixed_dot_product::<2, A, F, N>(values, coeffs),
+        4 => chunked_mixed_dot_product::<4, A, F, N>(values, coeffs),
+        8 => chunked_mixed_dot_product::<8, A, F, N>(values, coeffs),
+        16 => chunked_mixed_dot_product::<16, A, F, N>(values, coeffs),
+        32 => chunked_mixed_dot_product::<32, A, F, N>(values, coeffs),
+        64 => chunked_mixed_dot_product::<64, A, F, N>(values, coeffs),
+        // Unsupported chunk = configuration bug in a backend.
+        _ => panic!("mixed_dot_product chunk must be one of 1, 2, 4, 8, 16, 32, or 64"),
     }
 }
 
@@ -889,6 +1031,20 @@ pub trait Field:
         self.try_inverse().expect("Tried to invert zero")
     }
 
+    /// A square root of this field element, if one exists.
+    ///
+    /// Returns `Some(r)` with `r * r == *self` when this element is a quadratic
+    /// residue, and `None` when it is a quadratic non-residue. `ZERO` returns
+    /// `Some(ZERO)`. When two square roots exist, which one is returned is
+    /// unspecified.
+    ///
+    /// The default implementation uses the Tonelli–Shanks algorithm. Fields with
+    /// a more direct formula (e.g. those with `|F| ≡ 3 mod 4`) may override it.
+    #[must_use]
+    fn try_sqrt(&self) -> Option<Self> {
+        crate::sqrt::tonelli_shanks(*self)
+    }
+
     /// Add two slices of field elements together, returning the result in the first slice.
     ///
     /// Makes use of packing to speed up the addition.
@@ -916,6 +1072,25 @@ pub trait Field:
         }
     }
 
+    /// Accumulate `acc[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
+    ///
+    /// Each item provides one matrix row as `acc.len() / N` packed base-field words,
+    /// together with the row's `N` extension-field weights. `acc` is laid out with the
+    /// `N` weights of each word group adjacent, and its length must be a multiple of `N`.
+    ///
+    /// This is the inner kernel of batched columnwise (weighted-sum-of-rows) dot
+    /// products. Fields may override it to defer modular reductions across rows.
+    fn batched_columnwise_dot_product<EF, R, I, const N: usize>(
+        acc: &mut [EF::ExtensionPacking],
+        items: I,
+    ) where
+        EF: ExtensionField<Self>,
+        R: Iterator<Item = Self::Packing>,
+        I: Iterator<Item = (R, [EF; N])>,
+    {
+        generic_batched_columnwise_dot_product::<Self, EF, R, I, N>(acc, items);
+    }
+
     /// The number of elements in the field.
     ///
     /// This will either be prime if the field is a PrimeField or a power of a
@@ -931,6 +1106,30 @@ pub trait Field:
     #[inline]
     fn bits() -> usize {
         Self::order().bits() as usize
+    }
+}
+
+/// The generic accumulation behind [`Field::batched_columnwise_dot_product`]:
+/// `acc[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
+///
+/// Kept as a free function so that specialized `Field` implementations can fall back
+/// to it for extension degrees their kernels do not cover.
+pub fn generic_batched_columnwise_dot_product<F, EF, R, I, const N: usize>(
+    acc: &mut [EF::ExtensionPacking],
+    items: I,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+    R: Iterator<Item = F::Packing>,
+    I: Iterator<Item = (R, [EF; N])>,
+{
+    for (row, scales) in items {
+        let packed_scales = scales.map(EF::ExtensionPacking::from);
+        for (acc_c, r) in acc.chunks_exact_mut(N).zip(row) {
+            for (a, &s) in acc_c.iter_mut().zip(&packed_scales) {
+                *a += s * r;
+            }
+        }
     }
 }
 
@@ -1023,6 +1222,24 @@ pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + BasedVectorSpace<
     /// Otherwise return None.
     #[must_use]
     fn as_base(&self) -> Option<Base>;
+
+    /// Reassemble an element of `Self` from `D = DIMENSION` coefficients in `Self`
+    /// via `Σⱼ basisⱼ · coeffsⱼ`. Returns `None` if `coeffs.len() != Self::DIMENSION`.
+    ///
+    /// This is the `Self`-coefficient counterpart to
+    /// [`BasedVectorSpace::from_basis_coefficients_slice`], which takes coefficients
+    /// in `Base`. It is the natural "lifting" operation in commit-and-open protocols:
+    /// if an extension polynomial decomposes as `f(X) = Σⱼ basisⱼ · fⱼ(X)` with
+    /// `fⱼ` over `Base`, then `f(z) = Σⱼ basisⱼ · fⱼ(z)` for any `z ∈ Self`.
+    #[inline]
+    #[must_use]
+    fn from_ext_basis_coefficients(coeffs: &[Self]) -> Option<Self> {
+        (coeffs.len() == Self::DIMENSION).then(|| {
+            (0..Self::DIMENSION)
+                .map(|j| Self::ith_basis_element(j).unwrap() * coeffs[j])
+                .sum()
+        })
+    }
 }
 
 // Every field is trivially a one dimensional extension over itself.
@@ -1037,6 +1254,11 @@ impl<F: Field> ExtensionField<F> for F {
     #[inline]
     fn as_base(&self) -> Option<F> {
         Some(*self)
+    }
+
+    #[inline]
+    fn from_ext_basis_coefficients(coeffs: &[Self]) -> Option<Self> {
+        (coeffs.len() == 1).then(|| coeffs[0])
     }
 }
 
@@ -1085,11 +1307,18 @@ impl<R: PrimeCharacteristicRing> Powers<R> {
             .zip(self)
             .for_each(|(out, next)| *out = next);
     }
+}
 
+impl<F: Field> Powers<F> {
     /// Wrapper for `self.take(n).collect()`.
+    ///
+    /// Bounded to `F: Field` on purpose: the body resolves `.collect()` to the inherent
+    /// [`BoundedPowers::collect`] SIMD fast path, which only exists under `F: Field`.
+    /// Defining this method under a wider bound (e.g. `PrimeCharacteristicRing`) would
+    /// silently fall back to `Iterator::collect` and bypass packed-field acceleration.
     #[inline]
     #[must_use]
-    pub fn collect_n(self, n: usize) -> Vec<R> {
+    pub fn collect_n(self, n: usize) -> Vec<F> {
         self.take(n).collect()
     }
 }
@@ -1100,13 +1329,17 @@ impl<F: Field> BoundedPowers<F> {
     /// # Details
     ///
     /// The computation is split evenly amongst available threads, and each chunk is computed
-    /// using packed fields.
+    /// using packed fields. Small requests are computed on the current thread, as a parallel
+    /// dispatch would cost more than the fill itself.
     ///
     /// # Performance
     ///
     /// Enable the `parallel` feature to enable parallelization.
     #[must_use]
     pub fn collect(self) -> Vec<F> {
+        // Below this many scalars, a parallel dispatch costs more than the packed fill itself.
+        const PARALLEL_THRESHOLD: usize = 1 << 10;
+
         let num_powers = self.n;
 
         // When num_powers is small, fallback to serial computation
@@ -1119,25 +1352,30 @@ impl<F: Field> BoundedPowers<F> {
         let num_packed = num_powers.div_ceil(width);
         let mut points_packed = F::Packing::zero_vec(num_packed);
 
-        // Split computation evenly among threads
-        let num_threads = current_num_threads().max(1);
-        let chunk_size = num_packed.div_ceil(num_threads);
-
-        // Precompute base for each chunk.
         let base = self.iter.base;
-        let chunk_base = base.exp_u64((chunk_size * width) as u64);
         let shift = self.iter.current;
 
-        points_packed
-            .par_chunks_mut(chunk_size)
-            .enumerate()
-            .for_each(|(chunk_idx, chunk_slice)| {
-                // First power in this chunk
-                let chunk_start = shift * chunk_base.exp_u64(chunk_idx as u64);
+        if num_powers < PARALLEL_THRESHOLD {
+            F::Packing::packed_shifted_powers(base, shift).fill(&mut points_packed);
+        } else {
+            // Split computation evenly among threads
+            let num_threads = current_num_threads().max(1);
+            let chunk_size = num_packed.div_ceil(num_threads);
 
-                // Fill the chunk with packed powers.
-                F::Packing::packed_shifted_powers(base, chunk_start).fill(chunk_slice);
-            });
+            // Precompute base for each chunk.
+            let chunk_base = base.exp_u64((chunk_size * width) as u64);
+
+            points_packed
+                .par_chunks_mut(chunk_size)
+                .enumerate()
+                .for_each(|(chunk_idx, chunk_slice)| {
+                    // First power in this chunk
+                    let chunk_start = shift * chunk_base.exp_u64(chunk_idx as u64);
+
+                    // Fill the chunk with packed powers.
+                    F::Packing::packed_shifted_powers(base, chunk_start).fill(chunk_slice);
+                });
+        }
 
         // return the number of requested points, discarding the unused packed powers
         // SAFETY: size_of::<F::Packing> always divides size_of::<F::Packing>.
@@ -1162,5 +1400,17 @@ impl<R: PrimeCharacteristicRing> Iterator for BoundedPowers<R> {
             self.n -= 1;
             self.iter.next().unwrap()
         })
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.n, Some(self.n))
+    }
+}
+
+impl<R: PrimeCharacteristicRing> ExactSizeIterator for BoundedPowers<R> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.n
     }
 }

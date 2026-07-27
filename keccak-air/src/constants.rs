@@ -33,7 +33,7 @@ pub const RC: [u64; 24] = [
     0x8000000080008008,
 ];
 
-const RC_BITS: [[u8; 64]; 24] = [
+pub(crate) const RC_BITS: [[u8; 64]; 24] = [
     [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -156,6 +156,44 @@ const RC_BITS: [[u8; 64]; 24] = [
     ],
 ];
 
-pub(crate) const fn rc_value_bit(round: usize, bit_index: usize) -> u8 {
-    RC_BITS[round][bit_index]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rc_bits_consistent_with_rc() {
+        // The `RC_BITS` table is the bit-decomposition of the 24 round
+        // constants defined in FIPS 202 (Section 3.2.5, Algorithm 5).
+        //
+        // For each round r and bit position z:
+        //     RC_BITS[r][z] must equal bit z of RC[r]
+        //
+        // We also reconstruct each 64-bit constant from its bits
+        // and compare against the original — any single-bit typo
+        // in the 24 * 64 = 1536 entries would be caught.
+        for (r, rc_bits_r) in RC_BITS.iter().enumerate() {
+            let mut reconstructed = 0u64;
+            for (z, &bit) in rc_bits_r.iter().enumerate() {
+                // Each entry must be 0 or 1.
+                assert!(bit <= 1, "RC_BITS[{r}][{z}] = {bit}, expected 0 or 1");
+
+                // Must match the corresponding bit in the u64 constant.
+                assert_eq!(
+                    bit,
+                    ((RC[r] >> z) & 1) as u8,
+                    "RC_BITS[{r}][{z}] disagrees with RC[{r}] = {:#018x}",
+                    RC[r]
+                );
+
+                reconstructed |= (bit as u64) << z;
+            }
+
+            // Full round-trip: bits → u64 must recover the original.
+            assert_eq!(
+                reconstructed, RC[r],
+                "Reconstructed RC[{r}] = {reconstructed:#018x}, expected {:#018x}",
+                RC[r]
+            );
+        }
+    }
 }

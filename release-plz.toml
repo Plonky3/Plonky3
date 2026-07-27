@@ -97,7 +97,19 @@ name = "p3-mersenne-31"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-monolith"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-monolith-air"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-monty-31"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-multi-stark"
 version_group = "plonky3"
 
 [[package]]
@@ -125,7 +137,15 @@ name = "p3-rescue"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-security"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-sha256"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-sumcheck"
 version_group = "plonky3"
 
 [[package]]
@@ -138,4 +158,12 @@ version_group = "plonky3"
 
 [[package]]
 name = "p3-util"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-whir"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-zk-codes"
 version_group = "plonky3"

@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -12,7 +11,7 @@ use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use serde::{Deserialize, Serialize};
 
-use crate::{BuildPeriodicLdeTableFast, OpenedValues, Pcs, PolynomialSpace};
+use crate::{OpenedValues, Pcs, PolynomialSpace};
 
 /// A trivial PCS: its commitment is simply the coefficients of each poly.
 #[derive(Clone, Debug)]
@@ -27,7 +26,7 @@ pub fn eval_coeffs_at_pt<F: Field, EF: ExtensionField<F>>(
     coeffs: &RowMajorMatrix<F>,
     x: EF,
 ) -> Vec<EF> {
-    let mut acc = vec![EF::ZERO; coeffs.width()];
+    let mut acc = EF::zero_vec(coeffs.width());
     for r in (0..coeffs.height()).rev() {
         let row = coeffs.row_slice(r).unwrap();
         for (acc_c, row_c) in acc.iter_mut().zip(row.iter()) {
@@ -58,6 +57,10 @@ where
         // This panics if (and only if) `degree` is not a power of 2 or `degree`
         // > `1 << Val::TWO_ADICITY`.
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
+    }
+
+    fn log_max_lde_height(&self) -> usize {
+        Val::TWO_ADICITY
     }
 
     fn commit(
@@ -204,12 +207,4 @@ where
         }
         Ok(())
     }
-}
-
-impl<Val, Dft> BuildPeriodicLdeTableFast for TrivialPcs<Val, Dft>
-where
-    Val: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<Val>,
-{
-    type PeriodicDomain = TwoAdicMultiplicativeCoset<Val>;
 }

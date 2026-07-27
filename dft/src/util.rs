@@ -1,8 +1,9 @@
 use core::borrow::BorrowMut;
 
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PrimeCharacteristicRing, scale_slice_in_place_single_core};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
+use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
@@ -25,13 +26,28 @@ pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
 }
 
 /// Multiply each element of row `i` of `mat` by `shift**i`.
+///
+/// Scales row chunks in parallel, computing one starting power per chunk and
+/// then advancing it row-by-row inside the chunk.
 pub(crate) fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
-    mat.rows_mut()
-        .zip(shift.powers())
-        .for_each(|(row, weight)| {
-            row.iter_mut().for_each(|coeff| {
-                *coeff *= weight;
-            });
+    if shift == F::ONE {
+        return;
+    }
+
+    // Keep chunks large enough to amortize the starting-power exponentiation,
+    // but small enough to avoid allocating one weight per row.
+    const TARGET_CHUNK_VALUES: usize = 1 << 15;
+    let width = mat.width();
+    let chunk_rows = (TARGET_CHUNK_VALUES / width).max(1);
+
+    mat.par_row_chunks_mut(chunk_rows)
+        .enumerate()
+        .for_each(|(chunk_idx, mut rows)| {
+            let mut weight = shift.exp_u64((chunk_idx * chunk_rows) as u64);
+            for row in rows.rows_mut() {
+                scale_slice_in_place_single_core(row, weight);
+                weight *= shift;
+            }
         });
 }
 
@@ -138,17 +154,35 @@ mod tests {
     }
 
     #[test]
-    fn test_coset_shift_cols_identity_shift() {
-        // shift = 1 → all weights = 1 → matrix should remain unchanged
+    fn test_coset_shift_cols_early_return_for_one_shift() {
+        // shift = 1 takes the early-return path and leaves the matrix unchanged.
         let mut mat = RowMajorMatrix::new(
             vec![F::from_u8(7), F::from_u8(8), F::from_u8(9), F::from_u8(10)],
             2,
         );
+        let expected = mat.clone();
 
-        coset_shift_cols(&mut mat, F::from_u8(1));
+        coset_shift_cols(&mut mat, F::ONE);
 
-        let expected = vec![F::from_u8(7), F::from_u8(8), F::from_u8(9), F::from_u8(10)];
+        assert_eq!(mat, expected);
+    }
 
-        assert_eq!(mat.values, expected);
+    #[test]
+    fn test_coset_shift_cols_matches_scalar_reference() {
+        let mut actual = RowMajorMatrix::new((1u8..=24).map(F::from_u8).collect(), 3);
+        let mut expected = actual.clone();
+        let shift = F::from_u8(3);
+
+        let mut weight = F::ONE;
+        for row in expected.rows_mut() {
+            for coeff in row.iter_mut() {
+                *coeff *= weight;
+            }
+            weight *= shift;
+        }
+
+        coset_shift_cols(&mut actual, shift);
+
+        assert_eq!(actual, expected);
     }
 }

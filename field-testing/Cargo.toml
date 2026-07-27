@@ -9,13 +9,16 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# criterion pulls rayon transitively and rayon does not build on wasi.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+criterion.workspace = true
+
 [dependencies]
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-util.workspace = true
 
-criterion.workspace = true
 num-bigint.workspace = true
 proptest.workspace = true
 rand.workspace = true
@@ -25,4 +28,3 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
-

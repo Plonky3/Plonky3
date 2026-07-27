@@ -2,7 +2,7 @@
 //!
 //! # Background
 //!
-//! A sponge [BDPV07] hashes an input using a fixed-width permutation P.
+//! A sponge \[BDPV07\] hashes an input using a fixed-width permutation P.
 //! The b-element state has two regions:
 //!
 //! ```text
@@ -14,11 +14,11 @@
 //!
 //! - **Rate (r)** -- absorbs input, produces output.
 //! - **Capacity (c = b - r)** -- never exposed directly.
-//!   Provides collision resistance up to |F|^{c/2} queries [BDPA08].
+//!   Provides collision resistance up to |F|^{c/2} queries \[BDPA08\].
 //!
 //! This module uses the **overwrite** variant: each input block
 //! overwrites (rather than XORs into) the rate portion.
-//! Security carries over from the standard sponge [BDPA08, AMP10].
+//! Security carries over from the standard sponge \[BDPA08, AMP10\].
 //!
 //! # Variants
 //!
@@ -93,7 +93,10 @@ use core::marker::PhantomData;
 use core::ops::Add;
 
 use itertools::Itertools;
-use p3_field::{Field, PrimeField, PrimeField32, reduce_32};
+use p3_field::{
+    PrimeField, PrimeField32, absorb_radix_bits, max_shifted_absorb_injective_limbs,
+    reduce_packed_shifted,
+};
 
 use crate::Permutation;
 use crate::hasher::CryptographicHasher;
@@ -106,11 +109,20 @@ use crate::permutation::{CryptographicPermutation, Derangement};
 /// holds as long as the stored increment is non-zero.
 ///
 /// ```ignore
-/// Increment(BabyBear::ONE)   // d(x) = x + 1  for field elements
-/// Increment(1u64)            // d(x) = x + 1  for raw integers
+/// Increment::new(BabyBear::ONE)   // d(x) = x + 1  for field elements
+/// Increment::new(1u64)            // d(x) = x + 1  for raw integers
 /// ```
 #[derive(Copy, Clone, Debug)]
-pub struct Increment<T>(pub T);
+pub struct Increment<T>(T);
+
+impl<T: Default + PartialEq> Increment<T> {
+    /// Builds an increment padding function, panicking if `inc` is the
+    /// additive identity (which would make `d(x) = x`, not a derangement).
+    pub fn new(inc: T) -> Self {
+        assert!(inc != T::default());
+        Self(inc)
+    }
+}
 
 impl<T: Clone + Sync + Send + Add<Output = T>> Permutation<T> for Increment<T> {
     fn permute(&self, input: T) -> T {
@@ -151,6 +163,12 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     PaddingFreeSponge<P, WIDTH, RATE, OUT>
 {
     pub const fn new(permutation: P) -> Self {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT > 0);
+            assert!(OUT <= RATE);
+        }
         Self { permutation }
     }
 }
@@ -165,11 +183,6 @@ where
     where
         I: IntoIterator<Item = T>,
     {
-        const {
-            assert!(RATE > 0);
-            assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
-        }
         // Start from the all-zero state.
         let mut state = [T::default(); WIDTH];
         let mut input = input.into_iter();
@@ -251,8 +264,8 @@ where
 /// points). The standard choice is `Increment` which computes d(x) = x + 1:
 ///
 /// ```ignore
-/// Pad10Sponge::new(permutation, Increment(BabyBear::ONE))  // field
-/// Pad10Sponge::new(permutation, Increment(1u64))           // integer
+/// Pad10Sponge::new(permutation, Increment::new(BabyBear::ONE))  // field
+/// Pad10Sponge::new(permutation, Increment::new(1u64))           // integer
 /// ```
 ///
 /// The derangement **must have no fixed points** (d(x) != x for all x).
@@ -267,7 +280,7 @@ where
 ///
 /// Indifferentiable from a random oracle up to |F|^{c/2} queries (c = WIDTH - RATE).
 ///
-/// Implies collision resistance, preimage resistance, etc. [BDPA08] + [LBM25, Section 3.1].
+/// Implies collision resistance, preimage resistance, etc. \[BDPA08\] + \[LBM25, Section 3.1\].
 #[derive(Debug)]
 pub struct Pad10Sponge<T, P, D, const WIDTH: usize, const RATE: usize, const OUT: usize> {
     /// The cryptographic permutation applied after each absorbed block.
@@ -275,8 +288,8 @@ pub struct Pad10Sponge<T, P, D, const WIDTH: usize, const RATE: usize, const OUT
 
     /// A derangement (permutation with no fixed points) used for padding.
     ///
-    /// - Rate-domain:    state[i]    = d(T::default())
-    /// - Capacity-domain: state[RATE] = d(state[RATE])
+    /// - Rate-domain:    `state[i]    = d(T::default())`
+    /// - Capacity-domain: `state[RATE] = d(state[RATE])`
     padding_derangement: D,
 
     _phantom: PhantomData<T>,
@@ -303,6 +316,12 @@ impl<T, P, D, const WIDTH: usize, const RATE: usize, const OUT: usize>
     Pad10Sponge<T, P, D, WIDTH, RATE, OUT>
 {
     pub const fn new(permutation: P, padding_derangement: D) -> Self {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT > 0);
+            assert!(OUT <= RATE);
+        }
         Self {
             permutation,
             padding_derangement,
@@ -398,6 +417,8 @@ pub struct MultiField32PaddingFreeSponge<
     permutation: P,
     /// How many small-field elements fit inside one large-field element.
     num_f_elms: usize,
+    /// Radix used for shifted packing into the large field.
+    radix_bits: u32,
     _phantom: PhantomData<(F, PF)>,
 }
 
@@ -405,18 +426,26 @@ impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField32,
-    PF: Field,
+    PF: PrimeField,
 {
     pub fn new(permutation: P) -> Result<Self, String> {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT > 0);
+            assert!(OUT <= RATE);
+        }
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
         }
 
-        // Compute packing ratio: how many 32-bit field elements pack into one native field element.
-        let num_f_elms = PF::bits() / F::bits();
+        // Use shifted-radix injective packing for robust absorb encoding.
+        let num_f_elms = max_shifted_absorb_injective_limbs::<F, PF>();
+        let radix_bits = absorb_radix_bits::<F>();
         Ok(Self {
             permutation,
             num_f_elms,
+            radix_bits,
             _phantom: PhantomData,
         })
     }
@@ -436,7 +465,8 @@ where
         const {
             assert!(RATE > 0);
             assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
+            assert!(OUT > 0);
+            assert!(OUT <= RATE);
         }
         let mut state = [PF::default(); WIDTH];
 
@@ -451,14 +481,14 @@ where
         //   block_chunk = [f6, f7]  (partial)
         //     chunk 0: [f6, f7] -> pack into PF -> state[0]
         //   -> permute
-        for block_chunk in &input.into_iter().chunks(RATE) {
+        for block_chunk in &input.into_iter().chunks(RATE * self.num_f_elms) {
             for (chunk_id, chunk) in (&block_chunk.chunks(self.num_f_elms))
                 .into_iter()
                 .enumerate()
             {
-                // Pack num_f_elms small-field elements into one
-                // large-field element via mixed-radix reduction.
-                state[chunk_id] = reduce_32(&chunk.collect_vec());
+                // Pack num_f_elms small-field elements into one large-field
+                // element via shifted-radix reduction.
+                state[chunk_id] = reduce_packed_shifted(&chunk.collect_vec(), self.radix_bits);
             }
             state = self.permutation.permute(state);
         }
@@ -502,6 +532,8 @@ pub struct MultiField32Pad10Sponge<
     ///
     /// E.g. 64-bit field / 32-bit field = 2.
     num_f_elms: usize,
+    /// Radix used for shifted packing into the large field.
+    radix_bits: u32,
     _phantom: PhantomData<(F, PF)>,
 }
 
@@ -509,18 +541,26 @@ impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     MultiField32Pad10Sponge<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField32,
-    PF: Field,
+    PF: PrimeField,
 {
     pub fn new(permutation: P) -> Result<Self, String> {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT > 0);
+            assert!(OUT <= RATE);
+        }
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
         }
 
-        // E.g. PF has 64 bits, F has 32 bits -> 2 small elems per large elem.
-        let num_f_elms = PF::bits() / F::bits();
+        // Use shifted-radix injective packing for robust absorb encoding.
+        let num_f_elms = max_shifted_absorb_injective_limbs::<F, PF>();
+        let radix_bits = absorb_radix_bits::<F>();
         Ok(Self {
             permutation,
             num_f_elms,
+            radix_bits,
             _phantom: PhantomData,
         })
     }
@@ -574,8 +614,8 @@ where
                 .into_iter()
                 .enumerate()
             {
-                // Mixed-radix reduction: num_f_elms small -> 1 large.
-                state[chunk_id] = reduce_32(&chunk.collect_vec());
+                // Shifted-radix reduction: num_f_elms small -> 1 large.
+                state[chunk_id] = reduce_packed_shifted(&chunk.collect_vec(), self.radix_bits);
 
                 // Record how far we got (1-indexed).
                 last_chunk_len = chunk_id + 1;
@@ -745,7 +785,7 @@ mod tests {
         let sponge =
             Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
         let a = KoalaBear::new(42);
@@ -765,7 +805,7 @@ mod tests {
         let sponge =
             Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
         let a = KoalaBear::new(1);
@@ -788,7 +828,7 @@ mod tests {
         let sponge =
             Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
         let output = sponge.hash_iter(core::iter::empty::<KoalaBear>());
@@ -826,7 +866,7 @@ mod tests {
         let sponge =
             Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
         let input = [1u32, 2, 3, 4, 5].map(KoalaBear::new);
@@ -852,7 +892,7 @@ mod tests {
         let sponge =
             Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 6, 3, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
         let input = [10u32, 20, 30].map(KoalaBear::new);
@@ -877,7 +917,7 @@ mod tests {
             // This is the exact attack that padding prevents.
             let sponge = Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
             // Hash the base message.
@@ -906,7 +946,7 @@ mod tests {
             // Invariant: hash(x) == hash(x). No hidden mutable state.
             let sponge = Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
             // Hash the input twice with independent iterator clones.
@@ -926,7 +966,7 @@ mod tests {
             // Tests collision resistance across arbitrary length gaps.
             let sponge = Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
             // Hash the full input.

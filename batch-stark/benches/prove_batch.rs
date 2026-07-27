@@ -10,7 +10,6 @@ use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeField64};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
-use p3_lookup::LookupAir;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -55,9 +54,10 @@ impl<F: Field> BaseAir<F> for FibonacciAir {
         }
         Some(m)
     }
+    fn preprocessed_width(&self) -> usize {
+        1
+    }
 }
-
-impl<F: Field> LookupAir<F> for FibonacciAir {}
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -152,7 +152,6 @@ fn bench_prove_batch(c: &mut Criterion) {
                 air,
                 trace,
                 public_values: pis.clone(),
-                lookups: vec![],
             })
             .collect();
 

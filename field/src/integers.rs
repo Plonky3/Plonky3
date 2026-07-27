@@ -378,7 +378,8 @@ macro_rules! quotient_map_large_iint {
                 if int >= 0 {
                     Self::from_int(int as $large_int)
                 } else {
-                    -Self::from_int(-int as $large_int)
+                    // `unsigned_abs` gives the magnitude without overflowing on the minimum value.
+                    -Self::from_int(int.unsigned_abs())
                 }
             }
 

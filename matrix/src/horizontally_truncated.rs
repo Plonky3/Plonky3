@@ -1,5 +1,8 @@
+use alloc::vec::Vec;
 use core::marker::PhantomData;
 use core::ops::Range;
+
+use p3_field::PackedValue;
 
 use crate::Matrix;
 use crate::bitrev::BitReversibleMatrix;
@@ -40,11 +43,15 @@ where
     ///
     /// # Arguments
     /// - `inner`: The full inner matrix to be wrapped.
-    /// - `column_range`: The range of columns to expose (must satisfy `column_range.end <= inner.width()`).
+    /// - `column_range`: The columns to expose, satisfying `start <= end <= inner.width()`.
     ///
-    /// Returns `None` if the column range extends beyond the width of the inner matrix.
+    /// Returns `None` if the range is inverted (`start > end`) or extends beyond the inner width.
     pub fn new_with_range(inner: Inner, column_range: Range<usize>) -> Option<Self> {
-        (column_range.end <= inner.width()).then(|| Self {
+        // Accept the range only when:
+        // - `start <= end`: the range is not inverted.
+        // - `end <= inner.width()`: it stays within the inner matrix.
+        let valid = column_range.start <= column_range.end && column_range.end <= inner.width();
+        valid.then(|| Self {
             inner,
             column_range,
             _phantom: PhantomData,
@@ -124,6 +131,29 @@ where
                 self.column_range.start + end,
             )
         }
+    }
+
+    #[inline]
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        self.inner
+            .vertically_packed_row::<P>(r)
+            .skip(self.column_range.start)
+            .take(self.width())
+    }
+
+    #[inline]
+    fn vertically_packed_row_pair<P>(&self, r: usize, step: usize) -> Vec<P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        self.vertically_packed_row::<P>(r)
+            .chain(self.vertically_packed_row::<P>(r + step))
+            .collect()
     }
 }
 
@@ -418,5 +448,71 @@ mod tests {
 
         // Attempt to select columns 1..5 (extends beyond width).
         assert!(HorizontallyTruncated::new_with_range(inner, 1..5).is_none());
+    }
+
+    #[test]
+    fn test_inverted_column_range_is_rejected() {
+        // 2x3 matrix:
+        // [1 2 3]
+        // [4 5 6]
+        let inner = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 3);
+
+        // An inverted range has `start > end` while `end` is still inside the inner width.
+        // Built explicitly so the literal does not trip the empty-range lint.
+        //
+        //     2..1: start = 2 > end = 1, yet end = 1 <= width = 3
+        //
+        // The constructor must reject it rather than return a view.
+        let inverted = Range { start: 2, end: 1 };
+        assert!(HorizontallyTruncated::new_with_range(inner, inverted).is_none());
+    }
+
+    #[test]
+    fn test_vertically_packed_row_scalar_width_1() {
+        use p3_baby_bear::BabyBear;
+
+        type Packed = BabyBear;
+
+        // Full matrix (4x4):
+        // [  1   2   3   4  ]  <-- Row 0
+        // [  5   6   7   8  ]  <-- Row 1
+        // [  9  10  11  12  ]  <-- Row 2
+        // [ 13  14  15  16  ]  <-- Row 3
+        let inner = RowMajorMatrix::new((1..17).map(BabyBear::new).collect::<Vec<_>>(), 4);
+
+        // Truncate to the first two columns.
+        let truncated = HorizontallyTruncated::new(inner, 2).unwrap();
+
+        let packed = truncated
+            .vertically_packed_row::<Packed>(2)
+            .collect::<Vec<_>>();
+
+        assert_eq!(packed, vec![BabyBear::new(9), BabyBear::new(10)]);
+    }
+
+    #[test]
+    fn test_vertically_packed_row_pair_middle_column_range() {
+        use p3_baby_bear::BabyBear;
+        use p3_field::FieldArray;
+
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let inner = RowMajorMatrix::new((1..17).map(BabyBear::new).collect::<Vec<_>>(), 4);
+
+        // Select the middle two columns (1, 2), so the packed-row skip/take logic is exercised
+        // with a non-zero `column_range.start`.
+        let view = HorizontallyTruncated::new_with_range(inner, 1..3).unwrap();
+
+        let packed = view.vertically_packed_row_pair::<Packed>(0, 2);
+
+        assert_eq!(
+            packed,
+            vec![
+                [BabyBear::new(2), BabyBear::new(6)].into(),
+                [BabyBear::new(3), BabyBear::new(7)].into(),
+                [BabyBear::new(10), BabyBear::new(14)].into(),
+                [BabyBear::new(11), BabyBear::new(15)].into(),
+            ]
+        );
     }
 }

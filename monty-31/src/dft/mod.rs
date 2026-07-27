@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
@@ -30,34 +30,59 @@ fn coset_shift_and_scale_rows<F: Field>(
     shift: F,
     scale: F,
 ) {
+    debug_assert!(out.len().is_multiple_of(out_ncols));
+    debug_assert!(mat.len().is_multiple_of(ncols));
+    debug_assert!(out_ncols >= ncols);
+    debug_assert_eq!(out.len() / out_ncols, mat.len() / ncols);
     let powers = shift.shifted_powers(scale).collect_n(ncols);
+    // Pack the shared per-column weights once; every row reuses the same split.
+    let (powers_packed, powers_suffix) = F::Packing::pack_slice_with_suffix(&powers);
     out.par_chunks_exact_mut(out_ncols)
         .zip(mat.par_chunks_exact(ncols))
         .for_each(|(out_row, in_row)| {
-            izip!(out_row.iter_mut(), in_row, &powers).for_each(|(out, &coeff, &weight)| {
-                *out = coeff * weight;
-            });
+            // Only the first `ncols` entries carry data; the rest stays zero-padded.
+            let (out_packed, out_suffix) =
+                F::Packing::pack_slice_with_suffix_mut(&mut out_row[..ncols]);
+            let (in_packed, in_suffix) = F::Packing::pack_slice_with_suffix(in_row);
+            izip!(out_packed.iter_mut(), in_packed, powers_packed)
+                .for_each(|(out, &coeff, &weight)| *out = coeff * weight);
+            izip!(out_suffix.iter_mut(), in_suffix, powers_suffix)
+                .for_each(|(out, &coeff, &weight)| *out = coeff * weight);
         });
+}
+
+/// Paired twiddle and inverse-twiddle tables, always updated atomically
+/// under a single lock to prevent concurrent observers from seeing a
+/// half-updated state.
+#[derive(Clone, Debug)]
+struct TwiddlePair<F> {
+    twiddles: Arc<[Vec<F>]>,
+    inv_twiddles: Arc<[Vec<F>]>,
+}
+
+impl<F> Default for TwiddlePair<F> {
+    fn default() -> Self {
+        Self {
+            twiddles: Arc::from(Vec::new()),
+            inv_twiddles: Arc::from(Vec::new()),
+        }
+    }
 }
 
 /// Recursive DFT, decimation-in-frequency in the forward direction,
 /// decimation-in-time in the backward (inverse) direction.
 #[derive(Clone, Debug, Default)]
 pub struct RecursiveDft<F> {
-    /// Forward twiddle tables
-    #[allow(clippy::type_complexity)]
-    twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
-    /// Inverse twiddle tables
-    #[allow(clippy::type_complexity)]
-    inv_twiddles: Arc<RwLock<Arc<[Vec<F>]>>>,
+    /// Memoized twiddle factors, paired with their inverses.
+    ///
+    /// Both tables are stored behind a single lock so they are always
+    /// updated atomically.
+    cache: Arc<RwLock<TwiddlePair<F>>>,
 }
 
 impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     pub fn new(n: usize) -> Self {
-        let res = Self {
-            twiddles: Arc::default(),
-            inv_twiddles: Arc::default(),
-        };
+        let res = Self::default();
         res.update_twiddles(n);
         res
     }
@@ -98,10 +123,10 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
         // As we don't save the twiddles for the final layer where
         // the only twiddle is 1, roots_of_unity_table(fft_len)
         // returns a vector of twiddles of length log_2(fft_len) - 1.
-        // let curr_max_fft_len = 2 << self.twiddles.read().len();
         let need = log2_strict_usize(fft_len);
-        let snapshot = self.twiddles.read().clone();
-        let have = snapshot.len() + 1;
+
+        // Fast path: read lock to check if we already have enough.
+        let have = self.cache.read().twiddles.len() + 1;
         if have >= need {
             return;
         }
@@ -121,31 +146,32 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
                     .collect()
             })
             .collect::<Vec<_>>();
-        // Helper closure to extend a table under its lock.
+
+        // Slow path: acquire write lock and update both tables atomically.
         let have_minus_one = have - 1;
-        let extend_table = |lock: &RwLock<Arc<[Vec<_>]>>, missing: &[Vec<_>]| {
-            let mut w = lock.write();
-            let current_len = w.len();
-            // Double-check if an update is still needed after acquiring the write lock.
-            if (current_len + 1) < need {
-                let mut v = w.to_vec();
-                // Append only the portion needed in case another thread did a partial update.
-                let extend_from = current_len.saturating_sub(have_minus_one);
-                v.extend_from_slice(&missing[extend_from..]);
-                *w = v.into();
-            }
-        };
-        // Atomically update each table. This two-step process is the source of the race condition.
-        extend_table(&self.twiddles, &missing_twiddles);
-        extend_table(&self.inv_twiddles, &missing_inv_twiddles);
+        let mut cache = self.cache.write();
+        let current_len = cache.twiddles.len();
+        // Double-check if an update is still needed after acquiring the write lock.
+        if (current_len + 1) < need {
+            let extend_from = current_len.saturating_sub(have_minus_one);
+
+            let mut tw = cache.twiddles.to_vec();
+            tw.extend_from_slice(&missing_twiddles[extend_from..]);
+
+            let mut inv_tw = cache.inv_twiddles.to_vec();
+            inv_tw.extend_from_slice(&missing_inv_twiddles[extend_from..]);
+
+            cache.twiddles = tw.into();
+            cache.inv_twiddles = inv_tw.into();
+        }
     }
 
     fn get_twiddles(&self) -> Arc<[Vec<MontyField31<MP>>]> {
-        self.twiddles.read().clone()
+        self.cache.read().twiddles.clone()
     }
 
     fn get_inv_twiddles(&self) -> Arc<[Vec<MontyField31<MP>>]> {
-        self.inv_twiddles.read().clone()
+        self.cache.read().inv_twiddles.clone()
     }
 }
 

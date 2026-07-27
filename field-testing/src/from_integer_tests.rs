@@ -107,6 +107,14 @@ macro_rules! generate_from_large_i_int_tests {
         assert_eq!(<$field>::from_canonical_checked(-half), None);
         assert_eq!(<$field>::from_canonical_checked(<$int_type>::MAX), None);
         assert_eq!(<$field>::from_canonical_checked(<$int_type>::MIN), None);
+
+        // `from_int` is total, so the minimum value must not overflow the internal negation.
+        // Check it via the ring-homomorphism identity `from_int(MIN) == from_int(MIN + 1) - 1`.
+        let min = <$int_type>::MIN;
+        assert_eq!(
+            <$field>::from_int(min),
+            <$field>::from_int(min + 1) - <$field>::ONE
+        );
         )*
     };
 }

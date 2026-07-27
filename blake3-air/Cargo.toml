@@ -9,6 +9,9 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
 [dependencies]
 p3-air.workspace = true
 p3-field.workspace = true
@@ -18,9 +21,6 @@ p3-maybe-rayon.workspace = true
 itertools.workspace = true
 rand.workspace = true
 tracing.workspace = true
-
-[features]
-parallel = ["p3-maybe-rayon/parallel"]
 
 [lints]
 workspace = true

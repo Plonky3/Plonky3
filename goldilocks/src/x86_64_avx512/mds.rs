@@ -1,26 +1,37 @@
+use p3_field::PrimeCharacteristicRing;
 use p3_mds::MdsPermutation;
-use p3_mds::util::apply_circulant;
+use p3_mds::karatsuba_convolution::{
+    mds_circulant_karatsuba_8, mds_circulant_karatsuba_12, mds_circulant_karatsuba_16,
+};
+use p3_mds::util::{apply_circulant, first_row_to_first_col};
 use p3_symmetric::Permutation;
 
 use crate::x86_64_avx512::packing::PackedGoldilocksAVX512;
 use crate::{
-    MATRIX_CIRC_MDS_8_SML_ROW, MATRIX_CIRC_MDS_12_SML_ROW, MATRIX_CIRC_MDS_16_SML_ROW,
+    Goldilocks, MATRIX_CIRC_MDS_8_SML_ROW, MATRIX_CIRC_MDS_12_SML_ROW, MATRIX_CIRC_MDS_16_SML_ROW,
     MATRIX_CIRC_MDS_24_GOLDILOCKS, MdsMatrixGoldilocks,
 };
-const fn convert_array<const N: usize>(arr: [i64; N]) -> [u64; N] {
-    let mut result: [u64; N] = [0; N];
+
+/// Convert a `[i64; N]` row of small non-negative MDS coefficients into the
+/// matching circulant first column as `[Goldilocks; N]`. Used at compile time
+/// to feed the Karatsuba helpers.
+const fn sml_row_to_goldilocks_col<const N: usize>(row: &[i64; N]) -> [Goldilocks; N] {
+    let col_i64 = first_row_to_first_col(row);
+    let mut col = [Goldilocks::ZERO; N];
     let mut i = 0;
     while i < N {
-        result[i] = arr[i] as u64;
+        col[i] = Goldilocks::new(col_i64[i] as u64);
         i += 1;
     }
-    result
+    col
 }
 
 impl Permutation<[PackedGoldilocksAVX512; 8]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [PackedGoldilocksAVX512; 8]) -> [PackedGoldilocksAVX512; 8] {
-        const MATRIX_CIRC_MDS_8_SML_ROW_U64: [u64; 8] = convert_array(MATRIX_CIRC_MDS_8_SML_ROW);
-        apply_circulant(&MATRIX_CIRC_MDS_8_SML_ROW_U64, &input)
+        const COL: [Goldilocks; 8] = sml_row_to_goldilocks_col(&MATRIX_CIRC_MDS_8_SML_ROW);
+        let mut state = input;
+        mds_circulant_karatsuba_8(&mut state, &COL);
+        state
     }
 }
 
@@ -28,8 +39,10 @@ impl MdsPermutation<PackedGoldilocksAVX512, 8> for MdsMatrixGoldilocks {}
 
 impl Permutation<[PackedGoldilocksAVX512; 12]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [PackedGoldilocksAVX512; 12]) -> [PackedGoldilocksAVX512; 12] {
-        const MATRIX_CIRC_MDS_12_SML_ROW_U64: [u64; 12] = convert_array(MATRIX_CIRC_MDS_12_SML_ROW);
-        apply_circulant(&MATRIX_CIRC_MDS_12_SML_ROW_U64, &input)
+        const COL: [Goldilocks; 12] = sml_row_to_goldilocks_col(&MATRIX_CIRC_MDS_12_SML_ROW);
+        let mut state = input;
+        mds_circulant_karatsuba_12(&mut state, &COL);
+        state
     }
 }
 
@@ -37,8 +50,10 @@ impl MdsPermutation<PackedGoldilocksAVX512, 12> for MdsMatrixGoldilocks {}
 
 impl Permutation<[PackedGoldilocksAVX512; 16]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [PackedGoldilocksAVX512; 16]) -> [PackedGoldilocksAVX512; 16] {
-        const MATRIX_CIRC_MDS_16_SML_ROW_U64: [u64; 16] = convert_array(MATRIX_CIRC_MDS_16_SML_ROW);
-        apply_circulant(&MATRIX_CIRC_MDS_16_SML_ROW_U64, &input)
+        const COL: [Goldilocks; 16] = sml_row_to_goldilocks_col(&MATRIX_CIRC_MDS_16_SML_ROW);
+        let mut state = input;
+        mds_circulant_karatsuba_16(&mut state, &COL);
+        state
     }
 }
 
