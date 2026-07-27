@@ -18,8 +18,8 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::zerocheck::ZerocheckError;
 use p3_multi_stark::{
-    ProverInstance, ProverInstances, VerificationError, VerifierInstance, VerifierInstances,
-    prove, setup, verify,
+    ProverInstance, ProverInstances, VerificationError, VerifierInstance, VerifierInstances, prove,
+    setup, verify,
 };
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
