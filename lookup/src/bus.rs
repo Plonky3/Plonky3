@@ -6,6 +6,8 @@
 //!
 //! The proving system guarantees that all messages on a bus balance globally.
 
+use alloc::vec::Vec;
+
 use crate::builder::InteractionBuilder;
 use crate::count::Count;
 
@@ -81,6 +83,42 @@ impl<'a> LookupBus<'a> {
         // The provided side supplies entries rather than querying them.
         // It stays out of the query height check, so its bound is zero.
         builder.push_interaction(self.name, key, Count::provided(-num_lookups.into()));
+    }
+
+    /// Query the table with one of several mutually-exclusive keys.
+    ///
+    /// - At most one branch fires per row, selected by its flag.
+    /// - The active branch performs one lookup.
+    /// - An all-inactive row performs none.
+    ///
+    /// # Arguments
+    ///
+    /// - `branches` — one `(flag, key)` pair per mutually-exclusive case.
+    ///
+    /// # Soundness
+    ///
+    /// - The flags must be boolean.
+    /// - The flags must sum to at most one on every row.
+    /// - The AIR must enforce both rules.
+    /// - This method only records the flags.
+    pub fn lookup_key_exclusive<AB>(
+        &self,
+        builder: &mut AB,
+        branches: impl IntoIterator<Item = (AB::Expr, Vec<AB::Expr>)>,
+    ) where
+        AB: InteractionBuilder,
+    {
+        // Each branch is a unit query gated by its flag.
+        //
+        // - The count is `+1`.
+        // - So the numerator picks up just the flag.
+        // - The weight is `1`, matching one lookup per active row.
+        builder.push_exclusive_interaction(
+            self.name,
+            branches
+                .into_iter()
+                .map(|(flag, key)| (flag, Count::from(1), key)),
+        );
     }
 }
 
