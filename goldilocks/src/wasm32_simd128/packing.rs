@@ -199,13 +199,15 @@ impl_packed_field_div!(PackedGoldilocksWasmSimd128);
 impl_sum_prod_base_field!(PackedGoldilocksWasmSimd128, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksWasmSimd128 {
-    // Benchmarked on wasm32+simd128 under wasmtime across slice lengths 8, 16, 33, 64, 256:
-    // chunk=4 is consistently the fastest or near-fastest choice at every length (8-15%
-    // faster than chunk=2 throughout), while chunk=8/16 are consistently *worse* than
-    // chunk=2 for most lengths, and chunk=32/64 only win when the length happens to be a
-    // multiple of them (e.g. 256) — otherwise the leftover falls into the unvectorized
-    // per-element remainder path in `chunked_linear_combination`, which dominates for
-    // realistic (non-power-of-two) constraint counts.
+    // Benchmarked across slice lengths 8, 16, 33, 64, 256 under both wasmtime/Cranelift and
+    // Node/V8, since the two engines disagree sharply on the best chunk: Cranelift likes
+    // chunk=32/64 for aligned lengths (falling back to the unvectorized per-element
+    // remainder path in `chunked_linear_combination` otherwise), while V8 prefers chunk=16
+    // and regresses badly (2.2-2.3x slower than optimal) at chunk=32/64 regardless of
+    // alignment. chunk=4 is the min-max choice: worst-case 1.38x slower than the
+    // best-for-that-engine-and-length chunk across all 10 (engine, length) combinations
+    // tested, versus 1.57-1.59x for chunk=8/16 and 2.2x+ for chunk=32/64 — always
+    // reasonable, never catastrophic, on either engine.
     const BATCHED_LC_CHUNK: usize = 4;
 
     #[inline]
