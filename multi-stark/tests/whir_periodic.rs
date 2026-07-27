@@ -1,9 +1,15 @@
 //! End-to-end multilinear AIR SNARK with periodic columns, over WHIR.
 //!
 //! Periodic columns are public parameters derived from the AIR, never committed.
-//! The prover folds them into the zerocheck alongside the committed main trace.
+//!
+//! The prover folds them into the zerocheck alongside the committed columns.
 //! The verifier recomputes their multilinear extensions in closed form at the bound point.
-//! Only the main trace lives in a WHIR commitment.
+//!
+//! ```text
+//!     main trace         : WHIR commitment, opened at the bound point
+//!     preprocessed trace : WHIR commitment made once at setup
+//!     periodic columns   : no commitment at all
+//! ```
 
 use std::borrow::Cow;
 
@@ -45,11 +51,15 @@ type MyDft = Radix2DFTSmallBatch<F>;
 type L = PrefixProver<F, EF>;
 type TestPcs = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, L>;
 
-/// First-round folding factor; also the per-table padding floor.
+/// First-round folding factor.
+/// It is also the per-table padding floor.
 const FOLDING: usize = 2;
 
 /// Main trace column count.
 const MAIN_WIDTH: usize = 1;
+
+/// Preprocessed trace column count.
+const PREPROCESSED_WIDTH: usize = 1;
 
 /// Period of the first periodic column.
 const PERIOD_A: usize = 2;
@@ -57,9 +67,14 @@ const PERIOD_A: usize = 2;
 const PERIOD_B: usize = 4;
 
 /// A WHIR-backed multilinear AIR configuration over BabyBear.
+///
+/// The main and preprocessed traces stack different column counts.
+/// Their stacked polynomials therefore have different arities, one scheme each.
 struct WhirConfigForTest {
-    /// The WHIR commitment scheme, fixed to one stacked-table arity.
+    /// Scheme sized for the main stacked trace.
     pcs: TestPcs,
+    /// Scheme sized for the preprocessed stacked trace.
+    preprocessed_pcs: TestPcs,
 }
 
 impl MultiStarkConfig for WhirConfigForTest {
@@ -72,12 +87,17 @@ impl MultiStarkConfig for WhirConfigForTest {
         &self.pcs
     }
 
+    fn preprocessed_pcs(&self) -> &TestPcs {
+        &self.preprocessed_pcs
+    }
+
     fn min_num_variables(&self) -> usize {
         FOLDING
     }
 
     fn build_witness(&self, tables: Vec<Table<F>>) -> Witness<F> {
-        // The main trace commits as a single stacked table; periodic columns are never committed.
+        // Each committed trace stacks as one polynomial.
+        // Periodic columns never reach this point at all.
         L::new_witness(tables, FOLDING)
     }
 
@@ -111,8 +131,8 @@ fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFac
     rates
 }
 
-/// Build a configuration sized for a trace shape.
-fn config_for(log_height: usize, width: usize) -> WhirConfigForTest {
+/// Build a WHIR scheme sized for a stacked polynomial of a given column count.
+fn pcs_for(log_height: usize, width: usize) -> TestPcs {
     let stacked_num_variables = log_height + log2_ceil_usize(width);
     let folding_factor = FoldingFactor::Constant(FOLDING);
 
@@ -126,8 +146,17 @@ fn config_for(log_height: usize, width: usize) -> WhirConfigForTest {
         starting_log_inv_rate: 1,
     };
     let whir_config = WhirConfig::new(stacked_num_variables, params).unwrap();
+    TestPcs::new(whir_config, MyDft::default(), mmcs)
+}
+
+/// Build a configuration sized for a trace shape, one scheme per committed trace.
+///
+/// A test with no preprocessed trace still carries a preprocessed scheme.
+/// It stays unused: setup commits nothing for such an AIR.
+fn config_for(log_height: usize, width: usize) -> WhirConfigForTest {
     WhirConfigForTest {
-        pcs: TestPcs::new(whir_config, MyDft::default(), mmcs),
+        pcs: pcs_for(log_height, width),
+        preprocessed_pcs: pcs_for(log_height, PREPROCESSED_WIDTH),
     }
 }
 
@@ -140,10 +169,12 @@ fn challenger(config: &WhirConfigForTest) -> MyChallenger {
     challenger
 }
 
-/// The two periodic period vectors, of different lengths.
+/// The two period vectors, of different lengths.
 ///
-/// Column A repeats every two rows.
-/// Column B repeats every four rows.
+/// ```text
+///     column 0: [10, 20]        repeats every 2 rows
+///     column 1: [1, 2, 3, 4]    repeats every 4 rows
+/// ```
 fn periodic_columns() -> Vec<Vec<F>> {
     vec![
         vec![F::from_u64(10), F::from_u64(20)],
@@ -158,9 +189,10 @@ fn periodic_columns() -> Vec<Vec<F>> {
 
 /// Width-1 main AIR tied to two current-row periodic columns of different periods.
 ///
-/// Every row asserts `main[0] == periodic[0] + periodic[1]`.
+/// Every row asserts that the main column holds the sum of the two periodic values.
+///
 /// The AIR reads no next row.
-/// So it declares an empty main next-row set.
+/// It therefore declares an empty main next-row set.
 struct PeriodicAir;
 
 impl BaseAir<F> for PeriodicAir {
@@ -189,7 +221,9 @@ impl<AB: AirBuilder<F = F>> Air<AB> for PeriodicAir {
     }
 }
 
-/// A satisfying trace: `main[i] = periodic_A[i mod 2] + periodic_B[i mod 4]`.
+/// A satisfying trace for the sum AIR.
+///
+///     main[i] = periodic_0[i mod 2] + periodic_1[i mod 4]
 fn periodic_trace(n: usize) -> RowMajorMatrix<F> {
     let cols = periodic_columns();
     let values = (0..n)
@@ -200,13 +234,13 @@ fn periodic_trace(n: usize) -> RowMajorMatrix<F> {
 
 #[test]
 fn prove_verify_periodic_roundtrips() {
-    // A satisfying trace with periodic columns must prove and verify end to end through WHIR.
+    // Invariant: a satisfying trace with periodic columns round-trips through WHIR.
     let n = 256;
     let trace = periodic_trace(n);
     let config = config_for(log2_strict_usize(n), MAIN_WIDTH);
 
-    // Periodic columns are not committed.
-    // So setup yields empty keys.
+    // This AIR has no preprocessed trace, and periodic columns are never committed.
+    // Setup therefore commits nothing and yields empty keys.
     let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger(&config));
 
     let proof = prove(
@@ -220,7 +254,8 @@ fn prove_verify_periodic_roundtrips() {
         0,
         &mut challenger(&config),
     );
-    // No preprocessed trace and no periodic commitment: the proof carries no preprocessed opening.
+    // Nothing was committed at setup.
+    // There is therefore no preprocessed opening to carry.
     assert!(proof.preprocessed_opening.is_none());
 
     verify(
@@ -240,10 +275,12 @@ fn prove_verify_periodic_roundtrips() {
 
 #[test]
 fn verify_rejects_violated_periodic_constraint() {
-    // Fixture state: a satisfying trace obeys `main == periodic[0] + periodic[1]` on every row.
+    // Mutation: break row 0 so the main column no longer holds the periodic sum.
+    //
+    //     row 0 main : sum + 1
+    //                  → the batched constraint is nonzero on that row
     let n = 256;
     let mut trace = periodic_trace(n);
-    // Mutation: break the first row so the closed-form periodic sum no longer matches.
     trace.values[0] += F::ONE;
     let config = config_for(log2_strict_usize(n), MAIN_WIDTH);
 
@@ -261,7 +298,7 @@ fn verify_rejects_violated_periodic_constraint() {
         &mut challenger(&config),
     );
 
-    // Expected rejection: the zerocheck closes on a nonzero constraint value.
+    // The claimed zero sum cannot close against a nonzero constraint value.
     let err = verify(
         &config,
         VerifierInstances::new(vec![VerifierInstance::new(
@@ -270,6 +307,168 @@ fn verify_rejects_violated_periodic_constraint() {
             log2_strict_usize(n),
             &[],
         )]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerificationError::Zerocheck(ZerocheckError::FinalSumMismatch)
+        ),
+        "expected zerocheck final-sum mismatch, got {err:?}"
+    );
+}
+
+/// The fixed preprocessed column for a height-`n` trace.
+///
+///     row i holds 3 + 2 * i
+fn fixed_column(n: usize) -> Vec<F> {
+    (0..n).map(|i| F::from_u64(3 + 2 * i as u64)).collect()
+}
+
+/// AIR carrying all three column groups at once.
+///
+/// Every row asserts:
+///
+/// ```text
+///     main[0] = preprocessed[0] + periodic[0] * periodic[1]
+/// ```
+///
+/// The periodic factors multiply, lifting the constraint to degree two.
+///
+/// Nothing is read on the next row.
+/// No group therefore carries a successor claim.
+struct PeriodicPreprocessedAir {
+    /// Trace height the preprocessed column is generated to match.
+    height: usize,
+}
+
+impl BaseAir<F> for PeriodicPreprocessedAir {
+    fn width(&self) -> usize {
+        MAIN_WIDTH
+    }
+    fn preprocessed_width(&self) -> usize {
+        PREPROCESSED_WIDTH
+    }
+    fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
+        Some(RowMajorMatrix::new(
+            fixed_column(self.height),
+            PREPROCESSED_WIDTH,
+        ))
+    }
+    fn num_periodic_columns(&self) -> usize {
+        periodic_columns().len()
+    }
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+        Cow::Owned(periodic_columns())
+    }
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+    fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB: AirBuilder<F = F>> Air<AB> for PeriodicPreprocessedAir {
+    fn eval(&self, builder: &mut AB) {
+        // One value from each of the three column groups, all on the current row.
+        let main = builder.main().current_slice()[0];
+        let preprocessed = builder.preprocessed().current_slice()[0];
+        let periodic = builder.periodic_values();
+
+        // The periodic factors multiply, lifting the constraint to degree two.
+        let product: AB::Expr = periodic[0].into() * periodic[1].into();
+        builder.assert_eq(main, preprocessed.into() + product);
+    }
+}
+
+/// The satisfying main trace for the three-group AIR.
+///
+///     main[i] = fixed[i] + periodic_0[i mod 2] * periodic_1[i mod 4]
+fn periodic_preprocessed_trace(n: usize) -> RowMajorMatrix<F> {
+    let cols = periodic_columns();
+    let fixed = fixed_column(n);
+    let values = (0..n)
+        .map(|i| fixed[i] + cols[0][i % PERIOD_A] * cols[1][i % PERIOD_B])
+        .collect();
+    RowMajorMatrix::new(values, MAIN_WIDTH)
+}
+
+#[test]
+fn prove_verify_periodic_with_preprocessed_roundtrips() {
+    // Invariant: the three column groups coexist end to end.
+    //
+    //     main         : committed, opened at the bound point
+    //     preprocessed : committed at setup, opened at the same point
+    //     periodic     : uncommitted, recomputed in closed form
+    let n = 256;
+    let log_height = log2_strict_usize(n);
+    let air = PeriodicPreprocessedAir { height: n };
+    let trace = periodic_preprocessed_trace(n);
+    let config = config_for(log_height, MAIN_WIDTH);
+
+    // Setup commits the preprocessed column and nothing else.
+    let (pk, vk) = setup(&config, &[&air], &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(&config),
+    );
+
+    // The preprocessed commitment is opened at the bound point, hence one opening here.
+    assert!(proof.preprocessed_opening.is_some());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("honest three-group proof must verify");
+}
+
+#[test]
+fn verify_rejects_violated_periodic_preprocessed_constraint() {
+    // Mutation: break row 0 of the main trace.
+    //
+    //     row 0 main : fixed + product + 1
+    //                  → the degree-two constraint is nonzero on that row
+    let n = 256;
+    let log_height = log2_strict_usize(n);
+    let air = PeriodicPreprocessedAir { height: n };
+    let mut trace = periodic_preprocessed_trace(n);
+    trace.values[0] += F::ONE;
+    let config = config_for(log_height, MAIN_WIDTH);
+
+    let (pk, vk) = setup(&config, &[&air], &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(&config),
+    );
+
+    // The claimed zero sum cannot close against a nonzero constraint value.
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
         &proof,
         0,
         &mut challenger(&config),

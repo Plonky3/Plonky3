@@ -19,7 +19,7 @@ use p3_sumcheck::layout::Table;
 
 use crate::folder::MultilinearFolder;
 use crate::packed_ext::PackedExt;
-use crate::selectors::BoundaryEvals;
+use crate::selectors::{BoundaryEvals, periodic_num_variables};
 
 /// One batch of AIRs that share a single trace height.
 ///
@@ -89,12 +89,18 @@ impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
 ///
 /// Stores already-transposed trace tables.
 ///
-/// Each AIR contributes three column groups, folded identically and laid out per AIR as
-/// main columns, then preprocessed columns, then periodic columns.
-/// Main and preprocessed columns are committed and opened; periodic columns are not.
-/// A periodic column is materialized to the full trace height (`col[i mod period]`).
-/// It is a genuine multilinear polynomial, so it folds exactly like a committed column.
-/// The verifier recomputes each periodic column in closed form at the bound point.
+/// Each AIR contributes three column groups, folded identically and laid out in this order:
+///
+/// ```text
+///     main         : committed, opened at the bound point
+///     preprocessed : committed, opened at the bound point
+///     periodic     : uncommitted, materialized to the full trace height
+/// ```
+///
+/// A materialized periodic column is a genuine multilinear polynomial.
+/// It therefore folds exactly like a committed column.
+///
+/// The verifier recomputes each periodic column in closed form instead of opening it.
 pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     /// AIR whose alpha-batched constraint is being evaluated.
     airs: Vec<&'air A>,
@@ -104,10 +110,10 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     alpha: EF,
     /// Optional preprocessed tables, one per AIR.
     preprocessed: Vec<Option<&'data Table<F>>>,
-    /// Periodic tables, one per AIR, each materialized to full trace height.
+    /// Periodic tables, one per AIR, each materialized to the full trace height.
     ///
     /// `None` when the AIR declares no periodic columns.
-    /// Owned, since periodic columns are derived from the AIR rather than borrowed committed data.
+    /// Owned rather than borrowed: the values come from the AIR, not from committed data.
     periodic: Vec<Option<Table<F>>>,
     /// Main trace tables, one row per original trace column.
     tables: Vec<&'data Table<F>>,
@@ -668,8 +674,12 @@ where
             .collect::<Vec<_>>();
 
         // Materialize each AIR's periodic columns to the full trace height.
-        // A period-`p` column repeats every `p` rows, so row `i` reads `col[i mod p]`.
-        // The full-height column is a genuine multilinear polynomial, so it folds like any column.
+        //
+        //     period vector  : [v_0, v_1]
+        //     trace height 8 : [v_0, v_1, v_0, v_1, v_0, v_1, v_0, v_1]
+        //
+        // The full-height column is a genuine multilinear polynomial.
+        // It therefore folds through the sumcheck exactly like a committed column.
         let trace_height = 1 << num_vars;
         let periodic = stage
             .airs
@@ -679,15 +689,18 @@ where
                 if cols.is_empty() {
                     return None;
                 }
+
+                // Reject a declaration the trace cannot hold, matching the verifier's own check.
+                let num_variables =
+                    periodic_num_variables(air.num_periodic_columns(), &cols, num_vars)
+                        .expect("periodic column declaration must fit the trace height");
+
                 let mut values = Vec::with_capacity(cols.len() * trace_height);
-                for col in cols.iter() {
-                    let period = col.len();
-                    assert!(
-                        period.is_power_of_two() && trace_height.is_multiple_of(period),
-                        "periodic column period must be a power of two dividing the trace height"
-                    );
-                    // Row i reads value i mod period, cycling through the p values.
-                    values.extend((0..trace_height).map(|i| col[i % period]));
+                for (col, j) in cols.iter().zip(num_variables) {
+                    // Copy the whole period vector once per cycle it spans.
+                    for _ in 0..trace_height >> j {
+                        values.extend_from_slice(col);
+                    }
                 }
                 Some(Table::new(RowMajorMatrix::new(values, trace_height)))
             })

@@ -5,8 +5,9 @@ use core::ops::{AddAssign, Sub};
 
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::poly::PolyView;
 use p3_util::log2_strict_usize;
+use thiserror::Error;
 
 /// Boundary selectors evaluated at a sumcheck challenge.
 #[derive(Copy, Clone, Debug)]
@@ -323,46 +324,187 @@ where
     }
 }
 
-/// Evaluate every periodic column's multilinear extension at the bound point, in closed form.
+/// Reasons a declared periodic column cannot be laid out on a trace.
 ///
-/// A periodic column of period `p = 2^j` repeats every `p` rows.
-/// On the `k`-variable hypercube it therefore depends only on the low `j` bits of the row index.
+/// Each variant is a statement about the declaration and the trace height alone.
+/// No witness data is involved.
+#[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
+pub enum PeriodicError {
+    /// The advertised periodic column count disagrees with the period vectors supplied.
+    #[error("periodic column count mismatch: declared {declared}, supplied {supplied}")]
+    CountMismatch {
+        /// Count the AIR advertises.
+        declared: usize,
+        /// Number of period vectors the AIR supplies.
+        supplied: usize,
+    },
+    /// A period vector is empty, naming no values to repeat.
+    #[error("periodic column {column} is empty")]
+    Empty {
+        /// Index of the column in declaration order.
+        column: usize,
+    },
+    /// A period is not a power of two.
+    ///
+    /// Only such a period covers a whole block of row bits.
+    #[error("periodic column {column} has period {period}, which is not a power of two")]
+    PeriodNotPowerOfTwo {
+        /// Index of the column in declaration order.
+        column: usize,
+        /// Period supplied for it.
+        period: usize,
+    },
+    /// A period exceeds the trace height.
+    ///
+    /// The column then never completes one cycle inside the trace.
+    #[error("periodic column {column} has period {period}, above the trace height 2^{log_height}")]
+    PeriodAboveHeight {
+        /// Index of the column in declaration order.
+        column: usize,
+        /// Period supplied for it.
+        period: usize,
+        /// Base-two logarithm of the trace height.
+        log_height: usize,
+    },
+}
+
+/// Row-bit count each periodic column depends on, once the declaration is known to fit the trace.
 ///
-/// The layout is big-endian.
-/// So coordinate `0` is the most significant bit.
-/// Those low bits are therefore the last `j` coordinates of the point:
+/// A period-`p` column repeats every `p` rows.
+/// It therefore depends only on the low `log2(p)` bits of the row index.
+///
+/// A declaration fits a trace of `2^log_height` rows exactly when every period has the form:
+///
 /// ```text
-///     periodic_col(r_0, ..., r_{k-1}) = MLE_v(r_{k-j}, ..., r_{k-1})
+///     p = 2^j     with     0 <= j <= log_height
 /// ```
-/// where `v` is the length-`p` period vector.
 ///
-/// This matches the prover, which folds the full-height column `col[i mod p]` to the same point.
-/// The verifier computes it unaided: periodic columns are public parameters, never committed.
+/// Prover and verifier both go through this.
+/// The two sides therefore agree on which declarations are legal.
 ///
 /// # Arguments
 ///
-/// - `periodic_columns`: one period vector per declared periodic column, in declaration order.
+/// - `declared`: periodic column count the AIR advertises.
+/// - `columns`: one period vector per column, in declaration order.
+/// - `log_height`: base-two logarithm of the trace height.
+///
+/// # Returns
+///
+/// The exponent `j` of each column's period, in declaration order.
+///
+/// # Errors
+///
+/// - The advertised count disagrees with the number of period vectors.
+/// - A period vector is empty.
+/// - A period is not a power of two.
+/// - A period exceeds the trace height.
+pub(super) fn periodic_num_variables<F>(
+    declared: usize,
+    columns: &[Vec<F>],
+    log_height: usize,
+) -> Result<Vec<usize>, PeriodicError> {
+    // The opening layout steps over the advertised count to reach the next AIR's columns.
+    // A disagreement there misplaces every column laid out after this AIR.
+    if declared != columns.len() {
+        return Err(PeriodicError::CountMismatch {
+            declared,
+            supplied: columns.len(),
+        });
+    }
+
+    columns
+        .iter()
+        .enumerate()
+        .map(|(column, values)| {
+            let period = values.len();
+
+            // An empty vector names no values to repeat.
+            if period == 0 {
+                return Err(PeriodicError::Empty { column });
+            }
+
+            // A period that is not a power of two spans no whole block of row bits.
+            if !period.is_power_of_two() {
+                return Err(PeriodicError::PeriodNotPowerOfTwo { column, period });
+            }
+
+            // A period above the trace height would reach past the point's coordinates.
+            let j = log2_strict_usize(period);
+            if j > log_height {
+                return Err(PeriodicError::PeriodAboveHeight {
+                    column,
+                    period,
+                    log_height,
+                });
+            }
+
+            Ok(j)
+        })
+        .collect()
+}
+
+/// Evaluate every periodic column's multilinear extension at the bound point, in closed form.
+///
+/// A period-`p` column depends only on the low `j = log2(p)` bits of the row index.
+/// The hypercube layout is big-endian.
+/// Coordinate `0` is therefore the most significant bit.
+/// Those low bits are therefore the last `j` coordinates of the point:
+///
+/// ```text
+///     periodic_col(r_0, ..., r_{k-1}) = MLE_v(r_{k-j}, ..., r_{k-1})
+/// ```
+///
+/// Here `v` is the length-`p` period vector.
+///
+/// The prover folds the full-height column `col[i mod p]` to the same point.
+/// The leading coordinates' equality factors sum to one, collapsing that fold onto `v`:
+///
+/// ```text
+///     sum_{high} eq(r_0..r_{k-j-1}, high) = 1
+/// ```
+///
+/// Both sides therefore land on the same value.
+///
+/// The verifier computes this unaided.
+/// Periodic columns are public parameters of the AIR and are never committed.
+///
+/// # Arguments
+///
+/// - `declared`: periodic column count the AIR advertises.
+/// - `columns`: one period vector per column, in declaration order.
 /// - `point`: the bound sumcheck point, one coordinate per trace variable.
 ///
-/// # Panics
+/// # Returns
 ///
-/// - Panics if a period is not a power of two.
-/// - Panics if a period exceeds the number of point coordinates.
-pub(super) fn periodic_evals_at<F, EF>(periodic_columns: &[Vec<F>], point: &[EF]) -> Vec<EF>
+/// One evaluation per periodic column, in declaration order.
+///
+/// # Errors
+///
+/// Returns an error when the declaration does not fit a trace of `2^point.len()` rows.
+pub(super) fn periodic_evals_at<F, EF>(
+    declared: usize,
+    columns: &[Vec<F>],
+    point: &[EF],
+) -> Result<Vec<EF>, PeriodicError>
 where
     F: Field,
     EF: ExtensionField<F>,
 {
+    // One point coordinate per trace variable.
+    // The point length is therefore the height exponent.
     let k = point.len();
-    periodic_columns
+
+    // Reject a declaration that does not fit before indexing the point with it.
+    let num_variables = periodic_num_variables(declared, columns, k)?;
+
+    Ok(columns
         .iter()
-        .map(|col| {
-            // Number of low-order row bits the column depends on.
-            let j = log2_strict_usize(col.len());
-            // The last j coordinates carry those low-order bits, in order.
-            Poly::new(col.clone()).eval_base(&Point::new(point[k - j..].to_vec()))
+        .zip(num_variables)
+        .map(|(values, j)| {
+            // The last j coordinates carry the low-order row bits, in order.
+            PolyView::new(values).eval_base(&Point::new(point[k - j..].to_vec()))
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -528,5 +670,104 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn periodic_evals_match_the_materialized_column() {
+        // Invariant: the closed form on the low coordinates equals the full column's own extension.
+        //
+        // Fixture state: a period-4 vector on a 3-variable trace.
+        //
+        //     period vector : [5, 6, 7, 8]
+        //     materialized  : [5, 6, 7, 8, 5, 6, 7, 8]
+        //                     → depends on coordinates 1 and 2, never on coordinate 0
+        let column = [5u64, 6, 7, 8].map(F::from_u64).to_vec();
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x2C), 3);
+
+        let closed =
+            periodic_evals_at::<F, EF>(1, core::slice::from_ref(&column), point.as_slice())
+                .expect("a period-4 vector fits a height-8 trace");
+
+        // Materialize the column and evaluate it directly at the same point.
+        let materialized = Poly::new((0..8).map(|i| column[i % 4]).collect::<Vec<_>>());
+        assert_eq!(closed, vec![materialized.eval_base(&point)]);
+    }
+
+    #[test]
+    fn periodic_evals_reject_a_count_mismatch() {
+        // Mutation: advertise three columns while supplying one.
+        //
+        //     advertised : 3 -> the opening layout steps over 3 columns
+        //     supplied   : 1 -> every column laid out after this AIR would shift
+        let column = vec![F::ONE, F::TWO];
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(1), 2);
+
+        assert_eq!(
+            periodic_evals_at::<F, EF>(3, &[column], point.as_slice()),
+            Err(PeriodicError::CountMismatch {
+                declared: 3,
+                supplied: 1
+            })
+        );
+    }
+
+    #[test]
+    fn periodic_evals_reject_an_empty_period_vector() {
+        // Mutation: supply a period vector with no values to repeat.
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(2), 2);
+
+        assert_eq!(
+            periodic_evals_at::<F, EF>(1, &[Vec::new()], point.as_slice()),
+            Err(PeriodicError::Empty { column: 0 })
+        );
+    }
+
+    #[test]
+    fn periodic_evals_reject_a_non_power_of_two_period() {
+        // Mutation: use period 3, which covers no whole block of row bits.
+        let column = [1u64, 2, 3].map(F::from_u64).to_vec();
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(3), 3);
+
+        assert_eq!(
+            periodic_evals_at::<F, EF>(1, &[column], point.as_slice()),
+            Err(PeriodicError::PeriodNotPowerOfTwo {
+                column: 0,
+                period: 3
+            })
+        );
+    }
+
+    #[test]
+    fn periodic_evals_reject_a_period_above_the_trace_height() {
+        // Mutation: declare a period-8 column on a height-4 trace.
+        //
+        //     point coordinates : 2
+        //     coordinates needed: 3
+        //                         → the low bits reach past the point, hence the rejection
+        let column = [1u64, 2, 3, 4, 5, 6, 7, 8].map(F::from_u64).to_vec();
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(4), 2);
+
+        assert_eq!(
+            periodic_evals_at::<F, EF>(1, &[column], point.as_slice()),
+            Err(PeriodicError::PeriodAboveHeight {
+                column: 0,
+                period: 8,
+                log_height: 2
+            })
+        );
+    }
+
+    #[test]
+    fn periodic_evals_handle_a_constant_column() {
+        // Invariant: period 1 is a constant column and needs no coordinates at all.
+        //
+        //     period vector : [9]
+        //     materialized  : [9, 9, 9, 9]
+        //                     → value 9 at every point
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x3D), 2);
+        let closed = periodic_evals_at::<F, EF>(1, &[vec![F::from_u64(9)]], point.as_slice())
+            .expect("a constant column fits any trace height");
+
+        assert_eq!(closed, vec![EF::from(F::from_u64(9))]);
     }
 }
