@@ -1,22 +1,24 @@
-//! Merkle path pruning: compact multi-opening proofs via shared-ancestor deduplication.
+//! Merkle path pruning: minimal multi-opening proofs via a level-by-level frontier.
 //!
 //! # Problem
 //!
-//! When a STARK prover opens k leaf indices in a Merkle tree of height h,
-//! each opening produces h levels of sibling digests for verification — a total of k * h digest-levels.
+//! Opening `k` leaves in a height-`h` tree costs `k * h` sibling digests unpruned.
+//! Many are redundant: an ancestor of another queried leaf is recomputable.
+//! Such a sibling need not be sent.
 //!
-//! Many of these are **redundant**: leaves that are close in the tree share
-//! ancestors, and their authentication paths overlap above the Lowest Common Ancestor (LCA).
+//! # Solution — optimal frontier
 //!
-//! # Solution
+//! Walk the tree bottom-up over the set of queried nodes (the "frontier").
+//! At each level the frontier is grouped by parent.
+//! For a group, a child digest is sent only when no query lies under it:
 //!
-//! This module eliminates redundant sibling digests by exploiting tree structure:
+//! - child covers a queried leaf  -> recomputable, send nothing.
+//! - child covers no queried leaf -> boundary digest, must be sent.
 //!
-//! 1. Sort all opened paths by leaf index.
-//! 2. For each consecutive pair, compute their LCA level using the per-level
-//!    arity (stored as log_2 shifts).
-//! 3. Each path only emits siblings **below** its LCA with the previous path.
-//! 4. During restoration, siblings above the LCA are copied from the previous path.
+//! This is the strictly minimal set: every remaining sibling is forced by the tree.
+//!
+//! The queried indices come from the verifier's transcript, not the proof.
+//! So the proof is just one flat list of boundary digests in frontier order.
 //!
 //! # Visual example (binary tree)
 //!
@@ -34,15 +36,13 @@
 //!                    opened leaves
 //! ```
 //!
-//! **Without pruning** (3 paths x 3 levels = 9 sibling digests):
-//! - Leaf 1: siblings `[0, D, B]`       (3 digests)
-//! - Leaf 2: siblings `[3, C, B]`       (3 digests)
-//! - Leaf 5: siblings `[4, F, A]`       (3 digests)
+//! Frontier walk (sent digests only):
 //!
-//! **With pruning** (only 7 sibling digests):
-//! - Leaf 1: siblings `[0, D, B]`       (3 digests — first path, no sharing)
-//! - Leaf 2: siblings `[3, C]`          (2 digests — LCA at level 2, share level 2)
-//! - Leaf 5: siblings `[4, F, A]`       (3 digests — LCA at root, no sharing)
+//! - Level 0: nodes {1,2,5}  -> send siblings 0, 3, 4       (their pairs are unqueried)
+//! - Level 1: nodes {C,D,E}  -> C,D pair into A for free; send F   (E's pair)
+//! - Level 2: nodes {A,B}    -> pair into root for free; send nothing
+//!
+//! Total: 4 digests (0, 3, 4, F) versus 9 unpruned.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -53,11 +53,7 @@ use crate::PrunedProofError;
 
 /// A full (unpruned) Merkle authentication path for a single leaf.
 ///
-/// All sibling digests are stored in a **single contiguous allocation**.
-///
-/// The number of siblings at each tree level depends on the compression
-/// arity at that level: 2^shift - 1 digests per level.
-/// Level boundaries can be recovered from the per-level shift schedule.
+/// All sibling digests live in one contiguous allocation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(serialize = "[D; DIGEST_ELEMS]: Serialize"))]
 #[serde(bound(deserialize = "[D; DIGEST_ELEMS]: serde::de::DeserializeOwned"))]
@@ -65,335 +61,256 @@ pub(crate) struct MerkleAuthPath<D, const DIGEST_ELEMS: usize> {
     /// Index of this leaf in the tree (0-based).
     pub leaf_index: usize,
 
-    /// All sibling digests concatenated: level 0 first, then level 1, etc.
+    /// Sibling digests concatenated level by level, level 0 first.
     ///
-    /// The count at each level is 2^shift - 1, where shift is the log_2
-    /// of the compression arity at that level.
+    /// A level of arity `a` contributes `a - 1` entries.
+    /// They are the group's children with this path's own child removed.
     pub siblings: Vec<[D; DIGEST_ELEMS]>,
 }
 
-/// Compact representation of multiple Merkle authentication paths with
-/// redundant sibling digests removed.
+/// Compact multi-opening proof: the minimal set of boundary sibling digests.
 ///
-/// Paths are sorted by leaf index and deduplicated.
+/// Leaf indices, tree depth, and per-level arity are not stored.
+/// The verifier supplies the queried indices from its own transcript.
+/// It rederives the tree geometry from the committed matrix dimensions.
 ///
-/// Each path stores only the siblings below its LCA with the previous path;
-/// the rest are reconstructed during restoration by copying from that previous path.
-///
-/// # Wire format
-///
-/// - Tree depth and per-level arity are not stored.
-/// - The verifier rederives both from the committed matrix dimensions.
-/// - Doing so shrinks the proof and removes a DoS surface where a malicious
-///   schedule could dictate per-level sibling counts.
+/// Storing nothing but digests buys two guarantees:
+/// - No leaf index in the proof means none a forger could substitute.
+/// - No depth in the proof means none that could inflate the digest count.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(serialize = "[D; DIGEST_ELEMS]: Serialize"))]
 #[serde(bound(deserialize = "[D; DIGEST_ELEMS]: serde::de::DeserializeOwned"))]
 pub struct PrunedMerklePaths<D, const DIGEST_ELEMS: usize> {
-    /// Permutation mapping original input order to sorted/deduplicated index.
-    ///
-    /// Entry i holds the index into the sorted path array for the i-th
-    /// original query.
-    pub original_order: Vec<u32>,
-
-    /// Pruned authentication paths, sorted by leaf index.
-    pub paths: Vec<PrunedPath<D, DIGEST_ELEMS>>,
+    /// Boundary sibling digests in frontier order:
+    /// - level 0 first, then level 1, and so on,
+    /// - within a level, groups by ascending parent index,
+    /// - within a group, missing child positions ascending.
+    pub sibling_hashes: Vec<[D; DIGEST_ELEMS]>,
 }
 
-/// A single pruned Merkle authentication path.
+/// Number of siblings a full path holds across the given number of levels.
 ///
-/// Contains only the siblings below this path's LCA with the previous sorted path.
-///
-/// Siblings at and above the LCA are shared with the neighbor and omitted.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(serialize = "[D; DIGEST_ELEMS]: Serialize"))]
-#[serde(bound(deserialize = "[D; DIGEST_ELEMS]: serde::de::DeserializeOwned"))]
-pub struct PrunedPath<D, const DIGEST_ELEMS: usize> {
-    /// Leaf index in the original tree.
-    pub leaf_index: usize,
-    /// Flat sibling digests for the first few levels only (below LCA).
-    pub siblings: Vec<[D; DIGEST_ELEMS]>,
-}
-
-/// Total number of sibling digests for the first few levels.
+/// Each level contributes `arity - 1` siblings (one child is the path's own).
 #[inline]
-fn total_siblings_for_levels(num_levels: usize, shift_schedule: &[u32]) -> usize {
-    // Sum 2^shift - 1 for each of the first few levels.
-    //
-    //   Example: shift_schedule = [1, 2, 1], num_levels = 2
-    //     level 0: 2^1 - 1 = 1
-    //     level 1: 2^2 - 1 = 3
+fn total_siblings_for_levels(num_levels: usize, arity_schedule: &[usize]) -> usize {
+    //   Example: arity_schedule = [2, 4, 2], num_levels = 2
+    //     level 0: 2 - 1 = 1
+    //     level 1: 4 - 1 = 3
     //     → total = 4
-    shift_schedule[..num_levels]
+    arity_schedule[..num_levels].iter().map(|&a| a - 1).sum()
+}
+
+/// One node of the level-by-level frontier during a walk.
+#[derive(Clone, Copy)]
+struct FrontierNode {
+    /// Node index at the current level.
+    index: usize,
+
+    /// Smallest queried-leaf slot beneath this node.
+    ///
+    /// Every leaf under a shared ancestor carries identical siblings above it.
+    /// So this one slot's buffer stands in for the whole subtree.
+    lead: usize,
+}
+
+/// Runs the callback once per boundary child of the frontier, in wire order.
+///
+/// The frontier starts at the sorted-unique leaf nodes.
+/// It folds up one level per step, grouping nodes that share a parent.
+/// A child covered by a frontier node is recomputable and skipped.
+/// Every other child is a boundary and fires one callback.
+///
+/// The callback receives, in order:
+/// - the current level, indexing the arity schedule,
+/// - the slot whose buffer owns this group,
+/// - the lead node's position within the group,
+/// - the boundary child's position within the group.
+///
+/// Pruning and restoration share this walk, so they agree on wire order.
+fn walk_frontier(
+    sorted_unique: &[usize],
+    arity_schedule: &[usize],
+    mut visit: impl FnMut(usize, usize, usize, usize),
+) {
+    if sorted_unique.is_empty() {
+        return;
+    }
+
+    // Seed the frontier with one node per queried leaf, its own slot as lead.
+    let mut nodes: Vec<FrontierNode> = sorted_unique
         .iter()
-        .map(|&s| (1usize << s) - 1)
-        .sum()
-}
+        .enumerate()
+        .map(|(slot, &index)| FrontierNode { index, lead: slot })
+        .collect();
+    let mut parents: Vec<FrontierNode> = Vec::with_capacity(nodes.len());
 
-/// O(1) LCA for purely binary trees.
-///
-/// XOR the two leaf indices and count the bit-width of the result.
-/// The highest differing bit position is exactly the tree level where
-/// the two paths diverge.
-///
-/// For identical leaves, returns 1 (they share the parent at level 1).
-///
-/// # Returns
-///
-/// The smallest level at which both leaves share the same ancestor,
-/// clamped to the total number of levels.
-#[inline]
-fn first_shared_level_binary(a: usize, b: usize, num_levels: usize) -> usize {
-    let xor = a ^ b;
-    if xor == 0 {
-        // Same leaf — they trivially share the same parent.
-        return 1;
-    }
-    // Bit-width of the XOR = position of the highest differing bit + 1.
-    let level = (usize::BITS - xor.leading_zeros()) as usize;
-    level.min(num_levels)
-}
+    for (level, &arity) in arity_schedule.iter().enumerate() {
+        parents.clear();
 
-/// Generic LCA via per-level shift loop.
-///
-/// Right-shifts both indices by the arity at each level.
-/// The first level where they become equal is the LCA.
-///
-/// For binary trees the caller should use the O(1) fast path instead;
-/// that check must be hoisted outside hot loops.
-#[inline]
-fn first_shared_level_generic(a: usize, b: usize, shift_schedule: &[u32]) -> usize {
-    let mut a_idx = a;
-    let mut b_idx = b;
-    for (level, &shift) in shift_schedule.iter().enumerate() {
-        // Divide both indices by the arity at this level (via shift).
-        a_idx >>= shift;
-        b_idx >>= shift;
-        // If both land in the same group, they share this ancestor.
-        if a_idx == b_idx {
-            return level + 1;
+        let mut i = 0;
+        while i < nodes.len() {
+            let group = nodes[i].index / arity;
+            let group_start = group * arity;
+            // The first node in a group is its lead (smallest index → smallest slot).
+            let lead = nodes[i].lead;
+            let lead_pos = nodes[i].index - group_start;
+
+            // Walk child positions 0..arity in ascending order.
+            // A position matched by a frontier node is recomputable, so skip it.
+            // Every other position is a boundary child, reported here.
+            let mut member = i;
+            for k in 0..arity {
+                if member < nodes.len() && nodes[member].index == group_start + k {
+                    member += 1;
+                } else {
+                    visit(level, lead, lead_pos, k);
+                }
+            }
+
+            parents.push(FrontierNode { index: group, lead });
+            i = member;
         }
+
+        core::mem::swap(&mut nodes, &mut parents);
     }
-    // No convergence within the schedule — share only the root.
-    shift_schedule.len()
 }
 
-/// Eliminates redundant sibling levels shared between adjacent sorted paths.
+/// Offset of a child inside a lead path's flat sibling chunk for one level.
 ///
-/// # Algorithm
+/// The chunk lists the group's children except the lead's own position, ascending.
+/// So a child sits at its position, shifted down by one once past the skipped slot.
+#[inline]
+const fn sibling_offset(k: usize, lead_pos: usize) -> usize {
+    if k < lead_pos { k } else { k - 1 }
+}
+
+/// Emits the minimal set of boundary sibling digests for a batch of paths.
 ///
-/// 1. Sort a lightweight index array by leaf index (avoids moving large structs).
-/// 2. Deduplicate consecutive entries with the same leaf index.
-/// 3. For each path, compute the first shared level with the previous path
-///    and emit only the siblings below that level.
+/// - Sorts the queried leaves and drops duplicates.
+/// - Folds the frontier up the tree, level by level.
+/// - Reads each boundary digest from a group member's full path.
 ///
-/// # Performance
-///
-/// - Binary trees: O(1) LCA via bitwise XOR (checked once, hoisted).
-/// - N-ary trees: O(h) LCA via shift loop per consecutive pair.
-/// - Sorting: lightweight u32 index array, not the full path structs.
+/// The output order matches what restoration consumes.
 pub(crate) fn prune_paths<D, const DIGEST_ELEMS: usize>(
-    num_levels: usize,
-    shift_schedule: &[u32],
+    arity_schedule: &[usize],
     paths: &[MerkleAuthPath<D, DIGEST_ELEMS>],
 ) -> PrunedMerklePaths<D, DIGEST_ELEMS>
 where
-    D: Clone + PartialEq,
+    D: Clone,
 {
-    debug_assert_eq!(shift_schedule.len(), num_levels);
-
-    // Empty input → empty output.
-    if paths.is_empty() {
-        return PrunedMerklePaths {
-            original_order: vec![],
-            paths: vec![],
-        };
-    }
-
-    // Phase 1: Sort by leaf index.
-    //
-    // We sort a lightweight u32 index array instead of moving the full
-    // auth-path structs (which can be hundreds of bytes each).
-    // This keeps the sort entirely within L1 cache.
+    // Sort a lightweight index array by leaf index, so duplicates sit adjacent.
+    // Sorting indices instead of the heavy path structs keeps the pass cache-friendly.
     let mut order: Vec<u32> = (0..paths.len() as u32).collect();
     order.sort_unstable_by_key(|&i| paths[i as usize].leaf_index);
+    // Collapse repeated leaves to one entry each.
+    order.dedup_by_key(|&mut i| paths[i as usize].leaf_index);
 
-    // Phase 2: Deduplicate consecutive entries with the same leaf index.
-    //
-    // When the same leaf is queried multiple times, we store it once
-    // in the pruned output and record which original queries map to it.
-    //
-    //   Example: input queries [5, 1, 3, 1]
-    //     sorted order:    [1, 1, 3, 5]
-    //     after dedup:     [1, 3, 5]       (3 unique paths)
-    //     original_order:  [2, 0, 1, 0]    (query 0→slot 2, query 1→slot 0, ...)
-    let mut original_order = vec![0u32; paths.len()];
-    let mut deduped_indices: Vec<u32> = Vec::with_capacity(paths.len());
+    let sorted_unique: Vec<usize> = order
+        .iter()
+        .map(|&i| paths[i as usize].leaf_index)
+        .collect();
 
-    for &sorted_idx in &order {
-        let leaf = paths[sorted_idx as usize].leaf_index;
-        // Start a new deduped entry only when the leaf differs from the last one.
-        if deduped_indices
-            .last()
-            .is_none_or(|&prev| paths[prev as usize].leaf_index != leaf)
-        {
-            deduped_indices.push(sorted_idx);
-        }
-        // Record which deduped slot this original query maps to.
-        original_order[sorted_idx as usize] = (deduped_indices.len() - 1) as u32;
-    }
+    // Prefix sums of per-level chunk sizes: the level-l chunk of a path starts here.
+    let chunk_base: Vec<usize> = (0..=arity_schedule.len())
+        .map(|l| total_siblings_for_levels(l, arity_schedule))
+        .collect();
 
-    // Phase 3: Build pruned paths.
-    //
-    // For each unique leaf (in sorted order), compute how many levels
-    // of siblings to keep. The first path keeps everything. Subsequent
-    // paths keep only the levels below their LCA with the predecessor —
-    // the rest are identical and will be copied during restoration.
-    //
-    //   Example: height-3 binary tree, sorted leaves [0, 1, 4]
-    //     path 0 (leaf 0): first → keep all 3 levels
-    //     path 1 (leaf 1): LCA with leaf 0 at level 1 → keep 1 level
-    //     path 2 (leaf 4): LCA with leaf 1 at level 3 → keep 3 levels
-    let n = deduped_indices.len();
-    let mut pruned_paths = Vec::with_capacity(n);
+    // Each boundary child's digest is copied from the lead path's stored siblings.
+    // The lead's chunk for a level lists its group's other children.
+    // The boundary child at a given position lands at that chunk's matching offset.
+    let mut sibling_hashes = Vec::new();
+    walk_frontier(
+        &sorted_unique,
+        arity_schedule,
+        |level, lead, lead_pos, k| {
+            let src = &paths[order[lead] as usize].siblings;
+            sibling_hashes.push(src[chunk_base[level] + sibling_offset(k, lead_pos)].clone());
+        },
+    );
 
-    // Hoist the binary-tree check: O(h) once, not O(h) per pair.
-    // When all shifts are 1, the O(1) XOR fast path applies.
-    let is_purely_binary = shift_schedule.iter().all(|&s| s == 1);
-
-    for j in 0..n {
-        let path = &paths[deduped_indices[j] as usize];
-
-        // First path: keep all levels (no predecessor to share with).
-        // Later paths: keep only levels below the LCA with the predecessor.
-        let keep_levels = if j == 0 {
-            num_levels
-        } else {
-            let prev_leaf = paths[deduped_indices[j - 1] as usize].leaf_index;
-            if is_purely_binary {
-                // O(1): XOR the two leaf indices, count bit-width.
-                first_shared_level_binary(prev_leaf, path.leaf_index, num_levels)
-            } else {
-                // O(h): right-shift both indices level by level until they match.
-                first_shared_level_generic(prev_leaf, path.leaf_index, shift_schedule)
-            }
-        };
-
-        // Clamp to the actual number of levels (safety guard).
-        let keep = keep_levels.min(num_levels);
-        // Convert level count → flat-buffer element count.
-        //
-        //   Example: keep = 2, shift_schedule = [1, 2, 1]
-        //     level 0: 1 sibling, level 1: 3 siblings → 4 elements total
-        let sibling_count = total_siblings_for_levels(keep, shift_schedule);
-
-        pruned_paths.push(PrunedPath {
-            leaf_index: path.leaf_index,
-            // Slice the flat buffer up to the computed boundary.
-            siblings: path.siblings[..sibling_count].to_vec(),
-        });
-    }
-
-    PrunedMerklePaths {
-        original_order,
-        paths: pruned_paths,
-    }
+    PrunedMerklePaths { sibling_hashes }
 }
 
-/// Restores full Merkle authentication paths from a pruned representation.
+/// Rebuilds full authentication paths from the pruned frontier.
 ///
-/// Processes paths in sorted order.
-/// Each path takes its own stored siblings (below LCA) and copies the
-/// remaining siblings (at and above LCA) from the previous restored path.
+/// - Indices come from the verifier, never the proof, so the walk is bound to them.
+/// - Grouping is replayed by index arithmetic alone, with no hashing.
+/// - Each boundary digest is scattered into its group lead's full sibling buffer.
+///
+/// The amortized verifier reads only these boundary positions.
+/// It recomputes every other child itself, so untouched positions stay at default.
 ///
 /// # Trust model
 ///
-/// - The full-sibling count is supplied by the caller, never read from the proof.
-/// - A malicious prover cannot use it to inflate per-path allocations.
+/// - The full sibling count and the arity schedule come from verifier-known data.
+/// - A digest count differing from the frontier is rejected, whether short or long.
 ///
 /// # Returns
 ///
-/// - Full authentication paths in the **original input order** on success.
-/// - A [`PrunedProofError`] naming the specific malformation on failure.
+/// - Full authentication paths in sorted-unique order on success.
+/// - An error describing the count mismatch otherwise.
 pub(crate) fn restore_paths<D, const DIGEST_ELEMS: usize>(
     pruned: &PrunedMerklePaths<D, DIGEST_ELEMS>,
+    sorted_unique: &[usize],
+    arity_schedule: &[usize],
     full_sibling_count: usize,
 ) -> Result<Vec<MerkleAuthPath<D, DIGEST_ELEMS>>, PrunedProofError>
 where
     D: Clone + Default,
 {
-    let n = pruned.paths.len();
+    let supplied = &pruned.sibling_hashes;
 
-    // Zero paths with zero queries is valid (empty proof).
-    // Zero paths with nonzero queries is malformed.
-    if n == 0 {
-        return if pruned.original_order.is_empty() {
+    // Empty query set: the proof must carry no digests.
+    if sorted_unique.is_empty() {
+        return if supplied.is_empty() {
             Ok(vec![])
         } else {
-            Err(PrunedProofError::PathQueryCountMismatch {
-                num_paths: 0,
-                num_queries: pruned.original_order.len(),
+            Err(PrunedProofError::SiblingCountMismatch {
+                expected: 0,
+                got: supplied.len(),
             })
         };
     }
 
-    let mut restored: Vec<MerkleAuthPath<D, DIGEST_ELEMS>> = Vec::with_capacity(n);
+    let chunk_base: Vec<usize> = (0..=arity_schedule.len())
+        .map(|l| total_siblings_for_levels(l, arity_schedule))
+        .collect();
 
-    for i in 0..n {
-        let pruned_path = &pruned.paths[i];
-        let kept_siblings = pruned_path.siblings.len();
+    // One full-size, default-filled buffer per unique path.
+    // The walk overwrites only the lead-path boundary slots it touches.
+    // Building the zero digest by hand avoids requiring the digest type to be `Copy`.
+    let default_digest: [D; DIGEST_ELEMS] = core::array::from_fn(|_| D::default());
+    let mut restored: Vec<MerkleAuthPath<D, DIGEST_ELEMS>> = sorted_unique
+        .iter()
+        .map(|&leaf_index| MerkleAuthPath {
+            leaf_index,
+            siblings: vec![default_digest.clone(); full_sibling_count],
+        })
+        .collect();
 
-        // Allocate the full-size buffer once (no resizing).
-        let mut siblings = Vec::with_capacity(full_sibling_count);
-
-        // Lower portion: the unique siblings this path stored (below LCA).
-        // These differ from the predecessor and were kept during pruning.
-        siblings.extend_from_slice(&pruned_path.siblings);
-
-        // Upper portion: shared siblings copied from the previous path.
-        // Both paths traverse the same nodes above the LCA, so their
-        // siblings there are identical — just memcpy the tail.
-        //
-        //   Example: full = 5 siblings, this path stored 2
-        //     this path's buffer:  [s0, s1, ?, ?, ?]
-        //     previous path:       [_, _, s2, s3, s4]   (shared above LCA)
-        //     after copy:          [s0, s1, s2, s3, s4]
-        if let Some(prev) = restored.last()
-            && kept_siblings < full_sibling_count
-        {
-            siblings.extend_from_slice(&prev.siblings[kept_siblings..]);
+    // Scatter supplied digests into boundary slots, following the prover's wire order.
+    // Running out of supplied digests part-way means the proof is malformed.
+    let mut cursor = 0;
+    let mut overrun = false;
+    walk_frontier(sorted_unique, arity_schedule, |level, lead, lead_pos, k| {
+        if let Some(d) = supplied.get(cursor) {
+            restored[lead].siblings[chunk_base[level] + sibling_offset(k, lead_pos)] = d.clone();
+        } else {
+            overrun = true;
         }
+        cursor += 1;
+    });
 
-        // Sanity check: restored path must be exactly the right size.
-        // If not, the pruned proof is malformed.
-        if siblings.len() != full_sibling_count {
-            return Err(PrunedProofError::SiblingCountMismatch {
-                expected: full_sibling_count,
-                got: siblings.len(),
-            });
-        }
-
-        restored.push(MerkleAuthPath {
-            leaf_index: pruned_path.leaf_index,
-            siblings,
+    // `cursor` is the exact count the frontier requires.
+    // Reject a proof that supplied a different number of digests.
+    if overrun || cursor != supplied.len() {
+        return Err(PrunedProofError::SiblingCountMismatch {
+            expected: cursor,
+            got: supplied.len(),
         });
     }
 
-    // Reorder from sorted/deduped order back to the caller's original query
-    // order. Each entry in the order mapping points to the deduped path slot.
-    pruned
-        .original_order
-        .iter()
-        .map(|&idx| {
-            restored
-                .get(idx as usize)
-                .cloned()
-                .ok_or(PrunedProofError::OriginalOrderOutOfRange {
-                    slot: idx as usize,
-                    num_paths: n,
-                })
-        })
-        .collect()
+    Ok(restored)
 }
 
 // Tests
@@ -407,63 +324,61 @@ mod tests {
 
     use super::*;
 
-    /// Total number of individual sibling digests across all pruned paths.
+    // Digest width used throughout the unit tests.
+    const DE: usize = 2;
+
+    /// Deterministic N-ary compression of `arity` child digests into a parent.
     ///
-    /// Compare against the unpruned total (paths * full sibling count)
-    /// to measure the compression ratio.
-    fn pruned_sibling_count<D, const DIGEST_ELEMS: usize>(
-        pruned: &PrunedMerklePaths<D, DIGEST_ELEMS>,
-    ) -> usize {
-        pruned.paths.iter().map(|p| p.siblings.len()).sum()
-    }
-
-    fn binary_shifts(h: usize) -> Vec<u32> {
-        // All levels binary (arity 2 → shift 1).
-        vec![1; h]
-    }
-
-    fn quad_shifts(h: usize) -> Vec<u32> {
-        // All levels 4-ary (arity 4 → shift 2).
-        vec![2; h]
-    }
-
-    fn mock_path<const DE: usize>(leaf_index: usize, h: usize) -> MerkleAuthPath<u32, DE> {
-        // Deterministic siblings: value encodes (leaf_index, level) for easy debugging.
-        MerkleAuthPath {
-            leaf_index,
-            siblings: (0..h)
-                .map(|lvl| [(leaf_index * 100 + lvl) as u32; DE])
-                .collect(),
-        }
-    }
-
-    fn realistic_binary_path<const DE: usize>(
-        leaf_index: usize,
-        h: usize,
-    ) -> MerkleAuthPath<u32, DE> {
-        // Binary tree mock where siblings above the LCA are structurally
-        // identical for leaves sharing that ancestor.
-        // Sibling at level l = the "other child" index at that level.
-        MerkleAuthPath {
-            leaf_index,
-            siblings: (0..h)
-                .map(|lvl| [((leaf_index >> lvl) ^ 1) as u32; DE])
-                .collect(),
-        }
-    }
-
-    fn realistic_quad_path<const DE: usize>(
-        leaf_index: usize,
-        num_levels: usize,
-    ) -> MerkleAuthPath<u32, DE> {
-        // 4-ary tree mock: 3 siblings per level, shared above LCA.
-        // Group index at each level determines the sibling values.
-        let mut siblings = Vec::new();
-        for lvl in 0..num_levels {
-            let group_idx = leaf_index / 4usize.pow(lvl as u32 + 1);
-            for s in 0..3u32 {
-                siblings.push([(group_idx * 100 + lvl * 10 + s as usize) as u32; DE]);
+    /// Order-sensitive and position-weighted, like a real compressor.
+    /// A wrong sibling order or a swapped child changes the output.
+    fn combine(children: &[[u32; DE]]) -> [u32; DE] {
+        let mut out = [0u32; DE];
+        for (i, c) in children.iter().enumerate() {
+            for e in 0..DE {
+                out[e] = out[e]
+                    .wrapping_mul(31)
+                    .wrapping_add(c[e])
+                    .wrapping_add(i as u32);
             }
+        }
+        out
+    }
+
+    /// Build a full N-ary tree over `leaves` and return the digests per level.
+    ///
+    /// Level 0 is the leaves.
+    /// Each subsequent level compresses groups of one arity into their parent.
+    /// The leaf count must equal the product of the arity schedule.
+    fn build_tree(leaves: &[[u32; DE]], arity_schedule: &[usize]) -> Vec<Vec<[u32; DE]>> {
+        let mut levels = vec![leaves.to_vec()];
+        for &arity in arity_schedule {
+            let prev = levels.last().unwrap();
+            let cur: Vec<[u32; DE]> = prev.chunks(arity).map(combine).collect();
+            levels.push(cur);
+        }
+        levels
+    }
+
+    /// A leaf's full authentication path: every sibling at every level, flat.
+    ///
+    /// Matches the layout the prover produces.
+    /// Level 0 first; within a level the group's other children ascending, own position skipped.
+    fn full_path(
+        levels: &[Vec<[u32; DE]>],
+        leaf_index: usize,
+        arity_schedule: &[usize],
+    ) -> MerkleAuthPath<u32, DE> {
+        let mut siblings = Vec::new();
+        let mut idx = leaf_index;
+        for (lvl, &arity) in arity_schedule.iter().enumerate() {
+            let group_start = (idx / arity) * arity;
+            let pos = idx % arity;
+            for k in 0..arity {
+                if k != pos {
+                    siblings.push(levels[lvl][group_start + k]);
+                }
+            }
+            idx /= arity;
         }
         MerkleAuthPath {
             leaf_index,
@@ -471,577 +386,315 @@ mod tests {
         }
     }
 
-    // LCA tests
+    /// Recompute the root from restored paths, mirroring the amortized verifier.
+    ///
+    /// Member positions come from the running group digests.
+    /// Boundary positions are read from the lead path's restored siblings.
+    /// This is the reference the real verifier walk must match (no cap, no injection).
+    fn root_from_restored(
+        restored: &[MerkleAuthPath<u32, DE>],
+        sorted_unique: &[usize],
+        leaf_digests: &[[u32; DE]],
+        arity_schedule: &[usize],
+    ) -> [u32; DE] {
+        let mut digests = leaf_digests.to_vec();
+        let mut node_idx = sorted_unique.to_vec();
+        let mut lead: Vec<usize> = (0..sorted_unique.len()).collect();
+        let mut cursor = vec![0usize; sorted_unique.len()];
 
-    #[test]
-    fn test_lca_binary_fast_path() {
-        // Binary tree, height 3 (8 leaves).
-        //
-        //          [root]            Level 3
-        //        /        \
-        //     [A]          [B]       Level 2
-        //    /   \        /   \
-        //  [C]   [D]    [E]   [F]    Level 1
-        //  / \   / \    / \   / \
-        // 0   1 2   3  4   5 6   7   Level 0
+        for &arity in arity_schedule {
+            let mut nd = Vec::new();
+            let mut ni = Vec::new();
+            let mut nl = Vec::new();
+            let mut nc = Vec::new();
+            let mut i = 0;
+            while i < digests.len() {
+                let parent = node_idx[i] / arity;
+                let group_start = parent * arity;
+                let mut j = i + 1;
+                while j < digests.len() && node_idx[j] / arity == parent {
+                    j += 1;
+                }
+                let lead_path = lead[i];
+                let lead_pos = node_idx[i] - group_start;
+                let lead_sib = &restored[lead_path].siblings;
+                let cursor_start = cursor[i];
 
-        // Adjacent siblings share at level 1.
-        assert_eq!(first_shared_level_binary(0, 1, 3), 1);
-        assert_eq!(first_shared_level_binary(4, 5, 3), 1);
+                let mut inputs = vec![[0u32; DE]; arity];
+                let mut filled = vec![false; arity];
+                for k in i..j {
+                    let pos = node_idx[k] - group_start;
+                    inputs[pos] = digests[k];
+                    filled[pos] = true;
+                }
+                let mut sib = 0;
+                for k in 0..arity {
+                    if k == lead_pos {
+                        continue;
+                    }
+                    if !filled[k] {
+                        inputs[k] = lead_sib[cursor_start + sib];
+                    }
+                    sib += 1;
+                }
 
-        // Leaves in the same quadrant share at level 2.
-        assert_eq!(first_shared_level_binary(0, 3, 3), 2);
-        assert_eq!(first_shared_level_binary(4, 6, 3), 2);
-
-        // Leaves in opposite halves share only at the root.
-        assert_eq!(first_shared_level_binary(0, 7, 3), 3);
-
-        // Same leaf: trivially share at level 1.
-        assert_eq!(first_shared_level_binary(5, 5, 3), 1);
-    }
-
-    #[test]
-    fn test_lca_generic_binary() {
-        // Generic loop path must produce identical results for binary trees.
-        let s = binary_shifts(3);
-        assert_eq!(first_shared_level_generic(0, 1, &s), 1);
-        assert_eq!(first_shared_level_generic(0, 3, &s), 2);
-        assert_eq!(first_shared_level_generic(0, 7, &s), 3);
-        assert_eq!(first_shared_level_generic(4, 5, &s), 1);
-    }
-
-    #[test]
-    fn test_lca_4ary() {
-        // 4-ary tree, height 3 (64 leaves).
-        // Leaves 0-3 share the same parent → LCA at level 1.
-        let s = quad_shifts(3);
-        assert_eq!(first_shared_level_generic(0, 1, &s), 1);
-        assert_eq!(first_shared_level_generic(0, 3, &s), 1);
-
-        // Leaves 0 and 4 are in different level-0 groups, share at level 2.
-        assert_eq!(first_shared_level_generic(0, 4, &s), 2);
-        assert_eq!(first_shared_level_generic(0, 15, &s), 2);
-
-        // Leaves in different top quadrants share at level 3 (root).
-        assert_eq!(first_shared_level_generic(0, 16, &s), 3);
-        assert_eq!(first_shared_level_generic(0, 63, &s), 3);
-    }
-
-    #[test]
-    fn test_lca_mixed_schedule() {
-        // Mixed arity: 4-ary, binary, 4-ary → 4 * 2 * 4 = 32 leaves.
-        let s = vec![2u32, 1, 2];
-
-        // Leaves 0 and 3 are in the same 4-group at level 0.
-        assert_eq!(first_shared_level_generic(0, 3, &s), 1);
-
-        // Leaves 0 and 4 span different 4-groups but the same binary parent.
-        assert_eq!(first_shared_level_generic(0, 4, &s), 2);
-
-        // Leaves 0 and 8 span different top-level groups.
-        assert_eq!(first_shared_level_generic(0, 8, &s), 3);
-    }
-
-    #[test]
-    fn test_lca_symmetry() {
-        // LCA must be symmetric: swapping the two leaves must not change the result.
-        let s = vec![2u32, 1, 2];
-        for a in 0..32 {
-            for b in 0..32 {
-                assert_eq!(
-                    first_shared_level_generic(a, b, &s),
-                    first_shared_level_generic(b, a, &s)
-                );
+                nd.push(combine(&inputs));
+                ni.push(parent);
+                nl.push(lead_path);
+                nc.push(cursor_start + (arity - 1));
+                i = j;
             }
+            digests = nd;
+            node_idx = ni;
+            lead = nl;
+            cursor = nc;
+        }
+        digests[0]
+    }
+
+    /// Distinct pseudo-random leaf digests for a tree of `n` leaves.
+    fn leaf_digests(n: usize) -> Vec<[u32; DE]> {
+        (0..n)
+            .map(|i| [(i as u32) * 2 + 1, (i as u32) * 7 + 3])
+            .collect()
+    }
+
+    /// End-to-end oracle: prune then restore must reconstruct the true root.
+    ///
+    /// The queries may be unsorted and contain duplicates.
+    /// The prover feeds full paths in that order.
+    /// The verifier restores from the sorted-unique set.
+    fn assert_roundtrip(arity_schedule: &[usize], query_indices: &[usize]) {
+        let n_leaves: usize = arity_schedule.iter().product();
+        let leaves = leaf_digests(n_leaves);
+        let tree = build_tree(&leaves, arity_schedule);
+        let root = *tree.last().unwrap().first().unwrap();
+
+        // Prover: full paths in caller order.
+        let paths: Vec<_> = query_indices
+            .iter()
+            .map(|&i| full_path(&tree, i, arity_schedule))
+            .collect();
+        let pruned = prune_paths(arity_schedule, &paths);
+
+        // Verifier: sorted-unique query set drives restoration.
+        let mut sorted_unique = query_indices.to_vec();
+        sorted_unique.sort_unstable();
+        sorted_unique.dedup();
+        let full = total_siblings_for_levels(arity_schedule.len(), arity_schedule);
+        let restored = restore_paths(&pruned, &sorted_unique, arity_schedule, full).unwrap();
+
+        // The reconstructed root must equal the true root.
+        let leaf_ds: Vec<[u32; DE]> = sorted_unique.iter().map(|&i| leaves[i]).collect();
+        let got = root_from_restored(&restored, &sorted_unique, &leaf_ds, arity_schedule);
+        assert_eq!(
+            got, root,
+            "root mismatch for schedule {arity_schedule:?}, queries {query_indices:?}"
+        );
+    }
+
+    /// Pruned digest count for a query set (sorted-unique, arity schedule).
+    fn pruned_count(arity_schedule: &[usize], sorted_unique: &[usize]) -> usize {
+        let mut c = 0;
+        walk_frontier(sorted_unique, arity_schedule, |_, _, _, _| c += 1);
+        c
+    }
+
+    // Frontier count (minimality) tests
+
+    #[test]
+    fn count_full_binary_tree_is_zero() {
+        // Every leaf queried → every sibling is recomputable → nothing sent.
+        assert_eq!(pruned_count(&[2, 2, 2], &(0..8).collect::<Vec<_>>()), 0);
+    }
+
+    #[test]
+    fn count_scattered_binary_matches_doc_example() {
+        // Leaves {1,2,5} in a height-3 binary tree: 0,3,4 at level 0, F at level 1.
+        assert_eq!(pruned_count(&[2, 2, 2], &[1, 2, 5]), 4);
+    }
+
+    #[test]
+    fn count_single_leaf_is_full_path() {
+        // One query shares nothing → one sibling per level.
+        assert_eq!(pruned_count(&[2, 2, 2], &[5]), 3);
+        assert_eq!(pruned_count(&[4, 4], &[9]), 6);
+    }
+
+    #[test]
+    fn count_full_4ary_tree_is_zero() {
+        assert_eq!(pruned_count(&[4, 4], &(0..16).collect::<Vec<_>>()), 0);
+    }
+
+    #[test]
+    fn count_never_exceeds_unpruned() {
+        // Pruning must never send more than the naive per-path total.
+        let schedule = [2, 2, 2, 2, 2];
+        let full = total_siblings_for_levels(schedule.len(), &schedule);
+        for subset_end in 1..=32usize {
+            let indices: Vec<usize> = (0..subset_end).map(|i| (i * 13) % 32).collect();
+            let mut su = indices.clone();
+            su.sort_unstable();
+            su.dedup();
+            assert!(pruned_count(&schedule, &su) <= su.len() * full);
         }
     }
 
-    #[test]
-    fn test_binary_fast_path_matches_generic() {
-        // The O(1) binary fast path must produce identical results to the
-        // generic O(h) loop for all pairs in a binary tree.
-        let s = binary_shifts(5);
-        for a in 0..32 {
-            for b in 0..32 {
-                assert_eq!(
-                    first_shared_level_generic(a, b, &s),
-                    first_shared_level_binary(a, b, 5),
-                    "mismatch for a={a}, b={b}"
-                );
-            }
-        }
-    }
-
-    // Total siblings tests
+    // Round-trip tests
 
     #[test]
-    fn test_total_siblings_binary() {
-        // Binary tree: 1 sibling per level.
-        //   1 level  → 1
-        //   3 levels → 1 + 1 + 1 = 3
-        //   5 levels → 5
-        let s = binary_shifts(5);
-        assert_eq!(total_siblings_for_levels(0, &s), 0);
-        assert_eq!(total_siblings_for_levels(1, &s), 1);
-        assert_eq!(total_siblings_for_levels(3, &s), 3);
-        assert_eq!(total_siblings_for_levels(5, &s), 5);
+    fn roundtrip_binary_all_leaves() {
+        assert_roundtrip(&[2, 2, 2], &(0..8).collect::<Vec<_>>());
     }
 
     #[test]
-    fn test_total_siblings_4ary() {
-        // 4-ary tree: 3 siblings per level.
-        //   1 level  → 3
-        //   2 levels → 3 + 3 = 6
-        //   3 levels → 9
-        let s = quad_shifts(3);
-        assert_eq!(total_siblings_for_levels(0, &s), 0);
-        assert_eq!(total_siblings_for_levels(1, &s), 3);
-        assert_eq!(total_siblings_for_levels(2, &s), 6);
-        assert_eq!(total_siblings_for_levels(3, &s), 9);
+    fn roundtrip_binary_scattered() {
+        assert_roundtrip(&[2, 2, 2, 2, 2], &[0, 3, 7, 12, 15, 20, 31]);
     }
 
     #[test]
-    fn test_total_siblings_mixed() {
-        // Mixed: binary (1), 4-ary (3), 8-ary (7) → cumulative 1, 4, 11.
-        let s = vec![1u32, 2, 3];
-        assert_eq!(total_siblings_for_levels(0, &s), 0);
-        assert_eq!(total_siblings_for_levels(1, &s), 1);
-        assert_eq!(total_siblings_for_levels(2, &s), 4);
-        assert_eq!(total_siblings_for_levels(3, &s), 11);
-    }
-
-    // Pruning tests
-
-    #[test]
-    fn test_prune_empty() {
-        // No paths → empty pruned output.
-        let pruned = prune_paths::<u32, 2>(3, &binary_shifts(3), &[]);
-        assert!(pruned.paths.is_empty());
+    fn roundtrip_single() {
+        assert_roundtrip(&[2, 2, 2, 2], &[6]);
     }
 
     #[test]
-    fn test_prune_single_path() {
-        // A single path has no predecessor to share with → all levels kept.
-        // Binary: 1 sibling per level × 3 levels = 3 total.
-        let path = mock_path::<2>(5, 3);
-        let pruned = prune_paths(3, &binary_shifts(3), &[path]);
-        assert_eq!(pruned.paths.len(), 1);
-        assert_eq!(pruned.paths[0].siblings.len(), 3);
+    fn roundtrip_unordered_with_duplicates() {
+        // Unsorted input with a repeated leaf must still reconstruct the root.
+        assert_roundtrip(&[2, 2, 2], &[5, 1, 3, 1]);
     }
 
     #[test]
-    fn test_prune_adjacent_binary() {
-        // Leaves 4 and 5 are binary siblings → LCA at level 1.
-        // First path: all 3 levels. Second path: only level 0.
-        let paths = [mock_path::<2>(4, 3), mock_path::<2>(5, 3)];
-        let pruned = prune_paths(3, &binary_shifts(3), &paths);
-        assert_eq!(pruned.paths[0].siblings.len(), 3);
-        assert_eq!(pruned.paths[1].siblings.len(), 1);
+    fn roundtrip_4ary_all_leaves() {
+        assert_roundtrip(&[4, 4], &(0..16).collect::<Vec<_>>());
     }
 
     #[test]
-    fn test_prune_all_leaves_binary_height3() {
-        // All 8 leaves in a height-3 binary tree.
-        //
-        // Expected sibling counts per sorted path (1 sibling per binary level):
-        //   [3, 1, 2, 1, 3, 1, 2, 1]
-        //
-        // Total pruned siblings: 14 vs unpruned 8 * 3 = 24.
-        let h = 3;
-        let paths: Vec<_> = (0..8).map(|i| mock_path::<2>(i, h)).collect();
-        let pruned = prune_paths(h, &binary_shifts(h), &paths);
-        let counts: Vec<usize> = pruned.paths.iter().map(|p| p.siblings.len()).collect();
-        assert_eq!(counts, vec![3, 1, 2, 1, 3, 1, 2, 1]);
-        assert_eq!(pruned_sibling_count(&pruned), 14);
+    fn roundtrip_4ary_scattered() {
+        assert_roundtrip(&[4, 4, 4], &[0, 5, 17, 33, 50, 63]);
     }
 
     #[test]
-    fn test_prune_4ary_adjacent() {
-        // Leaves 0-3 are siblings in a 4-ary tree → all share level 1.
-        // First path: both levels (6 siblings). Remaining paths: only level 0 (3 siblings).
-        let s = quad_shifts(2);
-        let paths: Vec<_> = (0..4).map(|i| realistic_quad_path::<2>(i, 2)).collect();
-        let pruned = prune_paths(2, &s, &paths);
-        assert_eq!(pruned.paths[0].siblings.len(), 6);
-        assert_eq!(pruned.paths[1].siblings.len(), 3);
-        assert_eq!(pruned.paths[2].siblings.len(), 3);
-        assert_eq!(pruned.paths[3].siblings.len(), 3);
+    fn roundtrip_mixed_arity() {
+        // Mixed schedule [2,4,2] → 16 leaves.
+        // Exercises a per-level arity that varies down the tree.
+        assert_roundtrip(&[2, 4, 2], &[0, 1, 4, 7, 8, 11, 15]);
     }
 
-    #[test]
-    fn test_prune_duplicate_indices() {
-        // Two queries for the same leaf → deduplicated to one path.
-        // Both original queries map to the same deduped slot.
-        let paths = [mock_path::<2>(3, 3), mock_path::<2>(3, 3)];
-        let pruned = prune_paths(3, &binary_shifts(3), &paths);
-        assert_eq!(pruned.paths.len(), 1);
-        assert_eq!(pruned.original_order, vec![0, 0]);
-    }
+    // Rejection / bounds tests
 
     #[test]
-    fn test_original_order_preservation() {
-        // Input order [5, 1, 3] → sorted [1, 3, 5] at indices [0, 1, 2].
-        // Original query 0 (leaf 5) maps to sorted index 2, etc.
-        let paths = [
-            mock_path::<2>(5, 3),
-            mock_path::<2>(1, 3),
-            mock_path::<2>(3, 3),
-        ];
-        let pruned = prune_paths(3, &binary_shifts(3), &paths);
-        assert_eq!(pruned.original_order, vec![2, 0, 1]);
-    }
-
-    #[test]
-    fn test_proof_size_smaller_for_overlapping() {
-        // Clustered leaves must produce a strictly smaller pruned proof.
-        let h = 5;
-        let paths: Vec<_> = [2, 3, 6, 7].iter().map(|&i| mock_path::<2>(i, h)).collect();
-        let unpruned: usize = paths.iter().map(|p| p.siblings.len()).sum();
-        let pruned = prune_paths(h, &binary_shifts(h), &paths);
-        assert!(pruned_sibling_count(&pruned) < unpruned);
-    }
-
-    // Roundtrip tests
-
-    #[test]
-    fn test_roundtrip_single() {
-        // Single path: prune → restore must be identity.
-        let h = 4;
-        let s = binary_shifts(h);
-        let full = total_siblings_for_levels(h, &s);
-        let paths = [realistic_binary_path::<2>(3, h)];
-        let pruned = prune_paths(h, &s, &paths);
-        let restored = restore_paths(&pruned, full).unwrap();
-        assert_eq!(restored, paths);
-    }
-
-    #[test]
-    fn test_roundtrip_binary_all_leaves() {
-        // All 8 leaves in a height-3 binary tree: full roundtrip.
-        let h = 3;
-        let s = binary_shifts(h);
-        let full = total_siblings_for_levels(h, &s);
-        let paths: Vec<_> = (0..8).map(|i| realistic_binary_path::<2>(i, h)).collect();
-        let pruned = prune_paths(h, &s, &paths);
-        let restored = restore_paths(&pruned, full).unwrap();
-        assert_eq!(restored, paths);
-    }
-
-    #[test]
-    fn test_roundtrip_unordered() {
-        // Unsorted input [5, 1, 3] must be restored in the original order.
-        let h = 3;
-        let s = binary_shifts(h);
-        let full = total_siblings_for_levels(h, &s);
-        let paths = [
-            realistic_binary_path::<2>(5, h),
-            realistic_binary_path::<2>(1, h),
-            realistic_binary_path::<2>(3, h),
-        ];
-        let pruned = prune_paths(h, &s, &paths);
-        let restored = restore_paths(&pruned, full).unwrap();
-        assert_eq!(restored.as_slice(), &paths);
-    }
-
-    #[test]
-    fn test_roundtrip_duplicates() {
-        // Duplicate queries must roundtrip correctly.
-        // Both copies must match their respective originals.
-        let h = 3;
-        let s = binary_shifts(h);
-        let full = total_siblings_for_levels(h, &s);
-        let paths = [
-            realistic_binary_path::<2>(2, h),
-            realistic_binary_path::<2>(5, h),
-            realistic_binary_path::<2>(2, h),
-        ];
-        let pruned = prune_paths(h, &s, &paths);
-        let restored = restore_paths(&pruned, full).unwrap();
-        assert_eq!(restored.as_slice(), &paths);
-    }
-
-    #[test]
-    fn test_roundtrip_4ary() {
-        // All 16 leaves of a 2-level 4-ary tree.
-        let s = quad_shifts(2);
-        let full = total_siblings_for_levels(2, &s);
-        let paths: Vec<_> = (0..16).map(|i| realistic_quad_path::<2>(i, 2)).collect();
-        let pruned = prune_paths(2, &s, &paths);
-        let restored = restore_paths(&pruned, full).unwrap();
-        assert_eq!(restored, paths);
-    }
-
-    #[test]
-    fn test_roundtrip_height5() {
-        // Sparse query set across a height-5 binary tree.
-        let h = 5;
-        let s = binary_shifts(h);
-        let full = total_siblings_for_levels(h, &s);
-        let indices = [0, 3, 7, 12, 15, 16, 20, 31];
-        let paths: Vec<_> = indices
-            .iter()
-            .map(|&i| realistic_binary_path::<4>(i, h))
-            .collect();
-        let pruned = prune_paths(h, &s, &paths);
-        let restored = restore_paths(&pruned, full).unwrap();
-        assert_eq!(restored, paths);
-    }
-
-    #[test]
-    fn test_roundtrip_mixed_arity() {
-        // Mixed schedule [1, 2, 1] (binary, 4-ary, binary) → 16 leaves.
-        // Exercises both the LCA loop and the per-level sibling counts.
-        let shifts = vec![1u32, 2, 1];
-        let full = total_siblings_for_levels(shifts.len(), &shifts);
-        let indices = [0, 1, 4, 7, 8, 11, 15];
-        let paths: Vec<_> = indices
-            .iter()
-            .map(|&i| realistic_nary_path::<2>(i, &shifts))
-            .collect();
-        let pruned = prune_paths(shifts.len(), &shifts, &paths);
-        let restored = restore_paths(&pruned, full).unwrap();
-        assert_eq!(restored, paths);
-    }
-
-    // Error / bounds tests
-
-    #[test]
-    fn test_restore_empty() {
-        // Zero paths with zero queries → valid empty result, regardless of the
-        // sibling count the verifier expected.
-        let pruned = PrunedMerklePaths::<u32, 2> {
-            original_order: vec![],
-            paths: vec![],
+    fn restore_empty_query_set() {
+        let pruned = PrunedMerklePaths::<u32, DE> {
+            sibling_hashes: vec![],
         };
-        assert!(restore_paths(&pruned, 3).unwrap().is_empty());
+        assert!(
+            restore_paths(&pruned, &[], &[2, 2, 2], 3)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
-    fn test_restore_rejects_inconsistent_siblings() {
-        // First path stores only 1 level of siblings but the verifier expects 3.
-        // With no predecessor to copy from, restoration must fail.
-        let pruned = PrunedMerklePaths::<u32, 2> {
-            original_order: vec![0],
-            paths: vec![PrunedPath {
-                leaf_index: 0,
-                siblings: vec![[0; 2]],
-            }],
+    fn restore_rejects_nonempty_proof_for_empty_query_set() {
+        let pruned = PrunedMerklePaths::<u32, DE> {
+            sibling_hashes: vec![[0; DE]],
         };
         assert!(matches!(
-            restore_paths(&pruned, 3),
+            restore_paths(&pruned, &[], &[2, 2, 2], 3),
             Err(PrunedProofError::SiblingCountMismatch {
-                expected: 3,
+                expected: 0,
                 got: 1
             })
         ));
     }
 
     #[test]
-    fn test_restore_rejects_oversized_first_path() {
-        // Invariant: the first path's stored siblings must equal the
-        // verifier-derived full count. Anything bigger is malformed.
-        //
-        // Fixture state: verifier expects 3 siblings per full path.
-        //
-        // Mutation: first path stores 10 siblings (forged).
-        //
-        //     stored:    [s0, s1, s2, s3, s4, s5, s6, s7, s8, s9]   (len 10)
-        //     expected:  [s0, s1, s2]                               (len 3)
-        //     → 10 != 3 → reject
-        //
-        // Why this matters: trusting the prover-supplied length would let
-        // a malicious proof inflate per-path allocations arbitrarily.
-        let pruned = PrunedMerklePaths::<u32, 2> {
-            original_order: vec![0],
-            paths: vec![PrunedPath {
-                leaf_index: 0,
-                siblings: vec![[0; 2]; 10],
-            }],
+    fn restore_rejects_too_few_siblings() {
+        // Frontier for {1,2,5} needs 4 digests.
+        // Supply two fewer than that.
+        let schedule = [2, 2, 2];
+        let sorted_unique = [1, 2, 5];
+        let need = pruned_count(&schedule, &sorted_unique);
+        let pruned = PrunedMerklePaths::<u32, DE> {
+            sibling_hashes: vec![[0; DE]; need - 2],
         };
+        let full = total_siblings_for_levels(schedule.len(), &schedule);
         assert!(matches!(
-            restore_paths(&pruned, 3),
-            Err(PrunedProofError::SiblingCountMismatch {
-                expected: 3,
-                got: 10
-            })
+            restore_paths(&pruned, &sorted_unique, &schedule, full),
+            Err(PrunedProofError::SiblingCountMismatch { .. })
         ));
     }
 
-    // Size analysis
+    #[test]
+    fn restore_rejects_too_many_siblings() {
+        // Same frontier, but supply one extra digest.
+        let schedule = [2, 2, 2];
+        let sorted_unique = [1, 2, 5];
+        let need = pruned_count(&schedule, &sorted_unique);
+        let pruned = PrunedMerklePaths::<u32, DE> {
+            sibling_hashes: vec![[0; DE]; need + 1],
+        };
+        let full = total_siblings_for_levels(schedule.len(), &schedule);
+        assert!(matches!(
+            restore_paths(&pruned, &sorted_unique, &schedule, full),
+            Err(PrunedProofError::SiblingCountMismatch { expected, got })
+                if expected == need && got == need + 1
+        ));
+    }
+
+    // total_siblings_for_levels
 
     #[test]
-    fn test_pruned_size_leq_original() {
-        // Invariant: pruning must never increase the total sibling count.
-        for h in 2..6 {
-            let n_leaves = 1 << h;
-            for subset in 1..=n_leaves.min(16) {
-                let paths: Vec<_> = (0..subset).map(|i| mock_path::<2>(i, h)).collect();
-                let unpruned: usize = paths.iter().map(|p| p.siblings.len()).sum();
-                let pruned = prune_paths(h, &binary_shifts(h), &paths);
-                assert!(pruned_sibling_count(&pruned) <= unpruned);
-            }
-        }
+    fn total_siblings_accumulates_per_level() {
+        // binary(1) + 4ary(3) + 8ary(7) → cumulative 0,1,4,11.
+        let s = [2, 4, 8];
+        assert_eq!(total_siblings_for_levels(0, &s), 0);
+        assert_eq!(total_siblings_for_levels(1, &s), 1);
+        assert_eq!(total_siblings_for_levels(2, &s), 4);
+        assert_eq!(total_siblings_for_levels(3, &s), 11);
     }
 
     // Proptests
 
-    fn binary_tree_queries() -> impl Strategy<Value = (usize, Vec<usize>)> {
-        // Random binary tree: height 1..10, up to 32 random leaf queries.
-        (1..10usize).prop_flat_map(|h| {
-            let n_leaves = 1usize << h;
-            let indices = proptest::collection::vec(0..n_leaves, 1..=n_leaves.min(32));
-            (Just(h), indices)
+    fn binary_case() -> impl Strategy<Value = (usize, Vec<usize>)> {
+        (1..8usize).prop_flat_map(|h| {
+            let n = 1usize << h;
+            (Just(h), proptest::collection::vec(0..n, 1..=n.min(32)))
         })
     }
 
-    fn quad_tree_queries() -> impl Strategy<Value = (usize, Vec<usize>)> {
-        // Random 4-ary tree: height 1..5, up to 32 random leaf queries.
-        (1..5usize).prop_flat_map(|h| {
-            let n_leaves = 4usize.pow(h as u32);
-            let indices = proptest::collection::vec(0..n_leaves, 1..=n_leaves.min(32));
-            (Just(h), indices)
-        })
-    }
-
-    /// Build a realistic mock path for any power-of-two arity schedule.
-    ///
-    /// For each level, generates (2^shift - 1) siblings whose values are
-    /// determined by the ancestor group index at that level. This means
-    /// leaves sharing an ancestor will have identical siblings above the LCA.
-    fn realistic_nary_path<const DE: usize>(
-        leaf_index: usize,
-        shift_schedule: &[u32],
-    ) -> MerkleAuthPath<u32, DE> {
-        let mut siblings = Vec::new();
-        let mut group_size = 1usize;
-        for &shift in shift_schedule {
-            // The arity at this level.
-            let arity = 1usize << shift;
-            // Group size below this level (product of all arities so far + this one).
-            group_size *= arity;
-            // Which group does this leaf belong to at this level?
-            let group_idx = leaf_index / group_size;
-            // Generate (arity - 1) sibling digests for this level.
-            for s in 0..(arity - 1) {
-                siblings.push([(group_idx * 1000 + s) as u32; DE]);
-            }
-        }
-        MerkleAuthPath {
-            leaf_index,
-            siblings,
-        }
-    }
-
-    /// Strategy for a tree with random per-level arities (2, 4, 8, or 16).
-    /// Returns the shift schedule, total leaf count, and random query indices.
-    fn mixed_arity_tree_queries() -> impl Strategy<Value = (Vec<u32>, usize, Vec<usize>)> {
-        // 1..6 levels, each with a random power-of-two arity (shift 1..=4).
-        proptest::collection::vec(1..=4u32, 1..6).prop_flat_map(|shifts| {
-            // Total leaves = product of arities = 2^(sum of shifts).
-            let total_shift: u32 = shifts.iter().sum();
-            // Cap at 2^16 = 65536 leaves to keep tests fast.
-            if total_shift > 16 {
-                // Truncate the schedule to stay within bounds.
-                let mut cumulative = 0u32;
-                let truncated: Vec<u32> = shifts
-                    .into_iter()
-                    .take_while(|&s| {
-                        cumulative += s;
-                        cumulative <= 16
-                    })
-                    .collect();
-                let n_leaves = 1usize << truncated.iter().sum::<u32>();
-                let indices = proptest::collection::vec(0..n_leaves, 1..=n_leaves.min(32));
-                (Just(truncated), Just(n_leaves), indices)
-            } else {
-                let n_leaves = 1usize << total_shift;
-                let indices = proptest::collection::vec(0..n_leaves, 1..=n_leaves.min(32));
-                (Just(shifts), Just(n_leaves), indices)
-            }
-        })
+    fn nary_case() -> impl Strategy<Value = (Vec<usize>, Vec<usize>)> {
+        // 1..5 levels, each arity 2 or 4, capped at 4096 leaves.
+        proptest::collection::vec(prop_oneof![Just(2usize), Just(4usize)], 1..5).prop_flat_map(
+            |schedule| {
+                let n: usize = schedule.iter().product();
+                let indices = proptest::collection::vec(0..n, 1..=n.min(32));
+                (Just(schedule), indices)
+            },
+        )
     }
 
     proptest! {
         #[test]
-        fn proptest_binary_roundtrip((h, indices) in binary_tree_queries()) {
-            // Prune → restore must recover the exact original paths.
-            let s = binary_shifts(h);
-            let full = total_siblings_for_levels(h, &s);
-            let paths: Vec<_> = indices.iter().map(|&i| realistic_binary_path::<2>(i, h)).collect();
-            let pruned = prune_paths(h, &s, &paths);
-            let restored = restore_paths(&pruned, full).unwrap();
-            prop_assert_eq!(&restored, &paths);
+        fn proptest_binary_roundtrip((h, indices) in binary_case()) {
+            // prune → restore → reconstruct must recover the true root.
+            let schedule = vec![2usize; h];
+            assert_roundtrip(&schedule, &indices);
         }
 
         #[test]
-        fn proptest_quad_roundtrip((h, indices) in quad_tree_queries()) {
-            // Same roundtrip invariant for 4-ary trees.
-            let s = quad_shifts(h);
-            let full = total_siblings_for_levels(h, &s);
-            let paths: Vec<_> = indices.iter().map(|&i| realistic_quad_path::<2>(i, h)).collect();
-            let pruned = prune_paths(h, &s, &paths);
-            let restored = restore_paths(&pruned, full).unwrap();
-            prop_assert_eq!(&restored, &paths);
+        fn proptest_nary_roundtrip((schedule, indices) in nary_case()) {
+            assert_roundtrip(&schedule, &indices);
         }
 
         #[test]
-        fn proptest_pruned_size_leq_original((h, indices) in binary_tree_queries()) {
-            // Pruning must never increase total sibling count.
-            let s = binary_shifts(h);
-            let paths: Vec<_> = indices.iter().map(|&i| mock_path::<2>(i, h)).collect();
-            let unpruned: usize = paths.iter().map(|p| p.siblings.len()).sum();
-            let pruned = prune_paths(h, &s, &paths);
-            prop_assert!(pruned_sibling_count(&pruned) <= unpruned);
-        }
-
-        #[test]
-        fn proptest_binary_fast_path_matches_generic(a in 0..1024usize, b in 0..1024usize) {
-            // The O(1) binary fast path must match the O(h) generic loop.
-            let h = 10;
-            let s = binary_shifts(h);
-            prop_assert_eq!(
-                first_shared_level_generic(a, b, &s),
-                first_shared_level_binary(a, b, h)
-            );
-        }
-
-        #[test]
-        fn proptest_dedup_preserves_identity((h, mut indices) in binary_tree_queries()) {
-            // Duplicating every query must produce identical restored paths
-            // for the original and duplicated halves.
-            let original_len = indices.len();
-            indices.extend_from_slice(&indices.clone());
-            let s = binary_shifts(h);
-            let full = total_siblings_for_levels(h, &s);
-            let paths: Vec<_> = indices.iter().map(|&i| realistic_binary_path::<2>(i, h)).collect();
-            let pruned = prune_paths(h, &s, &paths);
-            let restored = restore_paths(&pruned, full).unwrap();
-            prop_assert_eq!(restored.len(), original_len * 2);
-            for i in 0..original_len {
-                prop_assert_eq!(&restored[i], &restored[i + original_len]);
-            }
-        }
-
-        #[test]
-        fn proptest_mixed_arity_roundtrip((shifts, _n_leaves, indices) in mixed_arity_tree_queries()) {
-            // Roundtrip with random per-level arities (2, 4, 8, or 16).
-            // Covers mixed schedules like [1, 3, 2] (binary, 8-ary, 4-ary).
-            let h = shifts.len();
-            let full = total_siblings_for_levels(h, &shifts);
-            let paths: Vec<_> = indices.iter().map(|&i| realistic_nary_path::<2>(i, &shifts)).collect();
-            let pruned = prune_paths(h, &shifts, &paths);
-            let restored = restore_paths(&pruned, full).unwrap();
-            prop_assert_eq!(&restored, &paths);
-        }
-
-        #[test]
-        fn proptest_mixed_arity_size_leq_original((shifts, _n_leaves, indices) in mixed_arity_tree_queries()) {
-            // Pruning must never increase sibling count, regardless of arity.
-            let h = shifts.len();
-            let paths: Vec<_> = indices.iter().map(|&i| realistic_nary_path::<2>(i, &shifts)).collect();
-            let unpruned: usize = paths.iter().map(|p| p.siblings.len()).sum();
-            let pruned = prune_paths(h, &shifts, &paths);
-            prop_assert!(pruned_sibling_count(&pruned) <= unpruned);
+        fn proptest_count_leq_unpruned((h, indices) in binary_case()) {
+            let schedule = vec![2usize; h];
+            let full = total_siblings_for_levels(schedule.len(), &schedule);
+            let mut su = indices;
+            su.sort_unstable();
+            su.dedup();
+            prop_assert!(pruned_count(&schedule, &su) <= su.len() * full);
         }
     }
 }

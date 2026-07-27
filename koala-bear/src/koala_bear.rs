@@ -1,6 +1,5 @@
-use p3_challenger::UniformSamplingField;
 use p3_field::exponentiation::exp_1420470955;
-use p3_field::{Algebra, PrimeCharacteristicRing};
+use p3_field::{Algebra, PrimeCharacteristicRing, UniformSamplingField};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TrinomialQuinticData, TwoAdicData,

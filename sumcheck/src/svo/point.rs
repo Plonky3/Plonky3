@@ -8,7 +8,7 @@ use itertools::Itertools;
 use p3_field::{ExtensionField, Field, add_scaled_slice_in_place};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::poly::{Poly, PolyView};
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
@@ -145,12 +145,12 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// polynomial only in the SVO variables, which is then:
     /// - evaluated at `z_svo` to obtain the opening value
     /// - partially compressed after each SVO round to feed the accumulator path
-    pub fn eval(&self, poly: &Poly<F>) -> (EF, EqSvoPartials<EF>) {
+    pub fn eval(&self, poly: PolyView<'_, F>) -> (EF, EqSvoPartials<EF>) {
         assert_eq!(self.num_variables(), poly.num_variables());
         // Each per-round compression is wrapped as an equality payload as it is produced.
         let (compressed, partial_evals) = match self.var_order {
             VariableOrder::Prefix => {
-                let compressed = self.z_split.compress_suffix(poly);
+                let compressed = self.z_split.compress_suffix(poly.as_view());
                 let partial_evals = (1..=self.num_variables_svo())
                     .map(|i| {
                         let (_svo_active, svo_rest) = self.z_svo.split_at(i);
@@ -160,7 +160,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
                 (compressed, partial_evals)
             }
             VariableOrder::Suffix => {
-                let compressed = self.z_split.compress_prefix(poly);
+                let compressed = self.z_split.compress_prefix(poly.as_view());
                 let partial_evals = (1..=self.num_variables_svo())
                     .map(|i| {
                         let (svo_rest, _svo_active) =
@@ -186,7 +186,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     }
 
     /// Returns the number of variables of the represented point.
-    pub const fn num_variables(&self) -> usize {
+    pub fn num_variables(&self) -> usize {
         self.z_svo.num_variables() + self.z_split.num_variables()
     }
 
@@ -459,7 +459,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// - If a supplied equality payload does not span the SVO variables.
     pub fn eval_next_suffix(
         &self,
-        poly: &Poly<F>,
+        poly: PolyView<'_, F>,
         d_eq: Option<&Poly<EF>>,
     ) -> (EF, NextSvoPartials<EF>) {
         // The polynomial must cover both the split and SVO variables.
@@ -471,14 +471,16 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         );
 
         // Compress the equality payload over the split prefix unless the caller supplied it.
-        let d_eq_owned = d_eq.is_none().then(|| self.z_split.compress_prefix(poly));
+        let d_eq_owned = d_eq
+            .is_none()
+            .then(|| self.z_split.compress_prefix(poly.as_view()));
         let d_eq = d_eq.unwrap_or_else(|| d_eq_owned.as_ref().unwrap());
         assert_eq!(d_eq.num_variables(), self.num_variables_svo());
 
         // A caller-supplied payload must equal the freshly computed one.
         #[cfg(debug_assertions)]
         if d_eq_owned.is_none() {
-            debug_assert_eq!(*d_eq, self.z_split.compress_prefix(poly));
+            debug_assert_eq!(*d_eq, self.z_split.compress_prefix(poly.as_view()));
         }
         // Carry payload: compress the polynomial over the split prefix with a one-row shift.
         let d_t = self.z_split.compress_prefix_shifted(poly);
@@ -534,7 +536,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     ///
     /// - If the polynomial does not span all point variables.
     /// - If the point is not in prefix layout.
-    pub fn eval_next_prefix(&self, poly: &Poly<F>) -> (EF, NextSvoPartials<EF>) {
+    pub fn eval_next_prefix(&self, poly: PolyView<'_, F>) -> (EF, NextSvoPartials<EF>) {
         // The polynomial must cover both the split and SVO variables.
         assert_eq!(self.num_variables(), poly.num_variables());
         // This routine derives its compressions only for prefix layout.
@@ -686,9 +688,9 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         let rest_eq = SplitEq::<EF, EF>::new_packed(&p_rest, EF::ONE);
 
         // Done state: contract the equality payload over the prefix at the matching active row.
-        let done = rest_eq.compress_prefix(d_eq);
+        let done = rest_eq.compress_prefix(d_eq.as_view());
         // Carry state: contract the equality payload over the prefix shifted by one successor step.
-        let mut carry = rest_eq.compress_prefix_shifted(d_eq);
+        let mut carry = rest_eq.compress_prefix_shifted(d_eq.as_view());
 
         // The all-ones prefix corner carries the full product of prefix coordinates.
         let carry_scale = p_rest.iter().copied().product::<EF>();
@@ -767,9 +769,9 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         let rest_eq = SplitEq::<EF, EF>::new_packed(&p_rest, EF::ONE);
 
         // Done state: contract the shifted-done payload over the suffix.
-        let mut done = rest_eq.compress_suffix(d_done);
+        let mut done = rest_eq.compress_suffix(d_done.as_view());
         // Carry crossing a row boundary lands one suffix step over, so contract it shifted.
-        let carry_done = rest_eq.compress_suffix_shifted(d_carry);
+        let carry_done = rest_eq.compress_suffix_shifted(d_carry.as_view());
 
         // Fold the boundary-crossing carry contribution into the done state.
         done.as_mut_slice()
@@ -837,7 +839,7 @@ mod test {
         let assert_eval = |svo_point: &SvoPoint<F, EF>, poly: &Poly<F>, point: &Point<EF>| {
             let e0 = poly.eval_base(point);
 
-            let (e1, partial_evals) = svo_point.eval(poly);
+            let (e1, partial_evals) = svo_point.eval(poly.as_view());
             assert_eq!(e0, e1);
             assert_eq!(partial_evals.rounds().len(), svo_point.num_variables_svo());
 
@@ -971,7 +973,7 @@ mod test {
             // Ground truth: the full successor evaluation over all variables.
             let expected = poly.eval_next_base(point);
             // Fast path: the SVO opening value plus per-round cached tables.
-            let (actual, partials) = svo_point.eval_next_suffix(poly, None);
+            let (actual, partials) = svo_point.eval_next_suffix(poly.as_view(), None);
             assert_eq!(actual, expected);
             assert_eq!(partials.rounds().len(), svo_point.num_variables_svo());
 
@@ -1026,7 +1028,7 @@ mod test {
             // Ground truth: the full successor evaluation over all variables.
             let expected = poly.eval_next_base(point);
             // Fast path: the SVO opening value plus per-round cached tables.
-            let (actual, partials) = svo_point.eval_next_prefix(poly);
+            let (actual, partials) = svo_point.eval_next_prefix(poly.as_view());
             assert_eq!(actual, expected);
             assert_eq!(partials.rounds().len(), svo_point.num_variables_svo());
 

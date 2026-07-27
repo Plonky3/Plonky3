@@ -10,7 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-parallel = ["rayon"]
+parallel = ["dep:rayon"]
 
 [dependencies]
 rayon = { workspace = true, optional = true }

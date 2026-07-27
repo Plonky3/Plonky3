@@ -22,6 +22,15 @@ pub mod prelude {
     pub use super::serial::*;
 
     pub trait SharedExt: ParallelIterator {
+        /// Folds each split of the iterator with `fold_op` (seeded by `identity`), then
+        /// combines the per-split accumulators with `reduce_op`.
+        ///
+        /// `identity()` must be neutral for `reduce_op`, and `fold_op`/`reduce_op` must be
+        /// mutually associative so that regrouping splits doesn't change the result — under
+        /// the `parallel` feature the split count (and thus how many times `reduce_op` runs)
+        /// depends on the thread pool. **The serial fallback never calls `reduce_op`** (there
+        /// is only one split), so an inconsistent `reduce_op` yields results that diverge
+        /// between `cargo test` and `cargo test --features parallel`.
         fn par_fold_reduce<Acc, Id, F, R>(self, identity: Id, fold_op: F, reduce_op: R) -> Acc
         where
             Acc: Send,

@@ -20,4 +20,5 @@ pub use domain::*;
 pub use ordering::*;
 pub use pcs::*;
 pub use periodic::*;
+pub use point::*;
 pub use proof::*;

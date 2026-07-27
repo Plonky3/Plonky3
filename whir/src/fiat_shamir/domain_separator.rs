@@ -50,16 +50,23 @@ pub(crate) struct ZkSumcheckParams {
 ///
 /// # Transcript Operation Encoding
 ///
-/// Each transcript step is encoded as a single field element:
+/// Each transcript step is encoded as a single field element with
+/// non-overlapping bit ranges for each component:
 ///
 /// ```text
-///     element = pattern_tag + sub_label + count
+///     element = (pattern_tag << (COUNT_BITS + LABEL_BITS))
+///              | (sub_label << COUNT_BITS)
+///              | count
 /// ```
 ///
 /// where:
 /// - `pattern_tag` distinguishes observe / sample / hint.
 /// - `sub_label` identifies the semantic role (e.g., Merkle digest, folding randomness).
-/// - `count` is the number of field elements involved (omitted for hints).
+/// - `count` is the number of field elements involved (zero for hints).
+///
+/// Packing into disjoint bit ranges (rather than summing the three values)
+/// keeps the encoding injective: distinct `(tag, label, count)` triples
+/// always produce distinct field elements.
 ///
 /// # Evaluation Claims Are Not Absorbed Here
 ///
@@ -94,6 +101,25 @@ pub struct DomainSeparator<EF, F> {
     _extension_field: PhantomData<EF>,
 }
 
+/// Number of bits allotted to the `count` component of an encoded entry.
+const COUNT_BITS: u32 = 16;
+
+/// Number of bits allotted to the `sub_label` component of an encoded entry.
+const LABEL_BITS: u32 = 8;
+
+/// Packs a pattern tag, sub-label, and count into one field element using
+/// disjoint bit ranges, so that distinct `(tag, label, count)` triples
+/// always produce distinct field elements.
+fn encode_entry<F: Field>(tag: Pattern, label: u8, count: usize) -> F {
+    debug_assert!(
+        count < (1 << COUNT_BITS),
+        "domain separator count exceeds the {COUNT_BITS}-bit budget"
+    );
+    let packed =
+        ((tag as usize) << (COUNT_BITS + LABEL_BITS)) | ((label as usize) << COUNT_BITS) | count;
+    F::from_usize(packed)
+}
+
 impl<EF, F> DomainSeparator<EF, F>
 where
     EF: ExtensionField<F>,
@@ -110,20 +136,14 @@ where
 
     /// Record that the prover observes `count` field elements into the sponge.
     pub(crate) fn observe(&mut self, count: usize, pattern: Observe) {
-        self.pattern.push(
-            pattern.as_field_element::<F>()
-                + F::from_usize(count)
-                + Pattern::Observe.as_field_element::<F>(),
-        );
+        self.pattern
+            .push(encode_entry::<F>(Pattern::Observe, pattern as u8, count));
     }
 
     /// Record that the verifier samples `count` field elements from the sponge.
     pub(crate) fn sample(&mut self, count: usize, pattern: Sample) {
-        self.pattern.push(
-            pattern.as_field_element::<F>()
-                + F::from_usize(count)
-                + Pattern::Sample.as_field_element::<F>(),
-        );
+        self.pattern
+            .push(encode_entry::<F>(Pattern::Sample, pattern as u8, count));
     }
 
     /// Encode a public protocol parameter into the domain separator.
@@ -136,10 +156,11 @@ where
     /// configuration, preventing cross-protocol transcript reuse.
     fn protocol_param(&mut self, value: usize) {
         // Constant marker: observe tag + protocol-param sub-label.
-        self.pattern.push(
-            Observe::ProtocolParam.as_field_element::<F>()
-                + Pattern::Observe.as_field_element::<F>(),
-        );
+        self.pattern.push(encode_entry::<F>(
+            Pattern::Observe,
+            Observe::ProtocolParam as u8,
+            0,
+        ));
         // Raw parameter value.
         self.pattern.push(F::from_usize(value));
     }
@@ -147,7 +168,7 @@ where
     /// Record a non-binding hint from the prover.
     pub(crate) fn hint(&mut self, pattern: Hint) {
         self.pattern
-            .push(pattern.as_field_element::<F>() + Pattern::Hint.as_field_element::<F>());
+            .push(encode_entry::<F>(Pattern::Hint, pattern as u8, 0));
     }
 
     /// Absorb the entire domain separator pattern into the challenger.
@@ -516,15 +537,19 @@ where
     /// Optionally append a proof-of-work challenge.
     ///
     /// When `bits` is positive, encodes:
-    /// 1. Sampling a 32-byte challenge from the sponge.
-    /// 2. Observing an 8-byte nonce that satisfies the grinding condition.
+    /// 1. A `Sample::PowQueries` entry marking the grinding challenge.
+    /// 2. A `Observe::PowNonce` entry marking the nonce that solves it.
+    ///
+    /// The accompanying counts are fixed shape descriptors for domain
+    /// separation; they do not correspond to a literal number of bytes or
+    /// field elements sampled/observed by `grind`/`check_witness`.
     ///
     /// When `bits` is zero, nothing is appended.
     pub(crate) fn pow(&mut self, bits: usize) {
         if bits > 0 {
-            // Sample a 32-byte PoW challenge preimage.
+            // Mark the PoW challenge (see doc comment above for the count's meaning).
             self.sample(32, Sample::PowQueries);
-            // Observe the nonce that solves the challenge.
+            // Mark the nonce that solves the challenge.
             self.observe(8, Observe::PowNonce);
         }
     }
@@ -535,7 +560,6 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
 
     use super::*;
@@ -544,15 +568,11 @@ mod tests {
     type EF = BinomialExtensionField<F, 4>;
 
     fn observe_entry(count: usize, observe: Observe) -> F {
-        observe.as_field_element::<F>()
-            + F::from_usize(count)
-            + Pattern::Observe.as_field_element::<F>()
+        encode_entry::<F>(Pattern::Observe, observe as u8, count)
     }
 
     fn sample_entry(count: usize, sample: Sample) -> F {
-        sample.as_field_element::<F>()
-            + F::from_usize(count)
-            + Pattern::Sample.as_field_element::<F>()
+        encode_entry::<F>(Pattern::Sample, sample as u8, count)
     }
 
     #[test]

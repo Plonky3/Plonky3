@@ -130,7 +130,6 @@ impl<const WIDTH: usize> ExternalLayer<Bn254, WIDTH, BN254_S_BOX_DEGREE>
 
 #[cfg(test)]
 mod tests {
-    use num_bigint::BigUint;
     use p3_field::PrimeField;
     use p3_poseidon2::ExternalLayerConstants;
     use p3_symmetric::Permutation;
@@ -164,10 +163,14 @@ mod tests {
     }
 
     fn ark_ff_from_bn254(input: Bn254) -> ark_FpBN256 {
-        // We can't just use `input.into_bytes()` as we need to first convert out of MONTY form.
-        // Going via `BigUint` is a little unnecessary but is sufficient for our purposes.
-        let bigint = BigUint::from_bytes_le(&input.as_canonical_biguint().to_bytes_le());
-        ark_FpBN256::from(bigint)
+        // The stored limbs are in Montgomery form, not the canonical integer.
+        // So the bytes must come from the canonical representative, not a raw reinterpret.
+        let bytes = input.as_canonical_biguint().to_bytes_le();
+
+        // Rebuild the ark-ff element from the little-endian bytes, reduced modulo the field order.
+        // Why: the byte path sidesteps ark-ff's big-integer conversion.
+        // That conversion is tied to a big-integer version that need not match the one used here.
+        ark_FpBN256::from_le_bytes_mod_order(&bytes)
     }
 
     #[test]

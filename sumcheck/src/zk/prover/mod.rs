@@ -27,6 +27,6 @@ mod residual;
 mod round;
 mod zk_prover;
 
-pub use common::stack_codewords;
 pub use layout::ZkLayout;
+pub use p3_zk_codes::stack_codewords;
 pub use zk_prover::{ZkPrefixProver, ZkProver, ZkSuffixProver};

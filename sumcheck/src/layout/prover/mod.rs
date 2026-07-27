@@ -2,8 +2,8 @@
 //!
 //! # Modules
 //!
-//! - Prefix prover: SIMD-packed first round.
-//! - Suffix prover: SVO-accumulator preprocessing.
+//! - Prefix prover: SVO-accumulator preprocessing, packed handoff.
+//! - Suffix prover: SVO-accumulator preprocessing, unpacked handoff.
 
 mod claims;
 mod prefix;
@@ -104,15 +104,63 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
         self.claims().num_variables_table(id)
     }
 
-    /// Records opening claims for the selected columns of one table.
+    /// Returns source table `id`.
+    fn table(&self, id: usize) -> &Table<F> {
+        self.claims().table(id)
+    }
+
+    /// Records opening claims for the selected columns of one table at a sampled point.
     ///
-    /// - Current openings evaluate a column at the sampled point.
+    /// - The local-frame opening point is drawn from the transcript.
+    /// - Current openings evaluate a column at that point.
     /// - Next openings evaluate the repeat-last successor view at the same point.
-    /// - Returned evaluations list all current openings first, then all next openings.
+    /// - Returned evaluations list all current openings first.
+    /// - Returned evaluations list all next openings second.
     fn eval<Ch>(
         &mut self,
         table_idx: usize,
         batch: &OpeningRequest,
+        challenger: &mut Ch,
+    ) -> OpeningEvals<EF>
+    where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Draw the local-frame opening point as powers of one challenge.
+        // This is the standalone-PCS convention: the verifier picks the evaluation point.
+        let point = Point::expand_from_univariate(
+            challenger.sample_algebra_element(),
+            self.num_variables_table(table_idx),
+        );
+        self.eval_at(table_idx, batch, &point, challenger)
+    }
+
+    /// Records opening claims for the selected columns of one table at a prescribed point.
+    ///
+    /// The caller supplies the local-frame opening point instead of sampling it.
+    /// An outer protocol that fixes the point opens its columns here.
+    ///
+    /// Soundness requires `point` to be sampled from, or bound to, the same `challenger`
+    /// before this call (see `PrescribedPointPcs`'s Fiat-Shamir/Soundness doc) — this
+    /// method absorbs the evaluations but not the point itself.
+    ///
+    /// - Current openings evaluate a column at the supplied point.
+    /// - Next openings evaluate the repeat-last successor view at the same point.
+    /// - The claimed evaluations are absorbed into the transcript.
+    /// - The current group is absorbed first.
+    /// - Returned evaluations list all current openings first.
+    /// - Returned evaluations list all next openings second.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point.
+    /// - Fiat-Shamir transcript.
+    fn eval_at<Ch>(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
         challenger: &mut Ch,
     ) -> OpeningEvals<EF>
     where
@@ -153,7 +201,6 @@ pub(super) mod test_utils {
     use p3_challenger::FieldChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::point::Point;
-    use p3_multilinear_util::poly::Poly;
     use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -192,12 +239,10 @@ pub(super) mod test_utils {
     pub(crate) fn build_tables() -> Vec<Table<F>> {
         let mut rng = SmallRng::seed_from_u64(1);
         // Table at index 1 in the insertion order: arity 10, two columns.
-        let a0 = Poly::<F>::rand(&mut rng, 10);
-        let a1 = Poly::<F>::rand(&mut rng, 10);
+        let a = Table::rand(&mut rng, 2, 10);
         // Table at index 0 in the insertion order: arity 9, two columns.
-        let b0 = Poly::<F>::rand(&mut rng, 9);
-        let b1 = Poly::<F>::rand(&mut rng, 9);
-        vec![Table::new(vec![b0, b1]), Table::new(vec![a0, a1])]
+        let b = Table::rand(&mut rng, 2, 9);
+        vec![b, a]
     }
 
     /// Returns the per-table shape used by the verifier side.
@@ -492,12 +537,7 @@ pub(super) mod test_utils {
         // One table per (arity, column_count) pair; each column is a random polynomial.
         shape
             .iter()
-            .map(|&(arity, num_cols)| {
-                let polys: Vec<Poly<F>> = (0..num_cols)
-                    .map(|_| Poly::<F>::rand(&mut rng, arity))
-                    .collect();
-                Table::new(polys)
-            })
+            .map(|&(arity, num_cols)| Table::rand(&mut rng, num_cols, arity))
             .collect()
     }
 

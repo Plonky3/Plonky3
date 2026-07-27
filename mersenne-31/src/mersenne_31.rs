@@ -7,7 +7,6 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use core::{array, fmt, iter};
 
 use num_bigint::BigUint;
-use p3_challenger::UniformSamplingField;
 use p3_field::exponentiation::exp_1717986917;
 use p3_field::integers::QuotientMap;
 use p3_field::op_assign_macros::{
@@ -15,8 +14,9 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, RawDataSerializable, halve_u32, impl_raw_serializable_primefield32,
-    quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
+    PrimeField32, PrimeField64, RawDataSerializable, UniformSamplingField, halve_u32,
+    impl_raw_serializable_primefield32, quotient_map_large_iint, quotient_map_large_uint,
+    quotient_map_small_int,
 };
 use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
 use rand::Rng;

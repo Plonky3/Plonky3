@@ -348,13 +348,21 @@ where
             let log_num_chunks = log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
-            let (_, quotient_domain_size) = checked_log_size_sum(ext_db, log_num_chunks)
+            let (quotient_domain_log_size, quotient_domain_size) =
+                checked_log_size_sum(ext_db, log_num_chunks).ok_or_else(|| {
+                    InvalidProofShapeError::QuotientDomainTooLarge {
+                        air: Some(i),
+                        maximum: usize::BITS as usize - 1,
+                        got: ext_db.saturating_add(log_num_chunks),
+                    }
+                })?;
+            let qdom = ext_dom
+                .try_create_disjoint_domain(quotient_domain_size)
                 .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
                     air: Some(i),
-                    maximum: usize::BITS as usize - 1,
-                    got: ext_db.saturating_add(log_num_chunks),
+                    maximum: pcs.log_max_lde_height(),
+                    got: quotient_domain_log_size,
                 })?;
-            let qdom = ext_dom.create_disjoint_domain(quotient_domain_size);
             Ok(qdom.split_domains(n_chunks))
         })
         .collect::<Result<Vec<_>, InvalidProofShapeError>>()?;
@@ -573,10 +581,8 @@ where
         let periodic_columns = air.periodic_columns();
         check_periodic_column_lengths(&periodic_columns, trace_domains[i].size())?;
 
-        let periodic_values: Vec<Challenge<SC>> = periodic_columns
-            .iter()
-            .map(|col| trace_domains[i].evaluate_periodic_column_at(col, zeta))
-            .collect();
+        let periodic_values: Vec<Challenge<SC>> =
+            trace_domains[i].evaluate_periodic_columns_at(&periodic_columns, zeta);
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
             trace_next: trace_next_ref,

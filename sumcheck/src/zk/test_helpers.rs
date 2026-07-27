@@ -9,8 +9,8 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
@@ -119,8 +119,7 @@ where
     let n_vars = p3_util::log2_strict_usize(evals.len());
 
     // One-column table built from the witness polynomial.
-    let poly = Poly::new(evals);
-    let table = Table::new(vec![poly]);
+    let table = Table::new(RowMajorMatrix::new(evals, 1 << n_vars));
 
     // Witness shape comes from the layout factory; binding mode is encoded
     // in the layout type itself.

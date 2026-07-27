@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use itertools::izip;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
@@ -35,12 +35,19 @@ fn coset_shift_and_scale_rows<F: Field>(
     debug_assert!(out_ncols >= ncols);
     debug_assert_eq!(out.len() / out_ncols, mat.len() / ncols);
     let powers = shift.shifted_powers(scale).collect_n(ncols);
+    // Pack the shared per-column weights once; every row reuses the same split.
+    let (powers_packed, powers_suffix) = F::Packing::pack_slice_with_suffix(&powers);
     out.par_chunks_exact_mut(out_ncols)
         .zip(mat.par_chunks_exact(ncols))
         .for_each(|(out_row, in_row)| {
-            izip!(out_row.iter_mut(), in_row, &powers).for_each(|(out, &coeff, &weight)| {
-                *out = coeff * weight;
-            });
+            // Only the first `ncols` entries carry data; the rest stays zero-padded.
+            let (out_packed, out_suffix) =
+                F::Packing::pack_slice_with_suffix_mut(&mut out_row[..ncols]);
+            let (in_packed, in_suffix) = F::Packing::pack_slice_with_suffix(in_row);
+            izip!(out_packed.iter_mut(), in_packed, powers_packed)
+                .for_each(|(out, &coeff, &weight)| *out = coeff * weight);
+            izip!(out_suffix.iter_mut(), in_suffix, powers_suffix)
+                .for_each(|(out, &coeff, &weight)| *out = coeff * weight);
         });
 }
 

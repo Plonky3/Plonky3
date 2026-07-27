@@ -66,6 +66,28 @@ pub const KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_24: usize = 23;
 /// (matching the Grain LFSR parameters used to generate the round constants below).
 pub const KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_32: usize = 31;
 
+const _: () = assert!(
+    KOALABEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL.len() == KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS
+);
+const _: () =
+    assert!(KOALABEAR_POSEIDON2_RC_16_EXTERNAL_FINAL.len() == KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS);
+const _: () =
+    assert!(KOALABEAR_POSEIDON2_RC_16_INTERNAL.len() == KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16);
+const _: () = assert!(
+    KOALABEAR_POSEIDON2_RC_24_EXTERNAL_INITIAL.len() == KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS
+);
+const _: () =
+    assert!(KOALABEAR_POSEIDON2_RC_24_EXTERNAL_FINAL.len() == KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS);
+const _: () =
+    assert!(KOALABEAR_POSEIDON2_RC_24_INTERNAL.len() == KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_24);
+const _: () = assert!(
+    KOALABEAR_POSEIDON2_RC_32_EXTERNAL_INITIAL.len() == KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS
+);
+const _: () =
+    assert!(KOALABEAR_POSEIDON2_RC_32_EXTERNAL_FINAL.len() == KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS);
+const _: () =
+    assert!(KOALABEAR_POSEIDON2_RC_32_INTERNAL.len() == KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_32);
+
 /// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
 ///
 /// It acts on arrays of the form either `[KoalaBear::Packing; WIDTH]` or `[KoalaBear; WIDTH]`. For speed purposes,

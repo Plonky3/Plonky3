@@ -9,7 +9,7 @@
 use p3_mds::util::first_row_to_first_col;
 use p3_monty_31::{MDSUtils, MdsMatrixMontyField31};
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct MDSBabyBearData;
 
 impl MDSUtils for MDSBabyBearData {

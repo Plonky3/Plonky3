@@ -16,7 +16,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField,
+    PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField, UniformSamplingField,
     impl_raw_serializable_primefield32, quotient_map_small_int, tonelli_shanks_two_adic,
 };
 use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
@@ -185,6 +185,17 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
 
 impl<MP: MontyParameters> Packable for MontyField31<MP> {}
 
+// Provide a blanket implementation for Monty31 fields here, which forwards the
+// implementation of the variables to the generic argument `<Field>Parameter`,
+// for which we implement the trait (KoalaBear, BabyBear).
+impl<MP> UniformSamplingField for MontyField31<MP>
+where
+    MP: UniformSamplingField + MontyParameters,
+{
+    const MAX_SINGLE_SAMPLE_BITS: usize = MP::MAX_SINGLE_SAMPLE_BITS;
+    const SAMPLING_BITS_M: [u64; 64] = MP::SAMPLING_BITS_M;
+}
+
 impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
     type PrimeSubfield = Self;
 
@@ -312,8 +323,8 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
                 let tail_sum = (lhs[4].value as u64) * (rhs[4].value as u64);
                 // head_sum < 4*P^2, tail_sum < P^2.
                 let head_sum_corr = head_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
-                // head_sum.min(head_sum_corr) is guaranteed to be < 2*P^2.
-                // Hence sum < 4P^2 < 2 * MONTY * P
+                // head_sum.min(head_sum_corr) reduces a value < 4*P^2 modulo MONTY*P,
+                // so it is < MONTY * P. Hence sum < 2 * MONTY * P.
                 let sum = head_sum.min(head_sum_corr) + tail_sum;
                 Self::new_monty(large_monty_reduce::<FP>(sum))
             }
@@ -326,8 +337,8 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
                     + (lhs[5].value as u64) * (rhs[5].value as u64);
                 // head_sum < 4*P^2, tail_sum < 2*P^2.
                 let head_sum_corr = head_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
-                // head_sum.min(head_sum_corr) is guaranteed to be < 2*P^2.
-                // Hence sum < 4P^2 < 2 * MONTY * P
+                // head_sum.min(head_sum_corr) reduces a value < 4*P^2 modulo MONTY*P,
+                // so it is < MONTY * P. Hence sum < 2 * MONTY * P.
                 let sum = head_sum.min(head_sum_corr) + tail_sum;
                 Self::new_monty(large_monty_reduce::<FP>(sum))
             }
@@ -342,8 +353,8 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
                 // head_sum, tail_sum are guaranteed to be < 4*P^2.
                 let head_sum_corr = head_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
                 let tail_sum_corr = tail_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
-                // head_sum.min(head_sum_corr), tail_sum.min(tail_sum_corr) is guaranteed to be < 2*P^2.
-                // Hence sum < 4P^2 < 2 * MONTY * P
+                // head_sum.min(head_sum_corr), tail_sum.min(tail_sum_corr) each reduce a value
+                // < 4*P^2 modulo MONTY*P, so each is < MONTY * P. Hence sum < 2 * MONTY * P.
                 let sum = head_sum.min(head_sum_corr) + tail_sum.min(tail_sum_corr);
                 Self::new_monty(large_monty_reduce::<FP>(sum))
             }
@@ -359,8 +370,8 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
                 // head_sum, tail_sum are guaranteed to be < 4*P^2.
                 let head_sum_corr = head_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
                 let tail_sum_corr = tail_sum.wrapping_sub((FP::PRIME as u64) << FP::MONTY_BITS);
-                // head_sum.min(head_sum_corr), tail_sum.min(tail_sum_corr) is guaranteed to be < 2*P^2.
-                // Hence sum < 4P^2 < 2 * MONTY * P
+                // head_sum.min(head_sum_corr), tail_sum.min(tail_sum_corr) each reduce a value
+                // < 4*P^2 modulo MONTY*P, so each is < MONTY * P. Hence sum < 2 * MONTY * P.
                 let sum = head_sum.min(head_sum_corr) + tail_sum.min(tail_sum_corr);
                 Self::new_monty(large_monty_reduce::<FP>(sum))
             }

@@ -5,12 +5,10 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use thiserror::Error;
 
 use super::{FoldingFactor, FoldingFactorError, ProtocolParameters};
-use crate::pcs::proof::WhirProof;
 
 /// Reasons a set of user-facing parameters cannot form a valid WHIR configuration.
 #[derive(Debug, Error)]
@@ -208,11 +206,6 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
-    /// Construct an empty proof shaped by this configuration.
-    pub(crate) fn empty_proof<MT: Mmcs<F>>(&self) -> WhirProof<F, EF, MT> {
-        WhirProof::empty(self.n_rounds(), self.final_queries)
-    }
-
     /// Derive a full protocol configuration from user-facing parameters.
     ///
     /// # Errors
@@ -674,8 +667,8 @@ where
                 log_inv_rate: last.log_inv_rate,
                 domain_size,
                 folded_domain_gen,
-                // Inherit OOD count from the last intermediate round.
-                ood_samples: last.ood_samples,
+                // The final phase has no OOD step; this field is unused here.
+                ood_samples: 0,
                 folding_pow_bits: self.final_folding_pow_bits,
             }
         }

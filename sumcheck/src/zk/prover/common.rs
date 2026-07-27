@@ -10,7 +10,6 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_zk_codes::ZkEncodingWithRandomness;
 use rand::Rng;
 
@@ -67,48 +66,20 @@ where
     // space is whatever the encoding defines.
     let masks: Vec<Vec<F>> = (0..k).map(|_| encoding.sample_message(rng)).collect();
 
-    // Encode each mask.
-    //
-    // Why explicit randomness: the prover must retain it for the base case.
-    //
-    //     draw order = an internally-drawing encode call
-    //     -> matched-RNG coupling with the witness-free simulator holds
-    let mut mask_randomness: Vec<Vec<F>> = Vec::with_capacity(k);
-    let codewords: Vec<Enc::Codeword> = masks
+    // Draw explicit randomness in the same order as scalar encoding would.
+    // The prover retains it for the base case.
+    let mask_randomness: Vec<Vec<F>> = masks
         .iter()
-        .map(|mask| {
-            let randomness = encoding.sample_randomness(rng);
-            let codeword = encoding.encode_with_randomness(mask, &randomness);
-            mask_randomness.push(randomness);
-            codeword
-        })
+        .map(|_| encoding.sample_randomness(rng))
         .collect();
 
-    // Stack the codewords column-wise and commit once.
-    let (commit, prover_data) = mmcs.commit_matrix(stack_codewords(&codewords));
+    // Batch encoding returns the same width-`k` matrix as encoding each mask
+    // separately and stacking the codewords column-wise.
+    let (commit, prover_data) =
+        mmcs.commit_matrix(encoding.encode_batch_with_randomness(&masks, &mask_randomness));
     challenger.observe(commit.clone());
 
     (masks, mask_randomness, (commit, prover_data))
-}
-
-/// Interleaves same-domain codewords into one width-`k` matrix.
-///
-/// ```text
-///     row z = ( cw_1(z), cw_2(z), ..., cw_k(z) )
-/// ```
-pub fn stack_codewords<F: Field, Cw: Matrix<F>>(codewords: &[Cw]) -> RowMajorMatrix<F> {
-    let height = codewords[0].height();
-    let width = codewords.len();
-    let mut values = F::zero_vec(height * width);
-    for (column, codeword) in codewords.iter().enumerate() {
-        // Each input codeword is a single column over the shared domain.
-        debug_assert_eq!(codeword.width(), 1);
-        debug_assert_eq!(codeword.height(), height);
-        for (row, value) in codeword.rows().enumerate() {
-            values[row * width + column] = value.into_iter().next().unwrap();
-        }
-    }
-    RowMajorMatrix::new(values, width)
 }
 
 /// Compute the auxiliary target, record it on the transcript, and return the running endpoint sum.

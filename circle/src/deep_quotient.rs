@@ -74,7 +74,8 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
 ///
 /// # Parameters
 ///
-/// - `alpha`: The random challenge scalar
+/// - `alpha_pow_width`: `alpha` raised to the power of the matrix width (`ps_at_x.len()`)
+/// - `alpha_powers`: `alpha^0, alpha^1, ..`, at least `ps_at_x.len()` of them
 /// - `x`: A point on the circle domain
 /// - `zeta`: The random challenge point (outside the original domain)
 /// - `ps_at_x`: Polynomial evaluations at point `x` (one per polynomial)
@@ -85,15 +86,15 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
 /// - `Some(value)`: the DEEP quotient value for this row.
 /// - `None`: the opening point coincides with this query point, so the denominator vanishes.
 pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<F>>(
-    alpha: EF,
+    alpha_pow_width: EF,
+    alpha_powers: &[EF],
     x: Point<F>,
     zeta: Point<EF>,
     ps_at_x: &[F],
     ps_at_zeta: &[EF],
 ) -> Option<EF> {
     // Compute the vanishing part: handles the (x - zeta) denominator
-    let (vp_num, vp_denom) =
-        deep_quotient_vanishing_part(x, zeta, alpha.exp_u64(ps_at_x.len() as u64));
+    let (vp_num, vp_denom) = deep_quotient_vanishing_part(x, zeta, alpha_pow_width);
 
     // On the circle, the denominator `|v_p(zeta)|^2` reduces to `2 * (1 - (x - zeta).x)`.
     // This is zero exactly when `x == zeta`.
@@ -102,7 +103,7 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
 
     // Compute the constraint part: handles the f(x) - f(zeta) numerator
     let constraint_part = dot_product::<EF, _, _>(
-        alpha.powers(),
+        alpha_powers.iter().copied(),
         izip!(ps_at_x, ps_at_zeta).map(|(&p_at_x, &p_at_zeta)| -p_at_zeta + p_at_x),
     );
 
@@ -345,13 +346,23 @@ mod tests {
         let ps_at_zeta = evals.evaluate_at_point(zeta);
 
         let mat_reduced = evals.deep_quotient_reduce(alpha, zeta, &ps_at_zeta);
+        let width = ps_at_zeta.len();
+        let alpha_pow_width = alpha.exp_u64(width as u64);
+        let alpha_powers = alpha.powers().collect_n(width);
         let row_reduced = evals
             .to_natural_order()
             .rows()
             .zip(domain.points())
             .map(|(ps_at_x, x)| {
-                deep_quotient_reduce_row(alpha, x, zeta, &ps_at_x.collect_vec(), &ps_at_zeta)
-                    .unwrap()
+                deep_quotient_reduce_row(
+                    alpha_pow_width,
+                    &alpha_powers,
+                    x,
+                    zeta,
+                    &ps_at_x.collect_vec(),
+                    &ps_at_zeta,
+                )
+                .unwrap()
             })
             .collect_vec();
         assert_eq!(cfft_permute_slice(&mat_reduced), row_reduced);
@@ -497,13 +508,36 @@ mod tests {
         let ps_at_x = [F::from_u8(1), F::from_u8(2)];
         let ps_at_zeta = [EF::from_u8(3), EF::from_u8(4)];
 
+        let alpha_pow_width = alpha.exp_u64(ps_at_x.len() as u64);
+        let alpha_powers = alpha.powers().collect_n(ps_at_x.len());
+
         // Lift the query point's coordinates into the extension field.
         // The opening point is now the same point, so `x - zeta` is the group identity.
         let zeta_on_x: Point<EF> = Point::new(EF::from(x.x), EF::from(x.y));
-        assert!(deep_quotient_reduce_row(alpha, x, zeta_on_x, &ps_at_x, &ps_at_zeta).is_none());
+        assert!(
+            deep_quotient_reduce_row(
+                alpha_pow_width,
+                &alpha_powers,
+                x,
+                zeta_on_x,
+                &ps_at_x,
+                &ps_at_zeta
+            )
+            .is_none()
+        );
 
         // A distinct opening point keeps the denominator nonzero and reduces normally.
         let zeta_off: Point<EF> = Point::from_projective_line(EF::from_u8(9));
-        assert!(deep_quotient_reduce_row(alpha, x, zeta_off, &ps_at_x, &ps_at_zeta).is_some());
+        assert!(
+            deep_quotient_reduce_row(
+                alpha_pow_width,
+                &alpha_powers,
+                x,
+                zeta_off,
+                &ps_at_x,
+                &ps_at_zeta
+            )
+            .is_some()
+        );
     }
 }

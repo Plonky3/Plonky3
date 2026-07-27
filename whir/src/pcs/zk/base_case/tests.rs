@@ -9,7 +9,7 @@ use core::slice::from_ref;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
-use p3_commit::{BatchOpeningRef, ExtensionMmcs, Mmcs};
+use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, dot_product};
@@ -22,7 +22,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::*;
-use crate::pcs::proof::QueryOpening;
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::zk::committer::FoldedRsCode;
 use crate::pcs::zk::mask::{MaskCodeShape, MaskGroupShape};
 use crate::pcs::zk::proof::BaseCaseZkProof;
@@ -181,12 +181,12 @@ fn honest_run(
         &source_randomness,
         &source_covector,
         &witnesses,
-        |position| {
-            let opening = extension_mmcs.open_batch(position, &source_data);
-            QueryOpening::Extension {
-                values: opening.opened_values.into_iter().next().unwrap(),
-                proof: opening.opening_proof,
-            }
+        |positions| {
+            QueryOpenings::Extension(SharedProofOpening::open(
+                &extension_mmcs,
+                positions,
+                &source_data,
+            ))
         },
         &mut prover_challenger,
         &mut rng,
@@ -232,22 +232,15 @@ fn verify_run(
         mask_covectors,
         mask_commitments,
         target,
-        |position, opening| {
-            let QueryOpening::Extension { values, proof } = opening else {
-                return Err(BaseCaseZkError::SourceOpeningRejected { position });
+        |positions, openings| {
+            let QueryOpenings::Extension(opening) = openings else {
+                return Err(BaseCaseZkError::SourceOpeningsRejected);
             };
-            extension_mmcs
-                .verify_batch(
-                    source_commitment,
-                    &dims,
-                    position,
-                    BatchOpeningRef {
-                        opened_values: from_ref(values),
-                        opening_proof: proof,
-                    },
-                )
-                .map_err(|_| BaseCaseZkError::SourceOpeningRejected { position })?;
-            Ok(values[0])
+            opening
+                .verify(extension_mmcs, source_commitment, &dims, positions)
+                .map_err(|_| BaseCaseZkError::SourceOpeningsRejected)?;
+            // Width-one source: the folded value is the single opened column.
+            Ok(opening.rows.iter().map(|row| row[0]).collect())
         },
         &mut challenger,
     )
@@ -318,15 +311,11 @@ fn base_case_rejects_tampered_blinded_randomness() {
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
-    // A randomness-reveal shift is absorbed before the spot positions are
-    // drawn, so the transcript diverges and a source opening is rejected.
-    // Whether it surfaces as a diverged Merkle opening or the encoding
-    // spot check depends on the transcript, so only rejection is asserted.
-    assert!(matches!(
-        err,
-        BaseCaseZkError::SourceOpeningRejected { .. }
-            | BaseCaseZkError::SourceSpotCheckFailed { .. },
-    ));
+    // The randomness reveal is absorbed before the spot positions are drawn.
+    //   verifier samples positions != the ones the proof was built for
+    //   -> the source multiproof opens leaves the verifier never asked for
+    //   -> index binding rejects the opening
+    assert_eq!(err, BaseCaseZkError::SourceOpeningsRejected);
 }
 
 #[test]
@@ -359,8 +348,8 @@ fn base_case_rejects_unbound_source_reveal() {
     )
     .unwrap_err();
     // The committed source genuinely differs from the reveal, so the source
-    // spot check always fails; the position it lands on is incidental.
-    assert!(matches!(err, BaseCaseZkError::SourceSpotCheckFailed { .. },));
+    // spot check fails. The failing position is fixed by the test seed.
+    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 1 });
 }
 
 #[test]
@@ -380,11 +369,14 @@ fn base_case_rejects_unbound_mask_reveal() {
     )
     .unwrap_err();
     // The committed mask genuinely differs from the reveal, so the mask
-    // spot check always fails in group 0; the position is incidental.
-    assert!(matches!(
+    // spot check fails in group 0. The failing position is fixed by the seed.
+    assert_eq!(
         err,
-        BaseCaseZkError::MaskSpotCheckFailed { group: 0, .. },
-    ));
+        BaseCaseZkError::MaskSpotCheckFailed {
+            group: 0,
+            position: 3
+        }
+    );
 }
 
 #[test]

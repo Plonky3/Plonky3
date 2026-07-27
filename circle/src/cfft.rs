@@ -15,7 +15,7 @@ use tracing::{debug_span, instrument};
 
 use crate::domain::CircleDomain;
 use crate::point::{Point, compute_lagrange_den_batched};
-use crate::{CfftPermutable, CfftView, cfft_permute_index, cfft_permute_slice};
+use crate::{CfftPermutable, CfftView, cfft_permute_slice};
 
 #[derive(Clone)]
 pub struct CircleEvaluations<F, M = RowMajorMatrix<F>> {
@@ -83,14 +83,19 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let h_inv = F::ONE.div_2exp_u64(domain.log_n as u64);
 
         let mut buf: Vec<F> = Vec::with_capacity(capacity.max(len));
-        cfft_layers(
-            buf.as_mut_ptr(),
-            domain.size(),
-            w,
-            &twiddles,
-            Some(&values),
-            Some(h_inv),
-        );
+        // SAFETY: `buf` has capacity for at least `len = domain.size() * w` elements, and
+        // `ingest` is set so `cfft_layers` initialises all of them from `values` before
+        // transforming.
+        unsafe {
+            cfft_layers(
+                buf.as_mut_ptr(),
+                domain.size(),
+                w,
+                &twiddles,
+                Some(&values),
+                Some(h_inv),
+            );
+        }
         // SAFETY: the first pass of `cfft_layers` copied every row of `values` into
         // `buf` before transforming it, so all `len` elements are initialised, and the
         // reservation above covers them.
@@ -219,14 +224,19 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
             .chain(twiddles)
             .collect_vec();
 
-        cfft_layers(
-            coeffs.values.as_mut_ptr(),
-            domain.size(),
-            w,
-            &layers,
-            None::<&RowMajorMatrix<F>>,
-            None,
-        );
+        // SAFETY: `coeffs.values` was reserved above to hold at least `target_len` elements,
+        // and every row beyond the original (lowest-index) block is written by a
+        // duplication layer before any butterfly layer reads it.
+        unsafe {
+            cfft_layers(
+                coeffs.values.as_mut_ptr(),
+                domain.size(),
+                w,
+                &layers,
+                None::<&RowMajorMatrix<F>>,
+                None,
+            );
+        }
 
         // SAFETY: every row with one of the top `added_bits` index bits set is written by
         // the duplication layer of its highest such bit (later duplication layers rewrite
@@ -305,13 +315,13 @@ fn log_group_rows<F>(log_h: usize, width: usize) -> usize {
 /// arithmetic, each one widens the window budget of its run by one bit instead of consuming it,
 /// keeping the number of passes unchanged.
 ///
-/// # Safety-relevant contract (not `unsafe fn` to keep call sites readable)
+/// # Safety
 ///
 /// `base` must be valid for reads and writes of `h * width` elements. Elements must be
 /// initialised, except (without `ingest`) rows whose index has a [`CfftLayer::Dup`] flipped
 /// bit set, and (with `ingest`) the whole buffer. `layers` must not be empty if `ingest` or
 /// `scale` is set (otherwise no pass would perform the copy or the scaling).
-fn cfft_layers<F: Field, B: Butterfly<F>, M: Matrix<F>>(
+unsafe fn cfft_layers<F: Field, B: Butterfly<F>, M: Matrix<F>>(
     base: *mut F,
     h: usize,
     width: usize,
@@ -360,16 +370,21 @@ fn cfft_layers<F: Field, B: Butterfly<F>, M: Matrix<F>>(
             log_stride
         )
         .in_scope(|| {
-            par_group_pass(
-                base,
-                h,
-                width,
-                &layers[start..end],
-                log_group_run,
-                log_stride,
-                pass_ingest,
-                pass_scale,
-            );
+            // SAFETY: `base` is valid for reads and writes of `h * width` elements per
+            // this function's contract, and the run `[start, end)` was chosen so its
+            // `flipped_bit`s fit within `[log_stride, log_stride + log_group_run)`.
+            unsafe {
+                par_group_pass(
+                    base,
+                    h,
+                    width,
+                    &layers[start..end],
+                    log_group_run,
+                    log_stride,
+                    pass_ingest,
+                    pass_scale,
+                );
+            }
         });
         start = end;
     }
@@ -383,9 +398,14 @@ fn cfft_layers<F: Field, B: Butterfly<F>, M: Matrix<F>>(
 /// `e = flipped_bit - log_stride` of `t` and applies the twiddle `b * j / h`, which reduces to
 /// index `t >> (e + 1)` into the contiguous twiddle slice for `hi`.
 ///
-/// See [`cfft_layers`] for the `ingest` and `scale` semantics and the safety contract.
+/// See [`cfft_layers`] for the `ingest` and `scale` semantics.
+///
+/// # Safety
+///
+/// `base` must be valid for reads and writes of `h * width` elements, per the same
+/// initialisation contract as [`cfft_layers`], restricted to the rows this pass touches.
 #[allow(clippy::too_many_arguments)]
-fn par_group_pass<F: Field, B: Butterfly<F>, M: Matrix<F>>(
+unsafe fn par_group_pass<F: Field, B: Butterfly<F>, M: Matrix<F>>(
     base: *mut F,
     h: usize,
     width: usize,
@@ -514,9 +534,7 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         reverse_slice_index_bits(&mut ys);
         ys
     }
-    pub(crate) fn nth_y_twiddle(&self, index: usize) -> F {
-        self.nth_point(cfft_permute_index(index << 1, self.log_n)).y
-    }
+
     pub(crate) fn x_twiddles(&self, layer: usize) -> Vec<F> {
         let generator = self.subgroup_generator() * (1 << layer);
         let shift = self.shift * (1 << layer);
@@ -578,6 +596,15 @@ mod tests {
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;
+
+    impl<F: ComplexExtendable> CircleDomain<F> {
+        /// Used only by [`crate::folding::fold_y_row`], the test-only reference implementation
+        /// of [`crate::folding::fold_y`]; see that function's doc comment.
+        pub(crate) fn nth_y_twiddle(&self, index: usize) -> F {
+            self.nth_point(crate::cfft_permute_index(index << 1, self.log_n))
+                .y
+        }
+    }
 
     #[test]
     fn test_cfft_icfft() {

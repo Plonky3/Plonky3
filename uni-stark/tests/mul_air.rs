@@ -21,7 +21,7 @@ use p3_symmetric::{
 };
 use p3_uni_stark::{StarkConfig, StarkGenericConfig, Val, prove, verify};
 use rand::distr::{Distribution, StandardUniform};
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 use rand::{RngExt, SeedableRng};
 
 /// How many `a * b = c` operations to do per row in the AIR.
@@ -257,13 +257,13 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
         <Val as Field>::Packing,
         MyHash,
         MyCompress,
-        SmallRng,
+        StdRng,
         2,
         8,
         4,
     >;
 
-    let val_mmcs = ValMmcs::new(hash, compress, 0, rng);
+    let val_mmcs = ValMmcs::new(hash, compress, 0, StdRng::seed_from_u64(1));
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
@@ -274,8 +274,8 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 
     let fri_params = FriParameters::new_testing_zk(challenge_mmcs);
-    type HidingPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
+    type HidingPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, StdRng::seed_from_u64(2));
     type MyConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
     let challenger = Challenger::new(perm);
     let config = MyConfig::new(pcs, challenger);

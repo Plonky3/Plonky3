@@ -5,7 +5,9 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_field::PrimeCharacteristicRing;
-use p3_lookup::{Challenges, Kind, Lookup, LookupProtocol, LookupTerminal};
+use p3_lookup::{
+    Challenges, Kind, Lookup, LookupProtocol, LookupTerminal, assert_uniform_tuple_width,
+};
 
 use crate::common::GlobalPreprocessed;
 use crate::config::{Challenge, Commitment, StarkGenericConfig as SGC, Val};
@@ -120,6 +122,10 @@ impl<SC: SGC> BatchTranscript<SC> {
         // - Local buses take a fresh index each, so nothing else can cancel them.
         // - The widest payload fixes where the bus offset sits, one power above it.
         let mut global_index: HashMap<&str, usize> = HashMap::new();
+        // Every tuple ever folded onto a given global bus must agree on width — see
+        // `assert_uniform_tuple_width`'s doc for why a mismatch would let two
+        // differently-shaped payloads fingerprint identically.
+        let mut global_width: HashMap<&str, usize> = HashMap::new();
         let mut next_bus = 0usize;
         let mut max_message_width = 1usize;
         let bus_ids: Vec<Vec<usize>> = all_lookups
@@ -129,16 +135,28 @@ impl<SC: SGC> BatchTranscript<SC> {
                     .as_ref()
                     .iter()
                     .map(|ctx| {
-                        // A lookup's payload width is the largest tuple it carries.
-                        for tuple in &ctx.elements {
-                            max_message_width = max_message_width.max(tuple.len());
-                        }
+                        // A lookup's own tuples must already agree on width, and its
+                        // payload width feeds the bus-offset power below.
+                        let ctx_width = assert_uniform_tuple_width(&ctx.elements, "lookup");
+                        max_message_width = max_message_width.max(ctx_width);
+
                         match &ctx.kind {
-                            Kind::Global(name) => *global_index.entry(name).or_insert_with(|| {
-                                let id = next_bus;
-                                next_bus += 1;
+                            Kind::Global(name) => {
+                                let id = *global_index.entry(name).or_insert_with(|| {
+                                    let id = next_bus;
+                                    next_bus += 1;
+                                    id
+                                });
+                                let expected = *global_width.entry(name).or_insert(ctx_width);
+                                assert_eq!(
+                                    expected, ctx_width,
+                                    "bus {name:?}: tuple widths {expected} and {ctx_width} \
+                                     differ; every interaction sharing a bus must use the \
+                                     same payload width, or a shorter tuple can alias a \
+                                     longer one",
+                                );
                                 id
-                            }),
+                            }
                             Kind::Local => {
                                 let id = next_bus;
                                 next_bus += 1;

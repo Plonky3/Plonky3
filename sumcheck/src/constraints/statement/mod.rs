@@ -4,7 +4,7 @@
 //!
 //! - **Equality**: explicit multilinear points `p(z_i) = s_i`, batched via eq polynomials.
 //! - **Select**: univariate evaluation claims, batched via the power-map select function.
-//! - **Initial**: mutable builder that accumulates constraints during commitment.
+//! - **Next**: repeat-last next-row evaluation constraints.
 
 /// Equality-based evaluation constraints with batched eq-polynomial combination.
 pub mod eq;

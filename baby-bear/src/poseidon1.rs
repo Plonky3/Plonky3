@@ -63,6 +63,15 @@ pub const BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16: usize = 13;
 /// With the +7.5% security margin: ⌈1.075 × 18.824⌉ = 21.
 pub const BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_24: usize = 21;
 
+const _: () = assert!(
+    BABYBEAR_POSEIDON1_RC_16.len()
+        == 2 * BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS + BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16
+);
+const _: () = assert!(
+    BABYBEAR_POSEIDON1_RC_24.len()
+        == 2 * BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS + BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_24
+);
+
 /// The Poseidon1 permutation for BabyBear.
 ///
 /// Acts on arrays of the form `[BabyBear; WIDTH]` or `[BabyBear::Packing; WIDTH]`.

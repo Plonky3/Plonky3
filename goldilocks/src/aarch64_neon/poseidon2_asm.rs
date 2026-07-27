@@ -1164,9 +1164,20 @@ pub fn external_terminal_permute_dual_w8(
 // Each operates on both packed lanes simultaneously using uint64x2_t.
 
 #[inline(always)]
+unsafe fn canonicalize_neon(x: uint64x2_t) -> uint64x2_t {
+    unsafe {
+        let p_vec = vdupq_n_u64(P);
+        let ge_p = vcgeq_u64(x, p_vec);
+        let sub = vandq_u64(ge_p, p_vec);
+        vsubq_u64(x, sub)
+    }
+}
+
+#[inline(always)]
 unsafe fn add_neon(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
     unsafe {
-        let res = vaddq_u64(a, b);
+        let b_canon = canonicalize_neon(b);
+        let res = vaddq_u64(a, b_canon);
         let overflow = vcgtq_u64(a, res);
         let adj = vshrq_n_u64::<32>(overflow);
         vaddq_u64(res, adj)
@@ -1176,8 +1187,9 @@ unsafe fn add_neon(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
 #[inline(always)]
 unsafe fn sub_neon(a: uint64x2_t, b: uint64x2_t) -> uint64x2_t {
     unsafe {
-        let res = vsubq_u64(a, b);
-        let underflow = vcgtq_u64(b, a);
+        let b_canon = canonicalize_neon(b);
+        let res = vsubq_u64(a, b_canon);
+        let underflow = vcgtq_u64(b_canon, a);
         let adj = vshrq_n_u64::<32>(underflow);
         vsubq_u64(res, adj)
     }
@@ -1276,6 +1288,7 @@ unsafe fn mds_light_neon<const WIDTH: usize>(state: &mut [uint64x2_t; WIDTH]) {
 }
 
 /// Convert separate lane arrays into NEON vector array.
+#[cfg(test)]
 #[inline]
 pub fn lanes_to_neon<const WIDTH: usize>(
     lane0: &[u64; WIDTH],
@@ -1289,6 +1302,7 @@ pub fn lanes_to_neon<const WIDTH: usize>(
 }
 
 /// Convert NEON vector array back to separate lane arrays.
+#[cfg(test)]
 #[inline]
 pub fn neon_to_lanes<const WIDTH: usize>(
     state_v: &[uint64x2_t; WIDTH],
@@ -2635,6 +2649,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_add_neon_second_order_overflow() {
+        unsafe {
+            let (r0, r1) = read_neon(add_neon(
+                make_neon(u64::MAX, u64::MAX),
+                make_neon(u64::MAX, u64::MAX),
+            ));
+            let expected = add_asm(u64::MAX, u64::MAX);
+            assert_eq!(canon(r0), canon(expected));
+            assert_eq!(canon(r1), canon(expected));
+            assert_eq!(canon(expected), (1u64 << 33) - 4);
+        }
+    }
+
+    #[test]
+    fn test_sub_neon_second_order_underflow() {
+        unsafe {
+            let (r0, r1) = read_neon(sub_neon(make_neon(0, 0), make_neon(u64::MAX, u64::MAX)));
+            let expected = sub_asm(0, u64::MAX);
+            assert_eq!(canon(r0), canon(expected));
+            assert_eq!(canon(r1), canon(expected));
+        }
+    }
+
     fn test_internal_neon_matches_scalar<const WIDTH: usize>(
         diag: [F; WIDTH],
         neon_fn: fn(&mut [uint64x2_t; WIDTH], &[u64]),
@@ -2868,6 +2906,30 @@ mod tests {
             for i in 0..8 {
                 prop_assert_eq!(canon(got[i]), canon(ref_state[i]));
             }
+        }
+
+        #[test]
+        fn test_add_neon_danger(a in danger_u64(), b in danger_u64()) {
+            let expected = (F::new(a) + F::new(b)).as_canonical_u64();
+            let got = unsafe { read_neon(add_neon(make_neon(a, a), make_neon(b, b))) };
+            prop_assert_eq!(canon(got.0), expected);
+            prop_assert_eq!(canon(got.1), expected);
+        }
+
+        #[test]
+        fn test_sub_neon_danger(a in danger_u64(), b in danger_u64()) {
+            let expected = (F::new(a) - F::new(b)).as_canonical_u64();
+            let got = unsafe { read_neon(sub_neon(make_neon(a, a), make_neon(b, b))) };
+            prop_assert_eq!(canon(got.0), expected);
+            prop_assert_eq!(canon(got.1), expected);
+        }
+
+        #[test]
+        fn test_double_neon_danger(a in danger_u64()) {
+            let expected = (F::new(a) + F::new(a)).as_canonical_u64();
+            let got = unsafe { read_neon(double_neon(make_neon(a, a))) };
+            prop_assert_eq!(canon(got.0), expected);
+            prop_assert_eq!(canon(got.1), expected);
         }
     }
 

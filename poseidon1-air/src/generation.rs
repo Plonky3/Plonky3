@@ -24,41 +24,15 @@
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
-use p3_field::{PrimeField, dot_product};
+use p3_field::PrimeField;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
-use p3_mds::karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
 use p3_poseidon1::external::mds_multiply;
 use tracing::instrument;
 
 use crate::columns::{Poseidon1Cols, num_cols};
+use crate::mds_dispatch::mds_dispatch;
 use crate::{FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox};
-
-/// Karatsuba MDS multiply for trace generation.
-///
-/// Uses Karatsuba convolution for supported widths (16, 24), falling back
-/// to dense O(t²) multiplication otherwise. Concrete field types satisfy
-/// the `Copy` bound required by the Karatsuba implementation.
-#[inline]
-fn mds_for_trace_gen<F: PrimeField, const WIDTH: usize>(
-    state: &mut [F; WIDTH],
-    circ_col: &[F; WIDTH],
-    dense_mds: &[[F; WIDTH]; WIDTH],
-) {
-    match WIDTH {
-        16 => {
-            let state_16: &mut [F; 16] = state.as_mut_slice().try_into().unwrap();
-            let col_16: &[F; 16] = circ_col.as_slice().try_into().unwrap();
-            mds_circulant_karatsuba_16(state_16, col_16);
-        }
-        24 => {
-            let state_24: &mut [F; 24] = state.as_mut_slice().try_into().unwrap();
-            let col_24: &[F; 24] = circ_col.as_slice().try_into().unwrap();
-            mds_circulant_karatsuba_24(state_24, col_24);
-        }
-        _ => mds_multiply(state, dense_mds),
-    }
-}
 
 /// Generate a trace for multiple Poseidon1 permutations (vectorized layout).
 ///
@@ -375,7 +349,7 @@ fn generate_full_round<
 
     // MDS multiply: state = MDS * state.
     // Karatsuba MDS for supported widths, dense fallback otherwise.
-    mds_for_trace_gen(state, circ_col, dense_mds);
+    mds_dispatch(state, circ_col, dense_mds);
 
     // Write the post-state to the trace.
     full_round
@@ -419,7 +393,7 @@ fn generate_sparse_partial_round<
 
     // Sparse matrix multiply.
     let old_s0 = state[0];
-    state[0] = dot_product(state.iter().copied(), first_row.iter().copied());
+    state[0] = F::dot_product(state, first_row);
     for i in 1..WIDTH {
         state[i] += old_s0 * v[i - 1];
     }

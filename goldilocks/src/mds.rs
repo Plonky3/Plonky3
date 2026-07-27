@@ -6,11 +6,13 @@
 //! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
 //! database.
 
-use p3_dft::Radix2Bowers;
+use p3_dft::{Radix2Bowers, TwoAdicSubgroupDft};
+use p3_field::PrimeCharacteristicRing;
 use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::Convolve;
-use p3_mds::util::{apply_circulant, apply_circulant_fft, first_row_to_first_col};
+use p3_mds::util::{apply_circulant, apply_circulant_fft_precomputed, first_row_to_first_col};
 use p3_symmetric::Permutation;
+use spin::LazyLock;
 
 use crate::{Goldilocks, reduce128};
 
@@ -150,10 +152,18 @@ const MATRIX_CIRC_MDS_32_GOLDILOCKS: [u64; 32] = [
     0x68ED2D2DB4B87697, 0x8B264C98A74E9D3B, 0x09EC23D83D847B09, 0x2C9A4D26669349A5,
 ];
 
+/// Frequency-domain transform of the width-32 circulant column, computed once
+/// and reused across every `permute` call instead of re-running the DFT of
+/// this fixed matrix on every invocation.
+static MATRIX_CIRC_MDS_32_FREQ: LazyLock<[Goldilocks; 32]> = LazyLock::new(|| {
+    const ENTRIES: [u64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_GOLDILOCKS);
+    let column = ENTRIES.map(Goldilocks::from_u64).to_vec();
+    FFT_ALGO.dft(column).try_into().unwrap()
+});
+
 impl Permutation<[Goldilocks; 32]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 32]) -> [Goldilocks; 32] {
-        const ENTRIES: [u64; 32] = first_row_to_first_col(&MATRIX_CIRC_MDS_32_GOLDILOCKS);
-        apply_circulant_fft(&FFT_ALGO, ENTRIES, &input)
+        apply_circulant_fft_precomputed(&FFT_ALGO, &MATRIX_CIRC_MDS_32_FREQ, &input)
     }
 }
 impl MdsPermutation<Goldilocks, 32> for MdsMatrixGoldilocks {}
@@ -178,10 +188,18 @@ const MATRIX_CIRC_MDS_64_GOLDILOCKS: [u64; 64] = [
     0xA8AE615C19CC2B99, 0xBC44444388444445, 0xDFE3F1F81CFC7E40, 0xDA4924916D24924A,
 ];
 
+/// Frequency-domain transform of the width-64 circulant column, computed once
+/// and reused across every `permute` call instead of re-running the DFT of
+/// this fixed matrix on every invocation.
+static MATRIX_CIRC_MDS_64_FREQ: LazyLock<[Goldilocks; 64]> = LazyLock::new(|| {
+    const ENTRIES: [u64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_GOLDILOCKS);
+    let column = ENTRIES.map(Goldilocks::from_u64).to_vec();
+    FFT_ALGO.dft(column).try_into().unwrap()
+});
+
 impl Permutation<[Goldilocks; 64]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 64]) -> [Goldilocks; 64] {
-        const ENTRIES: [u64; 64] = first_row_to_first_col(&MATRIX_CIRC_MDS_64_GOLDILOCKS);
-        apply_circulant_fft(&FFT_ALGO, ENTRIES, &input)
+        apply_circulant_fft_precomputed(&FFT_ALGO, &MATRIX_CIRC_MDS_64_FREQ, &input)
     }
 }
 impl MdsPermutation<Goldilocks, 64> for MdsMatrixGoldilocks {}

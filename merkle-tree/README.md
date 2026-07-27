@@ -5,7 +5,7 @@ commit to batches of trace and LDE matrices.
 
 Key items:
 
-- `MerkleTree` — a binary Merkle tree over rows of multiple matrices of differing heights
+- `MerkleTree` — an N-ary Merkle tree (with binary bridge levels) over rows of multiple matrices of differing heights
 - `MerkleTreeMmcs` — the `p3_commit::Mmcs` instantiation, with `verify_batch` for opening verification
 - `MerkleTreeHidingMmcs` — a hiding variant that salts leaves with caller-supplied randomness
 - `PrunedMerklePaths` / `PrunedBatchOpening` — de-duplicated multi-opening proofs

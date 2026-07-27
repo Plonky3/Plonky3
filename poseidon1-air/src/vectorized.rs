@@ -171,6 +171,7 @@ impl<
 /// Wraps a standard `Poseidon1Air` and applies it `VECTOR_LEN` times per row.
 /// All permutations within a row share the same round constants but operate
 /// on independent state inputs.
+#[derive(Debug, Clone)]
 pub struct VectorizedPoseidon1Air<
     F: PrimeCharacteristicRing,
     const WIDTH: usize,
@@ -229,6 +230,34 @@ impl<
     {
         let mut rng = SmallRng::seed_from_u64(1);
         let inputs = (0..num_hashes).map(|_| rng.random()).collect();
+        generate_vectorized_trace_rows::<
+            _,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+            VECTOR_LEN,
+        >(
+            inputs,
+            &self.air.full_constants,
+            &self.air.partial_constants,
+            extra_capacity_bits,
+        )
+    }
+
+    /// Generate a vectorized trace from caller-supplied permutation inputs.
+    ///
+    /// Unlike [`Self::generate_vectorized_trace_rows`], this proves the actual `inputs`
+    /// rather than fixed-seed random ones.
+    pub fn generate_vectorized_trace_rows_from_inputs(
+        &self,
+        inputs: Vec<[F; WIDTH]>,
+        extra_capacity_bits: usize,
+    ) -> RowMajorMatrix<F>
+    where
+        F: PrimeField,
+    {
         generate_vectorized_trace_rows::<
             _,
             WIDTH,

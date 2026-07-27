@@ -15,7 +15,6 @@ use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout as _, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -24,8 +23,8 @@ use p3_whir::parameters::{
     DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
 };
 use p3_whir::pcs::prover::WhirProver;
+use rand::SeedableRng;
 use rand::rngs::SmallRng;
-use rand::{RngExt, SeedableRng};
 use tracing::{info, warn};
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
@@ -170,11 +169,9 @@ fn main() {
         "WHIR PCS"
     );
 
-    // Generate one random multilinear polynomial f: {0,1}^m -> F and expose it
-    // as a single-column table.
+    // Generate one random single-column table.
     let mut rng = SmallRng::seed_from_u64(0);
-    let polynomial = Poly::<F>::new((0..1 << num_variables).map(|_| rng.random()).collect());
-    let table = Table::new(vec![polynomial]);
+    let table = Table::rand(&mut rng, 1, num_variables);
     let witness = Layout::new_witness(vec![table], folding_factor.at_round(0));
 
     let point_schedule: PointSchedule = (0..num_evaluations)

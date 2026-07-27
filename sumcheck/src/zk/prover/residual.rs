@@ -221,6 +221,10 @@ mod tests {
             0
         }
 
+        fn codeword_len(&self) -> usize {
+            self.ell_zk
+        }
+
         fn encode<R: Rng>(&self, msg: &[EF], _rng: &mut R) -> Self::Codeword {
             RowMajorMatrix::new_col(msg.to_vec())
         }
