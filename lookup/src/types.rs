@@ -572,7 +572,7 @@ mod tests {
                 ),
             ],
         }];
-        Lookups::from_interactions(&[], &local);
+        Lookups::from_interactions(&[], &local, &[]);
     }
 
     #[test]
