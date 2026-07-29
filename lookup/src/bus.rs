@@ -6,7 +6,10 @@
 //!
 //! The proving system guarantees that all messages on a bus balance globally.
 
+use alloc::vec::Vec;
+
 use crate::builder::InteractionBuilder;
+use crate::count::Count;
 
 /// Subset (table-lookup) bus.
 ///
@@ -42,17 +45,22 @@ impl<'a> LookupBus<'a> {
     /// # Arguments
     ///
     /// - `key` — elements identifying the entry.
-    /// - `multiplicity` — number of lookups this row performs.
+    /// - `count` — lookups this row performs, with its per-row magnitude bound.
+    ///
+    /// # Soundness
+    ///
+    /// - A constant such as `1` fixes its bound automatically.
+    /// - A variable count must declare a bound the AIR constrains it to respect.
     pub fn lookup_key<AB, E>(
         &self,
         builder: &mut AB,
         key: impl IntoIterator<Item = E>,
-        multiplicity: impl Into<AB::Expr>,
+        count: impl Into<Count<AB::Expr>>,
     ) where
         AB: InteractionBuilder,
         E: Into<AB::Expr>,
     {
-        builder.push_interaction(self.name, key, multiplicity, 1);
+        builder.push_interaction(self.name, key, count);
     }
 
     /// Provide a table entry.
@@ -72,7 +80,45 @@ impl<'a> LookupBus<'a> {
         AB: InteractionBuilder,
         E: Into<AB::Expr>,
     {
-        builder.push_interaction(self.name, key, -num_lookups.into(), 0);
+        // The provided side supplies entries rather than querying them.
+        // It stays out of the query height check, so its bound is zero.
+        builder.push_interaction(self.name, key, Count::provided(-num_lookups.into()));
+    }
+
+    /// Query the table with one of several mutually-exclusive keys.
+    ///
+    /// - At most one branch fires per row, selected by its flag.
+    /// - The active branch performs one lookup.
+    /// - An all-inactive row performs none.
+    ///
+    /// # Arguments
+    ///
+    /// - `branches` — one `(flag, key)` pair per mutually-exclusive case.
+    ///
+    /// # Soundness
+    ///
+    /// - The flags must be boolean.
+    /// - The flags must sum to at most one on every row.
+    /// - The AIR must enforce both rules.
+    /// - This method only records the flags.
+    pub fn lookup_key_exclusive<AB>(
+        &self,
+        builder: &mut AB,
+        branches: impl IntoIterator<Item = (AB::Expr, Vec<AB::Expr>)>,
+    ) where
+        AB: InteractionBuilder,
+    {
+        // Each branch is a unit query gated by its flag.
+        //
+        // - The count is `+1`.
+        // - So the numerator picks up just the flag.
+        // - The weight is `1`, matching one lookup per active row.
+        builder.push_exclusive_interaction(
+            self.name,
+            branches
+                .into_iter()
+                .map(|(flag, key)| (flag, Count::from(1), key)),
+        );
     }
 }
 
@@ -108,17 +154,22 @@ impl<'a> PermutationCheckBus<'a> {
     /// # Arguments
     ///
     /// - `fields` — the message elements.
-    /// - `multiplicity` — number of sends this row performs.
+    /// - `count` — sends this row performs, with its per-row magnitude bound.
+    ///
+    /// # Soundness
+    ///
+    /// - A constant such as `1` fixes its bound automatically.
+    /// - A variable count must declare a bound the AIR constrains it to respect.
     pub fn send<AB, E>(
         &self,
         builder: &mut AB,
         fields: impl IntoIterator<Item = E>,
-        multiplicity: impl Into<AB::Expr>,
+        count: impl Into<Count<AB::Expr>>,
     ) where
         AB: InteractionBuilder,
         E: Into<AB::Expr>,
     {
-        builder.push_interaction(self.name, fields, multiplicity, 1);
+        builder.push_interaction(self.name, fields, count);
     }
 
     /// Receive a message.
@@ -126,17 +177,23 @@ impl<'a> PermutationCheckBus<'a> {
     /// # Arguments
     ///
     /// - `fields` — the message elements.
-    /// - `multiplicity` — number of receives this row performs.
+    /// - `count` — receives this row performs, with its per-row magnitude bound.
+    ///
+    /// # Soundness
+    ///
+    /// - A constant such as `1` fixes its bound automatically.
+    /// - A variable count must declare a bound the AIR constrains it to respect.
     pub fn receive<AB, E>(
         &self,
         builder: &mut AB,
         fields: impl IntoIterator<Item = E>,
-        multiplicity: impl Into<AB::Expr>,
+        count: impl Into<Count<AB::Expr>>,
     ) where
         AB: InteractionBuilder,
         E: Into<AB::Expr>,
     {
-        builder.push_interaction(self.name, fields, -multiplicity.into(), 1);
+        // A receive is a negative send: flip the sign, keep the magnitude bound.
+        builder.push_interaction(self.name, fields, -count.into());
     }
 }
 
@@ -179,6 +236,7 @@ mod tests {
         type PreprocessedWindow = RowWindow<'static, F>;
         type MainWindow = RowWindow<'static, F>;
         type PublicVar = F;
+        type PeriodicVar = F;
 
         fn main(&self) -> Self::MainWindow {
             unimplemented!()
@@ -192,7 +250,7 @@ mod tests {
         fn is_last_row(&self) -> Self::Expr {
             unimplemented!()
         }
-        fn is_transition_window(&self, _: usize) -> Self::Expr {
+        fn is_transition(&self) -> Self::Expr {
             unimplemented!()
         }
         fn assert_zero<I: Into<Self::Expr>>(&mut self, _: I) {}
@@ -203,10 +261,11 @@ mod tests {
             &mut self,
             bus_name: &str,
             fields: impl IntoIterator<Item = E>,
-            _count: impl Into<Self::Expr>,
-            count_weight: u32,
+            count: impl Into<Count<Self::Expr>>,
         ) {
+            // Count the payload elements, then keep only the per-row bound.
             let num_fields = fields.into_iter().count();
+            let (_, count_weight) = count.into().into_parts();
             self.interactions.push(MockInteraction {
                 bus_name: String::from(bus_name),
                 num_fields,
@@ -216,7 +275,7 @@ mod tests {
 
         fn push_local_interaction(
             &mut self,
-            tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+            tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
         ) {
             tuples.into_iter().for_each(drop);
         }
@@ -230,7 +289,7 @@ mod tests {
     fn lookup_key_uses_weight_1() {
         let bus = LookupBus::new("mem");
         let mut b = MockBuilder::new();
-        bus.lookup_key(&mut b, [F::ONE, F::TWO], F::ONE);
+        bus.lookup_key(&mut b, [F::ONE, F::TWO], 1);
 
         assert_eq!(b.interactions.len(), 1);
         assert_eq!(b.interactions[0].bus_name, "mem");
@@ -252,8 +311,8 @@ mod tests {
         let bus = PermutationCheckBus::new("dispatch");
         let mut b = MockBuilder::new();
 
-        bus.send(&mut b, [F::ONE], F::ONE);
-        bus.receive(&mut b, [F::TWO], F::ONE);
+        bus.send(&mut b, [F::ONE], 1);
+        bus.receive(&mut b, [F::TWO], 1);
 
         assert_eq!(b.interactions.len(), 2);
         assert_eq!(b.interactions[0].count_weight, 1);
@@ -266,8 +325,8 @@ mod tests {
         let rc = LookupBus::new("range_check");
         let mut b = MockBuilder::new();
 
-        mem.lookup_key(&mut b, [F::ONE], F::ONE);
-        rc.lookup_key(&mut b, [F::TWO], F::ONE);
+        mem.lookup_key(&mut b, [F::ONE], 1);
+        rc.lookup_key(&mut b, [F::TWO], 1);
 
         assert_eq!(b.num_global_interactions(), 2);
         assert_eq!(b.interactions[0].bus_name, "memory");

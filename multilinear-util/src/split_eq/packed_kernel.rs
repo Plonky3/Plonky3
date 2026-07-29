@@ -627,7 +627,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
@@ -808,8 +807,8 @@ mod tests {
             let packed_inner = 1usize << inner_k;
             let (eq1, chunk, w0) = random_prefix_inputs(n_packed, packed_inner, seed);
 
-            let mut out_kernel = vec![PackedEF::ZERO; packed_inner];
-            let mut out_eager = vec![PackedEF::ZERO; packed_inner];
+            let mut out_kernel = PackedEF::zero_vec(packed_inner);
+            let mut out_eager = PackedEF::zero_vec(packed_inner);
 
             compress_prefix_to_packed_packed::<F, EF>(&mut out_kernel, &eq1, &chunk, w0);
             compress_prefix_to_packed_packed_kernel_eager::<F, EF>(
@@ -899,8 +898,8 @@ mod tests {
         //     packed_inner = 5         - one tile of length 5 (< TILE = 8).
         let (eq1, chunk, w0) = random_prefix_inputs(3, 5, 0xC0DE);
 
-        let mut out_kernel = vec![PackedEF::ZERO; 5];
-        let mut out_eager = vec![PackedEF::ZERO; 5];
+        let mut out_kernel = PackedEF::zero_vec(5);
+        let mut out_eager = PackedEF::zero_vec(5);
 
         compress_prefix_to_packed_packed::<F, EF>(&mut out_kernel, &eq1, &chunk, w0);
         compress_prefix_to_packed_packed_kernel_eager::<F, EF>(&mut out_eager, &eq1, &chunk, w0);
@@ -918,8 +917,8 @@ mod tests {
         //     packed_inner = 17        - two full tiles + one short tail.
         let (eq1, chunk, w0) = random_prefix_inputs(4, 17, 0xC0FFEE);
 
-        let mut out_kernel = vec![PackedEF::ZERO; 17];
-        let mut out_eager = vec![PackedEF::ZERO; 17];
+        let mut out_kernel = PackedEF::zero_vec(17);
+        let mut out_eager = PackedEF::zero_vec(17);
 
         compress_prefix_to_packed_packed::<F, EF>(&mut out_kernel, &eq1, &chunk, w0);
         compress_prefix_to_packed_packed_kernel_eager::<F, EF>(&mut out_eager, &eq1, &chunk, w0);

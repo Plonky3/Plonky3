@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Add broadcast, pack_columns, pack_columns_fn, and unpack_iter to PackedValue (#1450)
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Perf: abstract away Copy vs Clone (#1463)
+- Feat: expose Poseidon2 large instances (#1508)
+- Field: add division ops for packed binomial extension (#1512)
+- Refactor(koala-bear): simplify poseidon2 internal layer (#1542)
+- Add property tests for x86 Poseidon2 width-32 (#1550)
+- Test(poseidon1): validate all SIMD lanes against scalar outputs (#1560)
+- Poseidon1: verify generated constants against Rust tables (#1594)
+- Add carry-critical NEON dot product regression tests (#1600)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Chore: update CHANGELOGs (#1785)
+
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Add carry-critical NEON dot product regression tests (#1600)
+
+## [0.5.2] - 2026-03-27
+### Merged PRs
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Perf: abstract away Copy vs Clone (#1463)
+- Fix: use `u64` arithmetic in 64-bit challenger to avoid truncation (#1482)
+
 ## [0.5.1] - 2026-03-16
 ### Merged PRs
 - Fix overflow dot_product_5 neon (#1429)

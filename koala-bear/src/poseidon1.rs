@@ -62,6 +62,15 @@ pub const KOALABEAR_POSEIDON_PARTIAL_ROUNDS_16: usize = 20;
 /// With the +7.5% security margin: ⌈1.075 × 20.230⌉ = 23.
 pub const KOALABEAR_POSEIDON_PARTIAL_ROUNDS_24: usize = 23;
 
+const _: () = assert!(
+    KOALABEAR_POSEIDON1_RC_16.len()
+        == 2 * KOALABEAR_POSEIDON_HALF_FULL_ROUNDS + KOALABEAR_POSEIDON_PARTIAL_ROUNDS_16
+);
+const _: () = assert!(
+    KOALABEAR_POSEIDON1_RC_24.len()
+        == 2 * KOALABEAR_POSEIDON_HALF_FULL_ROUNDS + KOALABEAR_POSEIDON_PARTIAL_ROUNDS_24
+);
+
 /// The Poseidon1 permutation for KoalaBear.
 ///
 /// Acts on arrays of the form `[KoalaBear; WIDTH]` or `[KoalaBear::Packing; WIDTH]`.

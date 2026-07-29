@@ -1,4 +1,5 @@
 use p3_field::{Algebra, ExtensionField, Field, InjectiveMonomial};
+use serde::{Deserialize, Serialize};
 
 use crate::symbolic::variable::{BaseEntry, SymbolicVariable};
 use crate::symbolic::{SymLeaf, SymbolicExpr};
@@ -8,7 +9,7 @@ use crate::{AirBuilder, WindowAccess};
 ///
 /// These represent the atomic building blocks of AIR constraint expressions:
 /// trace column references, selectors, and field constants.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum BaseLeaf<F> {
     /// A reference to a trace column or public input.
     Variable(SymbolicVariable<F>),
@@ -48,6 +49,18 @@ impl<F: Field> SymLeaf for BaseLeaf<F> {
         }
     }
 
+    fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize {
+        match self {
+            Self::Variable(v) => v.poly_degree(trace_len, periodic_periods),
+            // Boundary selectors are non-zero at a single row, so they are degree-`(N - 1)`
+            // polynomials, while the transition selector only needs to vanish on the last
+            // row and so is linear.
+            Self::IsFirstRow | Self::IsLastRow => trace_len.saturating_sub(1),
+            Self::IsTransition => 1,
+            Self::Constant(_) => 0,
+        }
+    }
+
     fn as_const(&self) -> Option<&F> {
         match self {
             Self::Constant(c) => Some(c),
@@ -77,12 +90,26 @@ impl<F: Field, EF: ExtensionField<F>> From<F> for SymbolicExpression<EF> {
 impl<F: Field> SymbolicExpression<F> {
     /// Evaluate this symbolic expression against a concrete [`AirBuilder`].
     ///
-    /// Leaves resolve from the builder's trace windows, public values,
-    /// and selectors. Arithmetic nodes recurse into children.
+    /// # Overview
+    ///
+    /// - Walk the expression tree top-down.
+    /// - Replace each leaf with the builder's concrete value.
+    /// - Recurse into arithmetic nodes; combine in the builder's algebra.
+    ///
+    /// # Algorithm
+    ///
+    /// ```text
+    ///     leaf   → builder lookup (main / preprocessed / public / periodic / selector / constant)
+    ///     x + y  → resolve(x) + resolve(y)
+    ///     x - y  → resolve(x) - resolve(y)
+    ///     x * y  → resolve(x) * resolve(y)
+    ///     -x     → -resolve(x)
+    /// ```
     ///
     /// # Panics
     ///
-    /// Panics on periodic columns and row offsets beyond 1.
+    /// - Row offset other than 0 or 1.
+    /// - Column index out of bounds.
     pub fn resolve<AB>(&self, builder: &AB) -> AB::Expr
     where
         AB: AirBuilder<F = F>,
@@ -90,6 +117,8 @@ impl<F: Field> SymbolicExpression<F> {
         match self {
             Self::Leaf(leaf) => match leaf {
                 BaseLeaf::Variable(v) => match v.entry {
+                    // Main trace: offset 0 = current row, offset 1 = next row.
+                    // Symbolic builders only emit two-row windows.
                     BaseEntry::Main { offset } => {
                         let main = builder.main();
                         match offset {
@@ -104,6 +133,7 @@ impl<F: Field> SymbolicExpression<F> {
                             _ => panic!("expressions cannot span more than two rows"),
                         }
                     }
+                    // Preprocessed trace: same shape, commitment-free trace.
                     BaseEntry::Preprocessed { offset } => {
                         let prep = builder.preprocessed();
                         match offset {
@@ -118,16 +148,20 @@ impl<F: Field> SymbolicExpression<F> {
                             _ => panic!("expressions cannot span more than two rows"),
                         }
                     }
+                    // Public input: direct slice lookup.
                     BaseEntry::Public => builder.public_values()[v.index].into(),
-                    BaseEntry::Periodic => {
-                        panic!("periodic columns cannot be resolved in this context")
-                    }
+                    // Periodic column at the current row.
+                    // Empty default slice → out-of-bounds panic on stray emissions.
+                    BaseEntry::Periodic => builder.periodic_values()[v.index].into(),
                 },
+                // Boundary and transition selectors come straight from the builder.
                 BaseLeaf::IsFirstRow => builder.is_first_row(),
                 BaseLeaf::IsLastRow => builder.is_last_row(),
                 BaseLeaf::IsTransition => builder.is_transition_window(2),
+                // Lift the field constant into the builder's expression algebra.
                 BaseLeaf::Constant(c) => AB::Expr::from(*c),
             },
+            // Arithmetic: recurse on operands, combine in the builder's algebra.
             Self::Add { x, y, .. } => x.resolve(builder) + y.resolve(builder),
             Self::Sub { x, y, .. } => x.resolve(builder) - y.resolve(builder),
             Self::Neg { x, .. } => -x.resolve(builder),
@@ -259,6 +293,64 @@ mod tests {
             2,
             "Multiplication should sum degrees"
         );
+    }
+
+    #[test]
+    fn test_symbolic_expression_poly_degree() {
+        const N: usize = 8;
+
+        // The transition selector is linear, unlike the boundary selectors which are
+        // degree-`(N - 1)` polynomials.
+        let is_transition = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsTransition);
+        assert_eq!(is_transition.poly_degree(N, &[]), 1);
+
+        let is_first_row = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsFirstRow);
+        assert_eq!(is_first_row.poly_degree(N, &[]), N - 1);
+
+        // Constants contribute nothing.
+        let constant = SymbolicExpression::Leaf(BaseLeaf::Constant(BabyBear::new(5)));
+        assert_eq!(constant.poly_degree(N, &[]), 0);
+
+        // `is_transition * main` is degree `1 + (N - 1) = N`.
+        let main = SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(
+            BaseEntry::Main { offset: 0 },
+            0,
+        ));
+        let guarded = is_transition * main.clone();
+        assert_eq!(guarded.poly_degree(N, &[]), N);
+
+        // Products of periodic columns sum their reduced degrees: two period-2
+        // columns give `(N - N/2) + (N - N/2) = N`, versus `2(N - 1)` for two
+        // regular columns.
+        let p0 =
+            SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(BaseEntry::Periodic, 0));
+        let p1 =
+            SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(BaseEntry::Periodic, 1));
+        let periodic_product = p0 * p1;
+        assert_eq!(periodic_product.poly_degree(N, &[2, 2]), N);
+
+        // Sums take the max degree of their operands.
+        let sum = main + SymbolicExpression::Leaf(BaseLeaf::IsTransition);
+        assert_eq!(sum.poly_degree(N, &[]), N - 1);
+    }
+
+    #[test]
+    fn poly_degree_handles_shared_dag_in_linear_time() {
+        // Repeated squaring builds a DAG of depth `d` whose flattened tree has
+        // `2^d` leaves but only `O(d)` distinct nodes. `poly_degree` must run in
+        // time proportional to the distinct nodes; without memoization this test
+        // would take `O(2^d)` and never finish.
+        const DEPTH: usize = 30;
+        const N: usize = 1 << 10;
+
+        let mut expr =
+            SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(BaseEntry::Periodic, 0));
+        for _ in 0..DEPTH {
+            expr = expr.clone() * expr.clone();
+        }
+
+        // The period-2 column has degree `N - N/2 = N/2`; each squaring doubles it.
+        assert_eq!(expr.poly_degree(N, &[2]), (N / 2) << DEPTH);
     }
 
     #[test]
@@ -791,10 +883,17 @@ mod tests {
         assert_eq!(result.degree_multiple(), 0);
     }
 
-    /// Two-row trace builder.
+    /// Minimal builder used to drive symbolic-expression resolution.
+    ///
+    /// Carries:
+    /// - a 2-row main trace,
+    /// - a public-value slice,
+    /// - precomputed selector values for the current row,
+    /// - a periodic-column row evaluated at the current step.
     struct ResolveTestBuilder {
         main: RowMajorMatrix<BabyBear>,
         public_values: Vec<BabyBear>,
+        periodic_row: Vec<BabyBear>,
         is_first: BabyBear,
         is_last: BabyBear,
         is_transition: BabyBear,
@@ -807,6 +906,7 @@ mod tests {
         type PreprocessedWindow = RowMajorMatrix<BabyBear>;
         type MainWindow = RowMajorMatrix<BabyBear>;
         type PublicVar = BabyBear;
+        type PeriodicVar = BabyBear;
 
         fn main(&self) -> Self::MainWindow {
             self.main.clone()
@@ -824,7 +924,7 @@ mod tests {
             self.is_last
         }
 
-        fn is_transition_window(&self, _: usize) -> Self::Expr {
+        fn is_transition(&self) -> Self::Expr {
             self.is_transition
         }
 
@@ -833,13 +933,18 @@ mod tests {
         fn public_values(&self) -> &[Self::PublicVar] {
             &self.public_values
         }
+
+        fn periodic_values(&self) -> &[Self::PeriodicVar] {
+            &self.periodic_row
+        }
     }
 
-    /// 2-row × 2-column trace:
+    /// 2-row × 2-column trace, plus a 2-cell periodic row at the current step:
     ///
     /// ```text
-    ///     row 0 (current): [10, 20]
-    ///     row 1 (next):    [30, 40]
+    ///     main row 0 (current): [10, 20]
+    ///     main row 1 (next):    [30, 40]
+    ///     periodic_row (curr):  [7, 13]
     /// ```
     fn test_builder() -> ResolveTestBuilder {
         ResolveTestBuilder {
@@ -853,6 +958,9 @@ mod tests {
                 2, // width
             ),
             public_values: vec![BabyBear::new(99)],
+            // Two periodic columns at the current row.
+            // Distinct primes so any cross-stream mix-up is visible.
+            periodic_row: vec![BabyBear::new(7), BabyBear::new(13)],
             is_first: BabyBear::ONE,
             is_last: BabyBear::ZERO,
             is_transition: BabyBear::ONE,
@@ -934,11 +1042,79 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "periodic columns cannot be resolved")]
-    fn resolve_periodic_panics() {
+    fn resolve_periodic_columns() {
+        // Invariant: a periodic leaf reads from the builder's
+        // periodic-value slice, in declared column order.
+        //
+        // Fixture:
+        //
+        //     periodic row (current step) : [7, 13]
+        //     index 0 →  7
+        //     index 1 → 13
         let b = test_builder();
-        let expr =
+
+        // Column 0 → 7.
+        let p0 =
             SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 0));
-        let _ = expr.resolve(&b);
+        assert_eq!(p0.resolve(&b), BabyBear::new(7));
+
+        // Column 1 → 13.
+        let p1 =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 1));
+        assert_eq!(p1.resolve(&b), BabyBear::new(13));
+    }
+
+    #[test]
+    fn resolve_periodic_combines_with_arithmetic() {
+        // Invariant: periodic leaves compose under the same algebra
+        // as main, public, and preprocessed leaves.
+        //
+        // Fixture:
+        //
+        //     periodic row : [7, 13]
+        //     main row 0   : [10, 20]
+        //
+        //     expression   : main[0] * periodic[0] + periodic[1]
+        //                  = 10 * 7 + 13
+        //                  = 83
+        let b = test_builder();
+
+        let col0 =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0));
+        let p0 =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 0));
+        let p1 =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 1));
+
+        let expr = col0 * p0 + p1;
+        assert_eq!(expr.resolve(&b), BabyBear::new(83));
+    }
+
+    #[test]
+    fn serde_round_trip_preserves_resolution() {
+        // A constraint mixing every leaf kind, both row offsets, and all node kinds:
+        //   main[0]·main_next[1] - public[0] + periodic[0]·is_transition - constant
+        let b = test_builder();
+        let main_cur =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0));
+        let main_next =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 1 }, 1));
+        let public =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Public, 0));
+        let periodic =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 0));
+        let transition = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsTransition);
+
+        let expr = main_cur * main_next - public + periodic * transition
+            - SymbolicExpression::from(BabyBear::new(5));
+
+        let json = serde_json::to_string(&expr).unwrap();
+        let decoded: SymbolicExpression<BabyBear> = serde_json::from_str(&json).unwrap();
+
+        // Semantic equality: both trees resolve to the same value.
+        assert_eq!(decoded.resolve(&b), expr.resolve(&b));
+        // Structural equality: the decoded tree re-serializes identically.
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+        assert_eq!(decoded.degree_multiple(), expr.degree_multiple());
     }
 }

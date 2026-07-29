@@ -9,6 +9,9 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
 [dependencies]
 p3-air.workspace = true
 p3-field.workspace = true
@@ -38,9 +41,6 @@ p3-uni-stark = { path = "../uni-stark" }
 proptest.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
-
-[features]
-parallel = ["p3-maybe-rayon/parallel"]
 
 [lints]
 workspace = true

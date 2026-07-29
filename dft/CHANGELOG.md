@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Dft: testing for internals (#1494)
+- Perf(dft): butterfly micro-optimizations for Radix2DitParallel (~3% on coset_lde_batch) (#1492)
+- Fix(dft): merge twiddle and inv_twiddle locks in Radix2DFTSmallBatch (#1534)
+- Bench(dft): use iter_batched to exclude clone cost from measurement (#1575)
+- Chore: use T::zero_vec(n) instead of vec![T::ZERO; n] (#1633)
+- Perf(dft): generalise coset LDE to support fused quotient commitment (#1621)
+- Perf(dft): unroll DIT butterfly inner loops by 4 (#1555)
+- Perf: extend collect_n and shifted_powers to remaining call sites (#1683)
+- Perf(dft): optimize coset_shift_cols with early return and vectorized scaling (#1468)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Chore: update CHANGELOGs (#1785)
+- Doc: add basic READMEs in main crates (#1786)
+
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Perf(dft): butterfly micro-optimizations for Radix2DitParallel (~3% on coset_lde_batch) (#1492)
+- Fix(dft): merge twiddle and inv_twiddle locks in Radix2DFTSmallBatch (#1534)
+
+## [0.5.2] - 2026-03-27
 ## [0.5.1] - 2026-03-16
 ## [0.5.0] - 2026-03-10
 ### Merged PRs

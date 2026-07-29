@@ -1,0 +1,493 @@
+//! Poseidon2 external/internal layers specialized for `PackedGoldilocksAVX2`.
+//!
+//! `Poseidon2ExternalLayerGoldilocks`/`Poseidon2InternalLayerGoldilocks` (in the crate root
+//! `poseidon2` module) already act correctly on `PackedGoldilocksAVX2` through their generic
+//! `Algebra<Goldilocks>` implementation, since `PackedGoldilocksAVX2` implements both
+//! `Algebra<Goldilocks>` and `InjectiveMonomial<7>`. That generic path re-broadcasts every
+//! round constant from scalar `Goldilocks` into a packed vector on every single
+//! `permute_state`/`permute_state_initial`/`permute_state_terminal` call, which is wasted work
+//! once the permutation is used to hash many inputs.
+//!
+//! The types here instead:
+//! - broadcast each round constant into a `PackedGoldilocksAVX2` once, at construction time,
+//!   and reuse the packed constants across every future permutation call,
+//! - in the internal rounds, compute the lane sum used by the diffusion matrix from
+//!   `state[1..WIDTH]` independently of the S-box applied to `state[0]`, so the two
+//!   (data-independent) computations can be scheduled without one waiting on the other,
+//!   instead of forcing the sum to wait on the S-box's multiply/reduce chain, and
+//! - in the external rounds, where every state element's S-box is independent of every other,
+//!   batch the S-box's multiply/reduce chain by stage across the whole state (see
+//!   [`sbox_array`]) instead of fully computing one element's `x^7` before starting the next.
+//!
+//! For scalar `Goldilocks` state, both layers simply delegate to the existing generic
+//! implementation, which is already effectively optimal for a single field element.
+
+use alloc::vec::Vec;
+
+use p3_field::{InjectiveMonomial, PrimeCharacteristicRing};
+use p3_poseidon2::{
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
+    InternalLayerConstructor, MDSMat4, mds_light_permutation,
+};
+
+use crate::poseidon1::GOLDILOCKS_S_BOX_DEGREE;
+use crate::x86_64_avx2::packing::PackedGoldilocksAVX2;
+use crate::{Goldilocks, Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks};
+
+/// Add a round constant then apply the S-box (`x^7`) to a single packed element. Used by the
+/// internal rounds, where only `state[0]` is S-box'd each round; see [`sbox_array`] for the
+/// external rounds, where every state element is S-box'd and batching by stage matters.
+#[inline(always)]
+fn add_rc_and_sbox(val: &mut PackedGoldilocksAVX2, rc: PackedGoldilocksAVX2) {
+    *val = (*val + rc).injective_exp_n();
+}
+
+/// Apply the Poseidon2 S-box (`x^7`) to every element of a packed AVX2 state.
+///
+/// `p3_poseidon2`'s generic external-round driver applies the S-box one element at a time,
+/// fully completing one element's multiply/reduce chain (`x^2`, `x^3`, `x^4`, `x^7`) before
+/// starting the next. Since every state element's S-box is independent of every other, this
+/// instead batches the computation by stage across the whole state: all `WIDTH` squarings,
+/// then all `WIDTH` pairs of the next two (mutually independent) products, then all `WIDTH`
+/// final products. This gives the compiler `WIDTH`-many independent multiply/reduce chains to
+/// interleave at each stage instead of one at a time, mirroring `PrimeCharacteristicRing`'s own
+/// `exp_const_u64::<7>` addition chain (`x2 = x^2`, `x3 = x2*x`, `x4 = x2^2`, `x7 = x3*x4`),
+/// just computed array-wise rather than per-element.
+#[inline(always)]
+fn sbox_array<const WIDTH: usize>(state: &mut [PackedGoldilocksAVX2; WIDTH]) {
+    let x2: [PackedGoldilocksAVX2; WIDTH] = core::array::from_fn(|i| state[i].square());
+    // `x3`/`x4` start as copies of `x2` (a plain register/array copy, no computation) so that
+    // computing `x3[i] = x2[i] * state[i]` and `x4[i] = x2[i]^2` can share a single loop over
+    // `i`, instead of two separate full-width passes.
+    let mut x3 = x2;
+    let mut x4 = x2;
+    for i in 0..WIDTH {
+        x3[i] *= state[i];
+        x4[i] = x4[i].square();
+    }
+    for i in 0..WIDTH {
+        state[i] = x3[i] * x4[i];
+    }
+}
+
+/// Apply one external round (add round constants, S-box every element, apply the `4x4`-MDS
+/// light permutation) to a packed AVX2 state.
+#[inline(always)]
+fn external_round<const WIDTH: usize>(
+    state: &mut [PackedGoldilocksAVX2; WIDTH],
+    rc: &[PackedGoldilocksAVX2; WIDTH],
+) {
+    for i in 0..WIDTH {
+        state[i] += rc[i];
+    }
+    sbox_array(state);
+    mds_light_permutation(state, &MDSMat4);
+}
+
+/// Apply one internal round (add round constant, S-box `state[0]`, diffuse) of the
+/// width-8 Goldilocks Poseidon2 internal linear layer to a packed AVX2 state.
+///
+/// Mirrors `internal_layer_mat_mul_goldilocks_8` in the crate root `poseidon2` module, with
+/// the lane sum split into a part independent of the S-box (`sum_tail`, covering
+/// `state[1..8]`) and the S-box'd `state[0]`, combined only once both are ready.
+#[inline(always)]
+fn internal_round_goldilocks_8(state: &mut [PackedGoldilocksAVX2; 8], rc: PackedGoldilocksAVX2) {
+    let s1 = state[1];
+    let s2 = state[2];
+    let s3 = state[3];
+    let s4 = state[4];
+    let s5 = state[5];
+    let s6 = state[6];
+    let s7 = state[7];
+    let sum_tail = s1 + s2 + s3 + s4 + s5 + s6 + s7;
+
+    add_rc_and_sbox(&mut state[0], rc);
+    let s0 = state[0];
+    let sum = sum_tail + s0;
+
+    // V[0] = -2
+    state[0] = sum - (s0 + s0);
+    // V[1] = 1
+    state[1] = sum + s1;
+    // V[2] = 2
+    state[2] = sum + (s2 + s2);
+    // V[3] = 1/2
+    state[3] = sum + s3.halve();
+    // V[4] = 3
+    state[4] = sum + (s4 + s4 + s4);
+    // V[5] = -1/2
+    state[5] = sum - s5.halve();
+    // V[6] = -3
+    state[6] = sum - (s6 + s6 + s6);
+    // V[7] = -4
+    let two_s7 = s7 + s7;
+    state[7] = sum - (two_s7 + two_s7);
+}
+
+/// Apply one internal round of the width-12 Goldilocks Poseidon2 internal linear layer to a
+/// packed AVX2 state. See [`internal_round_goldilocks_8`] and
+/// `internal_layer_mat_mul_goldilocks_12` in the crate root `poseidon2` module.
+#[inline(always)]
+fn internal_round_goldilocks_12(state: &mut [PackedGoldilocksAVX2; 12], rc: PackedGoldilocksAVX2) {
+    let s1 = state[1];
+    let s2 = state[2];
+    let s3 = state[3];
+    let s4 = state[4];
+    let s5 = state[5];
+    let s6 = state[6];
+    let s7 = state[7];
+    let s8 = state[8];
+    let s9 = state[9];
+    let s10 = state[10];
+    let s11 = state[11];
+    let sum_tail = s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11;
+
+    add_rc_and_sbox(&mut state[0], rc);
+    let s0 = state[0];
+    let sum = sum_tail + s0;
+
+    // V[0] = -2
+    state[0] = sum - (s0 + s0);
+    // V[1] = 1
+    state[1] = sum + s1;
+    // V[2] = 2
+    state[2] = sum + (s2 + s2);
+    // V[3] = 1/2
+    state[3] = sum + s3.halve();
+    // V[4] = 3
+    state[4] = sum + (s4 + s4 + s4);
+    // V[5] = 4
+    let two_s5 = s5 + s5;
+    state[5] = sum + (two_s5 + two_s5);
+    // V[6] = -1/2
+    state[6] = sum - s6.halve();
+    // V[7] = -3
+    state[7] = sum - (s7 + s7 + s7);
+    // V[8] = -4
+    let two_s8 = s8 + s8;
+    state[8] = sum - (two_s8 + two_s8);
+    // V[9] = 1/2^2
+    state[9] = sum + s9.halve().halve();
+    // V[10] = -1/2^2
+    state[10] = sum - s10.halve().halve();
+    // V[11] = 1/2^3
+    state[11] = sum + s11.halve().halve().halve();
+}
+
+/// Apply one internal round of the width-16 Goldilocks Poseidon2 internal linear layer to a
+/// packed AVX2 state. See [`internal_round_goldilocks_8`] and
+/// `internal_layer_mat_mul_goldilocks_16` in the crate root `poseidon2` module.
+#[inline(always)]
+fn internal_round_goldilocks_16(state: &mut [PackedGoldilocksAVX2; 16], rc: PackedGoldilocksAVX2) {
+    let s1 = state[1];
+    let s2 = state[2];
+    let s3 = state[3];
+    let s4 = state[4];
+    let s5 = state[5];
+    let s6 = state[6];
+    let s7 = state[7];
+    let s8 = state[8];
+    let s9 = state[9];
+    let s10 = state[10];
+    let s11 = state[11];
+    let s12 = state[12];
+    let s13 = state[13];
+    let s14 = state[14];
+    let s15 = state[15];
+    let sum_tail = s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15;
+
+    add_rc_and_sbox(&mut state[0], rc);
+    let s0 = state[0];
+    let sum = sum_tail + s0;
+
+    // V[0] = -2
+    state[0] = sum - (s0 + s0);
+    // V[1] = 1
+    state[1] = sum + s1;
+    // V[2] = 2
+    state[2] = sum + (s2 + s2);
+    // V[3] = 1/2
+    state[3] = sum + s3.halve();
+    // V[4] = 3
+    state[4] = sum + (s4 + s4 + s4);
+    // V[5] = 4
+    let two_s5 = s5 + s5;
+    state[5] = sum + (two_s5 + two_s5);
+    // V[6] = -1/2
+    state[6] = sum - s6.halve();
+    // V[7] = -3
+    state[7] = sum - (s7 + s7 + s7);
+    // V[8] = -4
+    let two_s8 = s8 + s8;
+    state[8] = sum - (two_s8 + two_s8);
+    // V[9] = 1/2^3
+    state[9] = sum + s9.halve().halve().halve();
+    // V[10] = 1/2^4
+    state[10] = sum + s10.halve().halve().halve().halve();
+    // V[11] = 1/2^5
+    state[11] = sum + s11.halve().halve().halve().halve().halve();
+    // V[12] = -1/2^3
+    state[12] = sum - s12.halve().halve().halve();
+    // V[13] = -1/2^4
+    state[13] = sum - s13.halve().halve().halve().halve();
+    // V[14] = -1/2^5
+    state[14] = sum - s14.halve().halve().halve().halve().halve();
+    // V[15] = 1/2^32
+    let inv_2_32 = crate::MATRIX_DIAG_16_GOLDILOCKS[15];
+    state[15] = sum + s15 * inv_2_32;
+}
+
+/// The internal layers of the Poseidon2 permutation, specialized for `PackedGoldilocksAVX2`.
+#[derive(Clone, Debug, Default)]
+pub struct Poseidon2InternalLayerGoldilocksAVX2 {
+    /// Scalar fallback, used for `Permutation<[Goldilocks; WIDTH]>`.
+    inner: Poseidon2InternalLayerGoldilocks,
+    /// Each internal round constant, pre-broadcast into a packed vector.
+    packed_internal_constants: Vec<PackedGoldilocksAVX2>,
+}
+
+impl InternalLayerConstructor<Goldilocks> for Poseidon2InternalLayerGoldilocksAVX2 {
+    fn new_from_constants(internal_constants: Vec<Goldilocks>) -> Self {
+        let packed_internal_constants = internal_constants
+            .iter()
+            .copied()
+            .map(PackedGoldilocksAVX2::from)
+            .collect();
+        let inner = Poseidon2InternalLayerGoldilocks::new_from_constants(internal_constants);
+        Self {
+            inner,
+            packed_internal_constants,
+        }
+    }
+}
+
+impl InternalLayer<Goldilocks, 8, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocksAVX2
+{
+    fn permute_state(&self, state: &mut [Goldilocks; 8]) {
+        InternalLayer::<Goldilocks, 8, GOLDILOCKS_S_BOX_DEGREE>::permute_state(&self.inner, state);
+    }
+}
+
+impl InternalLayer<Goldilocks, 12, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocksAVX2
+{
+    fn permute_state(&self, state: &mut [Goldilocks; 12]) {
+        InternalLayer::<Goldilocks, 12, GOLDILOCKS_S_BOX_DEGREE>::permute_state(&self.inner, state);
+    }
+}
+
+impl InternalLayer<Goldilocks, 16, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocksAVX2
+{
+    fn permute_state(&self, state: &mut [Goldilocks; 16]) {
+        InternalLayer::<Goldilocks, 16, GOLDILOCKS_S_BOX_DEGREE>::permute_state(&self.inner, state);
+    }
+}
+
+// `MATRIX_DIAG_20_GOLDILOCKS` holds opaque full field elements rather than small
+// integers/powers of two (see its doc comment in the crate root `poseidon2` module), so it
+// doesn't admit the same cheap-add fast path as widths 8/12/16. Width 20 is otherwise
+// unused in this crate (no default constructor, no known-answer test), so both the scalar
+// and packed cases simply delegate to the existing generic implementation for correctness
+// parity with every other Goldilocks Poseidon2 backend, rather than leaving it unsupported.
+impl InternalLayer<Goldilocks, 20, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocksAVX2
+{
+    fn permute_state(&self, state: &mut [Goldilocks; 20]) {
+        InternalLayer::<Goldilocks, 20, GOLDILOCKS_S_BOX_DEGREE>::permute_state(&self.inner, state);
+    }
+}
+
+impl InternalLayer<PackedGoldilocksAVX2, 20, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocksAVX2
+{
+    fn permute_state(&self, state: &mut [PackedGoldilocksAVX2; 20]) {
+        InternalLayer::<PackedGoldilocksAVX2, 20, GOLDILOCKS_S_BOX_DEGREE>::permute_state(
+            &self.inner,
+            state,
+        );
+    }
+}
+
+impl InternalLayer<PackedGoldilocksAVX2, 8, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocksAVX2
+{
+    fn permute_state(&self, state: &mut [PackedGoldilocksAVX2; 8]) {
+        for &rc in &self.packed_internal_constants {
+            internal_round_goldilocks_8(state, rc);
+        }
+    }
+}
+
+impl InternalLayer<PackedGoldilocksAVX2, 12, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocksAVX2
+{
+    fn permute_state(&self, state: &mut [PackedGoldilocksAVX2; 12]) {
+        for &rc in &self.packed_internal_constants {
+            internal_round_goldilocks_12(state, rc);
+        }
+    }
+}
+
+impl InternalLayer<PackedGoldilocksAVX2, 16, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2InternalLayerGoldilocksAVX2
+{
+    fn permute_state(&self, state: &mut [PackedGoldilocksAVX2; 16]) {
+        for &rc in &self.packed_internal_constants {
+            internal_round_goldilocks_16(state, rc);
+        }
+    }
+}
+
+/// The external layers of the Poseidon2 permutation, specialized for `PackedGoldilocksAVX2`.
+#[derive(Clone)]
+pub struct Poseidon2ExternalLayerGoldilocksAVX2<const WIDTH: usize> {
+    /// Scalar fallback, used for `Permutation<[Goldilocks; WIDTH]>`.
+    inner: Poseidon2ExternalLayerGoldilocks<WIDTH>,
+    /// Each initial-round constant vector, pre-broadcast lane-wise into packed vectors.
+    packed_initial_external_constants: Vec<[PackedGoldilocksAVX2; WIDTH]>,
+    /// Each terminal-round constant vector, pre-broadcast lane-wise into packed vectors.
+    packed_terminal_external_constants: Vec<[PackedGoldilocksAVX2; WIDTH]>,
+}
+
+impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
+    for Poseidon2ExternalLayerGoldilocksAVX2<WIDTH>
+{
+    fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
+        let pack_round = |rc: &[Goldilocks; WIDTH]| rc.map(PackedGoldilocksAVX2::from);
+        let packed_initial_external_constants = external_constants
+            .get_initial_constants()
+            .iter()
+            .map(pack_round)
+            .collect();
+        let packed_terminal_external_constants = external_constants
+            .get_terminal_constants()
+            .iter()
+            .map(pack_round)
+            .collect();
+        let inner = Poseidon2ExternalLayerGoldilocks::new_from_constants(external_constants);
+        Self {
+            inner,
+            packed_initial_external_constants,
+            packed_terminal_external_constants,
+        }
+    }
+}
+
+impl<const WIDTH: usize> ExternalLayer<Goldilocks, WIDTH, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2ExternalLayerGoldilocksAVX2<WIDTH>
+{
+    fn permute_state_initial(&self, state: &mut [Goldilocks; WIDTH]) {
+        ExternalLayer::<Goldilocks, WIDTH, GOLDILOCKS_S_BOX_DEGREE>::permute_state_initial(
+            &self.inner,
+            state,
+        );
+    }
+
+    fn permute_state_terminal(&self, state: &mut [Goldilocks; WIDTH]) {
+        ExternalLayer::<Goldilocks, WIDTH, GOLDILOCKS_S_BOX_DEGREE>::permute_state_terminal(
+            &self.inner,
+            state,
+        );
+    }
+}
+
+impl<const WIDTH: usize> ExternalLayer<PackedGoldilocksAVX2, WIDTH, GOLDILOCKS_S_BOX_DEGREE>
+    for Poseidon2ExternalLayerGoldilocksAVX2<WIDTH>
+{
+    fn permute_state_initial(&self, state: &mut [PackedGoldilocksAVX2; WIDTH]) {
+        mds_light_permutation(state, &MDSMat4);
+        for rc in &self.packed_initial_external_constants {
+            external_round(state, rc);
+        }
+    }
+
+    fn permute_state_terminal(&self, state: &mut [PackedGoldilocksAVX2; WIDTH]) {
+        for rc in &self.packed_terminal_external_constants {
+            external_round(state, rc);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_field::PackedValue;
+    use p3_symmetric::Permutation;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+    use crate::{
+        default_goldilocks_poseidon2_8, default_goldilocks_poseidon2_12,
+        default_goldilocks_poseidon2_16,
+    };
+
+    const PACKING_WIDTH: usize = <PackedGoldilocksAVX2 as PackedValue>::WIDTH;
+
+    /// Applying the packed AVX2 permutation lane-by-lane must agree with applying the scalar
+    /// permutation independently to each lane, for every lane of a random packed state.
+    fn assert_packed_matches_scalar<const WIDTH: usize>(
+        scalar_perm: &impl Permutation<[Goldilocks; WIDTH]>,
+        packed_perm: &impl Permutation<[PackedGoldilocksAVX2; WIDTH]>,
+        rng: &mut SmallRng,
+    ) {
+        let lanes: [[Goldilocks; WIDTH]; PACKING_WIDTH] = core::array::from_fn(|_| rng.random());
+
+        let mut packed_state: [PackedGoldilocksAVX2; WIDTH] =
+            core::array::from_fn(|i| PackedGoldilocksAVX2::from_fn(|l| lanes[l][i]));
+        packed_perm.permute_mut(&mut packed_state);
+
+        for (l, lane) in lanes.into_iter().enumerate() {
+            let mut scalar_state = lane;
+            scalar_perm.permute_mut(&mut scalar_state);
+            for i in 0..WIDTH {
+                assert_eq!(
+                    scalar_state[i],
+                    packed_state[i].as_slice()[l],
+                    "width {WIDTH}, lane {l}, element {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn packed_matches_scalar_width_8() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = default_goldilocks_poseidon2_8();
+        assert_packed_matches_scalar(&perm, &perm, &mut rng);
+    }
+
+    #[test]
+    fn packed_matches_scalar_width_12() {
+        let mut rng = SmallRng::seed_from_u64(2);
+        let perm = default_goldilocks_poseidon2_12();
+        assert_packed_matches_scalar(&perm, &perm, &mut rng);
+    }
+
+    #[test]
+    fn packed_matches_scalar_width_16() {
+        let mut rng = SmallRng::seed_from_u64(3);
+        let perm = default_goldilocks_poseidon2_16();
+        assert_packed_matches_scalar(&perm, &perm, &mut rng);
+    }
+
+    /// Width 20 has no default constructor or known-answer test anywhere in this crate (its
+    /// diagonal constants are undocumented), so there is no `default_goldilocks_poseidon2_20`
+    /// to call here. This only exercises that the scalar and packed `InternalLayer`/
+    /// `ExternalLayer` impls agree with each other for width 20 (i.e. that delegating to the
+    /// generic implementation was wired correctly), not that the round numbers used are
+    /// cryptographically appropriate.
+    #[test]
+    fn packed_matches_scalar_width_20() {
+        let mut rng = SmallRng::seed_from_u64(4);
+        let perm: p3_poseidon2::Poseidon2<
+            Goldilocks,
+            Poseidon2ExternalLayerGoldilocksAVX2<20>,
+            Poseidon2InternalLayerGoldilocksAVX2,
+            20,
+            GOLDILOCKS_S_BOX_DEGREE,
+        > = p3_poseidon2::Poseidon2::new_from_rng(8, 22, &mut rng);
+        assert_packed_matches_scalar(&perm, &perm, &mut rng);
+    }
+}

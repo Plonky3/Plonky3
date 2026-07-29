@@ -15,7 +15,7 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 16> for KoalaBearInternalL
     /// The inputs must be in canonical form, otherwise the result is undefined.
     ///
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
-    /// the output is piped directly into add_sum the vector will be modified such that x[i] = D[i]*x[i] + sum.
+    /// the output is piped directly into add_sum the vector will be modified such that `x[i] = D[i]*x[i] + sum`.
     #[inline(always)]
     unsafe fn diagonal_mul_remainder(input: &mut [uint32x4_t; 15]) {
         unsafe {
@@ -54,7 +54,7 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 24> for KoalaBearInternalL
     /// The inputs must be in canonical form, otherwise the result is undefined.
     ///
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
-    /// the output is piped directly into add_sum, the vector will be modified such that x[i] = D[i]*x[i] + sum.
+    /// the output is piped directly into add_sum, the vector will be modified such that `x[i] = D[i]*x[i] + sum`.
     #[inline(always)]
     unsafe fn diagonal_mul_remainder(input: &mut [uint32x4_t; 23]) {
         unsafe {
@@ -109,7 +109,7 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 32> for KoalaBearInternalL
     /// The inputs must be in canonical form, otherwise the result is undefined.
     ///
     /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
-    /// the output is piped directly into add_sum, the vector will be modified such that x[i] = D[i]*x[i] + sum.
+    /// the output is piped directly into add_sum, the vector will be modified such that `x[i] = D[i]*x[i] + sum`.
     #[inline(always)]
     unsafe fn diagonal_mul_remainder(input: &mut [uint32x4_t; 31]) {
         unsafe {

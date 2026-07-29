@@ -1,7 +1,7 @@
 //! SHAKE-128 helper utilities for Monolith constant generation.
 
-use sha3::Shake128Reader;
-use sha3::digest::XofReader;
+use shake::Shake128Reader;
+use shake::digest::XofReader;
 
 /// Read 4 bytes from a SHAKE-128 stream and interpret as a little-endian u32.
 pub(crate) fn get_random_u32(shake: &mut Shake128Reader) -> u32 {

@@ -1,6 +1,6 @@
 [package]
 name = "p3-rescue"
-description = "Implementation of the Rescue hash function and utilities."
+description = "Implementation of the Rescue hash function and its variants."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,23 +10,28 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+p3-baby-bear.workspace = true
 p3-field.workspace = true
+p3-goldilocks.workspace = true
+p3-koala-bear.workspace = true
 p3-mds.workspace = true
+p3-mersenne-31.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
 
 rand.workspace = true
-sha3.workspace = true
+shake.workspace = true
 
 [dev-dependencies]
-p3-baby-bear = { path = "../baby-bear" }
-p3-goldilocks = { path = "../goldilocks" }
-p3-mersenne-31 = { path = "../mersenne-31" }
-
 criterion.workspace = true
+proptest.workspace = true
 
 [[bench]]
 name = "rescue"
+harness = false
+
+[[bench]]
+name = "rpo"
 harness = false
 
 [lints]

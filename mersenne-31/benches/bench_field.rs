@@ -4,7 +4,7 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_chunked_linear_combination,
-    benchmark_dot_array, benchmark_inv, benchmark_iter_sum, benchmark_sub_latency,
+    benchmark_dot_array, benchmark_inv, benchmark_iter_sum, benchmark_sqrt, benchmark_sub_latency,
     benchmark_sub_throughput, benchmark_sum_array,
 };
 use p3_mersenne_31::Mersenne31;
@@ -17,6 +17,7 @@ fn bench_field(c: &mut Criterion) {
     let name = "Mersenne31";
     const REPS: usize = 500;
     benchmark_inv::<F>(c, name);
+    benchmark_sqrt::<F>(c, name);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
     benchmark_sum_array::<F, 4, REPS>(c, name);
     benchmark_iter_sum::<F, 6, REPS>(c, name);

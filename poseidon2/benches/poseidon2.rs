@@ -4,7 +4,7 @@ use p3_bn254::{
     BN254_POSEIDON2_HALF_FULL_ROUNDS, BN254_POSEIDON2_PARTIAL_ROUNDS_3, Bn254, Poseidon2Bn254,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_goldilocks::{HashPackedGoldilocks, Poseidon2Goldilocks};
+use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_mersenne_31::{Mersenne31, Poseidon2Mersenne31};
 use p3_symmetric::Permutation;
@@ -31,11 +31,11 @@ fn bench_poseidon12(c: &mut Criterion) {
     poseidon2::<Mersenne31, Poseidon2Mersenne31<24>, 24>(c, &poseidon2_m31_24);
 
     let poseidon2_gold_8 = Poseidon2Goldilocks::<8>::new_from_rng_128(&mut rng);
-    poseidon2_goldilocks_packed::<Poseidon2Goldilocks<8>, 8>(c, &poseidon2_gold_8);
+    poseidon2::<Goldilocks, Poseidon2Goldilocks<8>, 8>(c, &poseidon2_gold_8);
     let poseidon2_gold_12 = Poseidon2Goldilocks::<12>::new_from_rng_128(&mut rng);
-    poseidon2_goldilocks_packed::<Poseidon2Goldilocks<12>, 12>(c, &poseidon2_gold_12);
+    poseidon2::<Goldilocks, Poseidon2Goldilocks<12>, 12>(c, &poseidon2_gold_12);
     let poseidon2_gold_16 = Poseidon2Goldilocks::<16>::new_from_rng_128(&mut rng);
-    poseidon2_goldilocks_packed::<Poseidon2Goldilocks<16>, 16>(c, &poseidon2_gold_16);
+    poseidon2::<Goldilocks, Poseidon2Goldilocks<16>, 16>(c, &poseidon2_gold_16);
 
     let poseidon2_bn254 = Poseidon2Bn254::<3>::new_from_rng(
         2 * BN254_POSEIDON2_HALF_FULL_ROUNDS,
@@ -52,24 +52,6 @@ where
 {
     let input = [F::Packing::ZERO; WIDTH];
     let name = format!("poseidon2::<{}, {}>", pretty_name::<F::Packing>(), WIDTH);
-    let id = BenchmarkId::new(name, WIDTH);
-    c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon2.permute(input)));
-}
-
-/// Goldilocks packed benchmark target.
-///
-/// On aarch64 this is [`PackedGoldilocksNeon`] via [`HashPackedGoldilocks`],
-/// while on other targets it resolves to `<Goldilocks as Field>::Packing`.
-fn poseidon2_goldilocks_packed<Perm, const WIDTH: usize>(c: &mut Criterion, poseidon2: &Perm)
-where
-    Perm: Permutation<[HashPackedGoldilocks; WIDTH]>,
-{
-    let input = [HashPackedGoldilocks::ZERO; WIDTH];
-    let name = format!(
-        "poseidon2::<{}, {}>",
-        pretty_name::<HashPackedGoldilocks>(),
-        WIDTH
-    );
     let id = BenchmarkId::new(name, WIDTH);
     c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon2.permute(input)));
 }

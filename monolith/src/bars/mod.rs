@@ -13,7 +13,7 @@
 pub mod goldilocks;
 pub mod mersenne31;
 
-use sha3::Shake128Reader;
+use shake::Shake128Reader;
 
 /// Trait capturing the field-specific Bars layer of a Monolith instance.
 ///

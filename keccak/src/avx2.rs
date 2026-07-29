@@ -434,7 +434,6 @@ mod tests {
         ],
     ];
 
-    #[allow(clippy::needless_range_loop)]
     fn our_res() -> [[u64; 25]; 4] {
         let mut packed_result = [[0; 4]; 25];
         for (i, packed_res) in packed_result.iter_mut().enumerate() {

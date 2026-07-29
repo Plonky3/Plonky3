@@ -14,16 +14,13 @@
 //! If we changed our domain construction (e.g., using multiple cosets), we would need to carefully reconsider these assumptions.
 
 use alloc::borrow::Cow;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{
-    BatchOpening, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs, PeriodicLdeTable,
-};
+use p3_commit::{Mmcs, OpenedValues, Pcs, PeriodicLdeTable};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
@@ -40,7 +37,7 @@ use tracing::{debug_span, instrument};
 
 use crate::periodic::build_periodic_lde_table_two_adic;
 use crate::verifier::{self, FriError};
-use crate::{FriFoldingStrategy, FriParameters, FriProof, prover};
+use crate::{BatchMultiOpening, FriFoldingStrategy, FriParameters, FriProof, prover};
 
 /// A polynomial commitment scheme using FRI to generate opening proofs.
 ///
@@ -87,7 +84,8 @@ pub type CommitmentWithOpeningPoints<Challenge, Commitment, Domain> = (
     Vec<(
         // The domain of the matrix
         Domain,
-        // A vector of (point, claimed_evaluation) pairs
+        // A vector of (point, claimed_evaluation) pairs.
+        // The claimed evaluation count per point is also the matrix width used by verification.
         Vec<(Challenge, Vec<Challenge>)>,
     )>,
 );
@@ -95,7 +93,7 @@ pub type CommitmentWithOpeningPoints<Challenge, Commitment, Domain> = (
 pub struct TwoAdicFriFolding<InputProof, InputError>(pub PhantomData<(InputProof, InputError)>);
 
 pub type TwoAdicFriFoldingForMmcs<F, M> =
-    TwoAdicFriFolding<Vec<BatchOpening<F, M>>, <M as Mmcs<F>>::Error>;
+    TwoAdicFriFolding<Vec<BatchMultiOpening<F, M>>, <M as Mmcs<F>>::Error>;
 
 impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionField<F>>
     FriFoldingStrategy<F, EF> for TwoAdicFriFolding<InputProof, InputError>
@@ -132,7 +130,7 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
         lagrange_interpolate_at(&xs, &evals, beta)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip_all, level = "debug")]
     fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, log_arity: usize, m: M) -> Vec<EF> {
         if log_arity == 1 {
             // Optimized path for arity 2
@@ -215,7 +213,7 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
     }
 }
 
-/// Lagrange interpolation: given points (xs[i], ys[i]), evaluate at z.
+/// Lagrange interpolation: given points `(xs[i], ys[i])`, evaluate at z.
 ///
 /// Uses the barycentric formula for efficiency when xs are roots of unity.
 fn lagrange_interpolate_at<F: TwoAdicField, EF: ExtensionField<F>>(
@@ -265,7 +263,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challen
 where
     Val: TwoAdicField,
     Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: Mmcs<Val, Proof: Sync, Error: Sync>,
+    InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: ExtensionField<Val>,
     Challenger:
@@ -275,7 +273,7 @@ where
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
-    type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
+    type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchMultiOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
     const ZK: bool = false;
 
@@ -285,6 +283,10 @@ where
     /// This function will panic if `degree` is not a power of 2 or `degree > (1 << Val::TWO_ADICITY)`.
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
+    }
+
+    fn log_max_lde_height(&self) -> usize {
+        Val::TWO_ADICITY
     }
 
     /// Commit to a collection of evaluation matrices.
@@ -346,6 +348,17 @@ where
     }
 
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        // Opening assumes every committed matrix is an LDE at `self.fri.log_blowup` and recovers the
+        // underlying polynomial degree as `height >> log_blowup`. A matrix shorter than the blowup
+        // factor would silently yield a zero-height degree and a malformed proof, so reject it here.
+        let min_height = 1 << self.fri.log_blowup;
+        for lde in &ldes {
+            assert!(
+                lde.height() >= min_height,
+                "committed LDE height {} is smaller than the blowup factor {min_height}",
+                lde.height()
+            );
+        }
         self.mmcs.commit(ldes)
     }
 
@@ -505,10 +518,10 @@ where
                 // For each collection of matrices
                 izip!(mats.iter(), points.iter())
                     .map(|(mat, points_for_mat)| {
-                        // TODO: This assumes that every input matrix has a blowup of at least self.fri.log_blowup.
-                        // If the blow_up factor is smaller than self.fri.log_blowup, this will lead to errors.
-                        // If it is bigger, we shouldn't get any errors but it will be slightly slower.
-                        // Ideally, polynomials could be passed in with their blow_up factors known.
+                        // Every committed matrix is assumed to be an LDE at `self.fri.log_blowup`;
+                        // `commit`/`commit_ldes` enforce `height >= 1 << log_blowup`. A larger actual
+                        // blowup is still sound, just slightly slower.
+                        // Ideally, polynomials would be passed in with their blow-up factors known.
 
                         // The point of this correction is that each column of the matrix corresponds to a low degree polynomial.
                         // Hence we can save time by restricting the height of the matrix to be the minimal height which
@@ -560,15 +573,12 @@ where
         // In our setup, k is two times the trace width plus the number of quotient polynomials.
         let alpha: Challenge = challenger.sample_algebra_element();
 
-        // We precompute powers of alpha as we need the same powers for each matrix.
-        // We compute both a vector of unpacked powers and a vector of packed powers.
-        // TODO: It should be possible to refactor this to only use the packed powers but
-        // this is not a bottleneck so is not a priority.
+        // We precompute the packed powers of alpha as we need the same powers for each matrix.
+        // The hot per-matrix reduction (`rowwise_packed_dot_product`) consumes these directly; the
+        // per-opening combination below unpacks `alpha`'s powers lazily via `alpha.powers()`, so we
+        // never materialize a full unpacked copy.
         let packed_alpha_powers =
             Challenge::ExtensionPacking::packed_ext_powers_capped(alpha, global_max_width)
-                .collect_vec();
-        let alpha_powers =
-            Challenge::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied())
                 .collect_vec();
 
         // Now that we have sent the openings to the verifier, it remains to prove
@@ -583,14 +593,14 @@ where
         // we may need to revisit this and to ensure it is safe to batch them together.
 
         // num_reduced records the number of (function, opening point) pairs for each `log_height`.
-        // TODO: This should really be `[0; Val::TWO_ADICITY]` but that runs into issues with generics.
-        let mut num_reduced = [0; 32];
+        // TODO: This should really be `[0; Val::TWO_ADICITY + 1]` but that runs into issues with generics.
+        let mut num_reduced = [0; 33];
 
         // For each `log_height` from 2^1 -> 2^32, reduced_openings will contain either `None`
         // if there are no matrices of that height, or `Some(vec)` where `vec` is equal to
         // a weighted sum of `(f(zeta) - f(x))/(zeta - x)` over all `f`'s of that height and
         // for each `f`, all opening points `zeta`. The sum is weighted by powers of the challenge alpha.
-        let mut reduced_openings: [_; 32] = core::array::from_fn(|_| None);
+        let mut reduced_openings: [_; 33] = core::array::from_fn(|_| None);
 
         for ((mats, points), openings_for_round) in
             mats_and_points.iter().zip(all_opened_values.iter())
@@ -606,7 +616,7 @@ where
                 // If this is our first matrix at this height, initialise reduced_openings to zero.
                 // Otherwise, get a mutable reference to it.
                 let reduced_opening_for_log_height = reduced_openings[log_height]
-                    .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
+                    .get_or_insert_with(|| Challenge::zero_vec(mat.height()));
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
                 // Treating our matrix M as the evaluations of functions f_0, f_1, ...
@@ -627,7 +637,7 @@ where
                     // As we have all the openings `f_i(z)`, we can combine them using `alpha`
                     // in an identical way to before to compute `Mred(z)`.
                     let reduced_openings: Challenge =
-                        dot_product(alpha_powers.iter().copied(), openings.iter().copied());
+                        dot_product(alpha.powers(), openings.iter().copied());
 
                     mat_compressed
                         .par_iter()
@@ -702,32 +712,14 @@ where
 
         Ok(())
     }
-}
 
-impl<Val, Dft, InputMmcs, FriMmcs> BuildPeriodicLdeTableFast
-    for TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
-where
-    Val: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<Val> + Default,
-{
-    type PeriodicDomain = TwoAdicMultiplicativeCoset<Val>;
-
-    fn maybe_build_periodic_lde_table_fast(
+    fn build_periodic_lde_table(
         &self,
-        periodic_cols: &[Vec<p3_commit::Val<Self::PeriodicDomain>>],
-        trace_domain: Self::PeriodicDomain,
-        quotient_domain: Self::PeriodicDomain,
-    ) -> Option<PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>>
-    where
-        p3_commit::Val<Self::PeriodicDomain>: Clone,
-    {
-        let periodic_cols_val: &[Vec<Val>] = unsafe { core::mem::transmute(periodic_cols) };
-        let table = build_periodic_lde_table_two_adic::<Val, Dft>(
-            periodic_cols_val,
-            &trace_domain,
-            &quotient_domain,
-        );
-        Some(table)
+        periodic_cols: &[Vec<Val>],
+        trace_domain: Self::Domain,
+        quotient_domain: Self::Domain,
+    ) -> PeriodicLdeTable<Val> {
+        build_periodic_lde_table_two_adic(&self.dft, periodic_cols, &trace_domain, &quotient_domain)
     }
 }
 

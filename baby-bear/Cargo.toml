@@ -10,7 +10,6 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-p3-challenger.workspace = true
 p3-field.workspace = true
 p3-mds.workspace = true
 p3-monty-31.workspace = true
@@ -38,6 +37,10 @@ harness = false
 
 [[bench]]
 name = "extension"
+harness = false
+
+[[bench]]
+name = "packed_extension"
 harness = false
 
 [lints]

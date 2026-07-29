@@ -1,0 +1,7 @@
+# Taplo TOML formatter configuration.
+# Run `taplo fmt` to format, `taplo fmt --check` to verify (used by CI).
+# See https://taplo.tamasfe.dev/configuration/file.html for the schema.
+
+[formatting]
+# Match the existing repo convention (4 spaces) instead of taplo's 2-space default.
+indent_string = "    "

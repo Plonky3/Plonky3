@@ -7,7 +7,7 @@ use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_matrix::dense::RowMajorMatrix;
@@ -17,8 +17,9 @@ use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
 use p3_uni_stark::{InvalidProofShapeError, StarkConfig, prove, verify};
+use p3_util::assert_sync;
 use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 
 /// For testing the public values feature
 pub struct FibonacciAir {}
@@ -161,26 +162,30 @@ type ZkValHidingMmcs = MerkleTreeHidingMmcs<
     [u64; p3_keccak::VECTOR_LEN],
     ZkFieldHash,
     ZkCompress,
-    SmallRng,
+    StdRng,
     2,
     4,
     4,
 >;
 type ZkChallenger = SerializingChallenger32<Val, HashChallenger<u8, ZkByteHash, 32>>;
 type ZkChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ZkValHidingMmcs>;
-type ZkHidingPcs = HidingFriPcs<Val, Dft, ZkValHidingMmcs, ZkChallengeHidingMmcs, SmallRng>;
+type ZkHidingPcs = HidingFriPcs<Val, Dft, ZkValHidingMmcs, ZkChallengeHidingMmcs, StdRng>;
 type ZkConfig = StarkConfig<ZkHidingPcs, Challenge, ZkChallenger>;
 
 fn make_zk_config() -> ZkConfig {
+    assert_sync::<ZkValHidingMmcs>();
+    assert_sync::<ZkHidingPcs>();
+    assert_sync::<ZkConfig>();
+
     let byte_hash = ZkByteHash {};
     let u64_hash = ZkU64Hash::new(KeccakF {});
     let field_hash = ZkFieldHash::new(u64_hash);
     let compress = ZkCompress::new(u64_hash);
-    let val_mmcs = ZkValHidingMmcs::new(field_hash, compress, 0, SmallRng::seed_from_u64(1));
+    let val_mmcs = ZkValHidingMmcs::new(field_hash, compress, 0, StdRng::seed_from_u64(1));
     let challenge_mmcs = ZkChallengeHidingMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
-    let pcs = ZkHidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
+    let pcs = ZkHidingPcs::new(dft, val_mmcs, fri_params, 4, StdRng::seed_from_u64(2));
     let challenger = ZkChallenger::from_hasher(vec![], byte_hash);
     ZkConfig::new(pcs, challenger)
 }
@@ -345,14 +350,14 @@ fn test_degree_bits_too_large_rejected() {
     // Unlike batch-stark, uni-stark has a single AIR so `air` is None.
     //
     //   - air: None              — uni-stark doesn't index by AIR
-    //   - maximum: BITS - 1      — largest safe exponent (63 on 64-bit)
+    //   - maximum: TWO_ADICITY   — largest degree supported by the PCS
     //   - got: BITS              — the tampered value we injected (64)
     match err {
         p3_uni_stark::VerificationError::InvalidProofShape(
             InvalidProofShapeError::DegreeBitsTooLarge { air, maximum, got },
         ) => {
             assert_eq!(air, None);
-            assert_eq!(maximum, usize::BITS as usize - 1);
+            assert_eq!(maximum, BabyBear::TWO_ADICITY);
             assert_eq!(got, usize::BITS as usize);
         }
         _ => panic!("unexpected error: {err:?}"),

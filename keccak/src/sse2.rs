@@ -392,19 +392,18 @@ mod tests {
         ],
     ];
 
-    #[allow(clippy::needless_range_loop)]
     fn our_res() -> [[u64; 25]; 2] {
         let mut packed_result = [[0; 2]; 25];
-        for i in 0..25 {
-            packed_result[i] = [STATES[0][i], STATES[1][i]];
+        for (i, packed_res) in packed_result.iter_mut().enumerate() {
+            *packed_res = [STATES[0][i], STATES[1][i]];
         }
 
         keccak_perm(&mut packed_result);
 
         let mut result = [[0; 25]; 2];
-        for i in 0..25 {
-            result[0][i] = packed_result[i][0];
-            result[1][i] = packed_result[i][1];
+        for (i, packed_res) in packed_result.iter().enumerate() {
+            result[0][i] = packed_res[0];
+            result[1][i] = packed_res[1];
         }
         result
     }

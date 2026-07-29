@@ -11,4 +11,5 @@ mod generation;
 
 pub use air::*;
 pub use columns::*;
+pub use constants::{BITS_PER_LIMB, U32_LIMBS};
 pub use generation::*;

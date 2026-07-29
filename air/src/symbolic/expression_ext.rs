@@ -1,9 +1,10 @@
 use alloc::sync::Arc;
 
 use p3_field::extension::{
-    BinomialExtensionField, CubicTrinomialExtensionField, QuinticTrinomialExtensionField,
+    BinomialExtensionField, Complex, CubicTrinomialExtensionField, QuinticTrinomialExtensionField,
 };
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
+use serde::{Deserialize, Serialize};
 
 use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::variable::SymbolicVariableExt;
@@ -13,7 +14,7 @@ use crate::symbolic::{SymLeaf, SymbolicExpr, SymbolicExpression, SymbolicVariabl
 ///
 /// These represent the atomic building blocks of extension-field AIR constraints:
 /// lifted base-field sub-trees, extension-field variables, and extension-field constants.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ExtLeaf<F, EF> {
     /// A lifted base-field expression (entire base sub-tree preserved).
     Base(SymbolicExpression<F>),
@@ -43,6 +44,14 @@ impl<F: Field, EF: ExtensionField<F>> SymLeaf for ExtLeaf<F, EF> {
         match self {
             Self::Base(e) => e.degree_multiple(),
             Self::ExtVariable(v) => v.degree_multiple(),
+            Self::ExtConstant(_) => 0,
+        }
+    }
+
+    fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize {
+        match self {
+            Self::Base(e) => e.poly_degree(trace_len, periodic_periods),
+            Self::ExtVariable(v) => v.poly_degree(trace_len),
             Self::ExtConstant(_) => 0,
         }
     }
@@ -190,6 +199,20 @@ where
     }
 }
 
+/// Concrete [`From`] for a degree-4 complex tower `BinomialExtensionField<Complex<F>, 2>`.
+///
+/// The symbolic base is `F` while the binomial's base parameter is `Complex<F>`, so
+/// the generic [`BinomialExtensionField<F, D>`] impl above does not cover it.
+impl<F: Field> From<BinomialExtensionField<Complex<F>, 2>>
+    for SymbolicExpressionExt<F, BinomialExtensionField<Complex<F>, 2>>
+where
+    BinomialExtensionField<Complex<F>, 2>: ExtensionField<F>,
+{
+    fn from(ef: BinomialExtensionField<Complex<F>, 2>) -> Self {
+        Self::Leaf(ExtLeaf::ExtConstant(ef))
+    }
+}
+
 /// Concrete [`Algebra`] for [`CubicTrinomialExtensionField`] — avoids overlap with `Algebra<F>`.
 impl<F: Field> Algebra<CubicTrinomialExtensionField<F>>
     for SymbolicExpressionExt<F, CubicTrinomialExtensionField<F>>
@@ -206,11 +229,22 @@ where
 {
 }
 
+/// Concrete [`Algebra`] for a degree-4 complex tower `BinomialExtensionField<Complex<F>, 2>` —
+/// avoids overlap with `Algebra<F>` and with the generic binomial impl, whose base parameter
+/// matches the symbolic base.
+impl<F: Field> Algebra<BinomialExtensionField<Complex<F>, 2>>
+    for SymbolicExpressionExt<F, BinomialExtensionField<Complex<F>, 2>>
+where
+    BinomialExtensionField<Complex<F>, 2>: ExtensionField<F>,
+{
+}
+
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
+    use p3_mersenne_31::{Mersenne31, QM31};
 
     use super::*;
     use crate::symbolic::SymbolicExpr;
@@ -803,5 +837,50 @@ mod tests {
 
         // The mixed result cannot be lowered to base.
         assert!(result.to_base().is_none());
+    }
+
+    #[test]
+    fn serde_round_trip_preserves_extension_constraint() {
+        // A constraint over all extension leaf kinds and a lifted base sub-tree:
+        //   perm[0]·challenge - ext_const + base_var
+        let perm = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Permutation { offset: 0 },
+            0,
+        ));
+        let challenge = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Challenge,
+            0,
+        ));
+        let ext_const = SymbolicExpressionExt::<F, EF>::from(EF::from_basis_coefficients_fn(|i| {
+            if i == 1 { F::ONE } else { F::ZERO }
+        }));
+        let base_var = SymbolicExpressionExt::<F, EF>::from(SymbolicVariable::<F>::new(
+            BaseEntry::Main { offset: 0 },
+            0,
+        ));
+
+        let expr = perm * challenge - ext_const + base_var;
+
+        let json = serde_json::to_string(&expr).unwrap();
+        let decoded: SymbolicExpressionExt<F, EF> = serde_json::from_str(&json).unwrap();
+
+        // Structural equality: the decoded tree re-serializes identically.
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+        assert_eq!(decoded.degree_multiple(), expr.degree_multiple());
+    }
+
+    #[test]
+    fn complex_tower_extension_constant_lowers_to_leaf() {
+        // `QM31 = BinomialExtensionField<Complex<Mersenne31>, 2>` is a degree-4 tower whose
+        // binomial base parameter (`Complex<Mersenne31>`) differs from the symbolic base
+        // (`Mersenne31`), so it needs the dedicated complex-tower impls.
+        fn assert_algebra<A: Algebra<B>, B>() {}
+        assert_algebra::<SymbolicExpressionExt<Mersenne31, QM31>, QM31>();
+
+        let expr = SymbolicExpressionExt::<Mersenne31, QM31>::from(QM31::ONE);
+        match expr {
+            SymbolicExpressionExt::Leaf(ExtLeaf::ExtConstant(c)) => assert_eq!(c, QM31::ONE),
+            _ => panic!("Expected an ExtConstant leaf"),
+        }
     }
 }

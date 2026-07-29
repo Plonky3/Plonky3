@@ -1,6 +1,5 @@
-use p3_challenger::UniformSamplingField;
 use p3_field::exponentiation::exp_1420470955;
-use p3_field::{Algebra, PrimeCharacteristicRing};
+use p3_field::{Algebra, PrimeCharacteristicRing, UniformSamplingField};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TrinomialQuinticData, TwoAdicData,
@@ -187,6 +186,28 @@ mod tests {
         assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
 
         test_field_json_serialization(&[f, f_1, f_2, f_p_minus_1, f_p_minus_2, m1, m2]);
+    }
+
+    #[test]
+    fn test_koala_bear_inherent_sqrt() {
+        // Exercises the inherent (two-adic) `try_sqrt` which shadows
+        // `Field::try_sqrt` for the concrete `KoalaBear` type.
+        let mut residues = 0;
+        let mut non_residues = 0;
+        for i in 0..2000u32 {
+            let x = F::from_u32(i);
+            // The square of any element is a quadratic residue.
+            let square = x.square();
+            assert_eq!(square.try_sqrt().map(|r| r.square()), Some(square));
+            match x.try_sqrt() {
+                Some(r) => {
+                    assert_eq!(r.square(), x);
+                    residues += 1;
+                }
+                None => non_residues += 1,
+            }
+        }
+        assert!(residues > 0 && non_residues > 0);
     }
 
     // MontyField31's have no redundant representations.

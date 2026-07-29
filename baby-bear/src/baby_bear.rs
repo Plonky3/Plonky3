@@ -1,6 +1,5 @@
-use p3_challenger::UniformSamplingField;
 use p3_field::exponentiation::exp_1725656503;
-use p3_field::{Algebra, PrimeCharacteristicRing};
+use p3_field::{Algebra, PrimeCharacteristicRing, UniformSamplingField};
 use p3_monty_31::{
     BarrettParameters, BinomialExtensionData, FieldParameters, MontyField31, MontyParameters,
     PackedMontyParameters, RelativelyPrimePower, TwoAdicData,
@@ -137,6 +136,7 @@ mod tests {
         test_field_json_serialization, test_prime_field, test_prime_field_32, test_prime_field_64,
         test_two_adic_field,
     };
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -182,6 +182,23 @@ mod tests {
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
 
         test_field_json_serialization(&[f, f_1, f_2, f_p_minus_1, f_p_minus_2, m1, m2]);
+    }
+
+    proptest! {
+        /// Exercises the inherent (two-adic) `try_sqrt` which shadows
+        /// `Field::try_sqrt` for the concrete `BabyBear` type.
+        #[test]
+        fn test_baby_bear_inherent_sqrt(x in prop::num::u32::ANY.prop_map(F::from_u32)) {
+            // The square of any element is a quadratic residue, so its root
+            // always exists and squares back to the original square.
+            let square = x.square();
+            prop_assert_eq!(square.try_sqrt().map(|r| r.square()), Some(square));
+
+            // Whenever a root is reported, it must square back to `x`.
+            if let Some(r) = x.try_sqrt() {
+                prop_assert_eq!(r.square(), x);
+            }
+        }
     }
 
     // MontyField31's have no redundant representations.

@@ -11,16 +11,17 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::Air;
-use p3_air::symbolic::SymbolicExpressionExt;
+use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_commit::Pcs;
 use p3_field::{Algebra, BasedVectorSpace};
-use p3_lookup::{InteractionSymbolicBuilder, Lookups};
+use p3_lookup::{InteractionSymbolicBuilder, LogUpGadget, Lookups};
 use p3_matrix::Matrix;
 use p3_uni_stark::Val;
 use p3_util::log2_strict_usize;
 
 use crate::config::{Challenge, Commitment, Domain, StarkGenericConfig as SGC};
 use crate::prover::StarkInstance;
+use crate::symbolic::get_log_num_quotient_chunks;
 
 /// Per-instance metadata for a preprocessed trace that lives inside a
 /// global preprocessed commitment.
@@ -255,7 +256,57 @@ where
             )
         };
 
-        let lookups = airs.iter().map(Lookups::from_air).collect();
+        // Build each AIR's lookups, then fold same-bus globals into shared columns.
+        //
+        // The budget is the largest fraction-pin degree that keeps the quotient
+        // chunk count fixed, so folding only removes columns, never adds work.
+        // An AIR with no spare degree gets a budget that folds nothing.
+        // Prover and verifier fold deterministically, so the layout needs no exchange.
+        let lookup_gadget = LogUpGadget::new();
+        let lookups: Vec<Lookups<Val<SC>>> = airs
+            .iter()
+            .zip(trace_ext_degree_bits.iter())
+            .map(|(air, &ext_db)| {
+                // Base trace length `N` (before any ZK extension), matching what the
+                // prover and verifier feed the degree model for this instance.
+                let trace_len = 1usize << (ext_db - is_zk);
+                let unpacked = Lookups::<Val<SC>>::from_air::<SC::Challenge, A>(air);
+
+                // `log_chunks` fixes the quotient bucket: n_chunks = 2^log_chunks.
+                let log_chunks =
+                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                        air,
+                        AirLayout::from_air(air),
+                        trace_len,
+                        &unpacked,
+                        is_zk,
+                        &lookup_gadget,
+                    );
+
+                // Largest fraction-pin degree still inside that bucket.
+                //
+                //     log2_ceil((d + is_zk).max(2) - 1) <= log_chunks
+                //  => d <= 2^log_chunks + 1 - is_zk
+                let budget = (1usize << log_chunks) + 1 - is_zk;
+                let packed = unpacked.pack_same_bus(&lookup_gadget, budget);
+
+                // The fold must not have moved the quotient bucket.
+                debug_assert_eq!(
+                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                        air,
+                        AirLayout::from_air(air),
+                        trace_len,
+                        &packed,
+                        is_zk,
+                        &lookup_gadget,
+                    ),
+                    log_chunks,
+                    "same-bus packing must preserve the quotient chunk count"
+                );
+
+                packed
+            })
+            .collect();
 
         Self {
             common: CommonData {

@@ -60,7 +60,7 @@ fn dft_preprocess(input: &RowMajorMatrix<F>) -> RowMajorMatrix<C> {
 /// Transform the result of applying the DFT to the packed
 /// `Mersenne31` values so that the convolution theorem holds.
 ///
-/// Source: https://www.robinscheibler.org/2013/02/13/real-fft.html
+/// Source: <https://www.robinscheibler.org/2013/02/13/real-fft.html>
 ///
 /// NB: This function and `idft_preprocess()` are inverses.
 fn dft_postprocess(input: &RowMajorMatrix<C>) -> RowMajorMatrix<C> {
@@ -110,7 +110,7 @@ fn dft_postprocess(input: &RowMajorMatrix<C>) -> RowMajorMatrix<C> {
 /// Undo the transform of the DFT matrix in `dft_postprocess()` so
 /// that the inverse DFT can be applied.
 ///
-/// Source: https://www.robinscheibler.org/2013/02/13/real-fft.html
+/// Source: <https://www.robinscheibler.org/2013/02/13/real-fft.html>
 ///
 /// NB: This function and `dft_postprocess()` are inverses.
 fn idft_preprocess(input: &RowMajorMatrix<C>) -> RowMajorMatrix<C> {
