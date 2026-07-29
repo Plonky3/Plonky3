@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpeningRef, Mmcs};
-use p3_field::{BasedVectorSpace, ExtensionField, TwoAdicField};
+use p3_field::{BasedVectorSpace, ExtensionField, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Dimensions;
 use thiserror::Error;
 
@@ -39,25 +39,32 @@ where
     };
 
     let domain_gen = F::two_adic_generator(current_log_domain);
-    row_evals
-        .iter()
-        .enumerate()
-        .map(|(col, &g_value)| {
+    let points: Vec<EF> = (0..row_evals.len())
+        .map(|col| {
             let natural_index = row_index + col * row_height;
-            let x = EF::from(current_shift) * EF::from(domain_gen.exp_u64(natural_index as u64));
-            let vanishing = eval_vanishing_at_roots(&ctx.all_points, x);
-            if vanishing == EF::ZERO {
-                return None;
-            }
-            let quotient = (g_value - eval_poly(&ctx.ans_poly, x)) * vanishing.inverse();
-            Some(eval_degree_correction(
-                quotient,
-                x,
-                ctx.r_comb,
-                ctx.all_points.len(),
-            ))
+            EF::from(current_shift) * EF::from(domain_gen.exp_u64(natural_index as u64))
         })
-        .collect()
+        .collect();
+    let vanishing_values: Vec<EF> = points
+        .iter()
+        .map(|&x| eval_vanishing_at_roots(&ctx.all_points, x))
+        .collect();
+    if vanishing_values.contains(&EF::ZERO) {
+        return None;
+    }
+    let vanishing_inverses = batch_multiplicative_inverse(&vanishing_values);
+
+    Some(
+        row_evals
+            .iter()
+            .zip(points)
+            .zip(vanishing_inverses)
+            .map(|((&g_value, x), vanishing_inverse)| {
+                let quotient = (g_value - eval_poly(&ctx.ans_poly, x)) * vanishing_inverse;
+                eval_degree_correction(quotient, x, ctx.r_comb, ctx.all_points.len())
+            })
+            .collect(),
+    )
 }
 
 /// Errors returned by [`verify_stir`].
@@ -242,8 +249,9 @@ where
 
         challenger.observe_algebra_slice(&rp.ood_answers);
 
-        // Step 3: query/OOD PoW. Mirrors the prover order: grind after OOD answers are
-        // transcript-bound so the witness gates re-rolls of favorable OOD answers.
+        // Step 3: query-phase PoW. It protects only the immediately following combination
+        // challenge and query indices; configuration soundness gives no PoW credit to the
+        // earlier OOD samples or the later shake challenge.
         if !challenger.check_witness(rc.pow_bits, rp.pow_witness) {
             return Err(StirError::InvalidPowWitness { round });
         }

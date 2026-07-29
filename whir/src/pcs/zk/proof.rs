@@ -6,13 +6,13 @@ use p3_commit::Mmcs;
 use p3_sumcheck::zk::ZkSumcheckData;
 use serde::{Deserialize, Serialize};
 
-use crate::pcs::proof::QueryOpening;
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 
 /// Complete HVZK-WHIR opening proof.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
-    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::MultiProof: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
 pub struct ZkWhirProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Claimed opening evaluations, one per requested point.
@@ -30,8 +30,8 @@ pub struct ZkWhirProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
 /// One HVZK code-switching round (Construction 9.7).
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
-    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::MultiProof: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
 pub struct ZkRoundProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Commitment to the next interleaved ZK oracle.
@@ -43,7 +43,7 @@ pub struct ZkRoundProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// PoW witness after the commitments.
     pub pow_witness: F,
     /// STIR query openings against the previous oracle.
-    pub queries: Vec<QueryOpening<F, EF, MT::Proof>>,
+    pub openings: QueryOpenings<F, EF, MT::MultiProof>,
 }
 
 /// The masked base case (Construction 7.2).
@@ -53,8 +53,8 @@ pub struct ZkRoundProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
 /// - Nothing about the folded witness or the carried masks leaks.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
-    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::MultiProof: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
 pub struct BaseCaseZkProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Commitment to the fresh main mask `g`, in the folded source code.
@@ -72,12 +72,12 @@ pub struct BaseCaseZkProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// PoW witness before the spot checks.
     pub pow_witness: F,
     /// Spot-check openings of the (virtual) source oracle, i.e. leaves of the last committed oracle.
-    pub source_queries: Vec<QueryOpening<F, EF, MT::Proof>>,
+    pub source_openings: QueryOpenings<F, EF, MT::MultiProof>,
     /// Spot-check openings of the fresh main mask `g` at the same positions.
-    pub fresh_main_queries: Vec<QueryOpening<F, EF, MT::Proof>>,
+    pub fresh_main_openings: SharedProofOpening<EF, MT::MultiProof>,
     /// Per group: paired openings of the carried oracle and its fresh blind.
     /// Each opened row spans the whole group.
-    pub mask_queries: Vec<Vec<MaskOpeningPair<F, EF, MT>>>,
+    pub mask_openings: Vec<MaskOpeningPair<EF, MT::MultiProof>>,
 }
 
 /// One mask oracle's blinded reveal.
@@ -89,15 +89,18 @@ pub struct BlindedMask<EF> {
     pub randomness: Vec<EF>,
 }
 
-/// Paired openings of a carried mask and its fresh blind at one position.
+/// Paired openings of one carried mask group and its fresh blind.
+///
+/// Both oracles open at the same shared spot-check positions,
+/// each under its own multiproof.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "F: Serialize, EF: Serialize, MT::Proof: Serialize",
-    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+    serialize = "EF: Serialize, P: Serialize",
+    deserialize = "EF: Deserialize<'de>, P: Deserialize<'de>"
 ))]
-pub struct MaskOpeningPair<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
-    /// Opening of the carried mask oracle `xi_i`.
-    pub carried: QueryOpening<F, EF, MT::Proof>,
-    /// Opening of the fresh blind `s'_i`.
-    pub fresh: QueryOpening<F, EF, MT::Proof>,
+pub struct MaskOpeningPair<EF, P> {
+    /// Openings of the carried mask oracle `xi_i`.
+    pub carried: SharedProofOpening<EF, P>,
+    /// Openings of the fresh blind `s'_i`.
+    pub fresh: SharedProofOpening<EF, P>,
 }

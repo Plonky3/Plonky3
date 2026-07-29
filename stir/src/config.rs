@@ -5,8 +5,11 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, SecurityAssumption};
+use p3_commit::Mmcs;
 use p3_field::{ExtensionField, TwoAdicField};
+
+use crate::SecurityAssumption;
+use crate::soundness::StirSoundness;
 
 /// User-facing STIR protocol parameters.
 ///
@@ -40,8 +43,8 @@ pub struct StirParameters<M> {
 
     /// Fixed proof-of-work difficulty in bits applied to each Fiat-Shamir grinding step.
     ///
-    /// Following the paper's discussion of PoW-assisted parameters, this reduces the
-    /// algebraic target from `security_level` to `security_level - max_pow_bits`.
+    /// This can reduce the algebraic target only for challenges sampled immediately after
+    /// the corresponding grind. OOD and shake-check errors receive no PoW credit.
     pub max_pow_bits: usize,
 
     /// Merkle tree commitment scheme for codeword commitments.
@@ -103,8 +106,9 @@ pub struct StirRoundConfig<F> {
     /// Proof-of-work difficulty used for the STIR query phase in this round.
     ///
     /// Derived as `max(0, security_level − query_algebraic_bits)` and capped at
-    /// `max_pow_bits`. `query_algebraic_bits` is the worst (min) of the per-round query
-    /// failure, OOD, and random-combination soundness terms.
+    /// `max_pow_bits`. Only the query-failure and random-combination terms are eligible:
+    /// the OOD points are sampled before this grind, while the shake challenge follows a
+    /// later prover message, so both must meet the target without PoW credit.
     pub pow_bits: usize,
 
     /// Proof-of-work difficulty used for the polynomial folding step in this round.
@@ -246,11 +250,11 @@ where
         // Per-round target adds a union-bound buffer of `ceil(log2(num_terms))` so that
         // summing every algebraic failure mode across the protocol is bounded by
         // `2^{-security_level}`. Exact term count: each of the `total_folds - 1`
-        // intermediate rounds has six independently bridged terms (query tier: query
+        // intermediate rounds has six independent terms (query tier: query
         // failure, OOD, random-combination, shake-check; folding tier: proximity-gaps,
         // sumcheck); the final stage has three (folding tier + final query failure).
-        // The buffer applies to every per-event term: query failure (via the query
-        // count below) and the auxiliary terms bridged by PoW.
+        // The buffer applies to every per-event term. OOD and shake-check must reach the
+        // buffered target algebraically because the query-phase grind does not protect them.
         const TERMS_PER_INTERMEDIATE_ROUND: usize = 6;
         const FINAL_STAGE_TERMS: usize = 3;
         let num_alg_terms = TERMS_PER_INTERMEDIATE_ROUND * (total_folds - 1) + FINAL_STAGE_TERMS;
@@ -292,16 +296,16 @@ where
         let mut log_inv_rate = log_blowup;
         let mut domain_shift = initial_shift;
 
-        // Query count uses the same buffered target so that summing the per-round query
+        // Query count uses the PoW-assisted target so that summing the per-round query
         // failure over all folds is bounded by `2^{-algebraic_security_level}`.
-        let target_bits = algebraic_security_level + union_bound_buffer;
+        let pow_target_bits = algebraic_security_level + union_bound_buffer;
         let query_count = |stage_log_inv_rate: usize, eta: f64| {
             let failure_base = params
                 .soundness_type
                 .stir_query_failure_base(stage_log_inv_rate, eta);
             params
                 .soundness_type
-                .stir_queries_for_base(target_bits, failure_base)
+                .stir_queries_for_base(pow_target_bits, failure_base)
         };
         let validate_eta = |stage: usize, stage_log_inv_rate: usize, eta: f64| {
             assert!(
@@ -333,13 +337,11 @@ where
             );
         };
 
-        // Size eta for the *buffered* algebraic target — the same number that drives the query
-        // count and the PoW gate. The old code used `algebraic_security_level` here, which made
-        // prox_gaps land at `algebraic` instead of `target_bits`; the PoW shortfall was then
-        // always `max_pow_bits + buffer`, exceeding the cap by `buffer` bits. The eta-aware
-        // accounting fix surfaces this; passing `target_bits` re-aligns eta with the gate.
+        // Size eta against both classes of error: PoW-eligible folding/query terms target
+        // `pow_target_bits`, while OOD and shake terms must reach the full buffered target.
         let mut final_eta = params.soundness_type.stir_initial_eta(
-            target_bits,
+            pow_target_bits,
+            buffered_security_level,
             log_degree,
             log_inv_rate,
             log_folding_factor,
@@ -357,13 +359,27 @@ where
                 log_inv_rate,
                 libm::log2(final_eta),
             );
-            let query_alg = params.soundness_type.stir_query_algebraic_bits(
+            let query_alg = params.soundness_type.stir_query_pow_eligible_bits(
                 field_size_bits,
                 log_degree,
                 log_inv_rate,
                 final_eta,
                 num_queries,
                 num_ood_samples,
+            );
+            let unprotected_alg = params.soundness_type.stir_query_unprotected_bits(
+                field_size_bits,
+                log_degree,
+                log_inv_rate,
+                final_eta,
+                num_queries,
+                num_ood_samples,
+            );
+            assert!(
+                unprotected_alg >= buffered_security_level as f64,
+                "round 0 OOD/shake checks reach only {unprotected_alg:.4} bits, below the \
+                 buffered target {buffered_security_level}; these challenges are not protected \
+                 by the query-phase PoW. Use a larger challenge field or lower security target."
             );
             let folding_pow_bits = derive_pow_bits("folding", "round 0", fold_alg);
             let pow_bits = derive_pow_bits("query", "round 0", query_alg);
@@ -389,7 +405,8 @@ where
 
             for round in 1..num_rounds {
                 final_eta = params.soundness_type.stir_recursive_eta(
-                    target_bits,
+                    pow_target_bits,
+                    buffered_security_level,
                     log_degree,
                     log_inv_rate,
                     log_domain_size,
@@ -408,7 +425,15 @@ where
                     log_inv_rate,
                     libm::log2(final_eta),
                 );
-                let query_alg = params.soundness_type.stir_query_algebraic_bits(
+                let query_alg = params.soundness_type.stir_query_pow_eligible_bits(
+                    field_size_bits,
+                    log_degree,
+                    log_inv_rate,
+                    final_eta,
+                    num_queries,
+                    num_ood_samples,
+                );
+                let unprotected_alg = params.soundness_type.stir_query_unprotected_bits(
                     field_size_bits,
                     log_degree,
                     log_inv_rate,
@@ -417,6 +442,13 @@ where
                     num_ood_samples,
                 );
                 let round_label = format!("round {round}");
+                assert!(
+                    unprotected_alg >= buffered_security_level as f64,
+                    "{round_label} OOD/shake checks reach only {unprotected_alg:.4} bits, below \
+                     the buffered target {buffered_security_level}; these challenges are not \
+                     protected by the query-phase PoW. Use a larger challenge field or lower \
+                     security target."
+                );
                 let folding_pow_bits = derive_pow_bits("folding", &round_label, fold_alg);
                 let pow_bits = derive_pow_bits("query", &round_label, query_alg);
 
@@ -441,7 +473,8 @@ where
             }
 
             final_eta = params.soundness_type.stir_recursive_eta(
-                target_bits,
+                pow_target_bits,
+                buffered_security_level,
                 log_degree,
                 log_inv_rate,
                 log_domain_size,
@@ -520,7 +553,8 @@ mod tests {
     use p3_challenger::DuplexChallenger;
     use p3_commit::ExtensionMmcs;
     use p3_field::Field;
-    use p3_field::extension::BinomialExtensionField;
+    use p3_field::extension::{BinomialExtensionField, CubicTrinomialExtensionField};
+    use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::SeedableRng;
@@ -698,6 +732,71 @@ mod tests {
     }
 
     #[test]
+    fn test_johnson_config_supports_realistic_security_targets() {
+        type E100 = BinomialExtensionField<TestF, 5>;
+        type M100 = ExtensionMmcs<TestF, E100, TestValMmcs>;
+
+        assert_eq!(E100::bits(), 155);
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(101);
+        let perm = TestPerm::new_from_rng_128(&mut rng);
+        let val_mmcs = TestValMmcs::new(TestHash::new(perm.clone()), TestCompress::new(perm), 0);
+        let config_100 = StirConfig::<TestF, E100, M100, TestChallenger>::new(
+            20,
+            StirParameters {
+                log_blowup: 2,
+                log_folding_factor: 2,
+                soundness_type: SecurityAssumption::JohnsonBound,
+                security_level: 100,
+                max_pow_bits: 0,
+                mmcs: M100::new(val_mmcs),
+            },
+        );
+        assert!(
+            config_100
+                .round_configs
+                .iter()
+                .all(|rc| rc.pow_bits == 0 && rc.folding_pow_bits == 0)
+        );
+        assert_eq!(config_100.final_pow_bits, 0);
+        assert_eq!(config_100.final_folding_pow_bits, 0);
+
+        type F128 = Goldilocks;
+        type E128 = CubicTrinomialExtensionField<F128>;
+        type Perm128 = Poseidon2Goldilocks<8>;
+        type Hash128 = PaddingFreeSponge<Perm128, 8, 4, 4>;
+        type Compress128 = TruncatedPermutation<Perm128, 2, 4, 8>;
+        type PackedF128 = <F128 as Field>::Packing;
+        type ValMmcs128 = MerkleTreeMmcs<PackedF128, PackedF128, Hash128, Compress128, 2, 4>;
+        type Mmcs128 = ExtensionMmcs<F128, E128, ValMmcs128>;
+        type Challenger128 = DuplexChallenger<F128, Perm128, 8, 4>;
+
+        assert_eq!(E128::bits(), 192);
+
+        let perm = Perm128::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs128::new(Hash128::new(perm.clone()), Compress128::new(perm), 0);
+        let config_128 = StirConfig::<F128, E128, Mmcs128, Challenger128>::new(
+            20,
+            StirParameters {
+                log_blowup: 2,
+                log_folding_factor: 2,
+                soundness_type: SecurityAssumption::JohnsonBound,
+                security_level: 128,
+                max_pow_bits: 0,
+                mmcs: Mmcs128::new(val_mmcs),
+            },
+        );
+        assert!(
+            config_128
+                .round_configs
+                .iter()
+                .all(|rc| rc.pow_bits == 0 && rc.folding_pow_bits == 0)
+        );
+        assert_eq!(config_128.final_pow_bits, 0);
+        assert_eq!(config_128.final_folding_pow_bits, 0);
+    }
+
+    #[test]
     fn test_stir_config_union_bound_buffer_scales_with_rounds() {
         // The per-round target_bits adds ceil(log2(6 * total_folds)) to algebraic_security_level
         // so the per-round error sums to <= 2^{-algebraic_security_level} across all folds.
@@ -838,7 +937,7 @@ mod tests {
                 for rc in &config.round_configs {
                     let log_inv_rate = rc.log_domain_size - rc.log_degree;
 
-                    let query_alg = soundness_type.stir_query_algebraic_bits(
+                    let query_alg = soundness_type.stir_query_pow_eligible_bits(
                         field_size_bits,
                         rc.log_degree,
                         log_inv_rate,
@@ -851,6 +950,20 @@ mod tests {
                         "{}: query_alg={query_alg:.4} + pow={} < {buffered:.4}",
                         label("intermediate-query"),
                         rc.pow_bits,
+                    );
+
+                    let unprotected_alg = soundness_type.stir_query_unprotected_bits(
+                        field_size_bits,
+                        rc.log_degree,
+                        log_inv_rate,
+                        rc.eta,
+                        rc.num_queries,
+                        rc.num_ood_samples,
+                    );
+                    assert!(
+                        unprotected_alg >= buffered - eps,
+                        "{}: OOD/shake={unprotected_alg:.4} < {buffered:.4} without PoW",
+                        label("intermediate-unprotected"),
                     );
 
                     let fold_alg = soundness_type.fold_algebraic_bits_at_log_eta(

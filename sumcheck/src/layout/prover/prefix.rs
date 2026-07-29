@@ -26,8 +26,8 @@ use crate::{Claim, SumcheckData, extrapolate_01inf};
 ///
 /// # Flow
 ///
-/// - Round one runs in SIMD-packed form.
-/// - Every later round runs on the residual product polynomial.
+/// - Every folding round is driven from precomputed SVO accumulators.
+/// - The handoff to the residual product polynomial is packed.
 #[derive(Debug, Clone)]
 pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     /// Recorded opening claims and the layout context that batches them.
@@ -86,10 +86,11 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
     ///
     /// - At least one current or next column must be requested.
     #[tracing::instrument(skip_all)]
-    fn eval<Ch>(
+    fn eval_at<Ch>(
         &mut self,
         table_idx: usize,
         batch: &OpeningRequest,
+        point: &Point<EF>,
         challenger: &mut Ch,
     ) -> OpeningEvals<EF>
     where
@@ -103,15 +104,12 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
             !batch.is_empty(),
             "opening schedule must name at least one column"
         );
-        // Sample the local-frame opening point from the transcript.
         let table = &self.claims.tables[table_idx];
-        let point = Point::expand_from_univariate(
-            challenger.sample_algebra_element(),
-            table.num_variables(),
-        );
+        // The opening point lives in the table's local frame, one coordinate per variable.
+        debug_assert_eq!(point.num_variables(), table.num_variables());
 
         // Factorise the point once; every selected column reuses it.
-        let point = SvoPoint::new_packed(self.claims.folding, &point);
+        let point = SvoPoint::new_packed(self.claims.folding, point);
 
         // Current group: evaluate each column at the point.
         // Each entry yields an opening (carrying preprocessing residuals) plus the bare eval.
@@ -231,8 +229,8 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
     ///       1   | Sample the batching challenge  a.
     ///       2   | running sum  = sum_{i}  a^i * eval_i.
     ///       3   | weight poly  = sum_{i}  a^i * eq(z_i, X).
-    ///       4   | Fold round 1 in SIMD-packed arithmetic.
-    ///       5   | Drive rounds 2..folding on the product polynomial.
+    ///       4   | Fold rounds 1..folding from precomputed SVO accumulators.
+    ///       5   | Hand off to the residual product polynomial, packed.
     /// ```
     ///
     /// # Precondition
@@ -631,11 +629,9 @@ mod tests {
         // Builds a four-column table and opens the first `open` of them.
         // Four columns tile a power-of-two space, so `open` columns is `open/4` occupancy.
         let mut routed = |open: usize| {
-            let mut prover =
-                PrefixProver::<F, EF>::from_witness(PrefixProver::<F, EF>::new_witness(
-                    vec![Table::new((0..4).map(|_| Poly::<F>::zero(8)).collect())],
-                    FOLDING,
-                ));
+            let mut prover = PrefixProver::<F, EF>::from_witness(
+                PrefixProver::<F, EF>::new_witness(vec![Table::zero(4, 8)], FOLDING),
+            );
             let cols: Vec<usize> = (0..open).collect();
             prover.eval(0, &OpeningBatch::new(cols, Vec::new()), &mut ch);
             prover.scatter_beats_pack(&rs)
@@ -648,7 +644,7 @@ mod tests {
 
         // A holey layout (one of five columns) sits far below the threshold.
         let mut sparse = PrefixProver::<F, EF>::from_witness(PrefixProver::<F, EF>::new_witness(
-            vec![Table::new((0..5).map(|_| Poly::<F>::zero(8)).collect())],
+            vec![Table::zero(5, 8)],
             FOLDING,
         ));
         sparse.eval(0, &OpeningBatch::new(vec![2], Vec::new()), &mut ch);

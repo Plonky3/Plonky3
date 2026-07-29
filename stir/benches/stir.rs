@@ -17,12 +17,13 @@ use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 use p3_challenger::{
     CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
 };
-use p3_commit::{ExtensionMmcs, Mmcs, SecurityAssumption};
+use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::QuinticTrinomialExtensionField;
 use p3_field::{BasedVectorSpace, ExtensionField, Field, TwoAdicField};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
+use p3_stir::SecurityAssumption;
 use p3_stir::config::{StirConfig, StirParameters};
 use p3_stir::prover::prove_stir;
 use p3_stir::verifier::verify_stir;

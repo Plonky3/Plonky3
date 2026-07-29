@@ -45,6 +45,15 @@ pub trait RoundProver<EF> {
     /// - The transcript record, which carries the claimed sum.
     /// - The vector of challenges sampled by the verifier.
     ///
+    /// # Transcript
+    ///
+    /// The caller must observe `claimed_sum` into the challenger before calling,
+    /// so that the round challenges depend on it. This method observes only the
+    /// round polynomials and any proof-of-work witnesses. The verifier observes
+    /// the claimed sum at the matching point in [`GenericDegreeProof::verify`],
+    /// so prover and verifier transcripts agree only when the caller mirrors that
+    /// observe here.
+    ///
     /// # Panics
     ///
     /// Panics if `degree` is zero.
@@ -63,9 +72,6 @@ pub trait RoundProver<EF> {
     {
         // A degree-zero polynomial would carry no information.
         assert!(degree > 0, "generic-degree sumcheck: degree must be > 0");
-
-        // Bind the transcript to the claimed sum so the challenges depend on the statement.
-        challenger.observe_algebra_element(claimed_sum);
 
         let mut proof = GenericDegreeProof {
             claimed_sum,
@@ -225,6 +231,7 @@ mod tests {
         // Prover side.
         let mut prover_state = prover_from(&columns);
         let mut p_ch = fresh_challenger();
+        p_ch.observe_algebra_element(claimed_sum);
         let (proof, prover_challenges) =
             prover_state.prove::<F, _>(&mut p_ch, log_m, 3, 0, claimed_sum);
 
@@ -259,6 +266,7 @@ mod tests {
 
         let mut prover_state = prover_from(&columns);
         let mut p_ch = fresh_challenger();
+        p_ch.observe_algebra_element(claimed_sum);
         let (proof, prover_challenges) =
             prover_state.prove::<F, _>(&mut p_ch, log_m, 3, pow_bits, claimed_sum);
 
@@ -294,6 +302,7 @@ mod tests {
 
         let mut prover_state = prover_from(&columns);
         let mut p_ch = fresh_challenger();
+        p_ch.observe_algebra_element(claimed_sum);
         let (mut proof, _) = prover_state.prove::<F, _>(&mut p_ch, log_m, 3, pow_bits, claimed_sum);
 
         let last_round = log_m - 1;

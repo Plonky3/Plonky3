@@ -84,10 +84,11 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
     ///
     /// - At least one current or next column must be requested.
     #[tracing::instrument(skip_all)]
-    fn eval<Ch>(
+    fn eval_at<Ch>(
         &mut self,
         table_idx: usize,
         batch: &OpeningRequest,
+        point: &Point<EF>,
         challenger: &mut Ch,
     ) -> OpeningEvals<EF>
     where
@@ -102,15 +103,12 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
             "opening schedule must name at least one column"
         );
 
-        // Sample the local-frame opening point from the transcript.
         let table = &self.claims.tables[table_idx];
-        let point = Point::expand_from_univariate(
-            challenger.sample_algebra_element(),
-            table.num_variables(),
-        );
+        // The opening point lives in the table's local frame, one coordinate per variable.
+        debug_assert_eq!(point.num_variables(), table.num_variables());
 
         // Factorise the point with the suffix split; every selected column reuses it.
-        let point = SvoPoint::new_unpacked(self.claims.folding, &point, VariableOrder::Suffix);
+        let point = SvoPoint::new_unpacked(self.claims.folding, point, VariableOrder::Suffix);
 
         // Current group: evaluate each column at the point.
         // Each entry yields an opening (carrying preprocessing residuals) plus the bare eval.
@@ -257,7 +255,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
                 &point,
                 VariableOrder::Suffix,
             );
-            let (ref_eval, ref_partials) = ref_svo.eval(poly);
+            let (ref_eval, ref_partials) = ref_svo.eval(poly.as_view());
             let opening = Opening {
                 poly_idx: None,
                 eval: ref_eval,
@@ -478,7 +476,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
                 rs.compress_suffix_into(
                     &mut out.as_mut_slice()
                         [off..off + (1 << (poly.num_variables() - rs.num_variables()))],
-                    poly,
+                    poly.as_view(),
                 );
             }
         }

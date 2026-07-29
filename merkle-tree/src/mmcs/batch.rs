@@ -1,4 +1,4 @@
-//! The standard [`Mmcs`] interface: commit, open, and verify a single index.
+//! The [`Mmcs`] trait implementation: commit, then open and verify one index or many.
 
 use alloc::vec::Vec;
 use core::cmp::Reverse;
@@ -16,6 +16,7 @@ use crate::MerkleTreeError::{
     CapMismatch, EmptyBatch, IndexOutOfBounds, WrongBatchSize, WrongHeight,
 };
 use crate::merkle_tree::padded_len;
+use crate::pruning::PrunedMerklePaths;
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 
 impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize> Mmcs<P::Value>
@@ -35,6 +36,7 @@ where
     type ProverData<M> = MerkleTree<P::Value, PW::Value, M, N, DIGEST_ELEMS>;
     type Commitment = MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>;
     type Proof = Vec<[PW::Value; DIGEST_ELEMS]>;
+    type MultiProof = PrunedMerklePaths<PW::Value, DIGEST_ELEMS>;
     type Error = MerkleTreeError;
 
     fn commit<M: Matrix<P::Value>>(
@@ -268,6 +270,28 @@ where
         } else {
             Err(CapMismatch)
         }
+    }
+
+    fn open_multi_batch<M: Matrix<P::Value>>(
+        &self,
+        indices: &[usize],
+        prover_data: &Self::ProverData<M>,
+    ) -> (Vec<Vec<Vec<P::Value>>>, Self::MultiProof) {
+        // Open every index against one shared, pruned authentication path.
+        let opening = self.open_batch_pruned(indices, prover_data);
+        // Return the opened rows and that shared proof as separate values.
+        (opening.opened_values, opening.pruned_proof)
+    }
+
+    fn verify_multi_batch<R: AsRef<[P::Value]> + PartialEq>(
+        &self,
+        commit: &Self::Commitment,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+        opened_values: &[Vec<R>],
+        proof: &Self::MultiProof,
+    ) -> Result<(), Self::Error> {
+        self.verify_batch_pruned(commit, dimensions, indices, opened_values, proof)
     }
 }
 

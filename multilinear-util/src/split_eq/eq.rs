@@ -66,7 +66,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     ///
     /// For packed tables, this accounts for the log_2(W) variables
     /// absorbed into each SIMD lane.
-    pub const fn num_variables(&self) -> usize {
+    pub fn num_variables(&self) -> usize {
         match self {
             Self::Unpacked(poly) => poly.num_variables(),
             // Packed polynomial has k - log_2(W) stored entries,
@@ -82,7 +82,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     ///
     /// This is used to determine chunk sizes when iterating over
     /// a polynomial paired with this eq table.
-    pub const fn scalar_chunk_size(&self) -> usize {
+    pub fn scalar_chunk_size(&self) -> usize {
         match self {
             Self::Unpacked(eq1) => eq1.num_evals(),
             Self::Packed(eq1) => eq1.num_evals() * F::Packing::WIDTH,

@@ -173,6 +173,12 @@ fn test_interpolate_poly_linear() {
 }
 
 #[test]
+#[should_panic(expected = "all interpolation points must be distinct")]
+fn test_interpolate_poly_rejects_duplicate_points() {
+    let _ = interpolate_poly(&[f(1), f(1)], &[f(2), f(3)]);
+}
+
+#[test]
 fn test_interpolate_poly_quadratic() {
     // Three points: p(0)=1, p(1)=3, p(2)=9  →  p(x) = 1 + x + x²
     let poly = interpolate_poly(&[f(0), f(1), f(2)], &[f(1), f(3), f(7)]);

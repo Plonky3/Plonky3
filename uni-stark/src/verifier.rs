@@ -345,13 +345,21 @@ where
     let mut challenger = config.initialise_challenger();
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> config.is_zk());
 
-    let (_, quotient_domain_size) = checked_log_size_sum(degree_bits, log_num_quotient_chunks)
+    let (quotient_domain_log_size, quotient_domain_size) =
+        checked_log_size_sum(degree_bits, log_num_quotient_chunks).ok_or_else(|| {
+            InvalidProofShapeError::QuotientDomainTooLarge {
+                air: None,
+                maximum: usize::BITS as usize - 1,
+                got: degree_bits.saturating_add(log_num_quotient_chunks),
+            }
+        })?;
+    let quotient_domain = trace_domain
+        .try_create_disjoint_domain(quotient_domain_size)
         .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
-            maximum: usize::BITS as usize - 1,
-            got: degree_bits.saturating_add(log_num_quotient_chunks),
+            maximum: pcs.log_max_lde_height(),
+            got: quotient_domain_log_size,
         })?;
-    let quotient_domain = trace_domain.create_disjoint_domain(quotient_domain_size);
     let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
 
     let randomized_quotient_chunks_domains = quotient_chunks_domains
@@ -444,10 +452,8 @@ where
     let periodic_columns = air.periodic_columns();
     check_periodic_column_lengths(&periodic_columns, init_trace_domain.size())?;
 
-    let periodic_values: Vec<SC::Challenge> = periodic_columns
-        .iter()
-        .map(|periodic_col| init_trace_domain.evaluate_periodic_column_at(periodic_col, zeta))
-        .collect();
+    let periodic_values: Vec<SC::Challenge> =
+        init_trace_domain.evaluate_periodic_columns_at(&periodic_columns, zeta);
 
     let zeta_next = init_trace_domain
         .next_point(zeta)

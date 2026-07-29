@@ -6,14 +6,12 @@ use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingC
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField, dot_product};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_sumcheck::zk::stack_codewords;
 use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::config::{BaseCaseZkConfig, MaskGroupWitness};
-use crate::pcs::proof::QueryOpening;
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::proof::{BaseCaseZkProof, BlindedMask, MaskOpeningPair};
 
@@ -51,7 +49,7 @@ where
     ///
     /// # Arguments
     ///
-    /// - `open_source`: opens the (virtual) source at a folded-domain position.
+    /// - `open_source`: opens the (virtual) source at the folded-domain positions.
     #[allow(clippy::too_many_arguments)]
     pub fn prove<Dft, Challenger, R>(
         &self,
@@ -60,7 +58,7 @@ where
         source_randomness: &[EF],
         source_covector: &[EF],
         masks: &[MaskGroupWitness<'_, F, EF, MT>],
-        mut open_source: impl FnMut(usize) -> QueryOpening<F, EF, MT::Proof>,
+        open_source: impl FnOnce(&[usize]) -> QueryOpenings<F, EF, MT::MultiProof>,
         challenger: &mut Challenger,
         rng: &mut R,
     ) -> BaseCaseZkProof<F, EF, MT>
@@ -110,22 +108,18 @@ where
             let encoding = group.shape.encoding::<EF>();
             let mut blind_messages = Vec::with_capacity(group.width);
             let mut blind_randomness = Vec::with_capacity(group.width);
-            let codewords: Vec<RowMajorMatrix<EF>> = (0..group.width)
-                .map(|_| {
-                    // Uniform blind message s~'_i and fresh encoding
-                    // randomness r'_i, retained for the reveals below.
-                    let message = encoding.sample_message(rng);
-                    let randomness = encoding.sample_randomness(rng);
-                    let codeword = encoding.encode_with_randomness(&message, &randomness);
-                    blind_messages.push(message);
-                    blind_randomness.push(randomness);
-                    codeword
-                })
-                .collect();
+            for _ in 0..group.width {
+                // Uniform blind message s~'_i and fresh encoding
+                // randomness r'_i, retained for the reveals below.
+                let message = encoding.sample_message(rng);
+                let randomness = encoding.sample_randomness(rng);
+                blind_messages.push(message);
+                blind_randomness.push(randomness);
+            }
             // Row z of the stacked matrix holds position z of every blind.
-            let (commitment, data) = self
-                .extension_mmcs
-                .commit_matrix(stack_codewords(&codewords));
+            let (commitment, data) = self.extension_mmcs.commit_matrix(
+                encoding.encode_batch_with_randomness(&blind_messages, &blind_randomness),
+            );
             challenger.observe(commitment.clone());
             fresh_mask_commitments.push(commitment);
             fresh_groups.push((blind_messages, blind_randomness, data, witness));
@@ -212,18 +206,11 @@ where
             self.config.num_queries,
             challenger,
         );
-        let mut source_queries = Vec::with_capacity(positions.len());
-        let mut fresh_main_queries = Vec::with_capacity(positions.len());
-        for &position in &positions {
-            // f(z): a leaf of the last committed oracle, virtually folded.
-            source_queries.push(open_source(position));
-            // g(z): the fresh main mask, committed above.
-            let opening = self.extension_mmcs.open_batch(position, &fresh_main_data);
-            fresh_main_queries.push(QueryOpening::Extension {
-                values: opening.opened_values.into_iter().next().unwrap(),
-                proof: opening.opening_proof,
-            });
-        }
+        // f(z): leaves of the last committed oracle, virtually folded.
+        let source_openings = open_source(&positions);
+        // g(z): the fresh main mask, committed above.
+        let fresh_main_openings =
+            SharedProofOpening::open(self.extension_mmcs, &positions, &fresh_main_data);
 
         // Move 5b: mask spot checks, t_zk positions per group.
         //
@@ -233,7 +220,7 @@ where
         //
         // Positions are shared across the group, so one opened row of each
         // oracle serves every member.
-        let mut mask_queries = Vec::with_capacity(fresh_groups.len());
+        let mut mask_openings = Vec::with_capacity(fresh_groups.len());
         for (group, (_, _, fresh_data, witness)) in
             self.config.mask_groups.iter().zip(&fresh_groups)
         {
@@ -243,26 +230,12 @@ where
                 self.config.mask_queries,
                 challenger,
             );
-            let pairs = positions
-                .iter()
-                .map(|&position| {
-                    // xi_i(y) and s'_i(y): the carried group oracle and its
-                    // fresh blind, opened at the same position.
-                    let carried = self.extension_mmcs.open_batch(position, witness.data);
-                    let fresh = self.extension_mmcs.open_batch(position, fresh_data);
-                    MaskOpeningPair {
-                        carried: QueryOpening::Extension {
-                            values: carried.opened_values.into_iter().next().unwrap(),
-                            proof: carried.opening_proof,
-                        },
-                        fresh: QueryOpening::Extension {
-                            values: fresh.opened_values.into_iter().next().unwrap(),
-                            proof: fresh.opening_proof,
-                        },
-                    }
-                })
-                .collect();
-            mask_queries.push(pairs);
+            // xi_i(y) and s'_i(y): the carried group oracle and its fresh
+            // blind, opened at the same shared positions.
+            mask_openings.push(MaskOpeningPair {
+                carried: SharedProofOpening::open(self.extension_mmcs, &positions, witness.data),
+                fresh: SharedProofOpening::open(self.extension_mmcs, &positions, fresh_data),
+            });
         }
 
         BaseCaseZkProof {
@@ -273,9 +246,9 @@ where
             blinded_randomness,
             blinded_masks,
             pow_witness,
-            source_queries,
-            fresh_main_queries,
-            mask_queries,
+            source_openings,
+            fresh_main_openings,
+            mask_openings,
         }
     }
 }

@@ -38,18 +38,19 @@ use p3_util::log2_strict_usize;
 
 /// Build the compact periodic LDE table using the two-adic evaluator.
 ///
-/// This is a type-level helper so callers can use concrete `F` without
-/// the compiler struggling to unify `F` with `PolynomialSpace::Val`.
+/// `dft` is the caller's configured DFT engine, reused here so its memoized twiddle
+/// cache isn't discarded in favor of a freshly conjured `Dft::default()`.
 pub fn build_periodic_lde_table_two_adic<F, Dft>(
+    dft: &Dft,
     periodic_table: &[Vec<F>],
     trace_domain: &TwoAdicMultiplicativeCoset<F>,
     lde_domain: &TwoAdicMultiplicativeCoset<F>,
 ) -> PeriodicLdeTable<F>
 where
     F: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F> + Default,
+    Dft: TwoAdicSubgroupDft<F>,
 {
-    TwoAdicPeriodicEvaluator::<Dft>::eval_on_lde(periodic_table, trace_domain, lde_domain)
+    TwoAdicPeriodicEvaluator::eval_on_lde_with_dft(dft, periodic_table, trace_domain, lde_domain)
 }
 
 /// Evaluates periodic polynomials for two-adic multiplicative cosets.
@@ -64,23 +65,18 @@ pub struct TwoAdicPeriodicEvaluator<Dft> {
 }
 
 impl<Dft> TwoAdicPeriodicEvaluator<Dft> {
-    pub fn new(_dft: Dft) -> Self {
-        Self {
-            _phantom: core::marker::PhantomData,
-        }
-    }
-}
-
-impl<F, Dft> PeriodicEvaluator<F, TwoAdicMultiplicativeCoset<F>> for TwoAdicPeriodicEvaluator<Dft>
-where
-    F: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F>,
-{
-    fn eval_on_lde(
+    /// Same as [`PeriodicEvaluator::eval_on_lde`], but reuses the given DFT engine instead
+    /// of conjuring a fresh `Dft::default()`, preserving its memoized twiddle cache.
+    pub fn eval_on_lde_with_dft<F>(
+        dft: &Dft,
         periodic_table: &[Vec<F>],
         trace_domain: &TwoAdicMultiplicativeCoset<F>,
         lde_domain: &TwoAdicMultiplicativeCoset<F>,
-    ) -> PeriodicLdeTable<F> {
+    ) -> PeriodicLdeTable<F>
+    where
+        F: TwoAdicField,
+        Dft: TwoAdicSubgroupDft<F>,
+    {
         if periodic_table.is_empty() {
             return PeriodicLdeTable::empty();
         }
@@ -132,8 +128,6 @@ where
         // So extended_height divides lde_len.
         let periodic_shift = lde_shift.exp_u64((lde_len / extended_height) as u64);
 
-        let dft = Dft::default();
-
         // Process each column: pad to max_period, then extrapolate
         // Build the result in column-major order first, then transpose to row-major
         let mut columns: Vec<Vec<F>> = Vec::with_capacity(num_cols);
@@ -162,6 +156,20 @@ where
         }
 
         PeriodicLdeTable::new(RowMajorMatrix::new(row_major_values, num_cols))
+    }
+}
+
+impl<F, Dft> PeriodicEvaluator<F, TwoAdicMultiplicativeCoset<F>> for TwoAdicPeriodicEvaluator<Dft>
+where
+    F: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F> + Default,
+{
+    fn eval_on_lde(
+        periodic_table: &[Vec<F>],
+        trace_domain: &TwoAdicMultiplicativeCoset<F>,
+        lde_domain: &TwoAdicMultiplicativeCoset<F>,
+    ) -> PeriodicLdeTable<F> {
+        Self::eval_on_lde_with_dft(&Dft::default(), periodic_table, trace_domain, lde_domain)
     }
 
     fn eval_at_point<EF: ExtensionField<F>>(

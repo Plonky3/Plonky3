@@ -383,7 +383,7 @@ mod test {
                 .map(|poly| {
                     // Virtual opening: evaluate the column at the SVO point and
                     // carry the per-round partial evaluations as payload.
-                    let (eval, partial_evals) = svo_point.eval(poly);
+                    let (eval, partial_evals) = svo_point.eval(poly.as_view());
                     let opening = Opening {
                         poly_idx: None,
                         eval,
@@ -445,7 +445,7 @@ mod test {
             let openings = polys
                 .iter()
                 .map(|poly| {
-                    let (eval, partial_evals) = svo_point.eval(poly);
+                    let (eval, partial_evals) = svo_point.eval(poly.as_view());
                     let opening = Opening {
                         poly_idx: None,
                         eval,
@@ -551,13 +551,13 @@ mod test {
         #[test]
         fn prop_accumulators_specialization_matches_general(k in 10usize..=14) {
             let mut rng = SmallRng::seed_from_u64(k as u64);
-            let poly = Poly::new((0..1 << k).map(|_| rng.random()).collect());
+            let poly = Poly::new((0..1 << k).map(|_| rng.random()).collect::<Vec<_>>());
             let point = Point::<EF>::rand(&mut rng, k);
 
             // Split the point at half to get partial evaluations.
             let (z_svo, z_rest) = point.split_at(k / 2);
             let split_eq = SplitEq::<F, EF>::new_packed(&z_rest, EF::ONE);
-            let partial_evals = split_eq.compress_suffix(&poly);
+            let partial_evals = split_eq.compress_suffix(poly.as_view());
 
             // Compare the dispatch path (which uses straightline specializations
             // for l <= 3) against the general grid-expansion path.

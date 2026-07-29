@@ -21,33 +21,27 @@
 //!
 //! - **Prover-assisted Ans/shake check.** The paper's verifier interpolates `Ans` itself.
 //!   Here the prover sends `Ans` and a shake polynomial, and the verifier checks the
-//!   identity at a transcript-derived random point. The Schwartz–Zippel error of this check
-//!   is included in [`p3_commit::SecurityAssumption::stir_query_algebraic_bits`] via
-//!   [`p3_commit::SecurityAssumption::shake_check_error`].
+//!   identity at a transcript-derived random point. Its Schwartz–Zippel error is included
+//!   explicitly in STIR's parameter validation.
 //! - **Fixed `s` schedule.** OOD sample count is fixed per the paper's recommended schedule
 //!   (`s = 1` for Johnson, `s = 2` for capacity); [`config::StirConfig::new`] does not search
 //!   for the smallest valid `s`.
 //! - **Proximity-gaps formulas from later work.** Johnson-bound proximity gaps use the
-//!   tighter \[BCSS25\] bound rather than \[BCI+20\]; see
-//!   [`p3_commit::SecurityAssumption::prox_gaps_error`].
+//!   tighter \[BCSS25\] bound rather than \[BCI+20\].
 //! - **Round-0 joint queries-combination bound (CB only).**
-//!   [`p3_commit::SecurityAssumption::stir_initial_eta`] extends the paper's prox-gap
-//!   formula for capacity bound with a joint queries-combination × prox-gap term
-//!   mirroring [`p3_commit::SecurityAssumption::stir_recursive_eta`]'s third term,
-//!   using a closed-form upper bound on `t_0` in place of the missing `t_{-1}`.
+//!   The capacity-bound initial eta extends the paper's prox-gap formula with a joint
+//!   queries-combination × prox-gap term, using a closed-form upper bound on `t_0` in place
+//!   of the missing `t_{-1}`.
 //!   Without it, CB `queries_combination_error` at round 0 sags ~`log₂(t_0)` bits
 //!   below `target_bits`. JB needs no such term — its list size stays small.
 //! - **Union-bound buffer.** [`config::StirConfig::new`] adds an explicit
-//!   `ceil(log2(6 · total_folds))` buffer to every per-round error term (query failure plus
-//!   the auxiliary terms bridged by PoW). Each round contributes up to six independently
-//!   bridged algebraic failure modes (query tier: query failure, OOD, random-combination,
+//!   `ceil(log2(6 · total_folds))` buffer to every per-round error term. Each round
+//!   contributes up to six independent algebraic failure modes (query tier: query failure,
+//!   OOD, random-combination,
 //!   shake-check; folding tier: proximity-gaps, sumcheck), so the union bound over the full
 //!   protocol is `≤ 6 · total_folds · 2^{-buffered_security_level}`. The paper's "+1 / +0"
 //!   rule only delivers the claimed bits when `total_folds ≤ 2` and per-round terms are
 //!   collapsed; the explicit log keeps deeper protocols tight across every term.
-//! - **PoW placement.** Each round's query/OOD PoW grind is placed BEFORE OOD sampling, so
-//!   it gates re-rolls of the OOD set via re-commitment (the paper's high-level protocol
-//!   does not specify PoW). The folding PoW gates the fold challenge as in the paper.
 
 #![no_std]
 
@@ -57,10 +51,12 @@ pub mod config;
 pub mod pcs;
 pub mod proof;
 pub mod prover;
+mod soundness;
 pub mod utils;
 pub mod verifier;
 
 pub use config::{StirConfig, StirParameters, StirRoundConfig};
+pub use p3_security::whir::SecurityAssumption;
 pub use pcs::TwoAdicStirPcs;
 pub use proof::{StirFinalQueryProof, StirProof, StirQueryProof, StirRoundProof};
 pub use verifier::{StirError, StirVerifyOutputs};

@@ -5,7 +5,6 @@ use core::mem::transmute;
 use p3_air::utils::{u64_to_16_bit_limbs, u64_to_bits_le};
 use p3_field::PrimeField64;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_maybe_rayon::iter::repeat_n;
 use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
@@ -31,16 +30,35 @@ pub fn generate_trace_rows<F: PrimeField64>(
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(rows.len(), num_rows);
 
-    let num_padding_inputs = num_rows.div_ceil(NUM_ROUNDS) - inputs.len();
-    let padded_inputs = inputs
-        .into_par_iter()
-        .chain(repeat_n([0; 25], num_padding_inputs));
+    let (real_rows, padding_rows) = rows.split_at_mut(inputs.len() * NUM_ROUNDS);
 
-    rows.par_chunks_mut(NUM_ROUNDS)
-        .zip(padded_inputs)
+    real_rows
+        .par_chunks_mut(NUM_ROUNDS)
+        .zip(inputs.into_par_iter())
         .for_each(|(row, input)| {
             generate_trace_rows_for_perm(row, input);
         });
+
+    // All padding chunks share the same all-zero input, so their trace is
+    // byte-identical. Generate it once and broadcast it into every padding
+    // chunk instead of re-running the permutation for each of them.
+    if !padding_rows.is_empty() {
+        let mut zero_block = F::zero_vec(NUM_ROUNDS * NUM_KECCAK_COLS);
+        {
+            let (prefix, zero_rows, suffix) = unsafe { zero_block.align_to_mut::<KeccakCols<F>>() };
+            assert!(prefix.is_empty(), "Alignment should match");
+            assert!(suffix.is_empty(), "Alignment should match");
+            generate_trace_rows_for_perm(zero_rows, [0; 25]);
+        }
+
+        let (prefix, padding_flat, suffix) = unsafe { padding_rows.align_to_mut::<F>() };
+        assert!(prefix.is_empty(), "Alignment should match");
+        assert!(suffix.is_empty(), "Alignment should match");
+
+        padding_flat
+            .par_chunks_mut(NUM_ROUNDS * NUM_KECCAK_COLS)
+            .for_each(|chunk| chunk.copy_from_slice(&zero_block[..chunk.len()]));
+    }
 
     trace
 }

@@ -4,8 +4,8 @@
 //! to those LDEs using an `InputMmcs`.
 //!
 //! **Open**: alpha-batch quotient polynomials `(f_i(z) - f_i(x)) / (z - x)` into per-height
-//! reduced-opening polynomials, then run [`prove_stir`] on each distinct LDE-height bucket.
-//! [`prove_stir`] returns the deduplicated first-round STIR query indices alongside the IOP
+//! reduced-opening polynomials, then run STIR on each distinct LDE-height bucket.
+//! The prover returns the deduplicated first-round STIR query indices alongside the IOP
 //! proof; at those positions the prover also opens the input LDE matrices (via `InputMmcs`)
 //! so the verifier can confirm the reduced-opening polynomial is correctly derived from the
 //! committed inputs.
@@ -27,9 +27,7 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{
-    BatchOpening, BatchOpeningRef, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs,
-};
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
@@ -40,13 +38,14 @@ use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow, RowMajorMatrixView};
 use p3_matrix::interpolation::{Interpolate, compute_adjusted_weights};
+use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use tracing::instrument;
 
 use crate::config::{StirConfig, StirParameters};
 use crate::proof::StirProof;
-use crate::prover::{coeffs_from_codeword, prove_stir};
+use crate::prover::prove_stir_from_codeword;
 use crate::verifier::{StirError, verify_stir};
 
 /// A polynomial commitment scheme using STIR to generate opening proofs.
@@ -67,14 +66,6 @@ impl<Val, Dft, InputMmcs, StirMmcs> TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs
             _phantom: PhantomData,
         }
     }
-}
-
-impl<Val, Dft, InputMmcs, StirMmcs> BuildPeriodicLdeTableFast
-    for TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs>
-where
-    Val: TwoAdicField,
-{
-    type PeriodicDomain = TwoAdicMultiplicativeCoset<Val>;
 }
 
 impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
@@ -319,13 +310,8 @@ where
 
                 // Precompute alpha-batched row values for this matrix (reused per point).
                 let p_x_vec: Vec<Challenge> = mat
-                    .rows()
-                    .map(|row| {
-                        row.zip(alpha_powers.iter())
-                            .map(|(px, &ap)| Challenge::from(px) * ap)
-                            .sum()
-                    })
-                    .collect_vec();
+                    .rowwise_packed_dot_product::<Challenge>(&packed_alpha_powers)
+                    .collect();
 
                 for (point, ys) in points_for_mat.iter().zip(opened_for_mat.iter()) {
                     let height_count = num_reduced.entry(log_h).or_insert(0);
@@ -364,7 +350,6 @@ where
 
             let mut ro_natural = ro;
             reverse_slice_index_bits(&mut ro_natural);
-            let stir_coeffs = coeffs_from_codeword(&self.dft, &ro_natural, Val::GENERATOR);
 
             let log_stir_degree = log_h.saturating_sub(self.stir.log_blowup).max(1);
             let stir_config = StirConfig::<Val, Challenge, StirMmcs, Challenger>::new(
@@ -373,7 +358,7 @@ where
             );
 
             let (stir_proof, first_round_query_indices) =
-                prove_stir(&stir_config, stir_coeffs, &self.dft, challenger);
+                prove_stir_from_codeword(&stir_config, ro_natural, &self.dft, challenger);
 
             // Input binding for this bucket. Folding factor is constant across rounds.
             let log_arity0 = stir_config.log_folding_factor;

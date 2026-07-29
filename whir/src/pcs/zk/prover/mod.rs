@@ -9,6 +9,7 @@ mod masks;
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use core::mem;
 
 pub use data::HidingWhirProverData;
 use data::ZkRoundData;
@@ -18,11 +19,10 @@ use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, PackedValue, PrimeCharacteristicRing, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrixView;
 use p3_maybe_rayon::prelude::*;
-use p3_multilinear_util::eq_batch::eval_eq_batch;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::split_eq::SplitEq;
 use p3_sumcheck::constraints::statement::SelectStatement;
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
@@ -33,7 +33,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use tracing::instrument;
 
-use crate::pcs::proof::QueryOpening;
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::base_case::{BaseCaseZkConfig, BaseCaseZkProver, MaskGroupWitness};
 use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
@@ -136,40 +136,47 @@ where
         //
         //     W = sum_i alpha^i eq(z_i, .)        claim = sum_i alpha^i v_i
         let alpha: EF = challenger.sample_algebra_element();
-        let mut weights = EF::zero_vec(1 << num_variables);
+        let coeffs: Vec<EF> = alpha.powers().collect_n(claims.len());
         let mut claim = EF::ZERO;
-        if !claims.is_empty() {
-            let coeffs: Vec<EF> = alpha.powers().collect_n(claims.len());
-            // All claim tables land in one batched parallel sweep.
-            // Row `var` of the point matrix holds variable `var` across claims.
-            let mut points_flat = Vec::with_capacity(num_variables * claims.len());
-            for var in 0..num_variables {
-                for (point, _) in claims {
-                    assert_eq!(point.num_variables(), num_variables);
-                    points_flat.push(point.as_slice()[var]);
-                }
-            }
-            eval_eq_batch::<F, EF, false>(
-                RowMajorMatrixView::new(&points_flat, claims.len()),
-                &mut weights,
-                &coeffs,
-            );
-            for ((_, eval), coeff) in claims.iter().zip(&coeffs) {
-                claim += *coeff * *eval;
-            }
+        for ((point, eval), coeff) in claims.iter().zip(&coeffs) {
+            assert_eq!(point.num_variables(), num_variables);
+            claim += *coeff * *eval;
         }
-        // Lift the base-field message into the extension once, in parallel.
-        let evals: Vec<EF> = prover_data
-            .message
-            .as_slice()
-            .par_iter()
-            .map(|&v| v.into())
-            .collect();
-        let product = ProductPolynomial::new_unpacked(
-            VariableOrder::Prefix,
-            Poly::new(evals),
-            Poly::new(weights),
-        );
+
+        // Build the weight and evaluation polynomials in SIMD-packed form
+        // whenever the hypercube is large enough, mirroring the non-ZK
+        // sumcheck's packed construction; the eq table is accumulated
+        // per-claim through the split-eq factorization instead of a full
+        // 2^n scalar materialization.
+        let k_pack = log2_strict_usize(F::Packing::WIDTH);
+        let product = if num_variables >= k_pack {
+            let mut weights = Poly::<EF::ExtensionPacking>::zero(num_variables - k_pack);
+            for ((point, _), &coeff) in claims.iter().zip(&coeffs) {
+                SplitEq::new_packed(point, coeff)
+                    .accumulate_into_packed(weights.as_mut_slice(), None);
+            }
+            let evals = Poly::new(
+                F::Packing::pack_slice(prover_data.message.as_slice())
+                    .par_iter()
+                    .map(|&p| EF::ExtensionPacking::from(p))
+                    .collect(),
+            );
+            ProductPolynomial::new_packed(VariableOrder::Prefix, evals, weights)
+        } else {
+            let mut weights = Poly::<EF>::zero(num_variables);
+            for ((point, _), &coeff) in claims.iter().zip(&coeffs) {
+                SplitEq::new_unpacked(point, coeff).accumulate_into(weights.as_mut_slice(), None);
+            }
+            let evals = Poly::new(
+                prover_data
+                    .message
+                    .as_slice()
+                    .par_iter()
+                    .map(|&v| v.into())
+                    .collect(),
+            );
+            ProductPolynomial::new_unpacked(VariableOrder::Prefix, evals, weights)
+        };
         let sumcheck_prover = SumcheckProver::new(product, claim);
 
         // Initial masked sumcheck batch.
@@ -284,17 +291,14 @@ where
                 challenger,
             );
 
-            // Open the previous oracle and fold each leaf at the batch
-            // randomness; the verifier recomputes the same folds.
-            let mut queries = Vec::with_capacity(stir_indexes.len());
-            let mut folded_values = Vec::with_capacity(stir_indexes.len());
-            let mut query_vars = Vec::with_capacity(stir_indexes.len());
-            for &index in &stir_indexes {
-                let (opening, folded) = self.open_and_fold(&round_data, index, &batch.randomness);
-                queries.push(opening);
-                folded_values.push(folded);
-                query_vars.push(round_params.folded_domain_gen.exp_u64(index as u64));
-            }
+            // Open the previous oracle in one multiproof and fold each leaf
+            // at the batch randomness; the verifier recomputes the same folds.
+            let (openings, folded_values) =
+                self.open_and_fold(&round_data, &stir_indexes, &batch.randomness);
+            let query_vars: Vec<F> = stir_indexes
+                .iter()
+                .map(|&index| round_params.folded_domain_gen.exp_u64(index as u64))
+                .collect();
             let query_points: Vec<EF> = query_vars.iter().map(|&x| EF::from(x)).collect();
 
             // Batch the carried claim with the fresh constraints.
@@ -424,7 +428,7 @@ where
                 mask_commitment,
                 ood_answers,
                 pow_witness,
-                queries,
+                openings,
             });
 
             // Next masked sumcheck batch over the new oracle.
@@ -499,8 +503,8 @@ where
             &oracle_randomness,
             source_covector.as_slice(),
             &mask_witnesses,
-            |position| {
-                self.open_and_fold(&round_data, position, &batch.randomness)
+            |positions| {
+                self.open_and_fold(&round_data, positions, &batch.randomness)
                     .0
             },
             challenger,
@@ -516,37 +520,45 @@ where
         }
     }
 
-    /// Opens one leaf of the active oracle and folds it at the randomness.
+    /// Opens the active oracle at every index in one multiproof and folds
+    /// each opened leaf at the randomness.
     fn open_and_fold(
         &self,
         round_data: &ZkRoundData<F, EF, MT>,
-        index: usize,
+        indices: &[usize],
         randomness: &Point<EF>,
-    ) -> (QueryOpening<F, EF, MT::Proof>, EF) {
+    ) -> (QueryOpenings<F, EF, MT::MultiProof>, Vec<EF>) {
         match round_data {
             ZkRoundData::Base(data) => {
-                let opening = self.mmcs.open_batch(index, data);
-                let values = opening.opened_values.into_iter().next().unwrap();
-                let folded = Poly::new(values.clone()).eval_base(randomness);
-                (
-                    QueryOpening::Base {
-                        values,
-                        proof: opening.opening_proof,
-                    },
-                    folded,
-                )
+                let mut opening = SharedProofOpening::open(self.mmcs, indices, data);
+                let folded = opening
+                    .rows
+                    .iter_mut()
+                    .map(|row| {
+                        // Fold from the owned row, then move it back. The row itself is what
+                        // travels into the proof, so cloning it just to satisfy `Poly::new`
+                        // is pure allocation. Mirrors the non-ZK prover's fold.
+                        let poly = Poly::new(mem::take(row));
+                        let eval = poly.eval_base(randomness);
+                        *row = poly.into_evals();
+                        eval
+                    })
+                    .collect();
+                (QueryOpenings::Base(opening), folded)
             }
             ZkRoundData::Ext(data) => {
-                let opening = self.extension_mmcs.open_batch(index, data);
-                let values = opening.opened_values.into_iter().next().unwrap();
-                let folded = Poly::new(values.clone()).eval_ext::<F>(randomness);
-                (
-                    QueryOpening::Extension {
-                        values,
-                        proof: opening.opening_proof,
-                    },
-                    folded,
-                )
+                let mut opening = SharedProofOpening::open(&self.extension_mmcs, indices, data);
+                let folded = opening
+                    .rows
+                    .iter_mut()
+                    .map(|row| {
+                        let poly = Poly::new(mem::take(row));
+                        let eval = poly.eval_ext::<F>(randomness);
+                        *row = poly.into_evals();
+                        eval
+                    })
+                    .collect();
+                (QueryOpenings::Extension(opening), folded)
             }
         }
     }

@@ -11,7 +11,9 @@ use alloc::vec::Vec;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpening, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{BasedVectorSpace, ExtensionField, Field, TwoAdicField};
+use p3_field::{
+    BasedVectorSpace, ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
+};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
@@ -19,8 +21,8 @@ use tracing::instrument;
 use crate::config::StirConfig;
 use crate::proof::{StirFinalQueryProof, StirProof, StirQueryProof, StirRoundProof};
 use crate::utils::{
-    add_polys, compute_shake_polynomial, degree_correct, eval_poly, fold_codeword,
-    interpolate_poly, next_domain_shift, quotient_by_roots, scale_poly,
+    compute_shake_polynomial, degree_correction_poly, eval_poly, fold_codeword, interpolate_poly,
+    next_domain_shift, vanishing_poly_from_roots,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -51,25 +53,56 @@ where
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>,
 {
-    let num_rounds = config.num_rounds();
-
-    // Commit to the initial codeword on L_0. The folding factor is constant across rounds
-    // (config.log_folding_factor) and the initial domain shift is always F::GENERATOR.
     let initial_shift = F::GENERATOR;
     let log_initial_domain = config.log_starting_domain_size();
     let initial_domain_size = 1 << log_initial_domain;
-
     let mut coeffs = poly_coeffs;
     coeffs.resize(initial_domain_size, EF::ZERO);
     let initial_codeword = codeword_from_coeffs(dft, coeffs, initial_shift, log_initial_domain);
 
-    let mut current_oracle_codeword = initial_codeword.clone();
-    let mut current_shift = initial_shift;
-    let mut current_log_domain = log_initial_domain;
+    prove_stir_from_codeword(config, initial_codeword, dft, challenger)
+}
 
+/// Prove low degree from an initial natural-order codeword on STIR's starting domain.
+///
+/// This avoids an inverse DFT followed by a forward DFT when a caller already has the
+/// codeword. The codeword must contain exactly `2^config.log_starting_domain_size()` values
+/// on `F::GENERATOR * H` in natural order.
+#[instrument(skip_all)]
+pub fn prove_stir_from_codeword<F, EF, Dft, M, Challenger>(
+    config: &StirConfig<F, EF, M, Challenger>,
+    initial_codeword: Vec<EF>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+) -> (StirProof<EF, M, Challenger::Witness>, Vec<usize>)
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
+    let num_rounds = config.num_rounds();
+    let initial_shift = F::GENERATOR;
+    let log_initial_domain = config.log_starting_domain_size();
+    let initial_domain_size = 1 << log_initial_domain;
+    assert_eq!(
+        initial_codeword.len(),
+        initial_domain_size,
+        "initial STIR codeword length must match the configured starting domain"
+    );
+
+    // Commit before moving the codeword into the round state, avoiding a full clone.
     let (initial_commit, initial_data) =
         commit_as_fiber_matrix(&config.mmcs, &initial_codeword, config.log_folding_factor);
     challenger.observe(initial_commit.clone());
+
+    let mut current_oracle_codeword = initial_codeword;
+    let mut current_shift = initial_shift;
+    let mut current_log_domain = log_initial_domain;
 
     let mut current_commit_data = initial_data;
 
@@ -148,8 +181,9 @@ where
             .collect();
         challenger.observe_algebra_slice(&ood_answers);
 
-        // Step 3: query/OOD PoW. The witness is ground after observing the OOD answers so the
-        // prover cannot re-roll favorable OOD answers without paying the query-phase PoW cost.
+        // Step 3: query-phase PoW. It protects the immediately following combination challenge
+        // and query indices. It does not strengthen the earlier OOD samples or the later shake
+        // challenge, which is separated from this grind by prover-controlled messages.
         let pow_witness = challenger.grind(rc.pow_bits);
 
         // Step 4: Query sampling.
@@ -219,14 +253,32 @@ where
         // stays consistent with the verifier.
         let _rho: EF = challenger.sample_algebra_element();
 
-        // Step 5: Construction 5.2 — compute the next virtual witness polynomial
-        // f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}).
+        // Step 5: Construction 5.2 — evaluate the next virtual witness directly on L_{i+1}:
+        // f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}). This avoids serial synthetic division
+        // and coefficient-domain degree correction; the three independent DFTs are parallel.
         let num_answers = all_points.len();
-        let numerator = add_polys(&fold_coeffs, &scale_poly(&ans_poly, EF::ZERO - EF::ONE));
-        let quotient = quotient_by_roots(&numerator, &all_points);
-        let f_next_coeffs = degree_correct(&quotient, r_comb, num_answers);
-        let next_oracle_codeword =
-            codeword_from_coeffs(dft, f_next_coeffs, next_shift, next_log_domain);
+        let ans_evals = codeword_from_coeffs(dft, ans_poly.clone(), next_shift, next_log_domain);
+        let vanishing_evals = codeword_from_coeffs(
+            dft,
+            vanishing_poly_from_roots(&all_points),
+            next_shift,
+            next_log_domain,
+        );
+        let degree_correction_evals = codeword_from_coeffs(
+            dft,
+            degree_correction_poly(r_comb, num_answers),
+            next_shift,
+            next_log_domain,
+        );
+        let vanishing_inverses = batch_multiplicative_inverse(&vanishing_evals);
+
+        let next_oracle_codeword: Vec<EF> = next_commit_codeword
+            .par_iter()
+            .zip(ans_evals.par_iter())
+            .zip(vanishing_inverses.par_iter())
+            .zip(degree_correction_evals.par_iter())
+            .map(|(((&g, &ans), &z_inv), &correction)| (g - ans) * z_inv * correction)
+            .collect();
 
         round_proofs.push(StirRoundProof {
             commitment: new_commit,

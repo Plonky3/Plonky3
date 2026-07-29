@@ -13,7 +13,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 use rand::{RngExt, SeedableRng};
 
 use super::adapter::HidingWhirPcs;
@@ -23,6 +23,7 @@ use super::proof::ZkWhirProof;
 use super::verifier::ZkVerifierError;
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption};
+use crate::pcs::proof::QueryOpenings;
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -33,7 +34,7 @@ type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
 type PackedF = <F as Field>::Packing;
 type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
 type MyDft = Radix2DFTSmallBatch<F>;
-type TestZkPcs = HidingWhirPcs<EF, F, MyDft, MyMmcs, MyChallenger, SmallRng>;
+type TestZkPcs = HidingWhirPcs<EF, F, MyDft, MyMmcs, MyChallenger, StdRng>;
 
 /// Commitment type of the test PCS.
 type TestCommitment = <TestZkPcs as MultilinearPcs<EF, MyChallenger>>::Commitment;
@@ -129,7 +130,7 @@ impl Setup {
             config,
             MyDft::default(),
             mmcs,
-            SmallRng::seed_from_u64(self.seed),
+            StdRng::seed_from_u64(self.seed),
         )
     }
 
@@ -182,7 +183,7 @@ impl Setup {
 struct Proven {
     /// The hiding PCS the proof was produced with.
     pcs: TestZkPcs,
-    /// Commitment to the (possibly simulated) witness.
+    /// Commitment to the witness used by the honest prover.
     commitment: TestCommitment,
     /// The opening proof; tamper tests mutate it in place.
     proof: ZkWhirProof<F, EF, MyMmcs>,
@@ -322,14 +323,8 @@ fn zk_whir_rejects_wrong_eval() {
     proven.proof.evals[0] += EF::ONE;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so a round-0 opening fails to authenticate.
-    //
-    // The exact position is a transcript artifact, not a protocol
-    // invariant, so only the variant and round are pinned.
-    assert!(matches!(
-        err,
-        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
-    ));
+    // so the round-0 multiproof fails to authenticate.
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
 }
 
 #[test]
@@ -365,14 +360,8 @@ fn zk_whir_rejects_tampered_ood_answer() {
     proven.proof.rounds[0].ood_answers[0] += EF::ONE;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so a round-0 opening fails to authenticate.
-    //
-    // The exact position is a transcript artifact, not a protocol
-    // invariant, so only the variant and round are pinned.
-    assert!(matches!(
-        err,
-        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
-    ));
+    // so the round-0 multiproof fails to authenticate.
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
 }
 
 #[test]
@@ -478,10 +467,11 @@ fn zk_whir_rejects_missing_query_opening() {
     // Openings are not absorbed, so the transcript matches up to the
     // count check itself.
     let mut proven = Setup::new(16).prove();
-    let _ = proven.proof.rounds[0]
-        .queries
-        .pop()
-        .expect("fixture has query openings");
+    let dropped = match &mut proven.proof.rounds[0].openings {
+        QueryOpenings::Base(opening) => opening.rows.pop().is_some(),
+        QueryOpenings::Extension(opening) => opening.rows.pop().is_some(),
+    };
+    assert!(dropped, "fixture has query openings");
     let err = proven.verify().unwrap_err();
     assert_eq!(
         err,
@@ -520,11 +510,11 @@ fn zk_whir_rejects_tampered_pow_witness() {
     proven.proof.rounds[0].pow_witness += F::ONE;
     let err = proven.verify().unwrap_err();
     // The bad witness usually fails the grind; if it coincidentally still
-    // satisfies it, the diverged transcript fails a later round-0 opening.
+    // satisfies it, the diverged transcript fails a later round-0 multiproof.
     assert!(matches!(
         err,
         ZkVerifierError::InvalidPowWitness { round: 0 }
-            | ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
+            | ZkVerifierError::MerkleVerificationFailed { round: 0 },
     ));
 }
 
@@ -538,14 +528,8 @@ fn zk_whir_rejects_tampered_sumcheck_wire() {
     proven.proof.sumchecks[0].round_coefficients[0][0] += EF::ONE;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so a round-0 opening fails to authenticate.
-    //
-    // The exact position is a transcript artifact, not a protocol
-    // invariant, so only the variant and round are pinned.
-    assert!(matches!(
-        err,
-        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
-    ));
+    // so the round-0 multiproof fails to authenticate.
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
 }
 
 #[test]
@@ -558,14 +542,8 @@ fn zk_whir_rejects_wrong_commitment() {
     proven.commitment = other.commitment;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so a round-0 opening fails to authenticate.
-    //
-    // The exact position is a transcript artifact, not a protocol
-    // invariant, so only the variant and round are pinned.
-    assert!(matches!(
-        err,
-        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
-    ));
+    // so the round-0 multiproof fails to authenticate.
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
 }
 
 /// Conditions a uniformly random witness on the public claims.
@@ -581,7 +559,7 @@ fn zk_whir_rejects_wrong_commitment() {
 /// - The system is solved jointly via Gaussian elimination over the
 ///   extension field.
 /// - Base-field inputs keep the solution in the base field.
-fn condition_witness(
+fn sample_witness_conditioned_on_claims(
     rng: &mut SmallRng,
     num_variables: usize,
     claims: &[(Point<EF>, EF)],
@@ -641,15 +619,15 @@ fn condition_witness(
 }
 
 #[test]
-fn zk_whir_simulator_witness_free_transcript_accepts() {
-    // Completeness direction of the simulator.
+fn zk_whir_conditioned_witness_round_trip_accepts() {
+    // Same-claim-fiber completeness check.
     //
-    //     witness-free transcript  ->  verifies
-    //                              ->  exposes exactly the public claims
+    // This samples a complete alternate witness conditioned on the public
+    // claims, then runs the honest prover against a fresh commitment to that
+    // witness. It does not construct a witness-free transcript simulator or
+    // establish transcript indistinguishability (Theorem 4.5).
     //
-    // The message is random, conditioned only on those claims.
-    // This is not the composed-distribution argument (Theorem 4.5).
-    // The per-component distribution proofs live where the masks are drawn:
+    // The per-component simulation tests live where the masks are drawn:
     //
     //     masked sumcheck wires  ->  p3-sumcheck simulator tests
     //     private OOD answers    ->  code_switch programmability tests
@@ -673,29 +651,30 @@ fn zk_whir_simulator_witness_free_transcript_accepts() {
         .map(|point| (point.clone(), witness.eval_base(point)))
         .collect();
 
-    // Simulator side: garbage witness agreeing exactly on the claims.
-    let mut simulator_rng = SmallRng::seed_from_u64(22);
-    let simulated_witness = condition_witness(&mut simulator_rng, num_variables, &claims);
+    // Alternate witness agreeing exactly on the claims.
+    let mut alternate_rng = SmallRng::seed_from_u64(22);
+    let alternate_witness =
+        sample_witness_conditioned_on_claims(&mut alternate_rng, num_variables, &claims);
     for (point, value) in &claims {
-        assert_eq!(simulated_witness.eval_base(point), *value);
+        assert_eq!(alternate_witness.eval_base(point), *value);
     }
     assert_ne!(
-        simulated_witness.as_slice(),
+        alternate_witness.as_slice(),
         witness.as_slice(),
-        "the simulated witness must differ from the real one off the claims",
+        "the alternate witness must differ from the original off the claims",
     );
 
-    // The simulated transcript verifies against the simulated commitment
-    // with the real public claims.
-    let proven = Setup::new(23).prove_with(simulated_witness, points);
+    // The honest transcript verifies against the alternate witness's own
+    // commitment while carrying the original public claims.
+    let proven = Setup::new(23).prove_with(alternate_witness, points);
     assert_eq!(
         proven.proof.evals,
         claims.iter().map(|(_, value)| *value).collect::<Vec<_>>(),
-        "the simulated transcript must expose exactly the public claims",
+        "the proof evaluation payload must match the public claims",
     );
     proven
         .verify()
-        .expect("simulated HVZK transcript must verify");
+        .expect("the conditioned-witness proof must verify");
 }
 
 #[test]

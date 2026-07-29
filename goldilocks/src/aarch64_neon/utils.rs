@@ -5,7 +5,7 @@ use core::arch::asm;
 use super::packing::PackedGoldilocksNeon;
 use crate::{Goldilocks, P};
 
-const EPSILON: u64 = P.wrapping_neg(); // 2^32 - 1
+pub(super) const EPSILON: u64 = P.wrapping_neg(); // 2^32 - 1
 
 // ---------------------------------------------------------------------------
 // Scalar field arithmetic (inline assembly)
@@ -240,8 +240,9 @@ pub(super) fn unpack_lanes<const WIDTH: usize>(
 
 /// Pack two raw `u64` lane arrays back into a packed NEON state.
 ///
-/// Each raw value is wrapped into a Goldilocks field element (with
-/// reduction modulo P) and paired into a packed slot.
+/// Each raw value is wrapped into a Goldilocks field element with no reduction performed
+/// (Goldilocks accepts any `u64` as a non-canonical internal representation) and paired
+/// into a packed slot.
 ///
 /// # Layout
 ///
@@ -275,6 +276,11 @@ pub(super) mod tests {
     fn canon(x: u64) -> u64 {
         F::new(x).as_canonical_u64()
     }
+
+    /// Raw operand patterns stressing every wraparound correction: field
+    /// extremes, the epsilon window, and non-canonical values up to
+    /// `u64::MAX`. The ops probed with these accept any u64 residue.
+    pub const EDGE: [u64; 8] = [0, 1, (1 << 32) - 1, 1 << 32, 1 << 63, P - 1, P, u64::MAX];
 
     /// Boundary u64s probed against every scalar ASM op.
     pub const EDGE_VALUES: &[u64] = &[

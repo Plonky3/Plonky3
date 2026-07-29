@@ -190,7 +190,16 @@ fn accumulate_lookup<F: Field>(
                 .map(|expr| expr.resolve(&builder))
                 .collect::<Vec<_>>();
 
-            let multiplicity = lookup.multiplicities[tuple_idx].resolve(&builder);
+            let mut multiplicity = lookup.multiplicities[tuple_idx].resolve(&builder);
+
+            // An exclusive branch only contributes when its flag fires.
+            //
+            // - The effective multiplicity is the flag times the count.
+            // - An inactive branch has flag 0.
+            // - So it adds nothing to the multiset.
+            if let Some(flags) = &lookup.flags {
+                multiplicity *= flags[tuple_idx].resolve(&builder);
+            }
 
             multiset.add(
                 key,

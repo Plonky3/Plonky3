@@ -198,6 +198,25 @@ pub fn eval_vanishing_at_roots<F: Field>(roots: &[F], point: F) -> F {
     roots.iter().fold(F::ONE, |acc, &root| acc * (point - root))
 }
 
+/// Coefficients of the vanishing polynomial `prod_{y in roots} (X - y)`.
+///
+/// The result is in ascending coefficient order, has length `roots.len() + 1`,
+/// and is monic. The empty root set produces the constant polynomial one.
+pub fn vanishing_poly_from_roots<F: Field>(roots: &[F]) -> Vec<F> {
+    let mut coeffs = Vec::with_capacity(roots.len() + 1);
+    coeffs.push(F::ONE);
+
+    for &root in roots {
+        coeffs.push(F::ZERO);
+        for i in (1..coeffs.len()).rev() {
+            coeffs[i] = coeffs[i - 1] - coeffs[i] * root;
+        }
+        coeffs[0] = -coeffs[0] * root;
+    }
+
+    coeffs
+}
+
 /// Shift for the next committed domain.
 ///
 /// The folded polynomial naturally lives on `current_shift^(2^log_arity) * H`. We commit it on
@@ -236,8 +255,8 @@ pub fn compute_shake_polynomial<F: Field>(ans: &[F], points: &[F]) -> Vec<F> {
 ///
 /// # Panics
 ///
-/// Panics if `points.len() != values.len()`. In debug builds, also panics if any two
-/// points are equal (duplicate points yield division by zero).
+/// Panics if `points.len() != values.len()` or if any two points are equal
+/// (duplicate points yield division by zero).
 pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
     assert_eq!(
         points.len(),
@@ -246,15 +265,12 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
     );
     let n = points.len();
 
-    #[cfg(debug_assertions)]
-    {
-        for i in 0..n {
-            for j in 0..i {
-                assert!(
-                    points[i] != points[j],
-                    "all interpolation points must be distinct"
-                );
-            }
+    for i in 0..n {
+        for j in 0..i {
+            assert!(
+                points[i] != points[j],
+                "all interpolation points must be distinct"
+            );
         }
     }
 
@@ -262,13 +278,21 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
         return vec![];
     }
 
-    // Newton's divided differences table.
+    // Newton's divided differences table. The denominators depend only on the
+    // interpolation points, so invert the whole triangular table at once.
     let mut dd = values.to_vec();
+    let denominators: Vec<F> = (1..n)
+        .flat_map(|k| (k..n).map(move |i| points[i] - points[i - k]))
+        .collect();
+    let denominator_inverses = batch_multiplicative_inverse(&denominators);
+    let mut denominator_offset = 0;
     for k in 1..n {
+        let width = n - k;
+        let inverses = &denominator_inverses[denominator_offset..denominator_offset + width];
         for i in (k..n).rev() {
-            let denom = points[i] - points[i - k];
-            dd[i] = (dd[i] - dd[i - 1]) * denom.inverse();
+            dd[i] = (dd[i] - dd[i - 1]) * inverses[i - k];
         }
+        denominator_offset += width;
     }
 
     // Evaluate Newton's forward difference expansion into coefficient form.
@@ -446,16 +470,7 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
         };
 
         // Precompute g^j for j = 0..new_height.
-        let g_powers: Vec<F> = {
-            let mut acc = F::ONE;
-            (0..new_height)
-                .map(|_| {
-                    let v = acc;
-                    acc *= g;
-                    v
-                })
-                .collect()
-        };
+        let g_powers: Vec<F> = g.powers().collect_n(new_height);
 
         (0..new_height)
             .into_par_iter()
@@ -506,7 +521,7 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
 /// Given:
 /// - `fiber`: `k = 2^log_arity` evaluations `f(shift * g^{j + l*new_height})` for `l=0..k-1`
 /// - `j`: index of the new-domain query point
-/// - `log_new_height`: log2 of the new domain size  
+/// - `log_new_height`: log2 of the new domain size
 /// - `log_arity`: log2 of the folding arity
 /// - `beta`: folding challenge
 ///
@@ -707,6 +722,18 @@ mod tests {
                     "mismatch for poly_len={poly_len}, gap={gap}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_vanishing_poly_from_roots() {
+        let roots = [F::from_u64(2), F::from_u64(3), F::from_u64(5)];
+        let poly = vanishing_poly_from_roots(&roots);
+
+        assert_eq!(poly.len(), roots.len() + 1);
+        assert_eq!(poly.last(), Some(&F::ONE));
+        for root in roots {
+            assert_eq!(eval_poly(&poly, root), F::ZERO);
         }
     }
 }

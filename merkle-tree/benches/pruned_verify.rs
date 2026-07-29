@@ -76,8 +76,14 @@ fn bench_pruned_verify(c: &mut Criterion) {
                 &(commit.clone(), dims.clone()),
                 |b, (commit, dims)| {
                     b.iter(|| {
-                        mmcs.verify_batch_pruned(commit, dims, pruned.clone())
-                            .unwrap()
+                        mmcs.verify_batch_pruned(
+                            commit,
+                            dims,
+                            &indices,
+                            &pruned.opened_values,
+                            &pruned.pruned_proof,
+                        )
+                        .unwrap();
                     });
                 },
             );

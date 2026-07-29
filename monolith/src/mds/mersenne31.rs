@@ -1,9 +1,12 @@
 //! Concrete (MDS) layer for Monolith-31.
 
-use p3_field::{PrimeCharacteristicRing, PrimeField32};
+use p3_field::integers::QuotientMap;
+use p3_field::{
+    Field, PrimeCharacteristicRing, PrimeField32, batch_multiplicative_inverse_general,
+};
 use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::Convolve;
-use p3_mds::util::{dot_product, first_row_to_first_col};
+use p3_mds::util::{dot_product, first_row_to_first_col, mds_multiply};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
 use shake::digest::{ExtendableOutput, Update};
@@ -12,8 +15,46 @@ use shake::{Shake128, Shake128Reader};
 use crate::util::get_random_u32;
 
 /// MDS matrix implementation for the Monolith-31 Concrete layer.
+///
+/// `NUM_FULL_ROUNDS` must match the [`Monolith`](crate::Monolith) instance this MDS matrix
+/// is plugged into, so that the SHAKE domain separator for non-standard widths binds to the
+/// actual round count (`NUM_FULL_ROUNDS + 1` total rounds) rather than a caller-recomputed copy.
+///
+/// For `WIDTH == 16` this uses the fast Karatsuba-convolution path over the
+/// paper's circulant matrix. For any other width, the matrix is a dense
+/// Cauchy matrix derived from SHAKE-128, precomputed once in [`Self::new`]
+/// rather than rebuilt on every permutation.
 #[derive(Clone, Debug)]
-pub struct MonolithMdsMatrixMersenne31<const NUM_ROUNDS: usize>;
+pub struct MonolithMdsMatrixMersenne31<const WIDTH: usize, const NUM_FULL_ROUNDS: usize> {
+    /// Dense Cauchy MDS matrix, indexed `matrix[row][col]`.
+    ///
+    /// Left as all-zero and unused when `WIDTH == 16`, which takes the
+    /// circulant Karatsuba path instead.
+    matrix: [[Mersenne31; WIDTH]; WIDTH],
+}
+
+impl<const WIDTH: usize, const NUM_FULL_ROUNDS: usize> Default
+    for MonolithMdsMatrixMersenne31<WIDTH, NUM_FULL_ROUNDS>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const WIDTH: usize, const NUM_FULL_ROUNDS: usize>
+    MonolithMdsMatrixMersenne31<WIDTH, NUM_FULL_ROUNDS>
+{
+    /// Construct a new Monolith-31 MDS matrix, precomputing the dense Cauchy
+    /// matrix once (skipped for `WIDTH == 16`, which uses the circulant path).
+    pub fn new() -> Self {
+        let matrix = if WIDTH == 16 {
+            [[Mersenne31::ZERO; WIDTH]; WIDTH]
+        } else {
+            derive_cauchy_mds_matrix::<WIDTH, NUM_FULL_ROUNDS>()
+        };
+        Self { matrix }
+    }
+}
 
 /// Precomputed first row of the 16x16 circulant MDS matrix for Mersenne31.
 ///
@@ -58,8 +99,8 @@ impl Convolve<Mersenne31, i64, i64> for MonolithConvolveMersenne31 {
     }
 }
 
-impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH]>
-    for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
+impl<const WIDTH: usize, const NUM_FULL_ROUNDS: usize> Permutation<[Mersenne31; WIDTH]>
+    for MonolithMdsMatrixMersenne31<WIDTH, NUM_FULL_ROUNDS>
 {
     fn permute(&self, input: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
         if WIDTH == 16 {
@@ -74,62 +115,62 @@ impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH
             );
             out_16[..].try_into().unwrap()
         } else {
-            // For non-standard widths, derive a Cauchy MDS matrix from SHAKE-128.
-            let mut shake = Shake128::default();
-            shake.update(b"Monolith");
-            shake.update(&[WIDTH as u8, NUM_ROUNDS as u8]);
-            shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
-            // The [16, 15] encodes the bit parameters for the Cauchy construction.
-            shake.update(&[16, 15]);
-            shake.update(b"MDS");
-            let mut shake_finalized = shake.finalize_xof();
-            apply_cauchy_mds_matrix(&mut shake_finalized, input)
+            let mut state = input;
+            mds_multiply(&mut state, &self.matrix);
+            state
         }
     }
 }
 
-impl<const WIDTH: usize, const NUM_ROUNDS: usize> MdsPermutation<Mersenne31, WIDTH>
-    for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
+impl<const WIDTH: usize, const NUM_FULL_ROUNDS: usize> MdsPermutation<Mersenne31, WIDTH>
+    for MonolithMdsMatrixMersenne31<WIDTH, NUM_FULL_ROUNDS>
 {
 }
 
-/// Multiply a state vector by a Cauchy MDS matrix derived from SHAKE-128.
+/// Derive the dense Cauchy MDS matrix from SHAKE-128.
 ///
 /// A Cauchy matrix has entries 1 / (x_i + y_j) where x and y are vectors
 /// with distinct x-components. The vectors are derived from the SHAKE
 /// stream with careful masking to ensure no overflow when computing
-/// x_i + y_j (which must stay below p).
-fn apply_cauchy_mds_matrix<F: PrimeField32, const WIDTH: usize>(
-    shake: &mut Shake128Reader,
-    to_multiply: [F; WIDTH],
-) -> [F; WIDTH] {
-    let mut output: [F; WIDTH] = [F::ZERO; WIDTH];
+/// x_i + y_j (which must stay below p). Denominators are inverted a row
+/// at a time via Montgomery's batch-inversion trick, replacing WIDTH^2
+/// individual field inversions with WIDTH batched ones.
+fn derive_cauchy_mds_matrix<const WIDTH: usize, const NUM_FULL_ROUNDS: usize>()
+-> [[Mersenne31; WIDTH]; WIDTH] {
+    const { assert!(WIDTH <= u8::MAX as usize) };
+    let mut shake = Shake128::default();
+    shake.update(b"Monolith");
+    shake.update(&[WIDTH as u8, (NUM_FULL_ROUNDS + 1) as u8]);
+    shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
+    // The [16, 15] encodes the bit parameters for the Cauchy construction.
+    shake.update(&[16, 15]);
+    shake.update(b"MDS");
+    let mut shake = shake.finalize_xof();
 
     // Compute masks that ensure x_i + y_j < p.
     // - x_mask keeps the value well below p (by ~8 bits).
     // - y_mask keeps the value below p/4 so x + y < p.
-    let bits = F::bits();
+    let bits = Mersenne31::bits();
     let x_mask = (1 << (bits - 9)) - 1;
     let y_mask = ((1 << bits) - 1) >> 2;
 
     // Sample y values with distinct x-components (x = y & x_mask).
-    let y = get_random_y_i::<WIDTH>(shake, x_mask, y_mask);
+    let y = get_random_y_i::<WIDTH>(&mut shake, x_mask, y_mask);
     let mut x = y;
     x.iter_mut().for_each(|x_i| *x_i &= x_mask);
 
-    // Compute output[i] = sum_j (1/(x_i + y_j)) * input[j].
-    for (i, x_i) in x.iter().enumerate() {
-        for (j, y_j) in y.iter().enumerate() {
-            let val = unsafe {
-                // Safety: x_i < x_mask < p/256 and y_j < y_mask < p/4,
-                // so x_i + y_j < p and from_canonical_unchecked is valid.
-                F::from_canonical_unchecked(x_i + y_j).inverse()
-            };
-            output[i] += val * to_multiply[j];
-        }
+    // matrix[i][j] = 1 / (x_i + y_j).
+    let mut matrix = [[Mersenne31::ZERO; WIDTH]; WIDTH];
+    for (x_i, row) in x.iter().zip(matrix.iter_mut()) {
+        let denominators: [Mersenne31; WIDTH] = core::array::from_fn(|j| unsafe {
+            // Safety: x_i < x_mask < p/256 and y_j < y_mask < p/4,
+            // so x_i + y_j < p and from_canonical_unchecked is valid.
+            Mersenne31::from_canonical_unchecked(x_i + y[j])
+        });
+        batch_multiplicative_inverse_general(&denominators, row, |v| v.inverse());
     }
 
-    output
+    matrix
 }
 
 /// Sample WIDTH random y-values from SHAKE such that their x-components
@@ -153,4 +194,82 @@ fn get_random_y_i<const WIDTH: usize>(
     }
 
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use core::array;
+
+    use super::*;
+
+    /// Independent, naive re-implementation of the original per-entry Cauchy
+    /// derivation (one `.inverse()` call per matrix entry), used as an oracle
+    /// to confirm the batched-inversion path in [`derive_cauchy_mds_matrix`]
+    /// is bit-identical.
+    fn naive_cauchy_mds_matrix<const WIDTH: usize, const NUM_FULL_ROUNDS: usize>()
+    -> [[Mersenne31; WIDTH]; WIDTH] {
+        let mut shake = Shake128::default();
+        shake.update(b"Monolith");
+        shake.update(&[WIDTH as u8, (NUM_FULL_ROUNDS + 1) as u8]);
+        shake.update(&Mersenne31::ORDER_U32.to_le_bytes());
+        shake.update(&[16, 15]);
+        shake.update(b"MDS");
+        let mut shake = shake.finalize_xof();
+
+        let bits = Mersenne31::bits();
+        let x_mask = (1 << (bits - 9)) - 1;
+        let y_mask = ((1 << bits) - 1) >> 2;
+
+        let y = get_random_y_i::<WIDTH>(&mut shake, x_mask, y_mask);
+        let mut x = y;
+        x.iter_mut().for_each(|x_i| *x_i &= x_mask);
+
+        array::from_fn(|i| {
+            array::from_fn(|j| unsafe {
+                // Safety: x[i] < x_mask < p/256 and y[j] < y_mask < p/4,
+                // so x[i] + y[j] < p and from_canonical_unchecked is valid.
+                Mersenne31::from_canonical_unchecked(x[i] + y[j]).inverse()
+            })
+        })
+    }
+
+    #[test]
+    fn cauchy_matrix_width24_matches_naive_oracle() {
+        let fast = derive_cauchy_mds_matrix::<24, 5>();
+        let naive = naive_cauchy_mds_matrix::<24, 5>();
+        assert_eq!(fast, naive);
+    }
+
+    #[test]
+    fn cauchy_matrix_is_deterministic() {
+        let a = derive_cauchy_mds_matrix::<24, 5>();
+        let b = derive_cauchy_mds_matrix::<24, 5>();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn permute_width24_matches_stored_matrix() {
+        // permute() on standard basis vectors must reconstruct the same
+        // dense matrix stored in the struct (mirrors monolith-air's
+        // extract_mds_matrix, scoped here to this crate's own type).
+        let mds = MonolithMdsMatrixMersenne31::<24, 5>::new();
+        for col in 0..24 {
+            let mut basis = [Mersenne31::ZERO; 24];
+            basis[col] = Mersenne31::ONE;
+            let output = mds.permute(basis);
+            for (row, &expected) in output.iter().enumerate() {
+                assert_eq!(expected, mds.matrix[row][col]);
+            }
+        }
+    }
+
+    #[test]
+    fn permute_width24_is_deterministic() {
+        let mds = MonolithMdsMatrixMersenne31::<24, 5>::new();
+        let input: [Mersenne31; 24] = array::from_fn(Mersenne31::from_usize);
+
+        let out1 = mds.permute(input);
+        let out2 = mds.permute(input);
+        assert_eq!(out1, out2);
+    }
 }

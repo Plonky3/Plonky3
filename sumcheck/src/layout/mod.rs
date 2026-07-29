@@ -52,15 +52,16 @@
 //!
 //! After lifting, a batching challenge `alpha` collapses every recorded
 //! opening into one residual claim. The residual sumcheck can bind variables
-//! in two different orders:
+//! in two different orders. In both modes, SVO accumulators are precomputed
+//! at claim-recording time and every folding round is driven from them with
+//! Lagrange weights; the modes differ only in the handoff to the residual
+//! product polynomial once folding completes:
 //!
-//! - Prefix-first binding: round one runs in SIMD-packed arithmetic, and the
-//!   remaining rounds drive a product polynomial.
-//! - Suffix-first binding: SVO accumulators are precomputed at claim-recording
-//!   time and folded round by round with Lagrange weights.
+//! - Prefix-first binding: the handoff is packed (`compress_prefix_to_packed`).
+//! - Suffix-first binding: the handoff is unpacked (`compress_stacked`).
 //!
 //! Both modes end at the same residual product polynomial; the binding order
-//! only decides which fast-path tricks apply on the first rounds.
+//! only decides which fast-path tricks apply on the handoff.
 //!
 //! # References
 //!
