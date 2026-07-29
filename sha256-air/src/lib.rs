@@ -43,6 +43,7 @@
 //! - Bitwise operations commit unpacked columns, 32 bits per word.
 //! - Modular additions commit packed columns, 2 x 16-bit limbs per word.
 //! - Bridge constraints keep the two views consistent whenever both are needed.
+//! - The output state `H'` commits unpacked: nothing reads its limbs back.
 //!
 //! # Constraint degree
 //!
@@ -70,12 +71,12 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use p3_air::check_constraints;
+    use p3_air::{AirLayout, BaseAir, check_constraints, get_max_constraint_degree};
     use p3_baby_bear::BabyBear;
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
-    use p3_field::PrimeField32;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PrimeCharacteristicRing, PrimeField32};
     use p3_fri::{FriParameters, TwoAdicFriPcs};
     use p3_keccak::{Keccak256Hash, KeccakF};
     use p3_merkle_tree::MerkleTreeMmcs;
@@ -109,14 +110,32 @@ mod tests {
 
     /// Rebuild the 8 output words from a populated row.
     ///
-    /// Packs the `[lo_16, hi_16]` limbs back into a single `u32`.
+    /// Packs the 32 little-endian bit columns back into a single `u32`.
     fn extract_output(cols: &Sha256Cols<F>) -> [u32; 8] {
         core::array::from_fn(|i| {
-            // Each h_out entry is two 16-bit limbs in little-endian order.
-            let lo = cols.h_out[i][0].as_canonical_u32();
-            let hi = cols.h_out[i][1].as_canonical_u32();
-            lo | (hi << 16)
+            // Fold the bits high to low so bit `j` lands in position `j`.
+            cols.h_out[i]
+                .iter()
+                .rev()
+                .fold(0u32, |acc, bit| (acc << 1) | bit.as_canonical_u32())
         })
+    }
+
+    /// Reinterpret a raw trace buffer as mutable typed rows.
+    ///
+    /// Used by the negative tests to corrupt a single column in place.
+    fn rows_mut(trace: &mut p3_matrix::dense::RowMajorMatrix<F>) -> &mut [Sha256Cols<F>] {
+        // Safe: same layout guarantee as the shared view above.
+        let (prefix, rows, suffix) = unsafe { trace.values.align_to_mut::<Sha256Cols<F>>() };
+        assert!(prefix.is_empty());
+        assert!(suffix.is_empty());
+        rows
+    }
+
+    /// Build a single-row trace over a fixed input, ready to be tampered with.
+    fn tamperable_trace() -> p3_matrix::dense::RowMajorMatrix<F> {
+        // Zero block on the canonical IV - any valid input would do.
+        generate_trace_rows::<F>(vec![concat_input([0u32; 16], SHA256_IV)], 0)
     }
 
     /// Expose the raw buffer as typed column rows.
@@ -150,6 +169,20 @@ mod tests {
         let expected = NUM_SHA256_COLS;
         let actual = size_of::<Sha256Cols<u8>>();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn declared_constraint_degree_matches_symbolic_degree() {
+        // Invariant: the hint lets the prover skip symbolic evaluation.
+        //
+        //     hint >= true degree  ->  sound
+        //     hint <  true degree  ->  silently invalid proofs
+        //
+        // Pin it against the degree symbolic evaluation would infer.
+        let air = Sha256Air;
+        let layout = AirLayout::from_air::<F>(&air);
+        let symbolic = get_max_constraint_degree::<F, _>(&air, layout, 1 << 4);
+        assert_eq!(BaseAir::<F>::max_constraint_degree(&air), Some(symbolic));
     }
 
     // Trace generator correctness.
@@ -273,6 +306,47 @@ mod tests {
             ),
         ];
         let trace = generate_trace_rows::<F>(inputs, 0);
+        check_constraints(&Sha256Air, &trace, &[]);
+    }
+
+    // Constraint rejection.
+
+    #[test]
+    #[should_panic(expected = "constraints not satisfied")]
+    fn constraints_reject_non_boolean_output_column() {
+        // Invariant: every `h_out` column is boolean.
+        //
+        // Bounding the columns is what bounds the two repacked limbs.
+        //
+        // A packed `h_out` would admit a second decomposition instead:
+        //
+        //     lo -= 2^16    hi += 1
+        //
+        // Both addition checks accept that shift.
+        let mut trace = tamperable_trace();
+        rows_mut(&mut trace)[0].h_out[0][0] = F::TWO;
+        check_constraints(&Sha256Air, &trace, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "constraints not satisfied")]
+    fn constraints_reject_flipped_output_bit() {
+        // Flipping any output bit changes the repacked word.
+        // The finalization addition must reject it.
+        let mut trace = tamperable_trace();
+        let bit = &mut rows_mut(&mut trace)[0].h_out[7][31];
+        *bit = F::ONE - *bit;
+        check_constraints(&Sha256Air, &trace, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "constraints not satisfied")]
+    fn constraints_reject_flipped_schedule_bit() {
+        // The expanded schedule words are witnessed, not derived.
+        // Only the recurrence ties them back to the block.
+        let mut trace = tamperable_trace();
+        let bit = &mut rows_mut(&mut trace)[0].w[16][0];
+        *bit = F::ONE - *bit;
         check_constraints(&Sha256Air, &trace, &[]);
     }
 

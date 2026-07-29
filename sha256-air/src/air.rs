@@ -87,6 +87,17 @@ impl<F> BaseAir<F> for Sha256Air {
         // Each row is self-contained, so no next-row columns are needed.
         Vec::new()
     }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        // Declared so the prover skips symbolic evaluation of the whole row.
+        //
+        // The bound is tight:
+        //
+        //     Maj, sigma XOR3, add2 / add3  ->  3
+        //     boolean checks                ->  2
+        //     packing identities            ->  1
+        Some(3)
+    }
 }
 
 impl<AB: AirBuilder> Air<AB> for Sha256Air {
@@ -128,6 +139,14 @@ fn eval_bit_range_checks<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB
     }
     // Symmetric range check for the `e` chain.
     for word in &local.e_chain {
+        builder.assert_bools(*word);
+    }
+
+    // Range-check the output chaining state.
+    //
+    // Invariant: nothing downstream re-derives `h_out`.
+    // These booleans are the only thing bounding its two limbs by `2^16`.
+    for word in &local.h_out {
         builder.assert_bools(*word);
     }
 }
@@ -340,23 +359,52 @@ fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var
 ///     final c = a_chain[65]    final g = e_chain[65]
 ///     final d = a_chain[64]    final h = e_chain[64]
 /// ```
+///
+/// # Soundness
+///
+/// The add helpers pin exactly two facts about their output word:
+///
+/// ```text
+///     acc    = out    - in_0    - in_1       in {0, -2^32}
+///     acc_16 = out[0] - in_0[0] - in_1[0]    in {0, -2^16}
+/// ```
+///
+/// Neither rules out moving `2^16` from the low limb into the high one:
+///
+/// ```text
+///     out[0] -= 2^16   ->   acc_16 shifts by -2^16
+///     out[1] += 1      ->   acc    unchanged
+/// ```
+///
+/// Both checks still hold whenever the honest low-limb carry is `0`.
+///
+/// So the helper alone admits two limb decompositions per output word.
+///
+/// One of them puts a limb outside `[0, 2^16)`.
+///
+/// For an intermediate such as `t1` the alias is harmless:
+///
+/// - Its consumer's output is repacked from boolean-checked bits.
+/// - That consumer's `acc_16` check pins its own low limb modulo `2^16`.
+/// - The alias shifts by a multiple of `2^16`, so it cancels there.
+///
+/// `h_out` has no consumer.
+///
+/// Committing it as bits makes both limbs 16-bit by construction.
 fn eval_finalization<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var>) {
     // H'_0..H'_3 are obtained by adding H[i] and the tail of the `a` chain.
     for i in 0..4 {
         let final_bits = &local.a_chain[CHAIN_LEN - 1 - i];
         let packed_expr = pack_word::<AB>(final_bits);
-        add2(builder, &local.h_out[i], &local.h_in[i], &packed_expr);
+        let h_out_expr = pack_word::<AB>(&local.h_out[i]);
+        add2_expr_out(builder, &h_out_expr, &local.h_in[i], &packed_expr);
     }
     // H'_4..H'_7 are obtained by adding H[i] and the tail of the `e` chain.
     for i in 0..4 {
         let final_bits = &local.e_chain[CHAIN_LEN - 1 - i];
         let packed_expr = pack_word::<AB>(final_bits);
-        add2(
-            builder,
-            &local.h_out[4 + i],
-            &local.h_in[4 + i],
-            &packed_expr,
-        );
+        let h_out_expr = pack_word::<AB>(&local.h_out[4 + i]);
+        add2_expr_out(builder, &h_out_expr, &local.h_in[4 + i], &packed_expr);
     }
 }
 

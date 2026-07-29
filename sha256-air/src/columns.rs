@@ -20,6 +20,21 @@
 //!     packed[1] = bit[16] + 2 * bit[17] + ... + 2^15 * bit[31]
 //! ```
 //!
+//! # Which values may be committed packed
+//!
+//! A freely committed packed pair says nothing about its limbs.
+//!
+//! Every packed column here earns its `[0, 2^16)` limbs one of two ways:
+//!
+//! - Pinned to boolean-checked bits: `h_in`, `ch`, `maj`, the sigmas.
+//! - Consumed by a later add that outputs bits: `sched_tmp`, `tmp1`, `t1`.
+//!
+//! The soundness note on `eval_finalization` covers why the second suffices.
+//!
+//! `h_out` fits neither rule, because nothing consumes it.
+//!
+//! It is therefore committed as bits.
+//!
 //! # Avoiding redundant packed columns
 //!
 //! Values whose bits are already committed never need a second packed column.
@@ -169,11 +184,24 @@ pub struct Sha256Cols<T> {
     /// Per-round intermediates, one entry per compression round.
     pub rounds: [Sha256RoundCols<T>; NUM_COMPRESSION_ROUNDS],
 
-    /// Output chaining state in packed form.
+    /// Full bit decomposition of the output chaining state.
     ///
-    /// Each entry equals the input `H[i]` plus the matching final working
-    /// variable, reduced modulo `2^32`.
-    pub h_out: [[T; U32_LIMBS]; STATE_WORDS],
+    /// Value: `H[i]` plus the matching final working variable, mod `2^32`.
+    ///
+    /// Unpacked because no later constraint reads it back.
+    ///
+    /// A packed pair `[lo, hi]` would admit a second decomposition:
+    ///
+    /// ```text
+    ///     lo' = lo - 2^16      hi' = hi + 1
+    /// ```
+    ///
+    /// The 32-bit value is unchanged, so both addition checks still pass.
+    ///
+    /// But `lo'` is no longer a 16-bit limb.
+    ///
+    /// A consumer reading the limbs apart would read unconstrained data.
+    pub h_out: [[T; WORD_BITS]; STATE_WORDS],
 }
 
 /// Total number of scalar columns required per row.

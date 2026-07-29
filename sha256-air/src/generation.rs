@@ -222,7 +222,10 @@ fn generate_trace_row_for_compression<F: PrimeField64>(
     let final_state: [u32; STATE_WORDS] = [a, b, c, d, e, f, g, h];
     for i in 0..STATE_WORDS {
         // Output word i = H[i] + final_state[i] (mod 2^32).
+        //
+        // Bit form: the AIR repacks it for the addition check.
+        // The bits are what bound the two 16-bit limbs.
         let h_out_word = h_in[i].wrapping_add(final_state[i]);
-        row.h_out[i] = u32_to_limbs(h_out_word).map(F::from_u16);
+        row.h_out[i] = u32_to_bits_le(h_out_word);
     }
 }
