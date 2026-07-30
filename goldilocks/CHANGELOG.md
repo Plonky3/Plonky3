@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.3] - 2026-07-30
+### Merged PRs
+- Perf(p3-goldilocks): add SVE2 vectorization (#1956)
+- Perf(p3-goldilocks): faster Goldilocks wasm simd128 backend (#1964)
+- Fix(goldilocks): canonicalize NEON add/sub operand to close second-order overflow (#1921)
+
 ## [0.6.2] - 2026-07-20
 ### Merged PRs
 - Perf(mersenne-31): complex-squaring scalar QM31 square (#1831)
