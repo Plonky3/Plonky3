@@ -507,7 +507,7 @@ fn dot_pairs<const N: usize>(get: impl Fn(usize) -> (v128, v128)) -> v128 {
 /// including a canonicalize step, for every term).
 ///
 /// Each term is a single (arbitrary, possibly non-canonical) 64-bit value, i.e. a 128-bit
-/// value with a zero high half, so — unlike [`dot_product_delayed_reduce`] — no bit-96 split
+/// value with a zero high half, so — unlike [`dot_pairs`] — no bit-96 split
 /// is needed: accumulating with plain wrapping 128-bit-per-lane addition (carry from the low
 /// word into the high word on overflow) gives the *exact* sum as long as `N < 2^64`, which
 /// always holds. `reduce128` finishes it.
@@ -764,7 +764,7 @@ mod tests {
     }
 
     /// Adversarial coverage for `mixed_dot_product`, which reuses the same
-    /// `dot_product_delayed_reduce` machinery with the coefficients broadcast per term
+    /// `dot_pairs` machinery with the coefficients broadcast per term
     /// instead of genuinely packed — the new risk is specifically in that broadcast wiring.
     #[test]
     fn mixed_dot_product_delayed_reduction_matches_scalar() {
