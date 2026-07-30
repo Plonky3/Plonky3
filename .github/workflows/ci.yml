@@ -141,7 +141,9 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-poseidon2-air
           cargo build --verbose --target ${{ env.target }} -p p3-rescue
           cargo build --verbose --target ${{ env.target }} -p p3-sha256
+          cargo build --verbose --target ${{ env.target }} -p p3-sha256-air
           cargo build --verbose --target ${{ env.target }} -p p3-security
+          cargo build --verbose --target ${{ env.target }} -p p3-stir
           cargo build --verbose --target ${{ env.target }} -p p3-sumcheck
           cargo build --verbose --target ${{ env.target }} -p p3-symmetric
           cargo build --verbose --target ${{ env.target }} -p p3-uni-stark
@@ -185,6 +187,8 @@ jobs:
         run: cargo run --release --target ${{ env.run_target }} --bin wasm_smoke -p p3-goldilocks
       - name: Run wasm_bench under wasmtime
         run: cargo run --release --target ${{ env.run_target }} --bin wasm_bench -p p3-goldilocks
+      - name: Run wasm_merkle_bench under wasmtime
+        run: cargo run --release --target ${{ env.run_target }} --example wasm_merkle_bench -p p3-goldilocks
 
   lint:
     name: Formatting and Clippy
