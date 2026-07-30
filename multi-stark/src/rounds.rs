@@ -10,6 +10,7 @@ use p3_air::{Air, BaseAir};
 use p3_field::{
     ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
 };
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyView};
@@ -18,7 +19,7 @@ use p3_sumcheck::layout::Table;
 
 use crate::folder::MultilinearFolder;
 use crate::packed_ext::PackedExt;
-use crate::selectors::BoundaryEvals;
+use crate::selectors::{BoundaryEvals, periodic_num_variables};
 
 /// One batch of AIRs that share a single trace height.
 ///
@@ -87,6 +88,19 @@ impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
 /// Sumcheck prover state for the AIR zerocheck.
 ///
 /// Stores already-transposed trace tables.
+///
+/// Each AIR contributes three column groups, folded identically and laid out in this order:
+///
+/// ```text
+///     main         : committed, opened at the bound point
+///     preprocessed : committed, opened at the bound point
+///     periodic     : uncommitted, materialized to the full trace height
+/// ```
+///
+/// A materialized periodic column is a genuine multilinear polynomial.
+/// It therefore folds exactly like a committed column.
+///
+/// The verifier recomputes each periodic column in closed form instead of opening it.
 pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     /// AIR whose alpha-batched constraint is being evaluated.
     airs: Vec<&'air A>,
@@ -96,6 +110,11 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     alpha: EF,
     /// Optional preprocessed tables, one per AIR.
     preprocessed: Vec<Option<&'data Table<F>>>,
+    /// Periodic tables, one per AIR, each materialized to the full trace height.
+    ///
+    /// `None` when the AIR declares no periodic columns.
+    /// Owned rather than borrowed: the values come from the AIR, not from committed data.
+    periodic: Vec<Option<Table<F>>>,
     /// Main trace tables, one row per original trace column.
     tables: Vec<&'data Table<F>>,
     /// Beta power for each AIR in canonical input order.
@@ -380,6 +399,10 @@ struct AirSlot {
     preprocessed_offset: usize,
     /// Number of preprocessed columns this AIR owns.
     preprocessed_width: usize,
+    /// First periodic column of this AIR inside the merged column buffer.
+    periodic_offset: usize,
+    /// Number of periodic columns this AIR owns.
+    periodic_width: usize,
     /// Per-variable degree of this AIR's eq-stripped round polynomial.
     degree: usize,
 }
@@ -403,6 +426,8 @@ impl AirSlot {
                     main_width: air.main_width,
                     preprocessed_offset: air.preprocessed_offset,
                     preprocessed_width: air.preprocessed_width,
+                    periodic_offset: air.periodic_offset,
+                    periodic_width: air.periodic_width,
                     degree: group.degree,
                 };
             }
@@ -426,6 +451,10 @@ struct DegreeGroupAir {
     preprocessed_offset: usize,
     /// Number of preprocessed columns this AIR owns.
     preprocessed_width: usize,
+    /// First periodic column of this AIR inside the merged column buffer.
+    periodic_offset: usize,
+    /// Number of periodic columns this AIR owns.
+    periodic_width: usize,
 }
 
 /// AIRs sharing one per-variable degree, folded into a single beta-weighted round polynomial.
@@ -448,10 +477,10 @@ struct DegreeGroup<EF> {
 impl<EF: Field> DegreeGroup<EF> {
     /// Bucket AIRs by degree and assign each AIR its column span in the merged buffer.
     ///
-    /// Columns are laid out per AIR as main columns then preprocessed columns, in caller order:
+    /// Columns are laid out per AIR as main, then preprocessed, then periodic columns, in caller order:
     ///
     /// ```text
-    ///     [ air0 main | air0 preproc | air1 main | air1 preproc | ... ]
+    ///     [ air0 main | air0 preproc | air0 periodic | air1 main | air1 preproc | air1 periodic | ... ]
     /// ```
     ///
     /// # Arguments
@@ -459,15 +488,22 @@ impl<EF: Field> DegreeGroup<EF> {
     /// - `degrees`: per-variable constraint degree of each AIR, in stage-local order.
     /// - `main_widths`: main column count of each AIR, in stage-local order.
     /// - `preprocessed_widths`: preprocessed column count of each AIR, in stage-local order.
-    fn build(degrees: &[usize], main_widths: &[usize], preprocessed_widths: &[usize]) -> Vec<Self> {
+    /// - `periodic_widths`: periodic column count of each AIR, in stage-local order.
+    fn build(
+        degrees: &[usize],
+        main_widths: &[usize],
+        preprocessed_widths: &[usize],
+        periodic_widths: &[usize],
+    ) -> Vec<Self> {
         // A btree keyed by degree gives deterministic group order across prover and verifier.
         let mut groups = BTreeMap::<usize, Vec<DegreeGroupAir>>::new();
         // Running column cursor into the merged buffer, advanced AIR by AIR.
         let mut column_offset = 0;
-        for (air_index, ((&degree, &main_width), &preprocessed_width)) in degrees
+        for (air_index, (((&degree, &main_width), &preprocessed_width), &periodic_width)) in degrees
             .iter()
             .zip(main_widths)
             .zip(preprocessed_widths)
+            .zip(periodic_widths)
             .enumerate()
         {
             // Main columns come first for this AIR.
@@ -476,6 +512,9 @@ impl<EF: Field> DegreeGroup<EF> {
             // Preprocessed columns follow immediately after.
             let preprocessed_offset = column_offset;
             column_offset += preprocessed_width;
+            // Periodic columns come last for this AIR.
+            let periodic_offset = column_offset;
+            column_offset += periodic_width;
             // File the AIR under its degree, keeping its column span.
             groups.entry(degree).or_default().push(DegreeGroupAir {
                 air_index,
@@ -483,6 +522,8 @@ impl<EF: Field> DegreeGroup<EF> {
                 main_width,
                 preprocessed_offset,
                 preprocessed_width,
+                periodic_offset,
+                periodic_width,
             });
         }
 
@@ -631,6 +672,44 @@ where
             .iter()
             .map(|table| table.map_or(0, Table::num_polys))
             .collect::<Vec<_>>();
+
+        // Materialize each AIR's periodic columns to the full trace height.
+        //
+        //     period vector  : [v_0, v_1]
+        //     trace height 8 : [v_0, v_1, v_0, v_1, v_0, v_1, v_0, v_1]
+        //
+        // The full-height column is a genuine multilinear polynomial.
+        // It therefore folds through the sumcheck exactly like a committed column.
+        let trace_height = 1 << num_vars;
+        let periodic = stage
+            .airs
+            .iter()
+            .map(|air| {
+                let cols = air.periodic_columns();
+                if cols.is_empty() {
+                    return None;
+                }
+
+                // Reject a declaration the trace cannot hold, matching the verifier's own check.
+                let num_variables =
+                    periodic_num_variables(air.num_periodic_columns(), &cols, num_vars)
+                        .expect("periodic column declaration must fit the trace height");
+
+                let mut values = Vec::with_capacity(cols.len() * trace_height);
+                for (col, j) in cols.iter().zip(num_variables) {
+                    // Copy the whole period vector once per cycle it spans.
+                    for _ in 0..trace_height >> j {
+                        values.extend_from_slice(col);
+                    }
+                }
+                Some(Table::new(RowMajorMatrix::new(values, trace_height)))
+            })
+            .collect::<Vec<_>>();
+        let periodic_widths = periodic
+            .iter()
+            .map(|table| table.as_ref().map_or(0, Table::num_polys))
+            .collect::<Vec<_>>();
+
         let num_airs = stage.airs.len();
         assert_eq!(
             betas.len(),
@@ -655,7 +734,12 @@ where
         }
 
         // Build the degree grouping once, then flatten it into the AIR-ordered fold view.
-        let degree_groups = DegreeGroup::build(&stage.degrees, &main_widths, &preprocessed_widths);
+        let degree_groups = DegreeGroup::build(
+            &stage.degrees,
+            &main_widths,
+            &preprocessed_widths,
+            &periodic_widths,
+        );
         let slots = AirSlot::flatten(&degree_groups);
 
         Self {
@@ -663,6 +747,7 @@ where
             public_values: stage.public_values.clone(),
             alpha,
             preprocessed: stage.preprocessed.clone(),
+            periodic,
             tables: stage.tables.clone(),
             betas,
             degree_groups,
@@ -688,6 +773,11 @@ where
                 .preprocessed
                 .iter()
                 .map(|table| table.map_or(0, Table::num_polys))
+                .sum::<usize>()
+            + self
+                .periodic
+                .iter()
+                .map(|table| table.as_ref().map_or(0, Table::num_polys))
                 .sum::<usize>()
     }
 
@@ -788,6 +878,9 @@ where
                         if let Some(preprocessed) = self.preprocessed[slot.air_index] {
                             fill_columns(&mut scratch, slot.preprocessed_offset, preprocessed);
                         }
+                        if let Some(periodic) = self.periodic[slot.air_index].as_ref() {
+                            fill_columns(&mut scratch, slot.periodic_offset, periodic);
+                        }
                     }
 
                     let (mut boundary, boundary_diff) =
@@ -826,6 +919,10 @@ where
                                             ..slot.preprocessed_offset + slot.preprocessed_width],
                                         &scratch.next_point[slot.preprocessed_offset
                                             ..slot.preprocessed_offset + slot.preprocessed_width],
+                                    )
+                                    .with_periodic(
+                                        &scratch.local_point[slot.periodic_offset
+                                            ..slot.periodic_offset + slot.periodic_width],
                                     )
                                     .eval_air(self.airs[slot.air_index]);
                                     evals[node - 1] += dot_product::<EF, _, _>(
@@ -905,6 +1002,9 @@ where
                 if let Some(preprocessed) = self.preprocessed[slot.air_index] {
                     fill_columns(&mut scratch, slot.preprocessed_offset, preprocessed);
                 }
+                if let Some(periodic) = self.periodic[slot.air_index].as_ref() {
+                    fill_columns(&mut scratch, slot.periodic_offset, periodic);
+                }
             }
 
             let (mut boundary, boundary_diff) = BoundaryEvals::<F>::row_pair(s, half, height);
@@ -942,6 +1042,10 @@ where
                                     ..slot.preprocessed_offset + slot.preprocessed_width],
                                 &scratch.next_point[slot.preprocessed_offset
                                     ..slot.preprocessed_offset + slot.preprocessed_width],
+                            )
+                            .with_periodic(
+                                &scratch.local_point[slot.periodic_offset
+                                    ..slot.periodic_offset + slot.periodic_width],
                             )
                             .eval_air(self.airs[slot.air_index]);
                             evals[node - 1] += eq_suffix * g;
@@ -988,6 +1092,13 @@ where
                         .map(|col| r * (col[num_evals - 1] - col[half]) + col[half]),
                 );
             }
+            if let Some(periodic) = self.periodic[slot.air_index].as_ref() {
+                next_tail.extend(
+                    periodic
+                        .iter_polys()
+                        .map(|col| r * (col[num_evals - 1] - col[half]) + col[half]),
+                );
+            }
         }
 
         let want_packed = (half / 2) >= F::Packing::WIDTH;
@@ -1008,6 +1119,14 @@ where
                             .collect::<Vec<_>>(),
                     );
                 }
+                if let Some(periodic) = self.periodic[slot.air_index].as_ref() {
+                    columns.extend(
+                        periodic
+                            .par_iter_polys()
+                            .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
+                            .collect::<Vec<_>>(),
+                    );
+                }
             }
             ExtColumns::Packed(columns)
         } else {
@@ -1022,6 +1141,14 @@ where
                 if let Some(preprocessed) = self.preprocessed[slot.air_index] {
                     columns.extend(
                         preprocessed
+                            .par_iter_polys()
+                            .map(|col| PolyView::new(col).fix_prefix_var(r))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                if let Some(periodic) = self.periodic[slot.air_index].as_ref() {
+                    columns.extend(
+                        periodic
                             .par_iter_polys()
                             .map(|col| PolyView::new(col).fix_prefix_var(r))
                             .collect::<Vec<_>>(),
@@ -1172,6 +1299,10 @@ where
                                 &scratch.next_point[slot.preprocessed_offset
                                     ..slot.preprocessed_offset + slot.preprocessed_width],
                             )
+                            .with_periodic(
+                                &scratch.local_point[slot.periodic_offset
+                                    ..slot.periodic_offset + slot.periodic_width],
+                            )
                             .eval_air(self.airs[slot.air_index]);
                             evals[0] += eq_suffix * g;
                             debug_assert!(slot.degree > 0);
@@ -1203,6 +1334,10 @@ where
                                             ..slot.preprocessed_offset + slot.preprocessed_width],
                                         &scratch.next_point[slot.preprocessed_offset
                                             ..slot.preprocessed_offset + slot.preprocessed_width],
+                                    )
+                                    .with_periodic(
+                                        &scratch.local_point[slot.periodic_offset
+                                            ..slot.periodic_offset + slot.periodic_width],
                                     )
                                     .eval_air(self.airs[slot.air_index]);
                                     evals[node - 1] += eq_suffix * g;
@@ -1352,6 +1487,10 @@ where
                                 &scratch.next_point[slot.preprocessed_offset
                                     ..slot.preprocessed_offset + slot.preprocessed_width],
                             )
+                            .with_periodic(
+                                &scratch.local_point[slot.periodic_offset
+                                    ..slot.periodic_offset + slot.periodic_width],
+                            )
                             .eval_air(self.airs[slot.air_index]);
                             evals[0] += dot_product::<EF, _, _>(
                                 eq_suffix.iter().copied(),
@@ -1386,6 +1525,10 @@ where
                                             ..slot.preprocessed_offset + slot.preprocessed_width],
                                         &scratch.next_point[slot.preprocessed_offset
                                             ..slot.preprocessed_offset + slot.preprocessed_width],
+                                    )
+                                    .with_periodic(
+                                        &scratch.local_point[slot.periodic_offset
+                                            ..slot.periodic_offset + slot.periodic_width],
                                     )
                                     .eval_air(self.airs[slot.air_index]);
                                     evals[node - 1] += dot_product::<EF, _, _>(
