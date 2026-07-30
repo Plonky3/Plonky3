@@ -27,7 +27,7 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, OpenedValues, Pcs};
+use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
@@ -41,12 +41,34 @@ use p3_matrix::interpolation::{Interpolate, compute_adjusted_weights};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::config::{StirConfig, StirParameters};
 use crate::proof::StirProof;
 use crate::prover::prove_stir_from_codeword;
 use crate::verifier::{StirError, verify_stir};
+
+/// Batched openings of one input commitment's LDE matrices at the STIR-derived query
+/// positions for one LDE-height bucket.
+///
+/// One multi-opening proof authenticates every opened row together, so sibling digests
+/// shared between the bucket's `(query, fiber column)` positions travel once.
+///
+/// `None` when the commitment has no matrix at this bucket's height.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound(
+    serialize = "Val: Serialize, InputMmcs::MultiProof: Serialize",
+    deserialize = "Val: Deserialize<'de>, InputMmcs::MultiProof: Deserialize<'de>"
+))]
+pub struct InputOpenings<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
+    /// `opened_values[k][m]` is the opened row of matrix `m` at the `k`-th queried position,
+    /// in the same `(query, fiber column)` order the prover and verifier both derive from
+    /// public data.
+    pub opened_values: Vec<Vec<Vec<Val>>>,
+    /// Compact multi-opening proof authenticating every row at once.
+    pub opening_proof: InputMmcs::MultiProof,
+}
 
 /// A polynomial commitment scheme using STIR to generate opening proofs.
 #[derive(Clone, Debug)]
@@ -73,7 +95,7 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> Pcs<Challenge, Challe
 where
     Val: TwoAdicField,
     Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: Mmcs<Val, Proof: Sync, Error: Sync + Debug>,
+    InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync + Debug>,
     StirMmcs: Mmcs<Challenge>,
     Challenge: ExtensionField<Val> + TwoAdicField + BasedVectorSpace<Val>,
     Challenger: FieldChallenger<Val>
@@ -93,13 +115,13 @@ where
     /// - `stir_proof`: the STIR IOP proof for that bucket (initial commitment plus per-round
     ///   IOP messages). The first-round query indices are NOT serialized — the verifier
     ///   re-derives them from `verify_stir`'s side outputs.
-    /// - `input_openings[commit_idx]`: per-commitment batch openings at the bucket's
-    ///   first-round STIR fiber positions, in the same sorted-by-index order the verifier
-    ///   reconstructs from `verify_stir`. Empty if the commitment has no matrices at this
-    ///   bucket's LDE height.
+    /// - `input_openings[commit_idx]`: one shared multi-opening proof for that commitment's
+    ///   rows at the bucket's first-round STIR fiber positions, in the same sorted-by-index
+    ///   order the verifier reconstructs from `verify_stir`. `None` if the commitment has no
+    ///   matrices at this bucket's LDE height.
     type Proof = Vec<(
         StirProof<Challenge, StirMmcs, Val>,
-        Vec<Vec<BatchOpening<Val, InputMmcs>>>,
+        Vec<Option<InputOpenings<Val, InputMmcs>>>,
     )>;
     type Error = StirError<StirMmcs::Error, InputMmcs::Error>;
 
@@ -365,28 +387,37 @@ where
             let fold_height0 = (1usize << stir_config.log_starting_domain_size()) >> log_arity0;
             let arity0 = 1usize << log_arity0;
 
-            let input_openings: Vec<Vec<BatchOpening<Val, InputMmcs>>> =
+            let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> =
                 commitment_data_with_opening_points
                     .iter()
                     .map(|(data, _)| {
                         let mats = self.input_mmcs.get_matrices(data);
                         if !mats.iter().any(|m| m.height() == bucket_height) {
-                            return Vec::new();
+                            return None;
                         }
                         let commit_max_height = mats.iter().map(|m| m.height()).max().unwrap();
                         let log_commit_max = log2_strict_usize(commit_max_height);
 
-                        first_round_query_indices
+                        // Flatten every `(query, fiber column)` position into one index list so
+                        // a single multi-opening proof covers the whole bucket for this
+                        // commitment, sharing sibling digests across positions.
+                        let q_globals: Vec<usize> = first_round_query_indices
                             .iter()
                             .flat_map(|&j| {
                                 (0..arity0).map(move |l| {
                                     let p = j + l * fold_height0;
                                     let q_local = reverse_bits_len(p, log_h);
-                                    let q_global = q_local << (log_commit_max - log_h);
-                                    self.input_mmcs.open_batch(q_global, data)
+                                    q_local << (log_commit_max - log_h)
                                 })
                             })
-                            .collect()
+                            .collect();
+
+                        let (opened_values, opening_proof) =
+                            self.input_mmcs.open_multi_batch(&q_globals, data);
+                        Some(InputOpenings {
+                            opened_values,
+                            opening_proof,
+                        })
                     })
                     .collect();
 
@@ -547,7 +578,7 @@ where
             // happen to exercise, mask the multi-commit case entirely).
             let mut expected_ro = vec![vec![Challenge::ZERO; arity0]; n_q];
 
-            for (commit_idx, ((commitment, domain_claims), per_commit_openings)) in
+            for (commit_idx, ((commitment, domain_claims), per_commit_opening)) in
                 commitments_with_opening_points
                     .iter()
                     .zip(input_openings.iter())
@@ -560,16 +591,17 @@ where
 
                 let has_at_bucket = mat_lde_heights.contains(&bucket_height);
 
-                // SHAPE CHECK: per-commit opening count is determined entirely by public
-                // input. Validating up-front turns any mismatch into a clean
-                // `InvalidProofShape` instead of an out-of-bounds panic on adversarial input.
-                let expected_openings_len = if has_at_bucket { n_q * arity0 } else { 0 };
-                if per_commit_openings.len() != expected_openings_len {
-                    return Err(StirError::InvalidProofShape);
-                }
-
-                if !has_at_bucket {
+                // SHAPE CHECK: whether an opening is present at all is determined entirely by
+                // public input. Validating up-front turns a mismatch into a clean
+                // `InvalidProofShape` instead of silently skipping a binding check.
+                let Some(opening) = per_commit_opening else {
+                    if has_at_bucket {
+                        return Err(StirError::InvalidProofShape);
+                    }
                     continue;
+                };
+                if !has_at_bucket {
+                    return Err(StirError::InvalidProofShape);
                 }
 
                 let commit_max_height = mat_lde_heights.iter().copied().max().unwrap();
@@ -591,6 +623,34 @@ where
                     })
                     .collect();
 
+                // Flatten the `(query, fiber column)` positions in the same order the prover
+                // used to build `opening.opened_values`.
+                let q_globals: Vec<usize> = first_round_unique_js
+                    .iter()
+                    .flat_map(|&j| {
+                        (0..arity0).map(move |l| {
+                            let p = j + l * fold_height0;
+                            let q_local = reverse_bits_len(p, log_h);
+                            q_local << (log_commit_max - log_h)
+                        })
+                    })
+                    .collect();
+
+                // SHAPE CHECK: opened-row count is determined entirely by public input.
+                if opening.opened_values.len() != q_globals.len() {
+                    return Err(StirError::InvalidProofShape);
+                }
+
+                self.input_mmcs
+                    .verify_multi_batch(
+                        commitment,
+                        &dimensions,
+                        &q_globals,
+                        &opening.opened_values,
+                        &opening.opening_proof,
+                    )
+                    .map_err(StirError::InputError)?;
+
                 let mut opening_idx = 0usize;
 
                 for (q_idx, &j) in first_round_unique_js.iter().enumerate() {
@@ -598,25 +658,16 @@ where
                     for l in 0..arity0 {
                         let p = j + l * fold_height0;
                         let q_local = reverse_bits_len(p, log_h);
-                        let q_global = q_local << (log_commit_max - log_h);
 
-                        let batch_open = &per_commit_openings[opening_idx];
+                        let row_vals_by_mat = &opening.opened_values[opening_idx];
                         opening_idx += 1;
-
-                        let batch_ref = BatchOpeningRef::new(
-                            &batch_open.opened_values,
-                            &batch_open.opening_proof,
-                        );
-                        self.input_mmcs
-                            .verify_batch(commitment, &dimensions, q_global, batch_ref)
-                            .map_err(StirError::InputError)?;
 
                         for (mat_idx, (_, point_claims)) in domain_claims.iter().enumerate() {
                             if mat_lde_heights[mat_idx] != bucket_height {
                                 continue;
                             }
 
-                            let row_vals = &batch_open.opened_values[mat_idx];
+                            let row_vals = &row_vals_by_mat[mat_idx];
                             let p_x: Challenge = row_vals
                                 .iter()
                                 .zip(alpha_powers.iter())

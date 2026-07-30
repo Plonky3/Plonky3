@@ -408,7 +408,10 @@ mod babybear_stir {
             assert_eq!(rp_a.ood_answers, rp_b.ood_answers);
             assert_eq!(rp_a.ans_polynomial, rp_b.ans_polynomial);
             assert_eq!(rp_a.shake_polynomial, rp_b.shake_polynomial);
-            assert_eq!(rp_a.query_proofs.len(), rp_b.query_proofs.len());
+            assert_eq!(
+                rp_a.query_openings.row_evals.len(),
+                rp_b.query_openings.row_evals.len()
+            );
         }
     }
 
@@ -424,8 +427,8 @@ mod babybear_stir {
         let mut p_challenger = challenger.clone();
         let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
-        assert!(!proof.round_proofs[0].query_proofs.is_empty());
-        proof.round_proofs[0].query_proofs[0].row_evals[0] += EF::from(F::ONE);
+        assert!(!proof.round_proofs[0].query_openings.row_evals.is_empty());
+        proof.round_proofs[0].query_openings.row_evals[0][0] += EF::from(F::ONE);
 
         let mut v_challenger = challenger;
         assert!(
@@ -536,14 +539,14 @@ mod babybear_stir {
         let mut p_challenger = challenger.clone();
         let (mut proof, _idx) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
-        assert!(!proof.final_query_proofs.is_empty());
-        assert!(!proof.final_query_proofs[0].row_evals.is_empty());
-        proof.final_query_proofs[0].row_evals[0] += EF::from(F::ONE);
+        assert!(!proof.final_query_openings.row_evals.is_empty());
+        assert!(!proof.final_query_openings.row_evals[0].is_empty());
+        proof.final_query_openings.row_evals[0][0] += EF::from(F::ONE);
 
         let mut v_challenger = challenger;
         assert!(
             verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err(),
-            "tampered final_query_proofs.row_evals must be rejected"
+            "tampered final_query_openings.row_evals must be rejected"
         );
     }
 
@@ -936,8 +939,8 @@ mod babybear_pcs {
         );
 
         // This intentionally measures serialized PCS proof objects only. Opened values are
-        // excluded because both proofs open the same point and width. The always-running test
-        // reports the current sizes; the ignored regression below records the intended ordering.
+        // excluded because both proofs open the same point and width. This test reports the
+        // current sizes; the regression below asserts the intended ordering.
         (stir_bytes.len(), fri_bytes.len())
     }
 
@@ -951,7 +954,6 @@ mod babybear_pcs {
     }
 
     #[test]
-    #[ignore = "TODO(#1917, #1919): port pruned MMCS openings to STIR"]
     fn assert_stir_proof_smaller_than_binary_fri() {
         const WIDTH: usize = 3;
 
