@@ -133,4 +133,380 @@ fn main() {
         let _ = black_box(acc);
         report("halve", N, dt);
     }
+
+    bench_poseidon2();
+    bench_dot_product();
+    bench_sum_array();
+    bench_quadratic_extension_mul();
+}
+
+/// Times the packed Goldilocks quadratic-extension multiplication and squaring
+/// (`binomial_mul`/`binomial_square` in `p3_field::extension`, applied to
+/// `[PackedGoldilocksWasmSimd128; 2]`), which route through the vectorized `dot_product`.
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn bench_quadratic_extension_mul() {
+    use core::hint::black_box;
+    use std::time::Instant;
+
+    use p3_field::extension::{binomial_mul, binomial_square};
+    use p3_field::{PrimeCharacteristicRing, PrimeField64};
+    use p3_goldilocks::{Goldilocks, PackedGoldilocksWasmSimd128};
+
+    const N: u64 = 200_000;
+    const W: Goldilocks = Goldilocks::new(7);
+
+    fn report(name: &str, n: u64, elapsed_ns: u128) {
+        let per_op = elapsed_ns as f64 / n as f64;
+        println!("{name:>28}: {per_op:>8.2} ns/op   ({n} ops in {elapsed_ns} ns)");
+    }
+
+    let a: [PackedGoldilocksWasmSimd128; 2] = core::array::from_fn(|i| {
+        PackedGoldilocksWasmSimd128([
+            Goldilocks::new((i as u64 + 1).wrapping_mul(0x9E3779B97F4A7C15) ^ 0x1234),
+            Goldilocks::new((i as u64 + 1).wrapping_mul(0xBF58476D1CE4E5B9) ^ 0x5678),
+        ])
+    });
+    let b: [PackedGoldilocksWasmSimd128; 2] = core::array::from_fn(|i| {
+        PackedGoldilocksWasmSimd128([
+            Goldilocks::new((i as u64 + 1).wrapping_mul(0x94D049BB133111EB) ^ 0x9abc),
+            Goldilocks::new((i as u64 + 1).wrapping_mul(0x2545F4914F6CDD1D) ^ 0xdef0),
+        ])
+    });
+
+    {
+        let mut acc = a;
+        let t0 = Instant::now();
+        for _ in 0..N {
+            let mut res = [PackedGoldilocksWasmSimd128::ZERO; 2];
+            binomial_mul(black_box(&acc), black_box(&b), &mut res, W);
+            acc = res;
+        }
+        let _ = black_box(acc[0].0[0].as_canonical_u64());
+        report("ext2_mul", N, t0.elapsed().as_nanos());
+    }
+
+    {
+        let mut acc = a;
+        let t0 = Instant::now();
+        for _ in 0..N {
+            let mut res = [PackedGoldilocksWasmSimd128::ZERO; 2];
+            binomial_square(black_box(&acc), &mut res, W);
+            acc = res;
+        }
+        let _ = black_box(acc[0].0[0].as_canonical_u64());
+        report("ext2_square", N, t0.elapsed().as_nanos());
+    }
+}
+
+/// Compares the vectorized delayed-reduction `sum_array` (one `reduce128` for the whole
+/// sum) against a naive `+`-chain (what the generic tree-sum default reduces to for a
+/// packed type — every `+` is a full modular add, ~9 ops including a canonicalize step),
+/// for the `N` values that matter most: Poseidon2's internal-round `sum_tail` at widths
+/// 8/12/16 sums 7/11/15 terms.
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn bench_sum_array() {
+    use core::hint::black_box;
+    use std::time::Instant;
+
+    use p3_field::PrimeCharacteristicRing;
+    use p3_goldilocks::{Goldilocks, PackedGoldilocksWasmSimd128};
+
+    const M: u64 = 200_000;
+
+    fn report(name: &str, n: u64, elapsed_ns: u128) {
+        let per_op = elapsed_ns as f64 / n as f64;
+        println!("{name:>28}: {per_op:>8.2} ns/op   ({n} ops in {elapsed_ns} ns)");
+    }
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            let terms: [PackedGoldilocksWasmSimd128; $n] = core::array::from_fn(|i| {
+                PackedGoldilocksWasmSimd128([
+                    Goldilocks::new((i as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ 0x1234),
+                    Goldilocks::new((i as u64).wrapping_mul(0xBF58476D1CE4E5B9) ^ 0x5678),
+                ])
+            });
+
+            {
+                let mut acc = PackedGoldilocksWasmSimd128::ZERO;
+                let t0 = Instant::now();
+                for _ in 0..M {
+                    acc += PackedGoldilocksWasmSimd128::sum_array::<$n>(black_box(&terms));
+                }
+                let dt = t0.elapsed().as_nanos();
+                let _ = black_box(acc);
+                report(concat!("sum_array_", $n, "_vectorized"), M, dt);
+            }
+
+            {
+                let mut acc = PackedGoldilocksWasmSimd128::ZERO;
+                let t0 = Instant::now();
+                for _ in 0..M {
+                    let sum = black_box(&terms)
+                        .iter()
+                        .copied()
+                        .reduce(|x, y| x + y)
+                        .unwrap();
+                    acc += sum;
+                }
+                let dt = t0.elapsed().as_nanos();
+                let _ = black_box(acc);
+                report(concat!("sum_array_", $n, "_chain"), M, dt);
+            }
+        }};
+    }
+
+    bench_n!(3);
+    bench_n!(7);
+    bench_n!(11);
+    bench_n!(15);
+    bench_n!(32);
+}
+
+/// Compares the vectorized delayed-reduction `dot_product` (one `reduce128` for the whole
+/// sum, computed 2 lanes at once) against the previous per-lane fallback (calling the
+/// scalar `Goldilocks::dot_product` — itself already delayed-reduction, just not
+/// vectorized — once per lane), for a range of `N`.
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn bench_dot_product() {
+    use core::hint::black_box;
+    use std::time::Instant;
+
+    use p3_field::PrimeCharacteristicRing;
+    use p3_goldilocks::{Goldilocks, PackedGoldilocksWasmSimd128};
+
+    const M: u64 = 200_000;
+
+    fn report(name: &str, n: u64, elapsed_ns: u128) {
+        let per_op = elapsed_ns as f64 / n as f64;
+        println!("{name:>28}: {per_op:>8.2} ns/op   ({n} ops in {elapsed_ns} ns)");
+    }
+
+    /// Mirrors the removed per-lane fallback: unpack to 2 scalar arrays, call the
+    /// (already delayed-reduction) scalar `Goldilocks::dot_product` once per lane, repack.
+    fn dot_product_per_lane_fallback<const N: usize>(
+        lhs: &[PackedGoldilocksWasmSimd128; N],
+        rhs: &[PackedGoldilocksWasmSimd128; N],
+    ) -> PackedGoldilocksWasmSimd128 {
+        let lhs0: [Goldilocks; N] = core::array::from_fn(|i| lhs[i].0[0]);
+        let rhs0: [Goldilocks; N] = core::array::from_fn(|i| rhs[i].0[0]);
+        let lhs1: [Goldilocks; N] = core::array::from_fn(|i| lhs[i].0[1]);
+        let rhs1: [Goldilocks; N] = core::array::from_fn(|i| rhs[i].0[1]);
+        PackedGoldilocksWasmSimd128([
+            Goldilocks::dot_product(&lhs0, &rhs0),
+            Goldilocks::dot_product(&lhs1, &rhs1),
+        ])
+    }
+
+    macro_rules! bench_n {
+        ($n:literal) => {{
+            let lhs: [PackedGoldilocksWasmSimd128; $n] = core::array::from_fn(|i| {
+                PackedGoldilocksWasmSimd128([
+                    Goldilocks::new((i as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ 0x1234),
+                    Goldilocks::new((i as u64).wrapping_mul(0xBF58476D1CE4E5B9) ^ 0x5678),
+                ])
+            });
+            let rhs: [PackedGoldilocksWasmSimd128; $n] = core::array::from_fn(|i| {
+                PackedGoldilocksWasmSimd128([
+                    Goldilocks::new((i as u64).wrapping_mul(0x94D049BB133111EB) ^ 0x9abc),
+                    Goldilocks::new((i as u64).wrapping_mul(0x2545F4914F6CDD1D) ^ 0xdef0),
+                ])
+            });
+
+            {
+                let mut acc = PackedGoldilocksWasmSimd128::ZERO;
+                let t0 = Instant::now();
+                for _ in 0..M {
+                    acc +=
+                        PackedGoldilocksWasmSimd128::dot_product(black_box(&lhs), black_box(&rhs));
+                }
+                let dt = t0.elapsed().as_nanos();
+                let _ = black_box(acc);
+                report(concat!("dot_product_", $n, "_vectorized"), M, dt);
+            }
+
+            {
+                let mut acc = PackedGoldilocksWasmSimd128::ZERO;
+                let t0 = Instant::now();
+                for _ in 0..M {
+                    acc += dot_product_per_lane_fallback(black_box(&lhs), black_box(&rhs));
+                }
+                let dt = t0.elapsed().as_nanos();
+                let _ = black_box(acc);
+                report(concat!("dot_product_", $n, "_per_lane"), M, dt);
+            }
+        }};
+    }
+
+    bench_n!(2);
+    bench_n!(3);
+    bench_n!(4);
+    bench_n!(5);
+    bench_n!(8);
+    bench_n!(16);
+    bench_n!(32);
+
+    bench_batched_linear_combination();
+}
+
+/// Sweeps `chunked_linear_combination::<CHUNK, ...>` over every `CHUNK` size
+/// `Algebra::BATCHED_LC_CHUNK` is allowed to take (1, 2, 4, 8, 16, 32, 64), for a
+/// realistic runtime-length slice, to pick the best chunk size for the now-vectorized
+/// `mixed_dot_product` (previously tuned to chunk=2 for the old per-lane fallback).
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn bench_batched_linear_combination() {
+    use core::hint::black_box;
+    use std::time::Instant;
+
+    use p3_field::{PrimeCharacteristicRing, chunked_linear_combination};
+    use p3_goldilocks::{Goldilocks, PackedGoldilocksWasmSimd128};
+
+    const M: u64 = 20_000;
+
+    fn report(name: &str, n: u64, elapsed_ns: u128) {
+        let per_op = elapsed_ns as f64 / n as f64;
+        println!("{name:>28}: {per_op:>8.2} ns/op   ({n} ops in {elapsed_ns} ns)");
+    }
+
+    macro_rules! bench_len {
+        ($len:literal) => {{
+            let values: [PackedGoldilocksWasmSimd128; $len] = core::array::from_fn(|i| {
+                PackedGoldilocksWasmSimd128([
+                    Goldilocks::new((i as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ 0x1234),
+                    Goldilocks::new((i as u64).wrapping_mul(0xBF58476D1CE4E5B9) ^ 0x5678),
+                ])
+            });
+            let coeffs: [Goldilocks; $len] = core::array::from_fn(|i| {
+                Goldilocks::new((i as u64).wrapping_mul(0x94D049BB133111EB) ^ 0x9abc)
+            });
+
+            macro_rules! bench_chunk {
+                ($chunk:literal) => {{
+                    let mut acc = PackedGoldilocksWasmSimd128::ZERO;
+                    let t0 = Instant::now();
+                    for _ in 0..M {
+                        acc += chunked_linear_combination::<
+                            $chunk,
+                            PackedGoldilocksWasmSimd128,
+                            Goldilocks,
+                        >(black_box(&values), black_box(&coeffs));
+                    }
+                    let dt = t0.elapsed().as_nanos();
+                    let _ = black_box(acc);
+                    report(concat!("batched_lc_len", $len, "_chunk", $chunk), M, dt);
+                }};
+            }
+
+            bench_chunk!(1);
+            bench_chunk!(2);
+            bench_chunk!(4);
+            bench_chunk!(8);
+            bench_chunk!(16);
+            bench_chunk!(32);
+            bench_chunk!(64);
+        }};
+    }
+
+    bench_len!(8);
+    bench_len!(16);
+    bench_len!(33);
+    bench_len!(64);
+    bench_len!(256);
+}
+
+/// Compares the specialized `Poseidon2ExternalLayerGoldilocksWasmSimd128`/
+/// `Poseidon2InternalLayerGoldilocksWasmSimd128` layers (pre-broadcast round constants,
+/// batched S-box, split lane-sum) against the generic `Algebra<Goldilocks>` fallback path
+/// (crate-root `Poseidon2ExternalLayerGoldilocks`/`Poseidon2InternalLayerGoldilocks`, which
+/// re-broadcasts every round constant from scalar on every call), for the same round
+/// constants, applied to a packed wasm32 state.
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn bench_poseidon2() {
+    use core::hint::black_box;
+    use std::time::Instant;
+
+    use p3_goldilocks::{
+        Goldilocks, PackedGoldilocksWasmSimd128, Poseidon2ExternalLayerGoldilocks,
+        Poseidon2InternalLayerGoldilocks, default_goldilocks_poseidon2_8,
+        default_goldilocks_poseidon2_12, default_goldilocks_poseidon2_16,
+    };
+    use p3_poseidon2::Poseidon2;
+    use p3_symmetric::Permutation;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    const M: u64 = 100_000;
+
+    fn report(name: &str, n: u64, elapsed_ns: u128) {
+        let per_op = elapsed_ns as f64 / n as f64;
+        println!("{name:>24}: {per_op:>8.2} ns/op   ({n} ops in {elapsed_ns} ns)");
+    }
+
+    fn make_state<const WIDTH: usize>(rng: &mut SmallRng) -> [PackedGoldilocksWasmSimd128; WIDTH] {
+        core::array::from_fn(|_| PackedGoldilocksWasmSimd128([rng.random(), rng.random()]))
+    }
+
+    macro_rules! bench_width {
+        ($width:literal, $specialized:expr, $generic:expr) => {{
+            let mut rng = SmallRng::seed_from_u64(3);
+            let specialized = $specialized;
+            let generic = $generic;
+
+            {
+                let mut state = make_state::<$width>(&mut rng);
+                let t0 = Instant::now();
+                for _ in 0..M {
+                    specialized.permute_mut(black_box(&mut state));
+                }
+                let dt = t0.elapsed().as_nanos();
+                let _ = black_box(&state);
+                report(concat!("poseidon2_", $width, "_specialized"), M, dt);
+            }
+
+            {
+                let mut state = make_state::<$width>(&mut rng);
+                let t0 = Instant::now();
+                for _ in 0..M {
+                    generic.permute_mut(black_box(&mut state));
+                }
+                let dt = t0.elapsed().as_nanos();
+                let _ = black_box(&state);
+                report(concat!("poseidon2_", $width, "_generic"), M, dt);
+            }
+        }};
+    }
+
+    bench_width!(
+        8,
+        default_goldilocks_poseidon2_8(),
+        Poseidon2::<
+            Goldilocks,
+            Poseidon2ExternalLayerGoldilocks<8>,
+            Poseidon2InternalLayerGoldilocks,
+            8,
+            7,
+        >::new_from_rng(8, 22, &mut SmallRng::seed_from_u64(99))
+    );
+    bench_width!(
+        12,
+        default_goldilocks_poseidon2_12(),
+        Poseidon2::<
+            Goldilocks,
+            Poseidon2ExternalLayerGoldilocks<12>,
+            Poseidon2InternalLayerGoldilocks,
+            12,
+            7,
+        >::new_from_rng(8, 22, &mut SmallRng::seed_from_u64(99))
+    );
+    bench_width!(
+        16,
+        default_goldilocks_poseidon2_16(),
+        Poseidon2::<
+            Goldilocks,
+            Poseidon2ExternalLayerGoldilocks<16>,
+            Poseidon2InternalLayerGoldilocks,
+            16,
+            7,
+        >::new_from_rng(8, 22, &mut SmallRng::seed_from_u64(99))
+    );
 }

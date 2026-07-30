@@ -30,7 +30,10 @@ serde = { workspace = true, features = ["derive"] }
 spin.workspace = true
 
 [dev-dependencies]
+p3-commit = { path = "../commit" }
 p3-field-testing = { path = "../field-testing" }
+p3-matrix = { path = "../matrix" }
+p3-merkle-tree = { path = "../merkle-tree" }
 
 proptest.workspace = true
 rand.workspace = true

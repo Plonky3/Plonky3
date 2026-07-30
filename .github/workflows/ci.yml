@@ -179,6 +179,8 @@ jobs:
         run: cargo run --release --target ${{ env.run_target }} --bin wasm_smoke -p p3-goldilocks
       - name: Run wasm_bench under wasmtime
         run: cargo run --release --target ${{ env.run_target }} --bin wasm_bench -p p3-goldilocks
+      - name: Run wasm_merkle_bench under wasmtime
+        run: cargo run --release --target ${{ env.run_target }} --example wasm_merkle_bench -p p3-goldilocks
 
   lint:
     name: Formatting and Clippy
