@@ -67,6 +67,75 @@ pub struct Poly<F, S = Vec<F>>(pub(crate) S, PhantomData<F>);
 /// Borrowed view of a multilinear polynomial's evaluation table.
 pub type PolyView<'a, F> = Poly<F, &'a [F]>;
 
+/// An extension-field polynomial stored either as scalar evaluations or in SIMD-packed form.
+///
+/// The two variants represent the same logical object. In the packed variant, the last
+/// `log2(F::Packing::WIDTH)` Boolean variables live inside the SIMD lanes, so the backing
+/// [`Poly`] has that many fewer stored variables. The accessors on this enum always report the
+/// logical size rather than the backing-vector size.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum PolyMaybePacked<F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// One extension-field element per Boolean-hypercube evaluation.
+    Scalar(Poly<EF>),
+    /// `F::Packing::WIDTH` consecutive evaluations per packed extension-field element.
+    Packed(Poly<EF::ExtensionPacking>),
+}
+
+impl<F, EF> PolyMaybePacked<F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Number of variables in the represented multilinear polynomial.
+    #[inline]
+    pub fn num_variables(&self) -> usize {
+        match self {
+            Self::Scalar(poly) => poly.num_variables(),
+            Self::Packed(poly) => poly.num_variables() + log2_strict_usize(F::Packing::WIDTH),
+        }
+    }
+
+    /// Number of logical scalar evaluations represented by the backing storage.
+    #[inline]
+    pub fn num_evals(&self) -> usize {
+        1 << self.num_variables()
+    }
+
+    /// Convert to scalar storage, unpacking SIMD lanes only when necessary.
+    #[inline]
+    pub fn unpack(self) -> Poly<EF> {
+        match self {
+            Self::Scalar(poly) => poly,
+            Self::Packed(poly) => poly.unpack::<F, EF>(),
+        }
+    }
+
+    /// Evaluate the represented polynomial without changing its storage format.
+    #[inline]
+    pub fn eval(&self, point: &Point<EF>) -> EF {
+        assert_eq!(self.num_variables(), point.num_variables());
+        match self {
+            Self::Scalar(poly) => poly.eval_ext::<F>(point),
+            Self::Packed(poly) => poly.eval_packed::<F, EF>(point),
+        }
+    }
+}
+
+impl<F, EF> From<Poly<EF>> for PolyMaybePacked<F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    #[inline]
+    fn from(poly: Poly<EF>) -> Self {
+        Self::Scalar(poly)
+    }
+}
+
 impl<F, S> Poly<F, S>
 where
     S: Borrow<[F]>,

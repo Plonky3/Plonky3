@@ -3,14 +3,16 @@
 use alloc::vec::Vec;
 use core::fmt::Debug;
 
-use p3_air::{Air, BaseAir, SymbolicAirBuilder};
+use p3_air::{Air, BaseAir};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
+use p3_field::PrimeField;
 use p3_sumcheck::PrescribedPointPcs;
 use thiserror::Error;
 
 use crate::VerifierInstances;
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
-use crate::folder::MultilinearFolder;
+use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
+use crate::lookup::{LookupError, verify_lookup};
 use crate::opening::TableOpening;
 use crate::proof::MultiStarkProof;
 use crate::zerocheck::{AirZerocheck, ZerocheckError};
@@ -24,6 +26,9 @@ where
     /// The zerocheck reduction or its closing constraint check failed.
     #[error("zerocheck: {0}")]
     Zerocheck(ZerocheckError),
+    /// The lookup proof is absent, malformed, or carries a nonzero LogUp sum.
+    #[error("lookup: {0}")]
+    Lookup(LookupError),
     /// The commitment opening failed to verify.
     #[error("opening: {0:?}")]
     Opening(E),
@@ -50,11 +55,12 @@ where
 /// ```text
 ///     1. absorb batched preprocessed commitment (if any)
 ///     2. absorb main commitment
-///     3. verify zerocheck sumcheck -> common bound point r, reduced sum
-///     4. open main tables at r     -> main values bound to the main commitment
-///     5. open preprocessed tables at r (if any)
+///     3. verify fractional GKR     -> lookup terminal claims (if needed)
+///     4. verify zerocheck sumcheck -> common bound point r, reduced sum
+///     5. open main tables at r     -> main values bound to the main commitment
+///     6. open preprocessed tables at r (if any)
 ///                                  -> values bound to the preprocessed commitment
-///     6. recompute g at r          -> match the reduced sum
+///     7. recompute g at r          -> match the reduced sum
 /// ```
 ///
 /// Each AIR instance is evaluated at the suffix of the common point matching its
@@ -98,6 +104,7 @@ pub fn verify<'a, C, A>(
 ) -> Result<(), VerificationError<PcsError<C>>>
 where
     C: MultiStarkConfig,
+    C::Val: PrimeField,
     C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
     C::Challenger: FieldChallenger<C::Val>
         + GrindingChallenger<Witness = C::Val>
@@ -105,7 +112,8 @@ where
         + CanObserve<Commitment<C>>,
     Commitment<C>: Clone,
     A: for<'b> Air<MultilinearFolder<'b, C::Val, C::Challenge, C::Challenge>>
-        + Air<SymbolicAirBuilder<C::Val, C::Challenge>>
+        + for<'b> Air<InteractionMultilinearFolder<'b, C::Val, C::Challenge, C::Challenge>>
+        + Air<p3_lookup::InteractionSymbolicBuilder<C::Val, C::Challenge>>
         + BaseAir<C::Val>,
 {
     assert!(!instances.is_empty());
@@ -137,22 +145,38 @@ where
     // 2. Absorb the main commitment, matching the prover's commit phase.
     challenger.observe(proof.commitment.clone());
 
-    // 3. Verify the batched zerocheck sumcheck, yielding the common bound point
-    // and the reduced sum.
+    // 3. Verify the fractional-GKR lookup phase. Its plan and terminal claims
+    // will feed the coupled AIR sumcheck next.
     let airs = instances.airs();
     let log_heights = instances.num_variables();
     let public_values = instances.public_values();
+    // Match the prover's single statement-level public-value observation before
+    // either lookup or zerocheck samples a challenge.
+    for values in &public_values {
+        challenger.observe_algebra_slice(values);
+    }
+    let lookup = verify_lookup::<C::Val, C::Challenge, A, _>(
+        &airs,
+        &log_heights,
+        proof.lookup.as_ref(),
+        challenger,
+    )
+    .map_err(VerificationError::Lookup)?;
+
+    // 4. Verify the batched zerocheck sumcheck, yielding the common bound point
+    // and the reduced sum.
     let zerocheck = AirZerocheck::new(&airs, pow_bits);
     let reduction = zerocheck
-        .verify_reduction::<C::Val, C::Challenge, _>(
+        .verify_reduction_with_lookup::<C::Val, C::Challenge, _>(
             &proof.sumcheck,
             &log_heights,
             &public_values,
+            lookup.as_ref(),
             challenger,
         )
         .map_err(VerificationError::Zerocheck)?;
 
-    // 4. Open the committed main trace tables at their suffixes of the bound
+    // 5. Open the committed main trace tables at their suffixes of the bound
     // point. The returned values are bound to the main commitment.
     let main_evals = config
         .pcs()
@@ -165,7 +189,7 @@ where
         )
         .map_err(VerificationError::Opening)?;
 
-    // 5. Open the preprocessed tables at their suffixes of the same bound point.
+    // 6. Open the preprocessed tables at their suffixes of the same bound point.
     // The owned batches are kept local so the closing check can borrow them.
     let preprocessed_evals = if let Some(preprocessed_commitment) = preprocessed_commitment {
         let opening = proof
@@ -222,15 +246,16 @@ where
         })
         .collect::<Vec<_>>();
 
-    // 6. Close the zerocheck: recompute g from commitment-bound values and match
+    // 7. Close the zerocheck: recompute g from commitment-bound values and match
     // the reduced sum.
     zerocheck
-        .check_constraint(
+        .check_constraint_with_lookup(
             &reduction,
             &main_openings,
             &preprocessed_openings,
             &log_heights,
             &public_values,
+            lookup.as_ref(),
         )
         .map_err(VerificationError::Zerocheck)
 }
