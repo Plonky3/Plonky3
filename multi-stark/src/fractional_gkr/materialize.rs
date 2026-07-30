@@ -15,7 +15,7 @@ use crate::lookup::LookupPlan;
 use crate::selectors::BoundaryEvals;
 
 /// Base-field context used to resolve only the symbolic expressions retained
-/// by [`Lookups::from_air`].
+/// by [`p3_lookup::Lookups::from_air`].
 struct LookupRowEvaluator<'row, F, Var> {
     main_window: RowWindow<'row, Var>,
     preprocessed_window: RowWindow<'row, Var>,

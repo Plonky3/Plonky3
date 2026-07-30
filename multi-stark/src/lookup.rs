@@ -639,6 +639,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use alloc::borrow::Cow;
     use alloc::vec;
 
@@ -825,13 +827,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "lookup-active AIR trace height must be at least the field packing width"
-    )]
     fn lookup_plan_rejects_trace_shorter_than_packing_width() {
-        let air = BalancedLookupAir;
         let packing_variables = log2_strict_usize(<F as Field>::Packing::WIDTH);
-        let _ = LookupPlan::build::<EF, _>(&[&air], &[packing_variables - 1]);
+        if packing_variables == 0 {
+            // Scalar packing has width one, so no nonempty trace can be shorter.
+            return;
+        }
+
+        let air = BalancedLookupAir;
+        assert!(
+            std::panic::catch_unwind(|| {
+                LookupPlan::build::<EF, _>(&[&air], &[packing_variables - 1])
+            })
+            .is_err()
+        );
     }
 
     #[test]
