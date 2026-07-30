@@ -87,6 +87,7 @@ where
 ///
 /// Panics if the instance list is empty.
 /// Panics if the verifier instances do not all use the same verifying key.
+/// Panics if the preprocessed key width disagrees with the AIR's declared preprocessed width.
 #[tracing::instrument(skip_all)]
 pub fn verify<'a, C, A>(
     config: &C,

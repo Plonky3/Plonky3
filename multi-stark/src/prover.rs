@@ -47,10 +47,14 @@ use crate::zerocheck::AirZerocheck;
 ///
 /// # Panics
 ///
-/// Panics if the instance list is empty.
-/// Panics if any trace arity is below the commitment scheme's padding floor.
-/// Panics if the prover instances do not all use the same proving key.
-/// Panics if an AIR declares preprocessed columns but the proving key has none.
+/// - The instance list must not be empty.
+/// - The trace width must match the AIR width.
+/// - The trace arity must meet the commitment scheme's padding floor.
+/// - This keeps the committed successor view in the same frame as zerocheck.
+/// - The prover instances must all use the same proving key.
+/// - The preprocessed key width must match the AIR's declared preprocessed width.
+/// - A preprocessed key, when present, must have the same height as the main trace.
+/// - A periodic column's period must be a power of two dividing the trace height.
 #[tracing::instrument(skip_all)]
 pub fn prove<'a, C, A>(
     config: &C,

@@ -1,32 +1,24 @@
 //! End-to-end lookup benchmark harness.
 //!
-//! Drives a parametric lookup workload through the full batch-STARK pipeline.
+//! Drives parametric lookup workloads through the full batch-STARK pipeline.
 //!
 //! Reports the numbers a lookup-layer change actually moves:
 //!
 //!     prove time       criterion-timed
 //!     verify time      criterion-timed
-//!     aux columns      committed permutation columns (the packing target)
+//!     aux columns      committed permutation columns (the layout target)
 //!     proof size       serialized bytes
 //!     peak heap        high-water bytes during one prove
 //!
-//! The workload is one balanced lookup AIR with these knobs:
+//! Two workload families exercise the two ways lookups fold into columns:
 //!
-//!     n_interactions   query/provide pairs, all on one shared bus
-//!     tuple_width      field elements per message
-//!     base_degree      degree of an optional base constraint, or 0 for none
-//!     active_period    one active row every `active_period` rows (row-sparsity)
-//!     n_airs           identical instances proven in one batch
+//!     same-bus    co-firing interactions summed into a column; degree grows with the fold
+//!     exclusive   one-of-N branches multiplexed into a column; degree stays flat
 //!
-//! Every case is measured twice, with same-bus packing on and off:
+//! Each case is measured as a pair of layout variants, so the win reads off the pair:
 //!
-//!     base_degree 0  → no spare budget → packing folds nothing → both rows match
-//!     base_degree d  → spare budget    → packing folds → fewer columns, less cost
-//!
-//! So the table proves the two claims side by side:
-//!
-//!     no-budget rows identical  → packing never regresses
-//!     budget rows packed lower  → packing is a strict win
+//!     same-bus    packed    vs unpacked     (folding on vs one column per interaction)
+//!     exclusive   exclusive vs additive     (the selector multiplex vs one column per branch)
 //!
 //! Running it:
 //!
@@ -128,7 +120,7 @@ fn disarm_heap() -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Workload: a balanced same-bus lookup AIR
+// Workload AIRs
 // ---------------------------------------------------------------------------
 
 /// The single bus every interaction speaks on.
@@ -136,14 +128,15 @@ fn disarm_heap() -> usize {
 /// One shared bus lets the packer fold interactions into common columns.
 const SHARED_BUS: LookupBus<'static> = LookupBus::new("shared");
 
-/// A balanced lookup AIR with a tunable base-constraint degree.
+/// A balanced same-bus lookup AIR with a tunable base-constraint degree.
 ///
 /// - Every slot queries a key and provides the same key on the shared bus.
 /// - Query and provide cancel, so any trace balances to a zero terminal.
+/// - All slots fire together on an active row, so they are summed, not multiplexed.
 /// - An optional degree-`base_degree` constraint sets the spare quotient budget.
 /// - That budget is exactly what the same-bus packer folds into.
 #[derive(Clone, Copy)]
-struct LookupLoadAir {
+struct SameBusAir {
     /// Query/provide pairs the AIR declares, all on the shared bus.
     n_interactions: usize,
     /// Field elements per message.
@@ -152,7 +145,7 @@ struct LookupLoadAir {
     base_degree: usize,
 }
 
-impl LookupLoadAir {
+impl SameBusAir {
     /// Main-trace columns per interaction: the key plus one selector.
     const fn stride(&self) -> usize {
         self.tuple_width + 1
@@ -169,14 +162,14 @@ impl LookupLoadAir {
     }
 }
 
-impl<F: Field> BaseAir<F> for LookupLoadAir {
+impl<F: Field> BaseAir<F> for SameBusAir {
     fn width(&self) -> usize {
         // Per-interaction columns, then the optional two-column witness.
         self.n_interactions * self.stride() + if self.has_base() { 2 } else { 0 }
     }
 }
 
-impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for LookupLoadAir {
+impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for SameBusAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let local = main.current_slice();
@@ -212,9 +205,131 @@ impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for LookupLoadAir {
     }
 }
 
+/// A balanced one-of-N lookup AIR, emitted with or without the exclusive layout.
+///
+/// - One selector flag per branch, exactly one active per row.
+/// - Each branch queries its key and provides the same key, so the bus balances.
+/// - Exclusive layout: two columns, one for the query side, one for the provide.
+/// - Additive layout: one column per branch per side, so `2 * n_branches` in total.
+///
+/// Both layouts compute the same per-row bus contribution.
+/// They differ only in how many auxiliary columns carry it.
+#[derive(Clone, Copy)]
+struct ExclusiveAir {
+    /// Mutually-exclusive branches the AIR declares.
+    n_branches: usize,
+    /// Whether to use the exclusive layout or the per-branch baseline.
+    exclusive: bool,
+}
+
+impl<F: Field> BaseAir<F> for ExclusiveAir {
+    fn width(&self) -> usize {
+        // Layout per row: n_branches flags, then n_branches width-1 keys.
+        2 * self.n_branches
+    }
+}
+
+impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for ExclusiveAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice();
+        let m = self.n_branches;
+
+        // Selector flags are boolean in both layouts.
+        for &flag in &local[..m] {
+            let f: AB::Expr = flag.into();
+            builder.assert_zero(f.clone() * (f - AB::Expr::ONE));
+        }
+
+        if self.exclusive {
+            // Exclusivity obligation: at most one flag fires per row.
+            // A boolean sum of booleans is `0` or `1`, so this pins "at most one".
+            let mut sum: AB::Expr = AB::Expr::ZERO;
+            for &flag in &local[..m] {
+                sum += flag.into();
+            }
+            builder.assert_zero(sum.clone() * (sum - AB::Expr::ONE));
+
+            // One exclusive column queries the active branch's key.
+            let query: Vec<(AB::Expr, Vec<AB::Expr>)> = (0..m)
+                .map(|k| (local[k].into(), vec![local[m + k].into()]))
+                .collect();
+            SHARED_BUS.lookup_key_exclusive(builder, query);
+
+            // One exclusive column provides the same active key, multiplicity -1.
+            builder.push_exclusive_interaction(
+                SHARED_BUS.name(),
+                (0..m).map(|k| {
+                    (
+                        local[k].into(),
+                        Count::provided(-AB::Expr::ONE),
+                        vec![local[m + k].into()],
+                    )
+                }),
+            );
+        } else {
+            // Baseline: one gated query column and one provide column per branch.
+            for k in 0..m {
+                let key = vec![local[m + k].into()];
+                let flag = local[k];
+                SHARED_BUS.lookup_key(builder, key.clone(), Count::bounded(flag.into(), 1));
+                SHARED_BUS.table_entry(builder, key, flag.into());
+            }
+        }
+    }
+}
+
+/// The workload AIRs the harness can prove, behind one monomorphic type.
+///
+/// A single type lets every case flow through one measure, report, and timing path.
+#[derive(Clone, Copy)]
+enum BenchAir {
+    /// Co-firing same-bus interactions, summed into folded columns.
+    SameBus(SameBusAir),
+    /// One-of-N branches, in either the exclusive or the per-branch layout.
+    Exclusive(ExclusiveAir),
+}
+
+impl<F: Field> BaseAir<F> for BenchAir {
+    fn width(&self) -> usize {
+        match self {
+            Self::SameBus(a) => BaseAir::<F>::width(a),
+            Self::Exclusive(a) => BaseAir::<F>::width(a),
+        }
+    }
+}
+
+impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for BenchAir {
+    fn eval(&self, builder: &mut AB) {
+        match self {
+            Self::SameBus(a) => a.eval(builder),
+            Self::Exclusive(a) => a.eval(builder),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Configuration matrix
 // ---------------------------------------------------------------------------
+
+/// Which workload family a case exercises, with its shape knobs.
+#[derive(Clone, Copy)]
+enum Workload {
+    /// Co-firing interactions on the shared bus; the packer may fold them.
+    SameBus {
+        /// Query/provide pairs the AIR declares.
+        n_interactions: usize,
+        /// Field elements per message.
+        tuple_width: usize,
+        /// Degree of the base constraint, or 0 for none.
+        base_degree: usize,
+    },
+    /// Mutually-exclusive branches; one fires per row.
+    Exclusive {
+        /// Branches folded into a single column by the exclusive layout.
+        n_branches: usize,
+    },
+}
 
 /// One benchmark point.
 #[derive(Clone, Copy)]
@@ -223,20 +338,16 @@ struct Case {
     name: &'static str,
     /// log2 of the trace height.
     log_height: usize,
-    /// Query/provide pairs the AIR declares.
-    n_interactions: usize,
-    /// Field elements per message.
-    tuple_width: usize,
-    /// Degree of the base constraint, or 0 for none.
-    base_degree: usize,
-    /// One active row every `active_period` rows.
+    /// Workload family and its shape.
+    workload: Workload,
+    /// One active row every `active_period` rows; applies to the same-bus family only.
     active_period: usize,
     /// Number of identical AIR instances in the batch.
     n_airs: usize,
 }
 
-/// Terse case constructor so the sweep below stays readable.
-const fn case(
+/// Same-bus case constructor.
+const fn same_bus(
     name: &'static str,
     log_height: usize,
     n_interactions: usize,
@@ -248,43 +359,132 @@ const fn case(
     Case {
         name,
         log_height,
-        n_interactions,
-        tuple_width,
-        base_degree,
+        workload: Workload::SameBus {
+            n_interactions,
+            tuple_width,
+            base_degree,
+        },
         active_period,
         n_airs,
     }
 }
 
+/// Exclusive case constructor.
+const fn exclusive(name: &'static str, log_height: usize, n_branches: usize) -> Case {
+    Case {
+        name,
+        log_height,
+        workload: Workload::Exclusive { n_branches },
+        active_period: 1,
+        n_airs: 1,
+    }
+}
+
 /// The default sweep, grouped by the axis each block isolates.
 ///
-/// Columns are: name, logH, n, tuple_width, base_degree, active_period, n_airs.
 /// Comment out blocks to shorten a local run.
 const CASES: &[Case] = &[
     // Smoke point: tiny, validates the pipeline fast.
-    case("smoke", 8, 1, 1, 0, 1, 1),
+    same_bus("smoke", 8, 1, 1, 0, 1, 1),
     // Interaction count: cost as a function of #lookups, one column each.
-    case("n=1", 14, 1, 1, 0, 1, 1),
-    case("n=4", 14, 4, 1, 0, 1, 1),
-    case("n=8", 14, 8, 1, 0, 1, 1),
-    case("n=16", 14, 16, 1, 0, 1, 1),
+    same_bus("n=1", 14, 1, 1, 0, 1, 1),
+    same_bus("n=4", 14, 4, 1, 0, 1, 1),
+    same_bus("n=8", 14, 8, 1, 0, 1, 1),
+    same_bus("n=16", 14, 16, 1, 0, 1, 1),
     // Tuple width: wider messages, same per-lookup degree.
-    case("tw=2", 14, 4, 2, 0, 1, 1),
-    case("tw=4", 14, 4, 4, 0, 1, 1),
+    same_bus("tw=2", 14, 4, 2, 0, 1, 1),
+    same_bus("tw=4", 14, 4, 4, 0, 1, 1),
     // Row-sparsity: fraction of active rows. Baseline cost is sparsity-blind today.
-    case("period=4", 14, 4, 1, 0, 4, 1),
-    case("period=16", 14, 4, 1, 0, 16, 1),
+    same_bus("period=4", 14, 4, 1, 0, 4, 1),
+    same_bus("period=16", 14, 4, 1, 0, 16, 1),
     // Batch size: several identical instances proven together.
-    case("airs=4", 14, 4, 1, 0, 1, 4),
+    same_bus("airs=4", 14, 4, 1, 0, 1, 4),
     // Spare budget: a degree-3 base constraint lets the packer fold two per column.
     // The benchmark FRI uses log-blowup 1, capping the quotient at degree 3.
     // So degree 3 is the deepest packing this config can show.
-    case("deg3_n=8", 14, 8, 1, 3, 1, 1),
-    case("deg3_n=16", 14, 16, 1, 3, 1, 1),
+    same_bus("deg3_n=8", 14, 8, 1, 3, 1, 1),
+    same_bus("deg3_n=16", 14, 16, 1, 3, 1, 1),
+    // Exclusivity: one-of-N per row collapses to a single column, flat degree.
+    exclusive("excl_n=8", 16, 8),
+    exclusive("excl_n=16", 16, 16),
+    exclusive("excl_n=32", 16, 32),
     // Heavy points at log_height 18: comment these out for a faster bench.
-    case("n=32_h18", 18, 32, 1, 0, 1, 1),
-    case("deg3_n=32_h18", 18, 32, 1, 3, 1, 1),
+    same_bus("n=32_h18", 18, 32, 1, 0, 1, 1),
+    same_bus("deg3_n=32_h18", 18, 32, 1, 3, 1, 1),
 ];
+
+// ---------------------------------------------------------------------------
+// Layout variants
+// ---------------------------------------------------------------------------
+
+/// One layout to prove for a case, plus how to measure it.
+struct Variant {
+    /// Label shown next to the case name.
+    label: &'static str,
+    /// The AIR description for this layout.
+    air: BenchAir,
+    /// Whether to overwrite the folded layout with one column per interaction.
+    force_unpacked: bool,
+    /// Whether to also run the criterion timing for this variant.
+    criterion: bool,
+}
+
+/// The pair of layouts a case is compared across.
+///
+/// - Same-bus: the folded layout against one column per interaction.
+/// - Exclusive: the selector multiplex against one column per branch.
+fn variants(case: &Case) -> Vec<Variant> {
+    match case.workload {
+        Workload::SameBus {
+            n_interactions,
+            tuple_width,
+            base_degree,
+        } => {
+            let air = BenchAir::SameBus(SameBusAir {
+                n_interactions,
+                tuple_width,
+                base_degree,
+            });
+            // The unpacked layout differs from the packed one only with spare budget.
+            // Without a base constraint the packer folds nothing, so the rows match.
+            let time_unpacked = base_degree >= 2;
+            vec![
+                Variant {
+                    label: "packed",
+                    air,
+                    force_unpacked: false,
+                    criterion: true,
+                },
+                Variant {
+                    label: "unpacked",
+                    air,
+                    force_unpacked: true,
+                    criterion: time_unpacked,
+                },
+            ]
+        }
+        Workload::Exclusive { n_branches } => vec![
+            Variant {
+                label: "exclusive",
+                air: BenchAir::Exclusive(ExclusiveAir {
+                    n_branches,
+                    exclusive: true,
+                }),
+                force_unpacked: false,
+                criterion: true,
+            },
+            Variant {
+                label: "additive",
+                air: BenchAir::Exclusive(ExclusiveAir {
+                    n_branches,
+                    exclusive: false,
+                }),
+                force_unpacked: false,
+                criterion: true,
+            },
+        ],
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Setup helpers
@@ -306,58 +506,86 @@ fn make_config() -> MyConfig {
     StarkConfig::new(pcs, challenger)
 }
 
-/// Build the AIRs, traces, and (empty) public values for one case.
-fn build_workload(case: &Case) -> (Vec<LookupLoadAir>, Vec<RowMajorMatrix<Val>>, Vec<Vec<Val>>) {
-    let air = LookupLoadAir {
-        n_interactions: case.n_interactions,
-        tuple_width: case.tuple_width,
-        base_degree: case.base_degree,
-    };
-
+/// Build the single-instance trace for a case.
+fn build_case_trace(case: &Case) -> RowMajorMatrix<Val> {
     let height = 1 << case.log_height;
-    let width = <LookupLoadAir as BaseAir<Val>>::width(&air);
-    let witness = air.witness_offset();
     let mut rng = SmallRng::seed_from_u64(0xD1CE_F00D);
 
-    let mut values = Val::zero_vec(height * width);
-    for r in 0..height {
-        let base = r * width;
-        // A row is active once every `active_period` rows.
-        let active = r % case.active_period == 0;
+    match case.workload {
+        Workload::SameBus {
+            n_interactions,
+            tuple_width,
+            base_degree,
+        } => {
+            let air = SameBusAir {
+                n_interactions,
+                tuple_width,
+                base_degree,
+            };
+            let width = <SameBusAir as BaseAir<Val>>::width(&air);
+            let witness = air.witness_offset();
 
-        // Keys are arbitrary: query and provide cancel whatever the key holds.
-        for i in 0..case.n_interactions {
-            let off = base + i * (case.tuple_width + 1);
-            for j in 0..case.tuple_width {
-                values[off + j] = Val::from_u32(rng.random());
+            let mut values = Val::zero_vec(height * width);
+            for r in 0..height {
+                let base = r * width;
+                // A row is active once every `active_period` rows.
+                let active = r % case.active_period == 0;
+
+                // Keys are arbitrary: query and provide cancel whatever the key holds.
+                for i in 0..n_interactions {
+                    let off = base + i * (tuple_width + 1);
+                    for j in 0..tuple_width {
+                        values[off + j] = Val::from_u32(rng.random());
+                    }
+                    // Selector gates both sides, so inactive rows contribute nothing.
+                    values[off + tuple_width] = if active { Val::ONE } else { Val::ZERO };
+                }
+
+                // Witness pair satisfies the base constraint: y = w^base_degree.
+                if air.has_base() {
+                    let w = Val::from_u32(rng.random());
+                    values[base + witness] = w;
+                    values[base + witness + 1] = w.exp_u64(base_degree as u64);
+                }
             }
-            // Selector gates both sides, so inactive rows contribute nothing.
-            values[off + case.tuple_width] = if active { Val::ONE } else { Val::ZERO };
+            RowMajorMatrix::new(values, width)
         }
+        Workload::Exclusive { n_branches } => {
+            let width = 2 * n_branches;
 
-        // Witness pair satisfies the base constraint: y = w^base_degree.
-        if air.has_base() {
-            let w = Val::from_u32(rng.random());
-            values[base + witness] = w;
-            values[base + witness + 1] = w.exp_u64(case.base_degree as u64);
+            let mut values = Val::zero_vec(height * width);
+            for r in 0..height {
+                let base = r * width;
+                // Random keys: a query and its provide cancel whatever the key holds.
+                for k in 0..n_branches {
+                    values[base + n_branches + k] = Val::from_u32(rng.random());
+                }
+                // Exactly one flag fires, satisfying the boolean and at-most-one rules.
+                values[base + r % n_branches] = Val::ONE;
+            }
+            RowMajorMatrix::new(values, width)
         }
     }
+}
 
-    let trace = RowMajorMatrix::new(values, width);
-
-    // Replicate the same instance to fill the batch.
+/// Replicate one instance into a full batch of `n_airs` identical instances.
+fn build_batch(
+    case: &Case,
+    air: BenchAir,
+) -> (Vec<BenchAir>, Vec<RowMajorMatrix<Val>>, Vec<Vec<Val>>) {
+    let trace = build_case_trace(case);
     let airs = vec![air; case.n_airs];
-    let traces = (0..case.n_airs).map(|_| trace.clone()).collect();
+    let traces = vec![trace; case.n_airs];
     let public_values = vec![Vec::new(); case.n_airs];
     (airs, traces, public_values)
 }
 
 /// Bundle parallel slices into prover instances.
 fn make_instances<'a>(
-    airs: &'a [LookupLoadAir],
+    airs: &'a [BenchAir],
     traces: &'a [RowMajorMatrix<Val>],
     public_values: &[Vec<Val>],
-) -> Vec<StarkInstance<'a, MyConfig, LookupLoadAir>> {
+) -> Vec<StarkInstance<'a, MyConfig, BenchAir>> {
     airs.iter()
         .zip(traces)
         .zip(public_values)
@@ -386,7 +614,7 @@ fn aux_columns(prover_data: &ProverData<MyConfig>) -> usize {
 ///
 /// The default path folds same-bus interactions; this overwrites that decision
 /// with the straight-from-the-AIR lookups, so a caller can measure both layouts.
-fn force_unpacked(prover_data: &mut ProverData<MyConfig>, airs: &[LookupLoadAir]) {
+fn force_unpacked(prover_data: &mut ProverData<MyConfig>, airs: &[BenchAir]) {
     prover_data.common.lookups = airs
         .iter()
         .map(Lookups::<Val>::from_air::<Challenge, _>)
@@ -406,16 +634,12 @@ struct Metrics {
     verify_ms: f64,
 }
 
-/// Run one case once, packed or unpacked, checking correctness and collecting metrics.
-///
-/// - `packed = true` keeps the default folded layout.
-/// - `packed = false` rebuilds one column per interaction.
-/// - The two differ only in the aux-trace layout, isolating the packer's effect.
-fn measure(config: &MyConfig, case: &Case, packed: bool) -> Metrics {
-    let (airs, traces, public_values) = build_workload(case);
+/// Prove and verify one variant once, checking correctness and collecting metrics.
+fn measure(config: &MyConfig, case: &Case, variant: &Variant) -> Metrics {
+    let (airs, traces, public_values) = build_batch(case, variant.air);
     let instances = make_instances(&airs, &traces, &public_values);
     let mut prover_data = ProverData::from_instances(config, &instances);
-    if !packed {
+    if variant.force_unpacked {
         force_unpacked(&mut prover_data, &airs);
     }
 
@@ -452,40 +676,22 @@ fn measure(config: &MyConfig, case: &Case, packed: bool) -> Metrics {
 
 /// Print the full metrics table once, before criterion timing.
 ///
-/// Each case prints two rows, packed and unpacked, so the no-regression and the
-/// win read straight off the pairs.
+/// Each case prints its two variants, so the win reads straight off the pair.
 fn print_report(config: &MyConfig) {
     eprintln!();
-    eprintln!("lookup end-to-end metrics (each case packed and unpacked)");
+    eprintln!("lookup end-to-end metrics (each case as a pair of layout variants)");
     eprintln!(
-        "{:<14} {:>5} {:>4} {:>4} {:>4} {:>7} {:>5} {:>7} {:>8} {:>10} {:>9} {:>9} {:>10}",
-        "case",
-        "logH",
-        "n",
-        "tw",
-        "deg",
-        "period",
-        "airs",
-        "packed",
-        "aux_cols",
-        "proof(KB)",
-        "peak(MB)",
-        "prove(ms)",
-        "verify(ms)",
+        "{:<16} {:>5} {:>10} {:>8} {:>10} {:>9} {:>9} {:>10}",
+        "case", "logH", "variant", "aux_cols", "proof(KB)", "peak(MB)", "prove(ms)", "verify(ms)",
     );
     for case in CASES {
-        for packed in [false, true] {
-            let m = measure(config, case, packed);
+        for variant in variants(case) {
+            let m = measure(config, case, &variant);
             eprintln!(
-                "{:<14} {:>5} {:>4} {:>4} {:>4} {:>7} {:>5} {:>7} {:>8} {:>10.1} {:>9.1} {:>9.1} {:>10.2}",
+                "{:<16} {:>5} {:>10} {:>8} {:>10.1} {:>9.1} {:>9.1} {:>10.2}",
                 case.name,
                 case.log_height,
-                case.n_interactions,
-                case.tuple_width,
-                case.base_degree,
-                case.active_period,
-                case.n_airs,
-                packed,
+                variant.label,
                 m.aux_columns,
                 m.proof_bytes as f64 / 1024.0,
                 m.peak_bytes as f64 / (1024.0 * 1024.0),
@@ -504,7 +710,7 @@ fn print_report(config: &MyConfig) {
 fn bench_lookup(c: &mut Criterion) {
     let config = make_config();
 
-    // The table carries aux columns, proof size, and peak heap, packed vs unpacked.
+    // The table carries aux columns, proof size, and peak heap for every variant.
     // Criterion below carries the rigorous prove and verify timings.
     print_report(&config);
 
@@ -512,29 +718,20 @@ fn bench_lookup(c: &mut Criterion) {
     group.sample_size(10);
 
     for case in CASES {
-        let (airs, traces, public_values) = build_workload(case);
-        let instances = make_instances(&airs, &traces, &public_values);
+        for variant in variants(case) {
+            // Skip variants whose timing would duplicate another (e.g. unpacked == packed).
+            if !variant.criterion {
+                continue;
+            }
 
-        // Packing changes the layout only when the AIR has spare budget.
-        // Time both arms there; otherwise the default path alone.
-        let arms: &[bool] = if case.base_degree >= 2 {
-            &[true, false]
-        } else {
-            &[true]
-        };
-
-        for &packed in arms {
+            let (airs, traces, public_values) = build_batch(case, variant.air);
+            let instances = make_instances(&airs, &traces, &public_values);
             let mut prover_data = ProverData::from_instances(&config, &instances);
-            if !packed {
+            if variant.force_unpacked {
                 force_unpacked(&mut prover_data, &airs);
             }
 
-            // The default path keeps the bare name; the unpacked arm is suffixed.
-            let id = if packed {
-                case.name.to_string()
-            } else {
-                format!("{}/unpacked", case.name)
-            };
+            let id = format!("{}/{}", case.name, variant.label);
 
             group.bench_function(BenchmarkId::new("prove", id.clone()), |b| {
                 b.iter(|| prove_batch(&config, &instances, &prover_data));

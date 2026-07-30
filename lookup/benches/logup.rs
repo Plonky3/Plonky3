@@ -111,6 +111,7 @@ fn build_lookups(num_lookups: usize, tuple_size: usize, trace_width: usize) -> V
                 multiplicities,
                 count_weight: 0,
                 column: lookup_idx,
+                flags: None,
             }
         })
         .collect()
@@ -208,5 +209,155 @@ fn bench_generate_permutation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_generate_permutation);
+/// Trace where exactly one of `num_branches` flags is `1` per row.
+///
+/// Layout per row is `[flag_0 .. flag_{M-1}, key_0 .. key_{M-1}]`, width `2M`.
+/// The active branch rotates round-robin, so the workload is fully dense.
+fn build_exclusive_trace(
+    num_branches: usize,
+    log_height: usize,
+    rng: &mut SmallRng,
+) -> RowMajorMatrix<F> {
+    let height = 1 << log_height;
+    let width = 2 * num_branches;
+
+    let mut values = F::zero_vec(height * width);
+    for row in 0..height {
+        let base = row * width;
+        // Random keys fill the key half of the row.
+        for k in 0..num_branches {
+            values[base + num_branches + k] = F::from_u32(rng.random::<u32>() % (1 << 27));
+        }
+        // Exactly one flag fires, rotating across rows.
+        values[base + row % num_branches] = F::ONE;
+    }
+    RowMajorMatrix::new(values, width)
+}
+
+/// One exclusive column carrying `num_branches` mutually-exclusive width-1 queries.
+fn build_exclusive_lookup(num_branches: usize) -> Lookup<F> {
+    let width = 2 * num_branches;
+    let sb = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: width,
+        ..Default::default()
+    });
+    let main = sb.main();
+    let local = main.current_slice();
+
+    // Branch k reads flag column k and key column M + k.
+    let flags = (0..num_branches).map(|k| local[k].into()).collect();
+    let elements = (0..num_branches)
+        .map(|k| vec![local[num_branches + k].into()])
+        .collect();
+    let multiplicities = (0..num_branches)
+        .map(|_| SymbolicExpression::from(F::ONE))
+        .collect();
+
+    Lookup {
+        kind: Kind::Local,
+        elements,
+        multiplicities,
+        count_weight: 1,
+        column: 0,
+        flags: Some(flags),
+    }
+}
+
+/// The no-exclusivity baseline: one gated single-query column per branch.
+///
+/// Each column is a unit query whose multiplicity is its own selector flag.
+/// This is how the same queries must be expressed without exclusivity support.
+fn build_additive_baseline(num_branches: usize) -> Vec<Lookup<F>> {
+    let width = 2 * num_branches;
+    let sb = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: width,
+        ..Default::default()
+    });
+    let main = sb.main();
+    let local = main.current_slice();
+
+    (0..num_branches)
+        .map(|k| {
+            // Multiplicity is the flag, so an inactive row contributes nothing.
+            let flag: SymbolicExpression<F> = local[k].into();
+            let key: SymbolicExpression<F> = local[num_branches + k].into();
+            Lookup {
+                kind: Kind::Local,
+                elements: vec![vec![key]],
+                multiplicities: vec![flag],
+                count_weight: 1,
+                column: k,
+                flags: None,
+            }
+        })
+        .collect()
+}
+
+/// Compare one exclusive column against the equivalent stack of additive columns.
+///
+/// Both express the same `M` mutually-exclusive queries over one trace.
+/// The exclusive form needs one auxiliary column; the baseline needs `M`.
+fn bench_exclusive_vs_additive(c: &mut Criterion) {
+    let mut group = c.benchmark_group("logup_exclusive_vs_additive");
+    group.sample_size(10);
+
+    let gadget = LogUpGadget::new();
+    let log_height = 16;
+
+    for &branches in &[8usize, 16, 32] {
+        let mut rng = SmallRng::seed_from_u64(7);
+        let trace = build_exclusive_trace(branches, log_height, &mut rng);
+
+        // Exclusive: a single column, so a single challenge pair.
+        let exclusive = vec![build_exclusive_lookup(branches)];
+        let exclusive_challenges = random_challenges(1, &mut rng);
+
+        // Baseline: M columns, so M challenge pairs.
+        let additive = build_additive_baseline(branches);
+        let additive_challenges = random_challenges(branches, &mut rng);
+
+        group.bench_function(
+            BenchmarkId::new(
+                "exclusive_1col",
+                format!("branches={branches}_h=2^{log_height}"),
+            ),
+            |b| {
+                b.iter(|| {
+                    gadget.generate_permutation::<SC>(
+                        &trace,
+                        &None,
+                        &[],
+                        &exclusive,
+                        &exclusive_challenges,
+                    );
+                });
+            },
+        );
+        group.bench_function(
+            BenchmarkId::new(
+                "additive_Ncol",
+                format!("branches={branches}_h=2^{log_height}"),
+            ),
+            |b| {
+                b.iter(|| {
+                    gadget.generate_permutation::<SC>(
+                        &trace,
+                        &None,
+                        &[],
+                        &additive,
+                        &additive_challenges,
+                    );
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_generate_permutation,
+    bench_exclusive_vs_additive
+);
 criterion_main!(benches);
