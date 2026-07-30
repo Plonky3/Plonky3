@@ -355,10 +355,16 @@ impl<F: Field> Lookups<F> {
 /// # Errors
 ///
 /// - When the weighted sum reaches the field characteristic.
-pub fn check_multiplicity_height_bound<F: PrimeField>(
-    lookups: &[Lookups<F>],
+pub fn check_multiplicity_height_bound<'a, F, I>(
+    lookups: I,
     heights: &[usize],
-) -> Result<(), LookupError> {
+) -> Result<(), LookupError>
+where
+    F: PrimeField + 'a,
+    I: IntoIterator<Item = &'a Lookups<F>>,
+    I::IntoIter: ExactSizeIterator,
+{
+    let lookups = lookups.into_iter();
     assert_eq!(
         lookups.len(),
         heights.len(),
@@ -368,12 +374,9 @@ pub fn check_multiplicity_height_bound<F: PrimeField>(
     // Accumulate `sum_i w_i * h_i` exactly via `BigUint`, since this sum
     // feeds the soundness comparison below and must stay exact for every
     // supported field, including large ones like BN254 (`p ~ 2^254`).
-    let weighted_height_sum = lookups
-        .iter()
-        .zip(heights)
-        .fold(BigUint::ZERO, |acc, (air, &h)| {
-            acc + BigUint::from(air.total_count_weight()) * BigUint::from(h)
-        });
+    let weighted_height_sum = lookups.zip(heights).fold(BigUint::ZERO, |acc, (air, &h)| {
+        acc + BigUint::from(air.total_count_weight()) * BigUint::from(h)
+    });
 
     // Compare against the exact characteristic `p`, valid for any prime size.
     if weighted_height_sum >= F::order() {

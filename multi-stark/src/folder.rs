@@ -6,9 +6,20 @@
 //!   - the verifier evaluates at the random sumcheck challenge.
 
 use p3_air::{Air, AirBuilder, RowWindow};
-use p3_field::{Algebra, PrimeCharacteristicRing};
+use p3_field::{Algebra, PrimeCharacteristicRing, dot_product};
+use p3_lookup::{Count, InteractionBuilder};
 
+use crate::lookup::AirLinkInstance;
 use crate::selectors::BoundaryEvals;
+
+/// The two independently batched expression families emitted by one AIR evaluation.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FolderEvaluations<Acc> {
+    /// Alpha-batched ordinary AIR constraints.
+    pub(crate) constraints: Acc,
+    /// Lookup-link expressions accumulated with their static GKR coefficients.
+    pub(crate) interactions: Acc,
+}
 
 /// Folder shared by the prover and the verifier.
 #[derive(Debug)]
@@ -140,10 +151,36 @@ where
     }
 }
 
+/// Discard lookup declarations while evaluating only ordinary AIR constraints.
+///
+/// Lookup-active AIRs are generic over [`InteractionBuilder`], so the ordinary
+/// path still needs to accept their declarations. The interaction wrapper below
+/// replaces this sink whenever lookup-link values are actually required.
+impl<'a, F, Var, Acc> InteractionBuilder for MultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    fn push_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _bus_name: &str,
+        _fields: impl IntoIterator<Item = E>,
+        _count: impl Into<Count<Self::Expr>>,
+    ) {
+    }
+
+    fn push_local_interaction(
+        &mut self,
+        _tuples: impl IntoIterator<Item = (alloc::vec::Vec<Self::Expr>, Count<Self::Expr>)>,
+    ) {
+    }
+}
+
 impl<'a, F, Var, Acc> AirBuilder for MultilinearFolder<'a, F, Var, Acc>
 where
-    F: PrimeCharacteristicRing + Into<Var> + Copy + Sync,
-    Var: Algebra<F> + Algebra<Var> + Copy + Send + Sync,
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
     Acc: Algebra<Var> + Copy,
 {
     type F = F;
@@ -200,6 +237,171 @@ where
     #[inline]
     fn periodic_values(&self) -> &[Self::PeriodicVar] {
         self.periodic_values
+    }
+}
+
+/// Lookup-aware adapter over the ordinary multilinear AIR folder.
+///
+/// The inner folder retains the constraint-only hot path. This adapter is
+/// constructed only at interpolation nodes that need lookup-link evaluations;
+/// it can then collect ordinary constraints, interactions, or both in one AIR
+/// evaluation.
+#[derive(Debug)]
+pub struct InteractionMultilinearFolder<'a, F, Var, Acc> {
+    inner: MultilinearFolder<'a, F, Var, Acc>,
+    link: &'a AirLinkInstance<Acc>,
+    theta_beta_powers: &'a [Acc],
+    interaction_accumulator: Acc,
+    constraints_enabled: bool,
+    local_seen: usize,
+    global_seen: usize,
+}
+
+impl<'a, F, Var, Acc> InteractionMultilinearFolder<'a, F, Var, Acc>
+where
+    Acc: PrimeCharacteristicRing,
+{
+    #[inline]
+    pub(crate) const fn new(
+        inner: MultilinearFolder<'a, F, Var, Acc>,
+        link: &'a AirLinkInstance<Acc>,
+        theta_beta_powers: &'a [Acc],
+        constraints_enabled: bool,
+    ) -> Self {
+        Self {
+            inner,
+            link,
+            theta_beta_powers,
+            interaction_accumulator: Acc::ZERO,
+            constraints_enabled,
+            local_seen: 0,
+            global_seen: 0,
+        }
+    }
+
+    /// Run the AIR once and return its ordinary and lookup expressions separately.
+    #[inline]
+    #[must_use]
+    pub(crate) fn eval_air<A>(mut self, air: &A) -> FolderEvaluations<Acc>
+    where
+        A: Air<Self>,
+        Self: AirBuilder,
+    {
+        air.eval(&mut self);
+        FolderEvaluations {
+            constraints: self.inner.accumulator,
+            interactions: self.interaction_accumulator,
+        }
+    }
+}
+
+impl<'a, F, Var, Acc> AirBuilder for InteractionMultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    type F = F;
+    type Expr = Var;
+    type Var = Var;
+    type MainWindow = RowWindow<'a, Var>;
+    type PreprocessedWindow = RowWindow<'a, Var>;
+    type PublicVar = F;
+    type PeriodicVar = Var;
+
+    #[inline]
+    fn main(&self) -> Self::MainWindow {
+        self.inner.main()
+    }
+
+    #[inline]
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
+        self.inner.preprocessed()
+    }
+
+    #[inline]
+    fn is_first_row(&self) -> Self::Expr {
+        self.inner.is_first_row()
+    }
+
+    #[inline]
+    fn is_last_row(&self) -> Self::Expr {
+        self.inner.is_last_row()
+    }
+
+    #[inline]
+    fn is_transition(&self) -> Self::Expr {
+        self.inner.is_transition()
+    }
+
+    #[inline]
+    fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
+        if self.constraints_enabled {
+            self.inner.assert_zero(x);
+        }
+    }
+
+    #[inline]
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values()
+    }
+
+    #[inline]
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.inner.periodic_values()
+    }
+}
+
+impl<'a, F, Var, Acc> InteractionBuilder for InteractionMultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    fn push_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _bus_name: &str,
+        fields: impl IntoIterator<Item = E>,
+        count: impl Into<Count<Self::Expr>>,
+    ) {
+        let lookup_index = self.global_seen;
+        self.global_seen += 1;
+        let lookup = &self.link.global_lookups()[lookup_index];
+        let (multiplicity, _) = count.into().into_parts();
+        let theta_fingerprint: Acc = dot_product(
+            self.theta_beta_powers.iter().copied(),
+            fields.into_iter().map(Into::into),
+        );
+        self.interaction_accumulator += lookup.block_weights[0]
+            * (Acc::from(multiplicity) + lookup.theta_bus_offset - theta_fingerprint);
+    }
+
+    fn push_local_interaction(
+        &mut self,
+        tuples: impl IntoIterator<Item = (alloc::vec::Vec<Self::Expr>, Count<Self::Expr>)>,
+    ) {
+        let lookup_index = self.local_seen;
+        self.local_seen += 1;
+        let lookup = &self.link.local_lookups()[lookup_index];
+
+        tuples
+            .into_iter()
+            .zip(lookup.block_weights.iter().copied())
+            .for_each(|((fields, count), weight)| {
+                let (multiplicity, _) = count.into_parts();
+                let theta_fingerprint: Acc =
+                    dot_product(self.theta_beta_powers.iter().copied(), fields.into_iter());
+                self.interaction_accumulator += weight
+                    * (Acc::from(multiplicity) + lookup.theta_bus_offset - theta_fingerprint);
+            });
+    }
+
+    fn num_global_interactions(&self) -> usize {
+        self.global_seen
+    }
+
+    fn num_local_interactions(&self) -> usize {
+        self.local_seen
     }
 }
 

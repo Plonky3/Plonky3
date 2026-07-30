@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use p3_air::{Air, BaseAir, SymbolicAirBuilder};
+use p3_air::{Air, BaseAir};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
@@ -10,8 +10,9 @@ use p3_sumcheck::PrescribedPointPcs;
 
 use crate::ProverInstances;
 use crate::config::{Commitment, MultiStarkConfig, ProverData};
-use crate::folder::MultilinearFolder;
+use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use crate::instance::ProverParts;
+use crate::lookup::prove_lookup;
 use crate::packed_ext::PackedExt;
 use crate::proof::MultiStarkProof;
 use crate::zerocheck::AirZerocheck;
@@ -23,9 +24,10 @@ use crate::zerocheck::AirZerocheck;
 /// ```text
 ///     1. absorb batched preprocessed commitment (if any)
 ///     2. commit(main trace tables) -> absorb main commitment
-///     3. zerocheck reduction       -> bound point r, sumcheck transcript
-///     4. open main tables at r     -> openings bound to the main commitment
-///     5. open preprocessed tables at r (if any)
+///     3. lookup materialization    -> fractional-GKR transcript (if needed)
+///     4. zerocheck reduction       -> bound point r, sumcheck transcript
+///     5. open main tables at r     -> openings bound to the main commitment
+///     6. open preprocessed tables at r (if any)
 ///                                  -> openings bound to the preprocessed commitment
 /// ```
 ///
@@ -55,6 +57,7 @@ use crate::zerocheck::AirZerocheck;
 /// - The preprocessed key width must match the AIR's declared preprocessed width.
 /// - A preprocessed key, when present, must have the same height as the main trace.
 /// - A periodic column's period must be a power of two dividing the trace height.
+/// - A lookup-active trace must meet the prover's SIMD packing width.
 #[tracing::instrument(skip_all)]
 pub fn prove<'a, C, A>(
     config: &C,
@@ -87,7 +90,23 @@ where
                 PackedExt<C::Val, <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking>,
                 PackedExt<C::Val, <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking>,
             >,
-        > + Air<SymbolicAirBuilder<C::Val, C::Challenge>>
+        > + for<'b> Air<InteractionMultilinearFolder<'b, C::Val, C::Val, C::Challenge>>
+        + for<'b> Air<
+            InteractionMultilinearFolder<
+                'b,
+                C::Val,
+                <C::Val as Field>::Packing,
+                <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking,
+            >,
+        > + for<'b> Air<InteractionMultilinearFolder<'b, C::Val, C::Challenge, C::Challenge>>
+        + for<'b> Air<
+            InteractionMultilinearFolder<
+                'b,
+                C::Val,
+                PackedExt<C::Val, <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking>,
+                PackedExt<C::Val, <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking>,
+            >,
+        > + Air<p3_lookup::InteractionSymbolicBuilder<C::Val, C::Challenge>>
         + BaseAir<C::Val>,
     <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking:
         From<C::Challenge> + From<<C::Val as Field>::Packing>,
@@ -149,15 +168,32 @@ where
         })
         .collect::<Vec<_>>();
 
-    // 3. Reduce all AIR constraints to one batched sumcheck and one bound point.
+    // 3. Materialize lookup fractions and reduce them with GKR. The retained
+    // plan and terminal claims will feed the coupled AIR sumcheck next.
+    let airs = instances.airs();
+    let public_values = instances.public_values();
+    // Public values belong to the whole multi-STARK statement. Bind them once
+    // before either lookup or zerocheck samples a challenge.
+    for values in &public_values {
+        challenger.observe_algebra_slice(values);
+    }
+    let (lookup_proof, lookup_data) = prove_lookup::<C::Val, C::Challenge, A, _>(
+        &airs,
+        &tables,
+        &preprocessed_tables,
+        &public_values,
+        challenger,
+    );
+
+    // 4. Reduce all AIR constraints to one batched sumcheck and one bound point.
     // The committed prover opens columns through the commitment schemes below, so
     // the zerocheck's own opened values are not used as the final proof openings.
-    let airs = instances.airs();
     let zerocheck = AirZerocheck::new(&airs, pow_bits);
-    let (zerocheck_proof, point) = zerocheck.prove::<C::Val, C::Challenge, _>(
+    let (zerocheck_proof, point) = zerocheck.prove_with_lookup::<C::Val, C::Challenge, _>(
         &preprocessed_tables,
         &tables,
-        &instances.public_values(),
+        &public_values,
+        lookup_data,
         challenger,
     );
     let sumcheck = zerocheck_proof.sumcheck;
@@ -165,7 +201,7 @@ where
     drop(tables);
     drop(preprocessed_tables);
 
-    // 4. Open each main trace table at its suffix of the common bound point.
+    // 5. Open each main trace table at its suffix of the common bound point.
     let opening = config.pcs().open_at(
         prover_data,
         &instances.opening_protocol(),
@@ -173,7 +209,7 @@ where
         challenger,
     );
 
-    // 5. Open each non-empty preprocessed table at the corresponding suffix of
+    // 6. Open each non-empty preprocessed table at the corresponding suffix of
     // the same bound point, reusing the setup commitment data.
     let preprocessed_opening = proving_key.preprocessed.as_ref().map(|preprocessed| {
         config.preprocessed_pcs().open_at(
@@ -186,6 +222,7 @@ where
 
     MultiStarkProof {
         commitment,
+        lookup: lookup_proof,
         sumcheck,
         opening,
         preprocessed_opening,

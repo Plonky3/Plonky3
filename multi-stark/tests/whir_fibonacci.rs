@@ -8,6 +8,7 @@ use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
+use p3_lookup::{Count, InteractionBuilder};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
@@ -196,6 +197,41 @@ impl<AB: AirBuilder> Air<AB> for FibAir {
     }
 }
 
+/// A local multiset equality whose two contribution blocks make the lookup
+/// GKR point one coordinate longer than the underlying trace point.
+struct LocalPermutationLookupAir;
+
+impl BaseAir<F> for LocalPermutationLookupAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB> Air<AB> for LocalPermutationLookupAir
+where
+    AB: AirBuilder<F = F> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice();
+        builder.push_local_interaction([
+            (vec![local[0].into()], Count::bounded(AB::Expr::ONE, 1)),
+            (vec![local[1].into()], Count::provided(-AB::Expr::ONE)),
+        ]);
+    }
+}
+
+fn permutation_trace(n: usize) -> RowMajorMatrix<F> {
+    let values = (0..n)
+        .flat_map(|row| [F::from_usize(row), F::from_usize(n - 1 - row)])
+        .collect();
+    RowMajorMatrix::new(values, 2)
+}
+
 /// Build a Fibonacci trace seeded with zero and one.
 fn fib_trace(n: usize) -> RowMajorMatrix<F> {
     fib_trace_with(n, F::ZERO, F::ONE)
@@ -261,6 +297,74 @@ fn prove_verify_fibonacci_roundtrips() {
         &mut challenger(&config),
     )
     .expect("honest Fibonacci proof must verify");
+}
+
+#[test]
+fn prove_verify_lookup_roundtrips_through_pcs() {
+    let n = 64;
+    let log_height = log2_strict_usize(n);
+    let air = LocalPermutationLookupAir;
+    let trace = permutation_trace(n);
+    let config = config_for(log_height, air.width());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(&config),
+    );
+    assert!(proof.lookup.is_some());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("honest lookup proof must verify through the trace PCS opening");
+}
+
+#[test]
+fn prove_verify_mixed_height_lookups_roundtrip_through_pcs() {
+    let air = LocalPermutationLookupAir;
+    let height_a = 64;
+    let height_b = 32;
+    let log_height_a = log2_strict_usize(height_a);
+    let log_height_b = log2_strict_usize(height_b);
+    let trace_a = permutation_trace(height_a);
+    let trace_b = permutation_trace(height_b);
+    let stacked_num_variables = log2_ceil_usize(2 * height_a + 2 * height_b);
+    let config = config_for_stacked(stacked_num_variables);
+    let (pk, vk) = setup(&config, &[&air, &air], &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&air, Table::new(trace_a.transpose()), &pk, &[]),
+            ProverInstance::new(&air, Table::new(trace_b.transpose()), &pk, &[]),
+        ]),
+        0,
+        &mut challenger(&config),
+    );
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&air, &vk, log_height_a, &[]),
+            VerifierInstance::new(&air, &vk, log_height_b, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )
+    .expect("mixed-height lookup proof must open each trace at its own PCS suffix");
 }
 
 #[test]
