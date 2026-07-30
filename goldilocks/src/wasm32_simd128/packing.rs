@@ -167,9 +167,6 @@ impl PrimeCharacteristicRing for PackedGoldilocksWasmSimd128 {
     #[inline]
     fn sum_array<const N: usize>(input: &[Self]) -> Self {
         assert_eq!(N, input.len());
-        const {
-            assert!((N as u32) <= (1 << 31));
-        }
         match N {
             0 => Self::ZERO,
             1 => input[0],
@@ -183,16 +180,10 @@ impl PrimeCharacteristicRing for PackedGoldilocksWasmSimd128 {
 
     #[inline]
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
-        const {
-            assert!((N as u32) <= (1 << 31));
-        }
         match N {
             0 => Self::ZERO,
             1 => lhs[0] * rhs[0],
-            _ => Self::from_vector(dot_product_delayed_reduce::<N>(
-                &core::array::from_fn(|i| lhs[i].to_vector()),
-                &core::array::from_fn(|i| rhs[i].to_vector()),
-            )),
+            _ => Self::from_vector(dot_pairs::<N>(|i| (lhs[i].to_vector(), rhs[i].to_vector()))),
         }
     }
 }
@@ -217,28 +208,17 @@ impl_sum_prod_base_field!(PackedGoldilocksWasmSimd128, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksWasmSimd128 {
     // Benchmarked across slice lengths 8, 16, 33, 64, 256 under both wasmtime/Cranelift and
-    // Node/V8, since the two engines disagree sharply on the best chunk: Cranelift likes
-    // chunk=32/64 for aligned lengths (falling back to the unvectorized per-element
-    // remainder path in `chunked_linear_combination` otherwise), while V8 prefers chunk=16
-    // and regresses badly (2.2-2.3x slower than optimal) at chunk=32/64 regardless of
-    // alignment. chunk=4 is the min-max choice: worst-case 1.38x slower than the
-    // best-for-that-engine-and-length chunk across all 10 (engine, length) combinations
-    // tested, versus 1.57-1.59x for chunk=8/16 and 2.2x+ for chunk=32/64 — always
-    // reasonable, never catastrophic, on either engine.
+    // Node/V8, feeding `dot_pairs` directly rather than through a materialized `[v128; N]`.
     const BATCHED_LC_CHUNK: usize = 4;
 
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
-        const {
-            assert!((N as u32) <= (1 << 31));
-        }
         match N {
             0 => Self::ZERO,
             1 => a[0] * f[0],
-            _ => Self::from_vector(dot_product_delayed_reduce::<N>(
-                &core::array::from_fn(|i| a[i].to_vector()),
-                &core::array::from_fn(|i| Self::from(f[i]).to_vector()),
-            )),
+            _ => Self::from_vector(dot_pairs::<N>(|i| {
+                (a[i].to_vector(), Self::from(f[i]).to_vector())
+            })),
         }
     }
 }
@@ -468,9 +448,14 @@ fn unsigned_lt_as_carry(a: v128, b: v128) -> v128 {
     u64x2_shr(mask, 63)
 }
 
-/// Delayed-reduction dot product: `sum(lhs[i] * rhs[i])` with a single final [`reduce128`]
-/// instead of one reduction per term. Mirrors the scalar `Goldilocks::dot_product`'s
-/// `N > 2` algorithm (see `goldilocks.rs`), vectorized to 2 lanes.
+/// Delayed-reduction dot product: `sum(get(i).0 * get(i).1)` with a single final
+/// [`reduce128`] instead of one reduction per term. Mirrors the scalar
+/// `Goldilocks::dot_product`'s `N > 2` algorithm (see `goldilocks.rs`), vectorized to 2 lanes.
+///
+/// Terms are produced one pair at a time by `get` rather than passed as `&[v128; N]`
+/// slices: materializing the `N` vectors first via `core::array::from_fn(|i| ...to_vector())`
+/// doesn't get elided by the wasm backend, and it costs real time and stack for `N` above a
+/// handful.
 ///
 /// Each 128-bit product `val` is split at bit 96 (not bit 64) into `lo96 + hi32 * 2^96`:
 /// `hi32 = val >> 96` is bounded by `2^32 - 1` per term, so up to `N <= 2^31` terms can be
@@ -480,13 +465,18 @@ fn unsigned_lt_as_carry(a: v128, b: v128) -> v128 {
 /// `2^128`, because that sum is itself `< 2^127` (`N <= 2^31` terms, each `lo96_i < 2^96`).
 /// Finally `2^96 ≡ -1 (mod P)` folds `acc_hi96` back in before the single [`reduce128`] call.
 #[inline]
-fn dot_product_delayed_reduce<const N: usize>(lhs: &[v128; N], rhs: &[v128; N]) -> v128 {
+fn dot_pairs<const N: usize>(get: impl Fn(usize) -> (v128, v128)) -> v128 {
+    const {
+        assert!((N as u32) <= (1 << 31));
+    }
+
     let mut acc_lo_hi = u64x2_splat(0);
     let mut acc_lo_lo = u64x2_splat(0);
     let mut acc_hi96 = u64x2_splat(0);
 
     for i in 0..N {
-        let (term_hi, term_lo) = mul64_64(lhs[i], rhs[i]);
+        let (lhs, rhs) = get(i);
+        let (term_hi, term_lo) = mul64_64(lhs, rhs);
         let term_hi96 = u64x2_shr(term_hi, 32);
 
         let new_lo_lo = i64x2_add(acc_lo_lo, term_lo);
@@ -639,6 +629,7 @@ mod tests {
                 check::<$n>([Goldilocks::new(u64::MAX); $n], [Goldilocks::ZERO; $n]);
             };
         }
+        check::<2>([Goldilocks::new(u64::MAX); 2], [Goldilocks::ZERO; 2]);
         check_edge_n!(3);
         check_edge_n!(4);
         check_edge_n!(5);
@@ -650,7 +641,7 @@ mod tests {
         check_edge_n!(16);
         check_edge_n!(32);
 
-        let mut rng = SmallRng::seed_from_u64(0x5A_A0_D1CA_7E);
+        let mut rng = SmallRng::seed_from_u64(0x005A_A0D1_CA7E);
         macro_rules! check_random_n {
             ($n:literal, $count:literal) => {
                 for _ in 0..$count {
@@ -752,7 +743,7 @@ mod tests {
 
         // Random stress across a range of N, including N well above what a single loop
         // iteration bound might be expected to special-case.
-        let mut rng = SmallRng::seed_from_u64(0xD07_9A0D_7CE);
+        let mut rng = SmallRng::seed_from_u64(0x00D0_79A0_D7CE);
         macro_rules! check_random_n {
             ($n:literal, $count:literal) => {
                 for _ in 0..$count {
@@ -816,7 +807,7 @@ mod tests {
         check_edge_n!(16);
         check_edge_n!(32);
 
-        let mut rng = SmallRng::seed_from_u64(0x11ED_D07_9A0D);
+        let mut rng = SmallRng::seed_from_u64(0x011E_DD07_9A0D);
         macro_rules! check_random_n {
             ($n:literal, $count:literal) => {
                 for _ in 0..$count {

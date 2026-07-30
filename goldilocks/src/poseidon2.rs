@@ -99,6 +99,13 @@ pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
 /// It acts on arrays of the form `[Goldilocks; WIDTH]` and `[PackedGoldilocksWasmSimd128; WIDTH]`,
 /// with round constants pre-broadcast into packed vectors at construction time. See
 /// [`crate::wasm32_simd128::Poseidon2ExternalLayerGoldilocksWasmSimd128`] for details.
+///
+/// This is a concrete, non-generic type: it only implements `Permutation` for
+/// `[Goldilocks; WIDTH]` and `[PackedGoldilocksWasmSimd128; WIDTH]` (not the generic
+/// `Algebra<Goldilocks>` state that the fallback `p3_poseidon2::Poseidon2` type below
+/// supports). Code that needs to build against all platforms should go through
+/// [`default_goldilocks_poseidon2_8`], [`default_goldilocks_poseidon2_12`],
+/// [`default_goldilocks_poseidon2_16`], or `new_from_rng`/`new_from_rng_128`.
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     Goldilocks,

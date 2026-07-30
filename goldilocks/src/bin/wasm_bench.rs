@@ -141,7 +141,7 @@ fn main() {
 }
 
 /// Times the packed Goldilocks quadratic-extension multiplication and squaring
-/// (`quadratic_mul`/`binomial_square` in `p3_field::extension`, applied to
+/// (`binomial_mul`/`binomial_square` in `p3_field::extension`, applied to
 /// `[PackedGoldilocksWasmSimd128; 2]`), which route through the vectorized `dot_product`.
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 fn bench_quadratic_extension_mul() {
