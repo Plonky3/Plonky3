@@ -98,6 +98,22 @@ mod babybear_stir {
         security_level: usize,
         max_pow_bits: usize,
     ) -> (StirParameters<MyMmcs>, Dft, Challenger) {
+        make_params_with_soundness(
+            log_blowup,
+            log_folding_factor,
+            SecurityAssumption::CapacityBound,
+            security_level,
+            max_pow_bits,
+        )
+    }
+
+    fn make_params_with_soundness(
+        log_blowup: usize,
+        log_folding_factor: usize,
+        soundness_type: SecurityAssumption,
+        security_level: usize,
+        max_pow_bits: usize,
+    ) -> (StirParameters<MyMmcs>, Dft, Challenger) {
         let perm = Perm::new_from_rng_128(&mut seeded_rng());
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm.clone());
@@ -107,7 +123,7 @@ mod babybear_stir {
         let params = StirParameters {
             log_blowup,
             log_folding_factor,
-            soundness_type: SecurityAssumption::CapacityBound,
+            soundness_type,
             security_level,
             max_pow_bits,
             mmcs,
@@ -229,6 +245,48 @@ mod babybear_stir {
         let mut v_ch = challenger;
         verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
             .expect("verification with PoW grinding failed");
+    }
+
+    #[test]
+    fn test_johnson_bound_prove_verify_with_grinding() {
+        // Keep the algebraic target fixed at 20 bits while reserving 8 bits for PoW.
+        // This exercises the BCSS25-derived Johnson eta and both grinding phases without
+        // making the ordinary test suite expensive.
+        let (params, dft, challenger) =
+            make_params_with_soundness(2, 2, SecurityAssumption::JohnsonBound, 28, 8);
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(POW_LOG_DEGREE, params);
+
+        assert_eq!(config.soundness_type, SecurityAssumption::JohnsonBound);
+        assert!(
+            config
+                .round_configs
+                .iter()
+                .all(|rc| rc.num_ood_samples == 1 && rc.eta.is_finite() && rc.eta > 0.)
+        );
+        assert!(config.final_eta.is_finite() && config.final_eta > 0.);
+        assert!(
+            config.round_configs.iter().any(|rc| rc.pow_bits > 0) || config.final_pow_bits > 0,
+            "Johnson-bound test parameters must exercise query grinding"
+        );
+        assert!(
+            config
+                .round_configs
+                .iter()
+                .any(|rc| rc.folding_pow_bits > 0)
+                || config.final_folding_pow_bits > 0,
+            "Johnson-bound test parameters must exercise folding grinding"
+        );
+
+        let mut rng = seeded_rng();
+        let degree = 1usize << POW_LOG_DEGREE;
+        let poly: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let mut p_ch = challenger.clone();
+        let (proof, _idx) = prove_stir(&config, poly, &dft, &mut p_ch);
+
+        let mut v_ch = challenger;
+        verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
+            .expect("Johnson-bound proof with PoW grinding should verify");
     }
 
     #[test]
@@ -766,6 +824,123 @@ mod babybear_pcs {
         do_test_pcs(&[4, 6, 8]);
     }
 
+    fn compare_stir_proof_size_with_binary_fri(
+        log_degree: usize,
+        log_folding_factor: usize,
+        width: usize,
+    ) -> (usize, usize) {
+        const SECURITY_BITS: usize = 32;
+
+        let mut perm_rng = seeded_rng();
+        let perm = Perm::new_from_rng_128(&mut perm_rng);
+
+        let (fri_val_mmcs, fri_challenge_mmcs) = make_mmcs(&perm);
+        let fri_params = FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: SECURITY_BITS,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: fri_challenge_mmcs,
+        };
+        assert_eq!(fri_params.conjectured_soundness_bits(), SECURITY_BITS);
+        let fri_pcs = FriPcs::new(Dft::default(), fri_val_mmcs, fri_params);
+
+        let (stir_val_mmcs, stir_challenge_mmcs) = make_mmcs(&perm);
+        let stir_params = StirParameters {
+            log_blowup: 1,
+            log_folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            security_level: SECURITY_BITS,
+            max_pow_bits: 0,
+            mmcs: stir_challenge_mmcs,
+        };
+        let stir_pcs = MyPcs::new(Dft::default(), stir_val_mmcs, stir_params);
+
+        let mut rng = seeded_rng();
+        let degree = 1 << log_degree;
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, degree, width);
+
+        let fri_domain =
+            <FriPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&fri_pcs, degree);
+        let stir_domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&stir_pcs, degree);
+        assert_eq!(fri_domain.size(), stir_domain.size());
+        assert_eq!(fri_domain.shift(), stir_domain.shift());
+
+        let mut fri_p_ch = Challenger::new(perm.clone());
+        let (fri_commit, fri_data) =
+            <FriPcs as Pcs<Challenge, Challenger>>::commit(&fri_pcs, [(fri_domain, mat.clone())]);
+        fri_p_ch.observe(fri_commit.clone());
+        let zeta: Challenge = fri_p_ch.sample_algebra_element();
+        let (fri_openings, fri_proof) = <FriPcs as Pcs<Challenge, Challenger>>::open(
+            &fri_pcs,
+            vec![(&fri_data, vec![vec![zeta]])],
+            &mut fri_p_ch,
+        );
+
+        let mut fri_v_ch = Challenger::new(perm.clone());
+        fri_v_ch.observe(fri_commit.clone());
+        let fri_v_zeta: Challenge = fri_v_ch.sample_algebra_element();
+        assert_eq!(fri_v_zeta, zeta);
+        let fri_claims = vec![(fri_domain, vec![(zeta, fri_openings[0][0][0].clone())])];
+        <FriPcs as Pcs<Challenge, Challenger>>::verify(
+            &fri_pcs,
+            vec![(fri_commit, fri_claims)],
+            &fri_proof,
+            &mut fri_v_ch,
+        )
+        .expect("binary FRI proof should verify");
+        let fri_bytes =
+            postcard::to_allocvec(&fri_proof).expect("binary FRI proof should serialize");
+
+        let mut stir_p_ch = Challenger::new(perm.clone());
+        let (stir_commit, stir_data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&stir_pcs, [(stir_domain, mat)]);
+        stir_p_ch.observe(stir_commit.clone());
+        let stir_zeta: Challenge = stir_p_ch.sample_algebra_element();
+        assert_eq!(
+            stir_zeta, zeta,
+            "same input commitment and challenger seed should give the same opening point"
+        );
+        let (stir_openings, stir_proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &stir_pcs,
+            vec![(&stir_data, vec![vec![stir_zeta]])],
+            &mut stir_p_ch,
+        );
+
+        let mut stir_v_ch = Challenger::new(perm);
+        stir_v_ch.observe(stir_commit.clone());
+        let stir_v_zeta: Challenge = stir_v_ch.sample_algebra_element();
+        assert_eq!(stir_v_zeta, stir_zeta);
+        let stir_claims = vec![(
+            stir_domain,
+            vec![(stir_zeta, stir_openings[0][0][0].clone())],
+        )];
+        <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &stir_pcs,
+            vec![(stir_commit, stir_claims)],
+            &stir_proof,
+            &mut stir_v_ch,
+        )
+        .expect("STIR proof should verify");
+        let stir_bytes = postcard::to_allocvec(&stir_proof).expect("STIR proof should serialize");
+        let proof_ratio = fri_bytes.len() as f64 / stir_bytes.len() as f64;
+
+        println!(
+            "proof-size: log_degree={log_degree}, log_folding_factor={log_folding_factor}, \
+             STIR={} bytes, binary FRI={} bytes, FRI/STIR={proof_ratio:.2}x",
+            stir_bytes.len(),
+            fri_bytes.len()
+        );
+
+        // This intentionally measures serialized PCS proof objects only. Opened values are
+        // excluded because both proofs open the same point and width. The always-running test
+        // reports the current sizes; the ignored regression below records the intended ordering.
+        (stir_bytes.len(), fri_bytes.len())
+    }
+
     #[test]
     fn test_pcs_proof_size_vs_binary_fri_equivalent_input() {
         const WIDTH: usize = 3;
@@ -773,125 +948,22 @@ mod babybear_pcs {
         for (log_degree, log_folding_factor) in [(14, 2), (16, 2)] {
             compare_stir_proof_size_with_binary_fri(log_degree, log_folding_factor, WIDTH);
         }
+    }
 
-        fn compare_stir_proof_size_with_binary_fri(
-            log_degree: usize,
-            log_folding_factor: usize,
-            width: usize,
-        ) {
-            const SECURITY_BITS: usize = 32;
+    #[test]
+    #[ignore = "TODO(#1917, #1919): port pruned MMCS openings to STIR"]
+    fn assert_stir_proof_smaller_than_binary_fri() {
+        const WIDTH: usize = 3;
 
-            let mut perm_rng = seeded_rng();
-            let perm = Perm::new_from_rng_128(&mut perm_rng);
-
-            let (fri_val_mmcs, fri_challenge_mmcs) = make_mmcs(&perm);
-            let fri_params = FriParameters {
-                log_blowup: 1,
-                log_final_poly_len: 0,
-                max_log_arity: 1,
-                num_queries: SECURITY_BITS,
-                commit_proof_of_work_bits: 0,
-                query_proof_of_work_bits: 0,
-                mmcs: fri_challenge_mmcs,
-            };
-            assert_eq!(fri_params.conjectured_soundness_bits(), SECURITY_BITS);
-            let fri_pcs = FriPcs::new(Dft::default(), fri_val_mmcs, fri_params);
-
-            let (stir_val_mmcs, stir_challenge_mmcs) = make_mmcs(&perm);
-            let stir_params = StirParameters {
-                log_blowup: 1,
-                log_folding_factor,
-                soundness_type: SecurityAssumption::CapacityBound,
-                security_level: SECURITY_BITS,
-                max_pow_bits: 0,
-                mmcs: stir_challenge_mmcs,
-            };
-            let stir_pcs = MyPcs::new(Dft::default(), stir_val_mmcs, stir_params);
-
-            let mut rng = seeded_rng();
-            let degree = 1 << log_degree;
-            let mat = RowMajorMatrix::<Val>::rand(&mut rng, degree, width);
-
-            let fri_domain =
-                <FriPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&fri_pcs, degree);
-            let stir_domain =
-                <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&stir_pcs, degree);
-            assert_eq!(fri_domain.size(), stir_domain.size());
-            assert_eq!(fri_domain.shift(), stir_domain.shift());
-
-            let mut fri_p_ch = Challenger::new(perm.clone());
-            let (fri_commit, fri_data) = <FriPcs as Pcs<Challenge, Challenger>>::commit(
-                &fri_pcs,
-                [(fri_domain, mat.clone())],
+        for (log_degree, log_folding_factor) in [(14, 2), (16, 2)] {
+            let (stir_bytes, fri_bytes) =
+                compare_stir_proof_size_with_binary_fri(log_degree, log_folding_factor, WIDTH);
+            assert!(
+                stir_bytes < fri_bytes,
+                "STIR proof ({stir_bytes} bytes) should be smaller than binary FRI proof \
+                 ({fri_bytes} bytes) for log_degree={log_degree}, \
+                 log_folding_factor={log_folding_factor}"
             );
-            fri_p_ch.observe(fri_commit.clone());
-            let zeta: Challenge = fri_p_ch.sample_algebra_element();
-            let (fri_openings, fri_proof) = <FriPcs as Pcs<Challenge, Challenger>>::open(
-                &fri_pcs,
-                vec![(&fri_data, vec![vec![zeta]])],
-                &mut fri_p_ch,
-            );
-
-            let mut fri_v_ch = Challenger::new(perm.clone());
-            fri_v_ch.observe(fri_commit.clone());
-            let fri_v_zeta: Challenge = fri_v_ch.sample_algebra_element();
-            assert_eq!(fri_v_zeta, zeta);
-            let fri_claims = vec![(fri_domain, vec![(zeta, fri_openings[0][0][0].clone())])];
-            <FriPcs as Pcs<Challenge, Challenger>>::verify(
-                &fri_pcs,
-                vec![(fri_commit, fri_claims)],
-                &fri_proof,
-                &mut fri_v_ch,
-            )
-            .expect("binary FRI proof should verify");
-            let fri_bytes =
-                postcard::to_allocvec(&fri_proof).expect("binary FRI proof should serialize");
-
-            let mut stir_p_ch = Challenger::new(perm.clone());
-            let (stir_commit, stir_data) =
-                <MyPcs as Pcs<Challenge, Challenger>>::commit(&stir_pcs, [(stir_domain, mat)]);
-            stir_p_ch.observe(stir_commit.clone());
-            let stir_zeta: Challenge = stir_p_ch.sample_algebra_element();
-            assert_eq!(
-                stir_zeta, zeta,
-                "same input commitment and challenger seed should give the same opening point"
-            );
-            let (stir_openings, stir_proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
-                &stir_pcs,
-                vec![(&stir_data, vec![vec![stir_zeta]])],
-                &mut stir_p_ch,
-            );
-
-            let mut stir_v_ch = Challenger::new(perm);
-            stir_v_ch.observe(stir_commit.clone());
-            let stir_v_zeta: Challenge = stir_v_ch.sample_algebra_element();
-            assert_eq!(stir_v_zeta, stir_zeta);
-            let stir_claims = vec![(
-                stir_domain,
-                vec![(stir_zeta, stir_openings[0][0][0].clone())],
-            )];
-            <MyPcs as Pcs<Challenge, Challenger>>::verify(
-                &stir_pcs,
-                vec![(stir_commit, stir_claims)],
-                &stir_proof,
-                &mut stir_v_ch,
-            )
-            .expect("STIR proof should verify");
-            let stir_bytes =
-                postcard::to_allocvec(&stir_proof).expect("STIR proof should serialize");
-            let proof_ratio = fri_bytes.len() as f64 / stir_bytes.len() as f64;
-
-            println!(
-                "proof-size: log_degree={log_degree}, log_folding_factor={log_folding_factor}, \
-             STIR={} bytes, binary FRI={} bytes, FRI/STIR={proof_ratio:.2}x",
-                stir_bytes.len(),
-                fri_bytes.len()
-            );
-
-            // This intentionally reports serialized PCS proof objects only. Opened values are
-            // excluded because both proofs open the same point and width. Relative size is not
-            // a regression invariant: it also depends on each PCS's evolving MMCS multiproof
-            // representation, not just the underlying STIR/FRI query complexity.
         }
     }
 
