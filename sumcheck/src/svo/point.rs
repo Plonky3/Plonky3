@@ -272,7 +272,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         // The split equality table is factored as an outer (eq0) over an inner (eq1) block.
         let eq1 = self.z_split.eq1();
         // Each outer entry owns one contiguous inner chunk of the output.
-        let cs = eq1.scalar_chunk_size();
+        let cs = eq1.num_scalar_evals();
         // Weight of the all-ones inner row, used to stitch the carry across chunk boundaries.
         let eq1_last = eq1.last_scalar();
         // Serial path: cheaper than thread spawning for small outputs.
@@ -387,7 +387,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         // The split equality table is factored as an outer (eq0) over an inner (eq1) block.
         let eq1 = self.z_split.eq1();
         // Each outer entry owns one contiguous inner chunk of the output.
-        let cs = eq1.scalar_chunk_size();
+        let cs = eq1.num_scalar_evals();
         // Weight of the all-ones inner row, used to stitch the shift across chunk boundaries.
         let eq1_last = eq1.last_scalar();
         // Serial path: cheaper than thread spawning for small outputs.

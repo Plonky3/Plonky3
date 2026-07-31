@@ -1,8 +1,11 @@
+mod maybe_packed;
+
 use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::marker::PhantomData;
 
+pub use maybe_packed::{PolyMaybePacked, PolyMaybePackedView};
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
 };
@@ -89,6 +92,9 @@ where
     }
 
     /// Returns the total number of stored evaluations.
+    ///
+    /// For a packed element type this counts packed elements, not scalar evaluations.
+    /// [`PolyMaybePacked::num_scalar_evals`] reports the logical scalar count.
     #[must_use]
     #[inline]
     pub fn num_evals(&self) -> usize {
@@ -106,7 +112,9 @@ where
     /// Returns a borrowed polynomial view over these evaluations.
     #[inline]
     pub fn as_view(&self) -> PolyView<'_, F> {
-        PolyView::new(self.as_slice())
+        // Invariant: `new` checks the length, and reborrowing cannot change it.
+        // Skip the recheck rather than pay it on every call.
+        Poly(self.as_slice(), PhantomData)
     }
 
     /// Returns a reference to the underlying slice of evaluations.
