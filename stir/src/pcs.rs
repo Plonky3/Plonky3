@@ -349,11 +349,11 @@ where
                         .map(|(&y, &ap)| y * ap)
                         .sum();
 
-                    for (ro_val, (&inv_d, &p_x)) in
-                        ro.iter_mut().zip(inv_denom.iter().zip(p_x_vec.iter()))
-                    {
-                        *ro_val += alpha_pow_offset * (p_x - y_combined) * inv_d;
-                    }
+                    ro.par_iter_mut()
+                        .zip(inv_denom.par_iter().zip(p_x_vec.par_iter()))
+                        .for_each(|(ro_val, (&inv_d, &p_x))| {
+                            *ro_val += alpha_pow_offset * (p_x - y_combined) * inv_d;
+                        });
                 }
             }
         }
