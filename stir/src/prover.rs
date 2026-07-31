@@ -21,8 +21,8 @@ use tracing::instrument;
 use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    compute_shake_polynomial, degree_correction_poly, eval_poly, fold_codeword, interpolate_poly,
-    next_domain_shift, vanishing_poly_from_roots,
+    compute_shake_polynomial, eval_poly, fold_codeword, interpolate_poly, next_domain_shift,
+    vanishing_poly_from_roots,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -254,30 +254,60 @@ where
         let _rho: EF = challenger.sample_algebra_element();
 
         // Step 5: Construction 5.2 — evaluate the next virtual witness directly on L_{i+1}:
-        // f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}). This avoids serial synthetic division
-        // and coefficient-domain degree correction; the three independent DFTs are parallel.
+        // f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}).
+        //
+        // DegCor(x) = (1 - (r_comb*x)^{gap+1}) / (1 - r_comb*x) is geometric in x over the
+        // coset (base-field ratio, EF-valued start), so it is evaluated pointwise via two
+        // `Powers` sweeps instead of a third DFT; its `(1 - r_comb*x)` denominator is folded
+        // into the vanishing-polynomial batch inversion below (one inversion, not two). Ans
+        // and the vanishing polynomial still need a DFT each — their roots are this round's
+        // arbitrary interpolation points — so those two are batched into one call.
         let num_answers = all_points.len();
-        let ans_evals = codeword_from_coeffs(dft, ans_poly.clone(), next_shift, next_log_domain);
-        let vanishing_evals = codeword_from_coeffs(
-            dft,
-            vanishing_poly_from_roots(&all_points),
-            next_shift,
-            next_log_domain,
-        );
-        let degree_correction_evals = codeword_from_coeffs(
-            dft,
-            degree_correction_poly(r_comb, num_answers),
-            next_shift,
-            next_log_domain,
-        );
-        let vanishing_inverses = batch_multiplicative_inverse(&vanishing_evals);
+        let next_domain_size = 1usize << next_log_domain;
 
-        let next_oracle_codeword: Vec<EF> = next_commit_codeword
-            .par_iter()
-            .zip(ans_evals.par_iter())
-            .zip(vanishing_inverses.par_iter())
-            .zip(degree_correction_evals.par_iter())
-            .map(|(((&g, &ans), &z_inv), &correction)| (g - ans) * z_inv * correction)
+        let vanishing_coeffs = vanishing_poly_from_roots(&all_points);
+        let mut combined_coeffs = EF::zero_vec(next_domain_size * 2);
+        for (i, &c) in ans_poly.iter().enumerate().take(next_domain_size) {
+            combined_coeffs[2 * i] = c;
+        }
+        for (i, &c) in vanishing_coeffs.iter().enumerate().take(next_domain_size) {
+            combined_coeffs[2 * i + 1] = c;
+        }
+        let combined_evals = dft
+            .coset_dft_algebra_batch(RowMajorMatrix::new(combined_coeffs, 2), next_shift)
+            .values;
+        let mut ans_evals = EF::zero_vec(next_domain_size);
+        let mut vanishing_evals = EF::zero_vec(next_domain_size);
+        for (i, pair) in combined_evals.chunks_exact(2).enumerate() {
+            ans_evals[i] = pair[0];
+            vanishing_evals[i] = pair[1];
+        }
+
+        // x_j = next_shift * g^j; step_j = r_comb * x_j = step_start * g^j.
+        let g_next = F::two_adic_generator(next_log_domain);
+        let g_powers: Vec<F> = g_next.powers().collect_n(next_domain_size);
+        let g_powers_hi: Vec<F> = g_next
+            .exp_u64((num_answers + 1) as u64)
+            .powers()
+            .collect_n(next_domain_size);
+        let step_start = r_comb * EF::from(next_shift);
+        let step_start_hi = step_start.exp_u64((num_answers + 1) as u64);
+
+        let combined_denoms: Vec<EF> = (0..next_domain_size)
+            .into_par_iter()
+            .map(|j| vanishing_evals[j] * (EF::ONE - step_start * EF::from(g_powers[j])))
+            .collect();
+        let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
+
+        let next_oracle_codeword: Vec<EF> = (0..next_domain_size)
+            .into_par_iter()
+            .map(|j| {
+                let degree_correction_numerator =
+                    EF::ONE - step_start_hi * EF::from(g_powers_hi[j]);
+                (next_commit_codeword[j] - ans_evals[j])
+                    * combined_inverses[j]
+                    * degree_correction_numerator
+            })
             .collect();
 
         round_proofs.push(StirRoundProof {
