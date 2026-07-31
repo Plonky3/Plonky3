@@ -21,8 +21,8 @@ use tracing::instrument;
 use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    compute_shake_polynomial, eval_poly, fold_codeword, interpolate_poly, next_domain_shift,
-    vanishing_poly_from_roots,
+    compute_shake_polynomial, eval_poly_parallel, fold_codeword, interpolate_poly,
+    next_domain_shift, vanishing_poly_from_roots,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -175,9 +175,16 @@ where
             }
         }
 
+        // `fold_coeffs` is padded to the next round's full domain size, but the folded
+        // polynomial's true degree is bounded by the round's degree schedule (a fixed
+        // factor smaller); evaluating only the non-trivially-zero prefix cuts Horner's
+        // work by that same factor.
+        let folded_degree_bound = 1usize << (rc.log_degree - log_arity);
+        let truncated_fold_coeffs = &fold_coeffs[..folded_degree_bound.min(fold_coeffs.len())];
+
         let ood_answers: Vec<EF> = ood_points
             .iter()
-            .map(|&z| eval_poly(&fold_coeffs, z))
+            .map(|&z| eval_poly_parallel(truncated_fold_coeffs, z))
             .collect();
         challenger.observe_algebra_slice(&ood_answers);
 

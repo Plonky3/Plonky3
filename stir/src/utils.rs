@@ -24,6 +24,33 @@ pub fn eval_poly<F: Field>(poly: &[F], point: F) -> F {
         .fold(F::ZERO, |acc, &coeff| acc * point + coeff)
 }
 
+/// Evaluate a polynomial at a point using a chunk-parallel Horner scheme.
+///
+/// Splits `poly` into contiguous chunks, evaluates each chunk's local Horner sum in
+/// parallel, then combines the per-chunk results with one more Horner pass over powers
+/// of `point^chunk_len`:
+/// `value = chunk_0 + point^L * (chunk_1 + point^L * (chunk_2 + ...))`.
+///
+/// Falls back to plain [`eval_poly`] for inputs too small to amortize the parallel
+/// dispatch.
+pub fn eval_poly_parallel<F: Field>(poly: &[F], point: F) -> F {
+    const MIN_PARALLEL_LEN: usize = 4096;
+    if poly.len() < MIN_PARALLEL_LEN {
+        return eval_poly(poly, point);
+    }
+
+    let num_chunks = current_num_threads().max(1);
+    let chunk_size = poly.len().div_ceil(num_chunks);
+    let point_pow_chunk = point.exp_u64(chunk_size as u64);
+
+    poly.par_chunks(chunk_size)
+        .map(|chunk| eval_poly(chunk, point))
+        .collect::<Vec<F>>()
+        .into_iter()
+        .rev()
+        .fold(F::ZERO, |acc, chunk_val| acc * point_pow_chunk + chunk_val)
+}
+
 /// Divide a coefficient-form polynomial by the linear factor `(X - point)`.
 ///
 /// Returns `(quotient, remainder)` via synthetic (Horner) division.
@@ -538,6 +565,20 @@ mod tests {
     fn test_eval_poly_zero() {
         let poly: Vec<F> = vec![];
         assert_eq!(eval_poly(&poly, F::from_u64(3)), F::ZERO);
+    }
+
+    #[test]
+    fn test_eval_poly_parallel_matches_eval_poly() {
+        // Exercise chunk boundaries around and past the parallel-dispatch threshold.
+        for len in [0, 1, 4095, 4096, 4097, 10_000] {
+            let poly: Vec<F> = (0..len).map(|i| F::from_u64(i as u64 + 1)).collect();
+            let point = F::from_u64(12345);
+            assert_eq!(
+                eval_poly_parallel(&poly, point),
+                eval_poly(&poly, point),
+                "mismatch at len={len}"
+            );
+        }
     }
 
     #[test]
