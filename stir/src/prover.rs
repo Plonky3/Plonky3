@@ -351,10 +351,15 @@ where
         final_log_arity,
         current_log_domain,
     );
-    let final_new_coeffs = coeffs_from_codeword(dft, &final_codeword, final_new_shift);
+    // The final polynomial has only `final_len` coefficients, far fewer than
+    // `final_codeword`'s full domain size. Rather than run a full-size iDFT and discard
+    // the (necessarily zero) high coefficients, gather a `final_len`-sized coset — every
+    // `stride`-th natural-order point, which is exactly the subgroup coset of that size —
+    // and run the small iDFT directly on it.
     let final_len = config.final_poly_len();
-    let mut final_poly = final_new_coeffs;
-    final_poly.resize(final_len, EF::ZERO);
+    let stride = final_codeword.len() / final_len;
+    let final_poly_evals: Vec<EF> = (0..final_len).map(|i| final_codeword[i * stride]).collect();
+    let final_poly = coeffs_from_codeword(dft, &final_poly_evals, final_new_shift);
 
     challenger.observe_algebra_slice(&final_poly);
     let final_pow_witness = challenger.grind(config.final_pow_bits);
