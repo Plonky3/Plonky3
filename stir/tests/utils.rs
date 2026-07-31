@@ -359,3 +359,38 @@ fn test_fold_codeword_agrees_with_fold_fiber() {
         );
     }
 }
+
+#[test]
+fn test_fold_codeword_higher_arity_agrees_with_fold_fiber() {
+    use p3_dft::Radix2DitParallel;
+    use p3_stir::prover::codeword_from_coeffs;
+    use p3_stir::utils::{fold_codeword, fold_fiber};
+
+    let log_domain = 6;
+    let domain_size = 1 << log_domain;
+    let dft = Radix2DitParallel::<F>::default();
+    let shift = F::GENERATOR;
+
+    let coeffs: Vec<EF> = (1..=domain_size).map(|i| ef(i as u64)).collect();
+    let codeword = codeword_from_coeffs(&dft, coeffs, shift, log_domain);
+
+    // Binary-pass decomposition kicks in for log_arity >= 2; check arity 4 and arity 8.
+    for log_arity in [2usize, 3usize] {
+        let gamma = ef(1000 + log_arity as u64);
+        let folded = fold_codeword::<F, EF>(&codeword, gamma, log_arity, log_domain);
+
+        let new_height = codeword.len() >> log_arity;
+        let log_new_height = log_domain - log_arity;
+
+        for j in 0..new_height {
+            let fiber: Vec<EF> = (0..(1 << log_arity))
+                .map(|k| codeword[j + k * new_height])
+                .collect();
+            let expected = fold_fiber::<F, EF>(&fiber, j, log_new_height, log_arity, gamma);
+            assert_eq!(
+                folded[j], expected,
+                "fold_codeword and fold_fiber disagree at log_arity={log_arity}, j={j}"
+            );
+        }
+    }
+}
