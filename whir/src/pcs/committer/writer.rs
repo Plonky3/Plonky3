@@ -4,7 +4,7 @@ use p3_field::{ExtensionField, PackedFieldExtension, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::extension::FlatMatrixView;
-use p3_multilinear_util::maybe::{PolyMaybePacked, PolyMaybePackedView};
+use p3_multilinear_util::poly::{PolyMaybePacked, PolyMaybePackedView};
 use p3_sumcheck::strategy::VariableOrder;
 use tracing::info_span;
 
@@ -74,7 +74,7 @@ where
             let padded = info_span!("pad").in_scope(|| {
                 let mut values = EF::zero_vec(height * width);
                 // Unpack the live evaluations straight into the leading rows; no scalar copy.
-                poly.unpack_into(&mut values[..poly.num_evals()]);
+                poly.unpack_into(&mut values[..poly.num_scalar_evals()]);
                 RowMajorMatrix::new(values, width)
             });
             info_span!("dft", height = padded.height(), width = padded.width())

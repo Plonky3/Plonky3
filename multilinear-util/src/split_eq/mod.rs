@@ -114,7 +114,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         }
 
         // Number of scalar elements per eq1 block.
-        let cs = self.eq1.num_evals();
+        let cs = self.eq1.num_scalar_evals();
         if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
             // Sequential: chunk poly by eq1 block size, pair with eq0 weights.
             // For each chunk, compute the inner dot product with eq1,
@@ -152,7 +152,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             return constant;
         }
 
-        let cs = self.eq1.num_evals();
+        let cs = self.eq1.num_scalar_evals();
         if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
             // Sequential outer loop: dot each chunk with eq1, weight by eq0.
             poly.as_slice()
@@ -187,30 +187,26 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             poly.num_variables() + log2_strict_usize(F::Packing::WIDTH),
             self.num_variables()
         );
-        match &self.eq1 {
-            EqMaybePacked::Packed(eq1) => {
-                // Both polynomial and eq1 are packed; use packed dot product kernel.
-                let cs = eq1.num_evals();
-                if (1 << (self.num_variables() - log2_strict_usize(F::Packing::WIDTH)))
-                    < PARALLEL_THRESHOLD
-                {
-                    poly.as_slice()
-                        .chunks(cs)
-                        .zip_eq(self.eq0.iter())
-                        .map(|(chunk, &w0)| self.eq1.dot_with_ext_packed(chunk) * w0)
-                        .sum::<EF>()
-                } else {
-                    poly.as_slice()
-                        .par_chunks(cs)
-                        .zip_eq(self.eq0.as_slice().par_iter())
-                        .map(|(chunk, &w0)| self.eq1.dot_with_ext_packed(chunk) * w0)
-                        .sum::<EF>()
-                }
-            }
-            EqMaybePacked::Scalar(_) => {
-                // eq1 is scalar; unpack the polynomial and delegate to the scalar path.
-                self.eval_ext(poly.unpack().as_view())
-            }
+        // One packed eq1 block per eq0 entry, when eq1 is packed at all.
+        let Some(cs) = self.eq1.packed_len() else {
+            // eq1 is scalar; unpack the polynomial and delegate to the scalar path.
+            return self.eval_ext(poly.unpack().as_view());
+        };
+
+        // Both polynomial and eq1 are packed; use packed dot product kernel.
+        if (1 << (self.num_variables() - log2_strict_usize(F::Packing::WIDTH))) < PARALLEL_THRESHOLD
+        {
+            poly.as_slice()
+                .chunks(cs)
+                .zip_eq(self.eq0.iter())
+                .map(|(chunk, &w0)| self.eq1.dot_with_ext_packed(chunk) * w0)
+                .sum::<EF>()
+        } else {
+            poly.as_slice()
+                .par_chunks(cs)
+                .zip_eq(self.eq0.as_slice().par_iter())
+                .map(|(chunk, &w0)| self.eq1.dot_with_ext_packed(chunk) * w0)
+                .sum::<EF>()
         }
     }
 
@@ -229,7 +225,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         assert_eq!(log2_strict_usize(out.len()), self.num_variables());
         // Collapse optional scale into a single weight; identity if absent.
         let w_scale = scale.unwrap_or(EF::ONE);
-        let cs = self.eq1.num_evals();
+        let cs = self.eq1.num_scalar_evals();
         if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
             // Sequential: for each eq0 entry, accumulate eq1 * (eq0_weight * scale).
             out.chunks_mut(cs)
@@ -277,7 +273,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
                 });
         } else {
             // Chunk size in packed elements (scalar chunk size / W).
-            let cs = self.eq1.num_evals() / F::Packing::WIDTH;
+            let cs = self.eq1.num_scalar_evals() / F::Packing::WIDTH;
             if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
                 out.chunks_mut(cs)
                     .zip(self.eq0.iter())
@@ -480,7 +476,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // The maximal row repeats instead of wrapping, so handle it separately below.
         let last = *evals.last().unwrap();
         // Each prefix weight pairs with one contiguous suffix block of this length.
-        let cs = self.eq1.num_evals();
+        let cs = self.eq1.num_scalar_evals();
         // Successor shift: dropping the first eval aligns row x with successor x + 1.
         //
         //     evals     : [ e0, e1, e2, ..., e_{last} ]
@@ -619,7 +615,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         let out_len = poly.num_evals() >> self.num_variables();
         let mut out = EF::zero_vec(out_len);
         // Each prefix-half weight pairs with one suffix block of this length.
-        let cs = self.eq1.num_evals();
+        let cs = self.eq1.num_scalar_evals();
 
         // No suffix variables means nothing to fix, so the shifted sum is empty.
         if self.num_variables() == 0 {

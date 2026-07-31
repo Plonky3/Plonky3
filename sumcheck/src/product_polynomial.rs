@@ -22,9 +22,8 @@
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_maybe_rayon::prelude::*;
-use p3_multilinear_util::maybe::{PolyMaybePacked, PolyMaybePackedView};
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::poly::{Poly, PolyMaybePacked, PolyMaybePackedView};
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
@@ -1055,7 +1054,7 @@ mod tests {
         let view = poly.evals_view();
         assert!(matches!(view, PolyMaybePacked::Scalar(_)));
         assert_eq!(view.num_variables(), 2);
-        assert_eq!(view.num_evals(), 4);
+        assert_eq!(view.num_scalar_evals(), 4);
 
         // Unpacking the view must reproduce the stored evaluations.
         let mut out = vec![EF::ZERO; 4];

@@ -9,9 +9,8 @@
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_maybe_rayon::prelude::*;
-use p3_multilinear_util::maybe::PolyMaybePackedView;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::poly::{Poly, PolyMaybePackedView};
 
 use crate::constraints::{Constraint, Statements};
 use crate::product_polynomial::ProductPolynomial;
