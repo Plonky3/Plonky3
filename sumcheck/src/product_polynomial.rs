@@ -22,6 +22,7 @@
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::maybe::{PolyMaybePacked, PolyMaybePackedView};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
@@ -109,51 +110,6 @@ enum MaybePacked<F: Field, EF: ExtensionField<F>> {
         /// Scalar evaluations of the weight polynomial `w(x)`.
         weights: Poly<EF>,
     },
-}
-
-/// Borrowed view of a multilinear polynomial in its live representation.
-///
-/// Reads the current evaluations with no scalar copy.
-/// Works directly on the SIMD-packed buffer the prover still holds.
-#[derive(Debug, Clone, Copy)]
-pub enum PolyMaybePacked<'a, F: Field, EF: ExtensionField<F>> {
-    /// SIMD-packed evaluations; each element holds `F::Packing::WIDTH` lanes.
-    Packed(&'a Poly<EF::ExtensionPacking>),
-    /// Scalar evaluations.
-    Scalar(&'a Poly<EF>),
-}
-
-impl<F: Field, EF: ExtensionField<F>> PolyMaybePacked<'_, F, EF> {
-    /// Returns the logical number of variables, accounting for SIMD packing.
-    pub fn num_variables(&self) -> usize {
-        match self {
-            Self::Packed(poly) => poly.num_variables() + log2_strict_usize(F::Packing::WIDTH),
-            Self::Scalar(poly) => poly.num_variables(),
-        }
-    }
-
-    /// Returns the logical number of evaluations, `2^num_variables`.
-    pub fn num_evals(&self) -> usize {
-        1 << self.num_variables()
-    }
-
-    /// Writes all logical evaluations into `out` in index order.
-    ///
-    /// # Panics
-    ///
-    /// The output length must equal [`Self::num_evals`].
-    pub fn unpack_into(&self, out: &mut [EF]) {
-        assert_eq!(out.len(), self.num_evals());
-        match self {
-            Self::Packed(poly) => {
-                let lanes = EF::ExtensionPacking::to_ext_iter(poly.iter().copied());
-                for (slot, value) in out.iter_mut().zip(lanes) {
-                    *slot = value;
-                }
-            }
-            Self::Scalar(poly) => out.copy_from_slice(poly.as_slice()),
-        }
-    }
 }
 
 /// Paired evaluation and weight polynomials, tagged by a variable-binding order.
@@ -500,10 +456,10 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     /// Borrows the evaluation polynomial in its live representation.
     ///
     /// No unpacking or copying takes place.
-    pub const fn evals_view(&self) -> PolyMaybePacked<'_, F, EF> {
+    pub fn evals_view(&self) -> PolyMaybePackedView<'_, F, EF> {
         match &self.inner {
-            MaybePacked::Packed { evals, .. } => PolyMaybePacked::Packed(evals),
-            MaybePacked::Unpacked { evals, .. } => PolyMaybePacked::Scalar(evals),
+            MaybePacked::Packed { evals, .. } => PolyMaybePacked::Packed(evals.as_view()),
+            MaybePacked::Unpacked { evals, .. } => PolyMaybePacked::Scalar(evals.as_view()),
         }
     }
 

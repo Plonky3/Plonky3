@@ -9,11 +9,12 @@
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::maybe::PolyMaybePackedView;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
 use crate::constraints::{Constraint, Statements};
-use crate::product_polynomial::{PolyMaybePacked, ProductPolynomial};
+use crate::product_polynomial::ProductPolynomial;
 use crate::{SumcheckData, extrapolate_01inf};
 
 /// Input size at which the round-coefficient routines switch from serial to parallel execution.
@@ -423,7 +424,7 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// Borrows the current evaluation polynomial in its live representation.
     ///
     /// No unpacking or copying takes place.
-    pub const fn evals_view(&self) -> PolyMaybePacked<'_, F, EF> {
+    pub fn evals_view(&self) -> PolyMaybePackedView<'_, F, EF> {
         self.poly.evals_view()
     }
 

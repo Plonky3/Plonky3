@@ -19,6 +19,7 @@ use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_pro
 use p3_util::log2_strict_usize;
 
 use super::packed_kernel::{compress_hi_dot_packed, compress_prefix_to_packed_packed};
+use crate::maybe::PolyMaybePacked;
 use crate::point::Point;
 use crate::poly::Poly;
 
@@ -31,13 +32,7 @@ use crate::poly::Poly;
 ///   Only used when k >= log_2(W), where W is the SIMD width.
 ///
 /// All kernel methods dispatch internally on the variant, so callers do not need to match.
-#[derive(Debug, Clone)]
-pub enum EqMaybePacked<F: Field, EF: ExtensionField<F>> {
-    /// Scalar extension-field evaluations, one per hypercube point.
-    Unpacked(Poly<EF>),
-    /// SIMD-packed evaluations, each element holds W consecutive lanes.
-    Packed(Poly<<EF as ExtensionField<F>>::ExtensionPacking>),
-}
+pub type EqMaybePacked<F, EF> = PolyMaybePacked<F, EF>;
 
 impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// Builds a scalar (unpacked) equality table from a multilinear point.
@@ -45,7 +40,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// Always produces the scalar variant regardless of the number of variables.
     pub(super) fn new_unpacked(point: &Point<EF>) -> Self {
         // Materialize eq(point, .) with unit scale into a scalar polynomial.
-        Self::Unpacked(Poly::new_from_point(point.as_slice(), EF::ONE))
+        Self::Scalar(Poly::new_from_point(point.as_slice(), EF::ONE))
     }
 
     /// Builds a SIMD-packed equality table when the point has enough variables.
@@ -58,34 +53,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             Self::Packed(Poly::new_packed_from_point(point.as_slice(), EF::ONE))
         } else {
             // Not enough evaluations to pack; fall back to scalar.
-            Self::Unpacked(Poly::new_from_point(point.as_slice(), EF::ONE))
-        }
-    }
-
-    /// Total number of boolean variables represented by this table.
-    ///
-    /// For packed tables, this accounts for the log_2(W) variables
-    /// absorbed into each SIMD lane.
-    pub fn num_variables(&self) -> usize {
-        match self {
-            Self::Unpacked(poly) => poly.num_variables(),
-            // Packed polynomial has k - log_2(W) stored entries,
-            // but represents k total variables.
-            Self::Packed(poly) => poly.num_variables() + log2_strict_usize(F::Packing::WIDTH),
-        }
-    }
-
-    /// Number of scalar base-field elements per eq1 block.
-    ///
-    /// - For unpacked: 2^k scalar elements.
-    /// - For packed: num_packed_entries * W scalar elements.
-    ///
-    /// This is used to determine chunk sizes when iterating over
-    /// a polynomial paired with this eq table.
-    pub fn scalar_chunk_size(&self) -> usize {
-        match self {
-            Self::Unpacked(eq1) => eq1.num_evals(),
-            Self::Packed(eq1) => eq1.num_evals() * F::Packing::WIDTH,
+            Self::Scalar(Poly::new_from_point(point.as_slice(), EF::ONE))
         }
     }
 
@@ -98,7 +66,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     pub(super) fn dot_with_base(&self, chunk: &[F]) -> EF {
         match self {
             // Scalar path: direct element-wise dot product.
-            Self::Unpacked(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
+            Self::Scalar(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
             Self::Packed(eq1) => {
                 // Reinterpret the flat scalar slice as packed SIMD elements.
                 // Compute packed dot product, then reduce lanes to a single scalar.
@@ -121,7 +89,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     pub(super) fn dot_with_ext(&self, chunk: &[EF]) -> EF {
         match self {
             // Scalar path: direct element-wise dot product.
-            Self::Unpacked(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
+            Self::Scalar(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
             Self::Packed(eq1) => {
                 // Group W consecutive extension-field elements into packed form,
                 // then dot product with the packed eq table.
@@ -151,7 +119,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                 let sum = dot_product(chunk.iter().copied(), eq1.iter().copied());
                 EF::ExtensionPacking::to_ext_iter([sum]).sum()
             }
-            Self::Unpacked(_) => unreachable!(),
+            Self::Scalar(_) => unreachable!(),
         }
     }
 
@@ -165,7 +133,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// before accumulating into the output.
     pub(super) fn accumulate_scalar_into(&self, out: &mut [EF], weight: EF) {
         match self {
-            Self::Unpacked(eq1) => {
+            Self::Scalar(eq1) => {
                 // Scalar path: direct weighted accumulation.
                 out.iter_mut()
                     .zip(eq1.iter())
@@ -222,7 +190,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     pub(super) fn compress_prefix_into(&self, out: &mut [EF], chunk: &[F], w0: EF) {
         let size_inner = out.len();
         match self {
-            Self::Unpacked(eq1) => {
+            Self::Scalar(eq1) => {
                 // Iterate over eq1 entries; each owns size_inner base-field elements.
                 chunk
                     .chunks(size_inner)
@@ -276,7 +244,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         w0: EF,
     ) {
         match self {
-            Self::Unpacked(eq1) => {
+            Self::Scalar(eq1) => {
                 let packed_inner = out.len();
                 // Pack the entire scalar chunk into SIMD elements.
                 let chunk = F::Packing::pack_slice(chunk);
@@ -319,7 +287,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// - eq0: the prefix-half eq table weights
     pub(super) fn compress_suffix_dot(&self, chunk: &[F], eq0: &Poly<EF>) -> EF {
         match self {
-            Self::Unpacked(eq1) => {
+            Self::Scalar(eq1) => {
                 // Group the chunk by eq1 size, pair with eq0 weights.
                 // Inner dot product over eq1, then weight by eq0 and sum.
                 chunk
@@ -366,7 +334,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         // Stream the equality weights as scalars, unpacking SIMD lanes when stored packed,
         // then run the shared row recurrence over that stream.
         match self {
-            Self::Unpacked(eq1) => {
+            Self::Scalar(eq1) => {
                 accumulate_next_rows(
                     out,
                     eq_weight,
@@ -405,7 +373,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         let size_inner = out.len();
         match self {
             // Scalar storage: one equality weight per inner block.
-            Self::Unpacked(eq1) => {
+            Self::Scalar(eq1) => {
                 // Skip the first inner block; its predecessor is in the prior chunk.
                 chunk
                     .chunks(size_inner)
@@ -451,11 +419,11 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// The block may be shorter than the table, so only its leading rows are used.
     pub(super) fn dot_with_base_shifted(&self, chunk: &[F]) -> EF {
         // The chunk never exceeds one full suffix-half row block.
-        debug_assert!(chunk.len() <= self.scalar_chunk_size());
+        debug_assert!(chunk.len() <= self.num_evals());
 
         match self {
             // Scalar storage: dot the chunk against the matching leading weights.
-            Self::Unpacked(eq1) => {
+            Self::Scalar(eq1) => {
                 dot_product(eq1.iter().take(chunk.len()).copied(), chunk.iter().copied())
             }
             // SIMD-packed storage: split the chunk into full lanes plus a tail.
@@ -494,7 +462,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     pub fn last_scalar(&self) -> EF {
         match self {
             // Scalar storage: the last entry is already a field element.
-            Self::Unpacked(eq1) => *eq1.as_slice().last().unwrap(),
+            Self::Scalar(eq1) => *eq1.as_slice().last().unwrap(),
             // Packed storage: the final row is the last lane of the last packed value.
             Self::Packed(eq1) => {
                 EF::ExtensionPacking::to_ext_iter([*eq1.as_slice().last().unwrap()])
@@ -583,7 +551,7 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
             // Should be scalar despite requesting packed.
-            assert!(matches!(eq, EqMaybePacked::Unpacked(_)));
+            assert!(matches!(eq, EqMaybePacked::Scalar(_)));
             assert_eq!(eq.num_variables(), k);
         }
     }
@@ -608,25 +576,8 @@ mod tests {
         for k in 0..=8 {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
-            assert!(matches!(eq, EqMaybePacked::Unpacked(_)));
+            assert!(matches!(eq, EqMaybePacked::Scalar(_)));
             assert_eq!(eq.num_variables(), k);
-        }
-    }
-
-    // Chunk size consistency
-
-    #[test]
-    fn test_scalar_chunk_size() {
-        let mut rng = SmallRng::seed_from_u64(0);
-        // Both variants must report the same scalar chunk size for a given k.
-        for k in 0..=8 {
-            let point = Point::<EF>::rand(&mut rng, k);
-            let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
-            // Scalar chunk size is always 2^k regardless of packing.
-            assert_eq!(unpacked.scalar_chunk_size(), 1 << k);
-
-            let packed = EqMaybePacked::<F, EF>::new_packed(&point);
-            assert_eq!(packed.scalar_chunk_size(), 1 << k);
         }
     }
 
@@ -896,7 +847,7 @@ mod tests {
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0), 0);
         let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
         assert_eq!(eq.num_variables(), 0);
-        assert_eq!(eq.scalar_chunk_size(), 1);
+        assert_eq!(eq.num_evals(), 1);
         // Dot with a single element should return that element times 1.
         assert_eq!(eq.dot_with_base(&[F::TWO]), EF::TWO);
         assert_eq!(eq.dot_with_ext(&[EF::TWO]), EF::TWO);
