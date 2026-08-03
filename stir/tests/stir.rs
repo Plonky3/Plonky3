@@ -409,8 +409,8 @@ mod babybear_stir {
             assert_eq!(rp_a.ans_polynomial, rp_b.ans_polynomial);
             assert_eq!(rp_a.shake_polynomial, rp_b.shake_polynomial);
             assert_eq!(
-                rp_a.query_openings.row_evals.len(),
-                rp_b.query_openings.row_evals.len()
+                rp_a.query_openings.as_ref().unwrap().row_evals.len(),
+                rp_b.query_openings.as_ref().unwrap().row_evals.len()
             );
         }
     }
@@ -427,8 +427,13 @@ mod babybear_stir {
         let mut p_challenger = challenger.clone();
         let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
-        assert!(!proof.round_proofs[0].query_openings.row_evals.is_empty());
-        proof.round_proofs[0].query_openings.row_evals[0][0] += EF::from(F::ONE);
+        let row_evals = &mut proof.round_proofs[0]
+            .query_openings
+            .as_mut()
+            .unwrap()
+            .row_evals;
+        assert!(!row_evals.is_empty());
+        row_evals[0][0] += EF::from(F::ONE);
 
         let mut v_challenger = challenger;
         assert!(
@@ -451,7 +456,11 @@ mod babybear_stir {
         let mut p_challenger = challenger.clone();
         let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
-        let row_evals = &mut proof.round_proofs[0].query_openings.row_evals;
+        let row_evals = &mut proof.round_proofs[0]
+            .query_openings
+            .as_mut()
+            .unwrap()
+            .row_evals;
         assert!(row_evals.len() >= 2, "need at least two queries to permute");
         assert_ne!(
             row_evals[0], row_evals[1],
@@ -480,6 +489,8 @@ mod babybear_stir {
 
         let sibs = &mut proof.round_proofs[0]
             .query_openings
+            .as_mut()
+            .unwrap()
             .opening_proof
             .sibling_hashes;
         assert!(!sibs.is_empty());
@@ -508,6 +519,8 @@ mod babybear_stir {
 
         let sibs = &mut proof.round_proofs[0]
             .query_openings
+            .as_mut()
+            .unwrap()
             .opening_proof
             .sibling_hashes;
         assert!(!sibs.is_empty());
@@ -614,6 +627,28 @@ mod babybear_stir {
     }
 
     #[test]
+    fn test_missing_initial_commitment_rejected() {
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let degree = 1usize << log_degree;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let mut p_challenger = challenger.clone();
+        let (mut proof, _idx) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+
+        // `verify_stir` verifies the initial oracle against its commitment, so a proof that
+        // omits the commitment cannot be checked and must be rejected rather than skipped.
+        proof.initial_commitment = None;
+
+        let mut v_challenger = challenger;
+        let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger)
+            .expect_err("a missing initial commitment must be rejected");
+        assert!(matches!(err, p3_stir::StirError::InvalidProofShape));
+    }
+
+    #[test]
     fn test_tampered_final_query_proof_fails() {
         let (params, dft, challenger) = make_params(1, 2);
         let mut rng = seeded_rng();
@@ -625,9 +660,10 @@ mod babybear_stir {
         let mut p_challenger = challenger.clone();
         let (mut proof, _idx) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
-        assert!(!proof.final_query_openings.row_evals.is_empty());
-        assert!(!proof.final_query_openings.row_evals[0].is_empty());
-        proof.final_query_openings.row_evals[0][0] += EF::from(F::ONE);
+        let row_evals = &mut proof.final_query_openings.as_mut().unwrap().row_evals;
+        assert!(!row_evals.is_empty());
+        assert!(!row_evals[0].is_empty());
+        row_evals[0][0] += EF::from(F::ONE);
 
         let mut v_challenger = challenger;
         assert!(
@@ -901,6 +937,13 @@ mod babybear_pcs {
     #[test]
     fn test_pcs_single_degree4() {
         do_test_pcs(&[4]);
+    }
+
+    #[test]
+    fn test_pcs_single_degree2_no_intermediate_rounds() {
+        // log_stir_degree == log_folding_factor, so STIR runs no intermediate rounds and the
+        // final-round queries read the external initial oracle directly.
+        do_test_pcs(&[2]);
     }
 
     #[test]
@@ -1356,9 +1399,9 @@ mod babybear_pcs {
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
-        // Tamper one coordinate of the claimed evaluation. The reduced opening recomputed
-        // by the verifier will diverge from what STIR queried, so the input-binding loop
-        // must reject.
+        // Tamper one coordinate of the claimed evaluation. The reduced opening the verifier
+        // reconstructs then diverges from the codeword STIR actually folded, so the round
+        // consistency checks must reject.
         let mut tampered = opening_values[0][0][0].clone();
         tampered[0] += Challenge::from(Val::ONE);
 
@@ -1368,5 +1411,43 @@ mod babybear_pcs {
             res.is_err(),
             "PCS verify must reject a tampered claimed opening"
         );
+    }
+
+    #[test]
+    fn test_pcs_rejects_stray_initial_commitment() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+        let log_d = 6;
+
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 3);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        p_ch.observe(commit.clone());
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        // The PCS runs STIR with an external initial oracle, so a proof carrying a commitment
+        // to it is malformed: accepting one would let a prover feed the transcript an extra
+        // message the verifier never checks.
+        proof[0].0.initial_commitment = Some(proof[0].0.round_proofs[0].commitment.clone());
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        let claims = vec![(
+            commit,
+            vec![(domain, vec![(v_zeta, opening_values[0][0][0].clone())])],
+        )];
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
+            .expect_err("a stray initial commitment must be rejected");
+        assert!(matches!(err, p3_stir::StirError::InvalidProofShape));
     }
 }

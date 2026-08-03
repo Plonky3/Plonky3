@@ -14,7 +14,11 @@ use serde::{Deserialize, Serialize};
 ))]
 pub struct StirProof<EF: Field, M: Mmcs<EF>, Witness> {
     /// Commitment to the initial codeword on L_0.
-    pub initial_commitment: M::Commitment,
+    ///
+    /// `None` when the initial oracle is external: the caller binds that codeword through its
+    /// own commitment and supplies the queried fibers at verification time, so STIR neither
+    /// commits to it nor opens it.
+    pub initial_commitment: Option<M::Commitment>,
 
     /// One proof per intermediate STIR round (excluding the final send).
     pub round_proofs: Vec<StirRoundProof<EF, M, Witness>>,
@@ -30,7 +34,10 @@ pub struct StirProof<EF: Field, M: Mmcs<EF>, Witness> {
 
     /// Merkle openings for the final consistency queries against the last committed codeword,
     /// sharing one pruned multi-opening proof.
-    pub final_query_openings: StirQueryOpenings<EF, M>,
+    ///
+    /// `None` exactly when these queries read an external initial oracle, which happens only
+    /// if there are no intermediate rounds.
+    pub final_query_openings: Option<StirQueryOpenings<EF, M>>,
 }
 
 /// Proof for a single STIR round.
@@ -70,7 +77,10 @@ pub struct StirRoundProof<EF: Field, M: Mmcs<EF>, Witness> {
     pub shake_polynomial: Vec<EF>,
 
     /// Merkle openings for the STIR queries, sharing one pruned multi-opening proof.
-    pub query_openings: StirQueryOpenings<EF, M>,
+    ///
+    /// `None` exactly when this round's queries read an external initial oracle, which happens
+    /// only in round 0.
+    pub query_openings: Option<StirQueryOpenings<EF, M>>,
 }
 
 /// Batched Merkle openings and fiber evaluations for the queries of one round.

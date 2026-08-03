@@ -63,6 +63,43 @@ where
     prove_stir_from_codeword(config, initial_codeword, dft, challenger)
 }
 
+/// Prove low degree from an initial codeword that the caller has already bound.
+///
+/// Identical to [`prove_stir_from_codeword`] except that the initial oracle is never committed:
+/// no Merkle tree is built over it, its commitment is absent from the proof, and the queries
+/// that read it ship no rows. The verifier side is [`verify_stir_with_external_initial`], whose
+/// caller supplies the queried fibers.
+///
+/// # Soundness requirement
+///
+/// The caller MUST guarantee that the initial codeword is uniquely determined by data already
+/// absorbed into `challenger` before this call — for the PCS layer, the input commitments, the
+/// claimed opening values, and the batching challenge derived from them. STIR draws the round-0
+/// folding challenge after this point, so a prover still free to choose the initial codeword
+/// afterwards would break the proximity argument. A commitment adds nothing once the codeword
+/// is already pinned, which is exactly why it can be dropped.
+///
+/// [`verify_stir_with_external_initial`]: crate::verifier::verify_stir_with_external_initial
+#[instrument(skip_all)]
+pub fn prove_stir_from_external_codeword<F, EF, Dft, M, Challenger>(
+    config: &StirConfig<F, EF, M, Challenger>,
+    initial_codeword: Vec<EF>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+) -> (StirProof<EF, M, Challenger::Witness>, Vec<usize>)
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
+    prove_stir_inner(config, initial_codeword, dft, challenger, false)
+}
+
 /// Prove low degree from an initial natural-order codeword on STIR's starting domain.
 ///
 /// This avoids an inverse DFT followed by a forward DFT when a caller already has the
@@ -85,6 +122,29 @@ where
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>,
 {
+    prove_stir_inner(config, initial_codeword, dft, challenger, true)
+}
+
+/// Shared body of [`prove_stir_from_codeword`] and [`prove_stir_from_external_codeword`].
+///
+/// `commit_initial` selects whether the initial oracle is committed and opened by STIR.
+fn prove_stir_inner<F, EF, Dft, M, Challenger>(
+    config: &StirConfig<F, EF, M, Challenger>,
+    initial_codeword: Vec<EF>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+    commit_initial: bool,
+) -> (StirProof<EF, M, Challenger::Witness>, Vec<usize>)
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
     let num_rounds = config.num_rounds();
     let initial_shift = F::GENERATOR;
     let log_initial_domain = config.log_starting_domain_size();
@@ -96,9 +156,14 @@ where
     );
 
     // Commit before moving the codeword into the round state, avoiding a full clone.
-    let (initial_commit, initial_data) =
-        commit_as_fiber_matrix(&config.mmcs, &initial_codeword, config.log_folding_factor);
-    challenger.observe(initial_commit.clone());
+    let (initial_commit, initial_data) = if commit_initial {
+        let (commit, data) =
+            commit_as_fiber_matrix(&config.mmcs, &initial_codeword, config.log_folding_factor);
+        challenger.observe(commit.clone());
+        (Some(commit), Some(data))
+    } else {
+        (None, None)
+    };
 
     let mut current_oracle_codeword = initial_codeword;
     let mut current_shift = initial_shift;
@@ -223,13 +288,15 @@ where
             }
         }
 
-        // One shared, pruned multi-opening proof for every query drawn this round.
-        let query_openings = open_fiber_rows(&config.mmcs, &query_indices, &current_commit_data);
+        // One shared, pruned multi-opening proof for every query drawn this round. Absent when
+        // this round reads an external initial oracle, whose fibers the verifier rebuilds.
+        let query_openings = current_commit_data
+            .as_ref()
+            .map(|data| open_fiber_rows(&config.mmcs, &query_indices, data));
         debug_assert!(
             query_openings
-                .row_evals
                 .iter()
-                .all(|row| row.len() == arity)
+                .all(|o| o.row_evals.iter().all(|row| row.len() == arity))
         );
 
         // Collect first-round query indices for the PCS binding check.
@@ -328,7 +395,7 @@ where
         });
 
         current_oracle_codeword = next_oracle_codeword;
-        current_commit_data = new_data;
+        current_commit_data = Some(new_data);
         current_shift = next_shift;
         current_log_domain = next_log_domain;
     }
@@ -374,13 +441,13 @@ where
         final_query_indices.push(j);
     }
 
-    let final_query_openings =
-        open_fiber_rows(&config.mmcs, &final_query_indices, &current_commit_data);
+    let final_query_openings = current_commit_data
+        .as_ref()
+        .map(|data| open_fiber_rows(&config.mmcs, &final_query_indices, data));
     debug_assert!(
         final_query_openings
-            .row_evals
             .iter()
-            .all(|row| row.len() == final_arity)
+            .all(|o| o.row_evals.iter().all(|row| row.len() == final_arity))
     );
 
     // When there are no intermediate rounds the final queries target the
