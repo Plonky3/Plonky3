@@ -483,17 +483,6 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        let global_max_height = commitments_with_opening_points
-            .iter()
-            .flat_map(|(_, domain_claims)| {
-                domain_claims
-                    .iter()
-                    .map(|(domain, _)| domain.size() << self.stir.log_blowup)
-            })
-            .max()
-            .unwrap_or(1);
-        let log_global_max_height = log2_strict_usize(global_max_height);
-
         // Observe all opened values to keep the transcript in sync.
         for (_, domain_claims) in &commitments_with_opening_points {
             for (_, point_claims) in domain_claims {
@@ -563,14 +552,6 @@ where
             Challenge::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied())
                 .collect_vec();
 
-        let coset: Vec<Val> = {
-            let coset =
-                TwoAdicMultiplicativeCoset::new(Val::GENERATOR, log_global_max_height).unwrap();
-            let mut pts = coset.iter().collect();
-            reverse_slice_index_bits(&mut pts);
-            pts
-        };
-
         // Verify each height bucket's STIR sub-proof and input binding.
         for (bucket_idx, &log_h) in bucket_log_heights.iter().enumerate() {
             let bucket_height = 1usize << log_h;
@@ -595,6 +576,13 @@ where
             // STIR ran with intermediate rounds or only a final round.
             let log_arity0 = stir_config.log_folding_factor;
             let arity0 = 1usize << log_arity0;
+
+            // A queried input row sits at LDE position `p = j + l * fold_height0`, whose coset
+            // point is `GENERATOR * g^p` for `g = two_adic_generator(log_h)`. Walking a fiber's
+            // `arity0` lanes is therefore one exponentiation per query followed by repeated
+            // multiplication by the fixed step `g^fold_height0`, an `arity0`-th root of unity.
+            let domain_gen = Val::two_adic_generator(log_h);
+            let fiber_step = domain_gen.exp_power_of_2(log_h - log_arity0);
 
             // STIR's initial oracle is the reduced opening, which is a deterministic function
             // of the input commitments, the claimed values, and `alpha` — all already in the
@@ -682,14 +670,13 @@ where
 
                         for (q_idx, &j) in first_round_unique_js.iter().enumerate() {
                             let row_vals_by_mat = &opening.opened_values[q_idx];
-                            let group = reverse_bits_len(j, log_h - log_arity0);
+                            let mut fiber_point = Val::GENERATOR * domain_gen.exp_u64(j as u64);
 
                             #[allow(clippy::needless_range_loop)]
                             for l in 0..arity0 {
-                                // Fiber column `l` sits at slot `reverse_bits_len(l, log_arity0)` of the
-                                // grouped row, and at LDE row `group * arity0 + slot`.
+                                // Fiber column `l` sits at slot `reverse_bits_len(l, log_arity0)`
+                                // of the grouped row.
                                 let slot = reverse_bits_len(l, log_arity0);
-                                let q_local = (group << log_arity0) | slot;
 
                                 for (mat_idx, (_, point_claims)) in domain_claims.iter().enumerate()
                                 {
@@ -721,12 +708,14 @@ where
                                             .sum();
 
                                         let inv_denom =
-                                            (*point - Challenge::from(coset[q_local])).inverse();
+                                            (*point - Challenge::from(fiber_point)).inverse();
 
                                         expected_ro[q_idx][l] +=
                                             alpha_pow_offset * (p_x - y_combined) * inv_denom;
                                     }
                                 }
+
+                                fiber_point *= fiber_step;
                             }
                         }
                     }
