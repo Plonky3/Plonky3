@@ -205,7 +205,7 @@ where
         );
         let fold_coeffs = coeffs_from_codeword(dft, &folded_codeword, fold_shift);
 
-        let next_commit_codeword =
+        let next_commit_codeword: Vec<EF> =
             codeword_from_coeffs(dft, fold_coeffs.clone(), next_shift, next_log_domain);
         let (new_commit, new_data) = commit_as_fiber_matrix(
             &config.mmcs,
@@ -339,7 +339,6 @@ where
         // arbitrary interpolation points — but both are tiny next to the domain, so they go
         // through the low-degree coset evaluation rather than a full-size DFT each.
         let num_answers = all_points.len();
-        let next_domain_size = 1usize << next_log_domain;
 
         let vanishing_coeffs = vanishing_poly_from_roots(&all_points);
         // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
@@ -354,32 +353,49 @@ where
             log_answer_len,
         );
 
-        // x_j = next_shift * g^j; step_j = r_comb * x_j = step_start * g^j.
+        // x_j = next_shift * g^j, so step_j = r_comb * x_j = step_start * g^j, and the degree
+        // correction's numerator sweeps the same coset at stride `num_answers + 1`. Both are
+        // geometric with a base-field ratio, so each chunk seeds one exponentiation and then
+        // advances by a base-field multiply: no power tables, and no ext-by-ext products.
+        const POWER_CHUNK: usize = 1 << 12;
         let g_next = F::two_adic_generator(next_log_domain);
-        let g_powers: Vec<F> = g_next.powers().collect_n(next_domain_size);
-        let g_powers_hi: Vec<F> = g_next
-            .exp_u64((num_answers + 1) as u64)
-            .powers()
-            .collect_n(next_domain_size);
-        let step_start = r_comb * EF::from(next_shift);
+        let g_next_hi = g_next.exp_u64((num_answers + 1) as u64);
+        let step_start = r_comb * next_shift;
         let step_start_hi = step_start.exp_u64((num_answers + 1) as u64);
 
-        let combined_denoms: Vec<EF> = (0..next_domain_size)
-            .into_par_iter()
-            .map(|j| vanishing_evals[j] * (EF::ONE - step_start * EF::from(g_powers[j])))
-            .collect();
+        // The quotient denominators are the vanishing evaluations scaled by the degree
+        // correction's `(1 - step)` denominator, so they are formed in place.
+        let mut combined_denoms = vanishing_evals;
+        combined_denoms
+            .par_chunks_mut(POWER_CHUNK)
+            .enumerate()
+            .for_each(|(chunk_idx, chunk)| {
+                let mut step = step_start * g_next.exp_u64((chunk_idx * POWER_CHUNK) as u64);
+                for denom in chunk.iter_mut() {
+                    *denom *= EF::ONE - step;
+                    step *= g_next;
+                }
+            });
         let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
+        drop(combined_denoms);
 
-        let next_oracle_codeword: Vec<EF> = (0..next_domain_size)
-            .into_par_iter()
-            .map(|j| {
-                let degree_correction_numerator =
-                    EF::ONE - step_start_hi * EF::from(g_powers_hi[j]);
-                (next_commit_codeword[j] - ans_evals[j])
-                    * combined_inverses[j]
-                    * degree_correction_numerator
-            })
-            .collect();
+        // `commit_as_fiber_matrix` has already copied the committed codeword into the Merkle
+        // tree, so the next oracle is formed in place over it.
+        let mut next_oracle_codeword = next_commit_codeword;
+        next_oracle_codeword
+            .par_chunks_mut(POWER_CHUNK)
+            .zip(ans_evals.par_chunks(POWER_CHUNK))
+            .zip(combined_inverses.par_chunks(POWER_CHUNK))
+            .enumerate()
+            .for_each(|(chunk_idx, ((chunk, ans_chunk), inverse_chunk))| {
+                let mut numerator_step =
+                    step_start_hi * g_next_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
+                for ((value, &ans), &inverse) in chunk.iter_mut().zip(ans_chunk).zip(inverse_chunk)
+                {
+                    *value = (*value - ans) * inverse * (EF::ONE - numerator_step);
+                    numerator_step *= g_next_hi;
+                }
+            });
 
         round_proofs.push(StirRoundProof {
             commitment: new_commit,
