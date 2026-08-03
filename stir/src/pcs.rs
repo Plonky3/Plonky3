@@ -62,12 +62,53 @@ use crate::verifier::{StirError, verify_stir};
     deserialize = "Val: Deserialize<'de>, InputMmcs::MultiProof: Deserialize<'de>"
 ))]
 pub struct InputOpenings<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
-    /// `opened_values[k][m]` is the opened row of matrix `m` at the `k`-th queried position,
-    /// in the same `(query, fiber column)` order the prover and verifier both derive from
-    /// public data.
+    /// `opened_values[k][m]` is the opened fiber-grouped row of matrix `m` at the `k`-th
+    /// queried position, in the same query order the prover and verifier both derive from
+    /// public data. Each such row concatenates the `2^log_folding_factor` LDE rows of one
+    /// fiber, ordered by the bit-reversal of the fiber column index.
     pub opened_values: Vec<Vec<Vec<Val>>>,
     /// Compact multi-opening proof authenticating every row at once.
     pub opening_proof: InputMmcs::MultiProof,
+}
+
+/// Prover data for [`TwoAdicStirPcs`].
+///
+/// The LDE matrices are committed in fiber-grouped form: each Merkle leaf holds
+/// `2^log_folding_factor` consecutive bit-reversed LDE rows, i.e. exactly the rows one
+/// first-round STIR query reads. `widths` records each matrix's column count before grouping
+/// so the original shape can be recovered for opening and quotient computation.
+pub struct StirProverData<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
+    data: InputMmcs::ProverData<RowMajorMatrix<Val>>,
+    widths: Vec<usize>,
+}
+
+/// Reinterpret a bit-reversed LDE as a matrix whose rows are whole STIR fibers.
+///
+/// A first-round query at fold-domain index `j` reads the LDE rows
+/// `reverse_bits_len(j + l * 2^(log_h - log_arity), log_h)` for `l < 2^log_arity`. Writing
+/// `j` into the low `log_h - log_arity` bits and `l` into the high `log_arity` bits, the
+/// reversal maps that set onto the contiguous block
+/// `[rev(j) * 2^log_arity, (rev(j) + 1) * 2^log_arity)`, so grouping is a pure reshape of the
+/// same buffer: no row ever straddles two leaves.
+fn group_fiber_rows<Val: Clone + Send + Sync>(
+    lde: RowMajorMatrix<Val>,
+    log_arity: usize,
+) -> RowMajorMatrix<Val> {
+    let width = lde.width() << log_arity;
+    RowMajorMatrix::new(lde.values, width)
+}
+
+/// Recover views of the committed matrices in their pre-grouping shape.
+fn lde_views<'a, Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>>(
+    input_mmcs: &InputMmcs,
+    prover_data: &'a StirProverData<Val, InputMmcs>,
+) -> Vec<RowMajorMatrixView<'a, Val>> {
+    input_mmcs
+        .get_matrices(&prover_data.data)
+        .into_iter()
+        .zip(prover_data.widths.iter())
+        .map(|(mat, &width)| RowMajorMatrixView::new(mat.values.as_slice(), width))
+        .collect()
 }
 
 /// A polynomial commitment scheme using STIR to generate opening proofs.
@@ -107,7 +148,7 @@ where
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
-    type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
+    type ProverData = StirProverData<Val, InputMmcs>;
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
     /// Proof structure: one entry per distinct LDE-height bucket (descending).
     ///
@@ -140,6 +181,7 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let min_height = 1usize << self.stir.log_folding_factor;
+        let mut widths = Vec::new();
         let ldes: Vec<_> = evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -155,13 +197,17 @@ where
                     self.stir.log_folding_factor,
                 );
                 let shift = Val::GENERATOR / domain.shift();
-                self.dft
+                let lde = self
+                    .dft
                     .coset_lde_batch(evals, self.stir.log_blowup, shift)
                     .bit_reverse_rows()
-                    .to_row_major_matrix()
+                    .to_row_major_matrix();
+                widths.push(lde.width());
+                group_fiber_rows(lde, self.stir.log_folding_factor)
             })
             .collect();
-        self.input_mmcs.commit(ldes)
+        let (commitment, data) = self.input_mmcs.commit(ldes);
+        (commitment, StirProverData { data, widths })
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -170,12 +216,16 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
-        let lde = self.input_mmcs.get_matrices(prover_data)[idx];
+        let lde = lde_views(&self.input_mmcs, prover_data).swap_remove(idx);
         if domain.shift() == Val::GENERATOR && lde.height() >= domain.size() {
-            return lde.split_rows(domain.size()).0.as_cow().bit_reverse_rows();
+            let width = lde.width();
+            let values: &'a [Val] = lde.values;
+            return RowMajorMatrixView::new(&values[..domain.size() * width], width)
+                .as_cow()
+                .bit_reverse_rows();
         }
         let poly_height = lde.height() >> self.stir.log_blowup;
-        let lde_mat = lde.as_view().bit_reverse_rows().to_row_major_matrix();
+        let lde_mat = lde.bit_reverse_rows().to_row_major_matrix();
         let mut coeffs = self.dft.coset_idft_batch(lde_mat, Val::GENERATOR);
         let width = coeffs.width();
         coeffs.values.truncate(poly_height * width);
@@ -216,19 +266,26 @@ where
 
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
         let min_lde_height = 1usize << (self.stir.log_folding_factor + self.stir.log_blowup);
-        for lde in &ldes {
-            assert!(
-                lde.height() >= min_lde_height,
-                "STIR PCS: pre-computed LDE height {} is below 2^{} (= {}) required by \
-                 log_folding_factor + log_blowup = {} + {}.",
-                lde.height(),
-                self.stir.log_folding_factor + self.stir.log_blowup,
-                min_lde_height,
-                self.stir.log_folding_factor,
-                self.stir.log_blowup,
-            );
-        }
-        self.input_mmcs.commit(ldes)
+        let mut widths = Vec::with_capacity(ldes.len());
+        let grouped: Vec<_> = ldes
+            .into_iter()
+            .map(|lde| {
+                assert!(
+                    lde.height() >= min_lde_height,
+                    "STIR PCS: pre-computed LDE height {} is below 2^{} (= {}) required by \
+                     log_folding_factor + log_blowup = {} + {}.",
+                    lde.height(),
+                    self.stir.log_folding_factor + self.stir.log_blowup,
+                    min_lde_height,
+                    self.stir.log_folding_factor,
+                    self.stir.log_blowup,
+                );
+                widths.push(lde.width());
+                group_fiber_rows(lde, self.stir.log_folding_factor)
+            })
+            .collect();
+        let (commitment, data) = self.input_mmcs.commit(grouped);
+        (commitment, StirProverData { data, widths })
     }
 
     #[instrument(name = "STIR PCS open", skip_all)]
@@ -240,15 +297,7 @@ where
         // Step 1: Compute evaluations at opening points using Lagrange interpolation.
         let mats_and_points: Vec<_> = commitment_data_with_opening_points
             .iter()
-            .map(|(data, points)| {
-                let mats = self
-                    .input_mmcs
-                    .get_matrices(data)
-                    .into_iter()
-                    .map(|m| m.as_view())
-                    .collect_vec();
-                (mats, points)
-            })
+            .map(|(data, points)| (lde_views(&self.input_mmcs, data), points))
             .collect();
 
         let (global_max_height, global_max_width) = mats_and_points
@@ -384,36 +433,34 @@ where
 
             // Input binding for this bucket. Folding factor is constant across rounds.
             let log_arity0 = stir_config.log_folding_factor;
-            let fold_height0 = (1usize << stir_config.log_starting_domain_size()) >> log_arity0;
-            let arity0 = 1usize << log_arity0;
 
             let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> =
                 commitment_data_with_opening_points
                     .iter()
                     .map(|(data, _)| {
-                        let mats = self.input_mmcs.get_matrices(data);
-                        if !mats.iter().any(|m| m.height() == bucket_height) {
+                        // Committed matrices are fiber-grouped, so their heights are the LDE
+                        // heights divided by the fold arity.
+                        let mats = self.input_mmcs.get_matrices(&data.data);
+                        if !mats
+                            .iter()
+                            .any(|m| m.height() << log_arity0 == bucket_height)
+                        {
                             return None;
                         }
-                        let commit_max_height = mats.iter().map(|m| m.height()).max().unwrap();
+                        let commit_max_height =
+                            mats.iter().map(|m| m.height()).max().unwrap() << log_arity0;
                         let log_commit_max = log2_strict_usize(commit_max_height);
 
-                        // Flatten every `(query, fiber column)` position into one index list so
-                        // a single multi-opening proof covers the whole bucket for this
-                        // commitment, sharing sibling digests across positions.
+                        // One index per query: the whole fiber lives in a single grouped row.
                         let q_globals: Vec<usize> = first_round_query_indices
                             .iter()
-                            .flat_map(|&j| {
-                                (0..arity0).map(move |l| {
-                                    let p = j + l * fold_height0;
-                                    let q_local = reverse_bits_len(p, log_h);
-                                    q_local << (log_commit_max - log_h)
-                                })
+                            .map(|&j| {
+                                reverse_bits_len(j, log_h - log_arity0) << (log_commit_max - log_h)
                             })
                             .collect();
 
                         let (opened_values, opening_proof) =
-                            self.input_mmcs.open_multi_batch(&q_globals, data);
+                            self.input_mmcs.open_multi_batch(&q_globals, &data.data);
                         Some(InputOpenings {
                             opened_values,
                             opening_proof,
@@ -551,10 +598,9 @@ where
                 e.map_input_err(|_| unreachable!("verify_stir does not produce InputError"))
             })?;
 
-            // The folding factor is constant across rounds, so the same arity/fold_height
-            // applies whether STIR ran with intermediate rounds or only a final round.
+            // The folding factor is constant across rounds, so the same arity applies whether
+            // STIR ran with intermediate rounds or only a final round.
             let log_arity0 = stir_config.log_folding_factor;
-            let fold_height0 = (1usize << stir_config.log_starting_domain_size()) >> log_arity0;
             let arity0 = 1usize << log_arity0;
 
             let first_round_unique_js = stir_outputs.first_round_indices;
@@ -614,26 +660,22 @@ where
                     })
                     .collect();
 
+                // Matrices are committed fiber-grouped: `2^log_arity0` LDE rows per committed
+                // row.
                 let dimensions: Vec<p3_matrix::Dimensions> = mat_lde_heights
                     .iter()
                     .zip(mat_widths.iter())
                     .map(|(&h, &w)| p3_matrix::Dimensions {
-                        height: h,
-                        width: w,
+                        height: h >> log_arity0,
+                        width: w << log_arity0,
                     })
                     .collect();
 
-                // Flatten the `(query, fiber column)` positions in the same order the prover
-                // used to build `opening.opened_values`.
+                // One grouped row per query, in the same order the prover used to build
+                // `opening.opened_values`.
                 let q_globals: Vec<usize> = first_round_unique_js
                     .iter()
-                    .flat_map(|&j| {
-                        (0..arity0).map(move |l| {
-                            let p = j + l * fold_height0;
-                            let q_local = reverse_bits_len(p, log_h);
-                            q_local << (log_commit_max - log_h)
-                        })
-                    })
+                    .map(|&j| reverse_bits_len(j, log_h - log_arity0) << (log_commit_max - log_h))
                     .collect();
 
                 // SHAPE CHECK: opened-row count is determined entirely by public input.
@@ -651,23 +693,26 @@ where
                     )
                     .map_err(StirError::InputError)?;
 
-                let mut opening_idx = 0usize;
-
                 for (q_idx, &j) in first_round_unique_js.iter().enumerate() {
+                    let row_vals_by_mat = &opening.opened_values[q_idx];
+                    let group = reverse_bits_len(j, log_h - log_arity0);
+
                     #[allow(clippy::needless_range_loop)]
                     for l in 0..arity0 {
-                        let p = j + l * fold_height0;
-                        let q_local = reverse_bits_len(p, log_h);
-
-                        let row_vals_by_mat = &opening.opened_values[opening_idx];
-                        opening_idx += 1;
+                        // Fiber column `l` sits at slot `reverse_bits_len(l, log_arity0)` of the
+                        // grouped row, and at LDE row `group * arity0 + slot`.
+                        let slot = reverse_bits_len(l, log_arity0);
+                        let q_local = (group << log_arity0) | slot;
 
                         for (mat_idx, (_, point_claims)) in domain_claims.iter().enumerate() {
                             if mat_lde_heights[mat_idx] != bucket_height {
                                 continue;
                             }
 
-                            let row_vals = &row_vals_by_mat[mat_idx];
+                            // `verify_multi_batch` already pinned each grouped row to
+                            // `dimensions[mat_idx].width`, so this slice is in bounds.
+                            let width = mat_widths[mat_idx];
+                            let row_vals = &row_vals_by_mat[mat_idx][slot * width..][..width];
                             let p_x: Challenge = row_vals
                                 .iter()
                                 .zip(alpha_powers.iter())

@@ -988,11 +988,10 @@ mod babybear_pcs {
         let (stir_commit, stir_data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&stir_pcs, [(stir_domain, mat)]);
         stir_p_ch.observe(stir_commit.clone());
+        // STIR's input commitment hashes fiber-grouped leaves, so its root — and hence the
+        // point derived from it — differs from FRI's over the same matrix. Proof size does
+        // not depend on which point is opened, so the comparison stays like-for-like.
         let stir_zeta: Challenge = stir_p_ch.sample_algebra_element();
-        assert_eq!(
-            stir_zeta, zeta,
-            "same input commitment and challenger seed should give the same opening point"
-        );
         let (stir_openings, stir_proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &stir_pcs,
             vec![(&stir_data, vec![vec![stir_zeta]])],
