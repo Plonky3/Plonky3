@@ -1,13 +1,11 @@
 use core::fmt::Debug;
-use core::ops::Deref;
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_multilinear_util::point::Point;
+use p3_sumcheck::constraints::statement::EqStatement;
 
-use crate::constraints::statement::EqStatement;
-use crate::parameters::WhirConfig;
 use crate::pcs::proof::WhirProof;
 use crate::pcs::verifier::errors::VerifierError;
 
@@ -80,35 +78,5 @@ where
             root,
             ood_statement,
         })
-    }
-}
-
-/// Lightweight wrapper for parsing commitment data during verification.
-#[derive(Debug)]
-pub struct CommitmentReader<'a, EF, F, Challenger>(&'a WhirConfig<EF, F, Challenger>)
-where
-    F: Field,
-    EF: ExtensionField<F>;
-
-impl<'a, EF, F, Challenger> CommitmentReader<'a, EF, F, Challenger>
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
-    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-{
-    pub const fn new(params: &'a WhirConfig<EF, F, Challenger>) -> Self {
-        Self(params)
-    }
-}
-
-impl<EF, F, Challenger> Deref for CommitmentReader<'_, EF, F, Challenger>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    type Target = WhirConfig<EF, F, Challenger>;
-
-    fn deref(&self) -> &Self::Target {
-        self.0
     }
 }

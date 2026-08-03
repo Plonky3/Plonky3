@@ -581,19 +581,21 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
 
     // For small problems, use the basic recursive approach
     let packing_width = F::Packing::WIDTH;
+    let log_packing_width = log2_strict_usize(packing_width);
     let num_threads = current_num_threads().next_power_of_two();
     let log_num_threads = log2_strict_usize(num_threads);
 
-    // If the number of variables is small, there is no need to use
-    // parallelization or packings.
-    if num_variables <= packing_width + 1 + log_num_threads {
+    // Small problems stay scalar: setting up SIMD lanes and threads costs more than it saves.
+    //
+    // The cutoff counts variables, not lanes.
+    // Packing the lowest variables fills the lanes, so 3 variables cover an 8-lane vector (2^3 = 8).
+    if num_variables <= log_packing_width + 1 + log_num_threads {
         // Allocate workspace once for all recursive calls
         //
         // The max function ensures we allocate at least 1 element to avoid empty slice issues
         let mut workspace = EF::zero_vec((2 * evals.width() * num_variables).max(1));
         eval_eq_batch_basic::<F, IF, EF, INITIALIZED>(evals, scalars, out, &mut workspace);
     } else {
-        let log_packing_width = log2_strict_usize(packing_width);
         let eval_len_min_packing = num_variables - log_packing_width;
 
         // Split the variables into three parts:
@@ -773,8 +775,9 @@ fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
             // Optimized base case for 1 variable
             let first_row = eval_points;
 
-            // Compute the two packed scalar vectors for both branches
-            let (s0_buffer, s1_buffer) = workspace.split_at_mut(num_points);
+            // Give each of the two branches its own buffer, one slot per evaluation point.
+            let (s0_buffer, rest) = workspace.split_at_mut(num_points);
+            let (s1_buffer, _) = rest.split_at_mut(num_points);
             for i in 0..num_points {
                 let z_0 = first_row.values[i];
                 let eq_eval = eq_evals[i];
@@ -794,10 +797,14 @@ fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
             debug_assert!(workspace.len() >= 4 * num_points);
             let (first_row, second_row) = eval_points.split_rows(1);
 
-            // Split workspace for all 4 leaf nodes.
+            // Each of the four leaves needs an equal buffer, one slot per evaluation point.
+            //
+            // Peel an equal chunk off the scratch space for every leaf, the last one included.
+            // Skip trimming the last and it keeps all the leftover scratch instead of its share.
             let (s00_buffer, rest) = workspace.split_at_mut(num_points);
             let (s01_buffer, rest) = rest.split_at_mut(num_points);
-            let (s10_buffer, s11_buffer) = rest.split_at_mut(num_points);
+            let (s10_buffer, rest) = rest.split_at_mut(num_points);
+            let (s11_buffer, _) = rest.split_at_mut(num_points);
 
             // Single loop to compute all 4 leaf scalars.
             for i in 0..num_points {
@@ -839,14 +846,15 @@ fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
             let (first_row, remainder) = eval_points.split_rows(1);
             let (second_row, third_row) = remainder.split_rows(1);
 
-            // Split workspace for all 8 leaf nodes.
+            // Each of the eight leaves needs an equal buffer, one slot per evaluation point.
             let (s000_buffer, rest) = workspace.split_at_mut(num_points);
             let (s001_buffer, rest) = rest.split_at_mut(num_points);
             let (s010_buffer, rest) = rest.split_at_mut(num_points);
             let (s011_buffer, rest) = rest.split_at_mut(num_points);
             let (s100_buffer, rest) = rest.split_at_mut(num_points);
             let (s101_buffer, rest) = rest.split_at_mut(num_points);
-            let (s110_buffer, s111_buffer) = rest.split_at_mut(num_points);
+            let (s110_buffer, rest) = rest.split_at_mut(num_points);
+            let (s111_buffer, _) = rest.split_at_mut(num_points);
 
             // Single loop to compute all 8 leaf scalars.
             for i in 0..num_points {
@@ -1296,5 +1304,58 @@ mod tests {
             output_parallel, output_basic,
             "Parallel base-field batched path should match basic batched evaluation"
         );
+    }
+
+    #[test]
+    fn base_batch_parallel_matches_basic_across_middle_sizes() {
+        // Check the parallel packed path against the scalar reference.
+        //
+        // The parallel path splits the variables three ways:
+        //
+        //     lowest few  -> packed into SIMD lanes
+        //     highest few -> spread across threads
+        //     the middle  -> drives the recursion
+        //
+        // The middle count picks which recursion branch runs, and each splits its own scratch space.
+        // Growing it walks the two-, three-, and deeper-variable branches in turn.
+
+        // Above this many variables, the parallel path takes over.
+        let packing_width = <F as Field>::Packing::WIDTH;
+        let num_threads = current_num_threads().next_power_of_two();
+        let log_num_threads = log2_strict_usize(num_threads);
+        let threshold = packing_width.ilog2() as usize + 1 + log_num_threads;
+
+        let num_points = 3;
+        let mut rng = SmallRng::seed_from_u64(0x5EED);
+
+        // Step the middle count through 2, 3, then 4 variables; the last one recurses.
+        for delta in 1..=3 {
+            let num_variables = threshold + delta;
+
+            let eval_points: Vec<Vec<F>> = (0..num_points)
+                .map(|_| (0..num_variables).map(|_| rng.random()).collect())
+                .collect();
+            let scalars: Vec<EF4> = (0..num_points).map(|_| rng.random()).collect();
+
+            // Matrix layout: each row is a variable, each column an evaluation point.
+            let mut evals_data = Vec::with_capacity(num_variables * num_points);
+            for var_idx in 0..num_variables {
+                for point in &eval_points {
+                    evals_data.push(point[var_idx]);
+                }
+            }
+            let evals = RowMajorMatrixView::new(&evals_data, num_points);
+
+            // Path under test: parallel + packed.
+            let mut parallel = EF4::zero_vec(1 << num_variables);
+            eval_eq_base_batch::<F, EF4, false>(evals, &mut parallel, &scalars);
+
+            // Reference: plain sequential recursion.
+            let mut basic = EF4::zero_vec(1 << num_variables);
+            let mut workspace = EF4::zero_vec(2 * num_points * num_variables);
+            eval_eq_batch_basic::<F, F, EF4, false>(evals, &scalars, &mut basic, &mut workspace);
+
+            assert_eq!(parallel, basic, "mismatch at num_variables={num_variables}");
+        }
     }
 }

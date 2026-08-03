@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Poseidon1: speedup monty-31 packed version on avx (#1420)
+- Monty31: use transmute in poseidon1 packing (#1446)
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Field: rm unused packed_linear_combination (#1460)
+- Perf: abstract away Copy vs Clone (#1463)
+- Field: implement packed / packed division (#1457)
+- Monty-31: improve `monty_reduce_u128` speed (#1483)
+- Fix compilation on aarch64 without neon (RUSTFLAGS="-C target-feature=-neon" cargo check) (#1514)
+- Core: couple more compile time assertions (#1525)
+- Perf(monty-31/neon): specialized exp_4 skipping intermediate reduction (#1558)
+- Fix(monty-31): eliminate twiddle cache race condition by merging into single lock (#1561)
+- Add carry-critical NEON dot product regression tests (#1600)
+- Perf: fast paths for mul_2exp_u64(0) and mul_2exp_u64(1) (#1654)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Refactor(field): unify extension-field logic under common abstraction (#1696)
+- Refactor(field): default ext_square to a general multiply (#1697)
+- Perf(monty-31): skip trivial coset shift in RecursiveDft (#1715)
+- Chore: update CHANGELOGs (#1785)
+
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Monty-31: improve `monty_reduce_u128` speed (#1483)
+- Fix compilation on aarch64 without neon (RUSTFLAGS="-C target-feature=-neon" cargo check) (#1514)
+- Core: couple more compile time assertions (#1525)
+- Perf(monty-31/neon): specialized exp_4 skipping intermediate reduction (#1558)
+- Add carry-critical NEON dot product regression tests (#1600)
+
+## [0.5.2] - 2026-03-27
+### Merged PRs
+- Poseidon1: speedup monty-31 packed version on avx (#1420)
+- Monty31: use transmute in poseidon1 packing (#1446)
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Perf: abstract away Copy vs Clone (#1463)
+
 ## [0.5.1] - 2026-03-16
 ### Merged PRs
 - Monty31: faster aarch64 neon `quintic_mul_packed` (#1422)

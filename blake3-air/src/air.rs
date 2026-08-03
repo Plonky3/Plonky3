@@ -19,7 +19,12 @@ use crate::{Blake3State, FullRound, QuarterRound, generate_trace_rows};
 pub struct Blake3Air {}
 
 impl Blake3Air {
-    pub fn generate_trace_rows<F: PrimeField64>(
+    /// Generate a trace over `num_hashes` fixed-seed random permutation inputs.
+    ///
+    /// This is for benches/examples only — it does not let callers supply the actual
+    /// inputs being hashed. Use the free [`generate_trace_rows`] function directly to
+    /// prove specific inputs.
+    pub fn generate_random_trace_rows<F: PrimeField64>(
         &self,
         num_hashes: usize,
         extra_capacity_bits: usize,
@@ -232,6 +237,10 @@ impl<F> BaseAir<F> for Blake3Air {
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![]
     }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        Some(3)
+    }
 }
 
 impl<AB: AirBuilder> Air<AB> for Blake3Air {
@@ -384,10 +393,9 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             });
         // Additionally, we need to ensure that both local.final_round_helpers and local.outputs[0] are boolean.
 
-        local
-            .final_round_helpers
+        // `final_round_helpers` values are already boolean asserted within `xor_32_shift()`
+        local.outputs[0]
             .iter()
-            .chain(local.outputs[0].iter())
             .for_each(|bits| bits.iter().for_each(|&bit| builder.assert_bool(bit)));
 
         // Finally we check the xor by xor'ing the output with final_round_helpers, packing the bits

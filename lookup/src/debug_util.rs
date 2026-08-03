@@ -190,7 +190,16 @@ fn accumulate_lookup<F: Field>(
                 .map(|expr| expr.resolve(&builder))
                 .collect::<Vec<_>>();
 
-            let multiplicity = lookup.multiplicities[tuple_idx].resolve(&builder);
+            let mut multiplicity = lookup.multiplicities[tuple_idx].resolve(&builder);
+
+            // An exclusive branch only contributes when its flag fires.
+            //
+            // - The effective multiplicity is the flag times the count.
+            // - An inactive branch has flag 0.
+            // - So it adds nothing to the multiset.
+            if let Some(flags) = &lookup.flags {
+                multiplicity *= flags[tuple_idx].resolve(&builder);
+            }
 
             multiset.add(
                 key,
@@ -239,8 +248,7 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
         F::from_bool(self.row + 1 == self.height)
     }
 
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        assert!(size <= 2, "only two-row windows are supported, got {size}");
+    fn is_transition(&self) -> Self::Expr {
         F::from_bool(self.row + 1 < self.height)
     }
 

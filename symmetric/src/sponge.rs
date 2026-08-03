@@ -109,11 +109,20 @@ use crate::permutation::{CryptographicPermutation, Derangement};
 /// holds as long as the stored increment is non-zero.
 ///
 /// ```ignore
-/// Increment(BabyBear::ONE)   // d(x) = x + 1  for field elements
-/// Increment(1u64)            // d(x) = x + 1  for raw integers
+/// Increment::new(BabyBear::ONE)   // d(x) = x + 1  for field elements
+/// Increment::new(1u64)            // d(x) = x + 1  for raw integers
 /// ```
 #[derive(Copy, Clone, Debug)]
-pub struct Increment<T>(pub T);
+pub struct Increment<T>(T);
+
+impl<T: Default + PartialEq> Increment<T> {
+    /// Builds an increment padding function, panicking if `inc` is the
+    /// additive identity (which would make `d(x) = x`, not a derangement).
+    pub fn new(inc: T) -> Self {
+        assert!(inc != T::default());
+        Self(inc)
+    }
+}
 
 impl<T: Clone + Sync + Send + Add<Output = T>> Permutation<T> for Increment<T> {
     fn permute(&self, input: T) -> T {
@@ -157,7 +166,8 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
         const {
             assert!(RATE > 0);
             assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
+            assert!(OUT > 0);
+            assert!(OUT <= RATE);
         }
         Self { permutation }
     }
@@ -533,8 +543,8 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
 /// points). The standard choice is `Increment` which computes d(x) = x + 1:
 ///
 /// ```ignore
-/// Pad10Sponge::new(permutation, Increment(BabyBear::ONE))  // field
-/// Pad10Sponge::new(permutation, Increment(1u64))           // integer
+/// Pad10Sponge::new(permutation, Increment::new(BabyBear::ONE))  // field
+/// Pad10Sponge::new(permutation, Increment::new(1u64))           // integer
 /// ```
 ///
 /// The derangement **must have no fixed points** (d(x) != x for all x).
@@ -588,7 +598,8 @@ impl<T, P, D, const WIDTH: usize, const RATE: usize, const OUT: usize>
         const {
             assert!(RATE > 0);
             assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
+            assert!(OUT > 0);
+            assert!(OUT <= RATE);
         }
         Self {
             permutation,
@@ -700,7 +711,8 @@ where
         const {
             assert!(RATE > 0);
             assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
+            assert!(OUT > 0);
+            assert!(OUT <= RATE);
         }
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
@@ -732,7 +744,8 @@ where
         const {
             assert!(RATE > 0);
             assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
+            assert!(OUT > 0);
+            assert!(OUT <= RATE);
         }
         let mut state = [PF::default(); WIDTH];
 
@@ -813,7 +826,8 @@ where
         const {
             assert!(RATE > 0);
             assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
+            assert!(OUT > 0);
+            assert!(OUT <= RATE);
         }
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
@@ -1080,7 +1094,7 @@ mod tests {
         let sponge =
             Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
         let a = KoalaBear::new(42);
@@ -1100,7 +1114,7 @@ mod tests {
         let sponge =
             Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
         let a = KoalaBear::new(1);
@@ -1123,7 +1137,7 @@ mod tests {
         let sponge =
             Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
         let output = sponge.hash_iter(core::iter::empty::<KoalaBear>());
@@ -1161,7 +1175,7 @@ mod tests {
         let sponge =
             Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
         let input = [1u32, 2, 3, 4, 5].map(KoalaBear::new);
@@ -1187,7 +1201,7 @@ mod tests {
         let sponge =
             Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 6, 3, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
         let input = [10u32, 20, 30].map(KoalaBear::new);
@@ -1458,7 +1472,7 @@ mod tests {
             // This is the exact attack that padding prevents.
             let sponge = Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
             // Hash the base message.
@@ -1487,7 +1501,7 @@ mod tests {
             // Invariant: hash(x) == hash(x). No hidden mutable state.
             let sponge = Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
             // Hash the input twice with independent iterator clones.
@@ -1507,7 +1521,7 @@ mod tests {
             // Tests collision resistance across arbitrary length gaps.
             let sponge = Pad10Sponge::<KoalaBear, WeightedSumPermutation, Increment<KoalaBear>, 4, 2, 2>::new(
                 WeightedSumPermutation,
-                Increment(KoalaBear::ONE),
+                Increment::new(KoalaBear::ONE),
             );
 
             // Hash the full input.

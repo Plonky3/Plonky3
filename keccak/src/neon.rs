@@ -1,4 +1,4 @@
-use core::arch::aarch64::{uint64x2_t, vbcaxq_u64, veor3q_u64, veorq_u64, vrax1q_u64, vxarq_u64};
+use core::arch::aarch64::{uint64x2_t, vbicq_u64, veorq_u64, vshlq_n_u64, vsriq_n_u64};
 use core::mem::transmute;
 
 use p3_symmetric::{CryptographicPermutation, Permutation};
@@ -47,73 +47,146 @@ fn flatten(mat: [[uint64x2_t; 5]; 5]) -> [uint64x2_t; 25] {
 }
 
 #[inline(always)]
+fn rol<const SHL_AMT: i32, const SHR_AMT: i32>(a: uint64x2_t) -> uint64x2_t {
+    unsafe { vsriq_n_u64::<SHR_AMT>(vshlq_n_u64::<SHL_AMT>(a), a) }
+}
+
+#[inline(always)]
+fn rol_1(a: uint64x2_t) -> uint64x2_t {
+    rol::<1, { 64 - 1 }>(a)
+}
+
+#[inline(always)]
+fn rol_8(a: uint64x2_t) -> uint64x2_t {
+    rol::<8, { 64 - 8 }>(a)
+}
+
+#[inline(always)]
+fn rol_56(a: uint64x2_t) -> uint64x2_t {
+    rol::<56, { 64 - 56 }>(a)
+}
+
+#[inline(always)]
 fn get_theta_parities(state: [[uint64x2_t; 5]; 5]) -> [uint64x2_t; 5] {
     unsafe {
-        let mut par0 = veor3q_u64(state[0][0], state[1][0], state[2][0]);
-        let mut par1 = veor3q_u64(state[0][1], state[1][1], state[2][1]);
-        let mut par2 = veor3q_u64(state[0][2], state[1][2], state[2][2]);
-        let mut par3 = veor3q_u64(state[0][3], state[1][3], state[2][3]);
-        let mut par4 = veor3q_u64(state[0][4], state[1][4], state[2][4]);
+        let mut par0 = veorq_u64(state[0][0], state[1][0]);
+        let mut par1 = veorq_u64(state[0][1], state[1][1]);
+        let mut par2 = veorq_u64(state[0][2], state[1][2]);
+        let mut par3 = veorq_u64(state[0][3], state[1][3]);
+        let mut par4 = veorq_u64(state[0][4], state[1][4]);
 
-        par0 = veor3q_u64(par0, state[3][0], state[4][0]);
-        par1 = veor3q_u64(par1, state[3][1], state[4][1]);
-        par2 = veor3q_u64(par2, state[3][2], state[4][2]);
-        par3 = veor3q_u64(par3, state[3][3], state[4][3]);
-        par4 = veor3q_u64(par4, state[3][4], state[4][4]);
+        par0 = veorq_u64(par0, state[2][0]);
+        par1 = veorq_u64(par1, state[2][1]);
+        par2 = veorq_u64(par2, state[2][2]);
+        par3 = veorq_u64(par3, state[2][3]);
+        par4 = veorq_u64(par4, state[2][4]);
+
+        par0 = veorq_u64(par0, state[3][0]);
+        par1 = veorq_u64(par1, state[3][1]);
+        par2 = veorq_u64(par2, state[3][2]);
+        par3 = veorq_u64(par3, state[3][3]);
+        par4 = veorq_u64(par4, state[3][4]);
+
+        par0 = veorq_u64(par0, state[4][0]);
+        par1 = veorq_u64(par1, state[4][1]);
+        par2 = veorq_u64(par2, state[4][2]);
+        par3 = veorq_u64(par3, state[4][3]);
+        par4 = veorq_u64(par4, state[4][4]);
 
         [
-            vrax1q_u64(par4, par1),
-            vrax1q_u64(par0, par2),
-            vrax1q_u64(par1, par3),
-            vrax1q_u64(par2, par4),
-            vrax1q_u64(par3, par0),
+            veorq_u64(par4, rol_1(par1)),
+            veorq_u64(par0, rol_1(par2)),
+            veorq_u64(par1, rol_1(par3)),
+            veorq_u64(par2, rol_1(par4)),
+            veorq_u64(par3, rol_1(par0)),
         ]
     }
 }
 
 #[inline(always)]
-fn theta_rho(state: [[uint64x2_t; 5]; 5]) -> [[uint64x2_t; 5]; 5] {
+fn theta(state: [[uint64x2_t; 5]; 5]) -> [[uint64x2_t; 5]; 5] {
     let theta_parities = get_theta_parities(state);
 
     unsafe {
         [
             [
                 veorq_u64(state[0][0], theta_parities[0]),
-                vxarq_u64::<63>(state[0][1], theta_parities[1]),
-                vxarq_u64::<2>(state[0][2], theta_parities[2]),
-                vxarq_u64::<36>(state[0][3], theta_parities[3]),
-                vxarq_u64::<37>(state[0][4], theta_parities[4]),
+                veorq_u64(state[0][1], theta_parities[1]),
+                veorq_u64(state[0][2], theta_parities[2]),
+                veorq_u64(state[0][3], theta_parities[3]),
+                veorq_u64(state[0][4], theta_parities[4]),
             ],
             [
-                vxarq_u64::<28>(state[1][0], theta_parities[0]),
-                vxarq_u64::<20>(state[1][1], theta_parities[1]),
-                vxarq_u64::<58>(state[1][2], theta_parities[2]),
-                vxarq_u64::<9>(state[1][3], theta_parities[3]),
-                vxarq_u64::<44>(state[1][4], theta_parities[4]),
+                veorq_u64(state[1][0], theta_parities[0]),
+                veorq_u64(state[1][1], theta_parities[1]),
+                veorq_u64(state[1][2], theta_parities[2]),
+                veorq_u64(state[1][3], theta_parities[3]),
+                veorq_u64(state[1][4], theta_parities[4]),
             ],
             [
-                vxarq_u64::<61>(state[2][0], theta_parities[0]),
-                vxarq_u64::<54>(state[2][1], theta_parities[1]),
-                vxarq_u64::<21>(state[2][2], theta_parities[2]),
-                vxarq_u64::<39>(state[2][3], theta_parities[3]),
-                vxarq_u64::<25>(state[2][4], theta_parities[4]),
+                veorq_u64(state[2][0], theta_parities[0]),
+                veorq_u64(state[2][1], theta_parities[1]),
+                veorq_u64(state[2][2], theta_parities[2]),
+                veorq_u64(state[2][3], theta_parities[3]),
+                veorq_u64(state[2][4], theta_parities[4]),
             ],
             [
-                vxarq_u64::<23>(state[3][0], theta_parities[0]),
-                vxarq_u64::<19>(state[3][1], theta_parities[1]),
-                vxarq_u64::<49>(state[3][2], theta_parities[2]),
-                vxarq_u64::<43>(state[3][3], theta_parities[3]),
-                vxarq_u64::<56>(state[3][4], theta_parities[4]),
+                veorq_u64(state[3][0], theta_parities[0]),
+                veorq_u64(state[3][1], theta_parities[1]),
+                veorq_u64(state[3][2], theta_parities[2]),
+                veorq_u64(state[3][3], theta_parities[3]),
+                veorq_u64(state[3][4], theta_parities[4]),
             ],
             [
-                vxarq_u64::<46>(state[4][0], theta_parities[0]),
-                vxarq_u64::<62>(state[4][1], theta_parities[1]),
-                vxarq_u64::<3>(state[4][2], theta_parities[2]),
-                vxarq_u64::<8>(state[4][3], theta_parities[3]),
-                vxarq_u64::<50>(state[4][4], theta_parities[4]),
+                veorq_u64(state[4][0], theta_parities[0]),
+                veorq_u64(state[4][1], theta_parities[1]),
+                veorq_u64(state[4][2], theta_parities[2]),
+                veorq_u64(state[4][3], theta_parities[3]),
+                veorq_u64(state[4][4], theta_parities[4]),
             ],
         ]
     }
+}
+
+#[inline(always)]
+fn rho(state: [[uint64x2_t; 5]; 5]) -> [[uint64x2_t; 5]; 5] {
+    [
+        [
+            state[0][0],
+            rol_1(state[0][1]),
+            rol::<62, { 64 - 62 }>(state[0][2]),
+            rol::<28, { 64 - 28 }>(state[0][3]),
+            rol::<27, { 64 - 27 }>(state[0][4]),
+        ],
+        [
+            rol::<36, { 64 - 36 }>(state[1][0]),
+            rol::<44, { 64 - 44 }>(state[1][1]),
+            rol::<6, { 64 - 6 }>(state[1][2]),
+            rol::<55, { 64 - 55 }>(state[1][3]),
+            rol::<20, { 64 - 20 }>(state[1][4]),
+        ],
+        [
+            rol::<3, { 64 - 3 }>(state[2][0]),
+            rol::<10, { 64 - 10 }>(state[2][1]),
+            rol::<43, { 64 - 43 }>(state[2][2]),
+            rol::<25, { 64 - 25 }>(state[2][3]),
+            rol::<39, { 64 - 39 }>(state[2][4]),
+        ],
+        [
+            rol::<41, { 64 - 41 }>(state[3][0]),
+            rol::<45, { 64 - 45 }>(state[3][1]),
+            rol::<15, { 64 - 15 }>(state[3][2]),
+            rol::<21, { 64 - 21 }>(state[3][3]),
+            rol_8(state[3][4]),
+        ],
+        [
+            rol::<18, { 64 - 18 }>(state[4][0]),
+            rol::<2, { 64 - 2 }>(state[4][1]),
+            rol::<61, { 64 - 61 }>(state[4][2]),
+            rol_56(state[4][3]),
+            rol::<14, { 64 - 14 }>(state[4][4]),
+        ],
+    ]
 }
 
 #[inline(always)]
@@ -161,11 +234,11 @@ const fn pi(state: [[uint64x2_t; 5]; 5]) -> [[uint64x2_t; 5]; 5] {
 fn chi_row(row: [uint64x2_t; 5]) -> [uint64x2_t; 5] {
     unsafe {
         [
-            vbcaxq_u64(row[0], row[2], row[1]),
-            vbcaxq_u64(row[1], row[3], row[2]),
-            vbcaxq_u64(row[2], row[4], row[3]),
-            vbcaxq_u64(row[3], row[0], row[4]),
-            vbcaxq_u64(row[4], row[1], row[0]),
+            veorq_u64(row[0], vbicq_u64(row[2], row[1])),
+            veorq_u64(row[1], vbicq_u64(row[3], row[2])),
+            veorq_u64(row[2], vbicq_u64(row[4], row[3])),
+            veorq_u64(row[3], vbicq_u64(row[0], row[4])),
+            veorq_u64(row[4], vbicq_u64(row[1], row[0])),
         ]
     }
 }
@@ -193,7 +266,8 @@ fn iota(i: usize, state: [[uint64x2_t; 5]; 5]) -> [[uint64x2_t; 5]; 5] {
 #[inline(always)]
 fn round(i: usize, state: [uint64x2_t; 25]) -> [uint64x2_t; 25] {
     let mut state = form_matrix(state);
-    state = theta_rho(state);
+    state = theta(state);
+    state = rho(state);
     state = pi(state);
     state = chi(state);
     state = iota(i, state);
@@ -218,6 +292,7 @@ impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
     use tiny_keccak::keccakf;
 
     use super::*;
@@ -279,10 +354,10 @@ mod tests {
         ],
     ];
 
-    fn our_res() -> [[u64; 25]; 2] {
+    fn our_res(states: [[u64; 25]; 2]) -> [[u64; 25]; 2] {
         let mut packed_result = [[0; 2]; 25];
         for (i, packed_res) in packed_result.iter_mut().enumerate() {
-            *packed_res = [STATES[0][i], STATES[1][i]];
+            *packed_res = [states[0][i], states[1][i]];
         }
 
         keccak_perm(&mut packed_result);
@@ -295,8 +370,8 @@ mod tests {
         result
     }
 
-    fn tiny_keccak_res() -> [[u64; 25]; 2] {
-        let mut result = STATES;
+    fn tiny_keccak_res(states: [[u64; 25]; 2]) -> [[u64; 25]; 2] {
+        let mut result = states;
         keccakf(&mut result[0]);
         keccakf(&mut result[1]);
         result
@@ -304,8 +379,17 @@ mod tests {
 
     #[test]
     fn test_vs_tiny_keccak() {
-        let expected = tiny_keccak_res();
-        let computed = our_res();
+        let expected = tiny_keccak_res(STATES);
+        let computed = our_res(STATES);
         assert_eq!(expected, computed);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_vs_tiny_keccak(states in prop::array::uniform2(prop::array::uniform25(any::<u64>()))) {
+            let expected = tiny_keccak_res(states);
+            let computed = our_res(states);
+            prop_assert_eq!(expected, computed);
+        }
     }
 }

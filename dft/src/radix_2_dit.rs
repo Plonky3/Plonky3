@@ -9,8 +9,9 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use spin::RwLock;
 
-use crate::TwoAdicSubgroupDft;
 use crate::butterflies::{Butterfly, DitButterfly, TwiddleFreeButterfly};
+use crate::util::coset_shift_cols;
+use crate::{Layout, TwoAdicSubgroupDft};
 
 /// Radix-2 Decimation-in-Time FFT over a two-adic subgroup.
 ///
@@ -74,6 +75,42 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Dit<F> {
             dit_layer(&mut mat.as_view_mut(), layer, &twiddles);
         }
         mat
+    }
+
+    fn coset_lde_batch_with_transform<T>(
+        &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        transform: T,
+    ) -> Self::Evaluations
+    where
+        T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+    {
+        let w = mat.width();
+        let h = mat.height();
+        let padded_h = h << added_bits;
+
+        // Recover polynomial coefficients.
+        let mut coeffs = self.idft_batch(mat);
+
+        // Let the caller inspect or modify the coefficient buffer.
+        transform(&mut coeffs.as_view_mut(), Layout::Natural);
+
+        // Apply the coset shift to only the live coefficient rows; the zero-padded
+        // tail does not need shifting because 0 * s^j = 0 for any j.
+        coset_shift_cols(&mut coeffs, shift);
+
+        // Grow the buffer to full padded capacity without touching existing elements.
+        // The tail must hold zeros; we zero-initialize only the new slots.
+        let live_len = w * h;
+        let total_len = w * padded_h;
+        coeffs.values.reserve_exact(total_len - live_len);
+        coeffs.values.resize(total_len, F::ZERO);
+        coeffs.width = w;
+
+        // Forward DFT over the full padded height.
+        self.dft_batch(coeffs)
     }
 }
 

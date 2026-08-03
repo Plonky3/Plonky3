@@ -19,7 +19,7 @@ p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-poseidon2.workspace = true
 
-rand.workspace = true
+rand = { workspace = true, features = ["std_rng"] }
 tracing.workspace = true
 
 [dev-dependencies]
@@ -38,7 +38,7 @@ tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [target.'cfg(target_family = "unix")'.dev-dependencies]
-tikv-jemallocator = "0.6"
+tikv-jemallocator = "0.7"
 
 [lints]
 workspace = true

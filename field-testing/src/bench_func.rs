@@ -46,6 +46,19 @@ where
     });
 }
 
+pub fn benchmark_sqrt<F: Field>(c: &mut Criterion, name: &str)
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    // Square a random element so the input is always a quadratic residue and the
+    // full square-root computation runs (rather than bailing out early).
+    let x = rng.random::<F>().square();
+    c.bench_function(&format!("{name} sqrt"), |b| {
+        b.iter(|| black_box(black_box(x).try_sqrt()));
+    });
+}
+
 pub fn benchmark_mul_2exp<R: PrimeCharacteristicRing + Copy, const REPS: usize>(
     c: &mut Criterion,
     name: &str,

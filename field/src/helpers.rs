@@ -102,6 +102,8 @@ pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) ->
         arr[i] = MaybeUninit::new(R::ZERO);
         i += 1;
     }
+    // SAFETY: every element of `arr` has been initialized above, so reinterpreting
+    // `[MaybeUninit<R>; D]` as `[R; D]` is sound.
     unsafe { core::mem::transmute_copy::<_, [R; D]>(&arr) }
 }
 

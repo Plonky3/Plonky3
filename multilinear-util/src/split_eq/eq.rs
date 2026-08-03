@@ -20,7 +20,7 @@ use p3_util::log2_strict_usize;
 
 use super::packed_kernel::{compress_hi_dot_packed, compress_prefix_to_packed_packed};
 use crate::point::Point;
-use crate::poly::Poly;
+use crate::poly::{Poly, PolyMaybePacked};
 
 /// Equality polynomial table in either scalar or SIMD-packed form.
 ///
@@ -31,13 +31,11 @@ use crate::poly::Poly;
 ///   Only used when k >= log_2(W), where W is the SIMD width.
 ///
 /// All kernel methods dispatch internally on the variant, so callers do not need to match.
+///
+/// The kernels read this table as eq(z, .), not as an arbitrary polynomial.
+/// Construction therefore goes through `new_unpacked` or `new_packed` only.
 #[derive(Debug, Clone)]
-pub enum EqMaybePacked<F: Field, EF: ExtensionField<F>> {
-    /// Scalar extension-field evaluations, one per hypercube point.
-    Unpacked(Poly<EF>),
-    /// SIMD-packed evaluations, each element holds W consecutive lanes.
-    Packed(Poly<<EF as ExtensionField<F>>::ExtensionPacking>),
-}
+pub struct EqMaybePacked<F: Field, EF: ExtensionField<F>>(PolyMaybePacked<F, EF>);
 
 impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// Builds a scalar (unpacked) equality table from a multilinear point.
@@ -45,7 +43,10 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// Always produces the scalar variant regardless of the number of variables.
     pub(super) fn new_unpacked(point: &Point<EF>) -> Self {
         // Materialize eq(point, .) with unit scale into a scalar polynomial.
-        Self::Unpacked(Poly::new_from_point(point.as_slice(), EF::ONE))
+        Self(PolyMaybePacked::Scalar(Poly::new_from_point(
+            point.as_slice(),
+            EF::ONE,
+        )))
     }
 
     /// Builds a SIMD-packed equality table when the point has enough variables.
@@ -55,37 +56,46 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     pub(super) fn new_packed(point: &Point<EF>) -> Self {
         // Check whether there are enough variables to fill at least one packed element.
         if point.num_variables() >= log2_strict_usize(F::Packing::WIDTH) {
-            Self::Packed(Poly::new_packed_from_point(point.as_slice(), EF::ONE))
+            Self(PolyMaybePacked::Packed(Poly::new_packed_from_point(
+                point.as_slice(),
+                EF::ONE,
+            )))
         } else {
             // Not enough evaluations to pack; fall back to scalar.
-            Self::Unpacked(Poly::new_from_point(point.as_slice(), EF::ONE))
+            Self::new_unpacked(point)
         }
     }
 
     /// Total number of boolean variables represented by this table.
     ///
-    /// For packed tables, this accounts for the log_2(W) variables
-    /// absorbed into each SIMD lane.
-    pub const fn num_variables(&self) -> usize {
-        match self {
-            Self::Unpacked(poly) => poly.num_variables(),
-            // Packed polynomial has k - log_2(W) stored entries,
-            // but represents k total variables.
-            Self::Packed(poly) => poly.num_variables() + log2_strict_usize(F::Packing::WIDTH),
-        }
+    /// For packed tables this accounts for the log_2(W) variables absorbed into the lanes.
+    #[inline]
+    pub fn num_variables(&self) -> usize {
+        self.0.num_variables()
     }
 
-    /// Number of scalar base-field elements per eq1 block.
+    /// Number of scalar evaluations per eq1 block, 2^k in either storage form.
     ///
-    /// - For unpacked: 2^k scalar elements.
-    /// - For packed: num_packed_entries * W scalar elements.
+    /// This sets the chunk size when iterating a polynomial paired with this table.
+    #[inline]
+    pub fn num_scalar_evals(&self) -> usize {
+        self.0.num_scalar_evals()
+    }
+
+    /// Whether the table is stored in SIMD-packed form.
+    #[inline]
+    pub const fn is_packed(&self) -> bool {
+        matches!(self.0, PolyMaybePacked::Packed(_))
+    }
+
+    /// Number of stored packed elements, or `None` when the table is stored as scalars.
     ///
-    /// This is used to determine chunk sizes when iterating over
-    /// a polynomial paired with this eq table.
-    pub const fn scalar_chunk_size(&self) -> usize {
-        match self {
-            Self::Unpacked(eq1) => eq1.num_evals(),
-            Self::Packed(eq1) => eq1.num_evals() * F::Packing::WIDTH,
+    /// This is the block length for pairing a packed polynomial against this table.
+    #[inline]
+    pub(super) fn packed_len(&self) -> Option<usize> {
+        match &self.0 {
+            PolyMaybePacked::Packed(eq1) => Some(eq1.num_evals()),
+            PolyMaybePacked::Scalar(_) => None,
         }
     }
 
@@ -96,10 +106,10 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// For packed tables, reinterprets the input slice as packed elements
     /// and reduces the SIMD lanes via horizontal sum at the end.
     pub(super) fn dot_with_base(&self, chunk: &[F]) -> EF {
-        match self {
+        match &self.0 {
             // Scalar path: direct element-wise dot product.
-            Self::Unpacked(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
-            Self::Packed(eq1) => {
+            PolyMaybePacked::Scalar(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
+            PolyMaybePacked::Packed(eq1) => {
                 // Reinterpret the flat scalar slice as packed SIMD elements.
                 // Compute packed dot product, then reduce lanes to a single scalar.
                 let sum = dot_product(
@@ -119,10 +129,10 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// For packed tables, groups the input into W-element sub-slices,
     /// converts each group to a packed element, then reduces at the end.
     pub(super) fn dot_with_ext(&self, chunk: &[EF]) -> EF {
-        match self {
+        match &self.0 {
             // Scalar path: direct element-wise dot product.
-            Self::Unpacked(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
-            Self::Packed(eq1) => {
+            PolyMaybePacked::Scalar(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
+            PolyMaybePacked::Packed(eq1) => {
                 // Group W consecutive extension-field elements into packed form,
                 // then dot product with the packed eq table.
                 let sum: EF::ExtensionPacking = dot_product(
@@ -141,17 +151,16 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     ///
     /// Computes `sum_{i} eq1[i] * chunk[i]` where both sides are already packed.
     ///
-    /// # Panics
-    ///
-    /// Panics (via unreachable) if the table is in unpacked form.
+    /// Callers gate this on `packed_len` returning `Some`.
+    /// The scalar arm is therefore unreachable.
     pub(super) fn dot_with_ext_packed(&self, chunk: &[EF::ExtensionPacking]) -> EF {
-        match self {
-            Self::Packed(eq1) => {
+        match &self.0 {
+            PolyMaybePacked::Packed(eq1) => {
                 // Both sides are packed; direct dot product then reduce.
                 let sum = dot_product(chunk.iter().copied(), eq1.iter().copied());
                 EF::ExtensionPacking::to_ext_iter([sum]).sum()
             }
-            Self::Unpacked(_) => unreachable!(),
+            PolyMaybePacked::Scalar(_) => unreachable!(),
         }
     }
 
@@ -164,14 +173,14 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// For packed tables, unpacks each SIMD element into W scalar lanes
     /// before accumulating into the output.
     pub(super) fn accumulate_scalar_into(&self, out: &mut [EF], weight: EF) {
-        match self {
-            Self::Unpacked(eq1) => {
+        match &self.0 {
+            PolyMaybePacked::Scalar(eq1) => {
                 // Scalar path: direct weighted accumulation.
                 out.iter_mut()
                     .zip(eq1.iter())
                     .for_each(|(out, &w1)| *out += weight * w1);
             }
-            Self::Packed(eq1) => {
+            PolyMaybePacked::Packed(eq1) => {
                 // Unpack each SIMD element into W scalar lanes,
                 // then accumulate weight * lane_value into the output.
                 out.chunks_mut(F::Packing::WIDTH)
@@ -191,12 +200,16 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// out[i] += weight * eq1[i]   for all i (packed elements)
     /// ```
     ///
-    /// # Panics
+    /// Reached only once the whole table is wide enough for the midpoint split to pack:
     ///
-    /// Panics (via unreachable) if the table is in unpacked form.
-    pub fn accumulate_packed_into(&self, out: &mut [EF::ExtensionPacking], weight: EF) {
-        match self {
-            Self::Packed(eq1) => {
+    /// ```text
+    /// n >= 2 * log_2(W)  =>  k_1 = ceil(n / 2) >= log_2(W)  =>  eq1 is packed
+    /// ```
+    ///
+    /// The scalar arm is therefore unreachable.
+    pub(super) fn accumulate_packed_into(&self, out: &mut [EF::ExtensionPacking], weight: EF) {
+        match &self.0 {
+            PolyMaybePacked::Packed(eq1) => {
                 // Both output and eq table are packed; direct accumulation.
                 out.iter_mut()
                     .zip(eq1.iter())
@@ -221,8 +234,8 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// - w0: the eq0 weight to multiply by
     pub(super) fn compress_prefix_into(&self, out: &mut [EF], chunk: &[F], w0: EF) {
         let size_inner = out.len();
-        match self {
-            Self::Unpacked(eq1) => {
+        match &self.0 {
+            PolyMaybePacked::Scalar(eq1) => {
                 // Iterate over eq1 entries; each owns size_inner base-field elements.
                 chunk
                     .chunks(size_inner)
@@ -236,7 +249,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                             .for_each(|(acc, &f)| *acc += w * f);
                     });
             }
-            Self::Packed(eq1) => {
+            PolyMaybePacked::Packed(eq1) => {
                 // Each packed eq1 entry covers W scalar eq1 entries.
                 // Outer chunk per packed entry: size_inner * W scalars.
                 chunk
@@ -275,8 +288,8 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         chunk: &[F],
         w0: EF,
     ) {
-        match self {
-            Self::Unpacked(eq1) => {
+        match &self.0 {
+            PolyMaybePacked::Scalar(eq1) => {
                 let packed_inner = out.len();
                 // Pack the entire scalar chunk into SIMD elements.
                 let chunk = F::Packing::pack_slice(chunk);
@@ -297,7 +310,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             //     - basis split into D per-coefficient mixed dot products,
             //     - one Montgomery reduction per CHUNK multiplies,
             //     - tiled inner loop for ILP.
-            Self::Packed(eq1) => {
+            PolyMaybePacked::Packed(eq1) => {
                 compress_prefix_to_packed_packed::<F, EF>(out, eq1.as_slice(), chunk, w0);
             }
         }
@@ -318,8 +331,8 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// - chunk: base-field slice of size 2^{num_variables}, representing one output row
     /// - eq0: the prefix-half eq table weights
     pub(super) fn compress_suffix_dot(&self, chunk: &[F], eq0: &Poly<EF>) -> EF {
-        match self {
-            Self::Unpacked(eq1) => {
+        match &self.0 {
+            PolyMaybePacked::Scalar(eq1) => {
                 // Group the chunk by eq1 size, pair with eq0 weights.
                 // Inner dot product over eq1, then weight by eq0 and sum.
                 chunk
@@ -334,11 +347,213 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             //     - basis split into four per-coefficient dot products,
             //     - one Montgomery reduction per four multiplies,
             //     - interleaved inner loop for ILP.
-            Self::Packed(eq1) => {
+            PolyMaybePacked::Packed(eq1) => {
                 compress_hi_dot_packed::<F, EF>(eq1.as_slice(), chunk, eq0.as_slice())
             }
         }
     }
+
+    /// Accumulates one outer chunk of the successor decomposition into a row buffer.
+    ///
+    /// Each row receives two contributions:
+    /// - its own equality weight scaled by the per-row factor
+    /// - its predecessor's equality weight scaled by the shifted factor
+    ///
+    /// Row 0 has no predecessor inside this chunk, so it instead takes the
+    /// precomputed cross-chunk boundary value.
+    ///
+    /// # Arguments
+    ///
+    /// - `out`: row buffer accumulated in place, one entry per equality row.
+    /// - `eq_weight`: scale applied to each row's own equality weight.
+    /// - `shifted_weight`: scale applied to each row's predecessor weight.
+    /// - `boundary`: already-scaled predecessor contribution for row 0.
+    #[doc(hidden)]
+    pub fn accumulate_next_chunk_into(
+        &self,
+        out: &mut [EF],
+        eq_weight: EF,
+        shifted_weight: EF,
+        boundary: EF,
+    ) {
+        // Stream the equality weights as scalars, unpacking SIMD lanes when stored packed,
+        // then run the shared row recurrence over that stream.
+        match &self.0 {
+            PolyMaybePacked::Scalar(eq1) => {
+                accumulate_next_rows(
+                    out,
+                    eq_weight,
+                    shifted_weight,
+                    boundary,
+                    eq1.iter().copied(),
+                );
+            }
+            PolyMaybePacked::Packed(eq1) => {
+                accumulate_next_rows(
+                    out,
+                    eq_weight,
+                    shifted_weight,
+                    boundary,
+                    EF::ExtensionPacking::to_ext_iter(eq1.iter().copied()),
+                );
+            }
+        }
+    }
+
+    /// Accumulates the interior of one outer chunk for shifted prefix compression.
+    ///
+    /// Each inner block is scaled by the outer prefix weight times its
+    /// predecessor's suffix-half equality weight, then added into the row buffer.
+    ///
+    /// The first inner block is skipped because its predecessor block lives in
+    /// the previous outer chunk and is handled by the caller.
+    ///
+    /// # Arguments
+    ///
+    /// - `out`: row buffer over the inner variables, accumulated in place.
+    /// - `chunk`: one outer chunk laid out as consecutive inner blocks.
+    /// - `w0`: outer prefix weight applied to every inner block in this chunk.
+    pub(super) fn compress_prefix_shifted_into(&self, out: &mut [EF], chunk: &[F], w0: EF) {
+        // The output length defines one inner block of evaluations.
+        let size_inner = out.len();
+        match &self.0 {
+            // Scalar storage: one equality weight per inner block.
+            PolyMaybePacked::Scalar(eq1) => {
+                // Skip the first inner block; its predecessor is in the prior chunk.
+                chunk
+                    .chunks(size_inner)
+                    .skip(1)
+                    .zip(eq1.iter())
+                    .for_each(|(chunk, &w1)| {
+                        // Combined weight: outer prefix times suffix predecessor.
+                        let w = w0 * w1;
+                        out.iter_mut()
+                            .zip_eq(chunk.iter())
+                            .for_each(|(acc, &f)| *acc += w * f);
+                    });
+            }
+            // SIMD-packed storage: one packed weight covers WIDTH consecutive blocks.
+            PolyMaybePacked::Packed(eq1) => {
+                // Drop the first inner block, then group blocks WIDTH at a time so
+                // each group pairs with one packed equality weight.
+                chunk[size_inner..]
+                    .chunks(size_inner * F::Packing::WIDTH)
+                    .zip(eq1.iter())
+                    .for_each(|(chunk, &w1)| {
+                        // Combined packed weight: outer prefix times suffix predecessor.
+                        let w = w1 * w0;
+                        // Unpack the group into per-block scalar weights and blocks.
+                        chunk
+                            .chunks(size_inner)
+                            .zip(EF::ExtensionPacking::to_ext_iter([w]))
+                            .for_each(|(chunk, w)| {
+                                out.iter_mut()
+                                    .zip_eq(chunk.iter())
+                                    .for_each(|(acc, &f)| *acc += w * f);
+                            });
+                    });
+            }
+        }
+    }
+
+    /// Dots a base-field chunk against the leading entries of this equality table.
+    ///
+    /// Callers pass a suffix block that already drops its first row, so the
+    /// first equality weight aligns with the predecessor of that row.
+    ///
+    /// The block may be shorter than the table, so only its leading rows are used.
+    pub(super) fn dot_with_base_shifted(&self, chunk: &[F]) -> EF {
+        // The chunk never exceeds one full suffix-half row block.
+        debug_assert!(chunk.len() <= self.num_scalar_evals());
+
+        match &self.0 {
+            // Scalar storage: dot the chunk against the matching leading weights.
+            PolyMaybePacked::Scalar(eq1) => {
+                dot_product(eq1.iter().take(chunk.len()).copied(), chunk.iter().copied())
+            }
+            // SIMD-packed storage: split the chunk into full lanes plus a tail.
+            PolyMaybePacked::Packed(eq1) => {
+                let (packed, suffix) = F::Packing::pack_slice_with_suffix(chunk);
+                let mut sum = EF::ZERO;
+                // Lane-parallel part: dot the packed weights with the packed chunk,
+                // then reduce the resulting packed value across its lanes.
+                if !packed.is_empty() {
+                    let packed_sum = dot_product(eq1.iter().copied(), packed.iter().copied());
+                    sum += EF::ExtensionPacking::to_ext_iter([packed_sum]).sum::<EF>();
+                }
+
+                // Tail part: the leftover rows that did not fill a full lane.
+                // They share the next packed weight, unpacked back to scalars.
+                if !suffix.is_empty() {
+                    // Unpack the next packed weight into its scalar lanes and dot it
+                    // against the leftover tail rows.
+                    let w1 = eq1.as_slice()[packed.len()];
+                    sum += dot_product::<EF, _, _>(
+                        EF::ExtensionPacking::to_ext_iter([w1]),
+                        suffix.iter().copied(),
+                    );
+                }
+
+                sum
+            }
+        }
+    }
+
+    /// Returns the final scalar entry of this equality table.
+    ///
+    /// This is the boundary weight that the repeated maximal row carries in the
+    /// successor decomposition.
+    #[doc(hidden)]
+    pub fn last_scalar(&self) -> EF {
+        match &self.0 {
+            // Scalar storage: the last entry is already a field element.
+            PolyMaybePacked::Scalar(eq1) => *eq1.as_slice().last().unwrap(),
+            // Packed storage: the final row is the last lane of the last packed value.
+            PolyMaybePacked::Packed(eq1) => {
+                EF::ExtensionPacking::to_ext_iter([*eq1.as_slice().last().unwrap()])
+                    .last()
+                    .unwrap()
+            }
+        }
+    }
+}
+
+/// Adds one outer chunk of the successor decomposition from a stream of equality weights.
+///
+/// The same recurrence drives both scalar and packed tables once their weights are
+/// presented as a scalar stream, so the two storage layouts share this body.
+///
+/// Each row receives its own weight scaled by the per-row factor plus its predecessor's
+/// weight scaled by the shifted factor.
+/// Row 0 has no predecessor inside this chunk, so it takes the cross-chunk boundary instead.
+///
+/// # Arguments
+///
+/// - `out`: row buffer accumulated in place, one entry per equality row.
+/// - `eq_weight`: scale applied to each row's own equality weight.
+/// - `shifted_weight`: scale applied to each row's predecessor weight.
+/// - `boundary`: already-scaled predecessor contribution for row 0.
+/// - `weights`: the equality weights of this chunk in row order.
+fn accumulate_next_rows<EF: Field>(
+    out: &mut [EF],
+    eq_weight: EF,
+    shifted_weight: EF,
+    boundary: EF,
+    mut weights: impl Iterator<Item = EF>,
+) {
+    // Peel off row 0; its predecessor lives in the previous outer chunk.
+    let (first_out, rest_out) = out.split_first_mut().unwrap();
+    // Running predecessor weight, seeded with the row-0 weight.
+    let mut prev = weights.next().unwrap();
+
+    // Row 0: own weight plus the cross-chunk boundary.
+    *first_out += eq_weight * prev + boundary;
+    // Remaining rows: own weight plus the in-chunk predecessor weight.
+    rest_out.iter_mut().zip_eq(weights).for_each(|(out, w1)| {
+        *out += eq_weight * w1 + shifted_weight * prev;
+        // Slide the predecessor window forward by one row.
+        prev = w1;
+    });
 }
 
 #[cfg(test)]
@@ -354,6 +569,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::split_eq::SplitEq;
 
     type F = BabyBear;
     type PackedF = <F as Field>::Packing;
@@ -380,7 +596,7 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
             // Should be scalar despite requesting packed.
-            assert!(matches!(eq, EqMaybePacked::Unpacked(_)));
+            assert!(!eq.is_packed());
             assert_eq!(eq.num_variables(), k);
         }
     }
@@ -393,7 +609,7 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
             // Should be in packed form.
-            assert!(matches!(eq, EqMaybePacked::Packed(_)));
+            assert!(eq.is_packed());
             assert_eq!(eq.num_variables(), k);
         }
     }
@@ -405,25 +621,8 @@ mod tests {
         for k in 0..=8 {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
-            assert!(matches!(eq, EqMaybePacked::Unpacked(_)));
+            assert!(!eq.is_packed());
             assert_eq!(eq.num_variables(), k);
-        }
-    }
-
-    // Chunk size consistency
-
-    #[test]
-    fn test_scalar_chunk_size() {
-        let mut rng = SmallRng::seed_from_u64(0);
-        // Both variants must report the same scalar chunk size for a given k.
-        for k in 0..=8 {
-            let point = Point::<EF>::rand(&mut rng, k);
-            let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
-            // Scalar chunk size is always 2^k regardless of packing.
-            assert_eq!(unpacked.scalar_chunk_size(), 1 << k);
-
-            let packed = EqMaybePacked::<F, EF>::new_packed(&point);
-            assert_eq!(packed.scalar_chunk_size(), 1 << k);
         }
     }
 
@@ -693,7 +892,7 @@ mod tests {
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0), 0);
         let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
         assert_eq!(eq.num_variables(), 0);
-        assert_eq!(eq.scalar_chunk_size(), 1);
+        assert_eq!(eq.num_scalar_evals(), 1);
         // Dot with a single element should return that element times 1.
         assert_eq!(eq.dot_with_base(&[F::TWO]), EF::TWO);
         assert_eq!(eq.dot_with_ext(&[EF::TWO]), EF::TWO);
@@ -709,5 +908,120 @@ mod tests {
         // Zero weight should not modify the buffer.
         eq.accumulate_scalar_into(&mut out, EF::ZERO);
         assert!(out.iter().all(|&v| v == EF::ONE));
+    }
+
+    #[test]
+    fn test_accumulate_next_chunk_into_matches_reference() {
+        // Invariant: both the scalar and SIMD-packed suffix tables produce the
+        // same per-chunk accumulation as the dense reference.
+        let mut rng = SmallRng::seed_from_u64(1);
+
+        // Fixture state: vary total variables 2..=10 so the suffix half spans
+        // both sub-packing-width and multi-packed-block sizes.
+        for k in 2..=10 {
+            let point = Point::<EF>::rand(&mut rng, k);
+            // Split in the middle so the suffix half has at least one variable.
+            let split_at = point.num_variables() / 2;
+            let (_prefix, suffix) = point.split_at(split_at);
+            let eq = Poly::new_from_point(suffix.as_slice(), EF::ONE);
+
+            // Random weights stand in for the prefix-driven scalars supplied at runtime.
+            let eq_weight = rng.random();
+            let shifted_weight = rng.random();
+            let boundary = rng.random();
+            // Random starting accumulator to confirm the routine adds rather than overwrites.
+            let initial = (0..eq.num_evals())
+                .map(|_| rng.random())
+                .collect::<Vec<_>>();
+
+            // Golden result from the obvious dense loop: each row takes its own
+            // equality weight plus the shifted predecessor weight, except row 0,
+            // which takes the cross-chunk boundary in place of a predecessor.
+            let mut expected = initial.clone();
+            for (idx, out) in expected.iter_mut().enumerate() {
+                let predecessor = if idx == 0 {
+                    boundary
+                } else {
+                    shifted_weight * eq.as_slice()[idx - 1]
+                };
+                *out += eq_weight * eq.as_slice()[idx] + predecessor;
+            }
+
+            // Scalar storage path must match the golden result.
+            let mut unpacked = initial.clone();
+            SplitEq::<F, EF>::new_unpacked(&point, EF::ONE)
+                .eq1()
+                .accumulate_next_chunk_into(
+                    unpacked.as_mut_slice(),
+                    eq_weight,
+                    shifted_weight,
+                    boundary,
+                );
+            assert_eq!(unpacked, expected);
+
+            // SIMD-packed storage path must produce identical scalars.
+            let mut packed = initial.clone();
+            SplitEq::<F, EF>::new_packed(&point, EF::ONE)
+                .eq1()
+                .accumulate_next_chunk_into(
+                    packed.as_mut_slice(),
+                    eq_weight,
+                    shifted_weight,
+                    boundary,
+                );
+            assert_eq!(packed, expected);
+        }
+    }
+
+    #[test]
+    fn test_compress_prefix_shifted_into_matches_reference() {
+        // Invariant: scalar and packed suffix tables yield the same interior
+        // prefix-compression accumulation as the dense reference.
+        let mut rng = SmallRng::seed_from_u64(2);
+
+        // Fixture state: vary total variables 2..=10 to cross packing boundaries.
+        for k in 2..=10 {
+            let point = Point::<EF>::rand(&mut rng, k);
+            // Middle split gives a non-empty suffix half to drive the weights.
+            let split_at = point.num_variables() / 2;
+            let (_prefix, suffix) = point.split_at(split_at);
+            let eq = Poly::new_from_point(suffix.as_slice(), EF::ONE);
+            // One inner block per inner variable assignment.
+            let size_inner = 1 << split_at;
+            // Random outer chunk laid out as suffix-rows blocks of inner_size each.
+            let chunk = (0..(eq.num_evals() * size_inner))
+                .map(|_| rng.random())
+                .collect::<Vec<_>>();
+            // Random outer prefix weight applied to the whole chunk.
+            let w0 = rng.random();
+            // Random starting accumulator to confirm the routine adds in place.
+            let initial = (0..size_inner).map(|_| rng.random()).collect::<Vec<_>>();
+
+            // Golden result from the obvious dense loop: skip the first inner
+            // block (its predecessor sits in the previous chunk), then add each
+            // later block weighted by the outer prefix times the suffix predecessor.
+            let mut expected = initial.clone();
+            for block_idx in 1..eq.num_evals() {
+                let w = w0 * eq.as_slice()[block_idx - 1];
+                let block = &chunk[block_idx * size_inner..(block_idx + 1) * size_inner];
+                for (out, &value) in expected.iter_mut().zip(block.iter()) {
+                    *out += w * value;
+                }
+            }
+
+            // Scalar storage path.
+            let mut unpacked = initial.clone();
+            SplitEq::<F, EF>::new_unpacked(&point, EF::ONE)
+                .eq1()
+                .compress_prefix_shifted_into(unpacked.as_mut_slice(), chunk.as_slice(), w0);
+            assert_eq!(unpacked, expected);
+
+            // SIMD-packed storage path must produce identical scalars.
+            let mut packed = initial.clone();
+            SplitEq::<F, EF>::new_packed(&point, EF::ONE)
+                .eq1()
+                .compress_prefix_shifted_into(packed.as_mut_slice(), chunk.as_slice(), w0);
+            assert_eq!(packed, expected);
+        }
     }
 }

@@ -7,7 +7,12 @@ use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
 #[instrument(skip_all, level = "debug")]
-pub fn get_log_num_quotient_chunks<F, A>(air: &A, layout: AirLayout, is_zk: usize) -> usize
+pub fn get_log_num_quotient_chunks<F, A>(
+    air: &A,
+    layout: AirLayout,
+    trace_len: usize,
+    is_zk: usize,
+) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
@@ -23,7 +28,8 @@ where
         // a different hint than the verifier computes for itself.
         debug_assert!(
             {
-                let symbolic = get_log_quotient_degree_extension::<F, F, A>(air, layout, is_zk);
+                let symbolic =
+                    get_log_quotient_degree_extension::<F, F, A>(air, layout, trace_len, is_zk);
                 result >= symbolic
             },
             "max_constraint_degree() hint {} is too small; actual log quotient degree is larger",
@@ -33,7 +39,7 @@ where
         return result;
     }
 
-    get_log_quotient_degree_extension(air, layout, is_zk)
+    get_log_quotient_degree_extension(air, layout, trace_len, is_zk)
 }
 
 #[instrument(
@@ -44,6 +50,7 @@ where
 pub fn get_log_quotient_degree_extension<F, EF, A>(
     air: &A,
     layout: AirLayout,
+    trace_len: usize,
     is_zk: usize,
 ) -> usize
 where
@@ -59,7 +66,8 @@ where
 
         debug_assert!(
             {
-                let actual = get_max_constraint_degree_extension::<F, EF, A>(air, layout);
+                let actual =
+                    get_max_constraint_degree_extension::<F, EF, A>(air, layout, trace_len);
                 degree_hint >= actual
             },
             "max_constraint_degree() hint {} is too small; symbolic evaluation found a larger degree",
@@ -71,7 +79,7 @@ where
 
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
     let constraint_degree =
-        (get_max_constraint_degree_extension::<F, EF, A>(air, layout) + is_zk).max(2);
+        (get_max_constraint_degree_extension::<F, EF, A>(air, layout, trace_len) + is_zk).max(2);
 
     // We bound the degree of the quotient polynomial by constraint_degree - 1,
     // then choose the number of quotient chunks as the smallest power of two
@@ -125,7 +133,7 @@ mod tests {
             constraints: vec![],
             width: 4,
         };
-        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), 0);
+        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), 8, 0);
         assert_eq!(log_degree, 0);
     }
 
@@ -135,7 +143,7 @@ mod tests {
             constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
             width: 4,
         };
-        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), 0);
+        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), 8, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
     }
 
@@ -149,7 +157,7 @@ mod tests {
             ],
             width: 4,
         };
-        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), 0);
+        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), 8, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
     }
 
@@ -188,7 +196,7 @@ mod tests {
             width: 4,
             degree_hint: Some(3),
         };
-        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 0);
+        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 8, 0);
         assert_eq!(log_chunks, log2_ceil_usize(2));
     }
 
@@ -201,7 +209,7 @@ mod tests {
             width: 4,
             degree_hint: None,
         };
-        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 0);
+        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 8, 0);
         assert_eq!(log_chunks, 0);
     }
 
@@ -213,7 +221,7 @@ mod tests {
             width: 4,
             degree_hint: Some(1),
         };
-        let with_hint = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 0);
+        let with_hint = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 8, 0);
 
         let air_no_hint = HintedMockAir {
             constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
@@ -221,7 +229,7 @@ mod tests {
             degree_hint: None,
         };
         let without_hint =
-            get_log_num_quotient_chunks(&air_no_hint, air_layout(&air_no_hint, 0), 0);
+            get_log_num_quotient_chunks(&air_no_hint, air_layout(&air_no_hint, 0), 8, 0);
 
         assert_eq!(with_hint, without_hint);
     }
@@ -236,6 +244,6 @@ mod tests {
             width: 4,
             degree_hint: Some(0),
         };
-        let _ = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 0);
+        let _ = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 8, 0);
     }
 }

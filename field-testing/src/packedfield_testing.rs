@@ -235,6 +235,46 @@ where
     }
 }
 
+/// Pin the fast `add_assign_lane` override against its default.
+///
+/// - The default rebuilds a full packed element and adds it.
+/// - The override touches only the `D` base lanes at the target lane.
+/// - Both must agree on every lane.
+/// - Only the target lane may change.
+pub fn test_add_assign_lane_ext<BF, EF, PE>()
+where
+    BF: Field,
+    EF: ExtensionField<BF, ExtensionPacking = PE>,
+    PE: PackedFieldExtension<BF, EF> + Copy + Eq,
+    StandardUniform: Distribution<PE> + Distribution<EF>,
+{
+    let mut rng = SmallRng::seed_from_u64(0xa55e_3b1c);
+    let width = BF::Packing::WIDTH;
+
+    // Random starting register and the scalar to inject, over several trials.
+    for _ in 0..32 {
+        let start: PE = rng.random();
+        let value: EF = rng.random();
+        // Inject into each lane in turn.
+        for lane in 0..width {
+            // Fast path: the per-type override.
+            let mut fast = start;
+            fast.add_assign_lane(lane, value);
+
+            // Reference: add `value` only to the target lane via the public constructor.
+            let reference = start + PE::from_ext_fn(|l| if l == lane { value } else { EF::ZERO });
+            assert_eq!(fast, reference, "lane {lane} mismatch");
+
+            // The target lane gains exactly `value`.
+            // Every other lane is untouched.
+            for other in 0..width {
+                let expected = start.extract(other) + if other == lane { value } else { EF::ZERO };
+                assert_eq!(fast.extract(other), expected, "leaked into lane {other}");
+            }
+        }
+    }
+}
+
 /// Verify packed binomial extension division against scalar reference results.
 ///
 /// Tests four operations:
@@ -1089,6 +1129,10 @@ macro_rules! test_packed_extension_field {
                     $extfield,
                     $packedextfield,
                 >();
+            }
+            #[test]
+            fn test_add_assign_lane_ext() {
+                $crate::test_add_assign_lane_ext::<$basefield, $extfield, $packedextfield>();
             }
         }
     };

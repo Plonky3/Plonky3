@@ -42,5 +42,15 @@ name = "interpolation"
 path = "benches/interpolation.rs"
 harness = false
 
+[[bench]]
+name = "vertical_packing"
+path = "benches/vertical_packing.rs"
+harness = false
+
+[[bench]]
+name = "bitrev_vertical_packing"
+path = "benches/bitrev_vertical_packing.rs"
+harness = false
+
 [lints]
 workspace = true

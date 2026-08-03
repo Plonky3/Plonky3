@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// Errors from sumcheck protocol verification.
-#[derive(Error, Debug)]
+#[derive(Error, Debug, PartialEq, Eq)]
 pub enum SumcheckError {
     /// The proof contains a different number of rounds than expected.
     #[error("Sumcheck round count mismatch: expected {expected}, got {actual}")]
@@ -29,15 +29,25 @@ pub enum SumcheckError {
         actual: usize,
     },
 
-    /// HVZK sumcheck: the number of supplied mask commitments does not match
-    /// the folding factor `k`.
-    #[error("HVZK mask commitment count mismatch: expected {expected}, got {actual}")]
-    MaskCommitmentCountMismatch { expected: usize, actual: usize },
-
     /// HVZK sumcheck: the proof's claimed `ell_zk` (mask code message length)
     /// does not match the verifier's expected value. Catches caller-side
     /// configuration mismatch between prover and verifier before the wire
     /// shape check.
     #[error("HVZK ell_zk mismatch: expected {expected}, got {actual}")]
     EllZkMismatch { expected: usize, actual: usize },
+
+    /// An opening claim's evaluations do not match the requested column shape.
+    ///
+    /// The evaluations come from the proof, so a malformed proof must be
+    /// rejected here rather than aborting the verifier.
+    #[error(
+        "Opening shape mismatch for table {table_idx}: requested {expected_current} current and {expected_next} next, got {actual_current} current and {actual_next} next"
+    )]
+    OpeningShapeMismatch {
+        table_idx: usize,
+        expected_current: usize,
+        expected_next: usize,
+        actual_current: usize,
+        actual_next: usize,
+    },
 }

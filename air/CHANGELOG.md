@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Air: some debugging improvements (#1431)
+- Field: rm unused packed_linear_combination (#1460)
+- Perf: abstract away Copy vs Clone (#1463)
+- Feat: add support for Periodic Columns at runtime (#1462)
+- Feat: add `assert_zeros_ext()` method to `ExtensionBuilder` (#1493)
+- Feat: add `assert_eq_arrays` to `AirBuilder` (#1507)
+- Air: document virtual pair column composition patterns (#1419)
+- Feat: add Quintic extension impl for SymbolicExpression (#1522)
+- Refactor(air): split air.rs into dedicated modules (#1466)
+- Add debug shape checks (#1568)
+- Air,batch-stark: show labels in constraint panic output (#1570)
+- Feat: add support for extensions of degree 3 (#1497)
+- Feat: bus-based cross-AIR interactions and lookup crate redesign (#1566)
+- Refactor(air): merge PeriodicAirBuilder into AirBuilder (#1611)
+- Chore: use T::zero_vec(n) instead of vec![T::ZERO; n] (#1633)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Refactor: remove duplication around AirBuilder `_named` methods (#1724)
+- Chore: update CHANGELOGs (#1785)
+
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Air: document virtual pair column composition patterns (#1419)
+
+## [0.5.2] - 2026-03-27
+### Merged PRs
+- Perf: abstract away Copy vs Clone (#1463)
+
 ## [0.5.1] - 2026-03-16
 ## [0.5.0] - 2026-03-10
 ### Merged PRs

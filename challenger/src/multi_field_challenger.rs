@@ -1,6 +1,7 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::array;
 
 use p3_field::{
     BasedVectorSpace, PrimeField, PrimeField32, absorb_radix_bits, max_absorb_injective_limbs,
@@ -91,6 +92,13 @@ where
         if RATE >= WIDTH {
             return Err(String::from("RATE must be less than WIDTH"));
         }
+        // A full flush stamps up to limbs-per-slot * RATE scalars into a byte-sized length tag.
+        // Past 255, lengths differing by 256 would share a tag and collide in the transcript.
+        if max_absorb_injective_limbs::<F, PF>() * RATE > u8::MAX as usize {
+            return Err(String::from(
+                "absorb length tag must fit in a u8: max_absorb_injective_limbs * RATE must be at most 255",
+            ));
+        }
 
         Ok(Self {
             inner: DuplexChallenger::new(permutation),
@@ -112,7 +120,9 @@ where
             .chunks(absorb_n)
             .map(|chunk| reduce_packed(chunk, rb))
             .collect();
-        self.inner.absorb_rate_padded_with_tag(&packed, n_in as u8);
+        // Invariant: the constructor bounds a full flush at 255 scalars, so this never truncates.
+        let tag = u8::try_from(n_in).expect("absorb length tag must fit in a u8");
+        self.inner.absorb_rate_padded_with_tag(&packed, tag);
         self.f_buffer.clear();
         self.f_squeeze_buffer.clear();
     }
@@ -186,8 +196,9 @@ where
         let words: &[PF; N] = values.as_ref();
 
         for chunk in words.chunks(RATE) {
-            self.inner
-                .absorb_rate_padded_with_tag(chunk, chunk.len() as u8);
+            // Invariant: each block holds at most RATE words, bounded at 255 by the constructor.
+            let tag = u8::try_from(chunk.len()).expect("absorb length tag must fit in a u8");
+            self.inner.absorb_rate_padded_with_tag(chunk, tag);
             self.f_squeeze_buffer.clear();
         }
     }
@@ -276,10 +287,91 @@ where
     /// We have 1/2^b - 1/p ≤ P1, P2 ≤ 1/2^b + 1/p
     fn sample_bits(&mut self, bits: usize) -> usize {
         assert!(bits < (usize::BITS as usize));
-        assert!((1 << bits) < F::ORDER_U32);
+        // Evaluate the bound in `u64` to keep the shift within its type width.
+        // A `u32` shift by `bits >= 32` would wrap and zero the mask, accepting any witness.
+        assert!(
+            (1u64 << bits) < F::ORDER_U64,
+            "requested bit count must fit within the field order"
+        );
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u32() as usize;
         rand_usize & ((1 << bits) - 1)
+    }
+}
+
+impl<F, PF, P, const WIDTH: usize, const RATE: usize> MultiField32Challenger<F, PF, P, WIDTH, RATE>
+where
+    F: PrimeField32,
+    PF: PrimeField,
+    P: CryptographicPermutation<[PF; WIDTH]>,
+{
+    /// Build the proof-of-work acceptance predicate used by
+    /// [`GrindingChallenger::grind`](crate::GrindingChallenger::grind).
+    ///
+    /// The predicate replays `check_witness` = `observe(witness)` + `sample_bits(bits)`
+    /// on a stack copy of the sponge state:
+    ///
+    /// ```text
+    ///     pending scalars | witness  ->  packed rate slots, zero tail, length tag
+    ///                                ->  permute
+    ///                                ->  last limb of last rate cell
+    ///                                ->  accept iff low `bits` are zero
+    /// ```
+    ///
+    /// Everything except the witness digit is candidate-independent and computed once.
+    /// Each call then costs one state copy, one digit write, one permutation,
+    /// and one limb split — no clone, no heap allocation.
+    pub(crate) fn pow_check_fn(&self, bits: usize) -> impl Fn(u32) -> bool + Sync + '_ {
+        let rb = self.absorb_radix_bits();
+        let absorb_n = self.absorb_num_f_elms();
+        let squeeze_n = self.squeeze_num_f_elms();
+
+        // The witness joins the pending scalars at the next free position.
+        let n_pending = self.f_buffer.len();
+        // Invariant: the constructor bounds a full flush at 255 scalars, so this never truncates.
+        let tag = u8::try_from(n_pending + 1).expect("absorb length tag must fit in a u8");
+
+        // Packed-slot coordinates of the witness digit.
+        let chunk_idx = n_pending / absorb_n;
+        let pos_in_chunk = n_pending % absorb_n;
+
+        // The packing is little-endian Horner: digit `j` of a chunk weighs `2^(rb * j)`.
+        let shift = PF::from_u64(1u64 << rb).exp_u64(pos_in_chunk as u64);
+
+        // Digits below the witness in its own chunk.
+        let const_tail: PF = reduce_packed(&self.f_buffer[chunk_idx * absorb_n..], rb);
+
+        // Candidate-independent pre-permutation state.
+        // Mirrors `absorb_rate_padded_with_tag(packed_chunks, tag)` on the inner sponge.
+        let base_state: [PF; WIDTH] = array::from_fn(|i| {
+            if i < chunk_idx {
+                // Full constant chunks fill the leading rate slots.
+                reduce_packed(&self.f_buffer[i * absorb_n..(i + 1) * absorb_n], rb)
+            } else if i < RATE {
+                // The witness chunk (rebuilt per candidate) and the unused rate slots are zeroed.
+                PF::ZERO
+            } else if i == RATE {
+                // The first capacity element carries the length tag.
+                self.inner.sponge_state[RATE] + PF::from_u8(tag)
+            } else {
+                // The rest of the capacity carries forward unchanged.
+                self.inner.sponge_state[i]
+            }
+        });
+
+        // Accept when the low `bits` of the checked challenge are zero.
+        let mask = (1u64 << bits) - 1;
+
+        move |candidate| {
+            // One stack copy, one digit write, one permutation per candidate.
+            let mut state = base_state;
+            state[chunk_idx] = const_tail + shift * PF::from_u32(candidate);
+            self.inner.permutation.permute_mut(&mut state);
+
+            // `sample_bits` pops the last limb split from the last rate cell.
+            let limbs = split_pf_to_field_order_limbs::<PF, F>(state[RATE - 1], squeeze_n);
+            (u64::from(limbs[squeeze_n - 1].as_canonical_u32()) & mask) == 0
+        }
     }
 }
 
@@ -314,6 +406,7 @@ mod tests {
     };
     use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
+    use proptest::prelude::*;
 
     use super::*;
     use crate::grinding_challenger::GrindingChallenger;
@@ -352,6 +445,41 @@ mod tests {
     }
 
     impl CryptographicPermutation<[PF; WIDTH]> for MixingPermutation {}
+
+    /// A no-op permutation generic over the state width.
+    /// Lets tests instantiate challengers at widths the fixed-width permutations cannot reach.
+    #[derive(Clone)]
+    struct WideIdentityPermutation;
+
+    impl<const W: usize> Permutation<[PF; W]> for WideIdentityPermutation {
+        fn permute_mut(&self, _input: &mut [PF; W]) {}
+    }
+
+    impl<const W: usize> CryptographicPermutation<[PF; W]> for WideIdentityPermutation {}
+
+    #[test]
+    fn test_new_rejects_length_tag_overflow() {
+        // The capacity length tag is a single byte stamped per padded absorb.
+        // A full flush absorbs up to limbs-per-slot * RATE scalars at once.
+        //
+        // Fixture state: BabyBear packs 2 limbs per Goldilocks rate slot.
+        assert_eq!(max_absorb_injective_limbs::<F, PF>(), 2);
+
+        // Mutation: push RATE past the byte boundary.
+        //
+        //     RATE = 128 → 2 * 128 = 256 > 255 → reject
+        //     RATE = 127 → 2 * 127 = 254 ≤ 255 → accept
+        let too_wide = MultiField32Challenger::<F, PF, _, 129, 128>::new(WideIdentityPermutation);
+        assert_eq!(
+            too_wide.err().as_deref(),
+            Some(
+                "absorb length tag must fit in a u8: max_absorb_injective_limbs * RATE must be at most 255"
+            )
+        );
+
+        let in_range = MultiField32Challenger::<F, PF, _, 128, 127>::new(WideIdentityPermutation);
+        assert!(in_range.is_ok());
+    }
 
     #[test]
     fn test_packing() {
@@ -655,5 +783,125 @@ mod tests {
         assert_eq!(challenger.inner.input_buffer, before.inner.input_buffer);
         assert_eq!(challenger.inner.output_buffer, before.inner.output_buffer);
         assert_eq!(challenger.inner.sponge_state, before.inner.sponge_state);
+    }
+
+    #[test]
+    #[should_panic = "requested bit count must fit within the field order"]
+    fn test_sample_bits_rejects_oversized_request() {
+        // Sampled field is BabyBear, order ~2^30.9, so a 32-bit request must be rejected.
+        // The bound is evaluated in u64, so the guard fires in every build profile.
+        let mut challenger =
+            MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(MixingPermutation).unwrap();
+        let _ = challenger.sample_bits(32);
+    }
+
+    #[test]
+    #[should_panic = "requested bit count must fit within the field order"]
+    fn test_grind_rejects_oversized_request() {
+        // Same guard, reached through the proof-of-work entry point.
+        let mut challenger =
+            MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(MixingPermutation).unwrap();
+        let _ = challenger.grind(32);
+    }
+
+    #[test]
+    fn test_grind_advances_state_like_direct_check() {
+        // The fast grind precomputes the pre-permutation state once per search.
+        // Its result and final transcript must match a direct `check_witness`.
+        //
+        // Pending counts cover every packing geometry (absorb_n = 2, RATE = 4):
+        //
+        //     0  ->  witness opens chunk 0          (chunk_idx 0, pos 0)
+        //     1  ->  witness completes chunk 0      (chunk_idx 0, pos 1)
+        //     4  ->  witness opens chunk 2          (chunk_idx 2, pos 0)
+        //     7  ->  witness fills the whole batch  (flush fires inside observe)
+        for pending in [0usize, 1, 4, 7] {
+            let mut challenger =
+                MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(MixingPermutation).unwrap();
+            for i in 0..pending {
+                challenger.observe(F::from_u8(i as u8));
+            }
+
+            // Shadow challenger consumes the witness through the plain verifier path.
+            let mut direct = challenger.clone();
+
+            let bits = 2;
+            let witness = challenger.grind(bits);
+
+            // The witness validates, and both transcripts land on the same state.
+            assert!(direct.check_witness(bits, witness), "pending = {pending}");
+            assert_eq!(challenger.inner.sponge_state, direct.inner.sponge_state);
+            assert_eq!(challenger.inner.input_buffer, direct.inner.input_buffer);
+            assert_eq!(challenger.inner.output_buffer, direct.inner.output_buffer);
+            assert_eq!(challenger.f_buffer, direct.f_buffer);
+            assert_eq!(challenger.f_squeeze_buffer, direct.f_squeeze_buffer);
+        }
+    }
+
+    #[test]
+    fn test_grind_advances_state_like_direct_check_bn254() {
+        // Bn254 splits each squeezed cell into several BabyBear limbs,
+        // so this pins the limb-extraction path the Goldilocks fixture cannot reach.
+        use p3_bn254::Bn254;
+
+        type PF254 = Bn254;
+
+        #[derive(Clone)]
+        struct Bn254MixingPermutation;
+
+        impl Permutation<[PF254; WIDTH]> for Bn254MixingPermutation {
+            fn permute_mut(&self, input: &mut [PF254; WIDTH]) {
+                let sum: PF254 = input.iter().copied().sum();
+                for (i, val) in input.iter_mut().enumerate() {
+                    *val = sum + PF254::from_u8((i + 1) as u8);
+                }
+            }
+        }
+
+        impl CryptographicPermutation<[PF254; WIDTH]> for Bn254MixingPermutation {}
+
+        let mut challenger =
+            MultiField32Challenger::<F, PF254, _, WIDTH, RATE>::new(Bn254MixingPermutation)
+                .unwrap();
+        assert!(challenger.squeeze_num_f_elms() > 1);
+        for i in 0..3u8 {
+            challenger.observe(F::from_u8(i));
+        }
+
+        let mut direct = challenger.clone();
+
+        let bits = 2;
+        let witness = challenger.grind(bits);
+
+        assert!(direct.check_witness(bits, witness));
+        assert_eq!(challenger.inner.sponge_state, direct.inner.sponge_state);
+        assert_eq!(challenger.f_buffer, direct.f_buffer);
+        assert_eq!(challenger.f_squeeze_buffer, direct.f_squeeze_buffer);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_pow_check_matches_check_witness(
+            pending_values in prop::collection::vec(0u32..F::ORDER_U32, 0..8),
+            candidate in 0u32..F::ORDER_U32,
+            bits in 1usize..8,
+        ) {
+            // Specialization-vs-reference pin:
+            // the precomputed-state predicate must agree with the plain
+            // `observe + sample_bits` verifier path on every candidate.
+            let mut challenger =
+                MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(MixingPermutation).unwrap();
+            for &v in &pending_values {
+                challenger.observe(F::from_u32(v));
+            }
+
+            let fast = challenger.pow_check_fn(bits)(candidate);
+
+            // Reference path on a clone; `candidate` is canonical by the range above.
+            let witness = F::from_u32(candidate);
+            let reference = challenger.clone().check_witness(bits, witness);
+
+            prop_assert_eq!(fast, reference);
+        }
     }
 }

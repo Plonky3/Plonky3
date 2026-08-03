@@ -4,7 +4,7 @@
 //! - <https://eprint.iacr.org/2026/391> (HVZK-WHIR),
 //! - <https://eprint.iacr.org/2024/1586> (base WHIR).
 
-use p3_field::{Field, HornerIter};
+use p3_field::{ExtensionField, Field, HornerIter};
 
 /// Action of `ze*_n(ρ) := (1, ρ, …, ρ^{n-1})` on a coefficient vector,
 /// computed by Horner's method (Definition 6.1 of eprint 2026/391).
@@ -32,14 +32,17 @@ use p3_field::{Field, HornerIter};
 /// # Edge case
 ///
 /// `coeffs.len() == 0` returns `F::ZERO` (empty sum).
-//
-// TODO: remove `#[allow(dead_code)]` once the HVZK sumcheck and
-// code-switching modules land and call this helper.
-#[allow(dead_code)]
 #[inline]
-pub(crate) fn eval_ze_star_n<F: Field>(point: F, coeffs: &[F]) -> F {
+pub(crate) fn eval_ze_star_n<F, EF>(point: F, coeffs: &[EF]) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
     // c_0 + ρ·(c_1 + ρ·(... + ρ·c_{n-1})) with n-1 multiplications.
-    coeffs.iter().copied().horner(point)
+    //
+    // Mixed accumulator: extension coefficients fold against a base point,
+    // so each step costs one cheap EF x F multiplication.
+    coeffs.iter().copied().horner_acc(EF::ZERO, point)
 }
 
 /// Evaluate the polynomial `(msg ‖ rand)` (coefficients) at point `ρ`:
@@ -74,12 +77,12 @@ pub(crate) fn eval_ze_star_n<F: Field>(point: F, coeffs: &[F]) -> F {
 /// # Cost
 ///
 /// Two Horner passes plus one `ρ^l` (`log_2 l` field multiplications).
-//
-// TODO: remove `#[allow(dead_code)]` once the HVZK code-switching module
-// lands and calls this helper.
-#[allow(dead_code)]
 #[inline]
-pub(crate) fn padded_ood_t1<F: Field>(point: F, msg: &[F], rand: &[F]) -> F {
+pub(crate) fn padded_ood_t1<F, EF>(point: F, msg: &[EF], rand: &[EF]) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
     // ze*_l(ρ) · msg.
     let msg_eval = eval_ze_star_n(point, msg);
 
@@ -93,7 +96,8 @@ pub(crate) fn padded_ood_t1<F: Field>(point: F, msg: &[F], rand: &[F]) -> F {
     // With msg.len() == 0 this is ρ^0 = 1, recovering the unpadded form.
     let shift = point.exp_u64(msg.len() as u64);
 
-    msg_eval + shift * rand_eval
+    // The shift stays in the base field: one cheap EF x F multiplication.
+    msg_eval + rand_eval * shift
 }
 
 #[cfg(test)]
@@ -116,7 +120,7 @@ mod tests {
     #[test]
     fn ze_star_n_empty_message_is_zero() {
         // Empty sum convention; non-trivial ρ surfaces any spurious ρ factor.
-        assert_eq!(eval_ze_star_n(F::from_u64(7), &[]), F::ZERO);
+        assert_eq!(eval_ze_star_n::<F, F>(F::from_u64(7), &[]), F::ZERO);
     }
 
     #[test]

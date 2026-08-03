@@ -169,8 +169,7 @@ where
     #[inline(always)]
     fn square(&self) -> Self {
         let mut res = Self::default();
-        let w = F::W;
-        binomial_square(&self.value, &mut res.value, w);
+        <A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_square(&self.value, &mut res.value);
         res
     }
 
@@ -463,9 +462,6 @@ where
         let b = rhs.value;
         let mut res = Self::default();
 
-        // Migrated to the unified shape-parameterized `ExtensionAlgebra` trait.
-        // `W` is now reached through the bridge impl (which projects `F::W`),
-        // so callers no longer pass it explicitly.
         <A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_mul(&a, &b, &mut res.value);
 
         res

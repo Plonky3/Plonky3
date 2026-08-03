@@ -122,6 +122,51 @@ impl<F: Field> Butterfly<F> for DifButterfly<F> {
     fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
         (x_1 + x_2, (x_1 - x_2) * self.0)
     }
+
+    /// Override `apply_to_rows` to pre-broadcast the twiddle factor into a packed field
+    /// once before the inner loop, and manually unroll it to expose multiple independent
+    /// sub-then-mul chains to the compiler's scheduler, hiding the multiplication latency.
+    /// Mirrors the [`DitButterfly`] override.
+    #[inline]
+    fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
+        let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix_mut(row_1);
+        let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
+        debug_assert_eq!(shorts_1.len(), shorts_2.len());
+        debug_assert_eq!(suffix_1.len(), suffix_2.len());
+        let twiddle_packed = F::Packing::from(self.0);
+        let mut c1 = shorts_1.chunks_exact_mut(4);
+        let mut c2 = shorts_2.chunks_exact_mut(4);
+        for (p1, p2) in (&mut c1).zip(&mut c2) {
+            let a1 = p1[0];
+            let b1 = p1[1];
+            let c1_ = p1[2];
+            let d1 = p1[3];
+            let a2 = p2[0];
+            let b2 = p2[1];
+            let c2_ = p2[2];
+            let d2 = p2[3];
+            p1[0] = a1 + a2;
+            p1[1] = b1 + b2;
+            p1[2] = c1_ + c2_;
+            p1[3] = d1 + d2;
+            p2[0] = (a1 - a2) * twiddle_packed;
+            p2[1] = (b1 - b2) * twiddle_packed;
+            p2[2] = (c1_ - c2_) * twiddle_packed;
+            p2[3] = (d1 - d2) * twiddle_packed;
+        }
+        for (x_1, x_2) in c1
+            .into_remainder()
+            .iter_mut()
+            .zip(c2.into_remainder().iter_mut())
+        {
+            let sum = *x_1 + *x_2;
+            *x_2 = (*x_1 - *x_2) * twiddle_packed;
+            *x_1 = sum;
+        }
+        for (x_1, x_2) in suffix_1.iter_mut().zip(suffix_2.iter_mut()) {
+            self.apply_in_place(x_1, x_2);
+        }
+    }
 }
 
 /// DIF (Decimation-In-Frequency) butterfly operation where `x_2` is guaranteed to be zero.

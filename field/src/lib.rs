@@ -1,4 +1,4 @@
-//! A framework for finite fields.
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 extern crate alloc;
@@ -14,6 +14,7 @@ mod helpers;
 pub mod integers;
 pub mod op_assign_macros;
 mod packed;
+mod sqrt;
 
 pub use array::*;
 pub use batch_inverse::*;
@@ -21,3 +22,4 @@ pub use dup::Dup;
 pub use field::*;
 pub use helpers::*;
 pub use packed::*;
+pub use sqrt::{tonelli_shanks, tonelli_shanks_two_adic};

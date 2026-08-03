@@ -75,12 +75,33 @@ pub fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: TwoAdicSubgroup
     // Transform the circulant column to the frequency domain.
     let column = column.map(F::from_u64).to_vec();
     let matrix = fft.dft(column);
+    let freq_column: [F; N] = matrix.try_into().unwrap();
 
+    apply_circulant_fft_precomputed(fft, &freq_column, input)
+}
+
+/// Use the convolution theorem to calculate the product of a circulant matrix
+/// and the given vector, where the matrix's first column has already been
+/// transformed to the frequency domain.
+///
+/// Useful when the circulant matrix is fixed across many calls: the caller
+/// can compute `freq_column` once (e.g. `fft.dft(column.map(F::from_u64).to_vec())`)
+/// instead of re-transforming a compile-time-constant column on every call.
+#[inline]
+pub fn apply_circulant_fft_precomputed<
+    F: TwoAdicField,
+    const N: usize,
+    FFT: TwoAdicSubgroupDft<F>,
+>(
+    fft: &FFT,
+    freq_column: &[F; N],
+    input: &[F; N],
+) -> [F; N] {
     // Transform the input vector to the frequency domain.
     let input = fft.dft(input.to_vec());
 
     // Convolution theorem: point-wise multiply in frequency domain.
-    let product = matrix.iter().zip(input).map(|(&x, y)| x * y).collect();
+    let product = freq_column.iter().zip(input).map(|(&x, y)| x * y).collect();
 
     // Transform back to the time domain to get the circulant product.
     let output = fft.idft(product);

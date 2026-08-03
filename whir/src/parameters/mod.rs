@@ -4,12 +4,11 @@ use alloc::vec::Vec;
 use core::fmt::Display;
 
 mod folding;
-pub mod soundness;
 pub mod whir;
 
 pub use folding::{FoldingFactor, FoldingFactorError};
-pub use soundness::SecurityAssumption;
-pub use whir::{RoundConfig, WhirConfig};
+pub use p3_security::whir::SecurityAssumption;
+pub use whir::{RoundConfig, WhirConfig, WhirConfigError};
 
 /// Fallback proof-of-work difficulty when the user does not specify one.
 ///

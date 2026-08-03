@@ -172,6 +172,14 @@ impl<F: QuinticTrinomialExtendable> PackedFieldExtension<F, QuinticTrinomialExte
     }
 
     #[inline]
+    fn add_assign_lane(&mut self, lane: usize, value: QuinticTrinomialExtensionField<F>) {
+        // Add each coefficient into its own base packing at the shared lane.
+        for (coeff, v) in self.value.iter_mut().zip(value.value) {
+            coeff.as_slice_mut()[lane] += v;
+        }
+    }
+
+    #[inline]
     fn packed_ext_powers(base: QuinticTrinomialExtensionField<F>) -> Powers<Self> {
         let width = F::Packing::WIDTH;
         let powers = base.powers().collect_n(width + 1);

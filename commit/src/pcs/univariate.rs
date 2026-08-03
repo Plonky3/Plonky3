@@ -13,31 +13,12 @@ use crate::{PeriodicLdeTable, PolynomialSpace};
 
 pub type Val<D> = <D as PolynomialSpace>::Val;
 
-/// Optional fast path for building the periodic LDE table (e.g. via coset LDE).
-/// Implement for PCS backends that can avoid evaluating at every quotient point.
-pub trait BuildPeriodicLdeTableFast {
-    type PeriodicDomain: PolynomialSpace;
-
-    fn maybe_build_periodic_lde_table_fast(
-        &self,
-        _periodic_cols: &[Vec<Val<Self::PeriodicDomain>>],
-        _trace_domain: Self::PeriodicDomain,
-        _quotient_domain: Self::PeriodicDomain,
-    ) -> Option<PeriodicLdeTable<Val<Self::PeriodicDomain>>>
-    where
-        Val<Self::PeriodicDomain>: Clone,
-    {
-        None
-    }
-}
-
 /// A polynomial commitment scheme, for committing to batches of polynomials defined by their evaluations
 /// over some domain.
 ///
 /// In general this does not have to be a hiding commitment scheme but it might be for some implementations.
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
-pub trait Pcs<Challenge, Challenger>:
-    BuildPeriodicLdeTableFast<PeriodicDomain = Self::Domain>
+pub trait Pcs<Challenge, Challenger>
 where
     Challenge: ExtensionField<Val<Self::Domain>>,
 {
@@ -75,9 +56,7 @@ where
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
     /// The base-2 logarithm of the largest evaluation domain this PCS can construct.
-    fn log_max_lde_height(&self) -> usize {
-        usize::BITS as usize - 1
-    }
+    fn log_max_lde_height(&self) -> usize;
 
     /// Given a collection of evaluation matrices, produce a binding commitment to
     /// the polynomials defined by those evaluations. If `zk` is enabled, the evaluations are
@@ -247,7 +226,7 @@ where
         fiat_shamir_challenger: &mut Challenger,
         _is_preprocessing: bool,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
-        debug_assert!(
+        assert!(
             !Self::ZK,
             "open_with_preprocessing should have a different implementation when ZK is enabled"
         );
@@ -296,7 +275,8 @@ where
 
     /// Build the compact periodic LDE table (height = max_period × blowup, width = num periodic columns).
     ///
-    /// Default: try fast path (e.g. coset LDE), else evaluate each column at the first `extended_height` quotient points.
+    /// Default: evaluate each column at the first `extended_height` quotient points. Backends that
+    /// can compute this faster (e.g. via coset LDE) should override this method.
     fn build_periodic_lde_table(
         &self,
         periodic_cols: &[Vec<Val<Self::Domain>>],
@@ -307,20 +287,44 @@ where
         Self::Domain: Clone,
         Val<Self::Domain>: Clone,
     {
-        if let Some(table) =
-            self.maybe_build_periodic_lde_table_fast(periodic_cols, trace_domain, quotient_domain)
-        {
-            return table;
-        }
         if periodic_cols.is_empty() {
             return PeriodicLdeTable::empty();
         }
         let trace_size = trace_domain.size();
         let quotient_size = quotient_domain.size();
+        assert!(
+            quotient_size >= trace_size,
+            "quotient domain size ({quotient_size}) must be >= trace domain size ({trace_size})",
+        );
+        assert!(
+            quotient_size.is_multiple_of(trace_size),
+            "quotient domain size ({quotient_size}) must be divisible by trace domain size ({trace_size})",
+        );
         let blowup = quotient_size / trace_size;
+
+        for col in periodic_cols {
+            let period = col.len();
+            assert!(
+                period > 0 && period.is_power_of_two(),
+                "periodic column length must be a non-zero power of 2, got {period}",
+            );
+            assert!(
+                trace_size.is_multiple_of(period),
+                "trace domain size ({trace_size}) must be divisible by periodic column length ({period})",
+            );
+        }
         let max_period = periodic_cols.iter().map(|c| c.len()).max().unwrap();
-        let extended_height = max_period * blowup;
+        let extended_height = max_period
+            .checked_mul(blowup)
+            .expect("extended height overflow when computing max_period * blowup");
+        // Implied by the column checks above.
+        // Each period divides the trace size, so max_period <= trace_size.
+        // Therefore extended_height = max_period * blowup <= trace_size * blowup = quotient_size.
+        debug_assert!(extended_height <= quotient_size);
         let num_cols = periodic_cols.len();
+        let row_major_capacity = extended_height
+            .checked_mul(num_cols)
+            .expect("row-major periodic table capacity overflow");
 
         let mut quotient_pts = Vec::with_capacity(extended_height);
         let mut pt = quotient_domain.first_point();
@@ -336,7 +340,7 @@ where
             .map(|col| (0..max_period).map(|i| col[i % col.len()]).collect())
             .collect();
 
-        let mut row_major = Vec::with_capacity(extended_height * num_cols);
+        let mut row_major = Vec::with_capacity(row_major_capacity);
         for point in quotient_pts.iter().take(extended_height) {
             for padded in &padded_cols {
                 row_major.push(trace_domain.evaluate_periodic_column_at(padded, *point));

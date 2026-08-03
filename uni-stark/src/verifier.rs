@@ -15,12 +15,51 @@ use p3_util::zip_eq::zip_eq;
 use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
-use crate::error::{InvalidProofShapeError, VerificationError};
+use crate::error::{InvalidProofShapeError, PeriodicColumnError, VerificationError};
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::{
     AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
 };
+
+/// Reject periodic columns the verifier cannot evaluate over the trace domain.
+///
+/// - Evaluation samples a subdomain whose size is the column length.
+/// - Both verifiers call this before evaluating.
+/// - A malformed AIR therefore errors instead of panicking.
+///
+/// # Arguments
+///
+/// - `periodic_columns` — the periodic columns declared by the AIR.
+/// - `trace_length` — the number of rows the columns repeat over.
+///
+/// # Errors
+///
+/// - A length that is not a power of two has no evaluation subdomain.
+/// - A length larger than the trace cannot sit inside the trace domain.
+pub fn check_periodic_column_lengths<F>(
+    periodic_columns: &[Vec<F>],
+    trace_length: usize,
+) -> Result<(), PeriodicColumnError> {
+    for col in periodic_columns {
+        let period = col.len();
+
+        // A subdomain of size `period` exists only for powers of two.
+        if !period.is_power_of_two() {
+            return Err(PeriodicColumnError::LengthNotPowerOfTwo { got: period });
+        }
+
+        // That subdomain must sit inside the trace domain.
+        if period > trace_length {
+            return Err(PeriodicColumnError::LengthTooLarge {
+                maximum: trace_length,
+                got: period,
+            });
+        }
+    }
+
+    Ok(())
+}
 
 pub fn validate_degree_bits(
     air: Option<usize>,
@@ -291,8 +330,12 @@ where
         num_periodic_columns: air.num_periodic_columns(),
         ..Default::default()
     };
+    // Base trace length `N` (before any ZK extension); the quotient degree model
+    // measures trace columns as degree-`(N - 1)` polynomials and accounts for ZK
+    // separately via `is_zk`.
+    let base_degree = 1usize << base_degree_bits;
     let log_num_quotient_chunks =
-        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
+        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, base_degree, config.is_zk());
     let (_, num_quotient_chunks) = checked_log_size_sum(log_num_quotient_chunks, config.is_zk())
         .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
@@ -302,13 +345,21 @@ where
     let mut challenger = config.initialise_challenger();
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> config.is_zk());
 
-    let (_, quotient_domain_size) = checked_log_size_sum(degree_bits, log_num_quotient_chunks)
+    let (quotient_domain_log_size, quotient_domain_size) =
+        checked_log_size_sum(degree_bits, log_num_quotient_chunks).ok_or_else(|| {
+            InvalidProofShapeError::QuotientDomainTooLarge {
+                air: None,
+                maximum: usize::BITS as usize - 1,
+                got: degree_bits.saturating_add(log_num_quotient_chunks),
+            }
+        })?;
+    let quotient_domain = trace_domain
+        .try_create_disjoint_domain(quotient_domain_size)
         .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
-            maximum: usize::BITS as usize - 1,
-            got: degree_bits.saturating_add(log_num_quotient_chunks),
+            maximum: pcs.log_max_lde_height(),
+            got: quotient_domain_log_size,
         })?;
-    let quotient_domain = trace_domain.create_disjoint_domain(quotient_domain_size);
     let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
 
     let randomized_quotient_chunks_domains = quotient_chunks_domains
@@ -388,12 +439,21 @@ where
     // Get an out-of-domain point to open our values at.
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
-    let zeta = challenger.sample_algebra_element();
-    let periodic_values: Vec<SC::Challenge> = air
-        .periodic_columns()
-        .iter()
-        .map(|periodic_col| init_trace_domain.evaluate_periodic_column_at(periodic_col, zeta))
-        .collect();
+    let zeta: SC::Challenge = challenger.sample_algebra_element();
+
+    // The opening at zeta divides by the vanishing polynomial of the trace domain.
+    // Reject any zeta on the domain, where that polynomial is zero and the inverse panics.
+    // Honest Fiat-Shamir sampling reaches this only with probability |H| / |EF|.
+    if init_trace_domain.vanishing_poly_at_point(zeta).is_zero() {
+        return Err(VerificationError::OodPointInDomain);
+    }
+
+    // Periodic columns are AIR logic; a malformed one must error, not panic.
+    let periodic_columns = air.periodic_columns();
+    check_periodic_column_lengths(&periodic_columns, init_trace_domain.size())?;
+
+    let periodic_values: Vec<SC::Challenge> =
+        init_trace_domain.evaluate_periodic_columns_at(&periodic_columns, zeta);
 
     let zeta_next = init_trace_domain
         .next_point(zeta)

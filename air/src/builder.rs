@@ -53,6 +53,11 @@ pub trait AirBuilder: Sized {
     ///   the trait can be implemented uniformly.
     type PeriodicVar: Into<Self::Expr> + Copy;
 
+    /// Number of consecutive trace rows a constraint may reference (the window arity).
+    ///
+    /// Only two-row windows (current + next) are currently supported.
+    const WINDOW: usize = 2;
+
     /// Return the current and next row slices of the main (primary) trace.
     fn main(&self) -> Self::MainWindow;
 
@@ -68,17 +73,22 @@ pub trait AirBuilder: Sized {
     fn is_last_row(&self) -> Self::Expr;
 
     /// Expression evaluating to zero only on the last row.
-    fn is_transition(&self) -> Self::Expr {
-        self.is_transition_window(2)
-    }
+    fn is_transition(&self) -> Self::Expr;
 
     /// Expression evaluating to zero only on the last `size - 1` rows.
     ///
     /// # Panics
     ///
-    /// Implementations should panic if `size > 2`, since only two-row
-    /// windows are currently supported.
-    fn is_transition_window(&self, size: usize) -> Self::Expr;
+    /// Panics if `size > Self::WINDOW`, since only two-row windows are
+    /// currently supported.
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        assert!(
+            size <= Self::WINDOW,
+            "window size {size} exceeds supported arity {}",
+            Self::WINDOW
+        );
+        self.is_transition()
+    }
 
     /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.
     fn when<I: Into<Self::Expr>>(&mut self, condition: I) -> FilteredAirBuilder<'_, Self> {

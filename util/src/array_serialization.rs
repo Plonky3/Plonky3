@@ -37,7 +37,7 @@ where
         for _ in 0..N {
             match seq.next_element()? {
                 Some(val) => data.push(val),
-                None => return Err(serde::de::Error::invalid_length(N, &self)),
+                None => return Err(serde::de::Error::invalid_length(data.len(), &self)),
             }
         }
         data.try_into().map_or_else(|_| unreachable!(), Ok)

@@ -33,30 +33,35 @@ pub use sse2::*;
     target_feature = "neon",
     target_feature = "sha3"
 ))]
-pub mod neon;
+pub mod neon_sha3;
 #[cfg(all(
     target_arch = "aarch64",
     target_feature = "neon",
     target_feature = "sha3"
 ))]
+pub use neon_sha3::*;
+
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    not(target_feature = "sha3")
+))]
+pub mod neon;
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    not(target_feature = "sha3")
+))]
 pub use neon::*;
 
 #[cfg(not(any(
-    all(
-        target_arch = "aarch64",
-        target_feature = "neon",
-        target_feature = "sha3",
-    ),
-    target_arch = "x86_64",
+    all(target_arch = "aarch64", target_feature = "neon"),
+    target_arch = "x86_64"
 )))]
 mod fallback;
 #[cfg(not(any(
-    all(
-        target_arch = "aarch64",
-        target_feature = "neon",
-        target_feature = "sha3",
-    ),
-    target_arch = "x86_64",
+    all(target_arch = "aarch64", target_feature = "neon"),
+    target_arch = "x86_64"
 )))]
 pub use fallback::*;
 

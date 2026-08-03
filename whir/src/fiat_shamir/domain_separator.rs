@@ -8,6 +8,7 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 
 use crate::fiat_shamir::pattern::{Hint, Observe, Pattern, Sample};
 use crate::parameters::{FoldingFactor, WhirConfig};
+use crate::pcs::zk::ZkWhirConfig;
 
 /// Configuration for a sumcheck phase in the protocol.
 #[derive(Debug)]
@@ -24,6 +25,19 @@ pub(crate) struct SumcheckParams {
     pub pow_bits: usize,
 }
 
+/// Configuration for an HVZK sumcheck phase in the protocol.
+#[derive(Debug)]
+pub(crate) struct ZkSumcheckParams {
+    /// Number of sumcheck rounds.
+    pub rounds: usize,
+
+    /// Proof-of-work difficulty in bits.
+    pub pow_bits: usize,
+
+    /// Mask-code message length `ell_zk`.
+    pub ell_zk: usize,
+}
+
 /// Encodes the structure of an interactive protocol as a sequence of field elements.
 ///
 /// # Overview
@@ -36,16 +50,23 @@ pub(crate) struct SumcheckParams {
 ///
 /// # Transcript Operation Encoding
 ///
-/// Each transcript step is encoded as a single field element:
+/// Each transcript step is encoded as a single field element with
+/// non-overlapping bit ranges for each component:
 ///
 /// ```text
-///     element = pattern_tag + sub_label + count
+///     element = (pattern_tag << (COUNT_BITS + LABEL_BITS))
+///              | (sub_label << COUNT_BITS)
+///              | count
 /// ```
 ///
 /// where:
 /// - `pattern_tag` distinguishes observe / sample / hint.
 /// - `sub_label` identifies the semantic role (e.g., Merkle digest, folding randomness).
-/// - `count` is the number of field elements involved (omitted for hints).
+/// - `count` is the number of field elements involved (zero for hints).
+///
+/// Packing into disjoint bit ranges (rather than summing the three values)
+/// keeps the encoding injective: distinct `(tag, label, count)` triples
+/// always produce distinct field elements.
 ///
 /// # Evaluation Claims Are Not Absorbed Here
 ///
@@ -80,6 +101,25 @@ pub struct DomainSeparator<EF, F> {
     _extension_field: PhantomData<EF>,
 }
 
+/// Number of bits allotted to the `count` component of an encoded entry.
+const COUNT_BITS: u32 = 16;
+
+/// Number of bits allotted to the `sub_label` component of an encoded entry.
+const LABEL_BITS: u32 = 8;
+
+/// Packs a pattern tag, sub-label, and count into one field element using
+/// disjoint bit ranges, so that distinct `(tag, label, count)` triples
+/// always produce distinct field elements.
+fn encode_entry<F: Field>(tag: Pattern, label: u8, count: usize) -> F {
+    debug_assert!(
+        count < (1 << COUNT_BITS),
+        "domain separator count exceeds the {COUNT_BITS}-bit budget"
+    );
+    let packed =
+        ((tag as usize) << (COUNT_BITS + LABEL_BITS)) | ((label as usize) << COUNT_BITS) | count;
+    F::from_usize(packed)
+}
+
 impl<EF, F> DomainSeparator<EF, F>
 where
     EF: ExtensionField<F>,
@@ -95,21 +135,15 @@ where
     }
 
     /// Record that the prover observes `count` field elements into the sponge.
-    pub fn observe(&mut self, count: usize, pattern: Observe) {
-        self.pattern.push(
-            pattern.as_field_element::<F>()
-                + F::from_usize(count)
-                + Pattern::Observe.as_field_element::<F>(),
-        );
+    pub(crate) fn observe(&mut self, count: usize, pattern: Observe) {
+        self.pattern
+            .push(encode_entry::<F>(Pattern::Observe, pattern as u8, count));
     }
 
     /// Record that the verifier samples `count` field elements from the sponge.
-    pub fn sample(&mut self, count: usize, pattern: Sample) {
-        self.pattern.push(
-            pattern.as_field_element::<F>()
-                + F::from_usize(count)
-                + Pattern::Sample.as_field_element::<F>(),
-        );
+    pub(crate) fn sample(&mut self, count: usize, pattern: Sample) {
+        self.pattern
+            .push(encode_entry::<F>(Pattern::Sample, pattern as u8, count));
     }
 
     /// Encode a public protocol parameter into the domain separator.
@@ -122,18 +156,19 @@ where
     /// configuration, preventing cross-protocol transcript reuse.
     fn protocol_param(&mut self, value: usize) {
         // Constant marker: observe tag + protocol-param sub-label.
-        self.pattern.push(
-            Observe::ProtocolParam.as_field_element::<F>()
-                + Pattern::Observe.as_field_element::<F>(),
-        );
+        self.pattern.push(encode_entry::<F>(
+            Pattern::Observe,
+            Observe::ProtocolParam as u8,
+            0,
+        ));
         // Raw parameter value.
         self.pattern.push(F::from_usize(value));
     }
 
     /// Record a non-binding hint from the prover.
-    pub fn hint(&mut self, pattern: Hint) {
+    pub(crate) fn hint(&mut self, pattern: Hint) {
         self.pattern
-            .push(pattern.as_field_element::<F>() + Pattern::Hint.as_field_element::<F>());
+            .push(encode_entry::<F>(Pattern::Hint, pattern as u8, 0));
     }
 
     /// Absorb the entire domain separator pattern into the challenger.
@@ -151,7 +186,7 @@ where
     ///
     /// Encodes sampling `num_samples` OOD evaluation points followed by
     /// observing their answers. Skipped when `num_samples` is zero.
-    pub fn add_ood(&mut self, num_samples: usize) {
+    pub(crate) fn add_ood(&mut self, num_samples: usize) {
         if num_samples > 0 {
             self.sample(num_samples, Sample::OodQuery);
             self.observe(num_samples, Observe::OodAnswers);
@@ -175,10 +210,31 @@ where
     /// The caller must observe these public inputs into the challenger
     /// before any challenges are sampled.
     /// See the struct-level documentation for the rationale.
-    pub fn commit_statement<Challenger, const DIGEST_ELEMS: usize>(
+    pub(crate) fn commit_statement<Challenger, const DIGEST_ELEMS: usize>(
         &mut self,
         config: &WhirConfig<EF, F, Challenger>,
     ) {
+        self.bind_config_params(config);
+        self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+        self.add_ood(config.commitment_ood_samples);
+    }
+
+    /// Commit-statement shape for the HVZK pipeline.
+    ///
+    /// - Binds the same configuration as the plain commit statement.
+    /// - Omits the commitment-phase out-of-domain step.
+    /// - The HVZK protocol has no initial commitment OOD, so declaring it
+    ///   would describe a transcript event that never happens.
+    pub(crate) fn commit_statement_hvzk<Challenger, const DIGEST_ELEMS: usize>(
+        &mut self,
+        config: &WhirConfig<EF, F, Challenger>,
+    ) {
+        self.bind_config_params(config);
+        self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+    }
+
+    /// Binds the protocol configuration into the pattern.
+    fn bind_config_params<Challenger>(&mut self, config: &WhirConfig<EF, F, Challenger>) {
         // Bind the transcript to the protocol configuration.
         self.protocol_param(config.num_variables);
         self.protocol_param(config.security_level);
@@ -211,9 +267,6 @@ where
                 }
             }
         }
-
-        self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
-        self.add_ood(config.commitment_ood_samples);
     }
 
     /// Append the full WHIR proof transcript to the domain separator.
@@ -239,7 +292,7 @@ where
     ///    - Perform PoW, then draw final query positions.
     ///    - Record hints and run the final sumcheck.
     ///    - Record deferred weight evaluation hints.
-    pub fn add_whir_proof<Challenger, const DIGEST_ELEMS: usize>(
+    pub(crate) fn add_whir_proof<Challenger, const DIGEST_ELEMS: usize>(
         &mut self,
         config: &WhirConfig<EF, F, Challenger>,
     ) where
@@ -250,14 +303,14 @@ where
         // Initial combination randomness and first sumcheck phase.
         self.sample(1, Sample::InitialCombinationRandomness);
         self.add_sumcheck(&SumcheckParams {
-            rounds: config.folding_factor.at_round(0),
+            rounds: config.round_folding_factor(0),
             pow_bits: config.starting_folding_pow_bits,
         });
 
         // Intermediate rounds: commitment → OOD → PoW → checkpoint → queries → sumcheck.
         let mut domain_size = config.starting_domain_size();
         for (round, r) in config.round_parameters.iter().enumerate() {
-            let folded_domain_size = domain_size >> config.folding_factor.at_round(round);
+            let folded_domain_size = domain_size >> config.round_folding_factor(round);
             // Byte length needed to encode a position in the folded domain.
             let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
 
@@ -282,17 +335,15 @@ where
             self.sample(1, Sample::CombinationRandomness);
 
             self.add_sumcheck(&SumcheckParams {
-                rounds: config.folding_factor.at_round(round + 1),
+                rounds: config.round_folding_factor(round + 1),
                 pow_bits: r.folding_pow_bits,
             });
             domain_size >>= config.rs_reduction_factor(round);
         }
 
         // Final round: coefficients → PoW → queries → sumcheck → deferred hints.
-        let folded_domain_size = domain_size
-            >> config
-                .folding_factor
-                .at_round(config.round_parameters.len());
+        let folded_domain_size =
+            domain_size >> config.round_folding_factor(config.round_parameters.len());
         let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
 
         // Observe all coefficients of the final folded polynomial.
@@ -337,19 +388,233 @@ where
         }
     }
 
+    /// Append a Construction 6.3 HVZK sumcheck sub-protocol.
+    ///
+    /// # Transcript shape
+    ///
+    /// 1. Observe the batch's interleaved mask commitment.
+    /// 2. Observe `mu_tilde`.
+    /// 3. Sample the combining challenge `eps`.
+    /// 4. For each round, observe the wire polynomial coefficients, optionally
+    ///    grind, then sample the folding challenge.
+    pub(crate) fn add_zk_sumcheck<const DIGEST_ELEMS: usize>(&mut self, params: &ZkSumcheckParams) {
+        let ZkSumcheckParams {
+            rounds,
+            pow_bits,
+            ell_zk,
+        } = *params;
+
+        // The batch's masks are interleaved into one committed oracle.
+        self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+        self.observe(1, Observe::ZkSumcheckMuTilde);
+        self.sample(1, Sample::ZkSumcheckCombinationRandomness);
+
+        let wire_coefficients = ell_zk.max(3) - 1;
+        for _ in 0..rounds {
+            self.observe(wire_coefficients, Observe::ZkSumcheckPoly);
+            self.pow(pow_bits);
+            self.sample(1, Sample::FoldingRandomness);
+        }
+    }
+
+    /// Append a Construction 6.3 HVZK sumcheck batch preceded by its bound
+    /// joint claim, as replayed by the residual-claim verifier.
+    pub(crate) fn add_zk_residual_sumcheck<const DIGEST_ELEMS: usize>(
+        &mut self,
+        params: &ZkSumcheckParams,
+    ) {
+        self.observe(1, Observe::ZkSumcheckClaim);
+        self.add_zk_sumcheck::<DIGEST_ELEMS>(params);
+    }
+
+    /// Append the full HVZK-WHIR proof transcript to the domain separator.
+    ///
+    /// Mirrors the plain-WHIR transcript builder for the hiding pipeline:
+    ///
+    /// ```text
+    ///     masked sumcheck batches -> code-switching rounds -> masked base case
+    /// ```
+    ///
+    /// Like the plain variant, evaluation points and claimed values are
+    /// external inputs.
+    /// The PCS layer binds them, not this builder.
+    pub(crate) fn add_zk_whir_proof<Challenger, const DIGEST_ELEMS: usize>(
+        &mut self,
+        config: &ZkWhirConfig<EF, F, Challenger>,
+    ) where
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+        EF: TwoAdicField,
+        F: TwoAdicField,
+    {
+        // Bind the ZK extension parameters.
+        self.protocol_param(config.zk.ell_zk);
+        self.protocol_param(config.mask_queries);
+        self.protocol_param(config.zk.mask_log_inv_rate);
+        for &budget in &config.oracle_randomness {
+            self.protocol_param(budget);
+        }
+
+        // Claim batching challenge and the initial masked sumcheck batch.
+        self.sample(1, Sample::InitialCombinationRandomness);
+        self.add_zk_residual_sumcheck::<DIGEST_ELEMS>(&ZkSumcheckParams {
+            rounds: config.round_folding_factor(0),
+            pow_bits: config.starting_folding_pow_bits,
+            ell_zk: config.zk.ell_zk,
+        });
+
+        // Code-switching rounds.
+        let mut domain_size = config.starting_domain_size();
+        for (round, r) in config.round_parameters.iter().enumerate() {
+            let folded_domain_size = domain_size >> config.round_folding_factor(round);
+            let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
+
+            // New oracle and fresh code-switch mask.
+            self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+            self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+            // Private out-of-domain answers.
+            self.add_ood(r.ood_samples);
+
+            // PoW, checkpoint, query positions on the previous oracle.
+            self.pow(r.pow_bits);
+            self.sample(1, Sample::TranscriptCheckpoint);
+            self.sample(r.num_queries * domain_size_bytes, Sample::StirQueries);
+            self.hint(Hint::StirQueries);
+            self.hint(Hint::MerkleProof);
+
+            // Batching challenge, then the next masked sumcheck batch.
+            self.sample(1, Sample::CombinationRandomness);
+            self.add_zk_residual_sumcheck::<DIGEST_ELEMS>(&ZkSumcheckParams {
+                rounds: config.round_folding_factor(round + 1),
+                pow_bits: r.folding_pow_bits,
+                ell_zk: config.zk.ell_zk,
+            });
+            domain_size >>= config.rs_reduction_factor(round);
+        }
+
+        // Masked base case.
+        let final_config = config.final_round_config();
+        let folded_domain_size = final_config.domain_size >> final_config.folding_factor;
+        let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
+        let randomness_len = config.oracle_randomness[config.n_rounds()];
+
+        // Fresh main mask plus one fresh blind group per carried mask group.
+        self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+        for _ in 0..config.mask_groups().len() {
+            self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+        }
+        self.observe(1, Observe::ZkBaseCaseClaim);
+        self.sample(1, Sample::CombinationRandomness);
+        // Blinded source reveal, then one blinded reveal per mask oracle.
+        self.observe(
+            (1 << final_config.num_variables) + randomness_len,
+            Observe::ZkBaseCaseReveal,
+        );
+        for group in config.mask_groups() {
+            for _ in 0..group.width {
+                self.observe(
+                    group.shape.message_len + group.shape.randomness_len,
+                    Observe::ZkBaseCaseReveal,
+                );
+            }
+        }
+
+        // Spot checks: source positions, then per-mask positions.
+        self.pow(config.final_pow_bits);
+        self.sample(
+            config.final_queries * domain_size_bytes,
+            Sample::FinalQueries,
+        );
+        self.hint(Hint::StirAnswers);
+        self.hint(Hint::MerkleProof);
+        for group in config.mask_groups() {
+            let mask_bytes = ((group.shape.domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
+            self.sample(config.mask_queries * mask_bytes, Sample::StirQueries);
+            self.hint(Hint::StirAnswers);
+            self.hint(Hint::MerkleProof);
+        }
+    }
+
     /// Optionally append a proof-of-work challenge.
     ///
     /// When `bits` is positive, encodes:
-    /// 1. Sampling a 32-byte challenge from the sponge.
-    /// 2. Observing an 8-byte nonce that satisfies the grinding condition.
+    /// 1. A `Sample::PowQueries` entry marking the grinding challenge.
+    /// 2. A `Observe::PowNonce` entry marking the nonce that solves it.
+    ///
+    /// The accompanying counts are fixed shape descriptors for domain
+    /// separation; they do not correspond to a literal number of bytes or
+    /// field elements sampled/observed by `grind`/`check_witness`.
     ///
     /// When `bits` is zero, nothing is appended.
-    pub fn pow(&mut self, bits: usize) {
+    pub(crate) fn pow(&mut self, bits: usize) {
         if bits > 0 {
-            // Sample a 32-byte PoW challenge preimage.
+            // Mark the PoW challenge (see doc comment above for the count's meaning).
             self.sample(32, Sample::PowQueries);
-            // Observe the nonce that solves the challenge.
+            // Mark the nonce that solves the challenge.
             self.observe(8, Observe::PowNonce);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+
+    fn observe_entry(count: usize, observe: Observe) -> F {
+        encode_entry::<F>(Pattern::Observe, observe as u8, count)
+    }
+
+    fn sample_entry(count: usize, sample: Sample) -> F {
+        encode_entry::<F>(Pattern::Sample, sample as u8, count)
+    }
+
+    #[test]
+    fn zk_sumcheck_domain_separator_shape_matches_transcript() {
+        let mut separator = DomainSeparator::<EF, F>::new(Vec::new());
+
+        separator.add_zk_sumcheck::<8>(&ZkSumcheckParams {
+            rounds: 2,
+            pow_bits: 0,
+            ell_zk: 4,
+        });
+
+        assert_eq!(
+            separator.pattern,
+            vec![
+                // One interleaved mask oracle covers the whole batch.
+                observe_entry(8, Observe::MerkleDigest),
+                observe_entry(1, Observe::ZkSumcheckMuTilde),
+                sample_entry(1, Sample::ZkSumcheckCombinationRandomness),
+                observe_entry(3, Observe::ZkSumcheckPoly),
+                sample_entry(1, Sample::FoldingRandomness),
+                observe_entry(3, Observe::ZkSumcheckPoly),
+                sample_entry(1, Sample::FoldingRandomness),
+            ],
+        );
+    }
+
+    #[test]
+    fn zk_sumcheck_domain_separator_uses_minimum_wire_width() {
+        let mut separator = DomainSeparator::<EF, F>::new(Vec::new());
+
+        separator.add_zk_sumcheck::<8>(&ZkSumcheckParams {
+            rounds: 1,
+            pow_bits: 0,
+            ell_zk: 2,
+        });
+
+        assert!(
+            separator
+                .pattern
+                .contains(&observe_entry(2, Observe::ZkSumcheckPoly)),
+            "ell_zk < 3 still sends max(ell_zk, 3) - 1 wire coefficients",
+        );
     }
 }

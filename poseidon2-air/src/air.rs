@@ -85,7 +85,12 @@ impl<
         }
     }
 
-    pub fn generate_trace_rows(
+    /// Generate a trace over `num_hashes` fixed-seed random permutation inputs.
+    ///
+    /// This is for benches/examples only — it does not let callers supply the actual
+    /// inputs being hashed. Use the free [`generate_trace_rows`] function directly to
+    /// prove specific inputs.
+    pub fn generate_random_trace_rows(
         &self,
         num_hashes: usize,
         extra_capacity_bits: usize,
@@ -137,7 +142,19 @@ impl<
     }
 
     fn max_constraint_degree(&self) -> Option<usize> {
-        Some(SBOX_DEGREE as usize)
+        Some(sbox_constraint_degree(SBOX_DEGREE, SBOX_REGISTERS))
+    }
+}
+
+/// The maximum degree among the constraints emitted by [`eval_sbox`] for a given
+/// `(DEGREE, REGISTERS)` configuration.
+pub(crate) const fn sbox_constraint_degree(degree: u64, registers: usize) -> usize {
+    match (degree, registers) {
+        (3, 0) => 3,
+        (5, 0) => 5,
+        (7, 0) => 7,
+        (5, 1) | (7, 1) | (11, 2) => 3,
+        _ => panic!("Unexpected (DEGREE, REGISTERS)"),
     }
 }
 
@@ -264,7 +281,7 @@ fn eval_partial_round<
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [AB::Expr; WIDTH],
-    partial_round: &PartialRound<AB::Var, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
+    partial_round: &PartialRound<AB::Var, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constant: &AB::F,
     builder: &mut AB,
 ) {

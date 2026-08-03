@@ -73,16 +73,18 @@ pub trait GenericPoseidon1LinearLayers<F: Field, const WIDTH: usize>: Sync {
 #[derive(Debug, Clone)]
 pub struct Poseidon1ExternalLayerGeneric<F, Mds, const WIDTH: usize> {
     constants: FullRoundConstants<F, WIDTH>,
-    _mds: PhantomData<Mds>,
+    mds: Mds,
+    _phantom: PhantomData<F>,
 }
 
-impl<F: Field, Mds, const WIDTH: usize> FullRoundLayerConstructor<F, WIDTH>
+impl<F: Field, Mds: Default, const WIDTH: usize> FullRoundLayerConstructor<F, WIDTH>
     for Poseidon1ExternalLayerGeneric<F, Mds, WIDTH>
 {
     fn new_from_constants(constants: FullRoundConstants<F, WIDTH>) -> Self {
         Self {
             constants,
-            _mds: PhantomData,
+            mds: Mds::default(),
+            _phantom: PhantomData,
         }
     }
 }
@@ -92,16 +94,14 @@ impl<F, A, Mds, const WIDTH: usize, const D: u64> FullRoundLayer<A, WIDTH, D>
 where
     F: Field + InjectiveMonomial<D>,
     A: Algebra<F> + InjectiveMonomial<D>,
-    Mds: Permutation<[A; WIDTH]> + Default + Sync + Clone,
+    Mds: Permutation<[A; WIDTH]> + Sync + Clone,
 {
     fn permute_state_initial(&self, state: &mut [A; WIDTH]) {
-        let mds = Mds::default();
-        full_round_initial_permute_state::<F, A, _, WIDTH, D>(state, &self.constants, &mds);
+        full_round_initial_permute_state::<F, A, _, WIDTH, D>(state, &self.constants, &self.mds);
     }
 
     fn permute_state_terminal(&self, state: &mut [A; WIDTH]) {
-        let mds = Mds::default();
-        full_round_terminal_permute_state::<F, A, _, WIDTH, D>(state, &self.constants, &mds);
+        full_round_terminal_permute_state::<F, A, _, WIDTH, D>(state, &self.constants, &self.mds);
     }
 }
 
@@ -145,16 +145,18 @@ where
 #[derive(Debug, Clone)]
 pub struct Poseidon1InternalLayerTextbook<F, Mds, const WIDTH: usize> {
     constants: PartialRoundConstants<F, WIDTH>,
-    _mds: PhantomData<Mds>,
+    mds: Mds,
+    _phantom: PhantomData<F>,
 }
 
-impl<F: Field, Mds, const WIDTH: usize> PartialRoundLayerConstructor<F, WIDTH>
+impl<F: Field, Mds: Default, const WIDTH: usize> PartialRoundLayerConstructor<F, WIDTH>
     for Poseidon1InternalLayerTextbook<F, Mds, WIDTH>
 {
     fn new_from_constants(constants: PartialRoundConstants<F, WIDTH>) -> Self {
         Self {
             constants,
-            _mds: PhantomData,
+            mds: Mds::default(),
+            _phantom: PhantomData,
         }
     }
 }
@@ -164,10 +166,9 @@ impl<F, A, Mds, const WIDTH: usize, const D: u64> PartialRoundLayer<A, WIDTH, D>
 where
     F: Field + InjectiveMonomial<D>,
     A: Algebra<F> + InjectiveMonomial<D>,
-    Mds: Permutation<[A; WIDTH]> + Default + Sync + Clone,
+    Mds: Permutation<[A; WIDTH]> + Sync + Clone,
 {
     fn permute_state(&self, state: &mut [A; WIDTH]) {
-        let mds = Mds::default();
-        textbook_partial_permute_state::<F, A, _, WIDTH, D>(state, &self.constants, &mds);
+        textbook_partial_permute_state::<F, A, _, WIDTH, D>(state, &self.constants, &self.mds);
     }
 }

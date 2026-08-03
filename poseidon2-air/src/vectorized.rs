@@ -13,7 +13,7 @@ use rand::{RngExt, SeedableRng};
 
 use crate::air::eval;
 use crate::constants::RoundConstants;
-use crate::{Poseidon2Air, Poseidon2Cols, generate_vectorized_trace_rows};
+use crate::{Poseidon2Air, Poseidon2Cols, generate_vectorized_trace_rows, sbox_constraint_degree};
 
 /// A "vectorized" version of Poseidon2Cols, for computing multiple Poseidon2 permutations per row.
 #[repr(C)]
@@ -134,6 +134,7 @@ impl<
 }
 
 /// A "vectorized" version of Poseidon2Air, for computing multiple Poseidon2 permutations per row.
+#[derive(Debug)]
 pub struct VectorizedPoseidon2Air<
     F: PrimeCharacteristicRing,
     LinearLayers,
@@ -153,6 +154,34 @@ pub struct VectorizedPoseidon2Air<
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
     >,
+}
+
+impl<
+    F: PrimeCharacteristicRing,
+    LinearLayers,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+    const VECTOR_LEN: usize,
+> Clone
+    for VectorizedPoseidon2Air<
+        F,
+        LinearLayers,
+        WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+        VECTOR_LEN,
+    >
+{
+    fn clone(&self) -> Self {
+        Self {
+            air: self.air.clone(),
+        }
+    }
 }
 
 impl<
@@ -236,6 +265,10 @@ impl<
 
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![]
+    }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        Some(sbox_constraint_degree(SBOX_DEGREE, SBOX_REGISTERS))
     }
 }
 

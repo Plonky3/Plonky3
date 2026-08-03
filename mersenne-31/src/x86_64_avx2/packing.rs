@@ -13,8 +13,8 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, dispatch_chunked_mixed_dot_product,
-    impl_packed_field_pow_2, mm256_mod_add, mm256_mod_sub,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm256_mod_add,
+    mm256_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -24,6 +24,8 @@ use crate::{Mersenne31, mul_2exp_i};
 
 const WIDTH: usize = 8;
 pub(crate) const P: __m256i = unsafe { transmute::<[u32; WIDTH], _>([0x7fffffff; WIDTH]) };
+/// The low 31 bits of each 64-bit lane, used to mask off the high half during folding.
+const LOW31_64: __m256i = unsafe { transmute::<[u64; 4], _>([0x7fffffff; 4]) };
 
 /// Vectorized AVX2 implementation of `Mersenne31` arithmetic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -189,6 +191,11 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX2 {
         // SAFETY: this is a repr(transparent) wrapper around an array.
         unsafe { reconstitute_from_base(Mersenne31::zero_vec(len * WIDTH)) }
     }
+
+    #[inline(always)]
+    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+        dot_product::<N>(u, v)
+    }
 }
 
 // Degree of the smallest permutation polynomial for Mersenne31.
@@ -218,11 +225,7 @@ impl Algebra<Mersenne31> for PackedMersenne31AVX2 {
 
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Mersenne31; N]) -> Self {
-        dispatch_chunked_mixed_dot_product::<Self, Mersenne31, N>(
-            a,
-            f,
-            <Self as Algebra<Mersenne31>>::BATCHED_LC_CHUNK,
-        )
+        mixed_dot_product::<N>(a, f)
     }
 }
 
@@ -362,8 +365,10 @@ fn square_unred(x: __m256i) -> __m256i {
 }
 
 /// Compute the permutation x -> x^5 on Mersenne-31 field elements
-/// represented as values in {0, ..., P}. If the inputs do not conform
-/// to this representation, the result is undefined.
+/// represented as signed values in {-P, ..., P}, producing output in {0, ..., P}.
+/// If the inputs do not conform to this representation, the result is undefined.
+/// The Poseidon2 round-constant addition in `input_plus_rc` (utils.rs) relies on
+/// this signed input range, since round constants are added in their negative form.
 #[inline(always)]
 pub(crate) fn exp5(x: __m256i) -> __m256i {
     unsafe {
@@ -394,6 +399,114 @@ pub(crate) fn exp5(x: __m256i) -> __m256i {
         let u = x86_64::_mm256_sub_epi32(t, corr);
 
         x86_64::_mm256_min_epu32(t, u)
+    }
+}
+
+/// Fold a vector of four 64-bit accumulators once: given `val`, return `res = val (mod P)`
+/// with `res <= (val >> 31) + P` in the low 32 bits of each lane.
+///
+/// Uses `2^31 = 1 (mod P)`: writing `val = hi * 2^31 + lo` with `lo <= P`, we have
+/// `val = hi + lo (mod P)`. Applied twice, any `val < 2^64` is brought to `0..=2 P`.
+#[inline(always)]
+#[must_use]
+fn fold_u64(val: __m256i) -> __m256i {
+    unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        let lo = x86_64::_mm256_and_si256(val, LOW31_64);
+        let hi = x86_64::_mm256_srli_epi64::<31>(val);
+        x86_64::_mm256_add_epi64(lo, hi)
+    }
+}
+
+/// Compute the dot product of `u` and `v` lanewise, deferring the Mersenne reduction.
+///
+/// Each product fits in 62 bits, so the raw `32x32 -> 64`-bit products are accumulated in
+/// 64-bit lanes (even and odd 32-bit indices kept apart, since `vpmuludq` reads only the
+/// low half of each 64-bit lane). Inputs are in `0..=P`, so a product is at most `P^2`;
+/// folding the accumulators below `2^33` every 3 iterations keeps `2^33 + 3 * P^2 < 2^64`,
+/// so the lanes never overflow.
+#[inline]
+fn dot_product<const N: usize>(
+    u: &[PackedMersenne31AVX2; N],
+    v: &[PackedMersenne31AVX2; N],
+) -> PackedMersenne31AVX2 {
+    unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        let mut acc_evn = x86_64::_mm256_setzero_si256();
+        let mut acc_odd = x86_64::_mm256_setzero_si256();
+        let mut unreduced = 0;
+        for i in 0..N {
+            let lhs = u[i].to_vector();
+            let rhs = v[i].to_vector();
+            acc_evn = x86_64::_mm256_add_epi64(acc_evn, x86_64::_mm256_mul_epu32(lhs, rhs));
+            acc_odd = x86_64::_mm256_add_epi64(
+                acc_odd,
+                x86_64::_mm256_mul_epu32(movehdup_epi32(lhs), movehdup_epi32(rhs)),
+            );
+            unreduced += 1;
+            if unreduced == 3 {
+                unreduced = 0;
+                acc_evn = fold_u64(acc_evn);
+                acc_odd = fold_u64(acc_odd);
+            }
+        }
+
+        // At most 2 unreduced products sit on top of a folded value: the lanes are below
+        // `2^33 + 2 * P^2 < 2^64`, so two folds bring them to `0..=2 P` in the low 32 bits.
+        let evn = fold_u64(fold_u64(acc_evn));
+        let odd = fold_u64(fold_u64(acc_odd));
+
+        // The even results sit in the low 32 bits of each 64-bit lane (indices 0, 2, 4, 6);
+        // shift the odd results up into the high halves (indices 1, 3, 5, 7) and merge.
+        let odd_shifted = x86_64::_mm256_slli_epi64::<32>(odd);
+        let t = x86_64::_mm256_blend_epi32::<0b10101010>(evn, odd_shifted);
+
+        // Final reduction of values in `0..=2 P` to the canonical `0..=P`.
+        let t_sub_p = x86_64::_mm256_sub_epi32(t, P);
+        PackedMersenne31AVX2::from_vector(x86_64::_mm256_min_epu32(t, t_sub_p))
+    }
+}
+
+/// Compute the dot product of `u` (packed) and `v` (scalar coefficients), deferring the
+/// Mersenne reduction. Each `v[i]` is broadcast across the packing lanes before
+/// multiplying, so this follows the same overflow argument as `dot_product`.
+///
+/// A broadcast vector already has every lane equal, so the odd/even shuffle used to
+/// separate `dot_product`'s two operands is unnecessary on the broadcast side.
+#[inline]
+fn mixed_dot_product<const N: usize>(
+    u: &[PackedMersenne31AVX2; N],
+    v: &[Mersenne31; N],
+) -> PackedMersenne31AVX2 {
+    unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+        let mut acc_evn = x86_64::_mm256_setzero_si256();
+        let mut acc_odd = x86_64::_mm256_setzero_si256();
+        let mut unreduced = 0;
+        for i in 0..N {
+            let lhs = u[i].to_vector();
+            let rhs = x86_64::_mm256_set1_epi32(v[i].value as i32);
+            acc_evn = x86_64::_mm256_add_epi64(acc_evn, x86_64::_mm256_mul_epu32(lhs, rhs));
+            acc_odd = x86_64::_mm256_add_epi64(
+                acc_odd,
+                x86_64::_mm256_mul_epu32(movehdup_epi32(lhs), rhs),
+            );
+            unreduced += 1;
+            if unreduced == 3 {
+                unreduced = 0;
+                acc_evn = fold_u64(acc_evn);
+                acc_odd = fold_u64(acc_odd);
+            }
+        }
+
+        let evn = fold_u64(fold_u64(acc_evn));
+        let odd = fold_u64(fold_u64(acc_odd));
+
+        let odd_shifted = x86_64::_mm256_slli_epi64::<32>(odd);
+        let t = x86_64::_mm256_blend_epi32::<0b10101010>(evn, odd_shifted);
+
+        let t_sub_p = x86_64::_mm256_sub_epi32(t, P);
+        PackedMersenne31AVX2::from_vector(x86_64::_mm256_min_epu32(t, t_sub_p))
     }
 }
 

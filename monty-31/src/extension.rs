@@ -1,6 +1,7 @@
 use p3_field::extension::{
     Binomial, BinomiallyExtendable, ExtensionAlgebra, HasTwoAdicBinomialExtension,
-    HasTwoAdicQuinticExtension, QuinticTrinomial, QuinticTrinomialExtendable,
+    HasTwoAdicQuinticExtension, QuinticTrinomial, QuinticTrinomialExtendable, binomial_square,
+    quintic_square,
 };
 use p3_field::{
     PrimeCharacteristicRing, TwoAdicField, field_to_array, packed_mod_add, packed_mod_sub,
@@ -66,6 +67,11 @@ where
         base_mul_packed(lhs, rhs, &mut res);
         res
     }
+
+    #[inline(always)]
+    fn ext_square(a: &[Self; WIDTH], res: &mut [Self; WIDTH]) {
+        binomial_square::<Self, Self, WIDTH>(a, res, <Self as BinomiallyExtendable<WIDTH>>::W);
+    }
 }
 
 impl<const WIDTH: usize, FP> BinomiallyExtendable<WIDTH> for MontyField31<FP>
@@ -105,6 +111,11 @@ where
     #[inline(always)]
     fn ext_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
         quintic_mul_packed_trinomial(a, b, res);
+    }
+
+    #[inline(always)]
+    fn ext_square(a: &[Self; 5], res: &mut [Self; 5]) {
+        quintic_square(a, res);
     }
 
     #[inline(always)]

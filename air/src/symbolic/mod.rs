@@ -3,8 +3,10 @@
 mod builder;
 mod expression;
 pub(crate) mod expression_ext;
+mod flatten;
 mod variable;
 
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::iter::{Product, Sum};
 use core::ops;
@@ -32,6 +34,10 @@ pub trait SymLeaf: Clone + core::fmt::Debug {
 
     /// Returns the degree multiple of this leaf.
     fn degree_multiple(&self) -> usize;
+
+    /// Returns the exact polynomial degree of this leaf over a trace of length
+    /// `trace_len`, given the period of each periodic column.
+    fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize;
 
     /// Try to view this leaf as a base-field constant.
     fn as_const(&self) -> Option<&Self::F>;
@@ -100,6 +106,59 @@ impl<A: SymLeaf> SymbolicExpr<A> {
                 degree_multiple, ..
             } => *degree_multiple,
         }
+    }
+
+    /// Returns the exact polynomial degree of this expression over a trace of
+    /// length `trace_len`, given the period of each periodic column (indexed by
+    /// periodic column index).
+    ///
+    /// This is trace-size aware: it treats the transition selector as the linear
+    /// polynomial it is and accounts for the reduced degree of periodic columns,
+    /// unlike the trace-size-independent [`Self::degree_multiple`].
+    pub fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize {
+        // The expression is a DAG: arithmetic nodes share `Arc` children, so a naive
+        // recursion would revisit shared subtrees exponentially. Memoize on node
+        // identity to keep this linear in the number of distinct nodes.
+        let mut cache: BTreeMap<*const Self, usize> = BTreeMap::new();
+        self.poly_degree_memo(trace_len, periodic_periods, &mut cache)
+    }
+
+    fn poly_degree_memo(
+        &self,
+        trace_len: usize,
+        periodic_periods: &[usize],
+        cache: &mut BTreeMap<*const Self, usize>,
+    ) -> usize {
+        match self {
+            Self::Leaf(a) => a.poly_degree(trace_len, periodic_periods),
+            Self::Add { x, y, .. } | Self::Sub { x, y, .. } => {
+                Self::child_poly_degree(x, trace_len, periodic_periods, cache).max(
+                    Self::child_poly_degree(y, trace_len, periodic_periods, cache),
+                )
+            }
+            Self::Neg { x, .. } => Self::child_poly_degree(x, trace_len, periodic_periods, cache),
+            Self::Mul { x, y, .. } => {
+                Self::child_poly_degree(x, trace_len, periodic_periods, cache)
+                    + Self::child_poly_degree(y, trace_len, periodic_periods, cache)
+            }
+        }
+    }
+
+    /// Degree of an `Arc`-shared child, looked up by pointer identity so each
+    /// distinct node is evaluated at most once.
+    fn child_poly_degree(
+        node: &Arc<Self>,
+        trace_len: usize,
+        periodic_periods: &[usize],
+        cache: &mut BTreeMap<*const Self, usize>,
+    ) -> usize {
+        let key = Arc::as_ptr(node);
+        if let Some(&degree) = cache.get(&key) {
+            return degree;
+        }
+        let degree = node.poly_degree_memo(trace_len, periodic_periods, cache);
+        cache.insert(key, degree);
+        degree
     }
 
     /// Try to view this expression as a base-field constant.

@@ -11,7 +11,11 @@ use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
-use crate::builder::{InteractionBuilder, SymbolicInteraction, SymbolicLocalInteraction};
+use crate::builder::{
+    InteractionBuilder, SymbolicExclusiveBranch, SymbolicExclusiveInteraction, SymbolicInteraction,
+    SymbolicLocalInteraction,
+};
+use crate::count::Count;
 
 /// Symbolic builder that captures constraints and bus interactions side by side.
 #[derive(Debug)]
@@ -22,6 +26,8 @@ pub struct InteractionSymbolicBuilder<F: Field, EF: ExtensionField<F> = F> {
     global_interactions: Vec<SymbolicInteraction<F>>,
     /// Intra-AIR lookups pushed so far, in emission order.
     local_interactions: Vec<SymbolicLocalInteraction<F>>,
+    /// Mutually-exclusive groups pushed so far, in emission order.
+    exclusive_interactions: Vec<SymbolicExclusiveInteraction<F>>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
@@ -31,6 +37,7 @@ impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
             inner: SymbolicAirBuilder::new(layout),
             global_interactions: Vec::new(),
             local_interactions: Vec::new(),
+            exclusive_interactions: Vec::new(),
         }
     }
 
@@ -42,6 +49,11 @@ impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
     /// Intra-AIR interactions recorded so far, in the order they were pushed.
     pub fn local_interactions(&self) -> &[SymbolicLocalInteraction<F>] {
         &self.local_interactions
+    }
+
+    /// Mutually-exclusive interactions recorded so far, in the order they were pushed.
+    pub fn exclusive_interactions(&self) -> &[SymbolicExclusiveInteraction<F>] {
+        &self.exclusive_interactions
     }
 
     /// Symbolic base-field constraints captured by the inner builder.
@@ -88,8 +100,8 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for InteractionSymbolicBuilder<
         self.inner.is_last_row()
     }
 
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        self.inner.is_transition_window(size)
+    fn is_transition(&self) -> Self::Expr {
+        self.inner.is_transition()
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
@@ -147,9 +159,11 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for InteractionSymbolic
         &mut self,
         bus_name: &str,
         fields: impl IntoIterator<Item = E>,
-        count: impl Into<Self::Expr>,
-        count_weight: u32,
+        count: impl Into<Count<Self::Expr>>,
     ) {
+        // Split the count into its signed expression and per-row magnitude bound.
+        let (count, count_weight) = count.into().into_parts();
+
         // Materialize lazy inputs into owned expressions and append one record.
         //
         // - Collected eagerly so the record outlives the caller's iterator.
@@ -157,14 +171,14 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for InteractionSymbolic
         self.global_interactions.push(SymbolicInteraction {
             bus_name: String::from(bus_name),
             fields: fields.into_iter().map(Into::into).collect(),
-            count: count.into(),
+            count,
             count_weight,
         });
     }
 
     fn push_local_interaction(
         &mut self,
-        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
     ) {
         // One call → one grouped record, not N separate ones.
         //
@@ -175,11 +189,45 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for InteractionSymbolic
         });
     }
 
+    fn push_exclusive_interaction(
+        &mut self,
+        bus_name: &str,
+        branches: impl IntoIterator<Item = (Self::Expr, Count<Self::Expr>, Vec<Self::Expr>)>,
+    ) {
+        // Split each branch's count into its signed expression and magnitude bound.
+        //
+        // - The flag and fields are stored verbatim.
+        // - Push order is preserved.
+        // - That order drives auxiliary-column assignment.
+        let branches = branches
+            .into_iter()
+            .map(|(flag, count, fields)| {
+                let (count, count_weight) = count.into_parts();
+                SymbolicExclusiveBranch {
+                    flag,
+                    count,
+                    fields,
+                    count_weight,
+                }
+            })
+            .collect();
+
+        self.exclusive_interactions
+            .push(SymbolicExclusiveInteraction {
+                bus_name: String::from(bus_name),
+                branches,
+            });
+    }
+
     fn num_global_interactions(&self) -> usize {
         self.global_interactions.len()
     }
 
     fn num_local_interactions(&self) -> usize {
         self.local_interactions.len()
+    }
+
+    fn num_exclusive_interactions(&self) -> usize {
+        self.exclusive_interactions.len()
     }
 }

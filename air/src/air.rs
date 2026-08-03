@@ -1,4 +1,4 @@
-use alloc::vec;
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
 use p3_matrix::dense::RowMajorMatrix;
@@ -54,8 +54,11 @@ pub trait BaseAir<F>: Sync {
     /// Periodic columns are public parameters and must be committed during initialization of
     /// the Fiat-Shamir transcript. The values returned are evaluations over a subgroup;
     /// callers may convert to coefficient form for efficient evaluation if needed.
-    fn periodic_columns(&self) -> Vec<Vec<F>> {
-        vec![]
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]>
+    where
+        F: Clone,
+    {
+        Cow::Borrowed(&[])
     }
 
     /// Return the periodic values for the given row index.

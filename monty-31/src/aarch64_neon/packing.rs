@@ -248,6 +248,28 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
         }
     }
 
+    #[inline]
+    fn xor(&self, rhs: &Self) -> Self {
+        let lhs = self.to_signed_vector();
+        let rhs = rhs.to_vector();
+        let res = xor::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `xor` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
+    #[inline]
+    fn andn(&self, rhs: &Self) -> Self {
+        let lhs = self.to_vector();
+        let rhs = rhs.to_signed_vector();
+        let res = andn::<FP>(lhs, rhs);
+        unsafe {
+            // Safety: `andn` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
     #[inline(always)]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         general_dot_product::<_, _, _, N>(u, v)
@@ -636,6 +658,59 @@ fn exp_7<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
 
         // Safe as mul_with_precomp::<MPNeon, true> returns integers in [0, P)
         aarch64::vreinterpretq_u32_s32(val_7)
+    }
+}
+
+/// Compute the elementary arithmetic generalization of `xor`, namely `xor(l, r) = l + r - 2lr`,
+/// of vectors in canonical form.
+///
+/// Inputs are assumed to be in canonical form; if they are not, the result is undefined.
+#[inline]
+#[must_use]
+fn xor<FP: FieldParameters>(lhs: int32x4_t, rhs: uint32x4_t) -> uint32x4_t {
+    // Rewrite as `r + l(1 - 2r)`. AVX2 uses `r + 2l(1/2 - r)` with an unsigned wide multiply that
+    // accepts operands up to `2^32`; NEON's Montgomery multiply is signed and bounded by `[-P, P]`,
+    // so we keep the multiply operands small by forming the field element `1 - 2r` instead. As `2r`
+    // is reduced to `[0, P)` and the Montgomery representation of `1` lies in `[0, P)`, the raw
+    // subtraction `1 - 2r` lands in `(-P, P)`, exactly the signed input range `mul` accepts.
+    unsafe {
+        // Compiler should realise that this is a constant.
+        let one = aarch64::vdupq_n_u32(MontyField31::<FP>::ONE.value);
+
+        // 0 <= 2r < P.
+        let double_rhs = uint32x4_mod_add(rhs, rhs, FP::PACKED_P);
+
+        // -P < 1 - 2r < P.
+        let one_sub_double_rhs =
+            aarch64::vreinterpretq_s32_u32(aarch64::vsubq_u32(one, double_rhs));
+
+        // 0 <= l(1 - 2r) < P.
+        let prod = mul::<FP>(lhs, one_sub_double_rhs);
+
+        // 0 <= r + l(1 - 2r) < P.
+        uint32x4_mod_add(rhs, prod, FP::PACKED_P)
+    }
+}
+
+/// Compute the elementary arithmetic generalization of `andnot`, namely `andn(l, r) = (1 - l)r`,
+/// of vectors in canonical form.
+///
+/// Inputs are assumed to be in canonical form; if they are not, the result is undefined.
+#[inline]
+#[must_use]
+fn andn<FP: FieldParameters>(lhs: uint32x4_t, rhs: int32x4_t) -> uint32x4_t {
+    // Mirrors the AVX2 identity `(2^32 - P - l)r`, adapted to NEON's signed Montgomery multiply.
+    // As both the Montgomery representation of `1` and `l` lie in `[0, P)`, the raw subtraction
+    // `1 - l` lands in `(-P, P)`, exactly the signed input range `mul` accepts.
+    unsafe {
+        // Compiler should realise that this is a constant.
+        let one = aarch64::vdupq_n_u32(MontyField31::<FP>::ONE.value);
+
+        // -P < 1 - l < P.
+        let one_sub_lhs = aarch64::vreinterpretq_s32_u32(aarch64::vsubq_u32(one, lhs));
+
+        // 0 <= (1 - l)r < P.
+        mul::<FP>(one_sub_lhs, rhs)
     }
 }
 

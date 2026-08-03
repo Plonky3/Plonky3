@@ -14,7 +14,6 @@ categories.workspace = true
 criterion.workspace = true
 
 [dependencies]
-p3-challenger.workspace = true
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-mds.workspace = true
@@ -27,12 +26,17 @@ num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
+spin.workspace = true
 
 [dev-dependencies]
+p3-commit = { path = "../commit" }
 p3-field-testing = { path = "../field-testing" }
+p3-matrix = { path = "../matrix" }
+p3-merkle-tree = { path = "../merkle-tree" }
 
 proptest.workspace = true
 rand.workspace = true
+serde_json.workspace = true
 
 [[bench]]
 name = "bench_field"

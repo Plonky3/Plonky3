@@ -109,6 +109,10 @@ name = "p3-monty-31"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-multi-stark"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-multilinear-util"
 version_group = "plonky3"
 
@@ -133,7 +137,15 @@ name = "p3-rescue"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-security"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-sha256"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-sha256-air"
 version_group = "plonky3"
 
 [[package]]

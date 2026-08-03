@@ -1,10 +1,11 @@
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::interpolation::Interpolate;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
@@ -77,7 +78,26 @@ pub trait PolynomialSpace: Copy {
     /// smaller than the `2`-adicity of the field.
     ///
     /// This fixes a canonical choice for prover/verifier determinism and LDE caching.
-    fn create_disjoint_domain(&self, min_size: usize) -> Self;
+    ///
+    /// # Panics
+    ///
+    /// Panics if `min_size` is too large for a disjoint domain to be constructed. Verifier-side
+    /// code processing untrusted input should prefer [`Self::try_create_disjoint_domain`], which
+    /// reports this condition as `None` instead of panicking.
+    fn create_disjoint_domain(&self, min_size: usize) -> Self {
+        self.try_create_disjoint_domain(min_size)
+            .unwrap_or_else(|| {
+                panic!("cannot construct a domain of size at least {min_size} disjoint from `self`")
+            })
+    }
+
+    /// The non-panicking counterpart to [`Self::create_disjoint_domain`].
+    ///
+    /// Returns `None` instead of panicking when `min_size` is too large for a disjoint domain
+    /// to be constructed (for two-adic domains, this happens when `log_2(min_size)` is not
+    /// smaller than the field's `2`-adicity). Intended for verifier-side code, which must
+    /// reject malformed or adversarial input rather than panic on it.
+    fn try_create_disjoint_domain(&self, min_size: usize) -> Option<Self>;
 
     /// Split the `PolynomialSpace` into `num_chunks` smaller `PolynomialSpaces` of equal size.
     ///
@@ -142,6 +162,15 @@ pub trait PolynomialSpace: Copy {
     /// gets value `col[i % col.len()]`. The default expands to trace size and
     /// delegates to [`Self::evaluate_polynomial_at`]; domains with algebraic
     /// structure (e.g. two-adic cosets) can override for O(period) work.
+    ///
+    /// # Performance
+    ///
+    /// This default is O(`self.size()`) time and allocates a `self.size()`-length
+    /// vector, versus O(`col.len()`) for an override that exploits the domain's
+    /// algebraic structure (e.g. two-adic cosets folding onto a sub-coset). For a
+    /// small period on a large trace this is a large (potentially many-orders-of-
+    /// magnitude) verifier slowdown. Any new `PolynomialSpace` implementor should
+    /// override this method rather than rely on the default.
     fn evaluate_periodic_column_at<Ext: ExtensionField<Self::Val>>(
         &self,
         col: &[Self::Val],
@@ -151,6 +180,23 @@ pub trait PolynomialSpace: Copy {
         let period = col.len();
         let evals: Vec<Self::Val> = (0..n).map(|i| col[i % period]).collect();
         self.evaluate_polynomial_at(&evals, point)
+    }
+
+    /// Evaluate several periodic column polynomials at `point`.
+    ///
+    /// The default expands to one call to [`Self::evaluate_periodic_column_at`] per
+    /// column. Domains with algebraic structure (e.g. two-adic cosets) can override
+    /// to batch columns that share a period, paying for one interpolation instead
+    /// of one per column.
+    fn evaluate_periodic_columns_at<Ext: ExtensionField<Self::Val>>(
+        &self,
+        periodic_columns: &[Vec<Self::Val>],
+        point: Ext,
+    ) -> Vec<Ext> {
+        periodic_columns
+            .iter()
+            .map(|col| self.evaluate_periodic_column_at(col, point))
+            .collect()
     }
 }
 
@@ -174,10 +220,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     /// is a fixed generator of `F^*` and `K` is the unique two-adic subgroup
     /// of with size `2^(ceil(log_2(min_size)))`.
     ///
-    /// # Panics
-    ///
-    /// This will panic if `min_size` > `1 << Val::TWO_ADICITY`.
-    fn create_disjoint_domain(&self, min_size: usize) -> Self {
+    /// Returns `None` if `min_size` > `1 << Val::TWO_ADICITY`.
+    fn try_create_disjoint_domain(&self, min_size: usize) -> Option<Self> {
         // We provide a short proof that these cosets are always disjoint:
         //
         // Assume without loss of generality that `|H| <= min_size <= |K|`.
@@ -188,8 +232,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         //
         // Thus `gH` and `gfK` are disjoint.
 
-        // This panics if (and only if) `min_size` > `1 << Val::TWO_ADICITY`.
-        Self::new(self.shift() * Val::GENERATOR, log2_ceil_usize(min_size)).unwrap()
+        // This is `None` if (and only if) `min_size` > `1 << Val::TWO_ADICITY`.
+        Self::new(self.shift() * Val::GENERATOR, log2_ceil_usize(min_size))
     }
 
     /// Given the coset `gH` and generator `h` of `H`, let `K = H^{num_chunks}`
@@ -317,7 +361,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
     }
 
     fn evaluate_polynomial_at<Ext: ExtensionField<Val>>(&self, evals: &[Val], point: Ext) -> Ext {
-        let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
+        let evals_mat = RowMajorMatrixView::new(evals, 1);
         evals_mat.interpolate_coset(self.shift(), point)[0]
     }
 
@@ -330,5 +374,92 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         let folds = self.log_size() - log_period;
         let sub_coset = Self::new(self.shift().exp_power_of_2(folds), log_period).unwrap();
         sub_coset.evaluate_polynomial_at(col, point.exp_power_of_2(folds))
+    }
+
+    /// Evaluate several periodic column polynomials at `point`, sharing one coset
+    /// materialization and batch inversion (via [`Interpolate::interpolate_coset`])
+    /// across all columns of a given period.
+    fn evaluate_periodic_columns_at<Ext: ExtensionField<Val>>(
+        &self,
+        periodic_columns: &[Vec<Val>],
+        point: Ext,
+    ) -> Vec<Ext> {
+        let mut cols_by_period: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (i, col) in periodic_columns.iter().enumerate() {
+            cols_by_period.entry(col.len()).or_default().push(i);
+        }
+
+        let mut result = Ext::zero_vec(periodic_columns.len());
+        for (period, indices) in cols_by_period {
+            let log_period = log2_strict_usize(period);
+            let folds = self.log_size() - log_period;
+            let sub_shift = self.shift().exp_power_of_2(folds);
+            let sub_point = point.exp_power_of_2(folds);
+
+            // Interleave the columns sharing this period into one row-major matrix
+            // so `interpolate_coset` can evaluate all of them with a single batch
+            // inversion.
+            let k = indices.len();
+            let mut values = Val::zero_vec(period * k);
+            for (col_pos, &orig_idx) in indices.iter().enumerate() {
+                for (row, &v) in periodic_columns[orig_idx].iter().enumerate() {
+                    values[row * k + col_pos] = v;
+                }
+            }
+
+            let evals = RowMajorMatrix::new(values, k).interpolate_coset(sub_shift, sub_point);
+            for (col_pos, &orig_idx) in indices.iter().enumerate() {
+                result[orig_idx] = evals[col_pos];
+            }
+        }
+
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::*;
+
+    type F = BabyBear;
+
+    #[test]
+    fn evaluate_periodic_columns_at_matches_per_column_eval() {
+        let domain = TwoAdicMultiplicativeCoset::<F>::new(F::GENERATOR, 4).unwrap();
+        let point = F::from_u32(12345);
+
+        // Two columns of period 4 (sharing a period class with >1 member) plus one
+        // of period 2, to exercise both the grouping and the interleaving.
+        let columns: Vec<Vec<F>> = vec![
+            (0..4).map(F::from_u32).collect(),
+            (0..2).map(|x| F::from_u32(x + 10)).collect(),
+            (0..4).map(|x| F::from_u32(x + 100)).collect(),
+        ];
+
+        let expected: Vec<F> = columns
+            .iter()
+            .map(|col| domain.evaluate_periodic_column_at(col, point))
+            .collect();
+        let actual = domain.evaluate_periodic_columns_at(&columns, point);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn evaluate_periodic_columns_at_empty() {
+        let domain = TwoAdicMultiplicativeCoset::<F>::new(F::GENERATOR, 4).unwrap();
+        let point = F::from_u32(7);
+        let columns: Vec<Vec<F>> = vec![];
+
+        assert_eq!(
+            domain.evaluate_periodic_columns_at(&columns, point),
+            Vec::<F>::new()
+        );
     }
 }

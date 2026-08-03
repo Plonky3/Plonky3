@@ -1,5 +1,4 @@
-//! A minimal univariate STARK framework.
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 extern crate alloc;

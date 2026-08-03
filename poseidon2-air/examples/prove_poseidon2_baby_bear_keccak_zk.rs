@@ -14,7 +14,7 @@ use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 #[cfg(target_family = "unix")]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::ForestLayer;
@@ -64,20 +64,19 @@ fn main() -> Result<(), impl Debug> {
     type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
     let compress = MyCompress::new(u64_hash);
 
-    // WARNING: DO NOT USE SmallRng in proper applications! Use a real PRNG instead!
     type ValMmcs = MerkleTreeHidingMmcs<
         [Val; p3_keccak::VECTOR_LEN],
         [u64; p3_keccak::VECTOR_LEN],
         FieldHash,
         MyCompress,
-        SmallRng,
+        StdRng,
         2,
         4,
         4,
     >;
     let mut rng = SmallRng::seed_from_u64(1);
     let constants = RoundConstants::from_rng(&mut rng);
-    let val_mmcs = ValMmcs::new(field_hash, compress, 0, rng);
+    let val_mmcs = ValMmcs::new(field_hash, compress, 0, StdRng::seed_from_u64(1));
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
@@ -102,8 +101,8 @@ fn main() -> Result<(), impl Debug> {
 
     let dft = Dft::default();
 
-    type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
-    let pcs = Pcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
+    type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
+    let pcs = Pcs::new(dft, val_mmcs, fri_params, 4, StdRng::seed_from_u64(2));
 
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs, challenger);

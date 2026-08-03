@@ -197,5 +197,45 @@ fn main() {
     assert_eq!(packed.0, lanes, "from_fn round-trip mismatch");
     println!("from_fn: OK");
 
+    // ---- dot_product ---------------------------------------------------------
+    // N=5 exercises the vectorized delayed-reduction path (N > 1); includes the
+    // all-maximal-value case, the densest adversarial input for its bit-96 split.
+    {
+        let a0 = [P - 1, 1, 0xffff_ffff, 0, P - 2];
+        let a1 = [u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX];
+        let b0 = [2u64, P - 1, 0xdead_beef, 1, u64::MAX];
+        let b1 = [u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX];
+        let lhs: [PackedGoldilocksWasmSimd128; 5] = core::array::from_fn(|i| pack(a0[i], a1[i]));
+        let rhs: [PackedGoldilocksWasmSimd128; 5] = core::array::from_fn(|i| pack(b0[i], b1[i]));
+        let got = PackedGoldilocksWasmSimd128::dot_product(&lhs, &rhs);
+        let want0 = Goldilocks::dot_product(&a0.map(Goldilocks::new), &b0.map(Goldilocks::new));
+        let want1 = Goldilocks::dot_product(&a1.map(Goldilocks::new), &b1.map(Goldilocks::new));
+        assert_eq!(
+            got.0,
+            [want0, want1],
+            "dot_product mismatch: {a0:#x?}.{b0:#x?} / {a1:#x?}.{b1:#x?}"
+        );
+    }
+    println!("dot_product: OK");
+
+    // ---- mixed_dot_product ----------------------------------------------------
+    {
+        use p3_field::Algebra;
+
+        let a0 = [P - 1, 1, 0xffff_ffff, 0, P - 2];
+        let a1 = [u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX];
+        let f = [2u64, P - 1, 0xdead_beef, 1, u64::MAX].map(Goldilocks::new);
+        let a: [PackedGoldilocksWasmSimd128; 5] = core::array::from_fn(|i| pack(a0[i], a1[i]));
+        let got = PackedGoldilocksWasmSimd128::mixed_dot_product(&a, &f);
+        let want0 = Goldilocks::dot_product(&a0.map(Goldilocks::new), &f);
+        let want1 = Goldilocks::dot_product(&a1.map(Goldilocks::new), &f);
+        assert_eq!(
+            got.0,
+            [want0, want1],
+            "mixed_dot_product mismatch: {a0:#x?} / {a1:#x?}, f={f:?}"
+        );
+    }
+    println!("mixed_dot_product: OK");
+
     println!("all packed wasm32+simd128 ops match scalar Goldilocks");
 }

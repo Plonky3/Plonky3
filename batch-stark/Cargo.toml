@@ -25,6 +25,7 @@ p3-util.workspace = true
 
 hashbrown.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
+thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
@@ -37,14 +38,19 @@ p3-keccak = { path = "../keccak" }
 p3-matrix = { path = "../matrix" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-mersenne-31 = { path = "../mersenne-31" }
+p3-security = { path = "../security" }
 p3-symmetric = { path = "../symmetric" }
 
 criterion.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
-rand.workspace = true
+rand = { workspace = true, features = ["std_rng"] }
 
 [[bench]]
 name = "prove_batch"
+harness = false
+
+[[bench]]
+name = "lookup"
 harness = false
 
 [lints]

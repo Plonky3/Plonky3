@@ -1,0 +1,20 @@
+[package]
+name = "p3-security"
+description = "Soundness analysis for STARK protocols: per-error-source modules composed at the protocol call site."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+libm.workspace = true
+p3-air.workspace = true
+p3-field.workspace = true
+p3-util.workspace = true
+serde = { workspace = true, features = ["derive", "alloc"] }
+
+[lints]
+workspace = true

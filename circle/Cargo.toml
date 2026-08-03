@@ -33,6 +33,7 @@ p3-symmetric = { path = "../symmetric" }
 
 criterion.workspace = true
 hashbrown.workspace = true
+proptest.workspace = true
 rand.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }

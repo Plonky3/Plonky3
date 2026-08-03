@@ -5,59 +5,112 @@ use p3_field::Field;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_uni_stark::{StarkGenericConfig, Val};
 
-use crate::types::{Kind, Lookup, LookupData, LookupError};
+use crate::types::{Lookup, LookupError, LookupTerminal};
 
-/// A lookup protocol that can evaluate constraints, generate permutation
-/// traces, and verify global sums.
+/// Lookup protocol over the single-terminal LogUp layout.
 ///
-/// Each lookup uses exactly one auxiliary column in the permutation trace,
-/// matching the single [`Lookup::column`] field.
+/// # Responsibilities
+///
+/// - Emit the per-row pinning constraint for each lookup's fraction column.
+/// - Emit the accumulator constraints that bind the AIR's committed terminal.
+/// - Generate the auxiliary permutation trace from the main trace.
+/// - Verify the cross-AIR sum of committed terminals balances to zero.
+///
+/// # Trace layout
+///
+/// ```text
+///     permutation column 0:      shared accumulator
+///     permutation column i + 1:  fraction column for lookup i
+/// ```
+///
+/// Every AIR declaring any lookup commits exactly one extension-field terminal.
 pub trait LookupProtocol {
     /// Random challenges per lookup (2 for LogUp: `α`, `β`).
     fn num_challenges(&self) -> usize;
 
-    /// Evaluate a local (intra-AIR) lookup constraint.
-    fn eval_local<AB: PermutationAirBuilder>(&self, builder: &mut AB, lookup: &Lookup<AB::F>);
+    /// Pin one lookup's fraction column to its per-row LogUp value.
+    ///
+    /// # Constraint
+    ///
+    /// On every row, the fraction column is forced to equal `V_i / U_i`:
+    ///
+    /// - `V_i` — numerator (signed sum of multiplicities times the cross-products).
+    /// - `U_i` — denominator (product of all `(alpha - combined_tuple)` terms).
+    fn eval_fraction<AB: PermutationAirBuilder>(&self, builder: &mut AB, lookup: &Lookup<AB::F>);
 
-    /// Evaluate a global (cross-AIR) lookup constraint.
-    fn eval_global<AB: PermutationAirBuilder>(
+    /// Constrain the shared accumulator and bind the AIR's committed terminal.
+    ///
+    /// # Constraints
+    ///
+    /// - **First row** — the accumulator is anchored to zero.
+    /// - **Transition** — each step adds the per-row sum of every fraction column.
+    /// - **Last row** — accumulator plus the last row's fractions equals the committed terminal.
+    fn eval_accumulator<AB: PermutationAirBuilder>(
         &self,
         builder: &mut AB,
-        lookup: &Lookup<AB::F>,
-        cumulative_sum: AB::ExprEF,
+        lookups: &[Lookup<AB::F>],
+        terminal: AB::ExprEF,
     );
 
-    /// Evaluate all lookups, dispatching by [`Kind`].
+    /// Evaluate every lookup constraint for one AIR.
     fn eval_all<AB: PermutationAirBuilder>(&self, builder: &mut AB, lookups: &[Lookup<AB::F>]) {
-        let mut pv_idx = 0;
-        for lookup in lookups {
-            match &lookup.kind {
-                Kind::Local => self.eval_local(builder, lookup),
-                Kind::Global(_) => {
-                    let expected = builder.permutation_values()[pv_idx].clone();
-                    pv_idx += 1;
-                    self.eval_global(builder, lookup, expected.into());
-                }
-            }
+        // No lookups means no permutation column and no committed terminal.
+        if lookups.is_empty() {
+            assert_eq!(
+                0,
+                builder.permutation_values().len(),
+                "permutation values count mismatch"
+            );
+            return;
         }
-        assert_eq!(pv_idx, builder.permutation_values().len());
+
+        // Exactly one terminal per AIR with lookups.
+        assert_eq!(
+            1,
+            builder.permutation_values().len(),
+            "permutation values count mismatch"
+        );
+        let terminal = builder.permutation_values()[0].clone();
+
+        // Pin each lookup's fraction column to its per-row rational value.
+        for lookup in lookups {
+            self.eval_fraction(builder, lookup);
+        }
+
+        // Pin the accumulator: anchor, transition, and terminal binding.
+        self.eval_accumulator(builder, lookups, terminal.into());
     }
 
-    /// Generate the permutation trace matrix.
+    /// Generate the permutation trace and the AIR's single terminal.
+    ///
+    /// # Returns
+    ///
+    /// - A trace matrix with the accumulator at column `0` and one fraction
+    ///   column per declared lookup.
+    /// - The AIR's terminal: `Some(_)` when any lookup is declared, `None` otherwise.
     fn generate_permutation<SC: StarkGenericConfig>(
         &self,
         main: &RowMajorMatrix<Val<SC>>,
         preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
         public_values: &[Val<SC>],
         lookups: &[Lookup<Val<SC>>],
-        lookup_data: &mut [LookupData<SC::Challenge>],
         challenges: &[SC::Challenge],
-    ) -> RowMajorMatrix<SC::Challenge>;
+    ) -> (
+        RowMajorMatrix<SC::Challenge>,
+        Option<LookupTerminal<SC::Challenge>>,
+    );
 
-    /// Verify global cumulative sums balance to zero.
-    fn verify_global_sum<EF: Field>(&self, cumulative_sums: &[EF]) -> Result<(), LookupError>;
+    /// Verify the cross-AIR sum of committed terminals is zero.
+    ///
+    /// - Present terminals contribute to the total.
+    /// - Absent terminals (AIRs without lookups) contribute nothing.
+    /// - A non-zero total signals an unbalanced lookup in the batch.
+    fn verify_terminal_sum<EF: Field>(
+        &self,
+        terminals: &[Option<LookupTerminal<EF>>],
+    ) -> Result<(), LookupError>;
 
-    /// Polynomial degree of the transition constraint for a given lookup.
+    /// Polynomial degree of the highest-degree constraint emitted for one lookup.
     fn constraint_degree<F: Field>(&self, lookup: &Lookup<F>) -> usize;
 
     /// Evaluate AIR constraints followed by lookup constraints.

@@ -7,14 +7,15 @@ use core::marker::PhantomData;
 use p3_field::{ExtensionField, Field, dot_product};
 use p3_multilinear_util::point::Point;
 
-use crate::Claim;
-use crate::constraints::Constraint;
-use crate::constraints::statement::EqStatement;
+use crate::constraints::statement::{EqStatement, NextStatement};
+use crate::constraints::{Constraint, Statements};
 use crate::layout::LayoutStrategy;
 use crate::layout::opening::{VerifierMultiClaim, VerifierOpening, VerifierVirtualClaim};
 use crate::layout::plan::{LayoutShape, plan_layout};
 use crate::layout::witness::{Selector, TablePlacement};
-use crate::table::TableShape;
+use crate::strategy::VariableOrder;
+use crate::table::{OpeningEvals, OpeningRequest, TableShape};
+use crate::{Claim, SumcheckError};
 
 /// Verifier-side layout and claim registry.
 #[derive(Debug, Clone)]
@@ -81,6 +82,14 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         }
     }
 
+    /// Return the layout strategy this verifier was constructed with.
+    ///
+    /// Downstream protocols read it to dispatch on the binding direction
+    /// without threading the strategy through their own state.
+    pub const fn strategy(&self) -> LayoutStrategy {
+        self.strategy
+    }
+
     /// Returns the arity of the source table at the given index.
     pub fn num_variables_table(&self, table_idx: usize) -> usize {
         // Look up this table's placement; every column shares the same selector bit-width.
@@ -99,57 +108,143 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// # Arguments
     ///
     /// - `table_idx`  — source table index.
-    /// - `polys`      — column indices that were opened; must be non-empty.
-    /// - `evals`      — claimed evaluations, aligned with the column list.
-    /// - `challenger` — Fiat–Shamir transcript.
+    /// - `batch`      — current and next columns opened at this point.
+    /// - `evals`      — claimed evaluations split the same way as the columns.
+    /// - `challenger` — Fiat-Shamir transcript.
     ///
-    /// # Fiat–Shamir
+    /// # Fiat-Shamir
     ///
-    /// - Samples the opening point internally from the challenger.
-    /// - Absorbs the evaluations into the transcript.
-    /// - Mirrors exactly the prover's `eval` absorption order.
+    /// - Samples the opening point internally from the transcript.
+    /// - Absorbs the evaluations, current group first then next.
+    /// - Mirrors exactly the prover-side absorption order.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`SumcheckError::OpeningShapeMismatch`] when the proof's
+    ///   evaluations do not match the requested column shape.
     ///
     /// # Panics
     ///
-    /// - Columns list must be non-empty.
-    /// - Column list and evaluation list must have equal length.
+    /// - At least one current or next column must be requested.
     /// - Every column index must be in range for this table.
     pub fn add_claim<Ch>(
         &mut self,
         table_idx: usize,
-        polys: &[usize],
-        evals: &[EF],
+        batch: &OpeningRequest,
+        evals: &OpeningEvals<EF>,
         challenger: &mut Ch,
-    ) where
+    ) -> Result<(), SumcheckError>
+    where
         Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
     {
-        let placement = self.placement(table_idx);
-        // Preconditions.
-        assert!(
-            !polys.is_empty(),
-            "opening schedule must name at least one column"
-        );
-        assert_eq!(polys.len(), evals.len());
-        assert!(polys.iter().all(|&i| i < placement.num_polys()));
-
-        // Sample the local-frame opening point from the transcript.
+        // Draw the local-frame opening point as powers of one challenge.
+        // This is the standalone-PCS convention: the verifier picks the evaluation point.
         let point = Point::expand_from_univariate(
             challenger.sample_algebra_element(),
             self.num_variables_table(table_idx),
         );
+        self.add_claim_at(table_idx, batch, &point, evals, challenger)
+    }
 
-        // Absorb the evals into the transcript; mirrors the prover's eval.
-        challenger.observe_algebra_slice(evals);
+    /// Records an opening claim at a prescribed point.
+    ///
+    /// The caller supplies the local-frame opening point instead of sampling it.
+    /// An outer protocol that fixes the point opens its columns through this entry.
+    ///
+    /// Soundness requires `point` to be sampled from, or bound to, the same `challenger`
+    /// before this call (see `PrescribedPointPcs`'s Fiat-Shamir/Soundness doc) — this
+    /// method absorbs the evaluations but not the point itself.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point.
+    /// - Claimed evaluations matching the batch shape.
+    /// - Fiat-Shamir transcript.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error when the evaluations do not match the requested shape.
+    ///
+    /// # Panics
+    ///
+    /// - At least one current or next column must be requested.
+    /// - Every column index must be in range for this table.
+    /// - The point must carry one coordinate per table variable.
+    pub fn add_claim_at<Ch>(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+        challenger: &mut Ch,
+    ) -> Result<(), SumcheckError>
+    where
+        Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+    {
+        let placement = self.placement(table_idx);
+        // Split the request into its two column groups.
+        let current = batch.current();
+        let next = batch.next();
+        // An empty request would silently record nothing. The schedule is built
+        // by the verifier, so an empty request is a caller bug, not a bad proof.
+        assert!(
+            !batch.is_empty(),
+            "opening schedule must name at least one column"
+        );
+        // The point lives in the table's local frame.
+        // It carries one coordinate per variable.
+        assert_eq!(point.num_variables(), self.num_variables_table(table_idx));
+        // The evaluations come from the proof, so a shape mismatch is a malformed
+        // proof and must be rejected rather than aborting the verifier.
+        if !batch.has_same_shape(evals) {
+            return Err(SumcheckError::OpeningShapeMismatch {
+                table_idx,
+                expected_current: current.len(),
+                expected_next: next.len(),
+                actual_current: evals.current().len(),
+                actual_next: evals.next().len(),
+            });
+        }
+        // Every requested column must address an existing slot in this table.
+        assert!(
+            current
+                .iter()
+                .all(|&poly_idx| poly_idx < placement.num_polys())
+        );
+        assert!(
+            next.iter()
+                .all(|&poly_idx| poly_idx < placement.num_polys())
+        );
 
-        // Pair each column index with its claimed evaluation into an opening.
-        let openings = polys
+        // Absorb the evals in the same current-then-next order as the prover.
+        challenger.observe_algebra_slice(evals.current());
+        challenger.observe_algebra_slice(evals.next());
+
+        // Pair each current column with its claimed evaluation.
+        let current_openings = current
             .iter()
-            .zip(evals.iter())
-            .map(|(&poly_idx, &eval)| VerifierOpening::new(poly_idx, eval))
+            .copied()
+            .zip(evals.current().iter().copied())
+            .map(|(poly_idx, eval)| VerifierOpening::new(poly_idx, eval))
+            .collect();
+        // Pair each next column with its claimed evaluation.
+        let next_openings = next
+            .iter()
+            .copied()
+            .zip(evals.next().iter().copied())
+            .map(|(poly_idx, eval)| VerifierOpening::new(poly_idx, eval))
             .collect();
 
         // Store the batch under this table's claim list.
-        self.claim_map[table_idx].push(VerifierMultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(VerifierMultiClaim::new(
+            point.clone(),
+            current_openings,
+            next_openings,
+        ));
+
+        Ok(())
     }
 
     /// Records a virtual evaluation claim on the full stacked polynomial.
@@ -186,44 +281,64 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// - Concrete openings first, walked in stacked-polynomial order.
     /// - Virtual claims continue the alpha sequence after the concrete ones.
     pub fn sum(&self, alpha: EF) -> EF {
-        let mut sum = EF::ZERO;
+        let mut concrete = EF::ZERO;
         let mut alphas = alpha.powers();
 
-        // Concrete openings: three loops, no filter. Alphas match insertion order.
+        // Walk every concrete opening in the canonical insertion order.
+        //     placements -> claims -> current openings -> next openings
+        // Each opening consumes the next power of alpha, matching the prover.
         for placement in &self.placements {
             for claim in &self.claim_map[placement.idx()] {
-                for opening in claim.openings() {
-                    sum += opening.eval() * alphas.next().unwrap();
+                // Current group first.
+                for opening in claim.current_openings() {
+                    concrete += opening.eval() * alphas.next().unwrap();
+                }
+                // Next group second, continuing the same power sequence.
+                for opening in claim.next_openings() {
+                    concrete += opening.eval() * alphas.next().unwrap();
                 }
             }
         }
 
         // Virtual claims: continue the alpha sequence right after the concrete ones.
-        sum += dot_product::<EF, _, _>(
+        let virtuals = dot_product::<EF, _, _>(
             self.virtual_claims.iter().map(VerifierVirtualClaim::eval),
             alpha.shifted_powers(alpha.exp_u64(self.num_claims() as u64)),
         );
 
-        sum
+        concrete + virtuals
     }
 
-    /// Builds the verifier-side equality constraint batching every claim.
+    /// Builds the alpha-batched constraint over every recorded claim.
     ///
-    /// # Contributions
+    /// # Overview
     ///
-    /// - Concrete opening: equality at the selector-lifted claim point.
-    /// - Virtual claim: equality at the full stacked point.
+    /// - A current opening contributes an equality at the selector-lifted claim point.
+    /// - A next opening contributes a repeat-last successor weight at that slot.
+    /// - A virtual claim contributes an equality at the full stacked point.
+    ///
+    /// # Why the split
+    ///
+    /// - The emitted statements preserve the same mixed insertion order the batched sum walks.
+    /// - That keeps each statement aligned with the alpha power assigned to its opening.
     pub fn constraint(&self, alpha: EF) -> Constraint<F, EF> {
-        // Output statement spans the full stacked variable space.
-        let mut eq_statement = EqStatement::initialize(self.k);
+        // Accumulate statements over the full stacked variable space.
+        // The push order mirrors the batched-sum walk, so alpha powers stay aligned.
+        let mut statements = Vec::new();
 
-        // Concrete contributions: walk each opening in insertion order and lift
-        // its claim point through the selector for that opening's column.
+        // Concrete contributions, walked in canonical insertion order.
         for placement in &self.placements {
             for claim in &self.claim_map[placement.idx()] {
-                for opening in claim.openings() {
-                    // The opening's column tells us which selector to lift through.
-                    let col = opening.poly_idx().unwrap();
+                // Current group: one equality statement per claim's current openings.
+                let mut eq_statement = EqStatement::initialize(self.k);
+                for opening in claim.current_openings() {
+                    // The column selects which slot lift to apply.
+                    // Recorded concrete openings always bind a column, never virtual.
+                    let col = opening
+                        .poly_idx()
+                        .expect("concrete claims only hold column-bound openings");
+                    // Lift the slot-local claim point into the full stacked space.
+                    // Suffix and prefix layouts place the folded variables at opposite ends.
                     let lifted = if self.strategy.reverse_selectors {
                         placement.selectors()[col].lift_suffix(claim.point())
                     } else {
@@ -231,16 +346,51 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
                     };
                     eq_statement.add_evaluated_constraint(lifted, opening.eval());
                 }
+                // Emit only if this claim actually had current openings.
+                if !eq_statement.is_empty() {
+                    statements.push(Statements::Eq(eq_statement));
+                }
+
+                // Next group: one repeat-last successor statement per claim's next openings.
+                let mut next_statement = NextStatement::initialize(self.k);
+                for opening in claim.next_openings() {
+                    // Recorded concrete openings always bind a column, never virtual.
+                    let col = opening
+                        .poly_idx()
+                        .expect("concrete claims only hold column-bound openings");
+                    // The successor weight depends on which end the folded variables sit.
+                    let var_order = if self.strategy.reverse_selectors {
+                        VariableOrder::Suffix
+                    } else {
+                        VariableOrder::Prefix
+                    };
+                    // Feed the slot selector, the claim point, the eval, and the layout.
+                    next_statement.add_evaluated_constraint(
+                        placement.selectors()[col].point(),
+                        claim.point().clone(),
+                        opening.eval(),
+                        var_order,
+                    );
+                }
+                // Emit only if this claim actually had next openings.
+                if !next_statement.is_empty() {
+                    statements.push(Statements::Next(next_statement));
+                }
             }
         }
 
         // Virtual contributions: claim points already span the full stacked space.
+        let mut virtual_statement = EqStatement::initialize(self.k);
         for claim in &self.virtual_claims {
-            eq_statement.add_evaluated_constraint(claim.point.clone(), claim.eval);
+            virtual_statement.add_evaluated_constraint(claim.point.clone(), claim.eval);
+        }
+        // Emit the virtual block only when at least one virtual claim exists.
+        if !virtual_statement.is_empty() {
+            statements.push(Statements::Eq(virtual_statement));
         }
 
-        // Wrap the assembled statement into an alpha-batched constraint.
-        Constraint::new_eq_only(alpha, eq_statement)
+        // Wrap the assembled statements into an alpha-batched constraint.
+        Constraint::new(alpha, self.k, statements)
     }
 
     /// Returns the placement metadata for the given source table.
@@ -267,6 +417,7 @@ mod tests {
 
     use super::*;
     use crate::strategy::VariableOrder;
+    use crate::table::OpeningBatch;
     use crate::tests::{EF, F, challenger};
 
     const fn prefix_strategy() -> LayoutStrategy {
@@ -350,12 +501,48 @@ mod tests {
         let mut ch = challenger();
 
         // Add two openings on table 0; count jumps from 0 to 2.
-        verifier.add_claim(0, &[0, 1], &[EF::from_u64(7), EF::from_u64(11)], &mut ch);
+        let request = OpeningBatch::new(vec![0, 1], Vec::new());
+        let evals = OpeningBatch::new(vec![EF::from_u64(7), EF::from_u64(11)], Vec::new());
+        verifier.add_claim(0, &request, &evals, &mut ch).unwrap();
         assert_eq!(verifier.num_claims(), 2);
 
         // Add one opening on table 1; count jumps from 2 to 3.
-        verifier.add_claim(1, &[0], &[EF::from_u64(13)], &mut ch);
+        let request = OpeningBatch::new(vec![0], Vec::new());
+        let evals = OpeningBatch::new(vec![EF::from_u64(13)], Vec::new());
+        verifier.add_claim(1, &request, &evals, &mut ch).unwrap();
         assert_eq!(verifier.num_claims(), 3);
+    }
+
+    #[test]
+    fn verifier_add_claim_rejects_shape_mismatch_without_panicking() {
+        // Invariant:
+        //     The evaluations come from the proof, so a shape mismatch against
+        //     the requested columns is rejected as an error, never a panic.
+        //
+        // Fixture state:
+        //     request names two direct columns, but only one evaluation is given.
+        let shapes = vec![TableShape::new(9, 2)];
+        let mut verifier: Verifier<F, EF> = Verifier::new(&shapes, prefix_strategy());
+        let mut ch = challenger();
+
+        let request = OpeningBatch::new(vec![0, 1], Vec::new());
+        let evals = OpeningBatch::new(vec![EF::from_u64(7)], Vec::new());
+        let err = verifier
+            .add_claim(0, &request, &evals, &mut ch)
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            SumcheckError::OpeningShapeMismatch {
+                table_idx: 0,
+                expected_current: 2,
+                expected_next: 0,
+                actual_current: 1,
+                actual_next: 0,
+            }
+        );
+        // The rejected claim left the registry untouched.
+        assert_eq!(verifier.num_claims(), 0);
     }
 
     #[test]
@@ -375,7 +562,9 @@ mod tests {
         let mut ch = challenger();
 
         // Concrete claim: two columns of table 0.
-        verifier.add_claim(0, &[0, 1], &[EF::from_u64(7), EF::from_u64(11)], &mut ch);
+        let request = OpeningBatch::new(vec![0, 1], Vec::new());
+        let evals = OpeningBatch::new(vec![EF::from_u64(7), EF::from_u64(11)], Vec::new());
+        verifier.add_claim(0, &request, &evals, &mut ch).unwrap();
 
         // Virtual claim: covers the full stacked space.
         verifier.add_virtual_eval(EF::from_u64(13), &mut ch);
@@ -415,7 +604,9 @@ mod tests {
 
         // Record a single opening on table 1; table 0 stays empty.
         let mut ch = challenger();
-        verifier.add_claim(1, &[0], &[EF::from_u64(9)], &mut ch);
+        let request = OpeningBatch::new(vec![0], Vec::new());
+        let evals = OpeningBatch::new(vec![EF::from_u64(9)], Vec::new());
+        verifier.add_claim(1, &request, &evals, &mut ch).unwrap();
 
         // Check: only one opening → sum equals its eval scaled by alpha^0.
         assert_eq!(verifier.sum(EF::from_u64(3)), EF::from_u64(9));

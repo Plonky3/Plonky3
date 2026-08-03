@@ -1,5 +1,6 @@
 use core::fmt::Debug;
 use core::marker::PhantomData;
+use std::borrow::Cow;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -19,7 +20,7 @@ use p3_symmetric::{
 use p3_uni_stark::{StarkConfig, prove, verify};
 use p3_util::assert_sync;
 use rand::SeedableRng;
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 
 #[derive(Clone)]
 struct PeriodicAir<F> {
@@ -60,8 +61,8 @@ impl<F: Field> BaseAir<F> for PeriodicAir<F> {
         self.periodic.len()
     }
 
-    fn periodic_columns(&self) -> Vec<Vec<F>> {
-        self.periodic.clone()
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+        Cow::Borrowed(&self.periodic)
     }
 }
 
@@ -132,14 +133,14 @@ fn periodic_air_two_adic_zk_prove_verify() -> Result<(), impl Debug> {
         <Val as Field>::Packing,
         Hash,
         Compress,
-        SmallRng,
+        StdRng,
         2,
         8,
         4,
     >;
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     type Dft = Radix2DitParallel<Val>;
-    type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
+    type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
     type Config = StarkConfig<Pcs, Challenge, Challenger>;
 
@@ -151,11 +152,11 @@ fn periodic_air_two_adic_zk_prove_verify() -> Result<(), impl Debug> {
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = Hash::new(perm.clone());
     let compress = Compress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress, 0, rng);
+    let val_mmcs = ValMmcs::new(hash, compress, 0, StdRng::seed_from_u64(1));
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let fri_params = FriParameters::new_testing_zk(challenge_mmcs);
-    let pcs = Pcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(2));
+    let pcs = Pcs::new(dft, val_mmcs, fri_params, 4, StdRng::seed_from_u64(2));
     let challenger = Challenger::new(perm);
     let config = Config::new(pcs, challenger);
 
