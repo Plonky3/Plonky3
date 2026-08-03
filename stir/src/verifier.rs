@@ -11,23 +11,35 @@ use thiserror::Error;
 use crate::config::StirConfig;
 use crate::proof::StirProof;
 use crate::utils::{
-    check_shake_consistency, eval_degree_correction, eval_poly, eval_vanishing_at_roots,
-    fold_fiber, next_domain_shift,
+    check_shake_consistency, eval_degree_correction, eval_poly, eval_poly_at_base,
+    lagrange_eval_at, next_domain_shift, reduce_mod_x_pow_minus_c, vanishing_poly_from_roots,
 };
 
 #[derive(Clone)]
 struct VirtualRoundContext<EF> {
     ans_poly: Vec<EF>,
     all_points: Vec<EF>,
+    /// Coefficient form of `prod_{y in all_points} (X - y)`, built once per round so that each
+    /// query can reduce it rather than re-multiplying every root.
+    vanishing_coeffs: Vec<EF>,
     r_comb: EF,
 }
 
+/// Translate one opened row of the previous round's oracle into values of the current
+/// virtual oracle `DegCor((g - Ans) / Z)`.
+///
+/// `subgroup_points` are the fiber's coordinates on the domain's subgroup; the fiber itself
+/// lives at `shift * subgroup_points`. Those are **base-field** points, so every evaluation
+/// here is extension-by-base.
+///
+/// The fiber is a coset of the `arity`-th roots of unity, hence every point shares the same
+/// `x^arity`. Reducing `Ans` and the vanishing polynomial modulo `X^arity - x^arity` once per
+/// query leaves `arity` coefficients to evaluate at `arity` points, turning `O(arity * t)`
+/// work per query into `O(t + arity^2)`.
 fn materialize_virtual_fiber<F, EF>(
     row_evals: &[EF],
-    row_index: usize,
-    row_height: usize,
-    current_log_domain: usize,
-    current_shift: F,
+    subgroup_points: &[F],
+    shift: F,
     prev_ctx: Option<&VirtualRoundContext<EF>>,
 ) -> Option<Vec<EF>>
 where
@@ -38,16 +50,16 @@ where
         return Some(row_evals.to_vec());
     };
 
-    let domain_gen = F::two_adic_generator(current_log_domain);
-    let points: Vec<EF> = (0..row_evals.len())
-        .map(|col| {
-            let natural_index = row_index + col * row_height;
-            EF::from(current_shift) * EF::from(domain_gen.exp_u64(natural_index as u64))
-        })
-        .collect();
+    let arity = row_evals.len();
+    let points: Vec<F> = subgroup_points.iter().map(|&x| shift * x).collect();
+    let common_power = points[0].exp_u64(arity as u64);
+
+    let ans_rem = reduce_mod_x_pow_minus_c(&ctx.ans_poly, arity, common_power);
+    let vanishing_rem = reduce_mod_x_pow_minus_c(&ctx.vanishing_coeffs, arity, common_power);
+
     let vanishing_values: Vec<EF> = points
         .iter()
-        .map(|&x| eval_vanishing_at_roots(&ctx.all_points, x))
+        .map(|&x| eval_poly_at_base(&vanishing_rem, x))
         .collect();
     if vanishing_values.contains(&EF::ZERO) {
         return None;
@@ -60,8 +72,8 @@ where
             .zip(points)
             .zip(vanishing_inverses)
             .map(|((&g_value, x), vanishing_inverse)| {
-                let quotient = (g_value - eval_poly(&ctx.ans_poly, x)) * vanishing_inverse;
-                eval_degree_correction(quotient, x, ctx.r_comb, ctx.all_points.len())
+                let quotient = (g_value - eval_poly_at_base(&ans_rem, x)) * vanishing_inverse;
+                eval_degree_correction(quotient, EF::from(x), ctx.r_comb, ctx.all_points.len())
             })
             .collect(),
     )
@@ -420,21 +432,29 @@ where
         let mut seen_query_indices: alloc::collections::BTreeSet<usize> =
             alloc::collections::BTreeSet::new();
 
+        // The fiber of query `j` sits at subgroup coordinates `g^j * (g^fold_height)^l`, a
+        // coset of the arity-th roots of unity. Deriving it once per query serves both the
+        // virtual-oracle materialization and the fold.
+        let domain_gen = F::two_adic_generator(current_log_domain);
+        let fiber_step = domain_gen.exp_power_of_2(fold_log_domain);
+
         for (q, (&j, row_evals)) in query_indices.iter().zip(round_rows).enumerate() {
             let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
 
+            let subgroup_points: Vec<F> = fiber_step
+                .shifted_powers(domain_gen.exp_u64(j as u64))
+                .take(arity)
+                .collect();
+
             let current_fiber = materialize_virtual_fiber::<F, EF>(
                 row_evals,
-                j,
-                fold_height,
-                current_log_domain,
+                &subgroup_points,
                 current_shift,
                 prev_ctx.as_ref(),
             )
             .ok_or(StirError::InvalidRoundConsistency { round, query: q })?;
 
-            let fold_val =
-                fold_fiber::<F, EF>(&current_fiber, j, fold_log_domain, log_arity, fold_beta);
+            let fold_val = lagrange_eval_at(&subgroup_points, &current_fiber, fold_beta);
 
             if seen_query_indices.insert(j) {
                 query_points.push(fold_point);
@@ -487,6 +507,7 @@ where
 
         prev_ctx = Some(VirtualRoundContext {
             ans_poly: rp.ans_polynomial.clone(),
+            vanishing_coeffs: vanishing_poly_from_roots(&all_points),
             all_points,
             r_comb,
         });
@@ -594,12 +615,18 @@ where
     // Track them with the same dedup-on-first-occurrence rule as the intermediate-round path.
     let mut final_seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
 
+    let final_domain_gen = F::two_adic_generator(current_log_domain);
+    let final_fiber_step = final_domain_gen.exp_power_of_2(final_new_log_domain);
+
     for (q, (&j, row_evals)) in final_indices.iter().zip(final_rows).enumerate() {
+        let subgroup_points: Vec<F> = final_fiber_step
+            .shifted_powers(final_domain_gen.exp_u64(j as u64))
+            .take(final_arity)
+            .collect();
+
         let current_fiber = materialize_virtual_fiber::<F, EF>(
             row_evals,
-            j,
-            final_new_height,
-            current_log_domain,
+            &subgroup_points,
             current_shift,
             prev_ctx.as_ref(),
         )
@@ -608,13 +635,7 @@ where
             query: q,
         })?;
 
-        let fold_val = fold_fiber::<F, EF>(
-            &current_fiber,
-            j,
-            final_new_log_domain,
-            final_log_arity,
-            final_fold_beta,
-        );
+        let fold_val = lagrange_eval_at(&subgroup_points, &current_fiber, final_fold_beta);
 
         let x_j = EF::from(final_new_shift) * EF::from(final_gen.exp_u64(j as u64));
 

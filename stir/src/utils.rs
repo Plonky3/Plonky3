@@ -225,6 +225,39 @@ pub fn eval_vanishing_at_roots<F: Field>(roots: &[F], point: F) -> F {
     roots.iter().fold(F::ONE, |acc, &root| acc * (point - root))
 }
 
+/// Horner evaluation of an extension-coefficient polynomial at a **base-field** point.
+///
+/// Identical to [`eval_poly`] on a lifted point, but each step is an extension-by-base
+/// product rather than a full extension multiplication.
+pub fn eval_poly_at_base<F: Field, EF: ExtensionField<F>>(poly: &[EF], point: F) -> EF {
+    poly.iter()
+        .rev()
+        .fold(EF::ZERO, |acc, &coeff| acc * point + coeff)
+}
+
+/// Reduce `poly` modulo `X^n - c`, returning the `n` remainder coefficients.
+///
+/// Writing `i = q*n + r` gives `X^i = (X^n)^q * X^r ≡ c^q * X^r`, so every coefficient folds
+/// onto its index mod `n` scaled by a power of `c`: one pass over `poly`, independent of `n`.
+///
+/// Evaluating the reduced polynomial agrees with the original at any point `x` with
+/// `x^n = c`, which for a coset of the `n`-th roots of unity is every point at once.
+pub fn reduce_mod_x_pow_minus_c<F: Field, EF: ExtensionField<F>>(
+    poly: &[EF],
+    n: usize,
+    c: F,
+) -> Vec<EF> {
+    let mut remainder = EF::zero_vec(n);
+    let mut c_pow = F::ONE;
+    for block in poly.chunks(n) {
+        for (slot, &coeff) in remainder.iter_mut().zip(block) {
+            *slot += coeff * c_pow;
+        }
+        c_pow *= c;
+    }
+    remainder
+}
+
 /// Coefficients of the vanishing polynomial `prod_{y in roots} (X - y)`.
 ///
 /// The result is in ascending coefficient order, has length `roots.len() + 1`,
