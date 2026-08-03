@@ -95,7 +95,7 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> Pcs<Challenge, Challe
 where
     Val: TwoAdicField,
     Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync + Debug>,
+    InputMmcs: Mmcs<Val, Error: Sync + Debug>,
     StirMmcs: Mmcs<Challenge>,
     Challenge: ExtensionField<Val> + TwoAdicField + BasedVectorSpace<Val>,
     Challenger: FieldChallenger<Val>

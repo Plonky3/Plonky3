@@ -436,6 +436,92 @@ mod babybear_stir {
         );
     }
 
+    /// Swapping two `row_evals` entries keeps every length check happy (same count, same
+    /// per-row width), so only the positional binding between `row_evals` and the
+    /// transcript-derived `query_indices` inside Merkle verification can catch it.
+    #[test]
+    fn test_permuted_row_evals_rejected() {
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let degree = 1usize << log_degree;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let mut p_challenger = challenger.clone();
+        let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+
+        let row_evals = &mut proof.round_proofs[0].query_openings.row_evals;
+        assert!(row_evals.len() >= 2, "need at least two queries to permute");
+        assert_ne!(
+            row_evals[0], row_evals[1],
+            "rows must differ for the permutation to change anything"
+        );
+        row_evals.swap(0, 1);
+
+        let mut v_challenger = challenger;
+        assert!(
+            verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err(),
+            "permuted row_evals must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_tampered_pruned_sibling_rejected() {
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let degree = 1usize << log_degree;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let mut p_challenger = challenger.clone();
+        let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+
+        let sibs = &mut proof.round_proofs[0]
+            .query_openings
+            .opening_proof
+            .sibling_hashes;
+        assert!(!sibs.is_empty());
+        sibs[0][0] += F::ONE;
+
+        let mut v_challenger = challenger;
+        let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger)
+            .expect_err("tampered sibling hash must be rejected");
+        assert!(matches!(
+            err,
+            p3_stir::StirError::InvalidMmcsProof { round: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn test_dropped_pruned_sibling_rejected() {
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let degree = 1usize << log_degree;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let mut p_challenger = challenger.clone();
+        let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+
+        let sibs = &mut proof.round_proofs[0]
+            .query_openings
+            .opening_proof
+            .sibling_hashes;
+        assert!(!sibs.is_empty());
+        sibs.pop();
+
+        let mut v_challenger = challenger;
+        let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger)
+            .expect_err("dropped sibling hash must be rejected");
+        assert!(matches!(
+            err,
+            p3_stir::StirError::InvalidMmcsProof { round: 0, .. }
+        ));
+    }
+
     #[test]
     fn test_tampered_ood_answer_fails() {
         let (params, dft, challenger) = make_params(1, 2);
@@ -1137,6 +1223,108 @@ mod babybear_pcs {
         assert!(
             matches!(res, Err(p3_stir::StirError::InvalidProofShape)),
             "truncated input_openings must be rejected as InvalidProofShape, got {res:?}"
+        );
+    }
+
+    /// A present-but-should-be-`Some` per-commitment input opening turned into `None` must
+    /// be rejected. This is distinct from truncation: the slot still exists at the right
+    /// index, only its content is dropped, so only the `has_at_bucket` shape check (not a
+    /// length mismatch) can catch it.
+    #[test]
+    fn test_pcs_input_opening_present_to_none_rejected() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let width = 3;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat_a = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+        let mat_b = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit_a, data_a) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
+        p_ch.observe(commit_a.clone());
+        let (commit_b, data_b) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
+        p_ch.observe(commit_b.clone());
+
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
+        let (opening_values, mut proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+
+        // Both commitments land in the same bucket, so both slots start as `Some`. Blank
+        // out the first one in place, keeping the vector's length untouched.
+        for (_stir_proof, input_openings) in proof.iter_mut() {
+            assert_eq!(input_openings.len(), 2);
+            assert!(input_openings[0].is_some());
+            input_openings[0] = None;
+        }
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
+        let _v_zeta: Challenge = v_ch.sample_algebra_element();
+
+        let opening_a = opening_values[0][0][0].clone();
+        let opening_b = opening_values[1][0][0].clone();
+        let claims = vec![
+            (commit_a, vec![(domain, vec![(zeta, opening_a)])]),
+            (commit_b, vec![(domain, vec![(zeta, opening_b)])]),
+        ];
+        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
+        assert!(
+            matches!(res, Err(p3_stir::StirError::InvalidProofShape)),
+            "Some -> None input opening must be rejected as InvalidProofShape, got {res:?}"
+        );
+    }
+
+    /// A per-commitment `opened_values` vector truncated to fewer rows than the queried
+    /// positions must be rejected before the MMCS multi-batch verification (which expects
+    /// matching lengths) is even called.
+    #[test]
+    fn test_pcs_opened_values_truncated_rejected() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+        let log_d = 6;
+        let width = 3;
+
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        p_ch.observe(commit.clone());
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        for (_stir_proof, input_openings) in proof.iter_mut() {
+            let opening = input_openings[0]
+                .as_mut()
+                .expect("single commitment must have a present opening");
+            assert!(!opening.opened_values.is_empty());
+            opening.opened_values.pop();
+        }
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        assert_eq!(v_zeta, zeta);
+
+        let opening = opening_values[0][0][0].clone();
+        let claims = vec![(commit, vec![(domain, vec![(zeta, opening)])])];
+        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
+        assert!(
+            matches!(res, Err(p3_stir::StirError::InvalidProofShape)),
+            "truncated opened_values must be rejected as InvalidProofShape, got {res:?}"
         );
     }
 

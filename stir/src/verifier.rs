@@ -67,6 +67,18 @@ where
     )
 }
 
+/// Wraps each opened row as a single-matrix batch for [`Mmcs::verify_multi_batch`].
+///
+/// `verify_multi_batch` takes `opened_values[query][matrix]` to support batches spanning
+/// several committed matrices at once; STIR only ever commits one matrix per round, so every
+/// inner `Vec` here always holds exactly one row slice.
+fn single_matrix_opened_values<EF>(row_evals: &[Vec<EF>]) -> Vec<Vec<&[EF]>> {
+    row_evals
+        .iter()
+        .map(|row| alloc::vec![row.as_slice()])
+        .collect()
+}
+
 /// Errors returned by [`verify_stir`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum StirError<MmcsError, InputError = ()> {
@@ -287,12 +299,7 @@ where
 
         // Step 4b: one shared, pruned Merkle multi-opening proof authenticates every query
         // row against the current commitment at once.
-        let opened_values: Vec<Vec<&[EF]>> = rp
-            .query_openings
-            .row_evals
-            .iter()
-            .map(|row| alloc::vec![row.as_slice()])
-            .collect();
+        let opened_values = single_matrix_opened_values(&rp.query_openings.row_evals);
         config
             .mmcs
             .verify_multi_batch(
@@ -454,12 +461,7 @@ where
         return Err(StirError::InvalidProofShape);
     }
 
-    let opened_values: Vec<Vec<&[EF]>> = proof
-        .final_query_openings
-        .row_evals
-        .iter()
-        .map(|row| alloc::vec![row.as_slice()])
-        .collect();
+    let opened_values = single_matrix_opened_values(&proof.final_query_openings.row_evals);
     config
         .mmcs
         .verify_multi_batch(
