@@ -70,15 +70,74 @@ pub struct InputOpenings<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
     pub opening_proof: InputMmcs::MultiProof,
 }
 
+/// One LDE-height class of a commitment: its own Merkle tree over the matrices at that height.
+struct HeightClass<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
+    data: InputMmcs::ProverData<RowMajorMatrix<Val>>,
+    /// Column count of each matrix in this class before fiber grouping.
+    widths: Vec<usize>,
+    lde_height: usize,
+}
+
 /// Prover data for [`TwoAdicStirPcs`].
 ///
-/// The LDE matrices are committed in fiber-grouped form: each Merkle leaf holds
-/// `2^log_folding_factor` consecutive bit-reversed LDE rows, i.e. exactly the rows one
-/// first-round STIR query reads. `widths` records each matrix's column count before grouping
-/// so the original shape can be recovered for opening and quotient computation.
+/// Matrices are committed in fiber-grouped form — each Merkle leaf holds
+/// `2^log_folding_factor` consecutive bit-reversed LDE rows, exactly the rows one first-round
+/// STIR query reads — and grouped into one tree per distinct LDE height, in descending height
+/// order. STIR runs an independent sub-proof per height bucket, so a single shared tree would
+/// force every bucket's openings to carry the rows of every *other* height as well, purely to
+/// recompute the authentication path. `placement` maps each matrix, in the order the caller
+/// committed them, to its `(class, index within class)`.
 pub struct StirProverData<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
-    data: InputMmcs::ProverData<RowMajorMatrix<Val>>,
+    classes: Vec<HeightClass<Val, InputMmcs>>,
+    placement: Vec<(usize, usize)>,
+}
+
+/// Split fiber-grouped LDEs into one height class per distinct LDE height, descending.
+///
+/// `heights` and `widths` are the pre-grouping LDE heights and column counts, in caller order.
+fn commit_by_height_class<Val, InputMmcs>(
+    input_mmcs: &InputMmcs,
+    grouped: Vec<RowMajorMatrix<Val>>,
+    heights: Vec<usize>,
     widths: Vec<usize>,
+) -> (Vec<InputMmcs::Commitment>, StirProverData<Val, InputMmcs>)
+where
+    Val: Send + Sync + Clone,
+    InputMmcs: Mmcs<Val>,
+{
+    let mut class_heights = heights.clone();
+    class_heights.sort_unstable();
+    class_heights.dedup();
+    class_heights.reverse();
+
+    let mut class_mats = vec![Vec::new(); class_heights.len()];
+    let mut class_widths = vec![Vec::new(); class_heights.len()];
+    let mut placement = Vec::with_capacity(grouped.len());
+    for ((mat, height), width) in grouped.into_iter().zip(heights).zip(widths) {
+        let class = class_heights
+            .iter()
+            .position(|&h| h == height)
+            .expect("every height is one of the distinct heights");
+        placement.push((class, class_mats[class].len()));
+        class_mats[class].push(mat);
+        class_widths[class].push(width);
+    }
+
+    let (commitments, classes) = izip!(class_mats, class_widths, class_heights)
+        .map(|(mats, widths, lde_height)| {
+            let (commitment, data) = input_mmcs.commit(mats);
+            (
+                commitment,
+                HeightClass {
+                    data,
+                    widths,
+                    lde_height,
+                },
+            )
+        })
+        .unzip();
+
+    (commitments, StirProverData { classes, placement })
 }
 
 /// Reinterpret a bit-reversed LDE as a matrix whose rows are whole STIR fibers.
@@ -97,16 +156,25 @@ fn group_fiber_rows<Val: Clone + Send + Sync>(
     RowMajorMatrix::new(lde.values, width)
 }
 
-/// Recover views of the committed matrices in their pre-grouping shape.
+/// Recover views of the committed matrices in their pre-grouping shape and caller order.
 fn lde_views<'a, Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>>(
     input_mmcs: &InputMmcs,
     prover_data: &'a StirProverData<Val, InputMmcs>,
 ) -> Vec<RowMajorMatrixView<'a, Val>> {
-    input_mmcs
-        .get_matrices(&prover_data.data)
-        .into_iter()
-        .zip(prover_data.widths.iter())
-        .map(|(mat, &width)| RowMajorMatrixView::new(mat.values.as_slice(), width))
+    let per_class: Vec<_> = prover_data
+        .classes
+        .iter()
+        .map(|class| input_mmcs.get_matrices(&class.data))
+        .collect();
+    prover_data
+        .placement
+        .iter()
+        .map(|&(class, index)| {
+            RowMajorMatrixView::new(
+                per_class[class][index].values.as_slice(),
+                prover_data.classes[class].widths[index],
+            )
+        })
         .collect()
 }
 
@@ -146,7 +214,8 @@ where
         + Clone,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
-    type Commitment = InputMmcs::Commitment;
+    /// One Merkle root per distinct LDE height, in descending height order.
+    type Commitment = Vec<InputMmcs::Commitment>;
     type ProverData = StirProverData<Val, InputMmcs>;
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
     /// Proof structure: one entry per distinct LDE-height bucket (descending).
@@ -183,6 +252,7 @@ where
     ) -> (Self::Commitment, Self::ProverData) {
         let min_height = 1usize << self.stir.log_folding_factor;
         let mut widths = Vec::new();
+        let mut heights = Vec::new();
         let ldes: Vec<_> = evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -204,11 +274,11 @@ where
                     .bit_reverse_rows()
                     .to_row_major_matrix();
                 widths.push(lde.width());
+                heights.push(lde.height());
                 group_fiber_rows(lde, self.stir.log_folding_factor)
             })
             .collect();
-        let (commitment, data) = self.input_mmcs.commit(ldes);
-        (commitment, StirProverData { data, widths })
+        commit_by_height_class(&self.input_mmcs, ldes, heights, widths)
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -217,7 +287,10 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
-        let lde = lde_views(&self.input_mmcs, prover_data).swap_remove(idx);
+        let (class, index) = prover_data.placement[idx];
+        let class_data = &prover_data.classes[class];
+        let grouped = self.input_mmcs.get_matrices(&class_data.data)[index];
+        let lde = RowMajorMatrixView::new(grouped.values.as_slice(), class_data.widths[index]);
         if domain.shift() == Val::GENERATOR && lde.height() >= domain.size() {
             let width = lde.width();
             let values: &'a [Val] = lde.values;
@@ -268,6 +341,7 @@ where
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
         let min_lde_height = 1usize << (self.stir.log_folding_factor + self.stir.log_blowup);
         let mut widths = Vec::with_capacity(ldes.len());
+        let mut heights = Vec::with_capacity(ldes.len());
         let grouped: Vec<_> = ldes
             .into_iter()
             .map(|lde| {
@@ -282,11 +356,11 @@ where
                     self.stir.log_blowup,
                 );
                 widths.push(lde.width());
+                heights.push(lde.height());
                 group_fiber_rows(lde, self.stir.log_folding_factor)
             })
             .collect();
-        let (commitment, data) = self.input_mmcs.commit(grouped);
-        (commitment, StirProverData { data, widths })
+        commit_by_height_class(&self.input_mmcs, grouped, heights, widths)
     }
 
     #[instrument(name = "STIR PCS open", skip_all)]
@@ -439,29 +513,23 @@ where
                 commitment_data_with_opening_points
                     .iter()
                     .map(|(data, _)| {
-                        // Committed matrices are fiber-grouped, so their heights are the LDE
-                        // heights divided by the fold arity.
-                        let mats = self.input_mmcs.get_matrices(&data.data);
-                        if !mats
+                        // Only this bucket's height class is opened; the other classes live in
+                        // their own trees and never appear in this bucket's proof.
+                        let class = data
+                            .classes
                             .iter()
-                            .any(|m| m.height() << log_arity0 == bucket_height)
-                        {
-                            return None;
-                        }
-                        let commit_max_height =
-                            mats.iter().map(|m| m.height()).max().unwrap() << log_arity0;
-                        let log_commit_max = log2_strict_usize(commit_max_height);
+                            .find(|class| class.lde_height == bucket_height)?;
 
-                        // One index per query: the whole fiber lives in a single grouped row.
+                        // Every matrix in the class shares the bucket's height, so the grouped
+                        // row index is the query index itself: one index per query, and the
+                        // whole fiber lives in that single row.
                         let q_globals: Vec<usize> = first_round_query_indices
                             .iter()
-                            .map(|&j| {
-                                reverse_bits_len(j, log_h - log_arity0) << (log_commit_max - log_h)
-                            })
+                            .map(|&j| reverse_bits_len(j, log_h - log_arity0))
                             .collect();
 
                         let (opened_values, opening_proof) =
-                            self.input_mmcs.open_multi_batch(&q_globals, &data.data);
+                            self.input_mmcs.open_multi_batch(&q_globals, &class.data);
                         Some(InputOpenings {
                             opened_values,
                             opening_proof,
@@ -670,9 +738,6 @@ where
                             return Err(StirError::InvalidProofShape);
                         }
 
-                        let commit_max_height = mat_lde_heights.iter().copied().max().unwrap();
-                        let log_commit_max = log2_strict_usize(commit_max_height);
-
                         let mat_widths: Vec<usize> = domain_claims
                             .iter()
                             .map(|(_, point_claims)| {
@@ -680,24 +745,44 @@ where
                             })
                             .collect();
 
-                        // Matrices are committed fiber-grouped: `2^log_arity0` LDE rows per committed
-                        // row.
-                        let dimensions: Vec<p3_matrix::Dimensions> = mat_lde_heights
+                        // The commitment is one root per distinct LDE height, descending; this
+                        // bucket reads only its own class, so only that class's matrices appear
+                        // in the opening.
+                        let mut class_heights = mat_lde_heights.clone();
+                        class_heights.sort_unstable();
+                        class_heights.dedup();
+                        class_heights.reverse();
+
+                        // SHAPE CHECK: the class count is determined entirely by public input.
+                        if commitment.len() != class_heights.len() {
+                            return Err(StirError::InvalidProofShape);
+                        }
+                        let class_idx = class_heights
                             .iter()
-                            .zip(mat_widths.iter())
-                            .map(|(&h, &w)| p3_matrix::Dimensions {
-                                height: h >> log_arity0,
-                                width: w << log_arity0,
+                            .position(|&h| h == bucket_height)
+                            .expect("`has_at_bucket` established this class exists");
+                        let class_members: Vec<usize> = mat_lde_heights
+                            .iter()
+                            .enumerate()
+                            .filter(|&(_, &h)| h == bucket_height)
+                            .map(|(mat_idx, _)| mat_idx)
+                            .collect();
+
+                        // Matrices are committed fiber-grouped: `2^log_arity0` LDE rows per
+                        // committed row.
+                        let dimensions: Vec<p3_matrix::Dimensions> = class_members
+                            .iter()
+                            .map(|&mat_idx| p3_matrix::Dimensions {
+                                height: bucket_height >> log_arity0,
+                                width: mat_widths[mat_idx] << log_arity0,
                             })
                             .collect();
 
-                        // One grouped row per query, in the same order the prover used to build
-                        // `opening.opened_values`.
+                        // Every matrix in the class shares the bucket's height, so the grouped
+                        // row index is the query index itself.
                         let q_globals: Vec<usize> = first_round_unique_js
                             .iter()
-                            .map(|&j| {
-                                reverse_bits_len(j, log_h - log_arity0) << (log_commit_max - log_h)
-                            })
+                            .map(|&j| reverse_bits_len(j, log_h - log_arity0))
                             .collect();
 
                         // SHAPE CHECK: opened-row count is determined entirely by public input.
@@ -707,7 +792,7 @@ where
 
                         self.input_mmcs
                             .verify_multi_batch(
-                                commitment,
+                                &commitment[class_idx],
                                 &dimensions,
                                 &q_globals,
                                 &opening.opened_values,
@@ -724,17 +809,14 @@ where
                                 // of the grouped row.
                                 let slot = reverse_bits_len(l, log_arity0);
 
-                                for (mat_idx, (_, point_claims)) in domain_claims.iter().enumerate()
-                                {
-                                    if mat_lde_heights[mat_idx] != bucket_height {
-                                        continue;
-                                    }
+                                for (local_idx, &mat_idx) in class_members.iter().enumerate() {
+                                    let (_, point_claims) = &domain_claims[mat_idx];
 
                                     // `verify_multi_batch` already pinned each grouped row to
-                                    // `dimensions[mat_idx].width`, so this slice is in bounds.
+                                    // `dimensions[local_idx].width`, so this slice is in bounds.
                                     let width = mat_widths[mat_idx];
                                     let row_vals =
-                                        &row_vals_by_mat[mat_idx][slot * width..][..width];
+                                        &row_vals_by_mat[local_idx][slot * width..][..width];
                                     let p_x: Challenge = row_vals
                                         .iter()
                                         .zip(alpha_powers.iter())
