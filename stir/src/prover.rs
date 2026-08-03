@@ -16,6 +16,7 @@ use p3_field::{
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
+use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
 use crate::config::StirConfig;
@@ -334,28 +335,24 @@ where
         // coset (base-field ratio, EF-valued start), so it is evaluated pointwise via two
         // `Powers` sweeps instead of a third DFT; its `(1 - r_comb*x)` denominator is folded
         // into the vanishing-polynomial batch inversion below (one inversion, not two). Ans
-        // and the vanishing polynomial still need a DFT each — their roots are this round's
-        // arbitrary interpolation points — so those two are batched into one call.
+        // and the vanishing polynomial still need evaluating — their roots are this round's
+        // arbitrary interpolation points — but both are tiny next to the domain, so they go
+        // through the low-degree coset evaluation rather than a full-size DFT each.
         let num_answers = all_points.len();
         let next_domain_size = 1usize << next_log_domain;
 
         let vanishing_coeffs = vanishing_poly_from_roots(&all_points);
-        let mut combined_coeffs = EF::zero_vec(next_domain_size * 2);
-        for (i, &c) in ans_poly.iter().enumerate().take(next_domain_size) {
-            combined_coeffs[2 * i] = c;
-        }
-        for (i, &c) in vanishing_coeffs.iter().enumerate().take(next_domain_size) {
-            combined_coeffs[2 * i + 1] = c;
-        }
-        let combined_evals = dft
-            .coset_dft_algebra_batch(RowMajorMatrix::new(combined_coeffs, 2), next_shift)
-            .values;
-        let mut ans_evals = EF::zero_vec(next_domain_size);
-        let mut vanishing_evals = EF::zero_vec(next_domain_size);
-        for (i, pair) in combined_evals.chunks_exact(2).enumerate() {
-            ans_evals[i] = pair[0];
-            vanishing_evals[i] = pair[1];
-        }
+        // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
+        // `num_answers + 1` coefficients.
+        let log_answer_len = log2_ceil_usize(num_answers + 1).min(next_log_domain);
+        let (ans_evals, vanishing_evals) = eval_low_degree_pair_on_coset(
+            dft,
+            &ans_poly,
+            &vanishing_coeffs,
+            next_shift,
+            next_log_domain,
+            log_answer_len,
+        );
 
         // x_j = next_shift * g^j; step_j = r_comb * x_j = step_start * g^j.
         let g_next = F::two_adic_generator(next_log_domain);
@@ -465,6 +462,86 @@ where
         final_query_openings,
     };
     (proof, first_round_query_indices)
+}
+
+/// Evaluate two polynomials of at most `2^log_len` coefficients on the coset `shift * <g>` of
+/// size `2^log_size`, returning both codewords in **natural order**.
+///
+/// A full-size DFT would spend all `log_size` butterfly layers on an input that is zero past
+/// its first `2^log_len` coefficients. Instead, split the coset into
+/// `m = 2^(log_size - log_len)` cosets of the size-`2^log_len` subgroup: writing the natural
+/// index as `i = a + m*b` with `a < m` and `b < 2^log_len`,
+///
+/// ```text
+/// x_i = shift * g^(a + m*b) = (shift * g^a) * (g^m)^b
+/// ```
+///
+/// and `g^m` generates that subgroup. So evaluating on the whole coset is `m` independent
+/// size-`2^log_len` DFTs, one per `a`, of the coefficients pre-scaled by `(shift * g^a)^c` —
+/// `O(N * log_len)` instead of `O(N * log_size)`. The `m` transforms are the columns of one
+/// batched call, and each output row lands on a contiguous natural-order block.
+///
+/// Coefficients past index `2^log_size` are ignored, matching evaluation of the truncation.
+fn eval_low_degree_pair_on_coset<F, EF, Dft>(
+    dft: &Dft,
+    first: &[EF],
+    second: &[EF],
+    shift: F,
+    log_size: usize,
+    log_len: usize,
+) -> (Vec<EF>, Vec<EF>)
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+{
+    debug_assert!(log_len <= log_size);
+    let size = 1usize << log_size;
+    let num_cosets = size >> log_len;
+    let generator = F::two_adic_generator(log_size);
+
+    // Row `c` holds the pair of degree-`c` coefficients scaled by `(shift * g^a)^c`, which as
+    // `a` varies is the geometric sequence starting at `shift^c` with ratio `g^c`.
+    let mut scaled = EF::zero_vec((1usize << log_len) * 2 * num_cosets);
+    scaled
+        .par_chunks_mut(2 * num_cosets)
+        .enumerate()
+        .for_each(|(c, row)| {
+            let first_c = first.get(c).copied().unwrap_or(EF::ZERO);
+            let second_c = second.get(c).copied().unwrap_or(EF::ZERO);
+            let ratio = generator.exp_u64(c as u64);
+            let mut scale = shift.exp_u64(c as u64);
+            for pair in row.chunks_exact_mut(2) {
+                pair[0] = first_c * scale;
+                pair[1] = second_c * scale;
+                scale *= ratio;
+            }
+        });
+
+    let transformed = dft
+        .dft_algebra_batch(RowMajorMatrix::new(scaled, 2 * num_cosets))
+        .values;
+
+    // Transform row `b` holds the evaluations at `i = a + num_cosets * b` for every `a`, i.e.
+    // the natural-order block `[num_cosets * b, num_cosets * (b + 1))`.
+    let mut first_evals = EF::zero_vec(size);
+    let mut second_evals = EF::zero_vec(size);
+    first_evals
+        .par_chunks_mut(num_cosets)
+        .zip(second_evals.par_chunks_mut(num_cosets))
+        .zip(transformed.par_chunks_exact(2 * num_cosets))
+        .for_each(|((first_block, second_block), row)| {
+            for ((first_slot, second_slot), pair) in first_block
+                .iter_mut()
+                .zip(second_block.iter_mut())
+                .zip(row.chunks_exact(2))
+            {
+                *first_slot = pair[0];
+                *second_slot = pair[1];
+            }
+        });
+
+    (first_evals, second_evals)
 }
 
 /// Evaluate a polynomial (coefficients in `EF`) on a coset `shift * <g>` of size
