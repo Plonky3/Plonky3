@@ -645,8 +645,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PrimeCharacteristicRing, dot_product};
     use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
     use proptest::prelude::*;
@@ -822,6 +822,47 @@ mod tests {
 
             prop_assert_eq!(h1, h1_ref);
             prop_assert_eq!(h_inf, h_inf_ref);
+        }
+
+        // The projective round identity, both protocol sides together: derive
+        // s(0) := C - s(inf) as the verifier does, evaluate the quadratic at
+        // the challenge, and compare against the dot product of the tables
+        // bound in the monomial basis. Unlike the reference check above, this
+        // fails if the sent message did not determine the round polynomial
+        // (e.g. the insufficient [s(0), s(inf)] message passes the reference
+        // check but not this one).
+        #[test]
+        fn prop_projective_round_message_satisfies_round_identity(
+            k in 1usize..=12,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let n = 1usize << k;
+            let evals: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let r: EF = rng.random();
+
+            let claim: EF = dot_product(evals.iter().copied(), weights.iter().copied());
+            let RoundMessage { c_a: s1, c_inf: s_inf } =
+                super::sumcheck_coefficients_prefix_projective(&evals, &weights);
+
+            // Verifier side: s(0) is derived, never sent. The quadratic is
+            // s(X) = s(0) + (s(1) - s(0) - s(inf)) * X + s(inf) * X^2.
+            let s0 = claim - s_inf;
+            let s_at_r = s0 + (s1 - s0 - s_inf) * r + s_inf * r.square();
+
+            // Prover side: bind the round variable at r in the monomial basis.
+            let (mut bound_evals, mut bound_weights) = (Poly::new(evals), Poly::new(weights));
+            bound_evals.fix_prefix_var_mut_monomial(r);
+            bound_weights.fix_prefix_var_mut_monomial(r);
+
+            prop_assert_eq!(
+                s_at_r,
+                dot_product(
+                    bound_evals.as_slice().iter().copied(),
+                    bound_weights.as_slice().iter().copied(),
+                )
+            );
         }
     }
 }
