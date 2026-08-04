@@ -28,8 +28,9 @@ pub struct StirProof<EF: Field, M: Mmcs<EF>, Witness> {
     /// Proof-of-work witness for the final query phase.
     pub final_pow_witness: Witness,
 
-    /// Merkle openings for the final consistency queries against the last committed codeword.
-    pub final_query_proofs: Vec<StirFinalQueryProof<EF, M>>,
+    /// Merkle openings for the final consistency queries against the last committed codeword,
+    /// sharing one pruned multi-opening proof.
+    pub final_query_openings: StirQueryOpenings<EF, M>,
 }
 
 /// Proof for a single STIR round.
@@ -68,37 +69,31 @@ pub struct StirRoundProof<EF: Field, M: Mmcs<EF>, Witness> {
     /// malicious prover cannot fit `Ans` to a known `rho`.
     pub shake_polynomial: Vec<EF>,
 
-    /// Merkle openings for each STIR query.
-    pub query_proofs: Vec<StirQueryProof<EF, M>>,
+    /// Merkle openings for the STIR queries, sharing one pruned multi-opening proof.
+    pub query_openings: StirQueryOpenings<EF, M>,
 }
 
-/// Merkle opening and fiber evaluations for a single STIR query.
+/// Batched Merkle openings and fiber evaluations for the queries of one round.
 ///
-/// The opened row is taken from the CURRENT commitment:
+/// The opened rows are taken from the CURRENT commitment:
 /// - in round 0 this is the current oracle itself,
 /// - in later rounds this is the previous round's folded oracle `g_i`.
 ///
-/// The verifier translates the opened row into current-round oracle values before
+/// The verifier translates each opened row into current-round oracle values before
 /// applying the fold.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(bound = "")]
-pub struct StirQueryProof<EF: Field, M: Mmcs<EF>> {
-    /// The opened row from the current commitment's fiber matrix.
-    pub row_evals: Vec<EF>,
-
-    /// Merkle opening proof authenticating `row_evals` against the current commitment.
-    pub opening_proof: M::Proof,
-}
-
-/// Merkle opening and fiber evaluations for a final-round query.
 ///
-/// Used to verify consistency between the last virtual oracle and the final polynomial.
+/// One multi-opening proof authenticates every row together, so sibling digests shared
+/// between queries — including queries that land on the same index — travel once.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(bound = "")]
-pub struct StirFinalQueryProof<EF: Field, M: Mmcs<EF>> {
-    /// The opened row from the last commitment's fiber matrix.
-    pub row_evals: Vec<EF>,
+#[serde(bound(
+    serialize = "M::MultiProof: Serialize",
+    deserialize = "M::MultiProof: Deserialize<'de>"
+))]
+pub struct StirQueryOpenings<EF: Field, M: Mmcs<EF>> {
+    /// `row_evals[q]` is the opened row from the current commitment's fiber matrix at the
+    /// `q`-th queried position, in query order.
+    pub row_evals: Vec<Vec<EF>>,
 
-    /// Merkle opening proof authenticating `row_evals` against the last committed codeword.
-    pub opening_proof: M::Proof,
+    /// Compact multi-opening proof authenticating every row at once.
+    pub opening_proof: M::MultiProof,
 }

@@ -9,7 +9,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, Mmcs};
+use p3_commit::Mmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     BasedVectorSpace, ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
@@ -19,7 +19,7 @@ use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
 use crate::config::StirConfig;
-use crate::proof::{StirFinalQueryProof, StirProof, StirQueryProof, StirRoundProof};
+use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
     compute_shake_polynomial, degree_correction_poly, eval_poly, fold_codeword, interpolate_poly,
     next_domain_shift, vanishing_poly_from_roots,
@@ -189,7 +189,7 @@ where
         // Step 4: Query sampling.
         let fold_gen = F::two_adic_generator(fold_log_domain);
 
-        let mut query_proofs = Vec::with_capacity(rc.num_queries);
+        let mut query_indices = Vec::with_capacity(rc.num_queries);
         let mut query_points = Vec::with_capacity(rc.num_queries);
         let mut query_answers = Vec::with_capacity(rc.num_queries);
 
@@ -197,8 +197,6 @@ where
             alloc::collections::BTreeSet::new();
 
         let r_comb: EF = challenger.sample_algebra_element();
-
-        let current_opening_data = &current_commit_data;
 
         for _ in 0..rc.num_queries {
             // `RESAMPLE = true`: the challenger loops on field-side rejection internally,
@@ -210,20 +208,22 @@ where
                 .expect("RESAMPLE = true: rejection loops internally, never errors");
             let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
 
-            let opening = config.mmcs.open_batch(j, current_opening_data);
-            let (row_evals, opening_proof) = into_single_opened_row(opening);
-            debug_assert_eq!(row_evals.len(), arity);
-
-            query_proofs.push(StirQueryProof {
-                row_evals,
-                opening_proof,
-            });
+            query_indices.push(j);
 
             if seen_query_indices.insert(j) {
                 query_points.push(fold_point);
                 query_answers.push(folded_codeword[j]);
             }
         }
+
+        // One shared, pruned multi-opening proof for every query drawn this round.
+        let query_openings = open_fiber_rows(&config.mmcs, &query_indices, &current_commit_data);
+        debug_assert!(
+            query_openings
+                .row_evals
+                .iter()
+                .all(|row| row.len() == arity)
+        );
 
         // Collect first-round query indices for the PCS binding check.
         if round == 0 {
@@ -287,7 +287,7 @@ where
             pow_witness,
             ans_polynomial: ans_poly,
             shake_polynomial: shake_poly,
-            query_proofs,
+            query_openings,
         });
 
         current_oracle_codeword = next_oracle_codeword;
@@ -322,21 +322,24 @@ where
     challenger.observe_algebra_slice(&final_poly);
     let final_pow_witness = challenger.grind(config.final_pow_bits);
 
-    let mut final_query_proofs = Vec::with_capacity(config.final_queries);
+    let mut final_query_indices = Vec::with_capacity(config.final_queries);
     let mut final_seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
     for _ in 0..config.final_queries {
         let j = challenger
             .sample_uniform_bits::<true>(final_new_log_domain)
             .expect("RESAMPLE = true: rejection loops internally, never errors");
         final_seen.insert(j);
-        let opening = config.mmcs.open_batch(j, &current_commit_data);
-        let (row_evals, opening_proof) = into_single_opened_row(opening);
-        debug_assert_eq!(row_evals.len(), final_arity);
-        final_query_proofs.push(StirFinalQueryProof {
-            row_evals,
-            opening_proof,
-        });
+        final_query_indices.push(j);
     }
+
+    let final_query_openings =
+        open_fiber_rows(&config.mmcs, &final_query_indices, &current_commit_data);
+    debug_assert!(
+        final_query_openings
+            .row_evals
+            .iter()
+            .all(|row| row.len() == final_arity)
+    );
 
     // When there are no intermediate rounds the final queries target the
     // initial codeword.  Expose them for PCS input binding.
@@ -350,7 +353,7 @@ where
         final_polynomial: final_poly,
         final_folding_pow_witness,
         final_pow_witness,
-        final_query_proofs,
+        final_query_openings,
     };
     (proof, first_round_query_indices)
 }
@@ -415,17 +418,27 @@ fn commit_as_fiber_matrix<EF: Field, M: Mmcs<EF>>(
     mmcs.commit_matrix(RowMajorMatrix::new(matrix, arity))
 }
 
-fn into_single_opened_row<EF: Field, M: Mmcs<EF>>(
-    opening: BatchOpening<EF, M>,
-) -> (Vec<EF>, M::Proof) {
-    let (mut opened_values, opening_proof) = opening.unpack();
-    assert_eq!(
-        opened_values.len(),
-        1,
-        "STIR commits exactly one codeword matrix"
-    );
-    let row_evals = opened_values
-        .pop()
-        .expect("STIR commits exactly one codeword matrix");
-    (row_evals, opening_proof)
+/// Opens `indices` against the current commitment's fiber matrix as one shared, pruned
+/// multi-opening proof.
+fn open_fiber_rows<EF: Field, M: Mmcs<EF>>(
+    mmcs: &M,
+    indices: &[usize],
+    prover_data: &M::ProverData<RowMajorMatrix<EF>>,
+) -> StirQueryOpenings<EF, M> {
+    let (values, opening_proof) = mmcs.open_multi_batch(indices, prover_data);
+    let row_evals = values
+        .into_iter()
+        .map(|mut per_matrix| {
+            assert_eq!(
+                per_matrix.len(),
+                1,
+                "STIR commits exactly one codeword matrix"
+            );
+            per_matrix.swap_remove(0)
+        })
+        .collect();
+    StirQueryOpenings {
+        row_evals,
+        opening_proof,
+    }
 }

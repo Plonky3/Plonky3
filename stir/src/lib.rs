@@ -8,7 +8,7 @@
 //! # Structure
 //!
 //! - [`config`]: Protocol parameters ([`StirParameters`], [`StirConfig`], [`StirRoundConfig`]).
-//! - [`proof`]: Proof types ([`StirProof`], [`StirRoundProof`], [`StirQueryProof`]).
+//! - [`proof`]: Proof types ([`StirProof`], [`StirRoundProof`], [`StirQueryOpenings`]).
 //! - [`utils`]: Polynomial arithmetic primitives (shake, ans, Horner eval, synthetic division).
 //! - [`prover`]: The STIR prover ([`prover::prove_stir`]).
 //! - [`verifier`]: The STIR verifier ([`verifier::verify_stir`], [`verifier::StirError`]).
@@ -58,5 +58,5 @@ pub mod verifier;
 pub use config::{StirConfig, StirParameters, StirRoundConfig};
 pub use p3_security::whir::SecurityAssumption;
 pub use pcs::TwoAdicStirPcs;
-pub use proof::{StirFinalQueryProof, StirProof, StirQueryProof, StirRoundProof};
+pub use proof::{StirProof, StirQueryOpenings, StirRoundProof};
 pub use verifier::{StirError, StirVerifyOutputs};

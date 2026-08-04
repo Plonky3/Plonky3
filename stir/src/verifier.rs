@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpeningRef, Mmcs};
+use p3_commit::Mmcs;
 use p3_field::{BasedVectorSpace, ExtensionField, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Dimensions;
 use thiserror::Error;
@@ -67,6 +67,18 @@ where
     )
 }
 
+/// Wraps each opened row as a single-matrix batch for [`Mmcs::verify_multi_batch`].
+///
+/// `verify_multi_batch` takes `opened_values[query][matrix]` to support batches spanning
+/// several committed matrices at once; STIR only ever commits one matrix per round, so every
+/// inner `Vec` here always holds exactly one row slice.
+fn single_matrix_opened_values<EF>(row_evals: &[Vec<EF>]) -> Vec<Vec<&[EF]>> {
+    row_evals
+        .iter()
+        .map(|row| alloc::vec![row.as_slice()])
+        .collect()
+}
+
 /// Errors returned by [`verify_stir`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum StirError<MmcsError, InputError = ()> {
@@ -74,11 +86,10 @@ pub enum StirError<MmcsError, InputError = ()> {
     #[error("Invalid proof-of-work witness in round {round}")]
     InvalidPowWitness { round: usize },
 
-    /// A Merkle opening proof failed.
-    #[error("Invalid MMCS opening proof in round {round}, query {query}")]
+    /// A Merkle multi-opening proof failed for a round's queries.
+    #[error("Invalid MMCS opening proof in round {round}")]
     InvalidMmcsProof {
         round: usize,
-        query: usize,
         #[source]
         source: MmcsError,
     },
@@ -115,15 +126,9 @@ impl<E1, IE1> StirError<E1, IE1> {
     pub fn map_input_err<IE2>(self, f: impl FnOnce(IE1) -> IE2) -> StirError<E1, IE2> {
         match self {
             Self::InvalidPowWitness { round } => StirError::InvalidPowWitness { round },
-            Self::InvalidMmcsProof {
-                round,
-                query,
-                source,
-            } => StirError::InvalidMmcsProof {
-                round,
-                query,
-                source,
-            },
+            Self::InvalidMmcsProof { round, source } => {
+                StirError::InvalidMmcsProof { round, source }
+            }
             Self::InvalidShakeConsistency { round } => StirError::InvalidShakeConsistency { round },
             Self::InvalidRoundConsistency { round, query } => {
                 StirError::InvalidRoundConsistency { round, query }
@@ -258,7 +263,7 @@ where
 
         // Step 4: combination challenge, query sampling, and fiber verification.
 
-        if rp.query_proofs.len() != rc.num_queries {
+        if rp.query_openings.row_evals.len() != rc.num_queries {
             return Err(StirError::InvalidProofShape);
         }
 
@@ -270,41 +275,58 @@ where
             width: arity
         }];
 
+        let r_comb: EF = challenger.sample_algebra_element();
+
+        // Step 4a: sample every query index first, in draw order, mirroring the prover's
+        // unbiased-sampling policy so the Fiat-Shamir transcript stays in sync. Merkle
+        // verification is deferred to a single shared multi-opening check below.
+        let mut query_indices: Vec<usize> = Vec::with_capacity(rc.num_queries);
+        for _ in 0..rc.num_queries {
+            let j = challenger
+                .sample_uniform_bits::<true>(fold_log_domain)
+                .expect("RESAMPLE = true: rejection loops internally, never errors");
+            query_indices.push(j);
+        }
+
+        if rp
+            .query_openings
+            .row_evals
+            .iter()
+            .any(|row| row.len() != arity)
+        {
+            return Err(StirError::InvalidProofShape);
+        }
+
+        // Step 4b: one shared, pruned Merkle multi-opening proof authenticates every query
+        // row against the current commitment at once.
+        let opened_values = single_matrix_opened_values(&rp.query_openings.row_evals);
+        config
+            .mmcs
+            .verify_multi_batch(
+                cur_commit,
+                &cur_dimensions,
+                &query_indices,
+                &opened_values,
+                &rp.query_openings.opening_proof,
+            )
+            .map_err(|source| StirError::InvalidMmcsProof { round, source })?;
+
+        // Step 4c: per-query virtual-oracle materialization and folding.
         let mut query_points: Vec<EF> = Vec::with_capacity(rc.num_queries);
         let mut query_answers: Vec<EF> = Vec::with_capacity(rc.num_queries);
 
         let mut seen_query_indices: alloc::collections::BTreeSet<usize> =
             alloc::collections::BTreeSet::new();
 
-        let r_comb: EF = challenger.sample_algebra_element();
-
-        for (q, qp) in rp.query_proofs.iter().enumerate() {
-            // See `prover.rs` for the unbiased-sampling rationale; the verifier must mirror
-            // the prover's draw policy exactly to keep the Fiat-Shamir transcript in sync.
-            let j = challenger
-                .sample_uniform_bits::<true>(fold_log_domain)
-                .expect("RESAMPLE = true: rejection loops internally, never errors");
-            if qp.row_evals.len() != arity {
-                return Err(StirError::InvalidProofShape);
-            }
-
+        for (q, (&j, row_evals)) in query_indices
+            .iter()
+            .zip(&rp.query_openings.row_evals)
+            .enumerate()
+        {
             let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
 
-            // Verify the Merkle opening of the current commitment at row j.
-            let opened_values: alloc::vec::Vec<alloc::vec::Vec<EF>> =
-                alloc::vec![qp.row_evals.clone()];
-            let batch_opening = BatchOpeningRef::new(&opened_values, &qp.opening_proof);
-            config
-                .mmcs
-                .verify_batch(cur_commit, &cur_dimensions, j, batch_opening)
-                .map_err(|source| StirError::InvalidMmcsProof {
-                    round,
-                    query: q,
-                    source,
-                })?;
-
             let current_fiber = materialize_virtual_fiber::<F, EF>(
-                &qp.row_evals,
+                row_evals,
                 j,
                 fold_height,
                 current_log_domain,
@@ -320,7 +342,7 @@ where
                 query_points.push(fold_point);
                 query_answers.push(fold_val);
                 if round == 0 {
-                    first_round_pairs.push((j, qp.row_evals.clone()));
+                    first_round_pairs.push((j, row_evals.clone()));
                 }
             }
         }
@@ -404,7 +426,7 @@ where
         return Err(StirError::InvalidPowWitness { round: num_rounds });
     }
 
-    if proof.final_query_proofs.len() != config.final_queries {
+    if proof.final_query_openings.row_evals.len() != config.final_queries {
         return Err(StirError::InvalidProofShape);
     }
 
@@ -420,33 +442,51 @@ where
     }];
     let final_gen = F::two_adic_generator(final_new_log_domain);
 
+    // Sample every final-round query index first, deferring Merkle verification to a single
+    // shared multi-opening check below.
+    let mut final_indices: Vec<usize> = Vec::with_capacity(config.final_queries);
+    for _ in 0..config.final_queries {
+        let j = challenger
+            .sample_uniform_bits::<true>(final_new_log_domain)
+            .expect("RESAMPLE = true: rejection loops internally, never errors");
+        final_indices.push(j);
+    }
+
+    if proof
+        .final_query_openings
+        .row_evals
+        .iter()
+        .any(|row| row.len() != final_arity)
+    {
+        return Err(StirError::InvalidProofShape);
+    }
+
+    let opened_values = single_matrix_opened_values(&proof.final_query_openings.row_evals);
+    config
+        .mmcs
+        .verify_multi_batch(
+            last_commit,
+            &final_dimensions,
+            &final_indices,
+            &opened_values,
+            &proof.final_query_openings.opening_proof,
+        )
+        .map_err(|source| StirError::InvalidMmcsProof {
+            round: num_rounds,
+            source,
+        })?;
+
     // When num_rounds == 0 the final queries also serve as the PCS first-round binding.
     // Track them with the same dedup-on-first-occurrence rule as the intermediate-round path.
     let mut final_seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
 
-    for (q, fqp) in proof.final_query_proofs.iter().enumerate() {
-        let j = challenger
-            .sample_uniform_bits::<true>(final_new_log_domain)
-            .expect("RESAMPLE = true: rejection loops internally, never errors");
-
-        if fqp.row_evals.len() != final_arity {
-            return Err(StirError::InvalidProofShape);
-        }
-
-        let opened_values: alloc::vec::Vec<alloc::vec::Vec<EF>> =
-            alloc::vec![fqp.row_evals.clone()];
-        let batch_opening = BatchOpeningRef::new(&opened_values, &fqp.opening_proof);
-        config
-            .mmcs
-            .verify_batch(last_commit, &final_dimensions, j, batch_opening)
-            .map_err(|source| StirError::InvalidMmcsProof {
-                round: num_rounds,
-                query: q,
-                source,
-            })?;
-
+    for (q, (&j, row_evals)) in final_indices
+        .iter()
+        .zip(&proof.final_query_openings.row_evals)
+        .enumerate()
+    {
         let current_fiber = materialize_virtual_fiber::<F, EF>(
-            &fqp.row_evals,
+            row_evals,
             j,
             final_new_height,
             current_log_domain,
@@ -474,7 +514,7 @@ where
         }
 
         if num_rounds == 0 && final_seen.insert(j) {
-            first_round_pairs.push((j, fqp.row_evals.clone()));
+            first_round_pairs.push((j, row_evals.clone()));
         }
     }
 
