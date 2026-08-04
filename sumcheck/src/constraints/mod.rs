@@ -344,32 +344,6 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         }
     }
 
-    /// Builds the batched weight polynomial and expected value in fresh accumulators.
-    ///
-    /// # Returns
-    ///
-    /// A pair holding the weight polynomial over the hypercube and the expected value scalar.
-    pub fn combine_new(&self) -> (Poly<EF>, EF) {
-        // Fresh weight accumulator: one entry per hypercube point, all zero.
-        let mut combined = Poly::zero(self.num_variables());
-        // Fresh scalar accumulator for the expected value.
-        let mut eval = EF::ZERO;
-
-        // Running exponent of the next challenge power to assign.
-        let mut shift = 0;
-        // The accumulator starts empty, so the first nonempty group may overwrite instead of add.
-        let mut initialized = false;
-        for statement in &self.statements {
-            // Fold this group; the returned flag flips true once anything has been written.
-            initialized =
-                statement.combine(&mut combined, &mut eval, self.challenge, shift, initialized);
-            // Advance past this group's constraints to keep the next group's powers disjoint.
-            shift += statement.len();
-        }
-
-        (combined, eval)
-    }
-
     /// SIMD-packed variant that builds the batched weight polynomial and expected value in fresh accumulators.
     ///
     /// # Returns
@@ -648,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn test_constraint_combine_new() {
+    fn test_constraint_combine() {
         // Declare test parameters explicitly
 
         // Number of variables (2 variables → 2^2 = 4 hypercube points)
@@ -667,7 +641,9 @@ mod tests {
             Constraint::new(challenge, num_variables, vec![Statements::Eq(eq_statement)]);
 
         // Combine into fresh accumulators
-        let (combined, eval) = constraint.combine_new();
+        let mut combined = Poly::zero(num_variables);
+        let mut eval = EF::ZERO;
+        constraint.combine(&mut combined, &mut eval);
 
         // Verify that the combined weight polynomial has the correct size
         // Should have 2^num_variables = 4 entries
@@ -680,43 +656,6 @@ mod tests {
         // Verify that at least some entries in the weight polynomial are non-zero
         let non_zero_count = combined.iter().filter(|&&x| x != EF::ZERO).count();
         assert!(non_zero_count > 0);
-    }
-
-    #[test]
-    fn test_constraint_combine_vs_combine_new() {
-        // Verify that combine and combine_new produce the same results
-
-        // Number of variables
-        let num_variables = 2;
-
-        // Random challenge
-        let challenge = EF::from_u64(7);
-
-        // Create a test constraint
-        let eq_point = Point::new(vec![EF::ZERO, EF::ONE]);
-        let eq_eval = EF::from_u64(15);
-        let eq_statement = EqStatement::new_hypercube(vec![eq_point], vec![eq_eval]);
-        let constraint: Constraint<F, EF> =
-            Constraint::new(challenge, num_variables, vec![Statements::Eq(eq_statement)]);
-
-        // Method 1: Use combine_new
-        let (combined_new, eval_new) = constraint.combine_new();
-
-        // Method 2: Use combine with fresh accumulators
-        let mut combined_manual = Poly::zero(num_variables);
-        let mut eval_manual = EF::ZERO;
-        constraint.combine(&mut combined_manual, &mut eval_manual);
-
-        // Verify that both methods produce identical results
-        assert_eq!(combined_new.num_evals(), combined_manual.num_evals());
-        for (new_val, manual_val) in combined_new
-            .as_slice()
-            .iter()
-            .zip(combined_manual.as_slice().iter())
-        {
-            assert_eq!(new_val, manual_val);
-        }
-        assert_eq!(eval_new, eval_manual);
     }
 
     #[test]
@@ -826,7 +765,9 @@ mod tests {
             ],
         );
 
-        let (combined, eval) = constraint.combine_new();
+        let mut combined = Poly::zero(num_variables);
+        let mut eval = EF::ZERO;
+        constraint.combine(&mut combined, &mut eval);
 
         // Rebuild the expected weight polynomial by hand, applying the same powers.
         // First group at gamma^0: plain equality weight.
