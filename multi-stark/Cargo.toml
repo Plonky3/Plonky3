@@ -41,8 +41,6 @@ p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true
 p3-whir.workspace = true
 rand = { workspace = true }
-tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
-tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [[bench]]
 name = "poseidon2"
