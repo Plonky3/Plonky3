@@ -78,7 +78,7 @@ pub(crate) fn zk_padded_matrix<A: Field>(
 /// - a direct (width-one) encoder for fresh base-case masks living in the
 ///   same code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FoldedRsCode<F> {
+pub(crate) struct FoldedRsCode<F> {
     /// Message length (power of two).
     pub message_len: usize,
     /// ZK randomness coefficients.
@@ -92,7 +92,7 @@ pub struct FoldedRsCode<F> {
 impl<F: TwoAdicField> FoldedRsCode<F> {
     /// Builds the folded code descriptor for a domain of the given size.
     #[must_use]
-    pub fn new(message_len: usize, randomness_len: usize, domain_size: usize) -> Self {
+    pub(crate) fn new(message_len: usize, randomness_len: usize, domain_size: usize) -> Self {
         assert!(message_len.is_power_of_two());
         assert!(message_len + randomness_len <= domain_size);
         Self {
@@ -109,7 +109,7 @@ impl<F: TwoAdicField> FoldedRsCode<F> {
     ///     Enc(msg, rand)(z) = sum_j msg_j x^j  +  sum_s rand_s x^{l + s}
     /// ```
     #[must_use]
-    pub fn evaluate_at<EF: ExtensionField<F>>(
+    pub(crate) fn evaluate_at<EF: ExtensionField<F>>(
         &self,
         position: usize,
         message: &[EF],
@@ -128,7 +128,7 @@ impl<F: TwoAdicField> FoldedRsCode<F> {
     ///
     /// The base case uses it for fresh masks in the virtual oracle's code.
     #[must_use]
-    pub fn encode_column<EF, Dft>(
+    pub(crate) fn encode_column<EF, Dft>(
         &self,
         dft: &Dft,
         message: &[EF],
