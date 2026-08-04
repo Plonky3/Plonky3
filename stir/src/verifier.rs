@@ -4,12 +4,14 @@ use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{BasedVectorSpace, ExtensionField, TwoAdicField, batch_multiplicative_inverse};
+use p3_field::{
+    BasedVectorSpace, ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
+};
 use p3_matrix::Dimensions;
 use thiserror::Error;
 
 use crate::config::StirConfig;
-use crate::proof::StirProof;
+use crate::proof::{StirProof, StirQueryOpenings};
 use crate::utils::{
     check_shake_consistency, eval_degree_correction, eval_poly, eval_poly_at_base,
     fold_domain_params, lagrange_eval_at, next_domain_shift, reduce_mod_x_pow_minus_c,
@@ -119,6 +121,104 @@ fn external_fibers_in_draw_order<EF: Clone, MmcsError, InputError>(
             fibers[pos].clone()
         })
         .collect())
+}
+
+/// Static parameters for fetching one round's queried oracle rows via [`fetch_round_rows`].
+struct RoundRowsRequest<'a, EF: Field, M: Mmcs<EF>> {
+    query_openings: Option<&'a StirQueryOpenings<EF, M>>,
+    query_indices: &'a [usize],
+    arity: usize,
+    expected_num_queries: usize,
+    commitment: Option<&'a M::Commitment>,
+    dimensions: &'a [Dimensions],
+    error_round: usize,
+}
+
+/// Fetch a round's queried oracle rows: an external initial oracle answered by the caller's
+/// own binding, or a committed oracle authenticated by one shared Merkle multi-opening proof.
+///
+/// Shared by the intermediate-round and final-round query-fetch steps, which differ only in
+/// which openings, commitment, and dimensions apply.
+fn fetch_round_rows<EF, M, Src, IE>(
+    mmcs: &M,
+    is_external: bool,
+    external_fibers: &mut Option<Src>,
+    req: &RoundRowsRequest<'_, EF, M>,
+) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>
+where
+    EF: Field,
+    M: Mmcs<EF>,
+    Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
+{
+    if is_external {
+        if req.query_openings.is_some() {
+            return Err(StirError::InvalidProofShape);
+        }
+        let source = external_fibers
+            .take()
+            .expect("the external source is consumed exactly once");
+        return external_fibers_in_draw_order(req.query_indices, req.arity, source);
+    }
+
+    let openings = req.query_openings.ok_or(StirError::InvalidProofShape)?;
+    if openings.row_evals.len() != req.expected_num_queries
+        || openings.row_evals.iter().any(|row| row.len() != req.arity)
+    {
+        return Err(StirError::InvalidProofShape);
+    }
+    let commit = req.commitment.ok_or(StirError::InvalidProofShape)?;
+    let opened_values = single_matrix_opened_values(&openings.row_evals);
+    mmcs.verify_multi_batch(
+        commit,
+        req.dimensions,
+        req.query_indices,
+        &opened_values,
+        &openings.opening_proof,
+    )
+    .map_err(|source| StirError::InvalidMmcsProof {
+        round: req.error_round,
+        source,
+    })?;
+    Ok(openings.row_evals.clone())
+}
+
+/// Compute one query's expected fold value against the current virtual oracle.
+///
+/// Builds the fiber's subgroup coordinates from `domain_gen`/`fiber_step`/`j`, materializes
+/// the opened row through the previous round's virtual-oracle transform (verbatim in round
+/// 0), and evaluates the fold at `fold_beta`. Shared by the intermediate-round and
+/// final-round query loops, which differ only in what they do with the resulting value.
+#[allow(clippy::too_many_arguments)]
+fn query_fold_value<F, EF, MmcsErr, InputErr>(
+    row_evals: &[EF],
+    j: usize,
+    domain_gen: F,
+    fiber_step: F,
+    arity: usize,
+    current_shift: F,
+    fold_beta: EF,
+    prev_ctx: Option<&VirtualRoundContext<EF>>,
+    round: usize,
+    query: usize,
+) -> Result<EF, StirError<MmcsErr, InputErr>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+{
+    let subgroup_points: Vec<F> = fiber_step
+        .shifted_powers(domain_gen.exp_u64(j as u64))
+        .take(arity)
+        .collect();
+
+    let current_fiber =
+        materialize_virtual_fiber::<F, EF>(row_evals, &subgroup_points, current_shift, prev_ctx)
+            .ok_or(StirError::InvalidRoundConsistency { round, query })?;
+
+    Ok(lagrange_eval_at(
+        &subgroup_points,
+        &current_fiber,
+        fold_beta,
+    ))
 }
 
 /// Errors returned by [`verify_stir`].
@@ -379,40 +479,20 @@ where
         // Step 4b: obtain this round's oracle rows. An external initial oracle is answered by
         // the caller against its own binding; every committed oracle has one shared, pruned
         // Merkle multi-opening proof authenticating all of its query rows at once.
-        let external_rows;
-        let round_rows: &[Vec<EF>] = if round == 0 && initial_is_external {
-            if rp.query_openings.is_some() {
-                return Err(StirError::InvalidProofShape);
-            }
-            let source = external_fibers
-                .take()
-                .expect("the external source is consumed exactly once");
-            external_rows = external_fibers_in_draw_order(&query_indices, arity, source)?;
-            &external_rows
-        } else {
-            let openings = rp
-                .query_openings
-                .as_ref()
-                .ok_or(StirError::InvalidProofShape)?;
-            if openings.row_evals.len() != rc.num_queries
-                || openings.row_evals.iter().any(|row| row.len() != arity)
-            {
-                return Err(StirError::InvalidProofShape);
-            }
-            let cur_commit = round_commitment(round).ok_or(StirError::InvalidProofShape)?;
-            let opened_values = single_matrix_opened_values(&openings.row_evals);
-            config
-                .mmcs
-                .verify_multi_batch(
-                    cur_commit,
-                    &cur_dimensions,
-                    &query_indices,
-                    &opened_values,
-                    &openings.opening_proof,
-                )
-                .map_err(|source| StirError::InvalidMmcsProof { round, source })?;
-            &openings.row_evals
-        };
+        let round_rows = fetch_round_rows(
+            &config.mmcs,
+            round == 0 && initial_is_external,
+            &mut external_fibers,
+            &RoundRowsRequest {
+                query_openings: rp.query_openings.as_ref(),
+                query_indices: &query_indices,
+                arity,
+                expected_num_queries: rc.num_queries,
+                commitment: round_commitment(round),
+                dimensions: &cur_dimensions,
+                error_round: round,
+            },
+        )?;
 
         // Step 4c: per-query virtual-oracle materialization and folding.
         let mut query_points: Vec<EF> = Vec::with_capacity(rc.num_queries);
@@ -427,23 +507,21 @@ where
         let domain_gen = F::two_adic_generator(current_log_domain);
         let fiber_step = domain_gen.exp_power_of_2(fold_log_domain);
 
-        for (q, (&j, row_evals)) in query_indices.iter().zip(round_rows).enumerate() {
+        for (q, (&j, row_evals)) in query_indices.iter().zip(&round_rows).enumerate() {
             let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
 
-            let subgroup_points: Vec<F> = fiber_step
-                .shifted_powers(domain_gen.exp_u64(j as u64))
-                .take(arity)
-                .collect();
-
-            let current_fiber = materialize_virtual_fiber::<F, EF>(
+            let fold_val = query_fold_value(
                 row_evals,
-                &subgroup_points,
+                j,
+                domain_gen,
+                fiber_step,
+                arity,
                 current_shift,
+                fold_beta,
                 prev_ctx.as_ref(),
-            )
-            .ok_or(StirError::InvalidRoundConsistency { round, query: q })?;
-
-            let fold_val = lagrange_eval_at(&subgroup_points, &current_fiber, fold_beta);
+                round,
+                q,
+            )?;
 
             if seen_query_indices.insert(j) {
                 query_points.push(fold_point);
@@ -552,53 +630,20 @@ where
 
     // With no intermediate rounds these queries read the initial oracle, so they follow the
     // same external-or-committed split as round 0 above.
-    let external_final_rows;
-    let final_rows: &[Vec<EF>] = if num_rounds == 0 && initial_is_external {
-        if proof.final_query_openings.is_some() {
-            return Err(StirError::InvalidProofShape);
-        }
-        let source = external_fibers
-            .take()
-            .expect("the external source is consumed exactly once");
-        external_final_rows = external_fibers_in_draw_order(&final_indices, final_arity, source)?;
-        &external_final_rows
-    } else {
-        let openings = proof
-            .final_query_openings
-            .as_ref()
-            .ok_or(StirError::InvalidProofShape)?;
-        if openings.row_evals.len() != config.final_queries
-            || openings
-                .row_evals
-                .iter()
-                .any(|row| row.len() != final_arity)
-        {
-            return Err(StirError::InvalidProofShape);
-        }
-        let last_commit = if num_rounds > 0 {
-            &proof.round_proofs[num_rounds - 1].commitment
-        } else {
-            proof
-                .initial_commitment
-                .as_ref()
-                .ok_or(StirError::InvalidProofShape)?
-        };
-        let opened_values = single_matrix_opened_values(&openings.row_evals);
-        config
-            .mmcs
-            .verify_multi_batch(
-                last_commit,
-                &final_dimensions,
-                &final_indices,
-                &opened_values,
-                &openings.opening_proof,
-            )
-            .map_err(|source| StirError::InvalidMmcsProof {
-                round: num_rounds,
-                source,
-            })?;
-        &openings.row_evals
-    };
+    let final_rows = fetch_round_rows(
+        &config.mmcs,
+        num_rounds == 0 && initial_is_external,
+        &mut external_fibers,
+        &RoundRowsRequest {
+            query_openings: proof.final_query_openings.as_ref(),
+            query_indices: &final_indices,
+            arity: final_arity,
+            expected_num_queries: config.final_queries,
+            commitment: round_commitment(num_rounds),
+            dimensions: &final_dimensions,
+            error_round: num_rounds,
+        },
+    )?;
 
     // When num_rounds == 0 the final queries also serve as the PCS first-round binding.
     // Track them with the same dedup-on-first-occurrence rule as the intermediate-round path.
@@ -607,24 +652,19 @@ where
     let final_domain_gen = F::two_adic_generator(current_log_domain);
     let final_fiber_step = final_domain_gen.exp_power_of_2(final_new_log_domain);
 
-    for (q, (&j, row_evals)) in final_indices.iter().zip(final_rows).enumerate() {
-        let subgroup_points: Vec<F> = final_fiber_step
-            .shifted_powers(final_domain_gen.exp_u64(j as u64))
-            .take(final_arity)
-            .collect();
-
-        let current_fiber = materialize_virtual_fiber::<F, EF>(
+    for (q, (&j, row_evals)) in final_indices.iter().zip(&final_rows).enumerate() {
+        let fold_val = query_fold_value(
             row_evals,
-            &subgroup_points,
+            j,
+            final_domain_gen,
+            final_fiber_step,
+            final_arity,
             current_shift,
+            final_fold_beta,
             prev_ctx.as_ref(),
-        )
-        .ok_or(StirError::InvalidRoundConsistency {
-            round: num_rounds,
-            query: q,
-        })?;
-
-        let fold_val = lagrange_eval_at(&subgroup_points, &current_fiber, final_fold_beta);
+            num_rounds,
+            q,
+        )?;
 
         let x_j = EF::from(final_new_shift) * EF::from(final_gen.exp_u64(j as u64));
 
