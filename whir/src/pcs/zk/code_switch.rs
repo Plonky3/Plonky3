@@ -48,7 +48,7 @@ pub enum CodeSwitchError {
 ///
 /// The pipeline builds one per round from the combination challenge.
 #[derive(Debug, Clone)]
-pub struct ZkMaskClaim<EF> {
+pub(crate) struct ZkMaskClaim<EF> {
     /// Coefficient on the inherited source claim (`nu_1`).
     pub base_claim_coeff: EF,
     /// Batching coefficients for OOD answers (`nu_{1+i}` for `i in [t_ood]`).
@@ -70,7 +70,7 @@ impl<EF: Field> ZkMaskClaim<EF> {
     /// - Any sumcheck scale on its source part is already baked in.
     /// - The covector side of that scale lives in the pipeline's symbolic
     ///   claim tracking, not here.
-    pub fn batched_claim(
+    pub(crate) fn batched_claim(
         &self,
         inherited_claim: EF,
         private_ood_answers: &[EF],
@@ -122,7 +122,7 @@ impl<EF: Field> ZkMaskClaim<EF> {
 /// - The fresh pad never appears in openings.
 /// - Query layers therefore stop at the randomness slots.
 #[must_use]
-pub fn switch_mask_covector<EF: Field>(
+pub(crate) fn switch_mask_covector<EF: Field>(
     message_len: usize,
     source_randomness_len: usize,
     pad_len: usize,
