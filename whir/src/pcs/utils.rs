@@ -67,7 +67,7 @@ use p3_util::log2_strict_usize;
 ///   draws; distinctness only lets `t` shrink slightly for the
 ///   same security, with negligible practical effect.
 /// - Revisit when wiring this through a recursive verifier.
-pub fn get_challenge_stir_queries<Challenger, F>(
+pub(crate) fn get_challenge_stir_queries<Challenger, F>(
     domain_size: usize,
     folding_factor: usize,
     num_queries: usize,
