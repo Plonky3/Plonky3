@@ -43,7 +43,11 @@ p3-dft = { path = "../dft" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-matrix = { path = "../matrix" }
 p3-poseidon1 = { path = "../poseidon1" }
+p3-stir = { path = "../stir" }
+p3-sumcheck = { path = "../sumcheck" }
+p3-whir = { path = "../whir" }
 
+tracing.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
