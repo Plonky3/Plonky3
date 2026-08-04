@@ -14,7 +14,7 @@ use crate::pcs::verifier::errors::VerifierError;
 /// Contains the Merkle root and the OOD equality constraints
 /// needed for verification.
 #[derive(Debug, Clone)]
-pub struct ParsedCommitment<F, D> {
+pub(crate) struct ParsedCommitment<F, D> {
     /// Merkle root of the committed evaluation table.
     pub root: D,
     /// OOD challenge points and their claimed evaluations.
@@ -31,7 +31,7 @@ where
     ///
     /// - Round index is past the last round carried by the proof.
     /// - Round entry is present but its Merkle-root slot is empty.
-    pub fn parse_with_round<EF, MT: Mmcs<F>, Challenger>(
+    pub(crate) fn parse_with_round<EF, MT: Mmcs<F>, Challenger>(
         proof: &WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
         num_variables: usize,
