@@ -1001,6 +1001,17 @@ pub trait Field:
     /// A generator of this field's multiplicative group.
     const GENERATOR: Self;
 
+    /// Whether evaluating multiple packed vectors of this field in lockstep (to overlap
+    /// independent dependency chains and hide packed-multiplication latency) is expected
+    /// to help throughput for this field.
+    ///
+    /// Defaults to `true`. Fields should override this to `false` when their packed
+    /// multiplication is not the bottleneck a lockstep evaluation strategy would address —
+    /// for instance because AIRs over this field already interleave enough independent
+    /// per-row work on their own, or because the field's packed multiply is already
+    /// short-latency relative to other pipeline costs.
+    const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = true;
+
     /// Check if the given field element is equal to the unique additive identity (ZERO).
     #[must_use]
     #[inline]

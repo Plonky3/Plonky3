@@ -365,6 +365,12 @@ impl Field for Mersenne31 {
     // Sage: GF(2^31 - 1).multiplicative_generator()
     const GENERATOR: Self = Self::new(7);
 
+    // Circle-STARK AIRs over this field (e.g. the vectorized Poseidon2 AIR) already
+    // interleave several independent permutations per row, which already supplies enough
+    // independent per-row dependency chains; evaluating additional packed vectors in
+    // lockstep on top of that does not improve throughput here.
+    const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = false;
+
     #[inline]
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U32
