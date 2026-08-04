@@ -44,7 +44,7 @@ use crate::utils::padded_ood_t1;
 
 /// HVZK-WHIR prover.
 #[derive(Debug)]
-pub struct HidingWhirProver<'a, EF, F, Dft, MT, Challenger>
+pub(crate) struct HidingWhirProver<'a, EF, F, Dft, MT, Challenger>
 where
     F: TwoAdicField,
     EF: ExtensionField<F>,
@@ -73,7 +73,7 @@ where
     StandardUniform: Distribution<EF> + Distribution<F>,
 {
     /// Bundles the prover dependencies.
-    pub fn new(config: &'a ZkWhirConfig<EF, F, Challenger>, dft: &'a Dft, mmcs: &'a MT) -> Self {
+    pub(crate) fn new(config: &'a ZkWhirConfig<EF, F, Challenger>, dft: &'a Dft, mmcs: &'a MT) -> Self {
         Self {
             config,
             dft,
@@ -83,7 +83,7 @@ where
     }
 
     /// Commits the witness as an interleaved ZK Reed-Solomon codeword.
-    pub fn commit<R: Rng>(
+    pub(crate) fn commit<R: Rng>(
         &self,
         message: Poly<F>,
         challenger: &mut Challenger,
@@ -118,7 +118,7 @@ where
     /// The claims must already be bound to the transcript by the caller.
     #[instrument(skip_all)]
     #[allow(clippy::too_many_lines)]
-    pub fn prove<R: Rng>(
+    pub(crate) fn prove<R: Rng>(
         &self,
         prover_data: HidingWhirProverData<F, EF, MT>,
         claims: &[(Point<EF>, EF)],

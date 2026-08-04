@@ -101,7 +101,7 @@ enum ActiveOracle<'a, C> {
 
 /// HVZK-WHIR verifier.
 #[derive(Debug)]
-pub struct HidingWhirVerifier<'a, EF, F, MT, Challenger>
+pub(crate) struct HidingWhirVerifier<'a, EF, F, MT, Challenger>
 where
     F: TwoAdicField,
     EF: ExtensionField<F>,
@@ -126,7 +126,7 @@ where
         + CanObserve<MT::Commitment>,
 {
     /// Bundles the verifier dependencies.
-    pub fn new(config: &'a ZkWhirConfig<EF, F, Challenger>, mmcs: &'a MT) -> Self {
+    pub(crate) fn new(config: &'a ZkWhirConfig<EF, F, Challenger>, mmcs: &'a MT) -> Self {
         Self {
             config,
             mmcs,
@@ -140,7 +140,7 @@ where
     /// The claims must already be bound to the transcript by the caller.
     #[instrument(skip_all)]
     #[allow(clippy::too_many_lines)]
-    pub fn verify(
+    pub(crate) fn verify(
         &self,
         proof: &ZkWhirProof<F, EF, MT>,
         commitment: &MT::Commitment,
