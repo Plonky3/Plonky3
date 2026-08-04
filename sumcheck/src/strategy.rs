@@ -130,6 +130,27 @@ where
     (acc1 + (w0 + w1) * (e0 + e1), acc_inf + w1 * e1)
 }
 
+/// The two prover-sent values of a quadratic sumcheck round.
+///
+/// The round polynomial has three unknowns; the verifier recovers the third
+/// from the running claim `C`, so only two values cross the transcript. Which
+/// finite point is sent differs by basis:
+///
+/// | basis      | `c_a`  | `c_inf`  | derived             |
+/// |------------|--------|----------|---------------------|
+/// | evaluation | `h(0)` | `h(inf)` | `h(1) = C - h(0)`   |
+/// | projective | `s(1)` | `s(inf)` | `s(0) = C - s(inf)` |
+///
+/// Named fields keep the two bases' different finite points from being
+/// swapped silently at dispatch sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoundMessage<A> {
+    /// The finite-point value: `h(0)` (evaluation basis) or `s(1)` (projective).
+    pub c_a: A,
+    /// The leading coefficient of the round polynomial: `h(inf)` / `s(inf)`.
+    pub c_inf: A,
+}
+
 /// Shared prefix round-coefficient scaffold, parameterised over the basis steps.
 ///
 /// The tiling, `PAR_THRESHOLD` par-vs-serial split, and `K`-tail fold are
@@ -216,7 +237,7 @@ where
     round_reduce(main, tail)
 }
 
-/// Computes `(h(0), h(inf))` for a prefix-binding sumcheck round.
+/// Computes the round message for a prefix-binding sumcheck round.
 ///
 /// # Inputs
 ///
@@ -225,20 +246,26 @@ where
 ///
 /// # Returns
 ///
-/// - `h(0)`   = sum_{b in {0,1}^{n-1}} f(0, b) * w(0, b)
-/// - `h(inf)` = sum_{b} (f(1, b) - f(0, b)) * (w(1, b) - w(0, b))
+/// - `c_a` = `h(0)`     = sum_{b in {0,1}^{n-1}} f(0, b) * w(0, b)
+/// - `c_inf` = `h(inf)` = sum_{b} (f(1, b) - f(0, b)) * (w(1, b) - w(0, b))
 ///
 /// # Complexity
 ///
 /// O(2^n). Parallelised above a 2^14 threshold. The main loop is tiled by
 /// `K` over a delayed-reduction dot product; the `half mod K` tail uses a
 /// streaming fold.
-pub fn sumcheck_coefficients_prefix<B, A>(evals: &[B], weights: &[A]) -> (A, A)
+pub fn sumcheck_coefficients_prefix<B, A>(evals: &[B], weights: &[A]) -> RoundMessage<A>
 where
     B: PrimeCharacteristicRing + Copy + Send + Sync,
     A: Algebra<B> + Copy + Send + Sync,
 {
-    sumcheck_coefficients_prefix_with(evals, weights, chunk_round_step::<B, A>, round_step::<B, A>)
+    let (c_a, c_inf) = sumcheck_coefficients_prefix_with(
+        evals,
+        weights,
+        chunk_round_step::<B, A>,
+        round_step::<B, A>,
+    );
+    RoundMessage { c_a, c_inf }
 }
 
 /// Projective (monomial-basis) variant of [`sumcheck_coefficients_prefix`]
@@ -248,25 +275,26 @@ where
 /// `[s(1), s(inf)]`; the verifier derives `s(0) := C - s(inf)` from the
 /// projective round identity `s(0) + s(inf) = C`. Returned as:
 ///
-/// - `s(1)`   = sum_{b} (w(0,b) + w(inf,b)) * (f(0,b) + f(inf,b))
-/// - `s(inf)` = sum_{b} w(inf, b) * f(inf, b)   (leading coefficient)
+/// - `c_a` = `s(1)`     = sum_{b} (w(0,b) + w(inf,b)) * (f(0,b) + f(inf,b))
+/// - `c_inf` = `s(inf)` = sum_{b} w(inf, b) * f(inf, b)   (leading coefficient)
 ///
 /// The evaluation-basis kernel's per-pair subtractions (`hi - lo`) become
 /// additions (`lo + hi`); same `K`-tiled, delayed-reduction structure.
-pub fn sumcheck_coefficients_prefix_projective<B, A>(evals: &[B], weights: &[A]) -> (A, A)
+pub fn sumcheck_coefficients_prefix_projective<B, A>(evals: &[B], weights: &[A]) -> RoundMessage<A>
 where
     B: PrimeCharacteristicRing + Copy + Send + Sync,
     A: Algebra<B> + Copy + Send + Sync,
 {
-    sumcheck_coefficients_prefix_with(
+    let (c_a, c_inf) = sumcheck_coefficients_prefix_with(
         evals,
         weights,
         chunk_round_step_projective::<B, A>,
         round_step_projective::<B, A>,
-    )
+    );
+    RoundMessage { c_a, c_inf }
 }
 
-/// Computes `(h(0), h(inf))` for a suffix-binding sumcheck round.
+/// Computes the round message for a suffix-binding sumcheck round.
 ///
 /// # Inputs
 ///
@@ -275,8 +303,8 @@ where
 ///
 /// # Returns
 ///
-/// - `h(0)`   = sum_{b in {0,1}^{n-1}} f(b, 0) * w(b, 0)
-/// - `h(inf)` = sum_{b} (f(b, 1) - f(b, 0)) * (w(b, 1) - w(b, 0))
+/// - `c_a` = `h(0)`     = sum_{b in {0,1}^{n-1}} f(b, 0) * w(b, 0)
+/// - `c_inf` = `h(inf)` = sum_{b} (f(b, 1) - f(b, 0)) * (w(b, 1) - w(b, 0))
 ///
 /// # Complexity
 ///
@@ -284,7 +312,7 @@ where
 /// buffer in `2K`-wide chunks: each chunk gathers `K` adjacent
 /// `(b_n=0, b_n=1)` pairs and dispatches to a delayed-reduction dot
 /// product.
-pub fn sumcheck_coefficients_suffix<B, A>(evals: &[B], weights: &[A]) -> (A, A)
+pub fn sumcheck_coefficients_suffix<B, A>(evals: &[B], weights: &[A]) -> RoundMessage<A>
 where
     B: PrimeCharacteristicRing + Copy + Send + Sync,
     A: Algebra<B> + Copy + Send + Sync,
@@ -342,7 +370,8 @@ where
             round_step(acc, e[0], e[1], w[0], w[1])
         });
 
-    round_reduce(main, tail)
+    let (c_a, c_inf) = round_reduce(main, tail);
+    RoundMessage { c_a, c_inf }
 }
 
 /// Which side of the variable order is bound first by the sumcheck rounds.
@@ -364,8 +393,8 @@ pub enum VariableOrder {
 }
 
 impl VariableOrder {
-    /// Computes `(h(0), h(inf))` for one quadratic sumcheck round.
-    pub fn sumcheck_coefficients<B, A>(self, evals: &[B], weights: &[A]) -> (A, A)
+    /// Computes the [`RoundMessage`] for one quadratic sumcheck round.
+    pub fn sumcheck_coefficients<B, A>(self, evals: &[B], weights: &[A]) -> RoundMessage<A>
     where
         B: PrimeCharacteristicRing + Copy + Send + Sync,
         A: Algebra<B> + Copy + Send + Sync,
@@ -624,7 +653,7 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use super::VariableOrder;
+    use super::{RoundMessage, VariableOrder};
     use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement};
     use crate::constraints::{Constraint, Statements};
 
@@ -780,7 +809,8 @@ mod tests {
             let evals: Vec<EF> = (0..n).map(|_| rng.random()).collect();
             let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
 
-            let (h1, h_inf) = super::sumcheck_coefficients_prefix_projective(&evals, &weights);
+            let RoundMessage { c_a: h1, c_inf: h_inf } =
+                super::sumcheck_coefficients_prefix_projective(&evals, &weights);
 
             let half = n / 2;
             // s(1): the X = 1 evaluation of each coefficient pair is lo + hi.
