@@ -8,6 +8,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_challenger::FieldChallenger;
 use p3_field::{
     ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
 };
@@ -61,8 +62,7 @@ pub fn eval_poly_parallel<F: Field>(poly: &[F], point: F) -> F {
 ///
 /// # Panics
 ///
-/// Panics if `poly` is empty. Callers handle the empty case explicitly upstream
-/// (`quotient_by_roots` checks `poly.len() > roots.len()`).
+/// Panics if `poly` is empty.
 pub fn divide_by_linear<F: Field>(poly: &[F], point: F) -> (Vec<F>, F) {
     assert!(
         !poly.is_empty(),
@@ -97,118 +97,6 @@ pub fn add_polys<F: PrimeCharacteristicRing + Copy>(a: &[F], b: &[F]) -> Vec<F> 
     result
 }
 
-/// Scale every coefficient of a polynomial by `scalar`.
-pub fn scale_poly<F: Field>(poly: &[F], scalar: F) -> Vec<F> {
-    poly.iter().map(|&c| c * scalar).collect()
-}
-
-/// Multiply two coefficient-form polynomials.
-pub fn multiply_polys<F: Field>(a: &[F], b: &[F]) -> Vec<F> {
-    if a.is_empty() || b.is_empty() {
-        return vec![];
-    }
-
-    let mut result = vec![F::ZERO; a.len() + b.len() - 1];
-    for (i, &ai) in a.iter().enumerate() {
-        for (j, &bj) in b.iter().enumerate() {
-            result[i + j] += ai * bj;
-        }
-    }
-
-    while result.last() == Some(&F::ZERO) && result.len() > 1 {
-        result.pop();
-    }
-
-    result
-}
-
-/// Divide `poly` by the vanishing polynomial over `roots`.
-///
-/// `poly` is required to vanish on every root (true by construction inside the STIR prover,
-/// where the numerator is `g_i − Ans_i` and `Ans_i` interpolates `g_i` on every root).
-///
-/// Each per-root remainder is asserted to be zero in **release builds too** — a silently
-/// dropped remainder would yield the wrong virtual oracle, and the cost of one field equality
-/// per round is negligible.
-///
-/// Returns the empty vector when the quotient reduces to the zero polynomial (legitimately,
-/// when `poly.len() ≤ roots.len()` and `poly` vanishes on all roots: any polynomial of degree
-/// `< n` that vanishes on `n` distinct points is identically zero). In that case downstream
-/// callers (`multiply_polys`, `codeword_from_coeffs`) treat the empty input as the zero
-/// polynomial.
-pub fn quotient_by_roots<F: Field>(poly: &[F], roots: &[F]) -> Vec<F> {
-    let mut quotient = poly.to_vec();
-    for &root in roots {
-        if quotient.is_empty() {
-            // Already reduced to the zero polynomial; further linear divisions stay zero.
-            break;
-        }
-        let (q, remainder) = divide_by_linear(&quotient, root);
-        assert!(
-            remainder == F::ZERO,
-            "quotient_by_roots: non-zero remainder when dividing by (X - root). \
-             The input polynomial does not vanish on every root — this should not happen \
-             with an honest STIR prover."
-        );
-        quotient = q;
-    }
-    quotient
-}
-
-/// Return the geometric-sum polynomial `sum_{ell=0}^{gap} (r_comb X)^ell`.
-pub fn degree_correction_poly<F: Field>(r_comb: F, gap: usize) -> Vec<F> {
-    let mut coeffs = Vec::with_capacity(gap + 1);
-    let mut power = F::ONE;
-    for _ in 0..=gap {
-        coeffs.push(power);
-        power *= r_comb;
-    }
-    coeffs
-}
-
-/// Apply `DegCor(d*, r_comb, f, d)` with `gap = d* - d`.
-///
-/// Equivalent to `multiply_polys(poly, &degree_correction_poly(r_comb, gap))`, but computed in
-/// `O(poly.len() + gap)` instead of `O(poly.len() * gap)` by exploiting the multiplier's
-/// geometric-series structure: `1 + rX + ... + r^gap X^gap = (1 - r^{gap+1} X^{gap+1}) / (1 - rX)`.
-///
-/// Let `A(X) = poly(X) / (1 - rX)` as a power series, so `a_k = poly[k] + r * a_{k-1}`. Then
-/// `poly(X) * (1 + rX + ... + r^gap X^gap) = A(X) - r^{gap+1} X^{gap+1} A(X)`, i.e.
-/// `result[k] = a_k - r^{gap+1} * a_{k - gap - 1}`.
-pub fn degree_correct<F: Field>(poly: &[F], r_comb: F, gap: usize) -> Vec<F> {
-    if poly.is_empty() {
-        return vec![];
-    }
-
-    let n = poly.len();
-    let len = n + gap;
-
-    let mut a = Vec::with_capacity(len);
-    let mut acc = F::ZERO;
-    for k in 0..len {
-        let p_k = poly.get(k).copied().unwrap_or(F::ZERO);
-        acc = p_k + r_comb * acc;
-        a.push(acc);
-    }
-
-    let r_pow = r_comb.exp_u64((gap + 1) as u64);
-    let mut result: Vec<F> = (0..len)
-        .map(|k| {
-            if k > gap {
-                a[k] - r_pow * a[k - gap - 1]
-            } else {
-                a[k]
-            }
-        })
-        .collect();
-
-    while result.last() == Some(&F::ZERO) && result.len() > 1 {
-        result.pop();
-    }
-
-    result
-}
-
 /// Evaluate the degree-correction factor at a point and multiply it into `value`.
 pub fn eval_degree_correction<F: Field>(value: F, point: F, r_comb: F, gap: usize) -> F {
     let step = point * r_comb;
@@ -218,11 +106,6 @@ pub fn eval_degree_correction<F: Field>(value: F, point: F, r_comb: F, gap: usiz
         (F::ONE - step.exp_u64((gap + 1) as u64)) * (F::ONE - step).inverse()
     };
     value * geom
-}
-
-/// Evaluate the vanishing polynomial `prod_{y in roots} (point - y)` at `point`.
-pub fn eval_vanishing_at_roots<F: Field>(roots: &[F], point: F) -> F {
-    roots.iter().fold(F::ONE, |acc, &root| acc * (point - root))
 }
 
 /// Horner evaluation of an extension-coefficient polynomial at a **base-field** point.
@@ -284,6 +167,40 @@ pub fn vanishing_poly_from_roots<F: Field>(roots: &[F]) -> Vec<F> {
 /// multiplicative generator.
 pub fn next_domain_shift<F: Field>(current_shift: F, log_arity: usize) -> F {
     current_shift.exp_power_of_2(log_arity) * F::GENERATOR
+}
+
+/// Sample `num_ood_samples` distinct out-of-domain points for a STIR round from the
+/// transcript.
+///
+/// `excluded_domains` gives the `(shift, log_size)` of the current, next, and fold-query
+/// domains for the round: each candidate is drawn until it lies outside all three cosets,
+/// so that it cannot collide with the interpolation nodes used elsewhere in the round.
+/// Prover and verifier both call this to derive identical points from identical
+/// transcript state.
+pub fn sample_ood_points<F, EF, Challenger>(
+    challenger: &mut Challenger,
+    excluded_domains: [(F, usize); 3],
+    num_ood_samples: usize,
+) -> Vec<EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Challenger: FieldChallenger<F>,
+{
+    let mut ood_points: Vec<EF> = Vec::with_capacity(num_ood_samples);
+    while ood_points.len() < num_ood_samples {
+        let z: EF = challenger.sample_algebra_element();
+        let outside_all_domains = excluded_domains.iter().all(|&(shift, log_size)| {
+            let z_norm = z * EF::from(shift).inverse();
+            z_norm.exp_power_of_2(log_size) != EF::ONE || log_size == 0
+        });
+        // Deduplicate OOD points.
+        let not_dup = ood_points.iter().all(|&existing| existing != z);
+        if outside_all_domains && not_dup {
+            ood_points.push(z);
+        }
+    }
+    ood_points
 }
 
 /// Compute the shake polynomial for a set of evaluation points.
@@ -715,22 +632,6 @@ mod tests {
         ];
         let result = lagrange_eval_at(&xs, &ys, EF::from(F::from_u64(4)));
         assert_eq!(result, EF::from(F::from_u64(16)));
-    }
-
-    #[test]
-    fn test_degree_correct_matches_naive_multiply() {
-        let r_comb = F::from_u64(7);
-        for poly_len in [0, 1, 2, 5, 8] {
-            for gap in [0, 1, 3, 6] {
-                let poly: Vec<F> = (0..poly_len).map(|i| F::from_u64(i as u64 + 1)).collect();
-                let expected = multiply_polys(&poly, &degree_correction_poly(r_comb, gap));
-                let actual = degree_correct(&poly, r_comb, gap);
-                assert_eq!(
-                    actual, expected,
-                    "mismatch for poly_len={poly_len}, gap={gap}"
-                );
-            }
-        }
     }
 
     #[test]

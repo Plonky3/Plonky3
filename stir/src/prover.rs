@@ -23,7 +23,7 @@ use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
     compute_shake_polynomial, eval_poly_parallel, fold_codeword, interpolate_poly,
-    next_domain_shift, vanishing_poly_from_roots,
+    next_domain_shift, sample_ood_points, vanishing_poly_from_roots,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -219,27 +219,15 @@ where
         // fold-query domain. Excluding the fold domain prevents an honest-prover failure
         // where an OOD point coincides with a sampled query point and the interpolation in
         // step 4 hits duplicate roots.
-        let current_domain_size = 1usize << current_log_domain;
-        let next_domain_size = 1usize << next_log_domain;
-        let fold_domain_size = 1usize << fold_log_domain;
-        let mut ood_points = Vec::with_capacity(rc.num_ood_samples);
-        while ood_points.len() < rc.num_ood_samples {
-            let z: EF = challenger.sample_algebra_element();
-            let z_norm_cur = z * EF::from(current_shift).inverse();
-            let outside_current = z_norm_cur.exp_power_of_2(current_log_domain) != EF::ONE
-                || current_domain_size == 1;
-            let z_norm_next = z * EF::from(next_shift).inverse();
-            let outside_next =
-                z_norm_next.exp_power_of_2(next_log_domain) != EF::ONE || next_domain_size == 1;
-            let z_norm_fold = z * EF::from(fold_shift).inverse();
-            let outside_fold =
-                z_norm_fold.exp_power_of_2(fold_log_domain) != EF::ONE || fold_domain_size == 1;
-            // Deduplicate OOD points.
-            let not_dup = ood_points.iter().all(|&existing| existing != z);
-            if outside_current && outside_next && outside_fold && not_dup {
-                ood_points.push(z);
-            }
-        }
+        let ood_points = sample_ood_points(
+            challenger,
+            [
+                (current_shift, current_log_domain),
+                (next_shift, next_log_domain),
+                (fold_shift, fold_log_domain),
+            ],
+            rc.num_ood_samples,
+        );
 
         // `fold_coeffs` is padded to the next round's full domain size, but the folded
         // polynomial's true degree is bounded by the round's degree schedule (a fixed
@@ -585,9 +573,9 @@ where
 /// Recover polynomial coefficients from a natural-order codeword on coset `shift * <g>`.
 ///
 /// The returned vector has length `codeword.len()`. Trailing zero coefficients are not
-/// stripped: callers downstream (`add_polys`, `multiply_polys`, `codeword_from_coeffs`)
-/// either handle variable-length inputs or explicitly resize, and a content-dependent
-/// length here would make the contract brittle against future refactors.
+/// stripped: callers downstream (`add_polys`, `codeword_from_coeffs`) either handle
+/// variable-length inputs or explicitly resize, and a content-dependent length here
+/// would make the contract brittle against future refactors.
 pub fn coeffs_from_codeword<F, EF, Dft>(dft: &Dft, codeword: &[EF], shift: F) -> Vec<EF>
 where
     F: TwoAdicField,

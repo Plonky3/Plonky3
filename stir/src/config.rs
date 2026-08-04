@@ -349,9 +349,26 @@ where
         );
         validate_eta(0, log_inv_rate, final_eta);
 
-        if total_folds != 1 {
+        // Round 0 reuses the `stir_initial_eta` already computed above; every subsequent
+        // round derives eta from the previous round's query count via `stir_recursive_eta`.
+        let mut prev_queries = 0;
+        for round in 0..num_rounds {
+            if round != 0 {
+                final_eta = params.soundness_type.stir_recursive_eta(
+                    pow_target_bits,
+                    buffered_security_level,
+                    log_degree,
+                    log_inv_rate,
+                    log_domain_size,
+                    log_folding_factor,
+                    field_size_bits,
+                    prev_queries,
+                );
+                validate_eta(round, log_inv_rate, final_eta);
+            }
+
             let num_queries = query_count(log_inv_rate, final_eta);
-            assert_disjoint_cosets(0, log_domain_size);
+            assert_disjoint_cosets(round, log_domain_size);
 
             let fold_alg = params.soundness_type.fold_algebraic_bits_at_log_eta(
                 field_size_bits,
@@ -375,14 +392,16 @@ where
                 num_queries,
                 num_ood_samples,
             );
+            let round_label = format!("round {round}");
             assert!(
                 unprotected_alg >= buffered_security_level as f64,
-                "round 0 OOD/shake checks reach only {unprotected_alg:.4} bits, below the \
-                 buffered target {buffered_security_level}; these challenges are not protected \
-                 by the query-phase PoW. Use a larger challenge field or lower security target."
+                "{round_label} OOD/shake checks reach only {unprotected_alg:.4} bits, below \
+                 the buffered target {buffered_security_level}; these challenges are not \
+                 protected by the query-phase PoW. Use a larger challenge field or lower \
+                 security target."
             );
-            let folding_pow_bits = derive_pow_bits("folding", "round 0", fold_alg);
-            let pow_bits = derive_pow_bits("query", "round 0", query_alg);
+            let folding_pow_bits = derive_pow_bits("folding", &round_label, fold_alg);
+            let pow_bits = derive_pow_bits("query", &round_label, query_alg);
 
             round_configs.push(StirRoundConfig {
                 log_degree,
@@ -397,81 +416,14 @@ where
                 folding_pow_bits,
             });
 
-            let mut prev_queries = num_queries;
+            prev_queries = num_queries;
             log_degree -= log_folding_factor;
             log_domain_size -= 1;
             log_inv_rate += log_folding_factor - 1;
             domain_shift = domain_shift.exp_power_of_2(log_folding_factor) * F::GENERATOR;
+        }
 
-            for round in 1..num_rounds {
-                final_eta = params.soundness_type.stir_recursive_eta(
-                    pow_target_bits,
-                    buffered_security_level,
-                    log_degree,
-                    log_inv_rate,
-                    log_domain_size,
-                    log_folding_factor,
-                    field_size_bits,
-                    prev_queries,
-                );
-                validate_eta(round, log_inv_rate, final_eta);
-
-                let num_queries = query_count(log_inv_rate, final_eta);
-                assert_disjoint_cosets(round, log_domain_size);
-
-                let fold_alg = params.soundness_type.fold_algebraic_bits_at_log_eta(
-                    field_size_bits,
-                    log_degree,
-                    log_inv_rate,
-                    libm::log2(final_eta),
-                );
-                let query_alg = params.soundness_type.stir_query_pow_eligible_bits(
-                    field_size_bits,
-                    log_degree,
-                    log_inv_rate,
-                    final_eta,
-                    num_queries,
-                    num_ood_samples,
-                );
-                let unprotected_alg = params.soundness_type.stir_query_unprotected_bits(
-                    field_size_bits,
-                    log_degree,
-                    log_inv_rate,
-                    final_eta,
-                    num_queries,
-                    num_ood_samples,
-                );
-                let round_label = format!("round {round}");
-                assert!(
-                    unprotected_alg >= buffered_security_level as f64,
-                    "{round_label} OOD/shake checks reach only {unprotected_alg:.4} bits, below \
-                     the buffered target {buffered_security_level}; these challenges are not \
-                     protected by the query-phase PoW. Use a larger challenge field or lower \
-                     security target."
-                );
-                let folding_pow_bits = derive_pow_bits("folding", &round_label, fold_alg);
-                let pow_bits = derive_pow_bits("query", &round_label, query_alg);
-
-                round_configs.push(StirRoundConfig {
-                    log_degree,
-                    log_domain_size,
-                    log_fold_domain_size: log_domain_size - log_folding_factor,
-                    domain_shift,
-                    log_folding_factor,
-                    eta: final_eta,
-                    num_queries,
-                    num_ood_samples,
-                    pow_bits,
-                    folding_pow_bits,
-                });
-
-                prev_queries = num_queries;
-                log_degree -= log_folding_factor;
-                log_domain_size -= 1;
-                log_inv_rate += log_folding_factor - 1;
-                domain_shift = domain_shift.exp_power_of_2(log_folding_factor) * F::GENERATOR;
-            }
-
+        if total_folds != 1 {
             final_eta = params.soundness_type.stir_recursive_eta(
                 pow_target_bits,
                 buffered_security_level,

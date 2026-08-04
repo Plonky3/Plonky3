@@ -12,7 +12,8 @@ use crate::config::StirConfig;
 use crate::proof::StirProof;
 use crate::utils::{
     check_shake_consistency, eval_degree_correction, eval_poly, eval_poly_at_base,
-    lagrange_eval_at, next_domain_shift, reduce_mod_x_pow_minus_c, vanishing_poly_from_roots,
+    lagrange_eval_at, next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points,
+    vanishing_poly_from_roots,
 };
 
 #[derive(Clone)]
@@ -335,26 +336,15 @@ where
             return Err(StirError::InvalidProofShape);
         }
 
-        let current_domain_size = 1usize << current_log_domain;
-        let next_domain_size = 1usize << next_log_domain;
-        let fold_domain_size = 1usize << fold_log_domain;
-        let mut ood_points: Vec<EF> = Vec::with_capacity(rc.num_ood_samples);
-        while ood_points.len() < rc.num_ood_samples {
-            let z: EF = challenger.sample_algebra_element();
-            let z_norm_cur = z * EF::from(current_shift).inverse();
-            let outside_current = z_norm_cur.exp_power_of_2(current_log_domain) != EF::ONE
-                || current_domain_size == 1;
-            let z_norm_next = z * EF::from(next_shift).inverse();
-            let outside_next =
-                z_norm_next.exp_power_of_2(next_log_domain) != EF::ONE || next_domain_size == 1;
-            let z_norm_fold = z * EF::from(fold_shift).inverse();
-            let outside_fold =
-                z_norm_fold.exp_power_of_2(fold_log_domain) != EF::ONE || fold_domain_size == 1;
-            let not_dup = ood_points.iter().all(|&existing| existing != z);
-            if outside_current && outside_next && outside_fold && not_dup {
-                ood_points.push(z);
-            }
-        }
+        let ood_points: Vec<EF> = sample_ood_points(
+            challenger,
+            [
+                (current_shift, current_log_domain),
+                (next_shift, next_log_domain),
+                (fold_shift, fold_log_domain),
+            ],
+            rc.num_ood_samples,
+        );
 
         challenger.observe_algebra_slice(&rp.ood_answers);
 
