@@ -595,7 +595,7 @@ where
             let reconstruct_initial_fibers =
                 |first_round_unique_js: &[usize]| -> Result<Vec<Vec<Challenge>>, Self::Error> {
                     let n_q = first_round_unique_js.len();
-                    let mut expected_ro = vec![vec![Challenge::ZERO; arity0]; n_q];
+                    let mut expected_ro = vec![Challenge::zero_vec(arity0); n_q];
 
                     for (commit_idx, ((commitment, domain_claims), per_commit_opening)) in
                         commitments_with_opening_points

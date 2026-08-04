@@ -417,28 +417,33 @@ mod babybear_stir {
 
     #[test]
     fn test_tampered_round_query_opening_fails() {
-        let (params, dft, challenger) = make_params(1, 2);
-        let mut rng = seeded_rng();
-        let log_degree = 8;
-        let degree = 1usize << log_degree;
-        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+        // Covers arity 4, 8, and 16 (log_folding_factor 2, 3, 4).
+        for log_folding_factor in [2, 3, 4] {
+            let (params, dft, challenger) = make_params(1, log_folding_factor);
+            let mut rng = seeded_rng();
+            let log_degree = 8;
+            let degree = 1usize << log_degree;
+            let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
 
-        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
-        let mut p_challenger = challenger.clone();
-        let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+            let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+            let mut p_challenger = challenger.clone();
+            let (mut proof, _query_indices) =
+                prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
-        let row_evals = &mut proof.round_proofs[0]
-            .query_openings
-            .as_mut()
-            .unwrap()
-            .row_evals;
-        assert!(!row_evals.is_empty());
-        row_evals[0][0] += EF::from(F::ONE);
+            let row_evals = &mut proof.round_proofs[0]
+                .query_openings
+                .as_mut()
+                .unwrap()
+                .row_evals;
+            assert!(!row_evals.is_empty());
+            row_evals[0][0] += EF::ONE;
 
-        let mut v_challenger = challenger;
-        assert!(
-            verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err()
-        );
+            let mut v_challenger = challenger;
+            assert!(
+                verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger)
+                    .is_err()
+            );
+        }
     }
 
     /// Swapping two `row_evals` entries keeps every length check happy (same count, same
