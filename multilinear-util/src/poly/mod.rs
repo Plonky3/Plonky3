@@ -496,7 +496,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     /// in place.
     ///
     /// The table is interpreted as monomial coefficients (the projective
-    /// `{0, inf}` representation of eprint 2026/762). Writing the polynomial as
+    /// `{0, inf}` representation of <https://eprint.iacr.org/2026/762> ). Writing the polynomial as
     /// `p(X_0, x') = a0(x') + X_0 * a1(x')`, with `a0` the low half (monomials
     /// without `X_0`) and `a1` the high half (monomials with `X_0`), binding
     /// `X_0 = r` gives, by Corollary 3.2:
@@ -510,7 +510,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     /// # Panics
     ///
     /// Panics if the polynomial is constant (zero free variables).
-    pub fn fix_prefix_var_mut_projective<F: Copy + Send + Sync>(&mut self, r: F)
+    pub fn fix_prefix_var_mut_monomial<F: Copy + Send + Sync>(&mut self, r: F)
     where
         A: Algebra<F>,
     {
@@ -2028,7 +2028,7 @@ pub(crate) mod test {
         /// subtraction. Applied across every variable it evaluates the monomial
         /// polynomial sum_S a_S * prod_{i in S} z_i at the point z.
         #[test]
-        fn prop_fix_prefix_var_mut_projective_evaluates_monomial_basis(
+        fn prop_fix_prefix_var_mut_monomial_evaluates_monomial_basis(
             k in 1usize..=12,
             seed in any::<u64>(),
         ) {
@@ -2055,7 +2055,7 @@ pub(crate) mod test {
             // Projective binding across all variables must agree.
             let mut compressed = Poly::new(poly.as_slice().to_vec());
             for &zi in z {
-                compressed.fix_prefix_var_mut_projective(zi);
+                compressed.fix_prefix_var_mut_monomial(zi);
             }
             prop_assert_eq!(compressed.as_constant().unwrap(), expected);
         }
