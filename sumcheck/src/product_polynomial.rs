@@ -576,6 +576,8 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::constraints::Statements;
+    use crate::constraints::statement::EqStatement;
     use crate::strategy::sumcheck_coefficients_prefix;
 
     type F = BabyBear;
@@ -1107,9 +1109,6 @@ mod tests {
         // The combine function should:
         // 1. Update the weight polynomial with new constraint contributions
         // 2. Update the running sum accordingly
-        use crate::constraints::statement::EqStatement;
-        use crate::constraints::{Constraint, Statements};
-
         let num_variables = 2;
         let evals = Poly::new(vec![EF::ONE; 4]);
         let weights = Poly::new(vec![EF::ONE; 4]);
