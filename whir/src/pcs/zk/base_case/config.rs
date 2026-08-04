@@ -11,7 +11,7 @@ use crate::pcs::zk::mask::MaskGroupShape;
 
 /// Shared base-case protocol shape.
 #[derive(Debug, Clone)]
-pub struct BaseCaseZkConfig<F> {
+pub(crate) struct BaseCaseZkConfig<F> {
     /// Folded source code: the code of the virtual oracle being checked.
     pub code: FoldedRsCode<F>,
     /// Carried mask oracle groups, in chronological commit order.
@@ -25,7 +25,7 @@ pub struct BaseCaseZkConfig<F> {
 }
 
 /// Prover-side view of one carried mask group.
-pub struct MaskGroupWitness<'a, F, EF, MT>
+pub(crate) struct MaskGroupWitness<'a, F, EF, MT>
 where
     F: TwoAdicField,
     EF: ExtensionField<F>,
@@ -42,5 +42,5 @@ where
 }
 
 /// Prover data type shared by every mask group in the pipeline.
-pub type MaskProverData<F, EF, MT> =
+pub(crate) type MaskProverData<F, EF, MT> =
     <ExtensionMmcs<F, EF, MT> as Mmcs<EF>>::ProverData<RowMajorMatrix<EF>>;

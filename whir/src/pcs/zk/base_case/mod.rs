@@ -71,7 +71,7 @@ mod error;
 mod prover;
 mod verifier;
 
-pub use config::{BaseCaseZkConfig, MaskGroupWitness, MaskProverData};
+pub(crate) use config::{BaseCaseZkConfig, MaskGroupWitness, MaskProverData};
 pub use error::BaseCaseZkError;
 pub use prover::BaseCaseZkProver;
 pub use verifier::BaseCaseZkVerifier;
