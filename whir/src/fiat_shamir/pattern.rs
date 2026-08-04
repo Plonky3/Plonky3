@@ -10,7 +10,7 @@
 /// The discriminant is encoded as a field element and combined with a
 /// sub-label and count to form a single domain separator entry.
 #[derive(Debug, Clone, Copy)]
-pub enum Pattern {
+pub(crate) enum Pattern {
     /// Verifier samples randomness from the transcript.
     Sample,
     /// Prover observes (absorbs) data into the transcript.
@@ -24,7 +24,7 @@ pub enum Pattern {
 /// Each variant identifies the semantic role of a challenge or
 /// randomness drawn from the sponge during the protocol.
 #[derive(Debug, Clone, Copy)]
-pub enum Sample {
+pub(crate) enum Sample {
     /// Randomness for the initial linear combination of constraints.
     InitialCombinationRandomness,
     /// Per-round folding challenge in the sumcheck protocol.
@@ -66,7 +66,7 @@ pub enum Sample {
 /// Each variant identifies the semantic role of data the prover
 /// commits into the sponge.
 #[derive(Debug, Clone, Copy)]
-pub enum Observe {
+pub(crate) enum Observe {
     /// Merkle tree root digest for a committed polynomial.
     MerkleDigest,
     /// Evaluations at out-of-domain points.
@@ -107,7 +107,7 @@ pub enum Observe {
 /// information but are not absorbed into the sponge. They do not
 /// affect soundness.
 #[derive(Debug, Clone, Copy)]
-pub enum Hint {
+pub(crate) enum Hint {
     /// Indices and positions of STIR query points.
     StirQueries,
     /// Evaluation values at STIR query positions.
