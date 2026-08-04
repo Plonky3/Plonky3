@@ -18,5 +18,5 @@
 mod masks;
 mod source;
 
-pub use masks::MaskClaims;
-pub use source::SourceClaim;
+pub(crate) use masks::MaskClaims;
+pub(crate) use source::SourceClaim;

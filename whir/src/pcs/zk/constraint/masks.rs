@@ -9,7 +9,7 @@ use p3_field::{Field, dot_product};
 /// - One covector per mask oracle, in commitment order.
 /// - The accumulated scale is folded into the covector entries directly.
 #[derive(Debug, Clone, Default)]
-pub struct MaskClaims<EF> {
+pub(crate) struct MaskClaims<EF> {
     /// Per-oracle dense covectors over the mask messages.
     pub covectors: Vec<Vec<EF>>,
 }
@@ -17,7 +17,7 @@ pub struct MaskClaims<EF> {
 impl<EF: Field> MaskClaims<EF> {
     /// Starts with no mask oracles.
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             covectors: Vec::new(),
         }
@@ -39,7 +39,7 @@ impl<EF: Field> MaskClaims<EF> {
     /// with, or the carried relation drifts.
     ///
     /// Returns the applied scale, so a running claim total can track it.
-    pub fn absorb_sumcheck(&mut self, eps: EF, folding_factor: usize) -> EF {
+    pub(crate) fn absorb_sumcheck(&mut self, eps: EF, folding_factor: usize) -> EF {
         let scale = eps * EF::TWO.exp_u64(folding_factor as u64).inverse();
         for covector in &mut self.covectors {
             for entry in covector.iter_mut() {
@@ -50,7 +50,7 @@ impl<EF: Field> MaskClaims<EF> {
     }
 
     /// Appends a fresh mask oracle claim.
-    pub fn push(&mut self, covector: Vec<EF>) {
+    pub(crate) fn push(&mut self, covector: Vec<EF>) {
         self.covectors.push(covector);
     }
 
@@ -59,7 +59,7 @@ impl<EF: Field> MaskClaims<EF> {
     /// Prover-side helper.
     /// The verifier never holds the messages.
     #[must_use]
-    pub fn evaluate(&self, messages: &[Vec<EF>]) -> EF {
+    pub(crate) fn evaluate(&self, messages: &[Vec<EF>]) -> EF {
         assert_eq!(messages.len(), self.covectors.len());
         self.covectors
             .iter()

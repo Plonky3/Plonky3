@@ -22,7 +22,7 @@ use p3_multilinear_util::poly::Poly;
 /// Both kinds are closed under prefix folding.
 /// That closure keeps the verifier's bookkeeping symbolic across rounds.
 #[derive(Debug, Clone)]
-pub enum SourceTerm<EF> {
+pub(crate) enum SourceTerm<EF> {
     /// Equality covector at a multilinear point.
     Eq {
         /// Constraint point, with arity equal to the message arity.
@@ -44,7 +44,7 @@ pub enum SourceTerm<EF> {
 
 /// A symbolic source term with its accumulated batching scale.
 #[derive(Debug, Clone)]
-pub struct SourceConstraint<EF> {
+pub(crate) struct SourceConstraint<EF> {
     /// Basis covector.
     pub term: SourceTerm<EF>,
     /// Accumulated scale: batching coefficients and sumcheck `eps` factors.
@@ -53,7 +53,7 @@ pub struct SourceConstraint<EF> {
 
 /// The full symbolic source-side claim.
 #[derive(Debug, Clone, Default)]
-pub struct SourceClaim<EF> {
+pub(crate) struct SourceClaim<EF> {
     /// Accumulated constraints, in introduction order.
     pub constraints: Vec<SourceConstraint<EF>>,
 }
@@ -61,14 +61,14 @@ pub struct SourceClaim<EF> {
 impl<EF: Field> SourceClaim<EF> {
     /// Starts with no constraints.
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             constraints: Vec::new(),
         }
     }
 
     /// Records an equality constraint `coeff * eq(point, .)`.
-    pub fn push_eq(&mut self, point: Point<EF>, coeff: EF) {
+    pub(crate) fn push_eq(&mut self, point: Point<EF>, coeff: EF) {
         self.constraints.push(SourceConstraint {
             term: SourceTerm::Eq { point },
             coeff,
@@ -76,7 +76,7 @@ impl<EF: Field> SourceClaim<EF> {
     }
 
     /// Records a power constraint `coeff * (var^index)` over `m` variables.
-    pub fn push_pow(&mut self, var: EF, num_variables: usize, coeff: EF) {
+    pub(crate) fn push_pow(&mut self, var: EF, num_variables: usize, coeff: EF) {
         self.constraints.push(SourceConstraint {
             term: SourceTerm::Pow {
                 var,
@@ -100,7 +100,7 @@ impl<EF: Field> SourceClaim<EF> {
     ///
     /// The `select` factor sums the power covector against `eq(., gamma)`.
     /// Coordinate `i` carries exponent `2^{m-1-i}`.
-    pub fn fold(&mut self, gamma: &Point<EF>) {
+    pub(crate) fn fold(&mut self, gamma: &Point<EF>) {
         let k = gamma.num_variables();
         for constraint in &mut self.constraints {
             match &mut constraint.term {
@@ -139,7 +139,7 @@ impl<EF: Field> SourceClaim<EF> {
     /// Materializes the dense covector over the remaining message slots.
     ///
     /// Used at the base case, where the remaining message is small.
-    pub fn materialize(&self, num_variables: usize) -> Poly<EF> {
+    pub(crate) fn materialize(&self, num_variables: usize) -> Poly<EF> {
         let mut dense = EF::zero_vec(1 << num_variables);
         // Each constraint adds `coeff * basis-term` into the accumulator.
         for constraint in &self.constraints {
