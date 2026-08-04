@@ -16,12 +16,13 @@ use p3_field::{
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
+use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
 use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    compute_shake_polynomial, degree_correction_poly, eval_poly, fold_codeword, interpolate_poly,
+    compute_shake_polynomial, eval_poly_parallel, fold_codeword, interpolate_poly,
     next_domain_shift, vanishing_poly_from_roots,
 };
 
@@ -63,6 +64,43 @@ where
     prove_stir_from_codeword(config, initial_codeword, dft, challenger)
 }
 
+/// Prove low degree from an initial codeword that the caller has already bound.
+///
+/// Identical to [`prove_stir_from_codeword`] except that the initial oracle is never committed:
+/// no Merkle tree is built over it, its commitment is absent from the proof, and the queries
+/// that read it ship no rows. The verifier side is [`verify_stir_with_external_initial`], whose
+/// caller supplies the queried fibers.
+///
+/// # Soundness requirement
+///
+/// The caller MUST guarantee that the initial codeword is uniquely determined by data already
+/// absorbed into `challenger` before this call — for the PCS layer, the input commitments, the
+/// claimed opening values, and the batching challenge derived from them. STIR draws the round-0
+/// folding challenge after this point, so a prover still free to choose the initial codeword
+/// afterwards would break the proximity argument. A commitment adds nothing once the codeword
+/// is already pinned, which is exactly why it can be dropped.
+///
+/// [`verify_stir_with_external_initial`]: crate::verifier::verify_stir_with_external_initial
+#[instrument(skip_all)]
+pub fn prove_stir_from_external_codeword<F, EF, Dft, M, Challenger>(
+    config: &StirConfig<F, EF, M, Challenger>,
+    initial_codeword: Vec<EF>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+) -> (StirProof<EF, M, Challenger::Witness>, Vec<usize>)
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
+    prove_stir_inner(config, initial_codeword, dft, challenger, false)
+}
+
 /// Prove low degree from an initial natural-order codeword on STIR's starting domain.
 ///
 /// This avoids an inverse DFT followed by a forward DFT when a caller already has the
@@ -85,6 +123,29 @@ where
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>,
 {
+    prove_stir_inner(config, initial_codeword, dft, challenger, true)
+}
+
+/// Shared body of [`prove_stir_from_codeword`] and [`prove_stir_from_external_codeword`].
+///
+/// `commit_initial` selects whether the initial oracle is committed and opened by STIR.
+fn prove_stir_inner<F, EF, Dft, M, Challenger>(
+    config: &StirConfig<F, EF, M, Challenger>,
+    initial_codeword: Vec<EF>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+    commit_initial: bool,
+) -> (StirProof<EF, M, Challenger::Witness>, Vec<usize>)
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
     let num_rounds = config.num_rounds();
     let initial_shift = F::GENERATOR;
     let log_initial_domain = config.log_starting_domain_size();
@@ -96,9 +157,14 @@ where
     );
 
     // Commit before moving the codeword into the round state, avoiding a full clone.
-    let (initial_commit, initial_data) =
-        commit_as_fiber_matrix(&config.mmcs, &initial_codeword, config.log_folding_factor);
-    challenger.observe(initial_commit.clone());
+    let (initial_commit, initial_data) = if commit_initial {
+        let (commit, data) =
+            commit_as_fiber_matrix(&config.mmcs, &initial_codeword, config.log_folding_factor);
+        challenger.observe(commit.clone());
+        (Some(commit), Some(data))
+    } else {
+        (None, None)
+    };
 
     let mut current_oracle_codeword = initial_codeword;
     let mut current_shift = initial_shift;
@@ -139,7 +205,7 @@ where
         );
         let fold_coeffs = coeffs_from_codeword(dft, &folded_codeword, fold_shift);
 
-        let next_commit_codeword =
+        let next_commit_codeword: Vec<EF> =
             codeword_from_coeffs(dft, fold_coeffs.clone(), next_shift, next_log_domain);
         let (new_commit, new_data) = commit_as_fiber_matrix(
             &config.mmcs,
@@ -175,9 +241,16 @@ where
             }
         }
 
+        // `fold_coeffs` is padded to the next round's full domain size, but the folded
+        // polynomial's true degree is bounded by the round's degree schedule (a fixed
+        // factor smaller); evaluating only the non-trivially-zero prefix cuts Horner's
+        // work by that same factor.
+        let folded_degree_bound = 1usize << (rc.log_degree - log_arity);
+        let truncated_fold_coeffs = &fold_coeffs[..folded_degree_bound.min(fold_coeffs.len())];
+
         let ood_answers: Vec<EF> = ood_points
             .iter()
-            .map(|&z| eval_poly(&fold_coeffs, z))
+            .map(|&z| eval_poly_parallel(truncated_fold_coeffs, z))
             .collect();
         challenger.observe_algebra_slice(&ood_answers);
 
@@ -216,13 +289,15 @@ where
             }
         }
 
-        // One shared, pruned multi-opening proof for every query drawn this round.
-        let query_openings = open_fiber_rows(&config.mmcs, &query_indices, &current_commit_data);
+        // One shared, pruned multi-opening proof for every query drawn this round. Absent when
+        // this round reads an external initial oracle, whose fibers the verifier rebuilds.
+        let query_openings = current_commit_data
+            .as_ref()
+            .map(|data| open_fiber_rows(&config.mmcs, &query_indices, data));
         debug_assert!(
             query_openings
-                .row_evals
                 .iter()
-                .all(|row| row.len() == arity)
+                .all(|o| o.row_evals.iter().all(|row| row.len() == arity))
         );
 
         // Collect first-round query indices for the PCS binding check.
@@ -254,31 +329,73 @@ where
         let _rho: EF = challenger.sample_algebra_element();
 
         // Step 5: Construction 5.2 — evaluate the next virtual witness directly on L_{i+1}:
-        // f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}). This avoids serial synthetic division
-        // and coefficient-domain degree correction; the three independent DFTs are parallel.
+        // f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}).
+        //
+        // DegCor(x) = (1 - (r_comb*x)^{gap+1}) / (1 - r_comb*x) is geometric in x over the
+        // coset (base-field ratio, EF-valued start), so it is evaluated pointwise via two
+        // `Powers` sweeps instead of a third DFT; its `(1 - r_comb*x)` denominator is folded
+        // into the vanishing-polynomial batch inversion below (one inversion, not two). Ans
+        // and the vanishing polynomial still need evaluating — their roots are this round's
+        // arbitrary interpolation points — but both are tiny next to the domain, so they go
+        // through the low-degree coset evaluation rather than a full-size DFT each.
         let num_answers = all_points.len();
-        let ans_evals = codeword_from_coeffs(dft, ans_poly.clone(), next_shift, next_log_domain);
-        let vanishing_evals = codeword_from_coeffs(
-            dft,
-            vanishing_poly_from_roots(&all_points),
-            next_shift,
-            next_log_domain,
-        );
-        let degree_correction_evals = codeword_from_coeffs(
-            dft,
-            degree_correction_poly(r_comb, num_answers),
-            next_shift,
-            next_log_domain,
-        );
-        let vanishing_inverses = batch_multiplicative_inverse(&vanishing_evals);
 
-        let next_oracle_codeword: Vec<EF> = next_commit_codeword
-            .par_iter()
-            .zip(ans_evals.par_iter())
-            .zip(vanishing_inverses.par_iter())
-            .zip(degree_correction_evals.par_iter())
-            .map(|(((&g, &ans), &z_inv), &correction)| (g - ans) * z_inv * correction)
-            .collect();
+        let vanishing_coeffs = vanishing_poly_from_roots(&all_points);
+        // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
+        // `num_answers + 1` coefficients.
+        let log_answer_len = log2_ceil_usize(num_answers + 1).min(next_log_domain);
+        let (ans_evals, vanishing_evals) = eval_low_degree_pair_on_coset(
+            dft,
+            &ans_poly,
+            &vanishing_coeffs,
+            next_shift,
+            next_log_domain,
+            log_answer_len,
+        );
+
+        // x_j = next_shift * g^j, so step_j = r_comb * x_j = step_start * g^j, and the degree
+        // correction's numerator sweeps the same coset at stride `num_answers + 1`. Both are
+        // geometric with a base-field ratio, so each chunk seeds one exponentiation and then
+        // advances by a base-field multiply: no power tables, and no ext-by-ext products.
+        const POWER_CHUNK: usize = 1 << 12;
+        let g_next = F::two_adic_generator(next_log_domain);
+        let g_next_hi = g_next.exp_u64((num_answers + 1) as u64);
+        let step_start = r_comb * next_shift;
+        let step_start_hi = step_start.exp_u64((num_answers + 1) as u64);
+
+        // The quotient denominators are the vanishing evaluations scaled by the degree
+        // correction's `(1 - step)` denominator, so they are formed in place.
+        let mut combined_denoms = vanishing_evals;
+        combined_denoms
+            .par_chunks_mut(POWER_CHUNK)
+            .enumerate()
+            .for_each(|(chunk_idx, chunk)| {
+                let mut step = step_start * g_next.exp_u64((chunk_idx * POWER_CHUNK) as u64);
+                for denom in chunk.iter_mut() {
+                    *denom *= EF::ONE - step;
+                    step *= g_next;
+                }
+            });
+        let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
+        drop(combined_denoms);
+
+        // `commit_as_fiber_matrix` has already copied the committed codeword into the Merkle
+        // tree, so the next oracle is formed in place over it.
+        let mut next_oracle_codeword = next_commit_codeword;
+        next_oracle_codeword
+            .par_chunks_mut(POWER_CHUNK)
+            .zip(ans_evals.par_chunks(POWER_CHUNK))
+            .zip(combined_inverses.par_chunks(POWER_CHUNK))
+            .enumerate()
+            .for_each(|(chunk_idx, ((chunk, ans_chunk), inverse_chunk))| {
+                let mut numerator_step =
+                    step_start_hi * g_next_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
+                for ((value, &ans), &inverse) in chunk.iter_mut().zip(ans_chunk).zip(inverse_chunk)
+                {
+                    *value = (*value - ans) * inverse * (EF::ONE - numerator_step);
+                    numerator_step *= g_next_hi;
+                }
+            });
 
         round_proofs.push(StirRoundProof {
             commitment: new_commit,
@@ -291,7 +408,7 @@ where
         });
 
         current_oracle_codeword = next_oracle_codeword;
-        current_commit_data = new_data;
+        current_commit_data = Some(new_data);
         current_shift = next_shift;
         current_log_domain = next_log_domain;
     }
@@ -314,10 +431,15 @@ where
         final_log_arity,
         current_log_domain,
     );
-    let final_new_coeffs = coeffs_from_codeword(dft, &final_codeword, final_new_shift);
+    // The final polynomial has only `final_len` coefficients, far fewer than
+    // `final_codeword`'s full domain size. Rather than run a full-size iDFT and discard
+    // the (necessarily zero) high coefficients, gather a `final_len`-sized coset — every
+    // `stride`-th natural-order point, which is exactly the subgroup coset of that size —
+    // and run the small iDFT directly on it.
     let final_len = config.final_poly_len();
-    let mut final_poly = final_new_coeffs;
-    final_poly.resize(final_len, EF::ZERO);
+    let stride = final_codeword.len() / final_len;
+    let final_poly_evals: Vec<EF> = (0..final_len).map(|i| final_codeword[i * stride]).collect();
+    let final_poly = coeffs_from_codeword(dft, &final_poly_evals, final_new_shift);
 
     challenger.observe_algebra_slice(&final_poly);
     let final_pow_witness = challenger.grind(config.final_pow_bits);
@@ -332,13 +454,13 @@ where
         final_query_indices.push(j);
     }
 
-    let final_query_openings =
-        open_fiber_rows(&config.mmcs, &final_query_indices, &current_commit_data);
+    let final_query_openings = current_commit_data
+        .as_ref()
+        .map(|data| open_fiber_rows(&config.mmcs, &final_query_indices, data));
     debug_assert!(
         final_query_openings
-            .row_evals
             .iter()
-            .all(|row| row.len() == final_arity)
+            .all(|o| o.row_evals.iter().all(|row| row.len() == final_arity))
     );
 
     // When there are no intermediate rounds the final queries target the
@@ -356,6 +478,86 @@ where
         final_query_openings,
     };
     (proof, first_round_query_indices)
+}
+
+/// Evaluate two polynomials of at most `2^log_len` coefficients on the coset `shift * <g>` of
+/// size `2^log_size`, returning both codewords in **natural order**.
+///
+/// A full-size DFT would spend all `log_size` butterfly layers on an input that is zero past
+/// its first `2^log_len` coefficients. Instead, split the coset into
+/// `m = 2^(log_size - log_len)` cosets of the size-`2^log_len` subgroup: writing the natural
+/// index as `i = a + m*b` with `a < m` and `b < 2^log_len`,
+///
+/// ```text
+/// x_i = shift * g^(a + m*b) = (shift * g^a) * (g^m)^b
+/// ```
+///
+/// and `g^m` generates that subgroup. So evaluating on the whole coset is `m` independent
+/// size-`2^log_len` DFTs, one per `a`, of the coefficients pre-scaled by `(shift * g^a)^c` —
+/// `O(N * log_len)` instead of `O(N * log_size)`. The `m` transforms are the columns of one
+/// batched call, and each output row lands on a contiguous natural-order block.
+///
+/// Coefficients past index `2^log_size` are ignored, matching evaluation of the truncation.
+fn eval_low_degree_pair_on_coset<F, EF, Dft>(
+    dft: &Dft,
+    first: &[EF],
+    second: &[EF],
+    shift: F,
+    log_size: usize,
+    log_len: usize,
+) -> (Vec<EF>, Vec<EF>)
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+{
+    debug_assert!(log_len <= log_size);
+    let size = 1usize << log_size;
+    let num_cosets = size >> log_len;
+    let generator = F::two_adic_generator(log_size);
+
+    // Row `c` holds the pair of degree-`c` coefficients scaled by `(shift * g^a)^c`, which as
+    // `a` varies is the geometric sequence starting at `shift^c` with ratio `g^c`.
+    let mut scaled = EF::zero_vec((1usize << log_len) * 2 * num_cosets);
+    scaled
+        .par_chunks_mut(2 * num_cosets)
+        .enumerate()
+        .for_each(|(c, row)| {
+            let first_c = first.get(c).copied().unwrap_or(EF::ZERO);
+            let second_c = second.get(c).copied().unwrap_or(EF::ZERO);
+            let ratio = generator.exp_u64(c as u64);
+            let mut scale = shift.exp_u64(c as u64);
+            for pair in row.chunks_exact_mut(2) {
+                pair[0] = first_c * scale;
+                pair[1] = second_c * scale;
+                scale *= ratio;
+            }
+        });
+
+    let transformed = dft
+        .dft_algebra_batch(RowMajorMatrix::new(scaled, 2 * num_cosets))
+        .values;
+
+    // Transform row `b` holds the evaluations at `i = a + num_cosets * b` for every `a`, i.e.
+    // the natural-order block `[num_cosets * b, num_cosets * (b + 1))`.
+    let mut first_evals = EF::zero_vec(size);
+    let mut second_evals = EF::zero_vec(size);
+    first_evals
+        .par_chunks_mut(num_cosets)
+        .zip(second_evals.par_chunks_mut(num_cosets))
+        .zip(transformed.par_chunks_exact(2 * num_cosets))
+        .for_each(|((first_block, second_block), row)| {
+            for ((first_slot, second_slot), pair) in first_block
+                .iter_mut()
+                .zip(second_block.iter_mut())
+                .zip(row.chunks_exact(2))
+            {
+                *first_slot = pair[0];
+                *second_slot = pair[1];
+            }
+        });
+
+    (first_evals, second_evals)
 }
 
 /// Evaluate a polynomial (coefficients in `EF`) on a coset `shift * <g>` of size

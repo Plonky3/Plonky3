@@ -11,12 +11,11 @@
 //! committed inputs.
 //!
 //! **Verify**: replay the same alpha-batching from the opening values, then for each height
-//! bucket call [`verify_stir`] and consume its [`StirVerifyOutputs`] — the sorted unique
-//! first-round query indices and their fiber evaluations. With those in hand the verifier
-//! checks each input MMCS opening against the committed input and confirms it agrees with
-//! the STIR first-round fiber evaluations. No hand-mirrored transcript replay is needed.
-//!
-//! [`StirVerifyOutputs`]: crate::verifier::StirVerifyOutputs
+//! bucket call [`verify_stir_with_external_initial`]. STIR's initial oracle *is* the reduced
+//! opening, which the transcript already pins through the input commitments, the claimed
+//! values, and `alpha`, so it is never committed a second time: whenever STIR needs its
+//! queried fibers, the verifier rebuilds them from the input MMCS openings at exactly the
+//! positions STIR sampled. No hand-mirrored transcript replay is needed.
 
 use alloc::borrow::Cow;
 use alloc::collections::BTreeSet;
@@ -46,8 +45,8 @@ use tracing::instrument;
 
 use crate::config::{StirConfig, StirParameters};
 use crate::proof::StirProof;
-use crate::prover::prove_stir_from_codeword;
-use crate::verifier::{StirError, verify_stir};
+use crate::prover::prove_stir_from_external_codeword;
+use crate::verifier::{StirError, verify_stir_with_external_initial};
 
 /// Batched openings of one input commitment's LDE matrices at the STIR-derived query
 /// positions for one LDE-height bucket.
@@ -62,12 +61,53 @@ use crate::verifier::{StirError, verify_stir};
     deserialize = "Val: Deserialize<'de>, InputMmcs::MultiProof: Deserialize<'de>"
 ))]
 pub struct InputOpenings<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
-    /// `opened_values[k][m]` is the opened row of matrix `m` at the `k`-th queried position,
-    /// in the same `(query, fiber column)` order the prover and verifier both derive from
-    /// public data.
+    /// `opened_values[k][m]` is the opened fiber-grouped row of matrix `m` at the `k`-th
+    /// queried position, in the same query order the prover and verifier both derive from
+    /// public data. Each such row concatenates the `2^log_folding_factor` LDE rows of one
+    /// fiber, ordered by the bit-reversal of the fiber column index.
     pub opened_values: Vec<Vec<Vec<Val>>>,
     /// Compact multi-opening proof authenticating every row at once.
     pub opening_proof: InputMmcs::MultiProof,
+}
+
+/// Prover data for [`TwoAdicStirPcs`].
+///
+/// The LDE matrices are committed in fiber-grouped form: each Merkle leaf holds
+/// `2^log_folding_factor` consecutive bit-reversed LDE rows, i.e. exactly the rows one
+/// first-round STIR query reads. `widths` records each matrix's column count before grouping
+/// so the original shape can be recovered for opening and quotient computation.
+pub struct StirProverData<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
+    data: InputMmcs::ProverData<RowMajorMatrix<Val>>,
+    widths: Vec<usize>,
+}
+
+/// Reinterpret a bit-reversed LDE as a matrix whose rows are whole STIR fibers.
+///
+/// A first-round query at fold-domain index `j` reads the LDE rows
+/// `reverse_bits_len(j + l * 2^(log_h - log_arity), log_h)` for `l < 2^log_arity`. Writing
+/// `j` into the low `log_h - log_arity` bits and `l` into the high `log_arity` bits, the
+/// reversal maps that set onto the contiguous block
+/// `[rev(j) * 2^log_arity, (rev(j) + 1) * 2^log_arity)`, so grouping is a pure reshape of the
+/// same buffer: no row ever straddles two leaves.
+fn group_fiber_rows<Val: Clone + Send + Sync>(
+    lde: RowMajorMatrix<Val>,
+    log_arity: usize,
+) -> RowMajorMatrix<Val> {
+    let width = lde.width() << log_arity;
+    RowMajorMatrix::new(lde.values, width)
+}
+
+/// Recover views of the committed matrices in their pre-grouping shape.
+fn lde_views<'a, Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>>(
+    input_mmcs: &InputMmcs,
+    prover_data: &'a StirProverData<Val, InputMmcs>,
+) -> Vec<RowMajorMatrixView<'a, Val>> {
+    input_mmcs
+        .get_matrices(&prover_data.data)
+        .into_iter()
+        .zip(prover_data.widths.iter())
+        .map(|(mat, &width)| RowMajorMatrixView::new(mat.values.as_slice(), width))
+        .collect()
 }
 
 /// A polynomial commitment scheme using STIR to generate opening proofs.
@@ -107,18 +147,19 @@ where
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
-    type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
+    type ProverData = StirProverData<Val, InputMmcs>;
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
     /// Proof structure: one entry per distinct LDE-height bucket (descending).
     ///
     /// Each bucket contains:
-    /// - `stir_proof`: the STIR IOP proof for that bucket (initial commitment plus per-round
-    ///   IOP messages). The first-round query indices are NOT serialized — the verifier
-    ///   re-derives them from `verify_stir`'s side outputs.
+    /// - `stir_proof`: the STIR IOP proof for that bucket (per-round IOP messages; the initial
+    ///   oracle is external, so neither its commitment nor its openings appear). The
+    ///   first-round query indices are NOT serialized — the verifier re-derives them from the
+    ///   transcript.
     /// - `input_openings[commit_idx]`: one shared multi-opening proof for that commitment's
     ///   rows at the bucket's first-round STIR fiber positions, in the same sorted-by-index
-    ///   order the verifier reconstructs from `verify_stir`. `None` if the commitment has no
-    ///   matrices at this bucket's LDE height.
+    ///   order the verifier reconstructs. `None` if the commitment has no matrices at this
+    ///   bucket's LDE height.
     type Proof = Vec<(
         StirProof<Challenge, StirMmcs, Val>,
         Vec<Option<InputOpenings<Val, InputMmcs>>>,
@@ -140,6 +181,7 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
         let min_height = 1usize << self.stir.log_folding_factor;
+        let mut widths = Vec::new();
         let ldes: Vec<_> = evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -155,13 +197,17 @@ where
                     self.stir.log_folding_factor,
                 );
                 let shift = Val::GENERATOR / domain.shift();
-                self.dft
+                let lde = self
+                    .dft
                     .coset_lde_batch(evals, self.stir.log_blowup, shift)
                     .bit_reverse_rows()
-                    .to_row_major_matrix()
+                    .to_row_major_matrix();
+                widths.push(lde.width());
+                group_fiber_rows(lde, self.stir.log_folding_factor)
             })
             .collect();
-        self.input_mmcs.commit(ldes)
+        let (commitment, data) = self.input_mmcs.commit(ldes);
+        (commitment, StirProverData { data, widths })
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -170,12 +216,16 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
-        let lde = self.input_mmcs.get_matrices(prover_data)[idx];
+        let lde = lde_views(&self.input_mmcs, prover_data).swap_remove(idx);
         if domain.shift() == Val::GENERATOR && lde.height() >= domain.size() {
-            return lde.split_rows(domain.size()).0.as_cow().bit_reverse_rows();
+            let width = lde.width();
+            let values: &'a [Val] = lde.values;
+            return RowMajorMatrixView::new(&values[..domain.size() * width], width)
+                .as_cow()
+                .bit_reverse_rows();
         }
         let poly_height = lde.height() >> self.stir.log_blowup;
-        let lde_mat = lde.as_view().bit_reverse_rows().to_row_major_matrix();
+        let lde_mat = lde.bit_reverse_rows().to_row_major_matrix();
         let mut coeffs = self.dft.coset_idft_batch(lde_mat, Val::GENERATOR);
         let width = coeffs.width();
         coeffs.values.truncate(poly_height * width);
@@ -216,19 +266,26 @@ where
 
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
         let min_lde_height = 1usize << (self.stir.log_folding_factor + self.stir.log_blowup);
-        for lde in &ldes {
-            assert!(
-                lde.height() >= min_lde_height,
-                "STIR PCS: pre-computed LDE height {} is below 2^{} (= {}) required by \
-                 log_folding_factor + log_blowup = {} + {}.",
-                lde.height(),
-                self.stir.log_folding_factor + self.stir.log_blowup,
-                min_lde_height,
-                self.stir.log_folding_factor,
-                self.stir.log_blowup,
-            );
-        }
-        self.input_mmcs.commit(ldes)
+        let mut widths = Vec::with_capacity(ldes.len());
+        let grouped: Vec<_> = ldes
+            .into_iter()
+            .map(|lde| {
+                assert!(
+                    lde.height() >= min_lde_height,
+                    "STIR PCS: pre-computed LDE height {} is below 2^{} (= {}) required by \
+                     log_folding_factor + log_blowup = {} + {}.",
+                    lde.height(),
+                    self.stir.log_folding_factor + self.stir.log_blowup,
+                    min_lde_height,
+                    self.stir.log_folding_factor,
+                    self.stir.log_blowup,
+                );
+                widths.push(lde.width());
+                group_fiber_rows(lde, self.stir.log_folding_factor)
+            })
+            .collect();
+        let (commitment, data) = self.input_mmcs.commit(grouped);
+        (commitment, StirProverData { data, widths })
     }
 
     #[instrument(name = "STIR PCS open", skip_all)]
@@ -240,15 +297,7 @@ where
         // Step 1: Compute evaluations at opening points using Lagrange interpolation.
         let mats_and_points: Vec<_> = commitment_data_with_opening_points
             .iter()
-            .map(|(data, points)| {
-                let mats = self
-                    .input_mmcs
-                    .get_matrices(data)
-                    .into_iter()
-                    .map(|m| m.as_view())
-                    .collect_vec();
-                (mats, points)
-            })
+            .map(|(data, points)| (lde_views(&self.input_mmcs, data), points))
             .collect();
 
         let (global_max_height, global_max_width) = mats_and_points
@@ -349,11 +398,11 @@ where
                         .map(|(&y, &ap)| y * ap)
                         .sum();
 
-                    for (ro_val, (&inv_d, &p_x)) in
-                        ro.iter_mut().zip(inv_denom.iter().zip(p_x_vec.iter()))
-                    {
-                        *ro_val += alpha_pow_offset * (p_x - y_combined) * inv_d;
-                    }
+                    ro.par_iter_mut()
+                        .zip(inv_denom.par_iter().zip(p_x_vec.par_iter()))
+                        .for_each(|(ro_val, (&inv_d, &p_x))| {
+                            *ro_val += alpha_pow_offset * (p_x - y_combined) * inv_d;
+                        });
                 }
             }
         }
@@ -380,40 +429,38 @@ where
             );
 
             let (stir_proof, first_round_query_indices) =
-                prove_stir_from_codeword(&stir_config, ro_natural, &self.dft, challenger);
+                prove_stir_from_external_codeword(&stir_config, ro_natural, &self.dft, challenger);
 
             // Input binding for this bucket. Folding factor is constant across rounds.
             let log_arity0 = stir_config.log_folding_factor;
-            let fold_height0 = (1usize << stir_config.log_starting_domain_size()) >> log_arity0;
-            let arity0 = 1usize << log_arity0;
 
             let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> =
                 commitment_data_with_opening_points
                     .iter()
                     .map(|(data, _)| {
-                        let mats = self.input_mmcs.get_matrices(data);
-                        if !mats.iter().any(|m| m.height() == bucket_height) {
+                        // Committed matrices are fiber-grouped, so their heights are the LDE
+                        // heights divided by the fold arity.
+                        let mats = self.input_mmcs.get_matrices(&data.data);
+                        if !mats
+                            .iter()
+                            .any(|m| m.height() << log_arity0 == bucket_height)
+                        {
                             return None;
                         }
-                        let commit_max_height = mats.iter().map(|m| m.height()).max().unwrap();
+                        let commit_max_height =
+                            mats.iter().map(|m| m.height()).max().unwrap() << log_arity0;
                         let log_commit_max = log2_strict_usize(commit_max_height);
 
-                        // Flatten every `(query, fiber column)` position into one index list so
-                        // a single multi-opening proof covers the whole bucket for this
-                        // commitment, sharing sibling digests across positions.
+                        // One index per query: the whole fiber lives in a single grouped row.
                         let q_globals: Vec<usize> = first_round_query_indices
                             .iter()
-                            .flat_map(|&j| {
-                                (0..arity0).map(move |l| {
-                                    let p = j + l * fold_height0;
-                                    let q_local = reverse_bits_len(p, log_h);
-                                    q_local << (log_commit_max - log_h)
-                                })
+                            .map(|&j| {
+                                reverse_bits_len(j, log_h - log_arity0) << (log_commit_max - log_h)
                             })
                             .collect();
 
                         let (opened_values, opening_proof) =
-                            self.input_mmcs.open_multi_batch(&q_globals, data);
+                            self.input_mmcs.open_multi_batch(&q_globals, &data.data);
                         Some(InputOpenings {
                             opened_values,
                             opening_proof,
@@ -436,17 +483,6 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        let global_max_height = commitments_with_opening_points
-            .iter()
-            .flat_map(|(_, domain_claims)| {
-                domain_claims
-                    .iter()
-                    .map(|(domain, _)| domain.size() << self.stir.log_blowup)
-            })
-            .max()
-            .unwrap_or(1);
-        let log_global_max_height = log2_strict_usize(global_max_height);
-
         // Observe all opened values to keep the transcript in sync.
         for (_, domain_claims) in &commitments_with_opening_points {
             for (_, point_claims) in domain_claims {
@@ -516,14 +552,6 @@ where
             Challenge::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied())
                 .collect_vec();
 
-        let coset: Vec<Val> = {
-            let coset =
-                TwoAdicMultiplicativeCoset::new(Val::GENERATOR, log_global_max_height).unwrap();
-            let mut pts = coset.iter().collect();
-            reverse_slice_index_bits(&mut pts);
-            pts
-        };
-
         // Verify each height bucket's STIR sub-proof and input binding.
         for (bucket_idx, &log_h) in bucket_log_heights.iter().enumerate() {
             let bucket_height = 1usize << log_h;
@@ -544,170 +572,165 @@ where
                 self.stir.clone(),
             );
 
-            // Run STIR verification and consume its first-round query view directly. No
-            // hand-mirrored transcript replay: anything that touches the FS state is contained
-            // inside `verify_stir` itself.
-            let stir_outputs = verify_stir(&stir_config, stir_proof, challenger).map_err(|e| {
-                e.map_input_err(|_| unreachable!("verify_stir does not produce InputError"))
-            })?;
-
-            // The folding factor is constant across rounds, so the same arity/fold_height
-            // applies whether STIR ran with intermediate rounds or only a final round.
+            // The folding factor is constant across rounds, so the same arity applies whether
+            // STIR ran with intermediate rounds or only a final round.
             let log_arity0 = stir_config.log_folding_factor;
-            let fold_height0 = (1usize << stir_config.log_starting_domain_size()) >> log_arity0;
             let arity0 = 1usize << log_arity0;
 
-            let first_round_unique_js = stir_outputs.first_round_indices;
-            let fiber_evals_per_query = stir_outputs.first_round_fiber_evals;
-            let n_q = first_round_unique_js.len();
+            // A queried input row sits at LDE position `p = j + l * fold_height0`, whose coset
+            // point is `GENERATOR * g^p` for `g = two_adic_generator(log_h)`. Walking a fiber's
+            // `arity0` lanes is therefore one exponentiation per query followed by repeated
+            // multiplication by the fixed step `g^fold_height0`, an `arity0`-th root of unity.
+            let domain_gen = Val::two_adic_generator(log_h);
+            let fiber_step = domain_gen.exp_power_of_2(log_h - log_arity0);
 
-            // Up-front fiber-shape check: each first-round fiber from STIR must have the
-            // expected width. Done once here so the inner accumulation loop can index without
-            // a bounds check on every iteration.
-            for row_evals in &fiber_evals_per_query {
-                if row_evals.len() != arity0 {
-                    return Err(StirError::InvalidProofShape);
-                }
-            }
+            // STIR's initial oracle is the reduced opening, which is a deterministic function
+            // of the input commitments, the claimed values, and `alpha` — all already in the
+            // transcript. Rather than have the prover commit and open it a second time, rebuild
+            // its queried fibers from the input MMCS openings on demand.
+            //
+            // The accumulation runs across ALL commitments: when several contribute matrices to
+            // the same height bucket, `ro[p]` is their sum, so a per-commitment reconstruction
+            // would be wrong.
+            let reconstruct_initial_fibers =
+                |first_round_unique_js: &[usize]| -> Result<Vec<Vec<Challenge>>, Self::Error> {
+                    let n_q = first_round_unique_js.len();
+                    let mut expected_ro = vec![Challenge::zero_vec(arity0); n_q];
 
-            // Accumulate the verifier-side expected reduced opening across ALL commitments.
-            // Comparing against `row_evals[l]` per commit was incorrect: when multiple
-            // commitments contribute matrices to the same height bucket, the prover's
-            // `ro[p]` is the sum across commitments, and the per-commit-equality check
-            // would fail (or, in the single-commit-per-bucket path that the existing tests
-            // happen to exercise, mask the multi-commit case entirely).
-            let mut expected_ro = vec![vec![Challenge::ZERO; arity0]; n_q];
+                    for (commit_idx, ((commitment, domain_claims), per_commit_opening)) in
+                        commitments_with_opening_points
+                            .iter()
+                            .zip(input_openings.iter())
+                            .enumerate()
+                    {
+                        let mat_lde_heights: Vec<usize> = domain_claims
+                            .iter()
+                            .map(|(domain, _)| domain.size() << self.stir.log_blowup)
+                            .collect();
 
-            for (commit_idx, ((commitment, domain_claims), per_commit_opening)) in
-                commitments_with_opening_points
-                    .iter()
-                    .zip(input_openings.iter())
-                    .enumerate()
-            {
-                let mat_lde_heights: Vec<usize> = domain_claims
-                    .iter()
-                    .map(|(domain, _)| domain.size() << self.stir.log_blowup)
-                    .collect();
+                        let has_at_bucket = mat_lde_heights.contains(&bucket_height);
 
-                let has_at_bucket = mat_lde_heights.contains(&bucket_height);
-
-                // SHAPE CHECK: whether an opening is present at all is determined entirely by
-                // public input. Validating up-front turns a mismatch into a clean
-                // `InvalidProofShape` instead of silently skipping a binding check.
-                let Some(opening) = per_commit_opening else {
-                    if has_at_bucket {
-                        return Err(StirError::InvalidProofShape);
-                    }
-                    continue;
-                };
-                if !has_at_bucket {
-                    return Err(StirError::InvalidProofShape);
-                }
-
-                let commit_max_height = mat_lde_heights.iter().copied().max().unwrap();
-                let log_commit_max = log2_strict_usize(commit_max_height);
-
-                let mat_widths: Vec<usize> = domain_claims
-                    .iter()
-                    .map(|(_, point_claims)| {
-                        point_claims.first().map(|(_, v)| v.len()).unwrap_or(0)
-                    })
-                    .collect();
-
-                let dimensions: Vec<p3_matrix::Dimensions> = mat_lde_heights
-                    .iter()
-                    .zip(mat_widths.iter())
-                    .map(|(&h, &w)| p3_matrix::Dimensions {
-                        height: h,
-                        width: w,
-                    })
-                    .collect();
-
-                // Flatten the `(query, fiber column)` positions in the same order the prover
-                // used to build `opening.opened_values`.
-                let q_globals: Vec<usize> = first_round_unique_js
-                    .iter()
-                    .flat_map(|&j| {
-                        (0..arity0).map(move |l| {
-                            let p = j + l * fold_height0;
-                            let q_local = reverse_bits_len(p, log_h);
-                            q_local << (log_commit_max - log_h)
-                        })
-                    })
-                    .collect();
-
-                // SHAPE CHECK: opened-row count is determined entirely by public input.
-                if opening.opened_values.len() != q_globals.len() {
-                    return Err(StirError::InvalidProofShape);
-                }
-
-                self.input_mmcs
-                    .verify_multi_batch(
-                        commitment,
-                        &dimensions,
-                        &q_globals,
-                        &opening.opened_values,
-                        &opening.opening_proof,
-                    )
-                    .map_err(StirError::InputError)?;
-
-                let mut opening_idx = 0usize;
-
-                for (q_idx, &j) in first_round_unique_js.iter().enumerate() {
-                    #[allow(clippy::needless_range_loop)]
-                    for l in 0..arity0 {
-                        let p = j + l * fold_height0;
-                        let q_local = reverse_bits_len(p, log_h);
-
-                        let row_vals_by_mat = &opening.opened_values[opening_idx];
-                        opening_idx += 1;
-
-                        for (mat_idx, (_, point_claims)) in domain_claims.iter().enumerate() {
-                            if mat_lde_heights[mat_idx] != bucket_height {
-                                continue;
+                        // SHAPE CHECK: whether an opening is present at all is determined entirely by
+                        // public input. Validating up-front turns a mismatch into a clean
+                        // `InvalidProofShape` instead of silently skipping a binding check.
+                        let Some(opening) = per_commit_opening else {
+                            if has_at_bucket {
+                                return Err(StirError::InvalidProofShape);
                             }
+                            continue;
+                        };
+                        if !has_at_bucket {
+                            return Err(StirError::InvalidProofShape);
+                        }
 
-                            let row_vals = &row_vals_by_mat[mat_idx];
-                            let p_x: Challenge = row_vals
-                                .iter()
-                                .zip(alpha_powers.iter())
-                                .map(|(&v, &ap)| Challenge::from(v) * ap)
-                                .sum();
+                        let commit_max_height = mat_lde_heights.iter().copied().max().unwrap();
+                        let log_commit_max = log2_strict_usize(commit_max_height);
 
-                            for (point_idx, (point, vals)) in point_claims.iter().enumerate() {
-                                let alpha_pow_offset =
-                                    alpha_offsets[commit_idx][mat_idx][point_idx];
+                        let mat_widths: Vec<usize> = domain_claims
+                            .iter()
+                            .map(|(_, point_claims)| {
+                                point_claims.first().map(|(_, v)| v.len()).unwrap_or(0)
+                            })
+                            .collect();
 
-                                let y_combined: Challenge = vals
-                                    .iter()
-                                    .zip(alpha_powers.iter())
-                                    .map(|(&y, &ap)| y * ap)
-                                    .sum();
+                        // Matrices are committed fiber-grouped: `2^log_arity0` LDE rows per committed
+                        // row.
+                        let dimensions: Vec<p3_matrix::Dimensions> = mat_lde_heights
+                            .iter()
+                            .zip(mat_widths.iter())
+                            .map(|(&h, &w)| p3_matrix::Dimensions {
+                                height: h >> log_arity0,
+                                width: w << log_arity0,
+                            })
+                            .collect();
 
-                                let inv_denom =
-                                    (*point - Challenge::from(coset[q_local])).inverse();
+                        // One grouped row per query, in the same order the prover used to build
+                        // `opening.opened_values`.
+                        let q_globals: Vec<usize> = first_round_unique_js
+                            .iter()
+                            .map(|&j| {
+                                reverse_bits_len(j, log_h - log_arity0) << (log_commit_max - log_h)
+                            })
+                            .collect();
 
-                                expected_ro[q_idx][l] +=
-                                    alpha_pow_offset * (p_x - y_combined) * inv_denom;
+                        // SHAPE CHECK: opened-row count is determined entirely by public input.
+                        if opening.opened_values.len() != q_globals.len() {
+                            return Err(StirError::InvalidProofShape);
+                        }
+
+                        self.input_mmcs
+                            .verify_multi_batch(
+                                commitment,
+                                &dimensions,
+                                &q_globals,
+                                &opening.opened_values,
+                                &opening.opening_proof,
+                            )
+                            .map_err(StirError::InputError)?;
+
+                        for (q_idx, &j) in first_round_unique_js.iter().enumerate() {
+                            let row_vals_by_mat = &opening.opened_values[q_idx];
+                            let mut fiber_point = Val::GENERATOR * domain_gen.exp_u64(j as u64);
+
+                            #[allow(clippy::needless_range_loop)]
+                            for l in 0..arity0 {
+                                // Fiber column `l` sits at slot `reverse_bits_len(l, log_arity0)`
+                                // of the grouped row.
+                                let slot = reverse_bits_len(l, log_arity0);
+
+                                for (mat_idx, (_, point_claims)) in domain_claims.iter().enumerate()
+                                {
+                                    if mat_lde_heights[mat_idx] != bucket_height {
+                                        continue;
+                                    }
+
+                                    // `verify_multi_batch` already pinned each grouped row to
+                                    // `dimensions[mat_idx].width`, so this slice is in bounds.
+                                    let width = mat_widths[mat_idx];
+                                    let row_vals =
+                                        &row_vals_by_mat[mat_idx][slot * width..][..width];
+                                    let p_x: Challenge = row_vals
+                                        .iter()
+                                        .zip(alpha_powers.iter())
+                                        .map(|(&v, &ap)| Challenge::from(v) * ap)
+                                        .sum();
+
+                                    for (point_idx, (point, vals)) in
+                                        point_claims.iter().enumerate()
+                                    {
+                                        let alpha_pow_offset =
+                                            alpha_offsets[commit_idx][mat_idx][point_idx];
+
+                                        let y_combined: Challenge = vals
+                                            .iter()
+                                            .zip(alpha_powers.iter())
+                                            .map(|(&y, &ap)| y * ap)
+                                            .sum();
+
+                                        let inv_denom =
+                                            (*point - Challenge::from(fiber_point)).inverse();
+
+                                        expected_ro[q_idx][l] +=
+                                            alpha_pow_offset * (p_x - y_combined) * inv_denom;
+                                    }
+                                }
+
+                                fiber_point *= fiber_step;
                             }
                         }
                     }
-                }
-            }
 
-            // Final binding check: the cross-commitment accumulated reduced opening must
-            // match the first-round fiber evaluations the STIR verifier extracted.
-            for (q_idx, _) in first_round_unique_js.iter().enumerate() {
-                let row_evals = &fiber_evals_per_query[q_idx];
-                for l in 0..arity0 {
-                    if expected_ro[q_idx][l] != row_evals[l] {
-                        return Err(StirError::PcsBindingMismatch {
-                            query: q_idx,
-                            column: l,
-                        });
-                    }
-                }
-            }
+                    Ok(expected_ro)
+                };
+
+            // Any transcript-touching step stays inside `verify_stir_with_external_initial`;
+            // the closure above only reads public data and the input openings.
+            verify_stir_with_external_initial(
+                &stir_config,
+                stir_proof,
+                challenger,
+                reconstruct_initial_fibers,
+            )?;
         }
 
         Ok(())

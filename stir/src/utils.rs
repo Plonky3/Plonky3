@@ -24,6 +24,33 @@ pub fn eval_poly<F: Field>(poly: &[F], point: F) -> F {
         .fold(F::ZERO, |acc, &coeff| acc * point + coeff)
 }
 
+/// Evaluate a polynomial at a point using a chunk-parallel Horner scheme.
+///
+/// Splits `poly` into contiguous chunks, evaluates each chunk's local Horner sum in
+/// parallel, then combines the per-chunk results with one more Horner pass over powers
+/// of `point^chunk_len`:
+/// `value = chunk_0 + point^L * (chunk_1 + point^L * (chunk_2 + ...))`.
+///
+/// Falls back to plain [`eval_poly`] for inputs too small to amortize the parallel
+/// dispatch.
+pub fn eval_poly_parallel<F: Field>(poly: &[F], point: F) -> F {
+    const MIN_PARALLEL_LEN: usize = 4096;
+    if poly.len() < MIN_PARALLEL_LEN {
+        return eval_poly(poly, point);
+    }
+
+    let num_chunks = current_num_threads().max(1);
+    let chunk_size = poly.len().div_ceil(num_chunks);
+    let point_pow_chunk = point.exp_u64(chunk_size as u64);
+
+    poly.par_chunks(chunk_size)
+        .map(|chunk| eval_poly(chunk, point))
+        .collect::<Vec<F>>()
+        .into_iter()
+        .rev()
+        .fold(F::ZERO, |acc, chunk_val| acc * point_pow_chunk + chunk_val)
+}
+
 /// Divide a coefficient-form polynomial by the linear factor `(X - point)`.
 ///
 /// Returns `(quotient, remainder)` via synthetic (Horner) division.
@@ -196,6 +223,39 @@ pub fn eval_degree_correction<F: Field>(value: F, point: F, r_comb: F, gap: usiz
 /// Evaluate the vanishing polynomial `prod_{y in roots} (point - y)` at `point`.
 pub fn eval_vanishing_at_roots<F: Field>(roots: &[F], point: F) -> F {
     roots.iter().fold(F::ONE, |acc, &root| acc * (point - root))
+}
+
+/// Horner evaluation of an extension-coefficient polynomial at a **base-field** point.
+///
+/// Identical to [`eval_poly`] on a lifted point, but each step is an extension-by-base
+/// product rather than a full extension multiplication.
+pub fn eval_poly_at_base<F: Field, EF: ExtensionField<F>>(poly: &[EF], point: F) -> EF {
+    poly.iter()
+        .rev()
+        .fold(EF::ZERO, |acc, &coeff| acc * point + coeff)
+}
+
+/// Reduce `poly` modulo `X^n - c`, returning the `n` remainder coefficients.
+///
+/// Writing `i = q*n + r` gives `X^i = (X^n)^q * X^r ≡ c^q * X^r`, so every coefficient folds
+/// onto its index mod `n` scaled by a power of `c`: one pass over `poly`, independent of `n`.
+///
+/// Evaluating the reduced polynomial agrees with the original at any point `x` with
+/// `x^n = c`, which for a coset of the `n`-th roots of unity is every point at once.
+pub fn reduce_mod_x_pow_minus_c<F: Field, EF: ExtensionField<F>>(
+    poly: &[EF],
+    n: usize,
+    c: F,
+) -> Vec<EF> {
+    let mut remainder = EF::zero_vec(n);
+    let mut c_pow = F::ONE;
+    for block in poly.chunks(n) {
+        for (slot, &coeff) in remainder.iter_mut().zip(block) {
+            *slot += coeff * c_pow;
+        }
+        c_pow *= c;
+    }
+    remainder
 }
 
 /// Coefficients of the vanishing polynomial `prod_{y in roots} (X - y)`.
@@ -389,13 +449,21 @@ pub fn check_shake_consistency<F: Field>(
 ///
 /// Construction 4.5 defines `Fold(f, β)(y)` over **coset** preimages
 /// `α·g^{j + l·new_height}` (`α` = domain shift). Interpolating at subgroup
-/// coordinates instead (no `α`) lets the barycentric weights be precomputed once
-/// and reused across all `j` (the `α^{j·(k-1)}` factor cancels in the ratio).
+/// coordinates instead (no `α`) lets the fold be decomposed into `log_arity`
+/// sequential arity-2 folds (below), which only works cleanly without a coset shift.
 ///
 /// Because the y-values are identical and the x-nodes scale by `α`,
 /// `P_coset(X) = P_subgroup(X/α)` exactly for any arity. Callers therefore pass
 /// `β = γ/α` to obtain Construction 4.5's coset fold at challenge `γ`; this crate's
 /// prover and verifier both do so, so the realized fold matches the paper literally.
+///
+/// # Binary-pass decomposition
+///
+/// An arity-`2^k` fold at challenge `beta` equals `k` sequential arity-2 folds at
+/// challenges `beta, beta^2, beta^4, …, beta^{2^(k-1)}` (the standard FFT decimation
+/// identity underlying FRI-style low-degree tests). Each pass halves the natural-order
+/// codeword, pairing index `j` with `j + height/2`: since `g^{height/2} = -1` on the
+/// pass's current domain, this pairs conjugate points `x` and `-x`.
 pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
     codeword: &[EF],
     beta: EF,
@@ -406,114 +474,40 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
     let new_height = codeword.len() / arity;
     assert!(new_height > 0);
 
-    if log_arity == 1 {
-        // Arity-2: x_j = g^j, x_{j+new_height} = -g^j  (since g^{new_height} = -1).
+    let mut data = codeword.to_vec();
+    let mut current_beta = beta;
+    let mut cur_log_domain = log_domain_size;
+
+    for _ in 0..log_arity {
+        let height = data.len() / 2;
+
         // fold(j) = (lo + hi)/2 + beta * (lo - hi) / (2 * g^j)
         //         = (lo + hi)/2 + (beta/2) * g_inv^j * (lo - hi)
         //
-        // g_orig has order `domain_size`, so g_inv = g_orig.inverse() has the same order.
-        // halve_inv_powers[j] = (1/2) * g_orig^{-j}
-        let g_orig_inv = F::two_adic_generator(log_domain_size).inverse();
+        // g_orig has order `2^cur_log_domain`, so g_inv = g_orig.inverse() has the same
+        // order. halve_inv_powers[j] = (1/2) * g_orig^{-j}.
+        let g_orig_inv = F::two_adic_generator(cur_log_domain).inverse();
         let halve_inv_powers: Vec<F> = g_orig_inv
             .shifted_powers(F::ONE.halve())
-            .take(new_height)
+            .take(height)
             .collect();
 
-        (0..new_height)
+        data = (0..height)
             .into_par_iter()
             .map(|j| {
-                let lo = codeword[j];
-                let hi = codeword[j + new_height];
+                let lo = data[j];
+                let hi = data[j + height];
                 let hip = EF::from(halve_inv_powers[j]);
-                (lo + hi).halve() + (lo - hi) * beta * hip
+                (lo + hi).halve() + (lo - hi) * current_beta * hip
             })
-            .collect()
-    } else {
-        // General arity k = 2^log_arity: evaluate Lagrange interpolation at `beta`
-        // through all k fiber values for each new-domain index j.
-        //
-        // x-coordinates for new-domain index j:
-        //   x_l = g^{j + l * new_height}  for l = 0..k-1
-        // where g = two_adic_generator(log_domain_size).
-        //
-        // Key identity: x_l^{(j)} = g^j * x_l^{(0)} for all l. The barycentric weight
-        // for node (j, l) satisfies w_l^{(j)} = g^{-j*(k-1)} * w_l^{(0)}. Since this
-        // factor is common to numerator and denominator, it cancels in the ratio. Thus
-        // the weights from j=0 (xs_0 = [1, step, step^2, ...]) can be reused for all j,
-        // and only the x-coordinates need to be rescaled by g^j.
-        let g = F::two_adic_generator(log_domain_size);
-        let step = g.exp_u64(new_height as u64); // arity-th root of unity
+            .collect();
 
-        // Precompute base x-coordinates xs_0[l] = step^l (for j = 0).
-        let xs_0: Vec<F> = {
-            let mut acc = F::ONE;
-            (0..arity)
-                .map(|_| {
-                    let v = acc;
-                    acc *= step;
-                    v
-                })
-                .collect()
-        };
-
-        // Precompute barycentric weights for xs_0 (reused for all j after cancellation).
-        let barycentric_weights: Vec<F> = {
-            let mut w = vec![F::ONE; arity];
-            for i in 0..arity {
-                for j in 0..arity {
-                    if i != j {
-                        w[i] *= xs_0[i] - xs_0[j];
-                    }
-                }
-            }
-            batch_multiplicative_inverse(&w)
-        };
-
-        // Precompute g^j for j = 0..new_height.
-        let g_powers: Vec<F> = g.powers().collect_n(new_height);
-
-        (0..new_height)
-            .into_par_iter()
-            .map(|j| {
-                let gj = g_powers[j];
-                // xs_j[l] = gj * xs_0[l]
-                let ys_j: Vec<EF> = (0..arity).map(|l| codeword[j + l * new_height]).collect();
-
-                // Check if beta equals one of the xs_j nodes (exact match).
-                for l in 0..arity {
-                    if beta == EF::from(gj * xs_0[l]) {
-                        return ys_j[l];
-                    }
-                }
-
-                // Barycentric Lagrange eval: use precomputed weights (cancellation of g^{j*(k-1)})
-                // num = sum_l w_l * ys_j[l] / (beta - gj * xs_0[l])
-                // den = sum_l w_l / (beta - gj * xs_0[l])
-                //
-                // The `arity` denominators are batch-inverted via Montgomery's trick (one EF
-                // inversion plus O(arity) multiplications) instead of `arity` separate divisions.
-                let diffs: Vec<EF> = (0..arity).map(|l| beta - EF::from(gj * xs_0[l])).collect();
-                let mut prefix = Vec::with_capacity(arity);
-                let mut running = EF::ONE;
-                for &diff in &diffs {
-                    prefix.push(running);
-                    running *= diff;
-                }
-                let mut inv_running = running.inverse();
-
-                let mut num = EF::ZERO;
-                let mut den = EF::ZERO;
-                for l in (0..arity).rev() {
-                    let inv_diff = inv_running * prefix[l];
-                    inv_running *= diffs[l];
-                    let term = EF::from(barycentric_weights[l]) * inv_diff;
-                    num += term * ys_j[l];
-                    den += term;
-                }
-                num / den
-            })
-            .collect()
+        current_beta = current_beta.square();
+        cur_log_domain -= 1;
     }
+
+    debug_assert_eq!(data.len(), new_height);
+    data
 }
 
 /// Compute the expected folded value for a single fiber (used by the verifier).
@@ -604,6 +598,20 @@ mod tests {
     fn test_eval_poly_zero() {
         let poly: Vec<F> = vec![];
         assert_eq!(eval_poly(&poly, F::from_u64(3)), F::ZERO);
+    }
+
+    #[test]
+    fn test_eval_poly_parallel_matches_eval_poly() {
+        // Exercise chunk boundaries around and past the parallel-dispatch threshold.
+        for len in [0, 1, 4095, 4096, 4097, 10_000] {
+            let poly: Vec<F> = (0..len).map(|i| F::from_u64(i as u64 + 1)).collect();
+            let point = F::from_u64(12345);
+            assert_eq!(
+                eval_poly_parallel(&poly, point),
+                eval_poly(&poly, point),
+                "mismatch at len={len}"
+            );
+        }
     }
 
     #[test]
