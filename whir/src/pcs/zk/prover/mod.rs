@@ -73,7 +73,11 @@ where
     StandardUniform: Distribution<EF> + Distribution<F>,
 {
     /// Bundles the prover dependencies.
-    pub(crate) fn new(config: &'a ZkWhirConfig<EF, F, Challenger>, dft: &'a Dft, mmcs: &'a MT) -> Self {
+    pub(crate) fn new(
+        config: &'a ZkWhirConfig<EF, F, Challenger>,
+        dft: &'a Dft,
+        mmcs: &'a MT,
+    ) -> Self {
         Self {
             config,
             dft,
