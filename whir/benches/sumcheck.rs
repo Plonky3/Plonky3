@@ -244,9 +244,10 @@ fn bench_round_coefficients(c: &mut Criterion) {
         &n,
         |b, _| {
             b.iter(|| {
-                let (c0, c_inf) =
-                    sumcheck_coefficients_prefix(black_box(&evals), black_box(&weights));
-                black_box((c0, c_inf))
+                black_box(sumcheck_coefficients_prefix(
+                    black_box(&evals),
+                    black_box(&weights),
+                ))
             });
         },
     );

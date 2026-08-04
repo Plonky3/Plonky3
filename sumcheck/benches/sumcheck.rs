@@ -32,7 +32,7 @@ use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{
-    SumcheckProver, VariableOrder, sumcheck_coefficients_prefix,
+    RoundMessage, SumcheckProver, VariableOrder, sumcheck_coefficients_prefix,
     sumcheck_coefficients_prefix_projective, sumcheck_coefficients_suffix,
 };
 use p3_sumcheck::{OpeningBatch, SumcheckData};
@@ -205,7 +205,7 @@ where
 ///
 /// The constant term and the leading coefficient of the round polynomial.
 #[inline]
-fn coeffs<Base, Acc>(order: VariableOrder, evals: &[Base], weights: &[Acc]) -> (Acc, Acc)
+fn coeffs<Base, Acc>(order: VariableOrder, evals: &[Base], weights: &[Acc]) -> RoundMessage<Acc>
 where
     Base: PrimeCharacteristicRing + Copy + Send + Sync,
     Acc: Algebra<Base> + Copy + Send + Sync,
