@@ -22,8 +22,8 @@ use tracing::instrument;
 use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    compute_shake_polynomial, eval_poly_parallel, fold_codeword, interpolate_poly,
-    next_domain_shift, sample_ood_points, vanishing_poly_from_roots,
+    compute_shake_polynomial, eval_poly_parallel, fold_codeword, fold_domain_params,
+    interpolate_poly, next_domain_shift, sample_ood_points, vanishing_poly_from_roots,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -183,9 +183,8 @@ where
         let log_arity = rc.log_folding_factor;
         let arity = 1 << log_arity;
 
-        let fold_log_domain = current_log_domain - log_arity;
-
-        let fold_shift = current_shift.exp_power_of_2(log_arity);
+        let (fold_log_domain, fold_shift) =
+            fold_domain_params(current_shift, current_log_domain, log_arity);
         let next_log_domain = current_log_domain - 1;
         let next_shift = next_domain_shift(current_shift, log_arity);
 
@@ -404,8 +403,8 @@ where
     // Final round: fold the last committed codeword and send the resulting polynomial.
     let final_log_arity = config.log_folding_factor;
     let final_arity = 1usize << final_log_arity;
-    let final_new_log_domain = current_log_domain - final_log_arity;
-    let final_new_shift = current_shift.exp_power_of_2(final_log_arity);
+    let (final_new_log_domain, final_new_shift) =
+        fold_domain_params(current_shift, current_log_domain, final_log_arity);
 
     let final_folding_pow_witness = challenger.grind(config.final_folding_pow_bits);
     let final_gamma: EF = challenger.sample_algebra_element();

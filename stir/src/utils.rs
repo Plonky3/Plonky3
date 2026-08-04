@@ -169,6 +169,20 @@ pub fn next_domain_shift<F: Field>(current_shift: F, log_arity: usize) -> F {
     current_shift.exp_power_of_2(log_arity) * F::GENERATOR
 }
 
+/// Domain `(log_size, shift)` that a fold of arity `2^log_arity` produces before any
+/// re-commitment shift is applied: `current_shift^(2^log_arity) * H`, `|H| = 2^(log_domain -
+/// log_arity)`.
+pub fn fold_domain_params<F: Field>(
+    current_shift: F,
+    current_log_domain: usize,
+    log_arity: usize,
+) -> (usize, F) {
+    (
+        current_log_domain - log_arity,
+        current_shift.exp_power_of_2(log_arity),
+    )
+}
+
 /// Sample `num_ood_samples` distinct out-of-domain points for a STIR round from the
 /// transcript.
 ///

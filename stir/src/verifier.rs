@@ -12,8 +12,8 @@ use crate::config::StirConfig;
 use crate::proof::StirProof;
 use crate::utils::{
     check_shake_consistency, eval_degree_correction, eval_poly, eval_poly_at_base,
-    lagrange_eval_at, next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points,
-    vanishing_poly_from_roots,
+    fold_domain_params, lagrange_eval_at, next_domain_shift, reduce_mod_x_pow_minus_c,
+    sample_ood_points, vanishing_poly_from_roots,
 };
 
 #[derive(Clone)]
@@ -312,10 +312,9 @@ where
         let log_arity = rc.log_folding_factor;
         let arity = 1 << log_arity;
 
-        let fold_log_domain = current_log_domain - log_arity;
+        let (fold_log_domain, fold_shift) =
+            fold_domain_params(current_shift, current_log_domain, log_arity);
         let fold_height = 1usize << fold_log_domain;
-
-        let fold_shift = current_shift.exp_power_of_2(log_arity);
         let next_log_domain = current_log_domain - 1;
         let next_shift = next_domain_shift(current_shift, log_arity);
 
@@ -509,9 +508,9 @@ where
     // Final round: verify the final fold against the last virtual oracle.
     let final_log_arity = config.log_folding_factor;
     let final_arity = 1usize << final_log_arity;
-    let final_new_log_domain = current_log_domain - final_log_arity;
+    let (final_new_log_domain, final_new_shift) =
+        fold_domain_params(current_shift, current_log_domain, final_log_arity);
     let final_new_height = 1usize << final_new_log_domain;
-    let final_new_shift = current_shift.exp_power_of_2(final_log_arity);
 
     if !challenger.check_witness(
         config.final_folding_pow_bits,
