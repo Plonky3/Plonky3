@@ -11,9 +11,10 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::config::{BaseCaseZkConfig, MaskGroupWitness};
-use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
-use crate::pcs::utils::get_challenge_stir_queries;
-use crate::pcs::zk::proof::{BaseCaseZkProof, BlindedMask, MaskOpeningPair};
+use super::{max_mask_domain_size, project_mask_positions};
+use crate::pcs::proof::{QueryOpenings, SharedBatchOpening, SharedProofOpening};
+use crate::pcs::utils::{get_challenge_iid_queries, get_challenge_stir_queries};
+use crate::pcs::zk::proof::{BaseCaseZkProof, BlindedMask};
 
 /// HVZK base-case prover (Construction 7.2).
 pub struct BaseCaseZkProver<'a, F, EF, MT>
@@ -96,12 +97,13 @@ where
 
         // Move 1b: one fresh blind s'_i = Enc(s~'_i, r'_i) per carried mask.
         //
-        // Blinds are committed group-wise, mirroring how the carried masks
-        // were committed:
+        // Each group keeps its own encoding and dimensions, mirroring the
+        // carried masks. The mixed MMCS commits every encoded matrix under
+        // one root:
         //
         //     group of width w  ->  w codewords stacked into one matrix
-        //                       ->  one root, one Merkle path per position
-        let mut fresh_mask_commitments = Vec::with_capacity(masks.len());
+        //     all group matrices -> one mixed-height commitment
+        let mut fresh_matrices = Vec::with_capacity(masks.len());
         let mut fresh_groups = Vec::with_capacity(masks.len());
         for (group, witness) in self.config.mask_groups.iter().zip(masks) {
             // Every member of a group shares the group's code.
@@ -117,13 +119,17 @@ where
                 blind_randomness.push(randomness);
             }
             // Row z of the stacked matrix holds position z of every blind.
-            let (commitment, data) = self.extension_mmcs.commit_matrix(
-                encoding.encode_batch_with_randomness(&blind_messages, &blind_randomness),
-            );
-            challenger.observe(commitment.clone());
-            fresh_mask_commitments.push(commitment);
-            fresh_groups.push((blind_messages, blind_randomness, data, witness));
+            fresh_matrices
+                .push(encoding.encode_batch_with_randomness(&blind_messages, &blind_randomness));
+            fresh_groups.push((blind_messages, blind_randomness, witness));
         }
+        let (fresh_mask_commitment, fresh_mask_data) = if fresh_matrices.is_empty() {
+            (None, None)
+        } else {
+            let (commitment, data) = self.extension_mmcs.commit(fresh_matrices);
+            challenger.observe(commitment.clone());
+            (Some(commitment), Some(data))
+        };
 
         // Move 2: the fresh-side claim.
         //
@@ -135,7 +141,7 @@ where
             fresh_message.iter().copied(),
             source_covector.iter().copied(),
         );
-        for (blind_messages, _, _, witness) in &fresh_groups {
+        for (blind_messages, _, witness) in &fresh_groups {
             for (message, covector) in blind_messages.iter().zip(witness.covectors) {
                 masked_claim +=
                     dot_product::<EF, _, _>(message.iter().copied(), covector.iter().copied());
@@ -167,7 +173,7 @@ where
         // - xi*_i = s~'_i + gamma * xi_i,
         // - the analogous r*_i for each mask's encoding randomness.
         let mut blinded_masks = Vec::new();
-        for (blind_messages, blind_randomness, _, witness) in &fresh_groups {
+        for (blind_messages, blind_randomness, witness) in &fresh_groups {
             for ((message, randomness), (hidden_message, hidden_randomness)) in blind_messages
                 .iter()
                 .zip(blind_randomness)
@@ -212,35 +218,51 @@ where
         let fresh_main_openings =
             SharedProofOpening::open(self.extension_mmcs, &positions, &fresh_main_data);
 
-        // Move 5b: mask spot checks, t_zk positions per group.
+        // Move 5b: mask spot checks from one global t_zk-query vector.
         //
         // The verifier will recheck, per position y and group member i:
         //
         //     Enc(xi*_i, r*_i)(y) = s'_i(y) + gamma * xi_i(y)
         //
-        // Positions are shared across the group, so one opened row of each
-        // oracle serves every member.
-        let mut mask_openings = Vec::with_capacity(fresh_groups.len());
-        for (group, (_, _, fresh_data, witness)) in
-            self.config.mask_groups.iter().zip(&fresh_groups)
-        {
-            let positions = get_challenge_stir_queries::<Challenger, F>(
-                group.shape.domain_size,
-                0,
+        // A uniform index on the largest domain projects uniformly onto every
+        // shorter power-of-two domain. Sampling with replacement preserves
+        // independence after projection and reveals at most t_zk distinct
+        // positions from any mask.
+        let max_mask_domain = max_mask_domain_size(&self.config.mask_groups);
+        let global_mask_positions = max_mask_domain.map(|domain_size| {
+            get_challenge_iid_queries::<Challenger, F>(
+                domain_size,
                 self.config.mask_queries,
                 challenger,
-            );
-            // xi_i(y) and s'_i(y): the carried group oracle and its fresh
-            // blind, opened at the same shared positions.
-            mask_openings.push(MaskOpeningPair {
-                carried: SharedProofOpening::open(self.extension_mmcs, &positions, witness.data),
-                fresh: SharedProofOpening::open(self.extension_mmcs, &positions, fresh_data),
-            });
+            )
+        });
+        let mut carried_mask_openings = Vec::with_capacity(fresh_groups.len());
+        if let (Some(max_domain), Some(global_positions)) =
+            (max_mask_domain, global_mask_positions.as_deref())
+        {
+            for (group, (_, _, witness)) in self.config.mask_groups.iter().zip(&fresh_groups) {
+                let positions =
+                    project_mask_positions(global_positions, max_domain, group.shape.domain_size);
+                carried_mask_openings.push(SharedProofOpening::open(
+                    self.extension_mmcs,
+                    &positions,
+                    witness.data,
+                ));
+            }
         }
+        let fresh_mask_opening = global_mask_positions.as_deref().map(|positions| {
+            SharedBatchOpening::open(
+                self.extension_mmcs,
+                positions,
+                fresh_mask_data
+                    .as_ref()
+                    .expect("fresh data exists whenever mask positions do"),
+            )
+        });
 
         BaseCaseZkProof {
             fresh_main_commitment,
-            fresh_mask_commitments,
+            fresh_mask_commitment,
             masked_claim,
             blinded_message,
             blinded_randomness,
@@ -248,7 +270,8 @@ where
             pow_witness,
             source_openings,
             fresh_main_openings,
-            mask_openings,
+            carried_mask_openings,
+            fresh_mask_opening,
         }
     }
 }

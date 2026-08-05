@@ -12,8 +12,9 @@ use p3_util::log2_strict_usize;
 
 use super::config::BaseCaseZkConfig;
 use super::error::BaseCaseZkError;
-use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
-use crate::pcs::utils::get_challenge_stir_queries;
+use super::{max_mask_domain_size, project_mask_positions};
+use crate::pcs::proof::{QueryOpenings, SharedBatchOpening, SharedProofOpening};
+use crate::pcs::utils::{get_challenge_iid_queries, get_challenge_stir_queries};
 use crate::pcs::zk::proof::BaseCaseZkProof;
 use crate::utils::padded_ood_t1;
 
@@ -101,7 +102,15 @@ where
         count(mask_commitments.len(), num_groups)?;
         count(source_covector.len(), code.message_len)?;
         count(proof.blinded_masks.len(), num_masks)?;
-        count(proof.fresh_mask_commitments.len(), num_groups)?;
+        count(
+            usize::from(proof.fresh_mask_commitment.is_some()),
+            usize::from(num_groups > 0),
+        )?;
+        count(
+            usize::from(proof.fresh_mask_opening.is_some()),
+            usize::from(num_groups > 0),
+        )?;
+        count(proof.carried_mask_openings.len(), num_groups)?;
         // Per-mask reveal and covector lengths against the group's code.
         let blinded = |kind, actual: usize, expected: usize| {
             if actual == expected {
@@ -148,7 +157,7 @@ where
         //     move 4  ->  reveals f*, r*, xi*_i, r*_i
         let fresh_main_commitment = &proof.fresh_main_commitment;
         challenger.observe(fresh_main_commitment.clone());
-        for commitment in &proof.fresh_mask_commitments {
+        if let Some(commitment) = &proof.fresh_mask_commitment {
             challenger.observe(commitment.clone());
         }
         challenger.observe_algebra_element(proof.masked_claim);
@@ -237,72 +246,89 @@ where
             }
         }
 
-        // Check 5: mask spot checks at t_zk positions per group.
+        // Check 5: mask spot checks from one global t_zk-query vector.
         //
         // Same equation as check 4, per group member i and position y:
         //
         //     Enc(xi*_i, r*_i)(y) = s'_i(y) + gamma * xi_i(y)
         //
-        // Positions are shared across a group: one opened row of each
-        // oracle serves every member.
-        openings("mask", proof.mask_openings.len(), num_groups)?;
-        let mut mask_offset = 0;
-        for (group_index, (group, pair)) in self
-            .config
-            .mask_groups
-            .iter()
-            .zip(&proof.mask_openings)
-            .enumerate()
-        {
-            let positions = get_challenge_stir_queries::<Challenger, F>(
-                group.shape.domain_size,
-                0,
+        // The shared fresh commitment follows mixed-MMCS index semantics:
+        // every global position is right-shifted for a shorter matrix. We use
+        // exactly those projected positions for the corresponding carried
+        // commitment, so both sides evaluate the same group-code point.
+        if let Some(max_domain) = max_mask_domain_size(&self.config.mask_groups) {
+            let global_positions = get_challenge_iid_queries::<Challenger, F>(
+                max_domain,
                 self.config.mask_queries,
                 challenger,
             );
-            let dims = vec![Dimensions {
-                height: group.shape.domain_size,
-                width: group.width,
-            }];
-            // xi_i(y) for every member i: rows of the carried oracle.
-            let carried_rows = self.verify_rows(
-                &mask_commitments[group_index],
-                &dims,
-                &positions,
-                &pair.carried,
-                group.width,
-                "carried mask",
+            let fresh_dims: Vec<Dimensions> = self
+                .config
+                .mask_groups
+                .iter()
+                .map(|group| Dimensions {
+                    height: group.shape.domain_size,
+                    width: group.width,
+                })
+                .collect();
+            let fresh_rows = self.verify_batch_rows(
+                proof
+                    .fresh_mask_commitment
+                    .as_ref()
+                    .expect("mask count check pins the shared commitment"),
+                &fresh_dims,
+                &global_positions,
+                proof
+                    .fresh_mask_opening
+                    .as_ref()
+                    .expect("mask count check pins the shared opening"),
+                "fresh masks",
             )?;
-            // s'_i(y) for every member i: rows of the fresh blind.
-            let fresh_rows = self.verify_rows(
-                &proof.fresh_mask_commitments[group_index],
-                &dims,
-                &positions,
-                &pair.fresh,
-                group.width,
-                "fresh mask",
-            )?;
-            // Evaluation domain of the mask code over the extension field.
-            let mask_gen = EF::two_adic_generator(log2_strict_usize(group.shape.domain_size));
-            let blinded = &proof.blinded_masks[mask_offset..mask_offset + group.width];
-            for ((&position, carried_row), fresh_row) in
-                positions.iter().zip(carried_rows).zip(fresh_rows)
+
+            let mut mask_offset = 0;
+            for (group_index, (group, carried_opening)) in self
+                .config
+                .mask_groups
+                .iter()
+                .zip(&proof.carried_mask_openings)
+                .enumerate()
             {
-                // The field point behind position y.
-                let point = mask_gen.exp_u64(position as u64);
-                for ((blinded, &carried), &fresh) in blinded.iter().zip(carried_row).zip(fresh_row)
+                let positions =
+                    project_mask_positions(&global_positions, max_domain, group.shape.domain_size);
+                let dims = vec![Dimensions {
+                    height: group.shape.domain_size,
+                    width: group.width,
+                }];
+                let carried_rows = self.verify_rows(
+                    &mask_commitments[group_index],
+                    &dims,
+                    &positions,
+                    carried_opening,
+                    group.width,
+                    "carried mask",
+                )?;
+                let mask_gen = EF::two_adic_generator(log2_strict_usize(group.shape.domain_size));
+                let blinded = &proof.blinded_masks[mask_offset..mask_offset + group.width];
+                for (query, (&position, carried_row)) in
+                    positions.iter().zip(carried_rows).enumerate()
                 {
-                    // Enc(xi*_i, r*_i)(y): re-encode member i's reveal.
-                    let blinded_value = padded_ood_t1(point, &blinded.message, &blinded.randomness);
-                    if blinded_value != fresh + gamma * carried {
-                        return Err(BaseCaseZkError::MaskSpotCheckFailed {
-                            group: group_index,
-                            position,
-                        });
+                    let fresh_row = &fresh_rows[query][group_index];
+                    let point = mask_gen.exp_u64(position as u64);
+                    for ((blinded, &carried), &fresh) in
+                        blinded.iter().zip(carried_row).zip(fresh_row)
+                    {
+                        let blinded_value =
+                            padded_ood_t1(point, &blinded.message, &blinded.randomness);
+                        if blinded_value != fresh + gamma * carried {
+                            return Err(BaseCaseZkError::MaskSpotCheckFailed {
+                                group: group_index,
+                                position,
+                            });
+                        }
                     }
                 }
+                mask_offset += group.width;
             }
-            mask_offset += group.width;
         }
 
         Ok(())
@@ -330,6 +356,38 @@ where
         }
         // Pin every row width locally before any caller indexes into it.
         if opening.rows.iter().any(|row| row.len() != width) {
+            return Err(BaseCaseZkError::MerkleVerificationFailed { kind });
+        }
+        opening
+            .verify(self.extension_mmcs, commitment, dims, positions)
+            .map_err(|_| BaseCaseZkError::MerkleVerificationFailed { kind })?;
+        Ok(&opening.rows)
+    }
+
+    /// Verifies one mixed-matrix extension opening and pins every axis before
+    /// callers index into the nested row structure.
+    fn verify_batch_rows<'p>(
+        &self,
+        commitment: &MT::Commitment,
+        dims: &[Dimensions],
+        positions: &[usize],
+        opening: &'p SharedBatchOpening<EF, MT::MultiProof>,
+        kind: &'static str,
+    ) -> Result<&'p [Vec<Vec<EF>>], BaseCaseZkError> {
+        if opening.rows.len() != positions.len() {
+            return Err(BaseCaseZkError::OpeningCountMismatch {
+                kind,
+                expected: positions.len(),
+                actual: opening.rows.len(),
+            });
+        }
+        if opening.rows.iter().any(|rows| {
+            rows.len() != dims.len()
+                || rows
+                    .iter()
+                    .zip(dims)
+                    .any(|(row, dimensions)| row.len() != dimensions.width)
+        }) {
             return Err(BaseCaseZkError::MerkleVerificationFailed { kind });
         }
         opening
