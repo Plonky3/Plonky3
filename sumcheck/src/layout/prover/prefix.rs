@@ -4,20 +4,23 @@ use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{
-    ExtensionField, Field, PackedFieldExtension, PackedValue, TwoAdicField, dot_product,
+    ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    TwoAdicField, dot_product,
 };
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
+use crate::constraints::statement::EqStatement;
+use crate::constraints::{Constraint, Statements};
 use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::opening::Opening;
 use crate::layout::prover::{Layout, StackedClaims};
 use crate::layout::witness::Table;
 use crate::layout::{LayoutStrategy, ProverMultiClaim, Witness};
 use crate::product_polynomial::ProductPolynomial;
-use crate::strategy::{SumcheckProver, VariableOrder};
+use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
 use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
 use crate::{Claim, SumcheckData, extrapolate_01inf};
@@ -37,6 +40,26 @@ pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     /// - Prefix binding folds this polynomial directly.
     /// - It is kept here, beside the shared claim state.
     pub(crate) poly: Poly<F>,
+    /// Plain lifted claim points and evals, in record order.
+    ///
+    /// The SVO machinery factorises claim points immediately, so the raw
+    /// stacked-coordinate points are stashed here at record time for the
+    /// projective initial rounds, which absorb them as one flat constraint.
+    ///
+    /// Recorded unconditionally: the layout does not know the basis until
+    /// `into_sumcheck`, and the cost is one point clone per opening, which
+    /// is negligible against the evaluation work at record time.
+    pub(crate) projective_eq_claims: Vec<(Point<EF>, EF)>,
+    /// Plain virtual (out-of-domain) claim points and evals, in record order.
+    ///
+    /// Kept separate from the concrete claims: the alpha-power assignment
+    /// places every concrete opening before every virtual claim.
+    pub(crate) projective_virtual_claims: Vec<(Point<EF>, EF)>,
+    /// Whether any repeat-last successor (next) opening was recorded.
+    ///
+    /// Next claims have no projective weight semantics; the projective
+    /// initial rounds reject them.
+    pub(crate) has_next_claims: bool,
 }
 
 impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
@@ -51,6 +74,9 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
                 parts.folding,
             ),
             poly: parts.poly,
+            projective_eq_claims: Vec::new(),
+            projective_virtual_claims: Vec::new(),
+            has_next_claims: false,
         }
     }
 
@@ -108,7 +134,19 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         // The opening point lives in the table's local frame, one coordinate per variable.
         debug_assert_eq!(point.num_variables(), table.num_variables());
 
+        // Stash the plain lifted points before factorisation: the projective
+        // initial rounds rebuild the batched claim constraint from them.
+        // The prefix layout uses reversed selectors, so claims lift as suffix.
+        let placement = self
+            .claims
+            .placements
+            .iter()
+            .find(|p| p.idx() == table_idx)
+            .expect("every table has a placement");
+        self.has_next_claims |= !next.is_empty();
+
         // Factorise the point once; every selected column reuses it.
+        let raw_point = point.clone();
         let point = SvoPoint::new_packed(self.claims.folding, point);
 
         // Current group: evaluate each column at the point.
@@ -132,6 +170,13 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
                 (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
             })
             .unzip();
+
+        // Record the plain lifted claim points with their evals, in the same
+        // flat order the verifier walks (and the alpha powers follow).
+        for (&poly_idx, &eval) in current.iter().zip(&current_evals) {
+            let lifted = placement.selectors()[poly_idx].lift_suffix(&raw_point);
+            self.projective_eq_claims.push((lifted, eval));
+        }
 
         // Bind the evaluations into the transcript, current group first then next.
         // The verifier absorbs the same bytes in the same order.
@@ -205,6 +250,9 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
 
         // Commit the evaluation to the transcript.
         challenger.observe_algebra_element(eval);
+        // Stash the plain point for the projective initial rounds.
+        self.projective_virtual_claims.push((point.clone(), eval));
+
         self.claims.virtual_claims.push(Claim {
             point,
             eval,
@@ -243,12 +291,17 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         sumcheck_data: &mut SumcheckData<F, EF>,
         pow_bits: usize,
         challenger: &mut Ch,
+        basis: Basis,
     ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Sanity: preprocessing cannot consume more rounds than the stacked arity.
         assert!(self.claims.folding <= self.claims.num_variables);
+
+        if basis == Basis::Projective {
+            return self.into_sumcheck_projective(sumcheck_data, pow_bits, challenger);
+        }
 
         let alpha: EF = challenger.sample_algebra_element();
         let n_claims = self.num_claims();
@@ -329,6 +382,92 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
 }
 
 impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
+    /// Projective initial folding rounds: the generic (non-SVO) path.
+    ///
+    /// Widens the stacked base table to the extension field, absorbs the
+    /// alpha-batched claim constraint into zero weights, and drives the
+    /// initial folds through the generic projective rounds of
+    /// [`ProductPolynomial`]. The flat statement order (concrete claims, then
+    /// virtual claims) mirrors the alpha-power assignment of the SVO path and
+    /// the verifier's constraint walk.
+    ///
+    /// Slower than the SVO fast path: the widening is an O(2^n) pass and the
+    /// full-size weight table is materialised. A projective SVO variant is
+    /// possible (the projective grid values are linear combinations of the
+    /// existing accumulator slots) but needs the accumulators' X = 1 slot
+    /// materialised; it is left as a follow-up, and benchmarks report the
+    /// initial-round phase separately so the asymmetry stays visible.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any repeat-last successor (next) opening was recorded; next
+    /// claims have no projective weight semantics.
+    fn into_sumcheck_projective<Ch>(
+        self,
+        sumcheck_data: &mut SumcheckData<F, EF>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
+    where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        assert!(
+            !self.has_next_claims,
+            "next claims are not supported projectively"
+        );
+        let num_variables = self.claims.num_variables;
+        let alpha: EF = challenger.sample_algebra_element();
+
+        // One flat equality statement per group, in alpha-power order.
+        let mut statements = Vec::new();
+        let mut concrete = EqStatement::initialize(num_variables);
+        for (point, eval) in &self.projective_eq_claims {
+            concrete.add_evaluated_constraint(point.clone(), *eval);
+        }
+        if !concrete.is_empty() {
+            statements.push(Statements::Eq(concrete));
+        }
+        let mut virtuals = EqStatement::initialize(num_variables);
+        for (point, eval) in &self.projective_virtual_claims {
+            virtuals.add_evaluated_constraint(point.clone(), *eval);
+        }
+        if !virtuals.is_empty() {
+            statements.push(Statements::Eq(virtuals));
+        }
+        let constraint = Constraint::new(alpha, num_variables, statements);
+
+        // Widen the stacked base table to the extension field, packed when
+        // large enough to fill SIMD lanes.
+        let k_pack = log2_strict_usize(F::Packing::WIDTH);
+        let wide: Vec<EF> = self.poly.iter().map(|&x| EF::from(x)).collect();
+        let mut prover = if num_variables > k_pack {
+            let evals = Poly::new(wide).pack::<F, EF>();
+            let weights = Poly::new(EF::ExtensionPacking::zero_vec(evals.num_evals()));
+            SumcheckProver::new(
+                ProductPolynomial::new_packed(VariableOrder::Prefix, evals, weights)
+                    .with_basis(Basis::Projective),
+                EF::ZERO,
+            )
+        } else {
+            let weights = Poly::new(EF::zero_vec(1 << num_variables));
+            SumcheckProver::new(
+                ProductPolynomial::new_unpacked(VariableOrder::Prefix, Poly::new(wide), weights)
+                    .with_basis(Basis::Projective),
+                EF::ZERO,
+            )
+        };
+
+        // Absorb the claim constraint and run the initial folds generically.
+        let rs = prover.compute_sumcheck_polynomials(
+            sumcheck_data,
+            challenger,
+            self.claims.folding,
+            pow_bits,
+            Some(constraint),
+        );
+        (prover, rs)
+    }
+
     /// Builds the residual equality weights in packed form.
     ///
     /// Two routes produce the identical polynomial; each call takes the cheaper one:

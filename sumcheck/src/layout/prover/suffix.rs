@@ -15,7 +15,7 @@ use crate::layout::prover::{Layout, StackedClaims};
 use crate::layout::witness::Table;
 use crate::layout::{LayoutStrategy, Witness};
 use crate::product_polynomial::ProductPolynomial;
-use crate::strategy::{SumcheckProver, VariableOrder};
+use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
 use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
 use crate::{Claim, SumcheckData, extrapolate_01inf};
@@ -313,10 +313,17 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         sumcheck_data: &mut SumcheckData<F, EF>,
         pow_bits: usize,
         challenger: &mut Ch,
+        basis: Basis,
     ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        // The projective basis is prefix-only.
+        assert_eq!(
+            basis,
+            Basis::Evaluation,
+            "the suffix layout has no projective path"
+        );
         // Sanity: preprocessing cannot consume more rounds than the stacked arity.
         assert!(self.claims.folding <= self.claims.num_variables);
         let alpha: EF = challenger.sample_algebra_element();

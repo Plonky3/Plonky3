@@ -427,11 +427,11 @@ mod test {
                 let cinf =
                     dot_product::<EF, _, _>(acc_inf.iter().copied(), weights.iter().copied());
 
-                let (c0_ref, cinf_ref) =
+                let msg =
                     VariableOrder::Suffix.sumcheck_coefficients(poly.as_slice(), eq.as_slice());
 
-                assert_eq!(c0, c0_ref);
-                assert_eq!(cinf, cinf_ref);
+                assert_eq!(c0, msg.c_a);
+                assert_eq!(cinf, msg.c_inf);
 
                 let r: EF = rng.random();
                 poly.fix_suffix_var_mut(r);
@@ -489,11 +489,11 @@ mod test {
                 let cinf =
                     dot_product::<EF, _, _>(acc_inf.iter().copied(), weights.iter().copied());
 
-                let (c0_ref, cinf_ref) =
+                let msg =
                     VariableOrder::Prefix.sumcheck_coefficients(poly.as_slice(), eq.as_slice());
 
-                assert_eq!(c0, c0_ref);
-                assert_eq!(cinf, cinf_ref);
+                assert_eq!(c0, msg.c_a);
+                assert_eq!(cinf, msg.c_inf);
 
                 let r: EF = rng.random();
                 poly.fix_prefix_var_mut(r);
