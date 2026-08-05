@@ -11,19 +11,21 @@ categories.workspace = true
 
 [dependencies]
 p3-field.workspace = true
+p3-keccak.workspace = true
 p3-maybe-rayon.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
 
+num-bigint.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-bn254 = { path = "../bn254" }
 p3-goldilocks = { path = "../goldilocks" }
-
-num-bigint.workspace = true
 proptest.workspace = true
+rand = { workspace = true, features = ["std", "thread_rng"] }
 
 [lints]
 workspace = true
