@@ -15,6 +15,7 @@ pub mod integers;
 pub mod op_assign_macros;
 mod packed;
 mod sqrt;
+mod vectorized;
 
 pub use array::*;
 pub use batch_inverse::*;
@@ -23,3 +24,4 @@ pub use field::*;
 pub use helpers::*;
 pub use packed::*;
 pub use sqrt::{tonelli_shanks, tonelli_shanks_two_adic};
+pub use vectorized::*;
