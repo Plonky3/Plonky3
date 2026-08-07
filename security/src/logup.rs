@@ -17,11 +17,20 @@
 //! ≤ `N·W` in `beta`, where `N = num_interactions · trace_length` is the
 //! number of denominator factors (interactions summed over all buses) and
 //! `W = max_message_width` is the widest payload. Sampling both challenges
-//! independently and uniformly from the challenge field `EF`, the union bound
-//! gives
+//! independently and uniformly from the challenge field `EF`, the per-variable
+//! union bound puts a numerator root at `N·(W + 1) / |EF|`.
+//!
+//! A root of the numerator is not the only way through. A *vanishing
+//! denominator* degenerates the batched transition identity: with `denom_j = 0`
+//! the constraint collapses to `multiplicity_j · Π_{s≠j} denom_s = 0`, forcing
+//! `multiplicity_j = 0` and letting a prover drop message `j` from the bus for
+//! free. Each denominator is monic in `alpha`, so for any `beta` exactly one
+//! `alpha` annihilates it — that event costs `N / |EF|`, not `N·W / |EF|`.
+//!
+//! Together
 //!
 //! ```text
-//!     ε_logup ≤ N·(W + 1) / |EF|.
+//!     ε_logup ≤ N·(W + 1) / |EF| + N / |EF| = N·(W + 2) / |EF|.
 //! ```
 //!
 //! Bus batching is subsumed: `N` already sums interactions over every bus, and
@@ -61,8 +70,11 @@ pub struct LogUpAir {
     pub max_message_width: usize,
 }
 
-/// `-log2(ε_logup)` in bits, following `ε_logup ≤ N·(W + 1) / |EF|` with
+/// `-log2(ε_logup)` in bits, following `ε_logup ≤ N·(W + 2) / |EF|` with
 /// `N = num_interactions · 2^log_trace_length` and `W = max_message_width`.
+///
+/// The `W + 2` covers both ways a sampled `(alpha, beta)` breaks the argument: a root of the
+/// cleared numerator, and a vanishing denominator that lets a message be dropped.
 ///
 /// Returns 0 bits for degenerate inputs (no interactions, or unknown field
 /// size). Prefer [`security_term`], which omits the term entirely when there
@@ -73,7 +85,7 @@ pub fn fingerprint_error(air: &LogUpAir, shape: &InstanceShape) -> ErrorBits {
     }
     let log_n = shape.log_trace_length as f64 + log2(air.num_interactions as f64);
     let width = air.max_message_width.max(1) as f64;
-    let bits = shape.modulus_bits as f64 - log_n - log2(width + 1.0);
+    let bits = shape.modulus_bits as f64 - log_n - log2(width + 2.0);
     ErrorBits::from_log2(bits.max(0.0))
 }
 
@@ -109,8 +121,8 @@ mod tests {
         }
     }
 
-    /// `ε ≤ N·(W+1)/|EF|` → bits = |EF| − log2(N) − log2(W+1). For
-    /// N = 2^20 · 16 = 2^24 and W = 3: 128 − 24 − log2(4) = 102.
+    /// `ε ≤ N·(W+2)/|EF|` → bits = |EF| − log2(N) − log2(W+2). For
+    /// N = 2^20 · 16 = 2^24 and W = 3: 128 − 24 − log2(5).
     #[test]
     fn fingerprint_error_regression() {
         let air = LogUpAir {
@@ -118,7 +130,8 @@ mod tests {
             max_message_width: 3,
         };
         let bits = fingerprint_error(&air, &shape(128)).bits();
-        assert!((bits - 102.0).abs() < 1e-9, "got {bits}");
+        let expected = 128.0 - 24.0 - 5f64.log2();
+        assert!((bits - expected).abs() < 1e-9, "got {bits}");
     }
 
     /// More interactions and wider messages both tighten (lower) the bound.
