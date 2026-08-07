@@ -844,6 +844,7 @@ fn test_two_instances() -> Result<(), impl Debug> {
 /// uses representative deployment-scale parameters.
 #[test]
 fn security_estimate_with_and_without_lookups() {
+    use p3_security::grinding::GrindingSites;
     use p3_security::logup::{self, LOGUP_LABEL, LogUpAir};
     use p3_security::shape::{InstanceShape, StarkAirParams};
     use p3_security::stark::proven_security_report;
@@ -912,9 +913,13 @@ fn security_estimate_with_and_without_lookups() {
         max_message_width: 16,
     };
 
-    let without = proven_security_report(&regime, &air, &shape, &[]);
-    let lookup_term = logup::security_term(&lookups, &shape).expect("batch uses a LogUp bus");
-    let with = proven_security_report(&regime, &air, &shape, &[lookup_term]);
+    // The batch grinds only inside FRI, which `regime` already carries.
+    let grinding = GrindingSites::NONE;
+
+    let without = proven_security_report(&regime, &air, &shape, &[], &grinding);
+    let lookup_term =
+        logup::security_term(&lookups, &shape, &grinding).expect("batch uses a LogUp bus");
+    let with = proven_security_report(&regime, &air, &shape, &[lookup_term], &grinding);
     let lookup_bits = logup::fingerprint_error(&lookups, &shape).bits();
 
     let (wo_regime, wo_bind) = without.binding();

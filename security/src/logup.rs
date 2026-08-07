@@ -40,6 +40,7 @@
 use libm::log2;
 
 use crate::error::ErrorBits;
+use crate::grinding::{GrindingSites, boost};
 use crate::report::SecurityTerm;
 use crate::shape::InstanceShape;
 
@@ -75,13 +76,20 @@ pub fn fingerprint_error(air: &LogUpAir, shape: &InstanceShape) -> ErrorBits {
 
 /// The LogUp fingerprint term for use in `extras`, or `None` when the AIR has
 /// no interactions (no lookup argument, hence no term).
-pub fn security_term(air: &LogUpAir, shape: &InstanceShape) -> Option<SecurityTerm> {
+///
+/// `grinding.lookup_challenge` is the grind sited immediately before
+/// `(alpha, beta)` are sampled; it boosts this term and nothing else.
+pub fn security_term(
+    air: &LogUpAir,
+    shape: &InstanceShape,
+    grinding: &GrindingSites,
+) -> Option<SecurityTerm> {
     if air.num_interactions == 0 {
         return None;
     }
     Some(SecurityTerm::new(
         LOGUP_LABEL,
-        fingerprint_error(air, shape),
+        boost(fingerprint_error(air, shape), grinding.lookup_challenge),
     ))
 }
 
@@ -138,15 +146,36 @@ mod tests {
             num_interactions: 0,
             max_message_width: 4,
         };
-        assert!(security_term(&none, &shape(128)).is_none());
+        assert!(security_term(&none, &shape(128), &GrindingSites::NONE).is_none());
 
         let some = LogUpAir {
             num_interactions: 4,
             max_message_width: 4,
         };
-        let term = security_term(&some, &shape(128)).expect("has interactions");
+        let term =
+            security_term(&some, &shape(128), &GrindingSites::NONE).expect("has interactions");
         assert_eq!(term.label, LOGUP_LABEL);
         assert_eq!(term.bits, fingerprint_error(&some, &shape(128)));
+    }
+
+    /// A grind sited before the lookup challenges adds its bits to this term
+    /// and leaves the underlying fingerprint bound untouched.
+    #[test]
+    fn lookup_challenge_grinding_boosts_the_term() {
+        let air = LogUpAir {
+            num_interactions: 4,
+            max_message_width: 4,
+        };
+        let s = shape(128);
+        let grinding = GrindingSites {
+            lookup_challenge: 20,
+            ..GrindingSites::NONE
+        };
+
+        let base = security_term(&air, &s, &GrindingSites::NONE).expect("has interactions");
+        let ground = security_term(&air, &s, &grinding).expect("has interactions");
+
+        assert!((ground.bits.bits() - base.bits.bits() - 20.0).abs() < 1e-12);
     }
 
     /// The term flows through `proven_security_report`'s `extras` and appears
@@ -177,9 +206,9 @@ mod tests {
             max_message_width: 8,
         };
 
-        let baseline = proven_security_report(&regime, &air, &s, &[]);
-        let term = security_term(&logup, &s).expect("has interactions");
-        let with_logup = proven_security_report(&regime, &air, &s, &[term]);
+        let baseline = proven_security_report(&regime, &air, &s, &[], &GrindingSites::NONE);
+        let term = security_term(&logup, &s, &GrindingSites::NONE).expect("has interactions");
+        let with_logup = proven_security_report(&regime, &air, &s, &[term], &GrindingSites::NONE);
 
         // Extras only tighten.
         assert!(with_logup.security_bits() <= baseline.security_bits());

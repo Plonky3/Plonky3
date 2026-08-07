@@ -10,6 +10,7 @@ use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
 use p3_field::{ExtensionField, Field};
 use p3_security::fri::{FriRegime, conjectured_error};
+use p3_security::grinding::GrindingSites;
 use p3_security::shape::{InstanceShape, StarkAirParams as P3AirShape};
 use p3_security::stark::proven_security_report;
 use p3_util::log2_floor_usize;
@@ -117,14 +118,29 @@ impl StarkSecurityParams {
         )
     }
 
+    /// Where this configuration grinds, by error source. A uni-STARK grinds
+    /// only inside FRI, so the DEEP and lookup-challenge sites stay at the
+    /// neutral `0`.
+    const fn grinding(&self) -> GrindingSites {
+        GrindingSites {
+            query_phase: self.fri_query_proof_of_work_bits,
+            ldt_commit_phase: self.fri_commit_proof_of_work_bits,
+            out_of_domain: 0,
+            lookup_challenge: 0,
+        }
+    }
+
+    /// The low-degree test owns the query- and commit-phase grinding sites,
+    /// so they are carried here and never re-applied by the composite.
     const fn fri_regime(&self) -> FriRegime {
+        let grinding = self.grinding();
         FriRegime {
             log_blowup: self.fri_log_blowup,
             num_queries: self.fri_num_queries,
             log_final_poly_len: self.fri_log_final_poly_len,
             max_log_arity: self.fri_max_log_arity,
-            commit_pow_bits: self.fri_commit_proof_of_work_bits,
-            query_pow_bits: self.fri_query_proof_of_work_bits,
+            commit_pow_bits: grinding.ldt_commit_phase,
+            query_pow_bits: grinding.query_phase,
         }
     }
 
@@ -269,7 +285,7 @@ impl ProvenSecurity {
         let air = params.air_shape();
         let shape = params.instance_shape(degree_bits);
 
-        let report = proven_security_report(&regime, &air, &shape, &[]);
+        let report = proven_security_report(&regime, &air, &shape, &[], &params.grinding());
 
         Self {
             unique_decoding_bits: report.udr.security_bits() as usize,

@@ -12,6 +12,7 @@ use alloc::vec::Vec;
 
 use crate::assumption::SecurityAssumption;
 use crate::error::ErrorBits;
+use crate::grinding::{GrindingSites, boost};
 use crate::ldt::LowDegreeTest;
 use crate::proximity::{list_size_ldr_m, list_size_udr};
 use crate::report::{
@@ -145,6 +146,9 @@ fn batching_term(
 /// Attained security is the min over these (see
 /// [`RegimeReport::security_bits`]), matching [`proven_security_regime`] plus
 /// the batching term.
+///
+/// `grinding.out_of_domain` boosts the DEEP term; the low-degree test's own
+/// sites are already folded into `ldt_error` by the [`LowDegreeTest`] impl.
 fn regime_report(
     regime: Regime,
     air: &StarkAirParams,
@@ -153,9 +157,13 @@ fn regime_report(
     ldt_error: ErrorBits,
     batch: Option<SecurityTerm>,
     extras: &[SecurityTerm],
+    grinding: &GrindingSites,
 ) -> RegimeReport {
     let ali = air::composition_error(air.num_constraints, list_size, shape.modulus_bits);
-    let deep = deep::deep_ali_error(air, shape, list_size);
+    let deep = boost(
+        deep::deep_ali_error(air, shape, list_size),
+        grinding.out_of_domain,
+    );
     let mut terms = Vec::with_capacity(5 + extras.len());
     terms.push(SecurityTerm::new(ALI_LABEL, ali));
     terms.push(SecurityTerm::new(DEEP_LABEL, deep));
@@ -179,11 +187,15 @@ fn regime_report(
 ///
 /// [`SecurityReport::security_bits`] reproduces [`proven_security`]; the report
 /// additionally exposes which term binds in each regime.
+///
+/// `grinding` sites the protocol's proof-of-work per error source; pass
+/// [`GrindingSites::NONE`] when the low-degree test carries all of it.
 pub fn proven_security_report<L: LowDegreeTest>(
     ldt: &L,
     air: &StarkAirParams,
     shape: &InstanceShape,
     extras: &[SecurityTerm],
+    grinding: &GrindingSites,
 ) -> SecurityReport {
     let log_blowup = ldt.log_blowup();
 
@@ -196,6 +208,7 @@ pub fn proven_security_report<L: LowDegreeTest>(
         udr_ldt,
         batching_term(SecurityAssumption::UniqueDecoding, shape, log_blowup, None),
         extras,
+        grinding,
     );
 
     let ldr = ldt.best_ldr(air, shape).map(|(m, ldr_ldt)| {
@@ -208,6 +221,7 @@ pub fn proven_security_report<L: LowDegreeTest>(
             ldr_ldt,
             batching_term(SecurityAssumption::JohnsonBound, shape, log_blowup, Some(m)),
             extras,
+            grinding,
         )
     });
 
@@ -276,6 +290,7 @@ mod tests {
             ldt,
             None,
             &[SecurityTerm::new("extra", extra)],
+            &GrindingSites::NONE,
         );
 
         assert!((report.security_bits() - expected.bits()).abs() < 1e-12);
@@ -300,7 +315,7 @@ mod tests {
         let air = air();
         let shape = shape();
 
-        let report = proven_security_report(&regime, &air, &shape, &[]);
+        let report = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
 
         // Same per-regime and combined numbers as ProvenSecurity / proven_security.
         assert_eq!(report.udr.security_bits().floor() as usize, 57);
@@ -377,7 +392,13 @@ mod tests {
     /// term is emitted in either regime.
     #[test]
     fn no_batch_term_for_single_function() {
-        let report = proven_security_report(&benchmark_regime(), &air(), &shape(), &[]);
+        let report = proven_security_report(
+            &benchmark_regime(),
+            &air(),
+            &shape(),
+            &[],
+            &GrindingSites::NONE,
+        );
         assert!(report.udr.terms().iter().all(|t| t.label != BATCH_LABEL));
         if let Some(ldr) = &report.ldr {
             assert!(ldr.terms().iter().all(|t| t.label != BATCH_LABEL));
@@ -401,8 +422,8 @@ mod tests {
             ..base
         };
 
-        let no_batch = proven_security_report(&regime, &air, &base, &[]);
-        let with_batch = proven_security_report(&regime, &air, &batched, &[]);
+        let no_batch = proven_security_report(&regime, &air, &base, &[], &GrindingSites::NONE);
+        let with_batch = proven_security_report(&regime, &air, &batched, &[], &GrindingSites::NONE);
 
         // Batching is an extra independent error source: it can only tighten.
         assert!(with_batch.security_bits() <= no_batch.security_bits());
@@ -424,7 +445,7 @@ mod tests {
             ..shape()
         };
 
-        let report = proven_security_report(&regime, &air, &shape, &[]);
+        let report = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
         let ldr = report
             .ldr
             .as_ref()
@@ -461,5 +482,25 @@ mod tests {
             )
             .max(0.0);
         assert!(batch_term.bits.bits() < fixed_m_bits);
+    }
+
+    /// The same monotonicity holds on the proven path, in both regimes.
+    #[test]
+    fn proven_more_grinding_is_not_less_security() {
+        let regime = benchmark_regime();
+        let air = air();
+        let shape = InstanceShape {
+            modulus_bits: 100,
+            ..shape()
+        };
+        let ground = GrindingSites {
+            out_of_domain: 24,
+            ..GrindingSites::NONE
+        };
+
+        let b0 = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+        let b24 = proven_security_report(&regime, &air, &shape, &[], &ground);
+        assert!(b24.udr.security_bits() >= b0.udr.security_bits());
+        assert!(b24.security_bits() >= b0.security_bits());
     }
 }
