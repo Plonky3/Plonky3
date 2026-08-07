@@ -43,6 +43,10 @@ pub enum Regime {
     UniqueDecoding,
     /// List-decoding regime at proximity parameter `m`.
     ListDecoding { m: usize },
+    /// Conjectured (random-words) regime: correlated agreement up to
+    /// list-decoding capacity, at list size 1. See
+    /// [`crate::proximity::list_size_conjectured`].
+    Conjectured,
 }
 
 /// Full soundness breakdown within a single proximity regime.
@@ -51,6 +55,10 @@ pub enum Regime {
 /// and the commitment-collision cap. The attained security is the minimum
 /// over all terms: a collision, or any single binding error, forges the
 /// proof.
+///
+/// This is also the top-level output of
+/// [`crate::stark::conjectured_security_report`], which has a single regime
+/// and therefore no [`SecurityReport`] envelope to maximize over.
 #[derive(Clone, Debug, Serialize)]
 pub struct RegimeReport {
     pub regime: Regime,

@@ -29,9 +29,12 @@
 //! `Challenges`), so it contributes no separate error term. The multiplicity
 //! height bound (`Σ wᵢ·hᵢ < p`) is enforced in-circuit and is not modeled here.
 //!
-//! The resulting term is passed to [`crate::stark::proven_security_report`] as
-//! an `extras` [`SecurityTerm`] by the protocol call site; it is not wired into
-//! the composite automatically, since not every STARK uses lookups.
+//! The resulting term is passed to [`crate::stark::proven_security_report`] or
+//! [`crate::stark::conjectured_security_report`] as an `extras`
+//! [`SecurityTerm`] by the protocol call site; it is not wired into the
+//! composite automatically, since not every STARK uses lookups. In the
+//! conjectured composite it is often the binding term at large trace lengths:
+//! `N` grows linearly in the trace while the query-phase error does not.
 //!
 //! # References
 //! - Haböck, *Multivariate lookups based on logarithmic derivatives*

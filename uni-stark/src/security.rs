@@ -4,15 +4,15 @@
 //! and crypto parameters into [`StarkSecurityParams`], builds the
 //! corresponding regime / instance shape, and delegates the math.
 
-use core::cmp::{max, min};
+use core::cmp::max;
 
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
 use p3_field::{ExtensionField, Field};
-use p3_security::fri::{FriRegime, conjectured_error};
+use p3_security::fri::FriRegime;
 use p3_security::grinding::GrindingSites;
 use p3_security::shape::{InstanceShape, StarkAirParams as P3AirShape};
-use p3_security::stark::proven_security_report;
+use p3_security::stark::{conjectured_security_report, proven_security_report};
 use p3_util::log2_floor_usize;
 
 /// Parameters required to compute STARK proof security level.
@@ -180,6 +180,13 @@ pub struct ConjecturedSecurity {
 impl ConjecturedSecurity {
     /// Conjectured security from FRI parameters using the random-words formula
     /// ([2025/2010] §1.5). Requires `num_modulus_bits` (log2 of field size) for the η cutoff.
+    ///
+    /// This entry point takes no AIR shape and no trace length, so the
+    /// AIR-composition and DEEP-ALI terms are evaluated on the smallest
+    /// instance that carries them — one degree-1 constraint over a
+    /// single-row trace — where both reduce to the field-size cap. A uni-STARK
+    /// has no lookups, so no `extras` apply either, leaving the low-degree
+    /// test and the commitment-collision cap as the only binding terms.
     pub fn compute(
         log_blowup: usize,
         num_queries: usize,
@@ -195,16 +202,20 @@ impl ConjecturedSecurity {
             commit_pow_bits: 0,
             query_pow_bits: query_proof_of_work_bits,
         };
+        let air = P3AirShape {
+            num_constraints: 1,
+            max_constraint_degree: 1,
+            max_combo: 1,
+        };
         let shape = InstanceShape {
             log_trace_length: 0,
             modulus_bits: num_modulus_bits,
             collision_resistance,
             num_batched_functions: 1,
         };
-        let fri_bits = conjectured_error(&regime, &shape).bits() as usize;
-        let bits = min(min(fri_bits, collision_resistance), num_modulus_bits);
+        let report = conjectured_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
         Self {
-            security_bits: bits,
+            security_bits: report.security_bits() as usize,
         }
     }
 
@@ -433,5 +444,52 @@ mod tests {
         let p = ProvenSecurity::compute(&params, 1 << 20);
         assert_eq!(p.unique_decoding_bits, 57);
         assert_eq!(p.list_decoding_bits, 65);
+    }
+
+    /// Regression vector pinning `ConjecturedSecurity` across the parameter
+    /// space it is routed through. Entries are
+    /// `(log_blowup, num_queries, query_pow, collision_resistance,
+    /// num_modulus_bits, expected_bits)`.
+    ///
+    /// A uni-STARK has no lookups and batches nothing in the conjectured
+    /// path, so the composite must reduce exactly to
+    /// `min(fri_conjectured, collision_resistance, num_modulus_bits)`.
+    #[test]
+    fn conjectured_security_regression_vector() {
+        const VECTOR: [(usize, usize, usize, usize, usize, usize); 8] = [
+            (1, 100, 16, 128, 252, 114),
+            (1, 100, 0, 128, 128, 97),
+            (2, 64, 20, 128, 128, 128),
+            (4, 20, 8, 256, 128, 86),
+            (8, 32, 0, 128, 128, 128),
+            (0, 100, 16, 128, 256, 16),
+            (1, 84, 16, 100, 128, 97),
+            (3, 27, 21, 128, 128, 100),
+        ];
+
+        for (log_blowup, num_queries, query_pow, collision, modulus, expected) in VECTOR {
+            let s = ConjecturedSecurity::compute(
+                log_blowup,
+                num_queries,
+                query_pow,
+                collision,
+                modulus,
+            );
+            assert_eq!(
+                s.security_bits, expected,
+                "conjectured security drifted at \
+                 (log_blowup={log_blowup}, num_queries={num_queries}, query_pow={query_pow}, \
+                 collision={collision}, modulus={modulus})"
+            );
+        }
+    }
+
+    /// More query grinding can only raise the conjectured bound, up to the
+    /// collision-resistance cap.
+    #[test]
+    fn conjectured_more_query_grinding_is_not_less_security() {
+        let s0 = ConjecturedSecurity::compute(1, 64, 0, 256, 256);
+        let s16 = ConjecturedSecurity::compute(1, 64, 16, 256, 256);
+        assert!(s16.security_bits >= s0.security_bits);
     }
 }
