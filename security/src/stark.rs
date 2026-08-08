@@ -236,32 +236,38 @@ pub fn proven_security_report<L: LowDegreeTest>(
 /// resistance. Scalar mirror of [`conjectured_security_report`], standing to
 /// it exactly as [`proven_security_regime`] stands to the report path.
 ///
-/// `ldt_error` is the low-degree test's conjectured error. For FRI that is the
-/// minimum of [`crate::fri::conjectured_error`] (query phase) and
-/// [`crate::fri::conjectured_commit_phase_error`] (folding rounds); passing
-/// only the former overstates security for a large LDE domain over a small
-/// field. [`conjectured_security_report`] composes both automatically via
-/// [`LowDegreeTest::conjectured_terms`]. The ALI and DEEP terms are evaluated at
-/// [`list_size_conjectured`] — see [`conjectured_security_report`] for why the
-/// proven path's L⁺ multiplier is absent here.
+/// The low-degree test's terms are taken from [`LowDegreeTest::conjectured_terms`]
+/// rather than passed in. Unlike the proven scalar path — where the caller has
+/// already resolved a per-regime error via [`crate::fri::proven_error_udr`] or
+/// [`crate::fri::best_ldr_m`] — the conjectured regime has no such search, so an
+/// `ErrorBits` parameter here would silently accept
+/// [`crate::fri::conjectured_error`] alone and drop the commit-phase round,
+/// overstating security for a large LDE domain over a small field. Taking the
+/// test itself makes that unrepresentable.
 ///
-/// Like the scalar proven path, this models no grinding sites: a caller that
-/// grinds boosts the affected term itself via [`crate::grinding::boost`], or
-/// uses [`conjectured_security_report`], which consults
+/// The ALI and DEEP terms are evaluated at [`list_size_conjectured`] — see
+/// [`conjectured_security_report`] for why the proven path's L⁺ multiplier is
+/// absent here.
+///
+/// Like the scalar proven path, this models no grinding sites beyond those the
+/// low-degree test already carries: a caller that grinds elsewhere boosts the
+/// affected term itself via [`crate::grinding::boost`], or uses
+/// [`conjectured_security_report`], which consults
 /// [`crate::grinding::GrindingSites`] directly.
-pub fn conjectured_security(
+pub fn conjectured_security<L: LowDegreeTest>(
+    ldt: &L,
     air: &StarkAirParams,
     shape: &InstanceShape,
-    ldt_error: ErrorBits,
     extras: &[ErrorBits],
 ) -> ErrorBits {
     let list_size = list_size_conjectured();
     let ali = air::composition_error(air.num_constraints, list_size, shape.modulus_bits);
     let deep = deep::deep_ali_error(air, shape, list_size);
-    let mut all: Vec<ErrorBits> = Vec::with_capacity(3 + extras.len());
+    let ldt_terms = ldt.conjectured_terms(shape);
+    let mut all: Vec<ErrorBits> = Vec::with_capacity(2 + ldt_terms.len() + extras.len());
     all.push(ali);
     all.push(deep);
-    all.push(ldt_error);
+    all.extend(ldt_terms.iter().map(|t| t.bits));
     all.extend_from_slice(extras);
     let algebraic = ErrorBits::min(&all);
     ErrorBits::from_log2(algebraic.bits().min(shape.collision_resistance as f64))
@@ -588,16 +594,25 @@ mod tests {
     }
 
     /// The conjectured report's attained bits equal the scalar
-    /// `conjectured_security` for the same LDT error and extras, and it is
+    /// `conjectured_security` for the same LDT, shape, and extras, and it is
     /// tagged as the conjectured regime.
+    ///
+    /// Checked with and without `extras`: a binding extra would mask a
+    /// divergence between the two paths' LDT term sets, which is exactly what
+    /// went unnoticed while the scalar path took a caller-supplied
+    /// `ErrorBits` and the report path composed `conjectured_terms`.
     #[test]
     fn conjectured_report_matches_scalar_composite() {
-        use crate::fri::conjectured_error;
-
         let regime = benchmark_regime();
         let air = air();
         let shape = shape();
         let extra = ErrorBits::from_log2(40.0);
+
+        // Without extras, the LDT terms are what the two paths must agree on.
+        let bare_report =
+            conjectured_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+        let bare_scalar = conjectured_security(&regime, &air, &shape, &[]);
+        assert!((bare_report.security_bits() - bare_scalar.bits()).abs() < 1e-12);
 
         let report = conjectured_security_report(
             &regime,
@@ -606,8 +621,7 @@ mod tests {
             &[SecurityTerm::new("extra", extra)],
             &GrindingSites::NONE,
         );
-        let scalar =
-            conjectured_security(&air, &shape, conjectured_error(&regime, &shape), &[extra]);
+        let scalar = conjectured_security(&regime, &air, &shape, &[extra]);
 
         assert_eq!(report.regime, Regime::Conjectured);
         assert!((report.security_bits() - scalar.bits()).abs() < 1e-12);
