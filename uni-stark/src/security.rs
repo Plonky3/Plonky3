@@ -178,8 +178,9 @@ pub struct ConjecturedSecurity {
 }
 
 impl ConjecturedSecurity {
-    /// Conjectured security from FRI parameters using the random-words formula
-    /// ([2025/2010] §1.5). Requires `num_modulus_bits` (log2 of field size) for the η cutoff.
+    /// Conjectured security from FRI parameters alone, using the random-words
+    /// formula ([2025/2010] §1.5). Requires `num_modulus_bits` (log2 of field
+    /// size) for the η cutoff.
     ///
     /// This entry point takes no AIR shape and no trace length, so the
     /// AIR-composition and DEEP-ALI terms are evaluated on the smallest
@@ -187,7 +188,14 @@ impl ConjecturedSecurity {
     /// single-row trace — where both reduce to the field-size cap. A uni-STARK
     /// has no lookups, so no `extras` apply either, leaving the low-degree
     /// test and the commitment-collision cap as the only binding terms.
-    pub fn compute(
+    ///
+    /// The result is therefore a property of the parameter space, not of any
+    /// particular instance: it answers "what can these FRI parameters attain
+    /// at best", and an instance with a real AIR over a real trace attains at
+    /// most this. Use [`Self::compute_from_params`] once the trace length is
+    /// known — the DEEP-ALI term grows with it, so this bound is optimistic
+    /// for every instance larger than a single row.
+    pub fn compute_ldt_only(
         log_blowup: usize,
         num_queries: usize,
         query_proof_of_work_bits: usize,
@@ -219,15 +227,48 @@ impl ConjecturedSecurity {
         }
     }
 
-    /// Compute conjectured security from a parameter bundle.
-    pub fn compute_from_params(params: &StarkSecurityParams) -> Self {
-        Self::compute(
-            params.fri_log_blowup,
-            params.fri_num_queries,
-            params.fri_query_proof_of_work_bits,
-            params.collision_resistance,
-            params.num_modulus_bits,
-        )
+    /// Compute conjectured security from a parameter bundle and the proof's
+    /// degree bits, composing the AIR-composition and DEEP-ALI terms at the
+    /// instance's real shape rather than the degenerate one
+    /// [`Self::compute_ldt_only`] uses.
+    ///
+    /// `degree_bits` already reflects the committed-polynomial size (post-zk
+    /// padding, when applicable), so the trace domain is `2^degree_bits` —
+    /// the same convention as [`ProvenSecurity::compute_from_proof`].
+    ///
+    /// # Two fields this does not consume
+    ///
+    /// `params` is threaded whole, but the conjectured composite reads less of
+    /// it than the proven one does:
+    ///
+    /// - `num_batched_functions` is ignored. The batched-openings term has no
+    ///   accepted conjectured analogue — the random-words heuristic bounds the
+    ///   distance distribution, not the proximity gap of the batching RLC — so
+    ///   [`conjectured_security_report`] omits it rather than guessing. An
+    ///   instance that random-linear-combines several committed codewords is
+    ///   graded optimistically here relative to [`ProvenSecurity`].
+    /// - `fri_commit_proof_of_work_bits` is ignored. The conjectured
+    ///   low-degree-test error models the query phase only, so there is no
+    ///   commit-phase round for it to be credited to. This understates
+    ///   security for a configuration that grinds there.
+    pub fn compute_from_params(params: &StarkSecurityParams, degree_bits: usize) -> Self {
+        debug_assert!(
+            params.air_max_constraint_degree <= (1usize << params.fri_log_blowup) + 1,
+            "AIR max constraint degree {} exceeds blowup+1 ({}); the prover cannot commit a quotient",
+            params.air_max_constraint_degree,
+            (1usize << params.fri_log_blowup) + 1
+        );
+
+        let report = conjectured_security_report(
+            &params.fri_regime(),
+            &params.air_shape(),
+            &params.instance_shape(degree_bits),
+            &[],
+            &params.grinding(),
+        );
+        Self {
+            security_bits: report.security_bits() as usize,
+        }
     }
 }
 
@@ -318,19 +359,19 @@ mod tests {
 
     #[test]
     fn conjectured_security_bounded_by_collision_resistance() {
-        let s = ConjecturedSecurity::compute(8, 32, 0, 128, 128);
+        let s = ConjecturedSecurity::compute_ldt_only(8, 32, 0, 128, 128);
         assert_eq!(s.security_bits, 128);
     }
 
     #[test]
     fn conjectured_security_random_words_formula() {
-        let s = ConjecturedSecurity::compute(4, 20, 8, 256, 128);
+        let s = ConjecturedSecurity::compute_ldt_only(4, 20, 8, 256, 128);
         assert!(s.security_bits > 0 && s.security_bits <= 256);
     }
 
     #[test]
     fn conjectured_security_log_blowup_zero_returns_zero_fri_bits() {
-        let s = ConjecturedSecurity::compute(0, 100, 16, 128, 256);
+        let s = ConjecturedSecurity::compute_ldt_only(0, 100, 16, 128, 256);
         assert_eq!(s.security_bits, 16);
     }
 
@@ -354,7 +395,7 @@ mod tests {
 
     #[test]
     fn proven_security_lower_than_conjectured_for_same_params() {
-        let c = ConjecturedSecurity::compute(8, 32, 8, 256, 252);
+        let c = ConjecturedSecurity::compute_ldt_only(8, 32, 8, 256, 252);
         let mut params = benchmark_high_arity_params(252);
         params.fri_log_blowup = 8;
         params.fri_num_queries = 32;
@@ -446,8 +487,8 @@ mod tests {
         assert_eq!(p.list_decoding_bits, 65);
     }
 
-    /// Regression vector pinning `ConjecturedSecurity` across the parameter
-    /// space it is routed through. Entries are
+    /// Regression vector pinning [`ConjecturedSecurity::compute_ldt_only`]
+    /// across the parameter space it is routed through. Entries are
     /// `(log_blowup, num_queries, query_pow, collision_resistance,
     /// num_modulus_bits, expected_bits)`.
     ///
@@ -455,7 +496,7 @@ mod tests {
     /// path, so the composite must reduce exactly to
     /// `min(fri_conjectured, collision_resistance, num_modulus_bits)`.
     #[test]
-    fn conjectured_security_regression_vector() {
+    fn conjectured_security_ldt_only_regression_vector() {
         const VECTOR: [(usize, usize, usize, usize, usize, usize); 8] = [
             (1, 100, 16, 128, 252, 114),
             (1, 100, 0, 128, 128, 97),
@@ -468,7 +509,7 @@ mod tests {
         ];
 
         for (log_blowup, num_queries, query_pow, collision, modulus, expected) in VECTOR {
-            let s = ConjecturedSecurity::compute(
+            let s = ConjecturedSecurity::compute_ldt_only(
                 log_blowup,
                 num_queries,
                 query_pow,
@@ -488,8 +529,84 @@ mod tests {
     /// collision-resistance cap.
     #[test]
     fn conjectured_more_query_grinding_is_not_less_security() {
-        let s0 = ConjecturedSecurity::compute(1, 64, 0, 256, 256);
-        let s16 = ConjecturedSecurity::compute(1, 64, 16, 256, 256);
+        let s0 = ConjecturedSecurity::compute_ldt_only(1, 64, 0, 256, 256);
+        let s16 = ConjecturedSecurity::compute_ldt_only(1, 64, 16, 256, 256);
         assert!(s16.security_bits >= s0.security_bits);
+    }
+
+    /// Regression vector pinning [`ConjecturedSecurity::compute_from_params`]
+    /// across trace heights, over a field small enough that the shape-bearing
+    /// DEEP-ALI term is in range of the query-phase term rather than masked by
+    /// the collision cap.
+    ///
+    /// DEEP-ALI binds throughout and its error is
+    /// `(max_deg·(k + max_combo − 1) + (k − 1)) / |F|`, which at `max_deg = 2`,
+    /// `max_combo = 2` is `(3·k + 1) / |F|` — so the level falls exactly one
+    /// bit per degree bit, from `96 − log2(3) − 1` downward. That slope is the
+    /// whole point of this entry point: [`ConjecturedSecurity::compute_ldt_only`]
+    /// reports a single constant across all five heights.
+    #[test]
+    fn conjectured_security_from_params_regression_vector() {
+        const DEGREE_BITS: [usize; 5] = [10, 16, 20, 24, 28];
+        const EXPECTED: [usize; 5] = [84, 78, 74, 70, 66];
+
+        let params = benchmark_high_arity_params(96);
+        let actual = DEGREE_BITS
+            .map(|degree_bits| ConjecturedSecurity::compute_from_params(&params, degree_bits))
+            .map(|s| s.security_bits);
+        assert_eq!(actual, EXPECTED, "conjectured security drifted");
+    }
+
+    /// The shape-aware path can only report at or below the shape-free one:
+    /// [`ConjecturedSecurity::compute_ldt_only`] evaluates the AIR-composition
+    /// and DEEP-ALI terms on a single-row, one-constraint instance, which is
+    /// the best case every real instance is measured against.
+    #[test]
+    fn conjectured_from_params_never_exceeds_ldt_only() {
+        let params = benchmark_high_arity_params(96);
+        let ldt_only = ConjecturedSecurity::compute_ldt_only(
+            params.fri_log_blowup,
+            params.fri_num_queries,
+            params.fri_query_proof_of_work_bits,
+            params.collision_resistance,
+            params.num_modulus_bits,
+        );
+
+        for degree_bits in 1..=28 {
+            let shaped = ConjecturedSecurity::compute_from_params(&params, degree_bits);
+            assert!(
+                shaped.security_bits <= ldt_only.security_bits,
+                "shape-aware bound exceeded the shape-free one at degree_bits={degree_bits}"
+            );
+        }
+    }
+
+    /// The DEEP-ALI term grows with the trace domain, so a taller instance can
+    /// never grade above a shorter one under the same parameters. This is the
+    /// dependence the shape-free entry point cannot express.
+    #[test]
+    fn conjectured_from_params_is_monotone_in_trace_height() {
+        let params = benchmark_high_arity_params(96);
+        let mut previous = usize::MAX;
+        for degree_bits in 1..=28 {
+            let bits = ConjecturedSecurity::compute_from_params(&params, degree_bits).security_bits;
+            assert!(bits <= previous, "level rose at degree_bits={degree_bits}");
+            previous = bits;
+        }
+    }
+
+    /// Proven security is never above conjectured at the same shape — the
+    /// conjectured regime drops the list-size multiplier the proven one pays.
+    #[test]
+    fn proven_never_exceeds_conjectured_at_the_same_shape() {
+        let params = benchmark_high_arity_params(252);
+        for degree_bits in [8, 16, 20, 24] {
+            let c = ConjecturedSecurity::compute_from_params(&params, degree_bits);
+            let p = ProvenSecurity::compute_from_proof(degree_bits, &params);
+            assert!(
+                p.security_bits() <= c.security_bits,
+                "proven exceeded conjectured at degree_bits={degree_bits}"
+            );
+        }
     }
 }
