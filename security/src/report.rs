@@ -16,8 +16,28 @@ use crate::error::ErrorBits;
 pub const ALI_LABEL: &str = "air-composition";
 /// Label for the DEEP-ALI out-of-domain term.
 pub const DEEP_LABEL: &str = "deep-ali";
-/// Label for the low-degree-test term.
+/// Label for the low-degree-test term, when an implementation reports its
+/// phases as one already-composed bound.
+///
+/// # Asymmetry with the conjectured path
+///
+/// The proven path reports this single label while the conjectured path
+/// reports [`LDT_QUERY_LABEL`] and [`LDT_COMMIT_LABEL`] separately, so a
+/// consumer diffing the two sees different label sets for the same protocol
+/// phases. That is deliberate, not an oversight: the proven path's LDT error
+/// is *already* a minimum by the time the composite sees it, because
+/// [`crate::fri::best_ldr_m`] searches for the proximity parameter `m`
+/// maximising `min(commit, query)` and returns only the winning value.
+/// Splitting the label there would require the regime search to carry both
+/// phases through, which changes what `best_ldr` optimises. The conjectured
+/// path has no such search, so nothing forces the phases together.
 pub const LDT_LABEL: &str = "low-degree-test";
+/// Label for the low-degree test's query-phase term, when an implementation
+/// reports its phases separately (see [`crate::ldt::LowDegreeTest::conjectured_terms`]).
+pub const LDT_QUERY_LABEL: &str = "ldt-query-phase";
+/// Label for the low-degree test's commit-phase (folding) term, when an
+/// implementation reports its phases separately.
+pub const LDT_COMMIT_LABEL: &str = "ldt-commit-phase";
 /// Label for the batched-openings random-linear-combination term.
 pub const BATCH_LABEL: &str = "batch-combination";
 /// Label for the commitment-collision cap term.

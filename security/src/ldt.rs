@@ -7,7 +7,11 @@
 //! [`crate::fri`]; [`crate::whir`] currently exposes only the underlying WHIR
 //! error terms, not yet a [`LowDegreeTest`] impl.
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::error::ErrorBits;
+use crate::report::{LDT_LABEL, SecurityTerm};
 use crate::shape::{InstanceShape, StarkAirParams};
 
 /// A low-degree test whose per-regime error terms compose with the AIR +
@@ -34,4 +38,28 @@ pub trait LowDegreeTest {
 
     /// Conjectured LDT error (random-words / heuristic regime).
     fn conjectured_error(&self, shape: &InstanceShape) -> ErrorBits;
+
+    /// The conjectured regime's LDT terms, labeled per phase.
+    ///
+    /// [`crate::stark::conjectured_security_report`] takes the minimum over
+    /// these alongside the ALI, DEEP, and collision terms, so an implementation
+    /// that reports its phases separately keeps each one inspectable rather
+    /// than collapsing them into a single number — the same reason the proven
+    /// path is a [`crate::report::RegimeReport`] and not a scalar.
+    ///
+    /// The default returns [`Self::conjectured_error`] under
+    /// [`LDT_LABEL`], which is correct for any LDT whose conjectured error is
+    /// already a single composed bound. Override it when the protocol has
+    /// distinct rounds worth surfacing — [`crate::fri::FriRegime`] splits the
+    /// query phase from the commit-phase folding rounds.
+    ///
+    /// Each returned term must bound a **distinct round** of the protocol.
+    /// The composite takes the minimum rather than summing because an
+    /// adversary who breaks any single round breaks the LDT, so the attained
+    /// security is that of the weakest round — the round-by-round accounting
+    /// of [2024/1553](https://eprint.iacr.org/2024/1553) §2. Returning two
+    /// bounds on the *same* round would silently discard the tighter one.
+    fn conjectured_terms(&self, shape: &InstanceShape) -> Vec<SecurityTerm> {
+        vec![SecurityTerm::new(LDT_LABEL, self.conjectured_error(shape))]
+    }
 }

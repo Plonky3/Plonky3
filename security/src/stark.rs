@@ -236,8 +236,12 @@ pub fn proven_security_report<L: LowDegreeTest>(
 /// resistance. Scalar mirror of [`conjectured_security_report`], standing to
 /// it exactly as [`proven_security_regime`] stands to the report path.
 ///
-/// `ldt_error` is the low-degree test's conjectured error (e.g.
-/// [`crate::fri::conjectured_error`]). The ALI and DEEP terms are evaluated at
+/// `ldt_error` is the low-degree test's conjectured error. For FRI that is the
+/// minimum of [`crate::fri::conjectured_error`] (query phase) and
+/// [`crate::fri::conjectured_commit_phase_error`] (folding rounds); passing
+/// only the former overstates security for a large LDE domain over a small
+/// field. [`conjectured_security_report`] composes both automatically via
+/// [`LowDegreeTest::conjectured_terms`]. The ALI and DEEP terms are evaluated at
 /// [`list_size_conjectured`] — see [`conjectured_security_report`] for why the
 /// proven path's L⁺ multiplier is absent here.
 ///
@@ -265,7 +269,8 @@ pub fn conjectured_security(
 
 /// Composite conjectured-security report, generic over the low-degree test.
 ///
-/// Composes the LDT's conjectured error ([`LowDegreeTest::conjectured_error`])
+/// Composes the LDT's conjectured terms ([`LowDegreeTest::conjectured_terms`],
+/// which for FRI splits the query phase from the commit-phase folding rounds)
 /// with the ALI, DEEP-ALI, `extras`, and commitment-collision terms and
 /// returns the labeled breakdown. Attained security is the min over the terms,
 /// exactly as in [`proven_security_report`], so the binding term stays
@@ -312,10 +317,11 @@ pub fn conjectured_security_report<L: LowDegreeTest>(
         grinding.out_of_domain,
     );
 
-    let mut terms = Vec::with_capacity(4 + extras.len());
+    let ldt_terms = ldt.conjectured_terms(shape);
+    let mut terms = Vec::with_capacity(3 + ldt_terms.len() + extras.len());
     terms.push(SecurityTerm::new(ALI_LABEL, ali));
     terms.push(SecurityTerm::new(DEEP_LABEL, deep));
-    terms.push(SecurityTerm::new(LDT_LABEL, ldt.conjectured_error(shape)));
+    terms.extend(ldt_terms);
     terms.extend_from_slice(extras);
     terms.push(SecurityTerm::new(
         COLLISION_LABEL,
@@ -327,6 +333,7 @@ pub fn conjectured_security_report<L: LowDegreeTest>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::report::LDT_QUERY_LABEL;
 
     fn shape() -> InstanceShape {
         InstanceShape {
@@ -670,8 +677,8 @@ mod tests {
         let with_logup =
             conjectured_security_report(&regime, &air, &shape, &[term], &GrindingSites::NONE);
 
-        // Without the lookup term the low-degree test is what binds.
-        assert_eq!(ldt_only.binding().label, LDT_LABEL);
+        // Without the lookup term the low-degree test's query phase is what binds.
+        assert_eq!(ldt_only.binding().label, LDT_QUERY_LABEL);
         // With it, the lookup term binds strictly lower — the overstatement.
         assert_eq!(with_logup.binding().label, LOGUP_LABEL);
         assert!(with_logup.security_bits() < ldt_only.security_bits());

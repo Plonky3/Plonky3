@@ -38,7 +38,11 @@ pub const fn boost(error: ErrorBits, pow_bits: usize) -> ErrorBits {
 /// - [`Self::query_phase`] and [`Self::ldt_commit_phase`] are consumed by the
 ///   [`crate::ldt::LowDegreeTest`] implementation, which already carries them
 ///   (`FriRegime::query_pow_bits` / `FriRegime::commit_pow_bits`). The
-///   composite does not re-apply them, so they are never double-counted.
+///   composite does not re-apply them, so they are never double-counted. Each
+///   boosts only the phase it precedes, in both the proven and conjectured
+///   paths — see [`crate::ldt::LowDegreeTest::conjectured_terms`], which keeps
+///   the two phases as separate terms so a grind credited to one cannot raise
+///   a bound set by the other.
 /// - [`Self::out_of_domain`] is applied to the DEEP-ALI term by
 ///   [`crate::stark::proven_security_report`] and
 ///   [`crate::stark::conjectured_security_report`].

@@ -247,10 +247,11 @@ impl ConjecturedSecurity {
     ///   [`conjectured_security_report`] omits it rather than guessing. An
     ///   instance that random-linear-combines several committed codewords is
     ///   graded optimistically here relative to [`ProvenSecurity`].
-    /// - `fri_commit_proof_of_work_bits` is ignored. The conjectured
-    ///   low-degree-test error models the query phase only, so there is no
-    ///   commit-phase round for it to be credited to. This understates
-    ///   security for a configuration that grinds there.
+    /// - `fri_commit_proof_of_work_bits` is credited, but only to the
+    ///   commit-phase term ([`p3_security::fri::conjectured_commit_phase_error`]),
+    ///   which is one of several the composite takes a minimum over. Grinding
+    ///   there raises the reported level only while that term is the binding
+    ///   one.
     pub fn compute_from_params(params: &StarkSecurityParams, degree_bits: usize) -> Self {
         debug_assert!(
             params.air_max_constraint_degree <= (1usize << params.fri_log_blowup) + 1,
@@ -357,9 +358,13 @@ mod tests {
     const TEST_AIR_MAX_DEG: usize = 2;
     const TEST_MAX_COMBO: usize = 2;
 
+    /// A 256-bit field puts every algebraic term — including the commit-phase
+    /// folding round, which over a 128-bit field would bind here at 119 — well
+    /// above the hash's 128-bit collision resistance, leaving the cap as the
+    /// only thing that binds.
     #[test]
     fn conjectured_security_bounded_by_collision_resistance() {
-        let s = ConjecturedSecurity::compute_ldt_only(8, 32, 0, 128, 128);
+        let s = ConjecturedSecurity::compute_ldt_only(8, 32, 0, 128, 256);
         assert_eq!(s.security_bits, 128);
     }
 
@@ -493,16 +498,23 @@ mod tests {
     /// num_modulus_bits, expected_bits)`.
     ///
     /// A uni-STARK has no lookups and batches nothing in the conjectured
-    /// path, so the composite must reduce exactly to
-    /// `min(fri_conjectured, collision_resistance, num_modulus_bits)`.
+    /// path, so the composite reduces to `min` over the query phase, the
+    /// commit-phase folding round, `collision_resistance`, and
+    /// `num_modulus_bits`.
+    ///
+    /// This entry point pins `max_log_arity = 0` and a single-row trace, so
+    /// the folding round is evaluated at `n = 2^log_blowup` — it binds only in
+    /// the two rows where the query phase would otherwise clear the collision
+    /// cap (`log_blowup` 2 and 8), which is exactly the overstatement that
+    /// omitting the round produced.
     #[test]
     fn conjectured_security_ldt_only_regression_vector() {
         const VECTOR: [(usize, usize, usize, usize, usize, usize); 8] = [
             (1, 100, 16, 128, 252, 114),
             (1, 100, 0, 128, 128, 97),
-            (2, 64, 20, 128, 128, 128),
+            (2, 64, 20, 128, 128, 125),
             (4, 20, 8, 256, 128, 86),
-            (8, 32, 0, 128, 128, 128),
+            (8, 32, 0, 128, 128, 119),
             (0, 100, 16, 128, 256, 16),
             (1, 84, 16, 100, 128, 97),
             (3, 27, 21, 128, 128, 100),
@@ -539,16 +551,19 @@ mod tests {
     /// DEEP-ALI term is in range of the query-phase term rather than masked by
     /// the collision cap.
     ///
-    /// DEEP-ALI binds throughout and its error is
-    /// `(max_deg·(k + max_combo − 1) + (k − 1)) / |F|`, which at `max_deg = 2`,
-    /// `max_combo = 2` is `(3·k + 1) / |F|` — so the level falls exactly one
-    /// bit per degree bit, from `96 − log2(3) − 1` downward. That slope is the
-    /// whole point of this entry point: [`ConjecturedSecurity::compute_ldt_only`]
-    /// reports a single constant across all five heights.
+    /// The FRI commit phase binds throughout, at
+    /// `|F| − log2((folding − 1)·(n + 1))` with `n = 2^(degree_bits + blowup)`
+    /// and `folding − 1 = 7` — so the level is `92.19 − degree_bits`, falling
+    /// exactly one bit per degree bit. DEEP-ALI tracks about 2.2 bits above it
+    /// (`|F| − log2(3·k + 1)`) and would bind at a lower folding arity.
+    ///
+    /// That slope is the whole point of this entry point:
+    /// [`ConjecturedSecurity::compute_ldt_only`] reports a single constant
+    /// across all five heights, because neither term is visible to it.
     #[test]
     fn conjectured_security_from_params_regression_vector() {
         const DEGREE_BITS: [usize; 5] = [10, 16, 20, 24, 28];
-        const EXPECTED: [usize; 5] = [84, 78, 74, 70, 66];
+        const EXPECTED: [usize; 5] = [82, 76, 72, 68, 64];
 
         let params = benchmark_high_arity_params(96);
         let actual = DEGREE_BITS
