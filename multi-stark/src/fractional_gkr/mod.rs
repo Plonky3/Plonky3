@@ -58,11 +58,9 @@ pub struct FractionGkrLayerProof<EF> {
     pub claims: SplitFraction<EF>,
 }
 
-/// A proof that a table of fractions reduces to the claimed root fraction.
+/// A proof that a table of fractions reduces to a zero root numerator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FractionGkrProof<EF> {
-    /// Numerator of the fully reduced root fraction.
-    pub root_numerator: EF,
     /// Denominator of the fully reduced root fraction.
     pub root_denominator: EF,
     /// Layer proofs in root-to-input order.

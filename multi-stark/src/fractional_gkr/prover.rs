@@ -504,12 +504,11 @@ fn restore_equality_factor<EF: Field>(
     (round_poly, q_sum)
 }
 
-/// Proves a binary-tree reduction of a table of fractions.
+/// Proves that a table of fractions sums to zero via a binary-tree reduction.
 ///
-/// The proof reduces the sum of the input fractions to a single root fraction.
-/// It observes the root and layer messages in `challenger` and returns the
-/// numerator and denominator openings of the input tables at the resulting
-/// transcript-derived point.
+/// It observes the root denominator and layer messages in `challenger` and
+/// returns the numerator and denominator openings of the input tables at the
+/// resulting transcript-derived point.
 ///
 /// # Panics
 ///
@@ -542,21 +541,21 @@ where
             n1: EF::from(fraction.n.as_slice()[1]),
             d1: denom.as_slice()[1],
         };
-        let root_numerator = root_claims.d1 * root_claims.n0 + root_claims.d0 * root_claims.n1;
         let root_denominator = root_claims.d0 * root_claims.d1;
+        debug_assert_eq!(
+            root_claims.d1 * root_claims.n0 + root_claims.d0 * root_claims.n1,
+            EF::ZERO,
+            "fraction GKR input fractions must sum to zero"
+        );
         assert_ne!(
             root_denominator,
             EF::ZERO,
             "fraction GKR root denominator must be nonzero"
         );
         challenger.observe_algebra_element(root_denominator);
-        challenger.observe_algebra_element(root_numerator);
 
         let lambda: EF = challenger.sample_algebra_element();
-        debug_assert_eq!(
-            root_numerator + lambda * root_denominator,
-            root_claims.gate(lambda)
-        );
+        debug_assert_eq!(lambda * root_denominator, root_claims.gate(lambda));
         challenger.observe_algebra_slice(&[
             root_claims.n0,
             root_claims.d0,
@@ -569,7 +568,6 @@ where
 
         return (
             FractionGkrProof {
-                root_numerator,
                 root_denominator,
                 layers: vec![FractionGkrLayerProof {
                     round_polys: Vec::new(),
@@ -610,25 +608,26 @@ where
     }
 
     let root_claims = fractions.pop().unwrap().unpack().into_constants();
-    let root_numerator = root_claims.d1 * root_claims.n0 + root_claims.d0 * root_claims.n1;
     let root_denominator = root_claims.d0 * root_claims.d1;
+    debug_assert_eq!(
+        root_claims.d1 * root_claims.n0 + root_claims.d0 * root_claims.n1,
+        EF::ZERO,
+        "fraction GKR input fractions must sum to zero"
+    );
     assert_ne!(
         root_denominator,
         EF::ZERO,
         "fraction GKR root denominator must be nonzero"
     );
     challenger.observe_algebra_element(root_denominator);
-    challenger.observe_algebra_element(root_numerator);
     let interpolator = RoundPolyInterpolator::new(2);
     let mut layer_proofs = Vec::with_capacity(num_variables);
 
     // Prove the final reduction from the two one-variable children to the scalar root. This
-    // layer has no sumcheck variables, but its random linear combination binds both root fields.
+    // layer has no sumcheck variables, but its random linear combination binds the root
+    // denominator to the zero-numerator statement.
     let lambda: EF = challenger.sample_algebra_element();
-    debug_assert_eq!(
-        root_numerator + lambda * root_denominator,
-        root_claims.gate(lambda)
-    );
+    debug_assert_eq!(lambda * root_denominator, root_claims.gate(lambda));
     challenger.observe_algebra_slice(&[
         root_claims.n0,
         root_claims.d0,
@@ -743,7 +742,6 @@ where
 
     (
         FractionGkrProof {
-            root_numerator,
             root_denominator,
             layers: layer_proofs,
         },
