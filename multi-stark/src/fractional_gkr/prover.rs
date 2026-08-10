@@ -48,6 +48,15 @@ where
     N: PrimeCharacteristicRing + Copy + Send + Sync,
     A: Algebra<N> + Copy + Send + Sync,
 {
+    debug_assert_eq!(eq_suffix.len(), n0_lo.len());
+    debug_assert_eq!(eq_suffix.len(), n0_hi.len());
+    debug_assert_eq!(eq_suffix.len(), n1_lo.len());
+    debug_assert_eq!(eq_suffix.len(), n1_hi.len());
+    debug_assert_eq!(eq_suffix.len(), d0_lo.len());
+    debug_assert_eq!(eq_suffix.len(), d0_hi.len());
+    debug_assert_eq!(eq_suffix.len(), d1_lo.len());
+    debug_assert_eq!(eq_suffix.len(), d1_hi.len());
+
     eq_suffix
         .par_iter()
         .zip(n0_lo.par_iter().zip(n0_hi.par_iter()))

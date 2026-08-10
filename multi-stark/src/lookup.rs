@@ -62,7 +62,7 @@ pub(crate) struct LookupInstancePlan<F: Field> {
 /// This stores no trace rows and allocates no numerator or denominator table.
 /// Physical contribution blocks are recovered from an instance's `base_offset`,
 /// `num_variables`, and declaration-order contribution index.
-pub struct LookupPlan<F: Field> {
+pub(crate) struct LookupPlan<F: Field> {
     /// Lookup-active AIR instances, sorted by descending trace height.
     pub(crate) instances: Vec<LookupInstancePlan<F>>,
     /// Largest payload tuple width among all planned lookup declarations.
