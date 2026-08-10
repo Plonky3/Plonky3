@@ -75,10 +75,10 @@ struct Scratch<Var> {
 impl<Var: PrimeCharacteristicRing> Scratch<Var> {
     fn new(main_width: usize, preprocessed_width: usize) -> Self {
         Self {
-            local: vec![Var::ZERO; main_width],
-            next: vec![Var::ZERO; main_width],
-            preprocessed_local: vec![Var::ZERO; preprocessed_width],
-            preprocessed_next: vec![Var::ZERO; preprocessed_width],
+            local: Var::zero_vec(main_width),
+            next: Var::zero_vec(main_width),
+            preprocessed_local: Var::zero_vec(preprocessed_width),
+            preprocessed_next: Var::zero_vec(preprocessed_width),
         }
     }
 }
