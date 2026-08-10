@@ -12,8 +12,8 @@ use core::cmp::Reverse;
 
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr};
 use p3_air::{Air, BaseAir, SymbolicExpression};
-use p3_field::{ExtensionField, Field, PackedValue};
-use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookups};
+use p3_field::{ExtensionField, Field, PackedValue, PrimeField};
+use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookups, check_multiplicity_height_bound};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 /// Whether a lookup expression reads one of the AIR's fixed periodic columns.
@@ -75,36 +75,56 @@ pub struct LookupPlan<F: Field> {
 
 impl<F: Field> LookupPlan<F> {
     /// Extract lookup declarations once, assign buses, and place exact-height blocks.
-    pub fn build<EF, A>(airs: &[&A], num_variables: &[usize]) -> Option<Self>
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the lookup multiplicity height bound reaches the
+    /// characteristic of `F`.
+    pub fn build<EF, A>(
+        airs: &[&A],
+        num_variables: &[usize],
+    ) -> Result<Option<Self>, p3_lookup::LookupError>
     where
+        F: PrimeField,
         EF: ExtensionField<F>,
         A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
     {
         assert_eq!(airs.len(), num_variables.len());
 
-        // Symbolically evaluate each AIR once and retain only instances that emit
-        // at least one atomic lookup contribution. Empty local declarations are inert.
-        let mut active = airs
+        // Symbolically evaluate each AIR once. The resulting public weights and
+        // trace heights determine the multiplicity soundness bound on both sides.
+        let lookups = airs
             .iter()
-            .zip(num_variables)
+            .map(|&air| Lookups::from_air::<EF, _>(air))
+            .collect::<Vec<_>>();
+        for lookup in lookups.iter().flat_map(|lookups| lookups.iter()) {
+            assert!(
+                lookup.flags.is_none(),
+                "multi-STARK lookups do not support exclusive interactions"
+            );
+            assert!(
+                !lookup
+                    .elements
+                    .iter()
+                    .flatten()
+                    .chain(lookup.multiplicities.iter())
+                    .any(uses_periodic_column),
+                "multi-STARK lookup expressions do not support periodic columns"
+            );
+        }
+        let trace_heights = num_variables
+            .iter()
+            .map(|&num_variables| 1usize << num_variables)
+            .collect::<Vec<_>>();
+        check_multiplicity_height_bound(&lookups, &trace_heights)?;
+
+        // Retain only instances that emit at least one atomic lookup
+        // contribution. Empty local declarations are inert.
+        let mut active = lookups
+            .into_iter()
+            .zip(num_variables.iter().copied())
             .enumerate()
-            .filter_map(|(air_index, (&air, &num_variables))| {
-                let lookups = Lookups::from_air::<EF, _>(air);
-                for lookup in lookups.iter() {
-                    assert!(
-                        lookup.flags.is_none(),
-                        "multi-STARK lookups do not support exclusive interactions"
-                    );
-                    assert!(
-                        !lookup
-                            .elements
-                            .iter()
-                            .flatten()
-                            .chain(lookup.multiplicities.iter())
-                            .any(uses_periodic_column),
-                        "multi-STARK lookup expressions do not support periodic columns"
-                    );
-                }
+            .filter_map(|(air_index, (lookups, num_variables))| {
                 lookups
                     .iter()
                     .any(|lookup| !lookup.elements.is_empty())
@@ -124,7 +144,7 @@ impl<F: Field> LookupPlan<F> {
 
         // No active lookup means this batch has no lookup transcript or proof section.
         if active.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         // Packed denominator blocks require at least one complete SIMD word per trace.
@@ -205,11 +225,11 @@ impl<F: Field> LookupPlan<F> {
                 .collect();
         }
 
-        Some(Self {
+        Ok(Some(Self {
             instances: active,
             max_width,
             num_buses: bus_to_id.len(),
             num_variables: log2_ceil_usize(active_height),
-        })
+        }))
     }
 }

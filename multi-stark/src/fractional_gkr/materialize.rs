@@ -280,7 +280,7 @@ pub(super) mod tests {
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_field::{Field, PrimeCharacteristicRing, PrimeField};
     use p3_lookup::{Count, InteractionBuilder, InteractionSymbolicBuilder};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_util::log2_strict_usize;
@@ -305,7 +305,7 @@ pub(super) mod tests {
         beta: EF,
     ) -> Option<Fraction<Poly<F>, PolyMaybePacked<F, EF>>>
     where
-        F: Field,
+        F: PrimeField,
         EF: ExtensionField<F>,
         A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
     {
@@ -313,7 +313,8 @@ pub(super) mod tests {
             .iter()
             .map(|table| table.num_variables())
             .collect::<Vec<_>>();
-        let plan = LookupPlan::build::<EF, A>(airs, &num_variables)?;
+        let plan = LookupPlan::build::<EF, A>(airs, &num_variables)
+            .expect("lookup multiplicity height bound should hold")?;
         Some(plan.materialize_fraction(main, preprocessed, public_values, alpha, beta))
     }
 
@@ -327,6 +328,7 @@ pub(super) mod tests {
         WideGlobal,
         SymbolicSources,
         EmptyLocal,
+        ExcessiveMultiplicity,
         None,
     }
 
@@ -407,6 +409,11 @@ pub(super) mod tests {
                         Count<AB::Expr>,
                     )>());
                 }
+                Declaration::ExcessiveMultiplicity => builder.push_interaction(
+                    "range",
+                    [local[0]],
+                    Count::bounded(AB::Expr::ONE, u32::MAX),
+                ),
                 Declaration::None => {}
             }
         }
@@ -570,7 +577,19 @@ pub(super) mod tests {
         let wide = TestAir(Declaration::GlobalNamedWide("shared"));
         let num_variables = test_lookup_num_variables();
 
-        LookupPlan::<F>::build::<EF, _>(&[&narrow, &wide], &[num_variables, num_variables]);
+        LookupPlan::<F>::build::<EF, _>(&[&narrow, &wide], &[num_variables, num_variables])
+            .unwrap();
+    }
+
+    #[test]
+    fn rejects_a_multiplicity_height_bound_reaching_the_characteristic() {
+        let air = TestAir(Declaration::ExcessiveMultiplicity);
+        let result = LookupPlan::<F>::build::<EF, _>(&[&air], &[test_lookup_num_variables()]);
+
+        assert!(matches!(
+            result,
+            Err(p3_lookup::LookupError::MultiplicityHeightBoundExceeded { .. })
+        ));
     }
 
     #[test]
