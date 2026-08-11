@@ -46,5 +46,9 @@ rand = { workspace = true, features = ["std"] }
 name = "stir"
 harness = false
 
+[[bench]]
+name = "stir_pcs"
+harness = false
+
 [lints]
 workspace = true
