@@ -575,6 +575,113 @@ struct FinalRoundOutput<EF: Field, M: Mmcs<EF>, Witness> {
     seen_query_indices: Vec<usize>,
 }
 
+/// One instance's in-flight final round, advanced in the order the transcript demands.
+///
+/// The phases, in order: \[grind\] `fold_and_derive` -> absorb final polynomial -> \[grind\] ->
+/// squeeze query indices -> `record_queries` -> `finish`.
+struct FinalRoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
+    config: &'a StirConfig<F, EF, M, Challenger>,
+    dft: &'a Dft,
+
+    current_shift: F,
+    current_log_domain: usize,
+    final_new_log_domain: usize,
+    final_new_shift: F,
+
+    final_codeword: Vec<EF>,
+    final_poly: Vec<EF>,
+
+    query_indices: Vec<usize>,
+    seen_query_indices: Vec<usize>,
+}
+
+impl<'a, F, EF, Dft, M, Challenger> FinalRoundProver<'a, F, EF, Dft, M, Challenger>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+{
+    /// Fix the final round's domain geometry. Touches no transcript state.
+    fn new(
+        config: &'a StirConfig<F, EF, M, Challenger>,
+        dft: &'a Dft,
+        current_shift: F,
+        current_log_domain: usize,
+    ) -> Self {
+        let final_log_arity = config.log_folding_factor;
+        let (final_new_log_domain, final_new_shift) =
+            fold_domain_params(current_shift, current_log_domain, final_log_arity);
+        Self {
+            config,
+            dft,
+            current_shift,
+            current_log_domain,
+            final_new_log_domain,
+            final_new_shift,
+            final_codeword: Vec::new(),
+            final_poly: Vec::new(),
+            query_indices: Vec::new(),
+            seen_query_indices: Vec::new(),
+        }
+    }
+
+    /// Fold at `final_gamma` and derive the final polynomial. The returned coefficients are
+    /// the round's only prover message and must be absorbed by the caller.
+    fn fold_and_derive(&mut self, current_oracle_codeword: &[EF], final_gamma: EF) -> &[EF] {
+        let final_log_arity = self.config.log_folding_factor;
+        // See the round-fold note in `RoundProver::fold_and_commit`: `gamma / current_shift`
+        // over subgroup coordinates is the paper's coset fold at challenge `gamma`.
+        let final_fold_beta = final_gamma * EF::from(self.current_shift.inverse());
+        self.final_codeword = tracing::debug_span!("fold_codeword").in_scope(|| {
+            fold_codeword::<F, EF>(
+                current_oracle_codeword,
+                final_fold_beta,
+                final_log_arity,
+                self.current_log_domain,
+            )
+        });
+        // The final polynomial has only `final_len` coefficients, far fewer than
+        // `final_codeword`'s full domain size. Rather than run a full-size iDFT and discard
+        // the (necessarily zero) high coefficients, gather a `final_len`-sized coset — every
+        // `stride`-th natural-order point, which is exactly the subgroup coset of that size —
+        // and run the small iDFT directly on it.
+        let final_len = self.config.final_poly_len();
+        let stride = self.final_codeword.len() / final_len;
+        let final_poly_evals: Vec<EF> = (0..final_len)
+            .map(|i| self.final_codeword[i * stride])
+            .collect();
+        self.final_poly = coeffs_from_codeword(self.dft, &final_poly_evals, self.final_new_shift);
+        &self.final_poly
+    }
+
+    /// Record the sampled query indices.
+    fn record_queries(&mut self, query_indices: Vec<usize>) {
+        let mut seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
+        for &j in &query_indices {
+            seen.insert(j);
+        }
+        self.query_indices = query_indices;
+        self.seen_query_indices = seen.into_iter().collect();
+    }
+
+    /// Touches no transcript state, so it may run after the caller has moved on to other
+    /// instances.
+    fn finish(self) -> FinalRoundFinish<EF> {
+        FinalRoundFinish {
+            final_poly: self.final_poly,
+            seen_query_indices: self.seen_query_indices,
+        }
+    }
+}
+
+/// Everything a finished final round hands back once its transcript phases are done.
+struct FinalRoundFinish<EF: Field> {
+    final_poly: Vec<EF>,
+    seen_query_indices: Vec<usize>,
+}
+
 /// Prove the final STIR round: fold the last committed codeword and send the resulting
 /// low-degree polynomial directly, rather than committing and querying it again.
 #[instrument(skip_all)]
@@ -597,63 +704,43 @@ where
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>,
 {
-    let final_log_arity = config.log_folding_factor;
-    let final_arity = 1usize << final_log_arity;
-    let (final_new_log_domain, final_new_shift) =
-        fold_domain_params(current_shift, current_log_domain, final_log_arity);
+    let final_arity = 1usize << config.log_folding_factor;
+    let mut state = FinalRoundProver::new(config, dft, current_shift, current_log_domain);
 
     let final_folding_pow_witness = challenger.grind(config.final_folding_pow_bits);
     let final_gamma: EF = challenger.sample_algebra_element();
 
-    // See the round-fold note: `gamma / current_shift` over subgroup coordinates is
-    // the paper's coset fold at challenge `gamma`.
-    let final_fold_beta = final_gamma * EF::from(current_shift.inverse());
-    let final_codeword = tracing::debug_span!("fold_codeword").in_scope(|| {
-        fold_codeword::<F, EF>(
-            current_oracle_codeword,
-            final_fold_beta,
-            final_log_arity,
-            current_log_domain,
-        )
-    });
-    // The final polynomial has only `final_len` coefficients, far fewer than
-    // `final_codeword`'s full domain size. Rather than run a full-size iDFT and discard
-    // the (necessarily zero) high coefficients, gather a `final_len`-sized coset — every
-    // `stride`-th natural-order point, which is exactly the subgroup coset of that size —
-    // and run the small iDFT directly on it.
-    let final_len = config.final_poly_len();
-    let stride = final_codeword.len() / final_len;
-    let final_poly_evals: Vec<EF> = (0..final_len).map(|i| final_codeword[i * stride]).collect();
-    let final_poly = coeffs_from_codeword(dft, &final_poly_evals, final_new_shift);
+    let final_poly = state.fold_and_derive(current_oracle_codeword, final_gamma);
+    challenger.observe_algebra_slice(final_poly);
 
-    challenger.observe_algebra_slice(&final_poly);
     let final_pow_witness = challenger.grind(config.final_pow_bits);
 
     let mut final_query_indices = Vec::with_capacity(config.final_queries);
-    let mut final_seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
     for _ in 0..config.final_queries {
         let j = challenger
-            .sample_uniform_bits::<true>(final_new_log_domain)
+            .sample_uniform_bits::<true>(state.final_new_log_domain)
             .expect("RESAMPLE = true: rejection loops internally, never errors");
-        final_seen.insert(j);
         final_query_indices.push(j);
     }
+    state.record_queries(final_query_indices);
 
     let final_query_openings = current_commit_data
         .as_ref()
-        .map(|data| open_fiber_rows(&config.mmcs, &final_query_indices, data));
+        .map(|data| open_fiber_rows(&config.mmcs, &state.query_indices, data));
     debug_assert!(
         final_query_openings
             .iter()
             .all(|o| o.row_evals.iter().all(|row| row.len() == final_arity))
     );
 
+    let finish = state.finish();
+
     FinalRoundOutput {
-        final_polynomial: final_poly,
+        final_polynomial: finish.final_poly,
         final_folding_pow_witness,
         final_pow_witness,
         final_query_openings,
-        seen_query_indices: final_seen.into_iter().collect(),
+        seen_query_indices: finish.seen_query_indices,
     }
 }
 
