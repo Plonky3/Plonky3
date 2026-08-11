@@ -138,6 +138,205 @@ struct RoundOutput<F, EF: Field, M: Mmcs<EF>, Witness> {
     seen_query_indices: Vec<usize>,
 }
 
+/// One instance's in-flight intermediate round, advanced in the order the transcript demands.
+///
+/// The round alternates between blocks of squeezed challenges and blocks of absorbed prover
+/// messages, and every grind sits immediately before a challenge block with no prover message
+/// in between — the property that lets a grind bind the challenge that follows it. Holding the
+/// round open across those boundaries lets a caller drive several instances through the same
+/// boundaries, so one grind can cover every instance's challenges at that site.
+///
+/// The phases, in order: \[grind\] `fold_and_commit` -> absorb commitment -> squeeze OOD points
+/// -> `ood_answers` -> absorb answers -> \[grind\] -> squeeze `r_comb` and query indices ->
+/// `record_queries` -> `ans_shake` -> absorb Ans/shake -> squeeze rho -> `finish`.
+struct RoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
+    config: &'a StirConfig<F, EF, M, Challenger>,
+    round: usize,
+    dft: &'a Dft,
+
+    log_arity: usize,
+    fold_log_domain: usize,
+    fold_shift: F,
+    next_log_domain: usize,
+    next_shift: F,
+
+    folded_codeword: Vec<EF>,
+    fold_coeffs: Vec<EF>,
+    next_commit_codeword: Vec<EF>,
+    new_data: Option<M::ProverData<RowMajorMatrix<EF>>>,
+
+    ood_points: Vec<EF>,
+    ood_answers: Vec<EF>,
+
+    query_indices: Vec<usize>,
+    query_points: Vec<EF>,
+    query_answers: Vec<EF>,
+    seen_query_indices: Vec<usize>,
+
+    ans_poly: Vec<EF>,
+    shake_poly: Vec<EF>,
+    all_points: Vec<EF>,
+}
+
+impl<'a, F, EF, Dft, M, Challenger> RoundProver<'a, F, EF, Dft, M, Challenger>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+{
+    /// Fix the round's domain geometry. Touches no transcript state.
+    fn new(
+        config: &'a StirConfig<F, EF, M, Challenger>,
+        round: usize,
+        dft: &'a Dft,
+        current_shift: F,
+        current_log_domain: usize,
+    ) -> Self {
+        let log_arity = config.round_configs[round].log_folding_factor;
+        let (fold_log_domain, fold_shift) =
+            fold_domain_params(current_shift, current_log_domain, log_arity);
+        Self {
+            config,
+            round,
+            dft,
+            log_arity,
+            fold_log_domain,
+            fold_shift,
+            next_log_domain: current_log_domain - 1,
+            next_shift: next_domain_shift(current_shift, log_arity),
+            folded_codeword: Vec::new(),
+            fold_coeffs: Vec::new(),
+            next_commit_codeword: Vec::new(),
+            new_data: None,
+            ood_points: Vec::new(),
+            ood_answers: Vec::new(),
+            query_indices: Vec::new(),
+            query_points: Vec::new(),
+            query_answers: Vec::new(),
+            seen_query_indices: Vec::new(),
+            ans_poly: Vec::new(),
+            shake_poly: Vec::new(),
+            all_points: Vec::new(),
+        }
+    }
+
+    /// Fold at `gamma` and commit the folded oracle. The returned commitment is the round's
+    /// first prover message and must be absorbed by the caller.
+    fn fold_and_commit(
+        &mut self,
+        current_oracle_codeword: &[EF],
+        current_shift: F,
+        current_log_domain: usize,
+        gamma: EF,
+    ) -> M::Commitment {
+        // `fold_codeword` interpolates at subgroup coordinates `g^{·}`. The codeword
+        // lives on the coset `current_shift · <g>`, so passing `gamma / current_shift`
+        // yields exactly Construction 4.5's coset fold at challenge `gamma`.
+        let fold_beta = gamma * EF::from(current_shift.inverse());
+        self.folded_codeword = tracing::debug_span!("fold_codeword").in_scope(|| {
+            fold_codeword::<F, EF>(
+                current_oracle_codeword,
+                fold_beta,
+                self.log_arity,
+                current_log_domain,
+            )
+        });
+        self.fold_coeffs = coeffs_from_codeword(self.dft, &self.folded_codeword, self.fold_shift);
+
+        self.next_commit_codeword = codeword_from_coeffs(
+            self.dft,
+            self.fold_coeffs.clone(),
+            self.next_shift,
+            self.next_log_domain,
+        );
+        let (new_commit, new_data) =
+            tracing::debug_span!("commit_as_fiber_matrix").in_scope(|| {
+                commit_as_fiber_matrix(
+                    &self.config.mmcs,
+                    &self.next_commit_codeword,
+                    self.config.log_folding_factor,
+                )
+            });
+        self.new_data = Some(new_data);
+        new_commit
+    }
+
+    /// The domains an OOD point must avoid: the current and next witness domains, and the
+    /// fold-query domain. Excluding the fold domain prevents an honest-prover failure where an
+    /// OOD point coincides with a sampled query point and the later interpolation hits
+    /// duplicate roots.
+    const fn ood_excluded_domains(
+        &self,
+        current_shift: F,
+        current_log_domain: usize,
+    ) -> [(F, usize); 3] {
+        [
+            (current_shift, current_log_domain),
+            (self.next_shift, self.next_log_domain),
+            (self.fold_shift, self.fold_log_domain),
+        ]
+    }
+
+    /// Evaluate the folded polynomial at the sampled OOD points. The answers are the round's
+    /// second prover message and must be absorbed by the caller.
+    fn ood_answers(&mut self, ood_points: Vec<EF>) -> &[EF] {
+        // `fold_coeffs` is padded to the next round's full domain size, but the folded
+        // polynomial's true degree is bounded by the round's degree schedule (a fixed
+        // factor smaller); evaluating only the non-trivially-zero prefix cuts Horner's
+        // work by that same factor.
+        let rc = &self.config.round_configs[self.round];
+        let folded_degree_bound = 1usize << (rc.log_degree - self.log_arity);
+        let truncated = &self.fold_coeffs[..folded_degree_bound.min(self.fold_coeffs.len())];
+
+        self.ood_points = ood_points;
+        self.ood_answers = self
+            .ood_points
+            .iter()
+            .map(|&z| eval_poly_parallel(truncated, z))
+            .collect();
+        &self.ood_answers
+    }
+
+    /// Record the sampled query indices and the folded values they read.
+    fn record_queries(&mut self, query_indices: Vec<usize>) {
+        let fold_gen = F::two_adic_generator(self.fold_log_domain);
+        let mut seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
+
+        for &j in &query_indices {
+            if seen.insert(j) {
+                self.query_points
+                    .push(EF::from(self.fold_shift) * EF::from(fold_gen.exp_u64(j as u64)));
+                self.query_answers.push(self.folded_codeword[j]);
+            }
+        }
+        self.query_indices = query_indices;
+        self.seen_query_indices = seen.into_iter().collect();
+    }
+
+    /// Interpolate the answer polynomial and derive the shake polynomial. Both are prover
+    /// messages and must be absorbed by the caller before rho is squeezed — otherwise a
+    /// malicious prover could fit Ans to satisfy the shake identity at a known rho.
+    fn ans_shake(&mut self) -> (&[EF], &[EF]) {
+        self.all_points = self
+            .ood_points
+            .iter()
+            .chain(self.query_points.iter())
+            .copied()
+            .collect();
+        let all_values: Vec<EF> = self
+            .ood_answers
+            .iter()
+            .chain(self.query_answers.iter())
+            .copied()
+            .collect();
+
+        self.ans_poly = interpolate_poly(&self.all_points, &all_values);
+        self.shake_poly = compute_shake_polynomial(&self.ans_poly, &self.all_points);
+        (&self.ans_poly, &self.shake_poly)
+    }
+}
+
 /// Prove one intermediate STIR round (Construction 5.2): fold the current oracle, sample OOD
 /// and query points, answer them, commit the folded oracle, and evaluate the next virtual
 /// witness directly on the next round's domain.
@@ -164,69 +363,29 @@ where
         + CanSampleUniformBits<F>,
 {
     let rc = &config.round_configs[round];
-    let log_arity = rc.log_folding_factor;
-    let arity = 1 << log_arity;
+    let arity = 1 << rc.log_folding_factor;
 
-    let (fold_log_domain, fold_shift) =
-        fold_domain_params(current_shift, current_log_domain, log_arity);
-    let next_log_domain = current_log_domain - 1;
-    let next_shift = next_domain_shift(current_shift, log_arity);
+    let mut state = RoundProver::new(config, round, dft, current_shift, current_log_domain);
 
     // Step 1: fold. Derive gamma after folding PoW.
     let folding_pow_witness = challenger.grind(rc.folding_pow_bits);
     let gamma: EF = challenger.sample_algebra_element();
 
-    // `fold_codeword` interpolates at subgroup coordinates `g^{·}`. The codeword
-    // lives on the coset `current_shift · <g>`, so passing `gamma / current_shift`
-    // yields exactly Construction 4.5's coset fold at challenge `gamma`.
-    let fold_beta = gamma * EF::from(current_shift.inverse());
-    let folded_codeword = tracing::debug_span!("fold_codeword").in_scope(|| {
-        fold_codeword::<F, EF>(
-            current_oracle_codeword,
-            fold_beta,
-            log_arity,
-            current_log_domain,
-        )
-    });
-    let fold_coeffs = coeffs_from_codeword(dft, &folded_codeword, fold_shift);
-
-    let next_commit_codeword: Vec<EF> =
-        codeword_from_coeffs(dft, fold_coeffs.clone(), next_shift, next_log_domain);
-    let (new_commit, new_data) = tracing::debug_span!("commit_as_fiber_matrix").in_scope(|| {
-        commit_as_fiber_matrix(
-            &config.mmcs,
-            &next_commit_codeword,
-            config.log_folding_factor,
-        )
-    });
+    let new_commit = state.fold_and_commit(
+        current_oracle_codeword,
+        current_shift,
+        current_log_domain,
+        gamma,
+    );
     challenger.observe(new_commit.clone());
 
     // Step 2: OOD sampling.
-    // OOD points must be outside the current and next witness domains AND outside the
-    // fold-query domain. Excluding the fold domain prevents an honest-prover failure
-    // where an OOD point coincides with a sampled query point and the interpolation in
-    // step 4 hits duplicate roots.
     let ood_points = sample_ood_points(
         challenger,
-        [
-            (current_shift, current_log_domain),
-            (next_shift, next_log_domain),
-            (fold_shift, fold_log_domain),
-        ],
+        state.ood_excluded_domains(current_shift, current_log_domain),
         rc.num_ood_samples,
     );
-
-    // `fold_coeffs` is padded to the next round's full domain size, but the folded
-    // polynomial's true degree is bounded by the round's degree schedule (a fixed
-    // factor smaller); evaluating only the non-trivially-zero prefix cuts Horner's
-    // work by that same factor.
-    let folded_degree_bound = 1usize << (rc.log_degree - log_arity);
-    let truncated_fold_coeffs = &fold_coeffs[..folded_degree_bound.min(fold_coeffs.len())];
-
-    let ood_answers: Vec<EF> = ood_points
-        .iter()
-        .map(|&z| eval_poly_parallel(truncated_fold_coeffs, z))
-        .collect();
+    let ood_answers = state.ood_answers(ood_points).to_vec();
     challenger.observe_algebra_slice(&ood_answers);
 
     // Step 3: query-phase PoW. It protects the immediately following combination challenge
@@ -235,40 +394,26 @@ where
     let pow_witness = challenger.grind(rc.pow_bits);
 
     // Step 4: Query sampling.
-    let fold_gen = F::two_adic_generator(fold_log_domain);
-
-    let mut query_indices = Vec::with_capacity(rc.num_queries);
-    let mut query_points = Vec::with_capacity(rc.num_queries);
-    let mut query_answers = Vec::with_capacity(rc.num_queries);
-
-    let mut seen_query_indices: alloc::collections::BTreeSet<usize> =
-        alloc::collections::BTreeSet::new();
-
     let r_comb: EF = challenger.sample_algebra_element();
 
-    for _ in 0..rc.num_queries {
-        // `RESAMPLE = true`: the challenger loops on field-side rejection internally,
-        // so this `expect` is unreachable for every challenger in this workspace.
-        // Unbiased sampling is required because `sample_bits` carries a per-draw modular
-        // bias of `2^fold_log_domain / |F|`, which is non-negligible over 31-bit fields.
-        let j = challenger
-            .sample_uniform_bits::<true>(fold_log_domain)
-            .expect("RESAMPLE = true: rejection loops internally, never errors");
-        let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
-
-        query_indices.push(j);
-
-        if seen_query_indices.insert(j) {
-            query_points.push(fold_point);
-            query_answers.push(folded_codeword[j]);
-        }
-    }
+    let query_indices: Vec<usize> = (0..rc.num_queries)
+        .map(|_| {
+            // `RESAMPLE = true`: the challenger loops on field-side rejection internally,
+            // so this `expect` is unreachable for every challenger in this workspace.
+            // Unbiased sampling is required because `sample_bits` carries a per-draw modular
+            // bias of `2^fold_log_domain / |F|`, which is non-negligible over 31-bit fields.
+            challenger
+                .sample_uniform_bits::<true>(state.fold_log_domain)
+                .expect("RESAMPLE = true: rejection loops internally, never errors")
+        })
+        .collect();
+    state.record_queries(query_indices);
 
     // One shared, pruned multi-opening proof for every query drawn this round. Absent when
     // this round reads an external initial oracle, whose fibers the verifier rebuilds.
     let query_openings = current_commit_data
         .as_ref()
-        .map(|data| open_fiber_rows(&config.mmcs, &query_indices, data));
+        .map(|data| open_fiber_rows(&config.mmcs, &state.query_indices, data));
     debug_assert!(
         query_openings
             .iter()
@@ -276,19 +421,8 @@ where
     );
 
     // Step 4: Answer polynomial, shake polynomial, and shake-check challenge.
-    let all_points: Vec<EF> = ood_points
-        .iter()
-        .chain(query_points.iter())
-        .copied()
-        .collect();
-    let all_values: Vec<EF> = ood_answers
-        .iter()
-        .chain(query_answers.iter())
-        .copied()
-        .collect();
-
-    let ans_poly = interpolate_poly(&all_points, &all_values);
-    let shake_poly = compute_shake_polynomial(&ans_poly, &all_points);
+    let (ans_poly, shake_poly) = state.ans_shake();
+    let (ans_poly, shake_poly) = (ans_poly.to_vec(), shake_poly.to_vec());
     // Bind ans_poly into the transcript BEFORE rho is sampled — otherwise a malicious prover
     // could fit Ans to satisfy the shake identity at a known rho.
     challenger.observe_algebra_slice(&ans_poly);
@@ -308,6 +442,13 @@ where
     // and the vanishing polynomial still need evaluating — their roots are this round's
     // arbitrary interpolation points — but both are tiny next to the domain, so they go
     // through the low-degree coset evaluation rather than a full-size DFT each.
+    let all_points = core::mem::take(&mut state.all_points);
+    let next_shift = state.next_shift;
+    let next_log_domain = state.next_log_domain;
+    let next_commit_codeword = core::mem::take(&mut state.next_commit_codeword);
+    let new_data = state.new_data.take().expect("set by `fold_and_commit`");
+    let seen_query_indices = core::mem::take(&mut state.seen_query_indices);
+
     let num_answers = all_points.len();
 
     let vanishing_coeffs = vanishing_poly_from_roots(&all_points);
