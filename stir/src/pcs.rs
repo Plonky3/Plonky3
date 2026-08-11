@@ -45,8 +45,8 @@ use tracing::instrument;
 
 use crate::config::{StirConfig, StirParameters};
 use crate::proof::StirProof;
-use crate::prover::prove_stir_from_external_codeword;
-use crate::verifier::{StirError, verify_stir_with_external_initial};
+use crate::prover::prove_stir_multi_from_external_codewords;
+use crate::verifier::{StirError, verify_stir_multi_with_external_initial};
 
 /// Batched openings of one input commitment's LDE matrices at the STIR-derived query
 /// positions for one LDE-height bucket.
@@ -482,63 +482,86 @@ where
             }
         }
 
-        // Step 3: For each non-empty height bucket (descending), run STIR on the bucket's
-        // reduced opening and bind the input MMCS. Each distinct LDE height gets its own
-        // STIR sub-proof. BTreeMap iterates in ascending key order, so reverse for descending.
-        let mut bucket_proofs = Vec::new();
-
+        // Step 3: run STIR on every non-empty height bucket's reduced opening in lockstep,
+        // sharing every grind across buckets, then bind the input MMCS at each bucket's
+        // query positions. Each distinct LDE height gets its own STIR sub-proof. BTreeMap
+        // iterates in ascending key order, so reverse for descending.
         let bucket_log_heights: Vec<usize> = reduced_openings.keys().rev().copied().collect();
-        for log_h in bucket_log_heights {
-            let ro = reduced_openings
-                .remove(&log_h)
-                .expect("present by construction");
-            let bucket_height = 1usize << log_h;
 
-            let mut ro_natural = ro;
-            reverse_slice_index_bits(&mut ro_natural);
+        let stir_configs: Vec<StirConfig<Val, Challenge, StirMmcs, Challenger>> =
+            bucket_log_heights
+                .iter()
+                .map(|&log_h| {
+                    let log_stir_degree = log_h.saturating_sub(self.stir.log_blowup).max(1);
+                    StirConfig::<Val, Challenge, StirMmcs, Challenger>::new(
+                        log_stir_degree,
+                        self.stir.clone(),
+                    )
+                })
+                .collect();
+        let stir_config_refs: Vec<&StirConfig<Val, Challenge, StirMmcs, Challenger>> =
+            stir_configs.iter().collect();
 
-            let log_stir_degree = log_h.saturating_sub(self.stir.log_blowup).max(1);
-            let stir_config = StirConfig::<Val, Challenge, StirMmcs, Challenger>::new(
-                log_stir_degree,
-                self.stir.clone(),
-            );
+        let initial_codewords: Vec<Vec<Challenge>> = bucket_log_heights
+            .iter()
+            .map(|&log_h| {
+                let mut ro_natural = reduced_openings
+                    .remove(&log_h)
+                    .expect("present by construction");
+                reverse_slice_index_bits(&mut ro_natural);
+                ro_natural
+            })
+            .collect();
 
-            let (stir_proof, first_round_query_indices) =
-                prove_stir_from_external_codeword(&stir_config, ro_natural, &self.dft, challenger);
+        let bucket_results = prove_stir_multi_from_external_codewords(
+            &stir_config_refs,
+            initial_codewords,
+            &self.dft,
+            challenger,
+        );
 
-            // Input binding for this bucket. Folding factor is constant across rounds.
-            let log_arity0 = stir_config.log_folding_factor;
+        let bucket_proofs = bucket_log_heights
+            .iter()
+            .zip(&stir_configs)
+            .zip(bucket_results)
+            .map(
+                |((&log_h, stir_config), (stir_proof, first_round_query_indices))| {
+                    let bucket_height = 1usize << log_h;
+                    // Folding factor is constant across rounds.
+                    let log_arity0 = stir_config.log_folding_factor;
 
-            let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> =
-                commitment_data_with_opening_points
-                    .iter()
-                    .map(|(data, _)| {
-                        // Only this bucket's height class is opened; the other classes live in
-                        // their own trees and never appear in this bucket's proof.
-                        let class = data
-                            .classes
+                    let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> =
+                        commitment_data_with_opening_points
                             .iter()
-                            .find(|class| class.lde_height == bucket_height)?;
+                            .map(|(data, _)| {
+                                // Only this bucket's height class is opened; the other classes live
+                                // in their own trees and never appear in this bucket's proof.
+                                let class = data
+                                    .classes
+                                    .iter()
+                                    .find(|class| class.lde_height == bucket_height)?;
 
-                        // Every matrix in the class shares the bucket's height, so the grouped
-                        // row index is the query index itself: one index per query, and the
-                        // whole fiber lives in that single row.
-                        let q_globals: Vec<usize> = first_round_query_indices
-                            .iter()
-                            .map(|&j| reverse_bits_len(j, log_h - log_arity0))
+                                // Every matrix in the class shares the bucket's height, so the
+                                // grouped row index is the query index itself: one index per query,
+                                // and the whole fiber lives in that single row.
+                                let q_globals: Vec<usize> = first_round_query_indices
+                                    .iter()
+                                    .map(|&j| reverse_bits_len(j, log_h - log_arity0))
+                                    .collect();
+
+                                let (opened_values, opening_proof) =
+                                    self.input_mmcs.open_multi_batch(&q_globals, &class.data);
+                                Some(InputOpenings {
+                                    opened_values,
+                                    opening_proof,
+                                })
+                            })
                             .collect();
 
-                        let (opened_values, opening_proof) =
-                            self.input_mmcs.open_multi_batch(&q_globals, &class.data);
-                        Some(InputOpenings {
-                            opened_values,
-                            opening_proof,
-                        })
-                    })
-                    .collect();
-
-            bucket_proofs.push((stir_proof, input_openings));
-        }
+                    (stir_proof, input_openings)
+                },
+            )
+            .collect();
 
         (all_opened_values, bucket_proofs)
     }
@@ -634,48 +657,64 @@ where
             })
             .collect();
 
-        // Verify each height bucket's STIR sub-proof and input binding.
-        for (bucket_idx, &log_h) in bucket_log_heights.iter().enumerate() {
-            let bucket_height = 1usize << log_h;
-            let (stir_proof, input_openings) = &proof[bucket_idx];
-
-            // SHAPE CHECK: input_openings has one slot per public commitment. Without this,
-            // a malicious proof could omit trailing commitments — a `zip` would silently
-            // drop them, their claimed values would still be observed into the transcript
-            // (above), but they'd never be MMCS-opened or included in the reduced-opening
-            // accumulation, so the proof would verify against a subset of the public input.
+        // SHAPE CHECK: every bucket's input_openings has one slot per public commitment.
+        // Without this, a malicious proof could omit trailing commitments — a `zip` would
+        // silently drop them, their claimed values would still be observed into the
+        // transcript (above), but they'd never be MMCS-opened or included in the
+        // reduced-opening accumulation, so the proof would verify against a subset of the
+        // public input.
+        for (_, input_openings) in proof {
             if input_openings.len() != commitments_with_opening_points.len() {
                 return Err(StirError::InvalidProofShape);
             }
+        }
 
-            let log_stir_degree = log_h.saturating_sub(self.stir.log_blowup).max(1);
-            let stir_config = StirConfig::<Val, Challenge, StirMmcs, Challenger>::new(
-                log_stir_degree,
-                self.stir.clone(),
-            );
+        let stir_configs: Vec<StirConfig<Val, Challenge, StirMmcs, Challenger>> =
+            bucket_log_heights
+                .iter()
+                .map(|&log_h| {
+                    let log_stir_degree = log_h.saturating_sub(self.stir.log_blowup).max(1);
+                    StirConfig::<Val, Challenge, StirMmcs, Challenger>::new(
+                        log_stir_degree,
+                        self.stir.clone(),
+                    )
+                })
+                .collect();
+        let stir_config_refs: Vec<&StirConfig<Val, Challenge, StirMmcs, Challenger>> =
+            stir_configs.iter().collect();
+        let stir_proofs: Vec<&StirProof<Challenge, StirMmcs, Val>> =
+            proof.iter().map(|(p, _)| p).collect();
 
-            // The folding factor is constant across rounds, so the same arity applies whether
-            // STIR ran with intermediate rounds or only a final round.
-            let log_arity0 = stir_config.log_folding_factor;
-            let arity0 = 1usize << log_arity0;
+        // Captured by every bucket's closure below; taking references up front lets `move`
+        // give each closure its own copy of the reference rather than the whole value.
+        let commitments_with_opening_points = &commitments_with_opening_points;
+        let point_data = &point_data;
+        let alpha_powers = &alpha_powers;
 
-            // A queried input row sits at LDE position `p = j + l * fold_height0`, whose coset
-            // point is `GENERATOR * g^p` for `g = two_adic_generator(log_h)`. Walking a fiber's
-            // `arity0` lanes is therefore one exponentiation per query followed by repeated
-            // multiplication by the fixed step `g^fold_height0`, an `arity0`-th root of unity.
-            let domain_gen = Val::two_adic_generator(log_h);
-            let fiber_step = domain_gen.exp_power_of_2(log_h - log_arity0);
+        // STIR's initial oracle is the reduced opening, which is a deterministic function of
+        // the input commitments, the claimed values, and `alpha` — all already in the
+        // transcript. Rather than have the prover commit and open it a second time, rebuild
+        // its queried fibers from the input MMCS openings on demand.
+        let initial_fibers: Vec<_> = bucket_log_heights
+            .iter()
+            .zip(&stir_configs)
+            .zip(proof.iter().map(|(_, input_openings)| input_openings))
+            .map(|((&log_h, stir_config), input_openings)| {
+                let bucket_height = 1usize << log_h;
+                // The folding factor is constant across rounds, so the same arity applies
+                // whether STIR ran with intermediate rounds or only a final round.
+                let log_arity0 = stir_config.log_folding_factor;
+                let arity0 = 1usize << log_arity0;
 
-            // STIR's initial oracle is the reduced opening, which is a deterministic function
-            // of the input commitments, the claimed values, and `alpha` — all already in the
-            // transcript. Rather than have the prover commit and open it a second time, rebuild
-            // its queried fibers from the input MMCS openings on demand.
-            //
-            // The accumulation runs across ALL commitments: when several contribute matrices to
-            // the same height bucket, `ro[p]` is their sum, so a per-commitment reconstruction
-            // would be wrong.
-            let reconstruct_initial_fibers =
-                |first_round_unique_js: &[usize]| -> Result<Vec<Vec<Challenge>>, Self::Error> {
+                // A queried input row sits at LDE position `p = j + l * fold_height0`, whose
+                // coset point is `GENERATOR * g^p` for `g = two_adic_generator(log_h)`.
+                // Walking a fiber's `arity0` lanes is therefore one exponentiation per query
+                // followed by repeated multiplication by the fixed step `g^fold_height0`, an
+                // `arity0`-th root of unity.
+                let domain_gen = Val::two_adic_generator(log_h);
+                let fiber_step = domain_gen.exp_power_of_2(log_h - log_arity0);
+
+                move |first_round_unique_js: &[usize]| -> Result<Vec<Vec<Challenge>>, Self::Error> {
                     let n_q = first_round_unique_js.len();
                     let mut expected_ro = vec![Challenge::zero_vec(arity0); n_q];
 
@@ -712,6 +751,9 @@ where
                     }
                     let inv_denoms = batch_multiplicative_inverse(&denom_diffs);
 
+                    // The accumulation runs across ALL commitments: when several contribute
+                    // matrices to the same height bucket, `ro[p]` is their sum, so a
+                    // per-commitment reconstruction would be wrong.
                     for (commit_idx, ((commitment, domain_claims), per_commit_opening)) in
                         commitments_with_opening_points
                             .iter()
@@ -843,17 +885,18 @@ where
                     }
 
                     Ok(expected_ro)
-                };
+                }
+            })
+            .collect();
 
-            // Any transcript-touching step stays inside `verify_stir_with_external_initial`;
-            // the closure above only reads public data and the input openings.
-            verify_stir_with_external_initial(
-                &stir_config,
-                stir_proof,
-                challenger,
-                reconstruct_initial_fibers,
-            )?;
-        }
+        // Any transcript-touching step stays inside `verify_stir_multi_with_external_initial`;
+        // every closure above only reads public data and its own bucket's input openings.
+        verify_stir_multi_with_external_initial(
+            &stir_config_refs,
+            &stir_proofs,
+            challenger,
+            initial_fibers,
+        )?;
 
         Ok(())
     }
