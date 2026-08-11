@@ -847,6 +847,418 @@ where
     (proof, first_round_query_indices)
 }
 
+/// One `(proof, first_round_query_indices)` pair per instance, in `configs` order.
+type StirMultiOutput<EF, M, Witness> = Vec<(StirProof<EF, M, Witness>, Vec<usize>)>;
+
+/// Per-instance mutable state threaded through [`prove_stir_multi_inner`]'s round loop.
+struct MultiInstanceState<F, EF: Field, M: Mmcs<EF>> {
+    codeword: Vec<EF>,
+    shift: F,
+    log_domain: usize,
+    commit_data: Option<M::ProverData<RowMajorMatrix<EF>>>,
+    initial_commitment: Option<M::Commitment>,
+    round_proofs: Vec<StirRoundProof<EF, M, F>>,
+    first_round_query_indices: Vec<usize>,
+}
+
+/// Prove low degree for `B` polynomials of possibly different degrees in lockstep, sharing
+/// every grind across the instances active at that site.
+///
+/// Instances are right-aligned: instance `i`, with `Mi = configs[i].num_rounds()`
+/// intermediate rounds, runs its local rounds at global rounds `max_m - Mi .. max_m`
+/// (`max_m = maxᵢ Mi`), so every instance reaches its final round on the same global step. At
+/// each global round the shared grind bits are the max, over the instances active at that
+/// round, of THAT instance's local round's bits: the round error is `maxᵢ εᵢ`, not `Σᵢ εᵢ`,
+/// because the statement is false in specific instances, fixed before the grind, and the
+/// adversary wins only if every doomed instance's fresh challenge lands lucky. Widening the
+/// active set adds hurdles, not chances, so no union-bound penalty applies.
+///
+/// The shared witness is replicated verbatim into every active instance's own proof slot;
+/// `verifier::verify_stir_multi_inner` checks the copies agree before checking the grind once.
+///
+/// Returns one `(proof, first_round_query_indices)` pair per instance, in `configs` order.
+fn prove_stir_multi_inner<F, EF, Dft, M, Challenger>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    initial_codewords: Vec<Vec<EF>>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+    commit_initial: bool,
+) -> StirMultiOutput<EF, M, Challenger::Witness>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
+    let b = configs.len();
+    assert_eq!(
+        initial_codewords.len(),
+        b,
+        "one initial codeword per instance"
+    );
+
+    let mut states: Vec<MultiInstanceState<F, EF, M>> = Vec::with_capacity(b);
+    for (i, codeword) in initial_codewords.into_iter().enumerate() {
+        let log_initial_domain = configs[i].log_starting_domain_size();
+        assert_eq!(
+            codeword.len(),
+            1 << log_initial_domain,
+            "initial STIR codeword length must match the configured starting domain"
+        );
+        let (initial_commitment, commit_data) = if commit_initial {
+            let (commit, data) =
+                commit_as_fiber_matrix(&configs[i].mmcs, &codeword, configs[i].log_folding_factor);
+            challenger.observe(commit.clone());
+            (Some(commit), Some(data))
+        } else {
+            (None, None)
+        };
+        states.push(MultiInstanceState {
+            codeword,
+            shift: F::GENERATOR,
+            log_domain: log_initial_domain,
+            commit_data,
+            initial_commitment,
+            round_proofs: Vec::with_capacity(configs[i].num_rounds()),
+            first_round_query_indices: Vec::new(),
+        });
+    }
+
+    let max_m = configs.iter().map(|c| c.num_rounds()).max().unwrap_or(0);
+    let offset = |i: usize| max_m - configs[i].num_rounds();
+
+    for r in 0..max_m {
+        let active: Vec<usize> = (0..b).filter(|&i| offset(i) <= r).collect();
+
+        // [grind folding_pow_bits], shared across every active instance's local round.
+        let shared_folding_bits = active
+            .iter()
+            .map(|&i| configs[i].round_configs[r - offset(i)].folding_pow_bits)
+            .max()
+            .expect("`active` is non-empty for r < max_m");
+        let folding_pow_witness = challenger.grind(shared_folding_bits);
+
+        // Phase 1: per-instance folding challenge, fold, commit, and absorb the commitment.
+        struct Phase1<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
+            rp: RoundProver<'a, F, EF, Dft, M, Challenger>,
+            commit: M::Commitment,
+        }
+        let phase1: Vec<Phase1<'_, F, EF, Dft, M, Challenger>> = active
+            .iter()
+            .map(|&i| {
+                let local_r = r - offset(i);
+                let mut rp = RoundProver::new(
+                    configs[i],
+                    local_r,
+                    dft,
+                    states[i].shift,
+                    states[i].log_domain,
+                );
+                let gamma: EF = challenger.sample_algebra_element();
+                let commit = rp.fold_and_commit(
+                    &states[i].codeword,
+                    states[i].shift,
+                    states[i].log_domain,
+                    gamma,
+                );
+                challenger.observe(commit.clone());
+                Phase1 { rp, commit }
+            })
+            .collect();
+
+        // Phase 2: per-instance OOD sampling and answer absorb.
+        struct Phase2<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
+            rp: RoundProver<'a, F, EF, Dft, M, Challenger>,
+            commit: M::Commitment,
+            ood_answers: Vec<EF>,
+        }
+        let phase2: Vec<Phase2<'_, F, EF, Dft, M, Challenger>> = active
+            .iter()
+            .zip(phase1)
+            .map(|(&i, p)| {
+                let rc = &configs[i].round_configs[r - offset(i)];
+                let mut rp = p.rp;
+                let ood_points = sample_ood_points(
+                    challenger,
+                    rp.ood_excluded_domains(states[i].shift, states[i].log_domain),
+                    rc.num_ood_samples,
+                );
+                let ood_answers = rp.ood_answers(ood_points).to_vec();
+                challenger.observe_algebra_slice(&ood_answers);
+                Phase2 {
+                    rp,
+                    commit: p.commit,
+                    ood_answers,
+                }
+            })
+            .collect();
+
+        // [grind pow_bits], shared across every active instance's local round.
+        let shared_pow_bits = active
+            .iter()
+            .map(|&i| configs[i].round_configs[r - offset(i)].pow_bits)
+            .max()
+            .expect("`active` is non-empty for r < max_m");
+        let pow_witness = challenger.grind(shared_pow_bits);
+
+        // Phase 3: per-instance combination challenge, query sampling, and query openings.
+        struct Phase3<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
+            rp: RoundProver<'a, F, EF, Dft, M, Challenger>,
+            commit: M::Commitment,
+            ood_answers: Vec<EF>,
+            query_openings: Option<StirQueryOpenings<EF, M>>,
+            r_comb: EF,
+        }
+        let phase3: Vec<Phase3<'_, F, EF, Dft, M, Challenger>> = active
+            .iter()
+            .zip(phase2)
+            .map(|(&i, p)| {
+                let rc = &configs[i].round_configs[r - offset(i)];
+                let mut rp = p.rp;
+                let r_comb: EF = challenger.sample_algebra_element();
+                let query_indices: Vec<usize> = (0..rc.num_queries)
+                    .map(|_| {
+                        challenger
+                            .sample_uniform_bits::<true>(rp.fold_log_domain)
+                            .expect("RESAMPLE = true: rejection loops internally, never errors")
+                    })
+                    .collect();
+                rp.record_queries(query_indices);
+
+                let query_openings = states[i]
+                    .commit_data
+                    .as_ref()
+                    .map(|data| open_fiber_rows(&configs[i].mmcs, &rp.query_indices, data));
+                debug_assert!(query_openings.iter().all(|o| {
+                    o.row_evals
+                        .iter()
+                        .all(|row| row.len() == 1usize << rp.log_arity)
+                }));
+
+                Phase3 {
+                    rp,
+                    commit: p.commit,
+                    ood_answers: p.ood_answers,
+                    query_openings,
+                    r_comb,
+                }
+            })
+            .collect();
+
+        // Phase 4: per-instance answer/shake polynomial absorb and shake-check challenge.
+        struct Phase4<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
+            rp: RoundProver<'a, F, EF, Dft, M, Challenger>,
+            commit: M::Commitment,
+            ood_answers: Vec<EF>,
+            query_openings: Option<StirQueryOpenings<EF, M>>,
+            r_comb: EF,
+        }
+        let phase4: Vec<Phase4<'_, F, EF, Dft, M, Challenger>> = phase3
+            .into_iter()
+            .map(|p| {
+                let mut rp = p.rp;
+                let (ans, shake) = rp.ans_shake();
+                let ans = ans.to_vec();
+                let shake = shake.to_vec();
+                challenger.observe_algebra_slice(&ans);
+                challenger.observe_algebra_slice(&shake);
+                let _rho: EF = challenger.sample_algebra_element();
+                Phase4 {
+                    rp,
+                    commit: p.commit,
+                    ood_answers: p.ood_answers,
+                    query_openings: p.query_openings,
+                    r_comb: p.r_comb,
+                }
+            })
+            .collect();
+
+        // Phase 5 (finish): touches no transcript state, so instance order no longer matters.
+        for (&i, p) in active.iter().zip(phase4) {
+            let finish = p.rp.finish(p.r_comb);
+            states[i].round_proofs.push(StirRoundProof {
+                commitment: p.commit,
+                folding_pow_witness,
+                ood_answers: p.ood_answers,
+                pow_witness,
+                ans_polynomial: finish.ans_poly,
+                shake_polynomial: finish.shake_poly,
+                query_openings: p.query_openings,
+            });
+            if r == offset(i) {
+                states[i].first_round_query_indices = finish.seen_query_indices;
+            }
+            states[i].codeword = finish.next_codeword;
+            states[i].commit_data = Some(finish.next_commit_data);
+            states[i].shift = finish.next_shift;
+            states[i].log_domain = finish.next_log_domain;
+        }
+    }
+
+    // Final round: every instance reaches it on this same global step (right-alignment).
+    let shared_final_folding_bits = configs
+        .iter()
+        .map(|c| c.final_folding_pow_bits)
+        .max()
+        .unwrap_or(0);
+    let final_folding_pow_witness = challenger.grind(shared_final_folding_bits);
+
+    let mut final_provers: Vec<FinalRoundProver<'_, F, EF, Dft, M, Challenger>> =
+        Vec::with_capacity(b);
+    for i in 0..b {
+        let mut frp = FinalRoundProver::new(configs[i], dft, states[i].shift, states[i].log_domain);
+        let final_gamma: EF = challenger.sample_algebra_element();
+        let final_poly = frp.fold_and_derive(&states[i].codeword, final_gamma);
+        challenger.observe_algebra_slice(final_poly);
+        final_provers.push(frp);
+    }
+
+    let shared_final_pow_bits = configs.iter().map(|c| c.final_pow_bits).max().unwrap_or(0);
+    let final_pow_witness = challenger.grind(shared_final_pow_bits);
+
+    let mut results = Vec::with_capacity(b);
+    for (i, mut frp) in final_provers.into_iter().enumerate() {
+        let final_arity = 1usize << configs[i].log_folding_factor;
+        let query_indices: Vec<usize> = (0..configs[i].final_queries)
+            .map(|_| {
+                challenger
+                    .sample_uniform_bits::<true>(frp.final_new_log_domain)
+                    .expect("RESAMPLE = true: rejection loops internally, never errors")
+            })
+            .collect();
+        frp.record_queries(query_indices);
+
+        let final_query_openings = states[i]
+            .commit_data
+            .as_ref()
+            .map(|data| open_fiber_rows(&configs[i].mmcs, &frp.query_indices, data));
+        debug_assert!(
+            final_query_openings
+                .iter()
+                .all(|o| o.row_evals.iter().all(|row| row.len() == final_arity))
+        );
+
+        let finish = frp.finish();
+        if configs[i].num_rounds() == 0 {
+            states[i].first_round_query_indices = finish.seen_query_indices;
+        }
+
+        let proof = StirProof {
+            initial_commitment: states[i].initial_commitment.clone(),
+            round_proofs: core::mem::take(&mut states[i].round_proofs),
+            final_polynomial: finish.final_poly,
+            final_folding_pow_witness,
+            final_pow_witness,
+            final_query_openings,
+        };
+        results.push((
+            proof,
+            core::mem::take(&mut states[i].first_round_query_indices),
+        ));
+    }
+
+    results
+}
+
+/// Prove low degree for `B` polynomials of possibly different degrees (given in coefficient
+/// form over `EF`), sharing every grind across the STIR instances active at that grind's site.
+///
+/// See `prove_stir_multi_inner` for the shared-grind soundness argument.
+#[instrument(skip_all)]
+pub fn prove_stir_multi<F, EF, Dft, M, Challenger>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    poly_coeffs: Vec<Vec<EF>>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+) -> StirMultiOutput<EF, M, Challenger::Witness>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
+    assert_eq!(
+        configs.len(),
+        poly_coeffs.len(),
+        "one polynomial per instance"
+    );
+    let initial_codewords = configs
+        .iter()
+        .zip(poly_coeffs)
+        .map(|(config, coeffs)| {
+            let log_initial_domain = config.log_starting_domain_size();
+            let mut coeffs = coeffs;
+            coeffs.resize(1 << log_initial_domain, EF::ZERO);
+            codeword_from_coeffs(dft, coeffs, F::GENERATOR, log_initial_domain)
+        })
+        .collect();
+    prove_stir_multi_inner(configs, initial_codewords, dft, challenger, true)
+}
+
+/// Prove low degree for `B` initial natural-order codewords on each instance's starting
+/// domain, sharing every grind across the STIR instances active at that grind's site.
+///
+/// See [`prove_stir_from_codeword`] for the codeword layout requirement, applied per instance,
+/// and `prove_stir_multi_inner` for the shared-grind soundness argument.
+#[instrument(skip_all)]
+pub fn prove_stir_multi_from_codewords<F, EF, Dft, M, Challenger>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    initial_codewords: Vec<Vec<EF>>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+) -> StirMultiOutput<EF, M, Challenger::Witness>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
+    prove_stir_multi_inner(configs, initial_codewords, dft, challenger, true)
+}
+
+/// Prove low degree for `B` initial codewords the caller has already bound (see
+/// [`prove_stir_from_external_codeword`]), sharing every grind across the STIR instances
+/// active at that grind's site.
+///
+/// # Soundness requirement
+///
+/// See [`prove_stir_from_external_codeword`]: each caller-supplied codeword must already be
+/// pinned by data absorbed into `challenger` before this call, and independently for each
+/// instance.
+///
+/// See `prove_stir_multi_inner` for the shared-grind soundness argument.
+#[instrument(skip_all)]
+pub fn prove_stir_multi_from_external_codewords<F, EF, Dft, M, Challenger>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    initial_codewords: Vec<Vec<EF>>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+) -> StirMultiOutput<EF, M, Challenger::Witness>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
+    prove_stir_multi_inner(configs, initial_codewords, dft, challenger, false)
+}
+
 /// Evaluate two polynomials of at most `2^log_len` coefficients on the coset `shift * <g>` of
 /// size `2^log_size`, returning both codewords in **natural order**.
 ///

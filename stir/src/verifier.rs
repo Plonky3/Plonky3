@@ -958,3 +958,360 @@ where
         first_round_fiber_evals,
     })
 }
+
+/// Source of the queried fibers of `B` external initial oracles, when there are none.
+type NoExternalFibersMulti<EF, MmcsError> =
+    fn(&[usize]) -> Result<Vec<Vec<EF>>, StirError<MmcsError>>;
+
+/// Verify `B` STIR proofs of possibly different degrees in lockstep, mirroring
+/// [`crate::prover::prove_stir_multi`].
+pub fn verify_stir_multi<F, EF, M, Challenger>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    proofs: &[&StirProof<EF, M, Challenger::Witness>],
+    challenger: &mut Challenger,
+) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
+    verify_stir_multi_inner(
+        configs,
+        proofs,
+        challenger,
+        None::<Vec<NoExternalFibersMulti<EF, M::Error>>>,
+    )
+}
+
+/// Verify `B` STIR proofs whose initial oracles are external, mirroring
+/// [`crate::prover::prove_stir_multi_from_external_codewords`].
+///
+/// `initial_fibers[i]` is called once with instance `i`'s sorted unique fold-domain indices,
+/// exactly as [`verify_stir_with_external_initial`]'s single-instance callback.
+pub fn verify_stir_multi_with_external_initial<F, EF, M, Challenger, IE, Src>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    proofs: &[&StirProof<EF, M, Challenger::Witness>],
+    challenger: &mut Challenger,
+    initial_fibers: Vec<Src>,
+) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error, IE>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+    Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
+{
+    verify_stir_multi_inner(configs, proofs, challenger, Some(initial_fibers))
+}
+
+/// Shared body of [`verify_stir_multi`] and [`verify_stir_multi_with_external_initial`].
+///
+/// Mirrors `prover::prove_stir_multi_inner`'s right-aligned lockstep schedule: at
+/// each global round, every active instance's grind witness must agree (checked via
+/// `PartialEq`, else [`StirError::InvalidProofShape`]), then the shared grind is checked once
+/// at the max of the active instances' bits.
+fn verify_stir_multi_inner<F, EF, M, Challenger, IE, Src>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    proofs: &[&StirProof<EF, M, Challenger::Witness>],
+    challenger: &mut Challenger,
+    external_fibers: Option<Vec<Src>>,
+) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error, IE>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+    Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
+{
+    let b = configs.len();
+    assert_eq!(proofs.len(), b, "one proof per instance");
+
+    for i in 0..b {
+        if proofs[i].round_proofs.len() != configs[i].num_rounds() {
+            return Err(StirError::InvalidProofShape);
+        }
+    }
+
+    let initial_is_external = external_fibers.is_some();
+    let mut external_fibers: Vec<Option<Src>> = external_fibers.map_or_else(
+        || (0..b).map(|_| None).collect(),
+        |v| {
+            assert_eq!(v.len(), b, "one external-fiber source per instance");
+            v.into_iter().map(Some).collect()
+        },
+    );
+
+    // The initial oracle is either committed by STIR — in which case its commitment enters the
+    // transcript here — or external, in which case the caller has already bound it and every
+    // proof must carry no commitment at all.
+    let mut shifts = Vec::with_capacity(b);
+    let mut log_domains = Vec::with_capacity(b);
+    for i in 0..b {
+        match (&proofs[i].initial_commitment, initial_is_external) {
+            (Some(commitment), false) => challenger.observe(commitment.clone()),
+            (None, true) => {}
+            _ => return Err(StirError::InvalidProofShape),
+        }
+        shifts.push(F::GENERATOR);
+        log_domains.push(configs[i].log_starting_domain_size());
+    }
+
+    let max_m = configs.iter().map(|c| c.num_rounds()).max().unwrap_or(0);
+    let offset = |i: usize| max_m - configs[i].num_rounds();
+
+    let mut prev_ctx: Vec<Option<VirtualRoundContext<EF>>> = (0..b).map(|_| None).collect();
+    let mut first_round_pairs: Vec<FirstRoundPairs<EF>> = (0..b).map(|_| Vec::new()).collect();
+
+    for r in 0..max_m {
+        let active: Vec<usize> = (0..b).filter(|&i| offset(i) <= r).collect();
+
+        let mut rvs: Vec<RoundVerifier<F, EF>> = active
+            .iter()
+            .map(|&i| {
+                RoundVerifier::<F, EF>::new(
+                    &configs[i].round_configs[r - offset(i)],
+                    shifts[i],
+                    log_domains[i],
+                )
+            })
+            .collect();
+
+        // [grind folding_pow_bits]: every active instance's replicated witness must agree.
+        let folding_witnesses: Vec<F> = active
+            .iter()
+            .map(|&i| proofs[i].round_proofs[r - offset(i)].folding_pow_witness)
+            .collect();
+        if folding_witnesses.windows(2).any(|w| w[0] != w[1]) {
+            return Err(StirError::InvalidProofShape);
+        }
+        let shared_folding_bits = active
+            .iter()
+            .map(|&i| configs[i].round_configs[r - offset(i)].folding_pow_bits)
+            .max()
+            .expect("`active` is non-empty for r < max_m");
+        if !challenger.check_witness(shared_folding_bits, folding_witnesses[0]) {
+            return Err(StirError::InvalidPowWitness { round: r });
+        }
+
+        // Phase 1: per-instance folding challenge and commitment absorb.
+        for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
+            let gamma: EF = challenger.sample_algebra_element();
+            challenger.observe(proofs[i].round_proofs[r - offset(i)].commitment.clone());
+            rv.set_gamma(gamma, shifts[i]);
+        }
+
+        // Phase 2: per-instance OOD sampling and answer absorb.
+        for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
+            let local_r = r - offset(i);
+            let rc = &configs[i].round_configs[local_r];
+            let rp = &proofs[i].round_proofs[local_r];
+            if rp.ood_answers.len() != rc.num_ood_samples {
+                return Err(StirError::InvalidProofShape);
+            }
+            rv.ood_points = sample_ood_points(
+                challenger,
+                rv.excluded_domains(shifts[i], log_domains[i]),
+                rc.num_ood_samples,
+            );
+            challenger.observe_algebra_slice(&rp.ood_answers);
+        }
+
+        // [grind pow_bits]: every active instance's replicated witness must agree.
+        let query_witnesses: Vec<F> = active
+            .iter()
+            .map(|&i| proofs[i].round_proofs[r - offset(i)].pow_witness)
+            .collect();
+        if query_witnesses.windows(2).any(|w| w[0] != w[1]) {
+            return Err(StirError::InvalidProofShape);
+        }
+        let shared_pow_bits = active
+            .iter()
+            .map(|&i| configs[i].round_configs[r - offset(i)].pow_bits)
+            .max()
+            .expect("`active` is non-empty for r < max_m");
+        if !challenger.check_witness(shared_pow_bits, query_witnesses[0]) {
+            return Err(StirError::InvalidPowWitness { round: r });
+        }
+
+        // Phase 3: per-instance combination challenge, query sampling, and fiber
+        // materialization/folding.
+        for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
+            let local_r = r - offset(i);
+            let rc = &configs[i].round_configs[local_r];
+            let r_comb: EF = challenger.sample_algebra_element();
+            rv.r_comb = r_comb;
+
+            let mut query_indices: Vec<usize> = Vec::with_capacity(rc.num_queries);
+            for _ in 0..rc.num_queries {
+                let j = challenger
+                    .sample_uniform_bits::<true>(rv.fold_log_domain)
+                    .expect("RESAMPLE = true: rejection loops internally, never errors");
+                query_indices.push(j);
+            }
+
+            let commitment = if local_r == 0 {
+                proofs[i].initial_commitment.as_ref()
+            } else {
+                Some(&proofs[i].round_proofs[local_r - 1].commitment)
+            };
+            let is_external = local_r == 0 && initial_is_external;
+
+            rv.fetch_and_fold(
+                configs[i],
+                local_r,
+                &proofs[i].round_proofs[local_r],
+                shifts[i],
+                log_domains[i],
+                prev_ctx[i].as_ref(),
+                is_external,
+                &mut external_fibers[i],
+                commitment,
+                &query_indices,
+            )?;
+        }
+
+        // Phase 4: per-instance ans/shake absorb, shake-check challenge, and consistency.
+        let mut finishes: Vec<(usize, RoundVerifyOutput<F, EF>)> = Vec::with_capacity(active.len());
+        for (&i, rv) in active.iter().zip(rvs) {
+            let local_r = r - offset(i);
+            let rp = &proofs[i].round_proofs[local_r];
+            let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
+
+            let max_ans_len = all_points.len();
+            if rp.ans_polynomial.len() > max_ans_len
+                || rp.shake_polynomial.len() > max_ans_len.saturating_sub(1)
+            {
+                return Err(StirError::InvalidProofShape);
+            }
+
+            challenger.observe_algebra_slice(&rp.ans_polynomial);
+            challenger.observe_algebra_slice(&rp.shake_polynomial);
+            let rho: EF = challenger.sample_algebra_element();
+
+            if !check_shake_consistency(
+                &rp.ans_polynomial,
+                &rp.shake_polynomial,
+                &all_points,
+                &all_values,
+                rho,
+            ) {
+                return Err(StirError::InvalidShakeConsistency { round: local_r });
+            }
+
+            finishes.push((i, rv.finish(rp.ans_polynomial.clone(), all_points)));
+        }
+
+        // Phase 5: touches no transcript state, so instance order no longer matters.
+        for (i, output) in finishes {
+            first_round_pairs[i].extend(output.first_round_pairs);
+            prev_ctx[i] = Some(output.ctx);
+            shifts[i] = output.next_shift;
+            log_domains[i] = output.next_log_domain;
+        }
+    }
+
+    // Final round: every instance reaches it on this same global step (right-alignment).
+    let final_folding_witnesses: Vec<F> =
+        proofs.iter().map(|p| p.final_folding_pow_witness).collect();
+    if final_folding_witnesses.windows(2).any(|w| w[0] != w[1]) {
+        return Err(StirError::InvalidProofShape);
+    }
+    let shared_final_folding_bits = configs
+        .iter()
+        .map(|c| c.final_folding_pow_bits)
+        .max()
+        .unwrap_or(0);
+    if !challenger.check_witness(shared_final_folding_bits, final_folding_witnesses[0]) {
+        return Err(StirError::InvalidPowWitness { round: max_m });
+    }
+
+    let mut fvs: Vec<FinalRoundVerifier<F, EF>> = (0..b)
+        .map(|i| {
+            FinalRoundVerifier::<F, EF>::new(
+                configs[i].log_folding_factor,
+                shifts[i],
+                log_domains[i],
+            )
+        })
+        .collect();
+
+    for i in 0..b {
+        let final_gamma: EF = challenger.sample_algebra_element();
+        fvs[i].set_gamma(final_gamma, shifts[i]);
+
+        let expected_final_len = configs[i].final_poly_len();
+        if proofs[i].final_polynomial.len() != expected_final_len {
+            return Err(StirError::InvalidProofShape);
+        }
+        challenger.observe_algebra_slice(&proofs[i].final_polynomial);
+    }
+
+    let final_query_witnesses: Vec<F> = proofs.iter().map(|p| p.final_pow_witness).collect();
+    if final_query_witnesses.windows(2).any(|w| w[0] != w[1]) {
+        return Err(StirError::InvalidProofShape);
+    }
+    let shared_final_pow_bits = configs.iter().map(|c| c.final_pow_bits).max().unwrap_or(0);
+    if !challenger.check_witness(shared_final_pow_bits, final_query_witnesses[0]) {
+        return Err(StirError::InvalidPowWitness { round: max_m });
+    }
+
+    for i in 0..b {
+        let mut final_indices: Vec<usize> = Vec::with_capacity(configs[i].final_queries);
+        for _ in 0..configs[i].final_queries {
+            let j = challenger
+                .sample_uniform_bits::<true>(fvs[i].final_new_log_domain)
+                .expect("RESAMPLE = true: rejection loops internally, never errors");
+            final_indices.push(j);
+        }
+
+        let commitment = if configs[i].num_rounds() == 0 {
+            proofs[i].initial_commitment.as_ref()
+        } else {
+            Some(
+                &proofs[i]
+                    .round_proofs
+                    .last()
+                    .expect("num_rounds() > 0")
+                    .commitment,
+            )
+        };
+        let is_external = configs[i].num_rounds() == 0 && initial_is_external;
+
+        let final_pairs = fvs[i].fetch_and_check(
+            configs[i],
+            proofs[i],
+            configs[i].num_rounds(),
+            shifts[i],
+            log_domains[i],
+            prev_ctx[i].as_ref(),
+            is_external,
+            &mut external_fibers[i],
+            commitment,
+            &final_indices,
+        )?;
+        first_round_pairs[i].extend(final_pairs);
+    }
+
+    Ok(first_round_pairs
+        .into_iter()
+        .map(|mut pairs| {
+            pairs.sort_by_key(|(j, _)| *j);
+            let (first_round_indices, first_round_fiber_evals): (Vec<_>, Vec<_>) =
+                pairs.into_iter().unzip();
+            StirVerifyOutputs {
+                first_round_indices,
+                first_round_fiber_evals,
+            }
+        })
+        .collect())
+}
