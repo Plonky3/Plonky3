@@ -366,6 +366,27 @@ where
                 );
             });
         }
+
+        // Projective (monomial-basis) binding: the subtraction-free
+        // `a0 + a1 * r` of eprint 2026/762, prefix only.
+        //
+        // This is where the projective basis is expected to pay. The
+        // round-coefficient kernel only trades a subtraction pass for an
+        // addition pass, so it cannot come out ahead; binding drops a pass.
+        group.bench_with_input(
+            BenchmarkId::new("prefix_projective", &label),
+            &(),
+            |b, ()| {
+                b.iter_batched_ref(
+                    || template.clone(),
+                    |poly| {
+                        poly.fix_prefix_var_mut_monomial(black_box(r));
+                        black_box(&*poly);
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
     }
 
     group.finish();
