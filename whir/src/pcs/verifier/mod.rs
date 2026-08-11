@@ -12,7 +12,7 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::constraints::statement::SelectStatement;
 use p3_sumcheck::constraints::{Constraint, Statements};
-use p3_sumcheck::strategy::VariableOrder;
+use p3_sumcheck::strategy::{Basis, VariableOrder};
 use p3_sumcheck::verify_final_sumcheck_rounds;
 use tracing::instrument;
 
@@ -123,6 +123,7 @@ where
             &mut claimed_eval,
             self.round_folding_factor(0),
             self.starting_folding_pow_bits,
+            Basis::Evaluation,
         )?;
         round_folding_randomness.push(folding_randomness);
 
@@ -176,6 +177,7 @@ where
                 &mut claimed_eval,
                 self.round_folding_factor(round_index + 1),
                 round_params.folding_pow_bits,
+                Basis::Evaluation,
             )?;
             round_folding_randomness.push(folding_randomness);
 
@@ -227,6 +229,7 @@ where
             &mut claimed_eval,
             self.final_sumcheck_rounds,
             self.final_folding_pow_bits,
+            Basis::Evaluation,
         )?;
         round_folding_randomness.push(final_sumcheck_randomness.clone());
 

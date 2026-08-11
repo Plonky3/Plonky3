@@ -141,8 +141,11 @@ where
 /// | evaluation | `h(0)` | `h(inf)` | `h(1) = C - h(0)`   |
 /// | projective | `s(1)` | `s(inf)` | `s(0) = C - s(inf)` |
 ///
-/// Named fields keep the two bases' different finite points from being
-/// swapped silently at dispatch sites.
+/// The struct itself is basis-agnostic: `c_a` has the same name and type in
+/// both rows, so it carries no evidence of which kernel produced it. What
+/// keeps the rows from being crossed is that a message is only ever produced
+/// by [`Basis::sumcheck_coefficients`] and only ever consumed by
+/// [`Basis::reduce_claim`], each under the same tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoundMessage<A> {
     /// The finite-point value: `h(0)` (evaluation basis) or `s(1)` (projective).
@@ -372,6 +375,101 @@ where
 
     let (c_a, c_inf) = round_reduce(main, tail);
     RoundMessage { c_a, c_inf }
+}
+
+/// How the sumcheck tables are interpreted, and with it the round arithmetic.
+///
+/// The table bytes are identical in both bases; the tag selects which
+/// polynomial those bytes describe, and one round arithmetic follows from
+/// each choice (eprint 2026/762, Section 3):
+///
+/// | per round                  | [`Basis::Evaluation`]              | [`Basis::Projective`]                           |
+/// |----------------------------|------------------------------------|-------------------------------------------------|
+/// | a table entry is           | a value on the hypercube `{0,1}^n` | a monomial coefficient (a value on `{0,inf}^n`) |
+/// | binding `X = r`            | `a0 + (a1 - a0) * r`               | `a0 + a1 * r`                                   |
+/// | message sent               | `[h(0), h(inf)]`                   | `[s(1), s(inf)]`                                |
+/// | value the verifier derives | `h(1) := C - h(0)`                 | `s(0) := C - s(inf)`                            |
+///
+/// The rows are one package per column: a consumer must take an entire
+/// column, never a mix. That is what the tag buys. A [`RoundMessage`] alone
+/// cannot say which column produced it, so the two values only ever leave or
+/// re-enter the transcript through the basis that defines them.
+///
+/// The claim invariant `C = dot(evals, weights)` is the same in both bases:
+/// the `{0,1}`-sum of products in the evaluation basis and the `{0,inf}`-sum
+/// in the projective basis are both the dot product of the two tables, so
+/// the running-sum bookkeeping does not change. Like [`VariableOrder`], the
+/// tag is consulted once per round in the outer frame, never inside the
+/// O(2^n) inner loops.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Basis {
+    /// The tables hold values over the boolean hypercube `{0,1}^n`; rounds
+    /// sum over `{0,1}` and bind by linear interpolation. The default.
+    #[default]
+    Evaluation,
+    /// The tables hold monomial coefficients, equivalently values over
+    /// `{0,inf}^n`; rounds sum over `{0,inf}` and bind subtraction-free
+    /// (eprint 2026/762).
+    ///
+    /// Prefix order only: the projective kernels are implemented for
+    /// prefix-bound variables (WHIR's path).
+    Projective,
+}
+
+impl Basis {
+    /// Computes the two-element round message for one quadratic sumcheck round.
+    ///
+    /// - [`Basis::Evaluation`]: `[h(0), h(inf)]`, dispatching on `order`.
+    /// - [`Basis::Projective`]: `[s(1), s(inf)]` (prefix only); the verifier
+    ///   derives `s(0) := C - s(inf)` from the projective round identity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the projective basis is paired with suffix binding.
+    pub fn sumcheck_coefficients<B, A>(
+        self,
+        order: VariableOrder,
+        evals: &[B],
+        weights: &[A],
+    ) -> RoundMessage<A>
+    where
+        B: PrimeCharacteristicRing + Copy + Send + Sync,
+        A: Algebra<B> + Copy + Send + Sync,
+    {
+        match self {
+            Self::Evaluation => order.sumcheck_coefficients(evals, weights),
+            Self::Projective => {
+                assert_eq!(
+                    order,
+                    VariableOrder::Prefix,
+                    "the projective basis is prefix-only"
+                );
+                sumcheck_coefficients_prefix_projective(evals, weights)
+            }
+        }
+    }
+
+    /// Reduces the running claim to the round polynomial at `r`, from the two
+    /// sent message elements.
+    ///
+    /// One source of truth for the round identity, shared by the prover and
+    /// the verifier:
+    ///
+    /// - [`Basis::Evaluation`]: message `[h(0), h(inf)]`; the identity
+    ///   `h(0) + h(1) = C` supplies `h(1) = C - h(0)`.
+    /// - [`Basis::Projective`]: message `[s(1), s(inf)]`; the identity
+    ///   `s(0) + s(inf) = C` supplies `s(0) = C - s(inf)`
+    ///   (eprint 2026/762, Fig. 3).
+    ///
+    /// Both reconstruct the quadratic through `{0, 1, inf}` and evaluate it
+    /// at `r`. Pairing a message with the wrong basis reduces to the wrong
+    /// claim, so this is the only place either identity is written down.
+    pub fn reduce_claim<EF: Field>(self, c_a: EF, c_inf: EF, r: EF, claimed_sum: EF) -> EF {
+        match self {
+            Self::Evaluation => extrapolate_01inf(c_a, claimed_sum - c_a, c_inf, r),
+            Self::Projective => extrapolate_01inf(claimed_sum - c_inf, c_a, c_inf, r),
+        }
+    }
 }
 
 /// Which side of the variable order is bound first by the sumcheck rounds.
@@ -653,7 +751,7 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use super::{RoundMessage, VariableOrder};
+    use super::{Basis, RoundMessage, VariableOrder};
     use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement};
     use crate::constraints::{Constraint, Statements};
 
@@ -851,6 +949,9 @@ mod tests {
             let s0 = claim - s_inf;
             let s_at_r = s0 + (s1 - s0 - s_inf) * r + s_inf * r.square();
 
+            // The shipped reduction must agree with the identity written out above.
+            prop_assert_eq!(Basis::Projective.reduce_claim(s1, s_inf, r, claim), s_at_r);
+
             // Prover side: bind the round variable at r in the monomial basis.
             let (mut bound_evals, mut bound_weights) = (Poly::new(evals), Poly::new(weights));
             bound_evals.fix_prefix_var_mut_monomial(r);
@@ -864,5 +965,38 @@ mod tests {
                 )
             );
         }
+
+        // A `RoundMessage` carries no evidence of its basis, so the tag is the
+        // only thing keeping the two round identities apart. Pin that they are
+        // genuinely different reductions: reading a projective message with the
+        // evaluation identity (or the reverse) lands on another claim entirely,
+        // which is why production only ever pairs the two through `Basis`.
+        #[test]
+        fn prop_the_two_round_identities_disagree_on_the_same_message(
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let (c_a, c_inf, r, claim): (EF, EF, EF, EF) =
+                (rng.random(), rng.random(), rng.random(), rng.random());
+
+            // Both reductions are quadratics through {0, 1, inf}; they differ
+            // in which of the three values the round identity supplies.
+            prop_assume!(c_a + c_inf != claim);
+
+            prop_assert_ne!(
+                Basis::Evaluation.reduce_claim(c_a, c_inf, r, claim),
+                Basis::Projective.reduce_claim(c_a, c_inf, r, claim),
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "the projective basis is prefix-only")]
+    fn projective_basis_rejects_suffix_binding() {
+        // The projective kernels are prefix-only; pairing them with suffix
+        // binding would silently run prefix math on suffix-laid-out data.
+        let evals = [EF::ONE; 4];
+        let weights = [EF::ONE; 4];
+        let _ = Basis::Projective.sumcheck_coefficients(VariableOrder::Suffix, &evals, &weights);
     }
 }
