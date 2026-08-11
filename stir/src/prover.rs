@@ -335,6 +335,109 @@ where
         self.shake_poly = compute_shake_polynomial(&self.ans_poly, &self.all_points);
         (&self.ans_poly, &self.shake_poly)
     }
+
+    /// Evaluate the next virtual witness on the next round's domain. Touches no transcript
+    /// state, so it may run after the caller has moved on to other instances.
+    fn finish(mut self, r_comb: EF) -> RoundFinish<F, EF, M> {
+        // Construction 5.2: f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}).
+        //
+        // DegCor(x) = (1 - (r_comb*x)^{gap+1}) / (1 - r_comb*x) is geometric in x over the
+        // coset (base-field ratio, EF-valued start), so it is evaluated pointwise via two
+        // `Powers` sweeps instead of a third DFT; its `(1 - r_comb*x)` denominator is folded
+        // into the vanishing-polynomial batch inversion below (one inversion, not two). Ans
+        // and the vanishing polynomial still need evaluating — their roots are this round's
+        // arbitrary interpolation points — but both are tiny next to the domain, so they go
+        // through the low-degree coset evaluation rather than a full-size DFT each.
+        let all_points = core::mem::take(&mut self.all_points);
+        let next_shift = self.next_shift;
+        let next_log_domain = self.next_log_domain;
+        let num_answers = all_points.len();
+
+        let vanishing_coeffs = vanishing_poly_from_roots(&all_points);
+        // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
+        // `num_answers + 1` coefficients.
+        let log_answer_len = log2_ceil_usize(num_answers + 1).min(next_log_domain);
+        let (ans_evals, vanishing_evals) = tracing::debug_span!("eval_low_degree_pair_on_coset")
+            .in_scope(|| {
+                eval_low_degree_pair_on_coset(
+                    self.dft,
+                    &self.ans_poly,
+                    &vanishing_coeffs,
+                    next_shift,
+                    next_log_domain,
+                    log_answer_len,
+                )
+            });
+
+        // x_j = next_shift * g^j, so step_j = r_comb * x_j = step_start * g^j, and the degree
+        // correction's numerator sweeps the same coset at stride `num_answers + 1`. Both are
+        // geometric with a base-field ratio, so each chunk seeds one exponentiation and then
+        // advances by a base-field multiply: no power tables, and no ext-by-ext products.
+        const POWER_CHUNK: usize = 1 << 12;
+        let g_next = F::two_adic_generator(next_log_domain);
+        let g_next_hi = g_next.exp_u64((num_answers + 1) as u64);
+        let step_start = r_comb * next_shift;
+        let step_start_hi = step_start.exp_u64((num_answers + 1) as u64);
+
+        // The quotient denominators are the vanishing evaluations scaled by the degree
+        // correction's `(1 - step)` denominator, so they are formed in place.
+        let next_oracle_codeword = tracing::debug_span!("quotient_sweep").in_scope(|| {
+            let mut combined_denoms = vanishing_evals;
+            combined_denoms
+                .par_chunks_mut(POWER_CHUNK)
+                .enumerate()
+                .for_each(|(chunk_idx, chunk)| {
+                    let mut step = step_start * g_next.exp_u64((chunk_idx * POWER_CHUNK) as u64);
+                    for denom in chunk.iter_mut() {
+                        *denom *= EF::ONE - step;
+                        step *= g_next;
+                    }
+                });
+            let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
+            drop(combined_denoms);
+
+            // `commit_as_fiber_matrix` has already copied the committed codeword into the
+            // Merkle tree, so the next oracle is formed in place over it.
+            let mut next_oracle_codeword = core::mem::take(&mut self.next_commit_codeword);
+            next_oracle_codeword
+                .par_chunks_mut(POWER_CHUNK)
+                .zip(ans_evals.par_chunks(POWER_CHUNK))
+                .zip(combined_inverses.par_chunks(POWER_CHUNK))
+                .enumerate()
+                .for_each(|(chunk_idx, ((chunk, ans_chunk), inverse_chunk))| {
+                    let mut numerator_step =
+                        step_start_hi * g_next_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
+                    for ((value, &ans), &inverse) in
+                        chunk.iter_mut().zip(ans_chunk).zip(inverse_chunk)
+                    {
+                        *value = (*value - ans) * inverse * (EF::ONE - numerator_step);
+                        numerator_step *= g_next_hi;
+                    }
+                });
+            next_oracle_codeword
+        });
+
+        RoundFinish {
+            next_codeword: next_oracle_codeword,
+            next_commit_data: self.new_data.take().expect("set by `fold_and_commit`"),
+            next_shift,
+            next_log_domain,
+            seen_query_indices: core::mem::take(&mut self.seen_query_indices),
+            ans_poly: core::mem::take(&mut self.ans_poly),
+            shake_poly: core::mem::take(&mut self.shake_poly),
+        }
+    }
+}
+
+/// Everything a finished round hands back once its transcript phases are done.
+struct RoundFinish<F, EF: Field, M: Mmcs<EF>> {
+    next_codeword: Vec<EF>,
+    next_commit_data: M::ProverData<RowMajorMatrix<EF>>,
+    next_shift: F,
+    next_log_domain: usize,
+    seen_query_indices: Vec<usize>,
+    ans_poly: Vec<EF>,
+    shake_poly: Vec<EF>,
 }
 
 /// Prove one intermediate STIR round (Construction 5.2): fold the current oracle, sample OOD
@@ -422,11 +525,10 @@ where
 
     // Step 4: Answer polynomial, shake polynomial, and shake-check challenge.
     let (ans_poly, shake_poly) = state.ans_shake();
-    let (ans_poly, shake_poly) = (ans_poly.to_vec(), shake_poly.to_vec());
     // Bind ans_poly into the transcript BEFORE rho is sampled — otherwise a malicious prover
     // could fit Ans to satisfy the shake identity at a known rho.
-    challenger.observe_algebra_slice(&ans_poly);
-    challenger.observe_algebra_slice(&shake_poly);
+    challenger.observe_algebra_slice(ans_poly);
+    challenger.observe_algebra_slice(shake_poly);
 
     // Sample and discard the shake-check challenge so the transcript state
     // stays consistent with the verifier.
@@ -442,77 +544,7 @@ where
     // and the vanishing polynomial still need evaluating — their roots are this round's
     // arbitrary interpolation points — but both are tiny next to the domain, so they go
     // through the low-degree coset evaluation rather than a full-size DFT each.
-    let all_points = core::mem::take(&mut state.all_points);
-    let next_shift = state.next_shift;
-    let next_log_domain = state.next_log_domain;
-    let next_commit_codeword = core::mem::take(&mut state.next_commit_codeword);
-    let new_data = state.new_data.take().expect("set by `fold_and_commit`");
-    let seen_query_indices = core::mem::take(&mut state.seen_query_indices);
-
-    let num_answers = all_points.len();
-
-    let vanishing_coeffs = vanishing_poly_from_roots(&all_points);
-    // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
-    // `num_answers + 1` coefficients.
-    let log_answer_len = log2_ceil_usize(num_answers + 1).min(next_log_domain);
-    let (ans_evals, vanishing_evals) = tracing::debug_span!("eval_low_degree_pair_on_coset")
-        .in_scope(|| {
-            eval_low_degree_pair_on_coset(
-                dft,
-                &ans_poly,
-                &vanishing_coeffs,
-                next_shift,
-                next_log_domain,
-                log_answer_len,
-            )
-        });
-
-    // x_j = next_shift * g^j, so step_j = r_comb * x_j = step_start * g^j, and the degree
-    // correction's numerator sweeps the same coset at stride `num_answers + 1`. Both are
-    // geometric with a base-field ratio, so each chunk seeds one exponentiation and then
-    // advances by a base-field multiply: no power tables, and no ext-by-ext products.
-    const POWER_CHUNK: usize = 1 << 12;
-    let g_next = F::two_adic_generator(next_log_domain);
-    let g_next_hi = g_next.exp_u64((num_answers + 1) as u64);
-    let step_start = r_comb * next_shift;
-    let step_start_hi = step_start.exp_u64((num_answers + 1) as u64);
-
-    // The quotient denominators are the vanishing evaluations scaled by the degree
-    // correction's `(1 - step)` denominator, so they are formed in place.
-    let next_oracle_codeword = tracing::debug_span!("quotient_sweep").in_scope(|| {
-        let mut combined_denoms = vanishing_evals;
-        combined_denoms
-            .par_chunks_mut(POWER_CHUNK)
-            .enumerate()
-            .for_each(|(chunk_idx, chunk)| {
-                let mut step = step_start * g_next.exp_u64((chunk_idx * POWER_CHUNK) as u64);
-                for denom in chunk.iter_mut() {
-                    *denom *= EF::ONE - step;
-                    step *= g_next;
-                }
-            });
-        let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
-        drop(combined_denoms);
-
-        // `commit_as_fiber_matrix` has already copied the committed codeword into the
-        // Merkle tree, so the next oracle is formed in place over it.
-        let mut next_oracle_codeword = next_commit_codeword;
-        next_oracle_codeword
-            .par_chunks_mut(POWER_CHUNK)
-            .zip(ans_evals.par_chunks(POWER_CHUNK))
-            .zip(combined_inverses.par_chunks(POWER_CHUNK))
-            .enumerate()
-            .for_each(|(chunk_idx, ((chunk, ans_chunk), inverse_chunk))| {
-                let mut numerator_step =
-                    step_start_hi * g_next_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
-                for ((value, &ans), &inverse) in chunk.iter_mut().zip(ans_chunk).zip(inverse_chunk)
-                {
-                    *value = (*value - ans) * inverse * (EF::ONE - numerator_step);
-                    numerator_step *= g_next_hi;
-                }
-            });
-        next_oracle_codeword
-    });
+    let finish = state.finish(r_comb);
 
     RoundOutput {
         proof: StirRoundProof {
@@ -520,15 +552,15 @@ where
             folding_pow_witness,
             ood_answers,
             pow_witness,
-            ans_polynomial: ans_poly,
-            shake_polynomial: shake_poly,
+            ans_polynomial: finish.ans_poly,
+            shake_polynomial: finish.shake_poly,
             query_openings,
         },
-        next_codeword: next_oracle_codeword,
-        next_commit_data: new_data,
-        next_shift,
-        next_log_domain,
-        seen_query_indices: seen_query_indices.into_iter().collect(),
+        next_codeword: finish.next_codeword,
+        next_commit_data: finish.next_commit_data,
+        next_shift: finish.next_shift,
+        next_log_domain: finish.next_log_domain,
+        seen_query_indices: finish.seen_query_indices,
     }
 }
 
