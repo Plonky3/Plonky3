@@ -11,11 +11,12 @@
 //! committed inputs.
 //!
 //! **Verify**: replay the same alpha-batching from the opening values, then for each height
-//! bucket call [`verify_stir_with_external_initial`]. STIR's initial oracle *is* the reduced
-//! opening, which the transcript already pins through the input commitments, the claimed
-//! values, and `alpha`, so it is never committed a second time: whenever STIR needs its
-//! queried fibers, the verifier rebuilds them from the input MMCS openings at exactly the
-//! positions STIR sampled. No hand-mirrored transcript replay is needed.
+//! bucket call [`verify_stir_with_external_initial`](crate::verifier::verify_stir_with_external_initial).
+//! STIR's initial oracle *is* the reduced opening, which the transcript already pins through
+//! the input commitments, the claimed values, and `alpha`, so it is never committed a second
+//! time: whenever STIR needs its queried fibers, the verifier rebuilds them from the input
+//! MMCS openings at exactly the positions STIR sampled. No hand-mirrored transcript replay is
+//! needed.
 
 use alloc::borrow::Cow;
 use alloc::collections::BTreeSet;
