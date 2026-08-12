@@ -176,6 +176,7 @@ where
         Val::TWO_ADICITY.saturating_sub(self.stir.log_blowup)
     }
 
+    #[instrument(name = "STIR PCS commit", skip_all)]
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
@@ -474,6 +475,7 @@ where
         (all_opened_values, bucket_proofs)
     }
 
+    #[instrument(name = "STIR PCS verify", skip_all)]
     fn verify(
         &self,
         commitments_with_opening_points: Vec<(

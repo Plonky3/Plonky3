@@ -142,6 +142,7 @@ struct RoundOutput<F, EF: Field, M: Mmcs<EF>, Witness> {
 /// and query points, answer them, commit the folded oracle, and evaluate the next virtual
 /// witness directly on the next round's domain.
 #[allow(clippy::too_many_arguments)]
+#[instrument(skip_all)]
 fn prove_round<F, EF, Dft, M, Challenger>(
     config: &StirConfig<F, EF, M, Challenger>,
     round: usize,
@@ -179,21 +180,25 @@ where
     // lives on the coset `current_shift · <g>`, so passing `gamma / current_shift`
     // yields exactly Construction 4.5's coset fold at challenge `gamma`.
     let fold_beta = gamma * EF::from(current_shift.inverse());
-    let folded_codeword = fold_codeword::<F, EF>(
-        current_oracle_codeword,
-        fold_beta,
-        log_arity,
-        current_log_domain,
-    );
+    let folded_codeword = tracing::debug_span!("fold_codeword").in_scope(|| {
+        fold_codeword::<F, EF>(
+            current_oracle_codeword,
+            fold_beta,
+            log_arity,
+            current_log_domain,
+        )
+    });
     let fold_coeffs = coeffs_from_codeword(dft, &folded_codeword, fold_shift);
 
     let next_commit_codeword: Vec<EF> =
         codeword_from_coeffs(dft, fold_coeffs.clone(), next_shift, next_log_domain);
-    let (new_commit, new_data) = commit_as_fiber_matrix(
-        &config.mmcs,
-        &next_commit_codeword,
-        config.log_folding_factor,
-    );
+    let (new_commit, new_data) = tracing::debug_span!("commit_as_fiber_matrix").in_scope(|| {
+        commit_as_fiber_matrix(
+            &config.mmcs,
+            &next_commit_codeword,
+            config.log_folding_factor,
+        )
+    });
     challenger.observe(new_commit.clone());
 
     // Step 2: OOD sampling.
@@ -309,14 +314,17 @@ where
     // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
     // `num_answers + 1` coefficients.
     let log_answer_len = log2_ceil_usize(num_answers + 1).min(next_log_domain);
-    let (ans_evals, vanishing_evals) = eval_low_degree_pair_on_coset(
-        dft,
-        &ans_poly,
-        &vanishing_coeffs,
-        next_shift,
-        next_log_domain,
-        log_answer_len,
-    );
+    let (ans_evals, vanishing_evals) = tracing::debug_span!("eval_low_degree_pair_on_coset")
+        .in_scope(|| {
+            eval_low_degree_pair_on_coset(
+                dft,
+                &ans_poly,
+                &vanishing_coeffs,
+                next_shift,
+                next_log_domain,
+                log_answer_len,
+            )
+        });
 
     // x_j = next_shift * g^j, so step_j = r_comb * x_j = step_start * g^j, and the degree
     // correction's numerator sweeps the same coset at stride `num_answers + 1`. Both are
@@ -330,36 +338,40 @@ where
 
     // The quotient denominators are the vanishing evaluations scaled by the degree
     // correction's `(1 - step)` denominator, so they are formed in place.
-    let mut combined_denoms = vanishing_evals;
-    combined_denoms
-        .par_chunks_mut(POWER_CHUNK)
-        .enumerate()
-        .for_each(|(chunk_idx, chunk)| {
-            let mut step = step_start * g_next.exp_u64((chunk_idx * POWER_CHUNK) as u64);
-            for denom in chunk.iter_mut() {
-                *denom *= EF::ONE - step;
-                step *= g_next;
-            }
-        });
-    let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
-    drop(combined_denoms);
+    let next_oracle_codeword = tracing::debug_span!("quotient_sweep").in_scope(|| {
+        let mut combined_denoms = vanishing_evals;
+        combined_denoms
+            .par_chunks_mut(POWER_CHUNK)
+            .enumerate()
+            .for_each(|(chunk_idx, chunk)| {
+                let mut step = step_start * g_next.exp_u64((chunk_idx * POWER_CHUNK) as u64);
+                for denom in chunk.iter_mut() {
+                    *denom *= EF::ONE - step;
+                    step *= g_next;
+                }
+            });
+        let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
+        drop(combined_denoms);
 
-    // `commit_as_fiber_matrix` has already copied the committed codeword into the Merkle
-    // tree, so the next oracle is formed in place over it.
-    let mut next_oracle_codeword = next_commit_codeword;
-    next_oracle_codeword
-        .par_chunks_mut(POWER_CHUNK)
-        .zip(ans_evals.par_chunks(POWER_CHUNK))
-        .zip(combined_inverses.par_chunks(POWER_CHUNK))
-        .enumerate()
-        .for_each(|(chunk_idx, ((chunk, ans_chunk), inverse_chunk))| {
-            let mut numerator_step =
-                step_start_hi * g_next_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
-            for ((value, &ans), &inverse) in chunk.iter_mut().zip(ans_chunk).zip(inverse_chunk) {
-                *value = (*value - ans) * inverse * (EF::ONE - numerator_step);
-                numerator_step *= g_next_hi;
-            }
-        });
+        // `commit_as_fiber_matrix` has already copied the committed codeword into the
+        // Merkle tree, so the next oracle is formed in place over it.
+        let mut next_oracle_codeword = next_commit_codeword;
+        next_oracle_codeword
+            .par_chunks_mut(POWER_CHUNK)
+            .zip(ans_evals.par_chunks(POWER_CHUNK))
+            .zip(combined_inverses.par_chunks(POWER_CHUNK))
+            .enumerate()
+            .for_each(|(chunk_idx, ((chunk, ans_chunk), inverse_chunk))| {
+                let mut numerator_step =
+                    step_start_hi * g_next_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
+                for ((value, &ans), &inverse) in chunk.iter_mut().zip(ans_chunk).zip(inverse_chunk)
+                {
+                    *value = (*value - ans) * inverse * (EF::ONE - numerator_step);
+                    numerator_step *= g_next_hi;
+                }
+            });
+        next_oracle_codeword
+    });
 
     RoundOutput {
         proof: StirRoundProof {
@@ -392,6 +404,7 @@ struct FinalRoundOutput<EF: Field, M: Mmcs<EF>, Witness> {
 
 /// Prove the final STIR round: fold the last committed codeword and send the resulting
 /// low-degree polynomial directly, rather than committing and querying it again.
+#[instrument(skip_all)]
 fn prove_final_round<F, EF, Dft, M, Challenger>(
     config: &StirConfig<F, EF, M, Challenger>,
     dft: &Dft,
@@ -422,12 +435,14 @@ where
     // See the round-fold note: `gamma / current_shift` over subgroup coordinates is
     // the paper's coset fold at challenge `gamma`.
     let final_fold_beta = final_gamma * EF::from(current_shift.inverse());
-    let final_codeword = fold_codeword::<F, EF>(
-        current_oracle_codeword,
-        final_fold_beta,
-        final_log_arity,
-        current_log_domain,
-    );
+    let final_codeword = tracing::debug_span!("fold_codeword").in_scope(|| {
+        fold_codeword::<F, EF>(
+            current_oracle_codeword,
+            final_fold_beta,
+            final_log_arity,
+            current_log_domain,
+        )
+    });
     // The final polynomial has only `final_len` coefficients, far fewer than
     // `final_codeword`'s full domain size. Rather than run a full-size iDFT and discard
     // the (necessarily zero) high coefficients, gather a `final_len`-sized coset — every
