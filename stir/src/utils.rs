@@ -13,6 +13,7 @@ use p3_field::{
     ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_maybe_rayon::prelude::*;
+use p3_util::log2_strict_usize;
 
 /// Evaluate a polynomial at a point using Horner's method.
 ///
@@ -472,7 +473,7 @@ pub fn fold_fiber<F: TwoAdicField, EF: ExtensionField<F>>(
     let step = g.exp_u64(new_height as u64); // = zeta = arity-th root of unity
     let xs: Vec<F> = step.shifted_powers(x0).take(arity).collect();
 
-    lagrange_eval_at(&xs, fiber, beta)
+    lagrange_interpolate_at(&xs, fiber, beta)
 }
 
 /// Evaluate the Lagrange interpolating polynomial through `(xs[i], ys[i])` at `point`.
@@ -512,6 +513,54 @@ pub fn lagrange_eval_at<F: Field, EF: ExtensionField<F>>(xs: &[F], ys: &[EF], po
         den += term;
     }
     num / den
+}
+
+/// Evaluate, at `point`, the degree-`< n` polynomial through `(xs[i], ys[i])`, where `xs` is
+/// a coset of the `n`-th roots of unity (`n` a power of two).
+///
+/// On a full root-of-unity coset the barycentric weights collapse to a closed form
+/// `w_i = x_i / (n * xs[0]^n)`, so the barycentric denominator `sum_i w_i / (point - x_i)`
+/// simplifies to `prod_i (point - x_i)` and needs no separate accumulation. One batch
+/// inversion covers every `(point - x_i)`, against [`lagrange_eval_at`]'s `O(n^2)` weight
+/// construction plus `n` separate divisions.
+///
+/// # Panics
+///
+/// Panics if `xs.len() != ys.len()`, or if `xs.len()` is not a power of two.
+pub fn lagrange_interpolate_at<F: Field, EF: ExtensionField<F>>(
+    xs: &[F],
+    ys: &[EF],
+    point: EF,
+) -> EF {
+    let n = xs.len();
+    assert_eq!(ys.len(), n);
+    if n == 0 {
+        return EF::ZERO;
+    }
+
+    // Short-circuit: if point coincides with one of the nodes, return the known value directly.
+    for i in 0..n {
+        if point == EF::from(xs[i]) {
+            return ys[i];
+        }
+    }
+
+    let log_n = log2_strict_usize(n);
+
+    // All xs lie in a coset of the 2^log_n roots of unity, so every x_i shares the same
+    // x_i^n = xs[0]^n.
+    let coset_power = xs[0].exp_power_of_2(log_n);
+    let weight_scale = (F::from_usize(n) * coset_power).inverse();
+
+    let diffs: Vec<EF> = xs.iter().map(|&x| point - EF::from(x)).collect();
+    let diff_invs = batch_multiplicative_inverse(&diffs);
+    let l_point = diffs.iter().copied().product::<EF>();
+
+    let mut result = EF::ZERO;
+    for ((&x, &y), &diff_inv) in xs.iter().zip(ys).zip(diff_invs.iter()) {
+        result += y * (x * weight_scale) * diff_inv;
+    }
+    result * l_point
 }
 
 #[cfg(test)]
@@ -646,6 +695,47 @@ mod tests {
         ];
         let result = lagrange_eval_at(&xs, &ys, EF::from(F::from_u64(4)));
         assert_eq!(result, EF::from(F::from_u64(16)));
+    }
+
+    #[test]
+    fn test_lagrange_interpolate_at_agrees_with_lagrange_eval_at_on_coset() {
+        // xs = a coset of the 8th roots of unity: shift * g^i for i in 0..8.
+        let log_n = 3;
+        let n = 1 << log_n;
+        let g = F::two_adic_generator(log_n);
+        let shift = F::GENERATOR;
+        let xs: Vec<F> = g.shifted_powers(shift).take(n).collect();
+        let ys: Vec<EF> = (0..n)
+            .map(|i| EF::from(F::from_u64(i as u64 * i as u64 + 1)))
+            .collect();
+
+        for z in [
+            EF::from(F::from_u64(1000)),
+            EF::ZERO,
+            -EF::from(F::from_u64(7)),
+        ] {
+            assert_eq!(
+                lagrange_interpolate_at(&xs, &ys, z),
+                lagrange_eval_at(&xs, &ys, z),
+                "closed-form and general barycentric forms must agree"
+            );
+        }
+    }
+
+    #[test]
+    fn test_lagrange_interpolate_at_returns_node_value_on_exact_match() {
+        let log_n = 2;
+        let n = 1 << log_n;
+        let g = F::two_adic_generator(log_n);
+        let shift = F::GENERATOR;
+        let xs: Vec<F> = g.shifted_powers(shift).take(n).collect();
+        let ys: Vec<EF> = (0..n)
+            .map(|i| EF::from(F::from_u64(i as u64 + 10)))
+            .collect();
+
+        for (i, &x) in xs.iter().enumerate() {
+            assert_eq!(lagrange_interpolate_at(&xs, &ys, EF::from(x)), ys[i]);
+        }
     }
 
     #[test]
