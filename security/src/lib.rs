@@ -55,6 +55,7 @@ pub mod stark;
 
 pub use assumption::SecurityAssumption;
 pub use error::ErrorBits;
+pub use grinding::GrindingSites;
 pub use ldt::LowDegreeTest;
 pub use report::{Regime, RegimeReport, SecurityReport, SecurityTerm};
 pub use shape::{InstanceShape, StarkAirParams};
