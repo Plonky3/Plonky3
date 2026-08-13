@@ -396,6 +396,7 @@ where
         let result = self
             .dft
             .coset_dft_batch(coeffs, domain.shift())
+            .bit_reverse_rows()
             .to_row_major_matrix();
         let result_width = result.width();
 
