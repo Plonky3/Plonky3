@@ -68,6 +68,13 @@ pub trait FieldParameters: PackedMontyParameters + Sized {
     const MONTY_GEN: MontyField31<Self>;
 
     const HALF_P_PLUS_1: u32 = (Self::PRIME + 1) >> 1;
+
+    /// See [`p3_field::Field::BENEFITS_FROM_LOCKSTEP_EVALUATION`].
+    ///
+    /// Defaults to `false`: this trait backs every `MontyField31<Self>` field, including
+    /// ones not yet benchmarked, so opting in is left to parameter sets that have measured
+    /// a win (e.g. `BabyBearParameters`, `KoalaBearParameters`).
+    const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = false;
 }
 
 /// An integer `D` such that `gcd(D, p - 1) = 1`.

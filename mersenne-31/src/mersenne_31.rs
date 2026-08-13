@@ -365,6 +365,12 @@ impl Field for Mersenne31 {
     // Sage: GF(2^31 - 1).multiplicative_generator()
     const GENERATOR: Self = Self::new(7);
 
+    // PackedMersenne31Neon's `dot_product` uses deferred-reduction accumulation (see #1894),
+    // which already closes the extension-field-multiply latency gap a lockstep evaluation
+    // strategy would otherwise address; evaluating additional packed vectors in lockstep on
+    // top of that does not improve throughput for this field (measured +10% regression).
+    const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = false;
+
     #[inline]
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U32

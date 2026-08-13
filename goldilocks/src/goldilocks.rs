@@ -420,6 +420,9 @@ impl Field for Goldilocks {
     // Sage: GF(2^64 - 2^32 + 1).multiplicative_generator()
     const GENERATOR: Self = Self::new(7);
 
+    // Measured -11% on quotient evaluation (twoadic PCS, Keccak AIR, aarch64+neon).
+    const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = true;
+
     fn is_zero(&self) -> bool {
         self.value == 0 || self.value == Self::ORDER_U64
     }
