@@ -30,8 +30,12 @@ use crate::{VectorizedChallenge, VectorizedConstraintFolder, VectorizedVal};
 /// multiplication (e.g. ~10 cycles at ~1.25 cycles/vector throughput on NEON). Two
 /// lockstep chains let the out-of-order core overlap independent rows; values above 2
 /// increase register pressure with diminishing returns.
+///
+/// Public so that a concrete (non-generic) `impl Air<ProverConstraintFolder<'a, SC>>` can
+/// name it in the matching `impl Air<VectorizedConstraintFolder<'a, SC, QUOTIENT_ILP>>`
+/// required by [`QuotientAir`] on `aarch64`+`neon` — see that trait's docs.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-const QUOTIENT_ILP: usize = 2;
+pub const QUOTIENT_ILP: usize = 2;
 
 /// AIRs usable with [`quotient_values`] and the functions built on it.
 ///
@@ -40,6 +44,11 @@ const QUOTIENT_ILP: usize = 2;
 /// per field at runtime (see [`Field::BENEFITS_FROM_LOCKSTEP_EVALUATION`]); AIRs written
 /// generically over the builder (the usual pattern) satisfy both automatically. Elsewhere
 /// this is exactly the [`ProverConstraintFolder`] bound, unchanged.
+///
+/// A concrete AIR with its own `impl Air<ProverConstraintFolder<'a, SC>>` (rather than a
+/// generic `impl<B: AirBuilder> Air<B>`) compiles on `x86_64` but fails to compile on
+/// `aarch64`+`neon` unless it also adds `impl<'a, SC> Air<VectorizedConstraintFolder<'a,
+/// SC, QUOTIENT_ILP>> for MyAir`.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub trait QuotientAir<SC: StarkGenericConfig>:
     Air<SymbolicAirBuilder<Val<SC>>>
@@ -468,7 +477,7 @@ where
 {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     if Val::<SC>::BENEFITS_FROM_LOCKSTEP_EVALUATION {
-        return quotient_values_vectorized::<SC, A, Mat>(
+        return quotient_values_inner::<SC, A, Mat, VectorizedEval<QUOTIENT_ILP>>(
             pcs,
             air,
             public_values,
@@ -480,7 +489,7 @@ where
             alpha,
         );
     }
-    quotient_values_plain::<SC, A, Mat>(
+    quotient_values_inner::<SC, A, Mat, PlainEval>(
         pcs,
         air,
         public_values,
@@ -493,8 +502,167 @@ where
     )
 }
 
+/// Row-group constraint-folding strategy used by [`quotient_values_inner`].
+///
+/// Abstracts over the plain (single packed vector) and lockstep-vectorized folders so the
+/// row-group loop is written once. `quotient_values_inner` is monomorphized per `Self`, so
+/// instantiating it at two concrete strategies produces the same machine code as two
+/// hand-written copies of the loop — no shared runtime dispatch is introduced between them.
+trait QuotientEvalStrategy<SC: StarkGenericConfig, A> {
+    /// The packed base-field type this strategy evaluates constraints over.
+    type Pack: PackedValue<Value = Val<SC>> + Copy + Send + Sync;
+    /// The packed extension-field type constraints are folded into.
+    type Challenge: Copy + Send + Sync;
+
+    /// Evaluate one row group's constraints, fold them (dividing by the vanishing
+    /// polynomial via `inv_vanishing`), and return the resulting challenge together with
+    /// the `base_constraints`/`ext_constraints` buffers so the caller can reclaim and
+    /// reuse their allocations for the next row group.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_row_group<'a>(
+        air: &A,
+        main: RowMajorMatrixView<'a, Self::Pack>,
+        preprocessed: RowMajorMatrixView<'a, Self::Pack>,
+        periodic_values: &'a [Self::Pack],
+        public_values: &'a [Val<SC>],
+        is_first_row: Self::Pack,
+        is_last_row: Self::Pack,
+        is_transition: Self::Pack,
+        inv_vanishing: Self::Pack,
+        base_alpha_powers: &'a [Vec<Val<SC>>],
+        ext_alpha_powers: &'a [SC::Challenge],
+        base_constraints: Vec<Self::Pack>,
+        ext_constraints: Vec<Self::Challenge>,
+        base_coefficients_buf: &mut Vec<Self::Pack>,
+        constraint_count: usize,
+    ) -> (Self::Challenge, Vec<Self::Pack>, Vec<Self::Challenge>);
+
+    /// Extract the scalar challenge at packed lane `idx`.
+    fn extract(challenge: &Self::Challenge, idx: usize) -> SC::Challenge;
+}
+
+/// [`QuotientEvalStrategy`] evaluating a single packed vector per constraint expression,
+/// via [`ProverConstraintFolder`].
+struct PlainEval;
+
+impl<SC, A> QuotientEvalStrategy<SC, A> for PlainEval
+where
+    SC: StarkGenericConfig,
+    A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
+{
+    type Pack = PackedVal<SC>;
+    type Challenge = PackedChallenge<SC>;
+
+    #[inline]
+    fn eval_row_group<'a>(
+        air: &A,
+        main: RowMajorMatrixView<'a, Self::Pack>,
+        preprocessed: RowMajorMatrixView<'a, Self::Pack>,
+        periodic_values: &'a [Self::Pack],
+        public_values: &'a [Val<SC>],
+        is_first_row: Self::Pack,
+        is_last_row: Self::Pack,
+        is_transition: Self::Pack,
+        inv_vanishing: Self::Pack,
+        base_alpha_powers: &'a [Vec<Val<SC>>],
+        ext_alpha_powers: &'a [SC::Challenge],
+        base_constraints: Vec<Self::Pack>,
+        ext_constraints: Vec<Self::Challenge>,
+        _base_coefficients_buf: &mut Vec<Self::Pack>,
+        constraint_count: usize,
+    ) -> (Self::Challenge, Vec<Self::Pack>, Vec<Self::Challenge>) {
+        let mut folder = ProverConstraintFolder {
+            main,
+            preprocessed,
+            preprocessed_window: RowWindow::from_view(&preprocessed),
+            periodic_values,
+            public_values,
+            is_first_row,
+            is_last_row,
+            is_transition,
+            base_alpha_powers,
+            ext_alpha_powers,
+            base_constraints,
+            ext_constraints,
+            constraint_index: 0,
+            constraint_count,
+        };
+        air.eval(&mut folder);
+
+        // quotient(x) = constraints(x) / Z_H(x)
+        let quotient = folder.finalize_constraints() * inv_vanishing;
+        (quotient, folder.base_constraints, folder.ext_constraints)
+    }
+
+    #[inline]
+    fn extract(challenge: &Self::Challenge, idx: usize) -> SC::Challenge {
+        challenge.extract(idx)
+    }
+}
+
+/// [`QuotientEvalStrategy`] evaluating `N` packed vectors in lockstep per constraint
+/// expression, via [`VectorizedConstraintFolder`].
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+struct VectorizedEval<const N: usize>;
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+impl<SC, A, const N: usize> QuotientEvalStrategy<SC, A> for VectorizedEval<N>
+where
+    SC: StarkGenericConfig,
+    A: for<'a> Air<VectorizedConstraintFolder<'a, SC, N>>,
+{
+    type Pack = VectorizedVal<SC, N>;
+    type Challenge = VectorizedChallenge<SC, N>;
+
+    #[inline]
+    fn eval_row_group<'a>(
+        air: &A,
+        main: RowMajorMatrixView<'a, Self::Pack>,
+        preprocessed: RowMajorMatrixView<'a, Self::Pack>,
+        periodic_values: &'a [Self::Pack],
+        public_values: &'a [Val<SC>],
+        is_first_row: Self::Pack,
+        is_last_row: Self::Pack,
+        is_transition: Self::Pack,
+        inv_vanishing: Self::Pack,
+        base_alpha_powers: &'a [Vec<Val<SC>>],
+        ext_alpha_powers: &'a [SC::Challenge],
+        base_constraints: Vec<Self::Pack>,
+        ext_constraints: Vec<Self::Challenge>,
+        base_coefficients_buf: &mut Vec<Self::Pack>,
+        constraint_count: usize,
+    ) -> (Self::Challenge, Vec<Self::Pack>, Vec<Self::Challenge>) {
+        let mut folder = VectorizedConstraintFolder {
+            main,
+            preprocessed,
+            preprocessed_window: RowWindow::from_view(&preprocessed),
+            periodic_values,
+            public_values,
+            is_first_row,
+            is_last_row,
+            is_transition,
+            base_alpha_powers,
+            ext_alpha_powers,
+            base_constraints,
+            ext_constraints,
+            constraint_index: 0,
+            constraint_count,
+        };
+        air.eval(&mut folder);
+
+        // quotient(x) = constraints(x) / Z_H(x)
+        let quotient = folder.finalize_constraints(base_coefficients_buf) * inv_vanishing;
+        (quotient, folder.base_constraints, folder.ext_constraints)
+    }
+
+    #[inline]
+    fn extract(challenge: &Self::Challenge, idx: usize) -> SC::Challenge {
+        challenge.extract(idx)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn quotient_values_plain<SC, A, Mat>(
+fn quotient_values_inner<SC, A, Mat, Strat>(
     pcs: &SC::Pcs,
     air: &A,
     public_values: &[Val<SC>],
@@ -507,9 +675,13 @@ fn quotient_values_plain<SC, A, Mat>(
 ) -> Vec<SC::Challenge>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>>,
     Mat: Matrix<Val<SC>> + Sync,
+    Strat: QuotientEvalStrategy<SC, A>,
 {
+    type Pack<SC, A, Strat> = <Strat as QuotientEvalStrategy<SC, A>>::Pack;
+    type Challenge<SC, A, Strat> = <Strat as QuotientEvalStrategy<SC, A>>::Challenge;
+
     let quotient_size = quotient_domain.size();
     let width = trace_on_quotient_domain.width();
     let mut sels = debug_span!("Compute Selectors")
@@ -518,9 +690,9 @@ where
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
 
-    // We take PackedVal::<SC>::WIDTH worth of values at a time from a quotient_size slice, so we need to
-    // pad with default values in the case where quotient_size is smaller than PackedVal::<SC>::WIDTH.
-    for _ in quotient_size..PackedVal::<SC>::WIDTH {
+    // We take Pack::WIDTH worth of values at a time from a quotient_size slice, so we need to
+    // pad with default values in the case where quotient_size is smaller than Pack::WIDTH.
+    for _ in quotient_size..Pack::<SC, A, Strat>::WIDTH {
         sels.is_first_row.push(Val::<SC>::default());
         sels.is_last_row.push(Val::<SC>::default());
         sels.is_transition.push(Val::<SC>::default());
@@ -533,8 +705,8 @@ where
     let periodic_table =
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
-    let pack_width = PackedVal::<SC>::WIDTH;
-    let periodic_packed: Vec<Vec<PackedVal<SC>>> = if periodic_table.is_empty() {
+    let pack_width = Pack::<SC, A, Strat>::WIDTH;
+    let periodic_packed: Vec<Vec<Pack<SC, A, Strat>>> = if periodic_table.is_empty() {
         Vec::new()
     } else {
         let ncols = periodic_table.width();
@@ -543,7 +715,7 @@ where
             .map(|i_start| {
                 (0..ncols)
                     .map(|col_idx| {
-                        PackedVal::<SC>::from_fn(|offset| {
+                        Pack::<SC, A, Strat>::from_fn(|offset| {
                             *periodic_table.get(i_start + offset, col_idx)
                         })
                     })
@@ -555,255 +727,99 @@ where
     // Buffers reused across row-groups on each worker thread: allocating the
     // packed row pairs and constraint accumulators fresh per group costs
     // ~20% of this function's runtime on wide traces.
-    struct GroupBuffers<SC: StarkGenericConfig> {
-        main: Vec<PackedVal<SC>>,
-        preprocessed: Vec<PackedVal<SC>>,
-        base_constraints: Vec<PackedVal<SC>>,
-        ext_constraints: Vec<PackedChallenge<SC>>,
+    struct GroupBuffers<P, C> {
+        main: Vec<P>,
+        preprocessed: Vec<P>,
+        base_constraints: Vec<P>,
+        ext_constraints: Vec<C>,
+        base_coefficients: Vec<P>,
     }
 
     let mut quotient_values = SC::Challenge::zero_vec(quotient_size);
     quotient_values
-        .par_chunks_mut(PackedVal::<SC>::WIDTH)
+        .par_chunks_mut(Pack::<SC, A, Strat>::WIDTH)
         .enumerate()
         .for_each_init(
-            || GroupBuffers::<SC> {
+            || GroupBuffers::<Pack<SC, A, Strat>, Challenge<SC, A, Strat>> {
                 main: Vec::with_capacity(2 * width),
                 preprocessed: Vec::with_capacity(
                     2 * preprocessed_on_quotient_domain.map_or(0, |p| p.width()),
                 ),
                 base_constraints: Vec::with_capacity(constraint_layout.base_indices.len()),
                 ext_constraints: Vec::with_capacity(constraint_layout.ext_indices.len()),
+                base_coefficients: Vec::with_capacity(base_alpha_powers.len()),
             },
             |bufs, (group, quotient_chunk)| {
-                let i_start = group * PackedVal::<SC>::WIDTH;
-                let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
+                let i_start = group * Pack::<SC, A, Strat>::WIDTH;
+                let i_range = i_start..i_start + Pack::<SC, A, Strat>::WIDTH;
 
                 let is_first_row =
-                    *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
-                let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
+                    *Pack::<SC, A, Strat>::from_slice(&sels.is_first_row[i_range.clone()]);
+                let is_last_row =
+                    *Pack::<SC, A, Strat>::from_slice(&sels.is_last_row[i_range.clone()]);
                 let is_transition =
-                    *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
-                let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
+                    *Pack::<SC, A, Strat>::from_slice(&sels.is_transition[i_range.clone()]);
+                let inv_vanishing = *Pack::<SC, A, Strat>::from_slice(&sels.inv_vanishing[i_range]);
 
                 bufs.main.clear();
                 bufs.main.extend(
-                    trace_on_quotient_domain.vertically_packed_row::<PackedVal<SC>>(i_start),
+                    trace_on_quotient_domain.vertically_packed_row::<Pack<SC, A, Strat>>(i_start),
                 );
                 bufs.main.extend(
                     trace_on_quotient_domain
-                        .vertically_packed_row::<PackedVal<SC>>(i_start + next_step),
+                        .vertically_packed_row::<Pack<SC, A, Strat>>(i_start + next_step),
                 );
                 let main = RowMajorMatrixView::new(&bufs.main, width);
 
                 let preprocessed_view = match preprocessed_on_quotient_domain {
                     Some(preprocessed) => {
                         bufs.preprocessed.clear();
-                        bufs.preprocessed
-                            .extend(preprocessed.vertically_packed_row::<PackedVal<SC>>(i_start));
+                        bufs.preprocessed.extend(
+                            preprocessed.vertically_packed_row::<Pack<SC, A, Strat>>(i_start),
+                        );
                         bufs.preprocessed.extend(
                             preprocessed
-                                .vertically_packed_row::<PackedVal<SC>>(i_start + next_step),
+                                .vertically_packed_row::<Pack<SC, A, Strat>>(i_start + next_step),
                         );
                         RowMajorMatrixView::new(&bufs.preprocessed, preprocessed.width())
                     }
                     None => RowMajorMatrixView::new(&[], 0),
                 };
-                let periodic_values: &[PackedVal<SC>] = if periodic_packed.is_empty() {
+                let periodic_values: &[Pack<SC, A, Strat>] = if periodic_packed.is_empty() {
                     &[]
                 } else {
                     &periodic_packed[i_start / pack_width]
                 };
-                let mut folder = ProverConstraintFolder {
+
+                let (quotient, base_constraints, ext_constraints) = Strat::eval_row_group(
+                    air,
                     main,
-                    preprocessed: preprocessed_view,
-                    preprocessed_window: RowWindow::from_view(&preprocessed_view),
+                    preprocessed_view,
                     periodic_values,
                     public_values,
                     is_first_row,
                     is_last_row,
                     is_transition,
-                    base_alpha_powers: &base_alpha_powers,
-                    ext_alpha_powers: &ext_alpha_powers,
-                    base_constraints: core::mem::take(&mut bufs.base_constraints),
-                    ext_constraints: core::mem::take(&mut bufs.ext_constraints),
-                    constraint_index: 0,
-                    constraint_count: constraint_layout.total_constraints(),
-                };
-                air.eval(&mut folder);
-
-                // quotient(x) = constraints(x) / Z_H(x)
-                let quotient = folder.finalize_constraints() * inv_vanishing;
-
-                // The contents were folded into `quotient` above; reclaim the Vecs and
-                // `clear` them (`len = 0`, capacity kept) so the next row group reuses
-                // the allocations.
-                bufs.base_constraints = folder.base_constraints;
-                bufs.base_constraints.clear();
-                bufs.ext_constraints = folder.ext_constraints;
-                bufs.ext_constraints.clear();
-
-                // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
-                for (idx_in_packing, q) in quotient_chunk.iter_mut().enumerate() {
-                    *q = quotient.extract(idx_in_packing);
-                }
-            },
-        );
-    quotient_values
-}
-
-#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-#[allow(clippy::too_many_arguments)]
-fn quotient_values_vectorized<SC, A, Mat>(
-    pcs: &SC::Pcs,
-    air: &A,
-    public_values: &[Val<SC>],
-    layout: AirLayout,
-    trace_domain: Domain<SC>,
-    quotient_domain: Domain<SC>,
-    trace_on_quotient_domain: &Mat,
-    preprocessed_on_quotient_domain: Option<&Mat>,
-    alpha: SC::Challenge,
-) -> Vec<SC::Challenge>
-where
-    SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<Val<SC>>>
-        + for<'a> Air<VectorizedConstraintFolder<'a, SC, QUOTIENT_ILP>>,
-    Mat: Matrix<Val<SC>> + Sync,
-{
-    type Pack<SC> = VectorizedVal<SC, QUOTIENT_ILP>;
-    type Challenge<SC> = VectorizedChallenge<SC, QUOTIENT_ILP>;
-    type Folder<'a, SC> = VectorizedConstraintFolder<'a, SC, QUOTIENT_ILP>;
-
-    let quotient_size = quotient_domain.size();
-    let width = trace_on_quotient_domain.width();
-    let mut sels = debug_span!("Compute Selectors")
-        .in_scope(|| trace_domain.selectors_on_coset(quotient_domain));
-
-    let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
-    let next_step = 1 << qdb;
-
-    // We take Pack::<SC>::WIDTH worth of values at a time from a quotient_size slice, so we need to
-    // pad with default values in the case where quotient_size is smaller than Pack::<SC>::WIDTH.
-    for _ in quotient_size..Pack::<SC>::WIDTH {
-        sels.is_first_row.push(Val::<SC>::default());
-        sels.is_last_row.push(Val::<SC>::default());
-        sels.is_transition.push(Val::<SC>::default());
-        sels.inv_vanishing.push(Val::<SC>::default());
-    }
-
-    let constraint_layout = get_constraint_layout(air, layout);
-    let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
-    let periodic_cols = air.periodic_columns();
-    let periodic_table =
-        pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
-
-    let pack_width = Pack::<SC>::WIDTH;
-    let periodic_packed: Vec<Vec<Pack<SC>>> = if periodic_table.is_empty() {
-        Vec::new()
-    } else {
-        let ncols = periodic_table.width();
-        (0..quotient_size)
-            .step_by(pack_width)
-            .map(|i_start| {
-                (0..ncols)
-                    .map(|col_idx| {
-                        Pack::<SC>::from_fn(|offset| *periodic_table.get(i_start + offset, col_idx))
-                    })
-                    .collect()
-            })
-            .collect()
-    };
-
-    // Buffers reused across row-groups on each worker thread: allocating the
-    // packed row pairs and constraint accumulators fresh per group costs
-    // ~20% of this function's runtime on wide traces.
-    struct GroupBuffers<SC: StarkGenericConfig> {
-        main: Vec<Pack<SC>>,
-        preprocessed: Vec<Pack<SC>>,
-        base_constraints: Vec<Pack<SC>>,
-        ext_constraints: Vec<Challenge<SC>>,
-    }
-
-    let mut quotient_values = SC::Challenge::zero_vec(quotient_size);
-    quotient_values
-        .par_chunks_mut(Pack::<SC>::WIDTH)
-        .enumerate()
-        .for_each_init(
-            || GroupBuffers::<SC> {
-                main: Vec::with_capacity(2 * width),
-                preprocessed: Vec::with_capacity(
-                    2 * preprocessed_on_quotient_domain.map_or(0, |p| p.width()),
-                ),
-                base_constraints: Vec::with_capacity(constraint_layout.base_indices.len()),
-                ext_constraints: Vec::with_capacity(constraint_layout.ext_indices.len()),
-            },
-            |bufs, (group, quotient_chunk)| {
-                let i_start = group * Pack::<SC>::WIDTH;
-                let i_range = i_start..i_start + Pack::<SC>::WIDTH;
-
-                let is_first_row = *Pack::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
-                let is_last_row = *Pack::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
-                let is_transition = *Pack::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
-                let inv_vanishing = *Pack::<SC>::from_slice(&sels.inv_vanishing[i_range]);
-
-                bufs.main.clear();
-                bufs.main
-                    .extend(trace_on_quotient_domain.vertically_packed_row::<Pack<SC>>(i_start));
-                bufs.main.extend(
-                    trace_on_quotient_domain.vertically_packed_row::<Pack<SC>>(i_start + next_step),
+                    inv_vanishing,
+                    &base_alpha_powers,
+                    &ext_alpha_powers,
+                    core::mem::take(&mut bufs.base_constraints),
+                    core::mem::take(&mut bufs.ext_constraints),
+                    &mut bufs.base_coefficients,
+                    constraint_layout.total_constraints(),
                 );
-                let main = RowMajorMatrixView::new(&bufs.main, width);
-
-                let preprocessed_view = match preprocessed_on_quotient_domain {
-                    Some(preprocessed) => {
-                        bufs.preprocessed.clear();
-                        bufs.preprocessed
-                            .extend(preprocessed.vertically_packed_row::<Pack<SC>>(i_start));
-                        bufs.preprocessed.extend(
-                            preprocessed.vertically_packed_row::<Pack<SC>>(i_start + next_step),
-                        );
-                        RowMajorMatrixView::new(&bufs.preprocessed, preprocessed.width())
-                    }
-                    None => RowMajorMatrixView::new(&[], 0),
-                };
-                let periodic_values: &[Pack<SC>] = if periodic_packed.is_empty() {
-                    &[]
-                } else {
-                    &periodic_packed[i_start / pack_width]
-                };
-                let mut folder = Folder::<SC> {
-                    main,
-                    preprocessed: preprocessed_view,
-                    preprocessed_window: RowWindow::from_view(&preprocessed_view),
-                    periodic_values,
-                    public_values,
-                    is_first_row,
-                    is_last_row,
-                    is_transition,
-                    base_alpha_powers: &base_alpha_powers,
-                    ext_alpha_powers: &ext_alpha_powers,
-                    base_constraints: core::mem::take(&mut bufs.base_constraints),
-                    ext_constraints: core::mem::take(&mut bufs.ext_constraints),
-                    constraint_index: 0,
-                    constraint_count: constraint_layout.total_constraints(),
-                };
-                air.eval(&mut folder);
-
-                // quotient(x) = constraints(x) / Z_H(x)
-                let quotient = folder.finalize_constraints() * inv_vanishing;
 
                 // The contents were folded into `quotient` above; reclaim the Vecs and
                 // `clear` them (`len = 0`, capacity kept) so the next row group reuses
                 // the allocations.
-                bufs.base_constraints = folder.base_constraints;
+                bufs.base_constraints = base_constraints;
                 bufs.base_constraints.clear();
-                bufs.ext_constraints = folder.ext_constraints;
+                bufs.ext_constraints = ext_constraints;
                 bufs.ext_constraints.clear();
 
                 // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
                 for (idx_in_packing, q) in quotient_chunk.iter_mut().enumerate() {
-                    *q = quotient.extract(idx_in_packing);
+                    *q = Strat::extract(&quotient, idx_in_packing);
                 }
             },
         );

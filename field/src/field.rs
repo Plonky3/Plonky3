@@ -1005,12 +1005,14 @@ pub trait Field:
     /// independent dependency chains and hide packed-multiplication latency) is expected
     /// to help throughput for this field.
     ///
-    /// Defaults to `true`. Fields should override this to `false` when their packed
-    /// multiplication is not the bottleneck a lockstep evaluation strategy would address —
-    /// for instance because AIRs over this field already interleave enough independent
-    /// per-row work on their own, or because the field's packed multiply is already
-    /// short-latency relative to other pipeline costs.
-    const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = true;
+    /// Only [`p3_uni_stark::quotient_values`](https://docs.rs/p3-uni-stark)'s `aarch64`
+    /// (`neon`)-gated path reads this constant; on every other target it has no effect,
+    /// so leaving it at the default is always safe there.
+    ///
+    /// Defaults to `false`, so fields fail safe into the plain (non-lockstep) path unless
+    /// explicitly measured to benefit. Override to `true` only once benchmarks confirm the
+    /// field's packed multiplication is latency-bound enough for lockstep evaluation to help.
+    const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = false;
 
     /// Check if the given field element is equal to the unique additive identity (ZERO).
     #[must_use]

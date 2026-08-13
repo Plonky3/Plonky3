@@ -365,10 +365,10 @@ impl Field for Mersenne31 {
     // Sage: GF(2^31 - 1).multiplicative_generator()
     const GENERATOR: Self = Self::new(7);
 
-    // Circle-STARK AIRs over this field (e.g. the vectorized Poseidon2 AIR) already
-    // interleave several independent permutations per row, which already supplies enough
-    // independent per-row dependency chains; evaluating additional packed vectors in
-    // lockstep on top of that does not improve throughput here.
+    // PackedMersenne31Neon's `dot_product` uses deferred-reduction accumulation (see #1894),
+    // which already closes the extension-field-multiply latency gap a lockstep evaluation
+    // strategy would otherwise address; evaluating additional packed vectors in lockstep on
+    // top of that does not improve throughput for this field (measured +10% regression).
     const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = false;
 
     #[inline]

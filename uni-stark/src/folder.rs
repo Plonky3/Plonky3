@@ -110,18 +110,26 @@ impl<SC: StarkGenericConfig, const N: usize> VectorizedConstraintFolder<'_, SC, 
     /// per vectorized component: the [`Algebra::mixed_dot_product`] overrides on
     /// [`Vectorized`]/[`VectorizedExt`] delegate each component to the underlying
     /// packed type, so the specialized SIMD dot products are still used.
+    ///
+    /// `base_coefficients` is caller-owned scratch space for the per-basis-dimension
+    /// coefficients computed along the way; callers reuse it across row groups instead
+    /// of allocating fresh each call.
     #[inline]
-    pub fn finalize_constraints(&self) -> VectorizedChallenge<SC, N> {
+    pub fn finalize_constraints(
+        &self,
+        base_coefficients: &mut Vec<VectorizedVal<SC, N>>,
+    ) -> VectorizedChallenge<SC, N> {
         debug_assert_eq!(self.constraint_index, self.constraint_count);
 
         let base = &self.base_constraints;
-        let base_coefficients: Vec<VectorizedVal<SC, N>> = self
-            .base_alpha_powers
-            .iter()
-            .map(|powers| VectorizedVal::<SC, N>::batched_linear_combination(base, powers))
-            .collect();
+        base_coefficients.clear();
+        base_coefficients.extend(
+            self.base_alpha_powers
+                .iter()
+                .map(|powers| VectorizedVal::<SC, N>::batched_linear_combination(base, powers)),
+        );
         let acc =
-            VectorizedChallenge::<SC, N>::from_vectorized_basis_coefficients(&base_coefficients);
+            VectorizedChallenge::<SC, N>::from_vectorized_basis_coefficients(base_coefficients);
         acc + VectorizedChallenge::<SC, N>::batched_linear_combination(
             &self.ext_constraints,
             self.ext_alpha_powers,

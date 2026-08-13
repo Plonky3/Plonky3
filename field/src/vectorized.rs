@@ -414,6 +414,39 @@ impl<F: Field, EF: ExtensionField<F>, const N: usize> PrimeCharacteristicRing
     fn square(&self) -> Self {
         self.map(|x| x.square())
     }
+
+    #[inline]
+    fn cube(&self) -> Self {
+        self.map(|x| x.cube())
+    }
+
+    #[inline]
+    fn exp_const_u64<const POWER: u64>(&self) -> Self {
+        self.map(|x| x.exp_const_u64::<POWER>())
+    }
+
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        self.map(|x| x.mul_2exp_u64(exp))
+    }
+
+    #[inline]
+    fn dot_product<const M: usize>(u: &[Self; M], v: &[Self; M]) -> Self {
+        Self(array::from_fn(|i| {
+            EF::ExtensionPacking::dot_product::<M>(
+                &array::from_fn::<_, M, _>(|j| u[j].0[i]),
+                &array::from_fn::<_, M, _>(|j| v[j].0[i]),
+            )
+        }))
+    }
+
+    #[inline]
+    fn sum_array<const M: usize>(input: &[Self]) -> Self {
+        assert_eq!(input.len(), M);
+        Self(array::from_fn(|i| {
+            EF::ExtensionPacking::sum_array::<M>(&array::from_fn::<_, M, _>(|j| input[j].0[i]))
+        }))
+    }
 }
 
 impl<F: Field, const N: usize> Algebra<F> for Vectorized<F, N> {
@@ -446,7 +479,10 @@ impl<F: Field, EF: ExtensionField<F>, const N: usize> Algebra<Vectorized<F, N>>
 // SAFETY: `Vectorized<F, N>` is `repr(transparent)` over `[F::Packing; N]` and
 // `F::Packing: PackedField` guarantees that `F::Packing` can be cast to/from
 // `[F; F::Packing::WIDTH]` without UB. Hence `Vectorized<F, N>` can be cast
-// to/from `[F; F::Packing::WIDTH * N]`.
+// to/from `[F; F::Packing::WIDTH * N]`. `from_slice`/`from_slice_mut` additionally
+// rely on `align_of::<F::Packing>() <= align_of::<F>()`, the same invariant
+// `PackedValue::pack_slice` asserts, to cast a `&[F]` pointer to `&Self` without
+// under-aligning the read.
 unsafe impl<F: Field, const N: usize> PackedValue for Vectorized<F, N> {
     type Value = F;
 
@@ -465,17 +501,13 @@ unsafe impl<F: Field, const N: usize> PackedValue for Vectorized<F, N> {
     #[inline]
     fn from_slice(slice: &[Self::Value]) -> &Self {
         assert_eq!(slice.len(), Self::WIDTH);
-        let (_, values, _) = unsafe { slice.align_to::<Self>() };
-        assert_eq!(values.len(), 1, "slice is not aligned to Self");
-        &values[0]
+        unsafe { &*slice.as_ptr().cast() }
     }
 
     #[inline]
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
         assert_eq!(slice.len(), Self::WIDTH);
-        let (_, values, _) = unsafe { slice.align_to_mut::<Self>() };
-        assert_eq!(values.len(), 1, "slice is not aligned to Self");
-        &mut values[0]
+        unsafe { &mut *slice.as_mut_ptr().cast() }
     }
 
     #[inline]
