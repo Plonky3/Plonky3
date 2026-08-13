@@ -22,10 +22,13 @@
 //!
 //! A root of the numerator is not the only way through. A *vanishing
 //! denominator* degenerates the batched transition identity: with `denom_j = 0`
-//! the constraint collapses to `multiplicity_j · Π_{s≠j} denom_s = 0`, forcing
-//! `multiplicity_j = 0` and letting a prover drop message `j` from the bus for
-//! free. Each denominator is monic in `alpha`, so for any `beta` exactly one
-//! `alpha` annihilates it — that event costs `N / |EF|`, not `N·W / |EF|`.
+//! the common denominator itself is `0`, so the constraint
+//! `common_denominator · frac_local − numerator = 0` no longer pins the
+//! fraction column — `frac_local` is multiplied away and left completely
+//! unconstrained on that row, letting a prover write any value into it and
+//! have the accumulator absorb it. Each denominator is monic in `alpha`, so
+//! for any `beta` exactly one `alpha` annihilates it — that event costs
+//! `N / |EF|`, not `N·W / |EF|`.
 //!
 //! Together
 //!

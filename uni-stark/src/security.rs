@@ -62,6 +62,14 @@ impl StarkSecurityParams {
     ///
     /// Use [`from_air`](Self::from_air) when an AIR is available — it derives
     /// `num_constraints` and `air_max_constraint_degree` from symbolic evaluation.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// If `air_max_constraint_degree` exceeds `blowup + 1`, the prover cannot
+    /// fit the quotient in the LDE and the resulting parameters describe an
+    /// unbuildable configuration. This does not account for zk: under zk the
+    /// prover's real bound is one tighter (`blowup`, not `blowup + 1`), but
+    /// `StarkSecurityParams` carries no `is_zk` flag to check that here.
     pub const fn new(
         fri: FriRegime,
         num_modulus_bits: usize,
@@ -70,6 +78,10 @@ impl StarkSecurityParams {
         air_max_constraint_degree: usize,
         max_combo: usize,
     ) -> Self {
+        debug_assert!(
+            air_max_constraint_degree <= (1usize << fri.log_blowup) + 1,
+            "AIR max constraint degree exceeds blowup+1; the prover cannot commit a quotient"
+        );
         Self {
             fri_log_blowup: fri.log_blowup,
             fri_log_final_poly_len: fri.log_final_poly_len,
@@ -118,29 +130,26 @@ impl StarkSecurityParams {
         )
     }
 
-    /// Where this configuration grinds, by error source. A uni-STARK grinds
-    /// only inside FRI, so the DEEP and lookup-challenge sites stay at the
-    /// neutral `0`.
+    /// Where this configuration grinds, by error source, excluding the FRI
+    /// query- and commit-phase sites — [`Self::fri_regime`] carries those
+    /// directly, since [`GrindingSites`] does not model the low-degree
+    /// test's own sites. A uni-STARK grinds only inside FRI, so the DEEP and
+    /// lookup-challenge sites stay at the neutral `0`.
     const fn grinding(&self) -> GrindingSites {
-        GrindingSites {
-            query_phase: self.fri_query_proof_of_work_bits,
-            ldt_commit_phase: self.fri_commit_proof_of_work_bits,
-            out_of_domain: 0,
-            lookup_challenge: 0,
-        }
+        GrindingSites::NONE
     }
 
     /// The low-degree test owns the query- and commit-phase grinding sites,
-    /// so they are carried here and never re-applied by the composite.
+    /// so they are read straight from `self` and never re-applied by the
+    /// composite.
     const fn fri_regime(&self) -> FriRegime {
-        let grinding = self.grinding();
         FriRegime {
             log_blowup: self.fri_log_blowup,
             num_queries: self.fri_num_queries,
             log_final_poly_len: self.fri_log_final_poly_len,
             max_log_arity: self.fri_max_log_arity,
-            commit_pow_bits: grinding.ldt_commit_phase,
-            query_pow_bits: grinding.query_phase,
+            commit_pow_bits: self.fri_commit_proof_of_work_bits,
+            query_pow_bits: self.fri_query_proof_of_work_bits,
         }
     }
 
@@ -202,11 +211,16 @@ impl ConjecturedSecurity {
         collision_resistance: usize,
         num_modulus_bits: usize,
     ) -> Self {
+        // `max_log_arity: 1` is the minimum arity `p3-fri` accepts (folding
+        // factor 2). The commit-phase error is non-increasing in arity (see
+        // `commit_phase_error_udr`), so evaluating it at the smallest legal
+        // arity keeps this a true upper bound over every real FRI config,
+        // whatever arity it actually folds at.
         let regime = FriRegime {
             log_blowup,
             num_queries,
             log_final_poly_len: 0,
-            max_log_arity: 0,
+            max_log_arity: 1,
             commit_pow_bits: 0,
             query_pow_bits: query_proof_of_work_bits,
         };
@@ -253,13 +267,6 @@ impl ConjecturedSecurity {
     ///   there raises the reported level only while that term is the binding
     ///   one.
     pub fn compute_from_params(params: &StarkSecurityParams, degree_bits: usize) -> Self {
-        debug_assert!(
-            params.air_max_constraint_degree <= (1usize << params.fri_log_blowup) + 1,
-            "AIR max constraint degree {} exceeds blowup+1 ({}); the prover cannot commit a quotient",
-            params.air_max_constraint_degree,
-            (1usize << params.fri_log_blowup) + 1
-        );
-
         let report = conjectured_security_report(
             &params.fri_regime(),
             &params.air_shape(),
@@ -327,13 +334,6 @@ impl ProvenSecurity {
                 list_decoding_bits: 0,
             };
         }
-        debug_assert!(
-            params.air_max_constraint_degree <= (1usize << params.fri_log_blowup) + 1,
-            "AIR max constraint degree {} exceeds blowup+1 ({}); the prover cannot commit a quotient",
-            params.air_max_constraint_degree,
-            (1usize << params.fri_log_blowup) + 1
-        );
-
         let regime = params.fri_regime();
         let air = params.air_shape();
         let shape = params.instance_shape(degree_bits);
@@ -502,11 +502,11 @@ mod tests {
     /// commit-phase folding round, `collision_resistance`, and
     /// `num_modulus_bits`.
     ///
-    /// This entry point pins `max_log_arity = 0` and a single-row trace, so
-    /// the folding round is evaluated at `n = 2^log_blowup` — it binds only in
-    /// the two rows where the query phase would otherwise clear the collision
-    /// cap (`log_blowup` 2 and 8), which is exactly the overstatement that
-    /// omitting the round produced.
+    /// This entry point pins `max_log_arity = 1` (the minimum arity `p3-fri`
+    /// accepts) and a single-row trace, so the folding round is evaluated at
+    /// `n = 2^log_blowup` — it binds only in the two rows where the query
+    /// phase would otherwise clear the collision cap (`log_blowup` 2 and 8),
+    /// which is exactly the overstatement that omitting the round produced.
     #[test]
     fn conjectured_security_ldt_only_regression_vector() {
         const VECTOR: [(usize, usize, usize, usize, usize, usize); 8] = [

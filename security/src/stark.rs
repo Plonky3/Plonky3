@@ -249,20 +249,23 @@ pub fn proven_security_report<L: LowDegreeTest>(
 /// [`conjectured_security_report`] for why the proven path's L⁺ multiplier is
 /// absent here.
 ///
-/// Like the scalar proven path, this models no grinding sites beyond those the
-/// low-degree test already carries: a caller that grinds elsewhere boosts the
-/// affected term itself via [`crate::grinding::boost`], or uses
-/// [`conjectured_security_report`], which consults
-/// [`crate::grinding::GrindingSites`] directly.
+/// `grinding.out_of_domain` boosts the DEEP term, exactly as in
+/// [`conjectured_security_report`]; the low-degree test's own sites are
+/// already folded into `ldt.conjectured_terms`'s output by the
+/// [`LowDegreeTest`] impl.
 pub fn conjectured_security<L: LowDegreeTest>(
     ldt: &L,
     air: &StarkAirParams,
     shape: &InstanceShape,
     extras: &[ErrorBits],
+    grinding: &GrindingSites,
 ) -> ErrorBits {
     let list_size = list_size_conjectured();
     let ali = air::composition_error(air.num_constraints, list_size, shape.modulus_bits);
-    let deep = deep::deep_ali_error(air, shape, list_size);
+    let deep = boost(
+        deep::deep_ali_error(air, shape, list_size),
+        grinding.out_of_domain,
+    );
     let ldt_terms = ldt.conjectured_terms(shape);
     let mut all: Vec<ErrorBits> = Vec::with_capacity(2 + ldt_terms.len() + extras.len());
     all.push(ali);
@@ -611,7 +614,7 @@ mod tests {
         // Without extras, the LDT terms are what the two paths must agree on.
         let bare_report =
             conjectured_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
-        let bare_scalar = conjectured_security(&regime, &air, &shape, &[]);
+        let bare_scalar = conjectured_security(&regime, &air, &shape, &[], &GrindingSites::NONE);
         assert!((bare_report.security_bits() - bare_scalar.bits()).abs() < 1e-12);
 
         let report = conjectured_security_report(
@@ -621,11 +624,23 @@ mod tests {
             &[SecurityTerm::new("extra", extra)],
             &GrindingSites::NONE,
         );
-        let scalar = conjectured_security(&regime, &air, &shape, &[extra]);
+        let scalar = conjectured_security(&regime, &air, &shape, &[extra], &GrindingSites::NONE);
 
         assert_eq!(report.regime, Regime::Conjectured);
         assert!((report.security_bits() - scalar.bits()).abs() < 1e-12);
         assert_eq!(report.binding().label, "extra");
+
+        // And at a nonzero grinding site — the axis the two paths could only
+        // diverge on before `conjectured_security` modeled `GrindingSites`
+        // itself, since it had no way to express the DEEP-term boost that
+        // `conjectured_security_report` applies.
+        let ground = GrindingSites {
+            out_of_domain: 24,
+            ..GrindingSites::NONE
+        };
+        let ground_report = conjectured_security_report(&regime, &air, &shape, &[], &ground);
+        let ground_scalar = conjectured_security(&regime, &air, &shape, &[], &ground);
+        assert!((ground_report.security_bits() - ground_scalar.bits()).abs() < 1e-12);
     }
 
     /// Conjectured mode decodes at list size 1, so ALI and DEEP carry no

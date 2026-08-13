@@ -58,6 +58,7 @@ impl SecurityTerm {
 
 /// The proximity regime a [`RegimeReport`] was evaluated in.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub enum Regime {
     /// Unique-decoding regime (list size 1).
     UniqueDecoding,

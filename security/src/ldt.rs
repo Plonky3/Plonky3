@@ -63,3 +63,53 @@ pub trait LowDegreeTest {
         vec![SecurityTerm::new(LDT_LABEL, self.conjectured_error(shape))]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A low-degree test that leaves every default in place, including
+    /// [`LowDegreeTest::conjectured_terms`], so the default body has a
+    /// dedicated test rather than relying on the first downstream `impl` —
+    /// currently [`crate::fri::FriRegime`], which overrides it — to exercise
+    /// it incidentally.
+    struct StubLdt;
+
+    impl LowDegreeTest for StubLdt {
+        fn log_blowup(&self) -> usize {
+            1
+        }
+
+        fn proven_error_udr(&self, _air: &StarkAirParams, _shape: &InstanceShape) -> ErrorBits {
+            ErrorBits::from_log2(0.0)
+        }
+
+        fn best_ldr(
+            &self,
+            _air: &StarkAirParams,
+            _shape: &InstanceShape,
+        ) -> Option<(usize, ErrorBits)> {
+            None
+        }
+
+        fn conjectured_error(&self, _shape: &InstanceShape) -> ErrorBits {
+            ErrorBits::from_log2(42.0)
+        }
+    }
+
+    #[test]
+    fn default_conjectured_terms_wraps_conjectured_error_under_ldt_label() {
+        let shape = InstanceShape {
+            log_trace_length: 0,
+            modulus_bits: 1,
+            collision_resistance: 1,
+            num_batched_functions: 1,
+        };
+
+        let terms = StubLdt.conjectured_terms(&shape);
+
+        assert_eq!(terms.len(), 1);
+        assert_eq!(terms[0].label, LDT_LABEL);
+        assert!((terms[0].bits.bits() - 42.0).abs() < 1e-12);
+    }
+}
