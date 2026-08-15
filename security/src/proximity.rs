@@ -49,6 +49,19 @@ pub const fn list_size_udr() -> f64 {
     1.0
 }
 
+/// Conjectured-regime list size: L⁺ = 1.
+///
+/// The random-words heuristic of [2025/2010] §1.5 treats a malicious prover's
+/// committed word as distributed like a uniformly random word, whose distance
+/// to the code concentrates at capacity `1 − ρ`. Conjecturing correlated
+/// agreement up to that radius, the relevant decoding list is a single
+/// codeword — numerically the same L⁺ = 1 as [`list_size_udr`], but justified
+/// by the conjecture rather than by the unique-decoding radius. The ALI and
+/// DEEP-ALI bounds therefore carry no list-size multiplier in this regime.
+pub const fn list_size_conjectured() -> f64 {
+    1.0
+}
+
 /// LDR list size: L⁺ = (m + 1/2)/√ρ. Matches `soundcalc`
 /// `johnson_bound::get_max_list_size` (explicit-m branch).
 pub fn list_size_ldr_m(log_blowup: usize, m: usize) -> f64 {

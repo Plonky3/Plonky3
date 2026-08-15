@@ -1,14 +1,12 @@
-use p3_air::Air;
-use p3_air::symbolic::SymbolicAirBuilder;
 use p3_commit::Pcs;
 use p3_matrix::Matrix;
 use tracing::debug_span;
 
-use crate::{ProverConstraintFolder, StarkGenericConfig, Val};
+use crate::{QuotientAir, StarkGenericConfig};
 
 /// Prover-side reusable data for preprocessed columns.
 ///
-/// This allows committing to the preprocessed trace once per [`Air`]/degree and reusing
+/// This allows committing to the preprocessed trace once per `Air`/degree and reusing
 /// the commitment and [`Pcs`] prover data across many proofs.
 pub struct PreprocessedProverData<SC: StarkGenericConfig> {
     /// The width (number of columns) of the preprocessed trace.
@@ -26,7 +24,7 @@ pub struct PreprocessedProverData<SC: StarkGenericConfig> {
 
 /// Verifier-side reusable data for preprocessed columns.
 ///
-/// This allows committing to the preprocessed trace once per [`Air`]/degree and reusing
+/// This allows committing to the preprocessed trace once per `Air`/degree and reusing
 /// the commitment across many verifications.
 #[derive(Clone)]
 pub struct PreprocessedVerifierKey<SC: StarkGenericConfig> {
@@ -40,10 +38,10 @@ pub struct PreprocessedVerifierKey<SC: StarkGenericConfig> {
     pub commitment: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
 }
 
-/// Set up and commit the preprocessed trace for a given [`Air`] and degree.
+/// Set up and commit the preprocessed trace for a given `Air` and degree.
 ///
-/// This can be called once per [`Air`]/degree configuration to obtain reusable
-/// prover data for preprocessed columns. Returns `None` if the [`Air`] does not
+/// This can be called once per `Air`/degree configuration to obtain reusable
+/// prover data for preprocessed columns. Returns `None` if the `Air` does not
 /// define any preprocessed columns.
 pub fn setup_preprocessed<SC, A>(
     config: &SC,
@@ -52,7 +50,7 @@ pub fn setup_preprocessed<SC, A>(
 ) -> Option<(PreprocessedProverData<SC>, PreprocessedVerifierKey<SC>)>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: QuotientAir<SC>,
 {
     let pcs = config.pcs();
     let is_zk = config.is_zk();

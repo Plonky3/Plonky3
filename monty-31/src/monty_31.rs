@@ -441,6 +441,8 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
 
     const GENERATOR: Self = FP::MONTY_GEN;
 
+    const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = FP::BENEFITS_FROM_LOCKSTEP_EVALUATION;
+
     fn try_inverse(&self) -> Option<Self> {
         if self.is_zero() {
             return None;

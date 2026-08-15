@@ -14,12 +14,15 @@
 //! - `CapacityBound` is not currently supported by FRI's commit-phase
 //!   analysis.
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use libm::{log2, pow};
-use p3_util::log2_floor_usize;
 
 use crate::error::ErrorBits;
 use crate::ldt::LowDegreeTest;
 use crate::proximity::{LDR_M_CAP, alpha_ldr_m, alpha_udr, compute_upper_m, gamma_ldr_m};
+use crate::report::{LDT_COMMIT_LABEL, LDT_QUERY_LABEL, SecurityTerm};
 use crate::shape::{InstanceShape, StarkAirParams};
 
 /// Security-relevant mirror of `p3_fri::FriParameters`.
@@ -60,6 +63,18 @@ impl LowDegreeTest for FriRegime {
     fn conjectured_error(&self, shape: &InstanceShape) -> ErrorBits {
         conjectured_error(self, shape)
     }
+
+    fn conjectured_terms(&self, shape: &InstanceShape) -> Vec<SecurityTerm> {
+        let mut terms = vec![SecurityTerm::new(
+            LDT_QUERY_LABEL,
+            conjectured_error(self, shape),
+        )];
+        terms.extend(
+            conjectured_commit_phase_error(self, shape)
+                .map(|bits| SecurityTerm::new(LDT_COMMIT_LABEL, bits)),
+        );
+        terms
+    }
 }
 
 /// Conjectured low-degree-test soundness (random-words, [2025/2010] §1.5).
@@ -83,17 +98,44 @@ pub fn conjectured_error(regime: &FriRegime, shape: &InstanceShape) -> ErrorBits
     ErrorBits::from_log2(bits)
 }
 
+/// FRI commit-phase per-round error in the conjectured regime.
+///
+/// Identical to [`commit_phase_error_udr`], and deliberately so: the bound
+/// counts the folding challenges that are *exceptional* for a given committed
+/// word, and that count does not depend on the decoding regime. What the
+/// random-words conjecture buys is the removal of the list-size multiplier
+/// `L⁺` that the Johnson-bound analysis pays (see
+/// [`crate::stark::conjectured_security_report`]) — it does not assert that a
+/// bad folding challenge cannot exist. Dropping the round entirely, as an
+/// LDT-only conjectured number does, therefore overstates security for a large
+/// LDE domain over a small field.
+///
+/// Returns `None` when no fold occurs, in which case there is no such round.
+pub fn conjectured_commit_phase_error(
+    regime: &FriRegime,
+    shape: &InstanceShape,
+) -> Option<ErrorBits> {
+    commit_phase_error_udr(regime, shape)
+}
+
 /// FRI commit-phase per-round error in UDR.
 ///
 /// ε ≤ (folding − 1)·(n + 1) / |F|, applied when at least one fold occurs.
 /// Slightly conservative versus `soundcalc`'s tighter `(γn + 1)` factor.
+///
+/// Returns `None` when `regime.max_log_arity` is `0` (folding factor `1`,
+/// i.e. no fold at all) — such a regime has no commit-phase round, rather
+/// than being indistinguishable from arity 2.
 pub fn commit_phase_error_udr(regime: &FriRegime, shape: &InstanceShape) -> Option<ErrorBits> {
+    let folding_minus_one = regime.folding_factor() - 1.0;
+    if folding_minus_one <= 0.0 {
+        return None;
+    }
     let lde_log = shape.log_trace_length + regime.log_blowup;
-    let num_layers = log2_floor_usize(1usize << lde_log).saturating_sub(regime.log_final_poly_len);
+    let num_layers = lde_log.saturating_sub(regime.log_final_poly_len) / regime.max_log_arity;
     if num_layers == 0 {
         return None;
     }
-    let folding_minus_one = (regime.folding_factor() - 1.0).max(1.0);
     let n = (1u64 << lde_log) as f64;
     let bits = shape.modulus_bits as f64 - log2(folding_minus_one * (n + 1.0))
         + regime.commit_pow_bits as f64;
@@ -109,17 +151,28 @@ pub fn commit_phase_error_udr(regime: &FriRegime, shape: &InstanceShape) -> Opti
 /// We also evaluate the n/q-style bound from [2024/1553] and report the
 /// tighter of the two. Round-by-round soundness is dominated by round 0
 /// (largest `n`), so we use `n = lde_domain_size` for every round.
-pub fn commit_phase_error_ldr_m(regime: &FriRegime, shape: &InstanceShape, m: usize) -> ErrorBits {
+///
+/// Returns `None` when `regime.max_log_arity` is `0` (folding factor `1`,
+/// i.e. no fold at all) — such a regime has no commit-phase round, rather
+/// than being indistinguishable from arity 2.
+pub fn commit_phase_error_ldr_m(
+    regime: &FriRegime,
+    shape: &InstanceShape,
+    m: usize,
+) -> Option<ErrorBits> {
     let rho = pow(2.0, -(regime.log_blowup as f64));
     let sqrt_rho = libm::sqrt(rho);
     let m_shifted = m as f64 + 0.5;
     let pp = gamma_ldr_m(regime.log_blowup, m);
     if pp <= 0.0 {
-        return ErrorBits::from_log2(0.0);
+        return Some(ErrorBits::from_log2(0.0));
+    }
+    let folding_minus_one = regime.folding_factor() - 1.0;
+    if folding_minus_one <= 0.0 {
+        return None;
     }
     let lde_log = shape.log_trace_length + regime.log_blowup;
     let n = (1u64 << lde_log) as f64;
-    let folding_minus_one = (regime.folding_factor() - 1.0).max(1.0);
 
     let num = (2.0 * pow(m_shifted, 5.0) + 3.0 * m_shifted * pp * rho) * n;
     let den = 3.0 * rho * sqrt_rho;
@@ -135,7 +188,9 @@ pub fn commit_phase_error_ldr_m(regime: &FriRegime, shape: &InstanceShape, m: us
         + 0.5 * log2(rho)
         + regime.commit_pow_bits as f64;
 
-    ErrorBits::from_log2(bits_linear.min(bits_n_over_q).max(0.0))
+    Some(ErrorBits::from_log2(
+        bits_linear.min(bits_n_over_q).max(0.0),
+    ))
 }
 
 /// FRI query-phase error: ε ≤ αᵏ, contributing `query_pow − k·log2(α)` bits.
@@ -191,9 +246,9 @@ pub fn proven_error_ldr_m(
     if k + air.max_combo as f64 >= (1.0 - pp) * lde {
         return ErrorBits::from_log2(0.0);
     }
-    let commit = commit_phase_error_ldr_m(regime, shape, m);
     let query = query_phase_error(alpha, regime.num_queries, regime.query_pow_bits);
-    ErrorBits::min(&[commit, query])
+    commit_phase_error_ldr_m(regime, shape, m)
+        .map_or(query, |commit| ErrorBits::min(&[commit, query]))
 }
 
 /// Search `m ∈ [3, min(compute_upper_m, LDR_M_CAP)]` for the value
@@ -299,6 +354,104 @@ mod tests {
         .bits()
         .floor() as usize;
         assert_eq!(combined, 65);
+    }
+
+    /// The conjectured commit-phase round is a real constraint, not a
+    /// formality: over a 128-bit field with a 2^26 LDE domain it lands near 100
+    /// bits, below a 128-bit target, so an LDT-only conjectured number that
+    /// omits it overstates security. It also matches the UDR bound exactly —
+    /// the conjecture removes the list-size multiplier, not the count of
+    /// exceptional folding challenges.
+    #[test]
+    fn conjectured_commit_phase_binds_below_a_128_bit_target() {
+        let regime = FriRegime {
+            log_blowup: 3,
+            num_queries: 27,
+            log_final_poly_len: 0,
+            max_log_arity: 2,
+            commit_pow_bits: 0,
+            query_pow_bits: 16,
+        };
+        let shape = InstanceShape {
+            log_trace_length: 23,
+            modulus_bits: 128,
+            collision_resistance: 128,
+            num_batched_functions: 1,
+        };
+
+        let commit = conjectured_commit_phase_error(&regime, &shape).expect("folds occur");
+        // |F| - log2(3 * (2^26 + 1)) = 128 - 27.585
+        assert!(
+            (commit.bits() - (128.0 - libm::log2(3.0 * (65_536.0 * 1024.0 + 1.0)))).abs() < 1e-9
+        );
+        assert!(commit.bits() < 128.0, "got {}", commit.bits());
+        assert_eq!(
+            commit.bits(),
+            commit_phase_error_udr(&regime, &shape).unwrap().bits()
+        );
+    }
+
+    /// Commit-phase grinding is credited to the commit-phase term and to
+    /// nothing else, and a fold-free configuration has no such round at all.
+    #[test]
+    fn conjectured_commit_phase_credits_only_its_own_grinding() {
+        let base = benchmark_regime();
+        let shape = benchmark_shape();
+
+        let ground = FriRegime {
+            commit_pow_bits: 12,
+            ..base
+        };
+        let b0 = conjectured_commit_phase_error(&base, &shape).expect("folds occur");
+        let b12 = conjectured_commit_phase_error(&ground, &shape).expect("folds occur");
+        assert!((b12.bits() - b0.bits() - 12.0).abs() < 1e-12);
+        // The query phase is untouched by it.
+        assert_eq!(
+            conjectured_error(&ground, &shape).bits(),
+            conjectured_error(&base, &shape).bits()
+        );
+
+        // Folding down to the full domain leaves no commit round.
+        let no_folds = FriRegime {
+            log_final_poly_len: shape.log_trace_length + base.log_blowup,
+            ..base
+        };
+        assert!(conjectured_commit_phase_error(&no_folds, &shape).is_none());
+        assert_eq!(
+            LowDegreeTest::conjectured_terms(&no_folds, &shape).len(),
+            1,
+            "a fold-free regime reports the query phase only"
+        );
+    }
+
+    /// `max_log_arity: 0` (folding factor 1) is a genuinely fold-free regime,
+    /// not a stand-in for arity 2: both the UDR and LDR commit-phase bounds
+    /// must report no round rather than silently clamping to arity 2's
+    /// `folding_minus_one = 1`.
+    #[test]
+    fn arity_one_reports_no_commit_round_rather_than_impersonating_arity_two() {
+        let base = benchmark_regime();
+        let shape = benchmark_shape();
+        let air = benchmark_air();
+        let no_arity = FriRegime {
+            max_log_arity: 0,
+            ..base
+        };
+
+        assert!(commit_phase_error_udr(&no_arity, &shape).is_none());
+        assert!(commit_phase_error_ldr_m(&no_arity, &shape, 10).is_none());
+        assert!(conjectured_commit_phase_error(&no_arity, &shape).is_none());
+
+        // The UDR/LDR composites fall back to the query-phase error alone.
+        assert_eq!(
+            proven_error_udr(&no_arity, &air, &shape).bits(),
+            query_phase_error(
+                alpha_udr(shape.log_trace_length, no_arity.log_blowup, air.max_combo),
+                no_arity.num_queries,
+                no_arity.query_pow_bits,
+            )
+            .bits()
+        );
     }
 
     #[test]
