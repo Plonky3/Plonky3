@@ -904,7 +904,7 @@ mod babybear_pcs {
 
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
-        p_challenger.observe(commit.clone());
+        commit.iter().for_each(|c| p_challenger.observe(c.clone()));
 
         let zeta: Challenge = p_challenger.sample_algebra_element();
 
@@ -915,7 +915,7 @@ mod babybear_pcs {
 
         // Verify.
         let mut v_challenger = challenger_template;
-        v_challenger.observe(commit.clone());
+        commit.iter().for_each(|c| v_challenger.observe(c.clone()));
         let v_zeta: Challenge = v_challenger.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1035,7 +1035,9 @@ mod babybear_pcs {
         let mut stir_p_ch = Challenger::new(perm.clone());
         let (stir_commit, stir_data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&stir_pcs, [(stir_domain, mat)]);
-        stir_p_ch.observe(stir_commit.clone());
+        stir_commit
+            .iter()
+            .for_each(|c| stir_p_ch.observe(c.clone()));
         // STIR's input commitment hashes fiber-grouped leaves, so its root — and hence the
         // point derived from it — differs from FRI's over the same matrix. Proof size does
         // not depend on which point is opened, so the comparison stays like-for-like.
@@ -1047,7 +1049,9 @@ mod babybear_pcs {
         );
 
         let mut stir_v_ch = Challenger::new(perm);
-        stir_v_ch.observe(stir_commit.clone());
+        stir_commit
+            .iter()
+            .for_each(|c| stir_v_ch.observe(c.clone()));
         let stir_v_zeta: Challenge = stir_v_ch.sample_algebra_element();
         assert_eq!(stir_v_zeta, stir_zeta);
         let stir_claims = vec![(
@@ -1137,10 +1141,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain_a, mat_a)]);
-        p_ch.observe(commit_a.clone());
+        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain_b, mat_b)]);
-        p_ch.observe(commit_b.clone());
+        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
 
         let zeta: Challenge = p_ch.sample_algebra_element();
 
@@ -1151,8 +1155,8 @@ mod babybear_pcs {
 
         // Verify.
         let mut v_ch = challenger_template;
-        v_ch.observe(commit_a.clone());
-        v_ch.observe(commit_b.clone());
+        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
+        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1192,10 +1196,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
-        p_ch.observe(commit_a.clone());
+        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
-        p_ch.observe(commit_b.clone());
+        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
 
         let zeta: Challenge = p_ch.sample_algebra_element();
 
@@ -1204,8 +1208,8 @@ mod babybear_pcs {
             <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
 
         let mut v_ch = challenger_template;
-        v_ch.observe(commit_a.clone());
-        v_ch.observe(commit_b.clone());
+        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
+        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1237,10 +1241,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
-        p_ch.observe(commit_a.clone());
+        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
-        p_ch.observe(commit_b.clone());
+        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
 
         let zeta: Challenge = p_ch.sample_algebra_element();
         let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
@@ -1256,8 +1260,8 @@ mod babybear_pcs {
         }
 
         let mut v_ch = challenger_template;
-        v_ch.observe(commit_a.clone());
-        v_ch.observe(commit_b.clone());
+        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
+        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
         let _v_zeta: Challenge = v_ch.sample_algebra_element();
 
         let opening_a = opening_values[0][0][0].clone();
@@ -1292,10 +1296,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
-        p_ch.observe(commit_a.clone());
+        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
-        p_ch.observe(commit_b.clone());
+        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
 
         let zeta: Challenge = p_ch.sample_algebra_element();
         let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
@@ -1311,8 +1315,8 @@ mod babybear_pcs {
         }
 
         let mut v_ch = challenger_template;
-        v_ch.observe(commit_a.clone());
-        v_ch.observe(commit_b.clone());
+        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
+        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
         let _v_zeta: Challenge = v_ch.sample_algebra_element();
 
         let opening_a = opening_values[0][0][0].clone();
@@ -1345,7 +1349,7 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
-        p_ch.observe(commit.clone());
+        commit.iter().for_each(|c| p_ch.observe(c.clone()));
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
@@ -1362,7 +1366,7 @@ mod babybear_pcs {
         }
 
         let mut v_ch = challenger_template;
-        v_ch.observe(commit.clone());
+        commit.iter().for_each(|c| v_ch.observe(c.clone()));
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1391,7 +1395,7 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
-        p_ch.observe(commit.clone());
+        commit.iter().for_each(|c| p_ch.observe(c.clone()));
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
@@ -1400,7 +1404,7 @@ mod babybear_pcs {
         );
 
         let mut v_ch = challenger_template;
-        v_ch.observe(commit.clone());
+        commit.iter().for_each(|c| v_ch.observe(c.clone()));
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1431,7 +1435,7 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
-        p_ch.observe(commit.clone());
+        commit.iter().for_each(|c| p_ch.observe(c.clone()));
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
@@ -1445,7 +1449,7 @@ mod babybear_pcs {
         proof[0].0.initial_commitment = Some(proof[0].0.round_proofs[0].commitment.clone());
 
         let mut v_ch = challenger_template;
-        v_ch.observe(commit.clone());
+        commit.iter().for_each(|c| v_ch.observe(c.clone()));
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         let claims = vec![(
             commit,
@@ -1453,6 +1457,216 @@ mod babybear_pcs {
         )];
         let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
             .expect_err("a stray initial commitment must be rejected");
+        assert!(matches!(err, p3_stir::StirError::InvalidProofShape));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-instance lockstep driver: grind sharing across STIR height buckets.
+// ---------------------------------------------------------------------------
+
+mod babybear_stir_multi {
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_stir::prover::{prove_stir, prove_stir_multi};
+    use p3_stir::verifier::verify_stir_multi;
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type ValMmcs =
+        MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress, 2, 8>;
+    type MyMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+    type Dft = Radix2DitParallel<F>;
+    type Challenger = DuplexChallenger<F, Perm, 16, 8>;
+
+    fn make_params(
+        log_blowup: usize,
+        log_folding_factor: usize,
+        security_level: usize,
+        max_pow_bits: usize,
+    ) -> (StirParameters<MyMmcs>, Dft, Challenger) {
+        let perm = Perm::new_from_rng_128(&mut seeded_rng());
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+        let val_mmcs = ValMmcs::new(hash, compress, 0);
+        let mmcs = MyMmcs::new(val_mmcs);
+
+        let params = StirParameters {
+            log_blowup,
+            log_folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            security_level,
+            max_pow_bits,
+            mmcs,
+        };
+        (params, Dft::default(), Challenger::new(perm))
+    }
+
+    type Instances = (Vec<StirConfig<F, EF, MyMmcs, Challenger>>, Vec<Vec<EF>>);
+
+    /// Build one config per `log_degrees` entry (all sharing `params`) plus a random
+    /// polynomial for each.
+    fn make_instances(params: &StirParameters<MyMmcs>, log_degrees: &[usize]) -> Instances {
+        let mut rng = seeded_rng();
+        let configs = log_degrees
+            .iter()
+            .map(|&log_degree| {
+                StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params.clone())
+            })
+            .collect();
+        let polys = log_degrees
+            .iter()
+            .map(|&log_degree| (0..1usize << log_degree).map(|_| rng.random()).collect())
+            .collect();
+        (configs, polys)
+    }
+
+    /// Run `prove_stir_multi` then `verify_stir_multi` over one bucket per `log_degrees` entry
+    /// and assert the proof verifies.
+    fn do_test_multi_prove_verify(
+        params: &StirParameters<MyMmcs>,
+        dft: &Dft,
+        challenger_template: &Challenger,
+        log_degrees: &[usize],
+    ) {
+        let (configs, polys) = make_instances(params, log_degrees);
+        let config_refs: Vec<&StirConfig<F, EF, MyMmcs, Challenger>> = configs.iter().collect();
+
+        let mut p_ch = challenger_template.clone();
+        let results = prove_stir_multi(&config_refs, polys, dft, &mut p_ch);
+        assert_eq!(results.len(), log_degrees.len());
+
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+        let mut v_ch = challenger_template.clone();
+        verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proofs, &mut v_ch)
+            .unwrap_or_else(|e| {
+                panic!("multi-bucket verification failed for log_degrees={log_degrees:?}: {e}")
+            });
+    }
+
+    #[test]
+    fn test_multi_one_bucket() {
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        do_test_multi_prove_verify(&params, &dft, &challenger, &[8]);
+    }
+
+    #[test]
+    fn test_multi_two_buckets_ratio2() {
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        do_test_multi_prove_verify(&params, &dft, &challenger, &[9, 8]);
+    }
+
+    #[test]
+    fn test_multi_two_buckets_ratio8() {
+        // log_degree 11 vs 8: LDE-height ratio 2^3 = 8. Grind sharing is ratio-independent,
+        // so this must configure and verify exactly like the ratio-2 case.
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        do_test_multi_prove_verify(&params, &dft, &challenger, &[11, 8]);
+    }
+
+    #[test]
+    fn test_multi_three_buckets_ratio2_steps() {
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        do_test_multi_prove_verify(&params, &dft, &challenger, &[10, 9, 8]);
+    }
+
+    #[test]
+    fn test_multi_three_buckets_ratio8_spread() {
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        do_test_multi_prove_verify(&params, &dft, &challenger, &[12, 9, 8]);
+    }
+
+    #[test]
+    fn test_multi_one_bucket_matches_single_instance_bytes() {
+        // At B=1 the shared-grind schedule degenerates to the single-instance schedule, so
+        // the multi-driver must reproduce the exact same transcript and proof bytes.
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        let log_degree = 8;
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+
+        let mut rng = seeded_rng();
+        let poly: Vec<EF> = (0..1usize << log_degree).map(|_| rng.random()).collect();
+
+        let mut p_ch_single = challenger.clone();
+        let (single_proof, single_idx) = prove_stir(&config, poly.clone(), &dft, &mut p_ch_single);
+
+        let config_refs = [&config];
+        let mut p_ch_multi = challenger;
+        let results = prove_stir_multi(&config_refs, vec![poly], &dft, &mut p_ch_multi);
+        assert_eq!(results.len(), 1);
+        let (multi_proof, multi_idx) = &results[0];
+
+        assert_eq!(single_idx, *multi_idx);
+        let single_bytes = postcard::to_allocvec(&single_proof).expect("serialize");
+        let multi_bytes = postcard::to_allocvec(multi_proof).expect("serialize");
+        assert_eq!(
+            single_bytes, multi_bytes,
+            "B=1 multi-driver must be byte-identical to the single-instance path"
+        );
+    }
+
+    #[test]
+    fn test_multi_witness_replayed_across_grind_sites_rejected() {
+        let (params, dft, challenger) = make_params(1, 2, 32, 12);
+        let log_degree = 8;
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let round_with_pow = config
+            .round_configs
+            .iter()
+            .position(|rc| rc.pow_bits > 0)
+            .expect("expected a round with pow_bits > 0");
+
+        let mut rng = seeded_rng();
+        let poly: Vec<EF> = (0..1usize << log_degree).map(|_| rng.random()).collect();
+
+        let config_refs = [&config];
+        let mut p_ch = challenger.clone();
+        let results = prove_stir_multi(&config_refs, vec![poly], &dft, &mut p_ch);
+        let (mut proof, _idx) = results.into_iter().next().expect("one instance");
+
+        // Replay the folding-grind witness at the query-grind site of the same round: the two
+        // grinds bind different transcript states, so this must be rejected.
+        proof.round_proofs[round_with_pow].pow_witness =
+            proof.round_proofs[round_with_pow].folding_pow_witness;
+
+        let mut v_ch = challenger;
+        let proofs = [&proof];
+        let err = verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proofs, &mut v_ch)
+            .expect_err("a witness replayed from another grind site must be rejected");
+        assert!(matches!(err, p3_stir::StirError::InvalidPowWitness { .. }));
+    }
+
+    #[test]
+    fn test_multi_disagreeing_replicated_witness_rejected() {
+        let (params, dft, challenger) = make_params(1, 2, 32, 12);
+        let log_degree = 8;
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        // Two identical-height instances so their round indices line up 1:1 and share every
+        // grind site exactly.
+        let config_refs = [&config, &config];
+
+        let mut rng = seeded_rng();
+        let polys = vec![
+            (0..1usize << log_degree).map(|_| rng.random()).collect(),
+            (0..1usize << log_degree).map(|_| rng.random()).collect(),
+        ];
+
+        let mut p_ch = challenger.clone();
+        let mut results = prove_stir_multi(&config_refs, polys, &dft, &mut p_ch).into_iter();
+        let proof_a = results.next().expect("bucket a").0;
+        let mut proof_b = results.next().expect("bucket b").0;
+
+        // Disagree bucket B's round-0 folding-grind witness from bucket A's replicated copy.
+        proof_b.round_proofs[0].folding_pow_witness += F::ONE;
+
+        let mut v_ch = challenger;
+        let proofs = [&proof_a, &proof_b];
+        let err = verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proofs, &mut v_ch)
+            .expect_err("disagreeing replicated witnesses across buckets must be rejected");
         assert!(matches!(err, p3_stir::StirError::InvalidProofShape));
     }
 }

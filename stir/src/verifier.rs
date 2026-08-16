@@ -10,7 +10,7 @@ use p3_field::{
 use p3_matrix::Dimensions;
 use thiserror::Error;
 
-use crate::config::StirConfig;
+use crate::config::{StirConfig, StirRoundConfig};
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
     check_shake_consistency, eval_degree_correction, eval_poly, eval_poly_at_base,
@@ -233,6 +233,181 @@ struct RoundVerifyOutput<F, EF> {
     first_round_pairs: FirstRoundPairs<EF>,
 }
 
+/// One instance's in-flight intermediate round, advanced in the order the transcript demands.
+///
+/// Mirrors `prover::RoundProver`: every grind sits immediately before a challenge
+/// block with no prover message in between, so holding the round's virtual-oracle state open
+/// across those boundaries lets a caller drive several instances through the same boundaries,
+/// sharing one grind per site.
+struct RoundVerifier<F, EF: Field> {
+    arity: usize,
+    fold_log_domain: usize,
+    fold_shift: F,
+    next_log_domain: usize,
+    next_shift: F,
+
+    fold_beta: EF,
+    ood_points: Vec<EF>,
+    query_points: Vec<EF>,
+    query_answers: Vec<EF>,
+    first_round_pairs: FirstRoundPairs<EF>,
+    r_comb: EF,
+}
+
+impl<F, EF> RoundVerifier<F, EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+{
+    /// Fix the round's domain geometry. Touches no transcript state.
+    fn new(rc: &StirRoundConfig<F>, current_shift: F, current_log_domain: usize) -> Self {
+        let log_arity = rc.log_folding_factor;
+        let (fold_log_domain, fold_shift) =
+            fold_domain_params(current_shift, current_log_domain, log_arity);
+        Self {
+            arity: 1usize << log_arity,
+            fold_log_domain,
+            fold_shift,
+            next_log_domain: current_log_domain - 1,
+            next_shift: next_domain_shift(current_shift, log_arity),
+            fold_beta: EF::ZERO,
+            ood_points: Vec::new(),
+            query_points: Vec::new(),
+            query_answers: Vec::new(),
+            first_round_pairs: Vec::new(),
+            r_comb: EF::ZERO,
+        }
+    }
+
+    /// The domains an OOD point must avoid, matching `prover::RoundProver::ood_excluded_domains`.
+    const fn excluded_domains(
+        &self,
+        current_shift: F,
+        current_log_domain: usize,
+    ) -> [(F, usize); 3] {
+        [
+            (current_shift, current_log_domain),
+            (self.next_shift, self.next_log_domain),
+            (self.fold_shift, self.fold_log_domain),
+        ]
+    }
+
+    /// Consume the folding challenge, deriving the coset fold point.
+    fn set_gamma(&mut self, gamma: EF, current_shift: F) {
+        self.fold_beta = gamma * EF::from(current_shift.inverse());
+    }
+
+    /// Fetch this round's oracle rows, translate each into the current virtual oracle, and
+    /// fold. Records the round-0 `(index, row)` pairs the PCS layer needs for input binding.
+    #[allow(clippy::too_many_arguments)]
+    fn fetch_and_fold<M, Challenger, IE, Src>(
+        &mut self,
+        config: &StirConfig<F, EF, M, Challenger>,
+        round: usize,
+        rp: &StirRoundProof<EF, M, F>,
+        current_shift: F,
+        current_log_domain: usize,
+        prev_ctx: Option<&VirtualRoundContext<EF>>,
+        is_external: bool,
+        external_fibers: &mut Option<Src>,
+        commitment: Option<&M::Commitment>,
+        query_indices: &[usize],
+    ) -> Result<(), StirError<M::Error, IE>>
+    where
+        M: Mmcs<EF>,
+        Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
+    {
+        let fold_height = 1usize << self.fold_log_domain;
+        let cur_dimensions = alloc::vec![Dimensions {
+            height: fold_height,
+            width: self.arity
+        }];
+
+        let round_rows = fetch_round_rows(
+            &config.mmcs,
+            is_external,
+            external_fibers,
+            &RoundRowsRequest {
+                query_openings: rp.query_openings.as_ref(),
+                query_indices,
+                arity: self.arity,
+                expected_num_queries: query_indices.len(),
+                commitment,
+                dimensions: &cur_dimensions,
+                error_round: round,
+            },
+        )?;
+
+        let fold_gen = F::two_adic_generator(self.fold_log_domain);
+        // The fiber of query `j` sits at subgroup coordinates `g^j * (g^fold_height)^l`, a
+        // coset of the arity-th roots of unity. Deriving it once per query serves both the
+        // virtual-oracle materialization and the fold.
+        let domain_gen = F::two_adic_generator(current_log_domain);
+        let fiber_step = domain_gen.exp_power_of_2(self.fold_log_domain);
+
+        let mut seen_query_indices: alloc::collections::BTreeSet<usize> =
+            alloc::collections::BTreeSet::new();
+
+        for (q, (&j, row_evals)) in query_indices.iter().zip(&round_rows).enumerate() {
+            let fold_point = EF::from(self.fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
+
+            let fold_val = query_fold_value(
+                row_evals,
+                j,
+                domain_gen,
+                fiber_step,
+                self.arity,
+                current_shift,
+                self.fold_beta,
+                prev_ctx,
+                round,
+                q,
+            )?;
+
+            if seen_query_indices.insert(j) {
+                self.query_points.push(fold_point);
+                self.query_answers.push(fold_val);
+                if round == 0 {
+                    self.first_round_pairs.push((j, row_evals.clone()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The OOD + query points and their claimed values, in the order `Ans` interpolates them.
+    fn all_points_and_values(&self, ood_answers: &[EF]) -> (Vec<EF>, Vec<EF>) {
+        let all_points: Vec<EF> = self
+            .ood_points
+            .iter()
+            .chain(self.query_points.iter())
+            .copied()
+            .collect();
+        let all_values: Vec<EF> = ood_answers
+            .iter()
+            .chain(self.query_answers.iter())
+            .copied()
+            .collect();
+        (all_points, all_values)
+    }
+
+    /// Touches no transcript state, so it may run after the caller has moved on to other
+    /// instances.
+    fn finish(self, ans_polynomial: Vec<EF>, all_points: Vec<EF>) -> RoundVerifyOutput<F, EF> {
+        RoundVerifyOutput {
+            ctx: VirtualRoundContext {
+                vanishing_coeffs: vanishing_poly_from_roots(&all_points),
+                ans_poly: ans_polynomial,
+                all_points,
+                r_comb: self.r_comb,
+            },
+            next_shift: self.next_shift,
+            next_log_domain: self.next_log_domain,
+            first_round_pairs: self.first_round_pairs,
+        }
+    }
+}
+
 /// Verify one intermediate STIR round (Construction 5.2) against the current virtual oracle,
 /// producing the virtual-oracle context and domain state the next round (or the final round)
 /// builds on.
@@ -260,14 +435,7 @@ where
     Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
 {
     let rc = &config.round_configs[round];
-    let log_arity = rc.log_folding_factor;
-    let arity = 1 << log_arity;
-
-    let (fold_log_domain, fold_shift) =
-        fold_domain_params(current_shift, current_log_domain, log_arity);
-    let fold_height = 1usize << fold_log_domain;
-    let next_log_domain = current_log_domain - 1;
-    let next_shift = next_domain_shift(current_shift, log_arity);
+    let mut rv = RoundVerifier::<F, EF>::new(rc, current_shift, current_log_domain);
 
     // Step 1: folding PoW, folding challenge gamma, and folded-oracle commitment.
     if !challenger.check_witness(rc.folding_pow_bits, rp.folding_pow_witness) {
@@ -276,23 +444,18 @@ where
 
     let gamma: EF = challenger.sample_algebra_element();
     challenger.observe(rp.commitment.clone());
-
     // Mirror the prover: fold at coset coordinates via `gamma / current_shift`
     // (`fold_fiber` interpolates at subgroup coordinates).
-    let fold_beta = gamma * EF::from(current_shift.inverse());
+    rv.set_gamma(gamma, current_shift);
 
     // Step 2: OOD sampling and answer observation.
     if rp.ood_answers.len() != rc.num_ood_samples {
         return Err(StirError::InvalidProofShape);
     }
 
-    let ood_points: Vec<EF> = sample_ood_points(
+    rv.ood_points = sample_ood_points(
         challenger,
-        [
-            (current_shift, current_log_domain),
-            (next_shift, next_log_domain),
-            (fold_shift, fold_log_domain),
-        ],
+        rv.excluded_domains(current_shift, current_log_domain),
         rc.num_ood_samples,
     );
 
@@ -306,15 +469,8 @@ where
     }
 
     // Step 4: combination challenge, query sampling, and fiber verification.
-
-    let fold_gen = F::two_adic_generator(fold_log_domain);
-
-    let cur_dimensions = alloc::vec![Dimensions {
-        height: fold_height,
-        width: arity
-    }];
-
     let r_comb: EF = challenger.sample_algebra_element();
+    rv.r_comb = r_comb;
 
     // Step 4a: sample every query index first, in draw order, mirroring the prover's
     // unbiased-sampling policy so the Fiat-Shamir transcript stays in sync. Merkle
@@ -322,80 +478,28 @@ where
     let mut query_indices: Vec<usize> = Vec::with_capacity(rc.num_queries);
     for _ in 0..rc.num_queries {
         let j = challenger
-            .sample_uniform_bits::<true>(fold_log_domain)
+            .sample_uniform_bits::<true>(rv.fold_log_domain)
             .expect("RESAMPLE = true: rejection loops internally, never errors");
         query_indices.push(j);
     }
 
-    // Step 4b: obtain this round's oracle rows. An external initial oracle is answered by
-    // the caller against its own binding; every committed oracle has one shared, pruned
-    // Merkle multi-opening proof authenticating all of its query rows at once.
-    let round_rows = fetch_round_rows(
-        &config.mmcs,
+    // Step 4b/4c: obtain this round's oracle rows and fold each query against the current
+    // virtual oracle.
+    rv.fetch_and_fold(
+        config,
+        round,
+        rp,
+        current_shift,
+        current_log_domain,
+        prev_ctx,
         is_external,
         external_fibers,
-        &RoundRowsRequest {
-            query_openings: rp.query_openings.as_ref(),
-            query_indices: &query_indices,
-            arity,
-            expected_num_queries: rc.num_queries,
-            commitment,
-            dimensions: &cur_dimensions,
-            error_round: round,
-        },
+        commitment,
+        &query_indices,
     )?;
 
-    // Step 4c: per-query virtual-oracle materialization and folding.
-    let mut query_points: Vec<EF> = Vec::with_capacity(rc.num_queries);
-    let mut query_answers: Vec<EF> = Vec::with_capacity(rc.num_queries);
-    let mut first_round_pairs: FirstRoundPairs<EF> = Vec::new();
-
-    let mut seen_query_indices: alloc::collections::BTreeSet<usize> =
-        alloc::collections::BTreeSet::new();
-
-    // The fiber of query `j` sits at subgroup coordinates `g^j * (g^fold_height)^l`, a
-    // coset of the arity-th roots of unity. Deriving it once per query serves both the
-    // virtual-oracle materialization and the fold.
-    let domain_gen = F::two_adic_generator(current_log_domain);
-    let fiber_step = domain_gen.exp_power_of_2(fold_log_domain);
-
-    for (q, (&j, row_evals)) in query_indices.iter().zip(&round_rows).enumerate() {
-        let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
-
-        let fold_val = query_fold_value(
-            row_evals,
-            j,
-            domain_gen,
-            fiber_step,
-            arity,
-            current_shift,
-            fold_beta,
-            prev_ctx,
-            round,
-            q,
-        )?;
-
-        if seen_query_indices.insert(j) {
-            query_points.push(fold_point);
-            query_answers.push(fold_val);
-            if round == 0 {
-                first_round_pairs.push((j, row_evals.clone()));
-            }
-        }
-    }
-
     // Step 4: ans + shake polynomial observation and consistency check.
-    let all_points: Vec<EF> = ood_points
-        .iter()
-        .chain(query_points.iter())
-        .copied()
-        .collect();
-    let all_values: Vec<EF> = rp
-        .ood_answers
-        .iter()
-        .chain(query_answers.iter())
-        .copied()
-        .collect();
+    let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
 
     // Ans interpolates |all_points| values, so its degree is `< all_points.len()`. The
     // prover may have stripped trailing zeros, so accept any length up to that bound; reject
@@ -424,17 +528,124 @@ where
         return Err(StirError::InvalidShakeConsistency { round });
     }
 
-    Ok(RoundVerifyOutput {
-        ctx: VirtualRoundContext {
-            ans_poly: rp.ans_polynomial.clone(),
-            vanishing_coeffs: vanishing_poly_from_roots(&all_points),
-            all_points,
-            r_comb,
-        },
-        next_shift,
-        next_log_domain,
-        first_round_pairs,
-    })
+    Ok(rv.finish(rp.ans_polynomial.clone(), all_points))
+}
+
+/// One instance's in-flight final round, advanced in the order the transcript demands.
+///
+/// Mirrors `prover::FinalRoundProver`.
+struct FinalRoundVerifier<F, EF: Field> {
+    final_arity: usize,
+    final_new_log_domain: usize,
+    final_new_shift: F,
+    fold_beta: EF,
+}
+
+impl<F, EF> FinalRoundVerifier<F, EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+{
+    /// Fix the final round's domain geometry. Touches no transcript state.
+    fn new(log_folding_factor: usize, current_shift: F, current_log_domain: usize) -> Self {
+        let (final_new_log_domain, final_new_shift) =
+            fold_domain_params(current_shift, current_log_domain, log_folding_factor);
+        Self {
+            final_arity: 1usize << log_folding_factor,
+            final_new_log_domain,
+            final_new_shift,
+            fold_beta: EF::ZERO,
+        }
+    }
+
+    /// Consume the final folding challenge, deriving the coset fold point.
+    fn set_gamma(&mut self, final_gamma: EF, current_shift: F) {
+        self.fold_beta = final_gamma * EF::from(current_shift.inverse());
+    }
+
+    /// Fetch the final-round oracle rows, fold each query against the current virtual oracle,
+    /// and check the fold against the sent final polynomial. Returns the round-0 `(index, row)`
+    /// pairs the PCS layer needs for input binding, when this is also the first round.
+    #[allow(clippy::too_many_arguments)]
+    fn fetch_and_check<M, Challenger, IE, Src>(
+        &self,
+        config: &StirConfig<F, EF, M, Challenger>,
+        proof: &StirProof<EF, M, F>,
+        num_rounds: usize,
+        current_shift: F,
+        current_log_domain: usize,
+        prev_ctx: Option<&VirtualRoundContext<EF>>,
+        is_external: bool,
+        external_fibers: &mut Option<Src>,
+        commitment: Option<&M::Commitment>,
+        final_indices: &[usize],
+    ) -> Result<FirstRoundPairs<EF>, StirError<M::Error, IE>>
+    where
+        M: Mmcs<EF>,
+        Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
+    {
+        let final_new_height = 1usize << self.final_new_log_domain;
+        let final_dimensions = alloc::vec![Dimensions {
+            height: final_new_height,
+            width: self.final_arity,
+        }];
+        let final_gen = F::two_adic_generator(self.final_new_log_domain);
+
+        // With no intermediate rounds these queries read the initial oracle, so they follow
+        // the same external-or-committed split as an intermediate round.
+        let final_rows = fetch_round_rows(
+            &config.mmcs,
+            is_external,
+            external_fibers,
+            &RoundRowsRequest {
+                query_openings: proof.final_query_openings.as_ref(),
+                query_indices: final_indices,
+                arity: self.final_arity,
+                expected_num_queries: final_indices.len(),
+                commitment,
+                dimensions: &final_dimensions,
+                error_round: num_rounds,
+            },
+        )?;
+
+        // When num_rounds == 0 the final queries also serve as the PCS first-round binding.
+        // Track them with the same dedup-on-first-occurrence rule as the intermediate-round
+        // path.
+        let mut final_seen: alloc::collections::BTreeSet<usize> =
+            alloc::collections::BTreeSet::new();
+        let mut first_round_pairs: FirstRoundPairs<EF> = Vec::new();
+
+        let final_domain_gen = F::two_adic_generator(current_log_domain);
+        let final_fiber_step = final_domain_gen.exp_power_of_2(self.final_new_log_domain);
+
+        for (q, (&j, row_evals)) in final_indices.iter().zip(&final_rows).enumerate() {
+            let fold_val = query_fold_value(
+                row_evals,
+                j,
+                final_domain_gen,
+                final_fiber_step,
+                self.final_arity,
+                current_shift,
+                self.fold_beta,
+                prev_ctx,
+                num_rounds,
+                q,
+            )?;
+
+            let x_j = EF::from(self.final_new_shift) * EF::from(final_gen.exp_u64(j as u64));
+
+            let expected = eval_poly(&proof.final_polynomial, x_j);
+            if fold_val != expected {
+                return Err(StirError::FinalPolyMismatch);
+            }
+
+            if num_rounds == 0 && final_seen.insert(j) {
+                first_round_pairs.push((j, row_evals.clone()));
+            }
+        }
+
+        Ok(first_round_pairs)
+    }
 }
 
 /// Verify the final STIR round: the last fold is checked directly against the sent final
@@ -462,11 +673,11 @@ where
         + CanSampleUniformBits<F>,
     Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
 {
-    let final_log_arity = config.log_folding_factor;
-    let final_arity = 1usize << final_log_arity;
-    let (final_new_log_domain, final_new_shift) =
-        fold_domain_params(current_shift, current_log_domain, final_log_arity);
-    let final_new_height = 1usize << final_new_log_domain;
+    let mut fv = FinalRoundVerifier::<F, EF>::new(
+        config.log_folding_factor,
+        current_shift,
+        current_log_domain,
+    );
 
     if !challenger.check_witness(
         config.final_folding_pow_bits,
@@ -476,8 +687,7 @@ where
     }
 
     let final_gamma: EF = challenger.sample_algebra_element();
-    // See the round-fold note: coset fold at `final_gamma` via `final_gamma / current_shift`.
-    let final_fold_beta = final_gamma * EF::from(current_shift.inverse());
+    fv.set_gamma(final_gamma, current_shift);
 
     let expected_final_len = config.final_poly_len();
     if proof.final_polynomial.len() != expected_final_len {
@@ -490,74 +700,28 @@ where
         return Err(StirError::InvalidPowWitness { round: num_rounds });
     }
 
-    let final_dimensions = alloc::vec![Dimensions {
-        height: final_new_height,
-        width: final_arity,
-    }];
-    let final_gen = F::two_adic_generator(final_new_log_domain);
-
     // Sample every final-round query index first, deferring Merkle verification to a single
     // shared multi-opening check below.
     let mut final_indices: Vec<usize> = Vec::with_capacity(config.final_queries);
     for _ in 0..config.final_queries {
         let j = challenger
-            .sample_uniform_bits::<true>(final_new_log_domain)
+            .sample_uniform_bits::<true>(fv.final_new_log_domain)
             .expect("RESAMPLE = true: rejection loops internally, never errors");
         final_indices.push(j);
     }
 
-    // With no intermediate rounds these queries read the initial oracle, so they follow the
-    // same external-or-committed split as an intermediate round.
-    let final_rows = fetch_round_rows(
-        &config.mmcs,
+    fv.fetch_and_check(
+        config,
+        proof,
+        num_rounds,
+        current_shift,
+        current_log_domain,
+        prev_ctx,
         is_external,
         external_fibers,
-        &RoundRowsRequest {
-            query_openings: proof.final_query_openings.as_ref(),
-            query_indices: &final_indices,
-            arity: final_arity,
-            expected_num_queries: config.final_queries,
-            commitment,
-            dimensions: &final_dimensions,
-            error_round: num_rounds,
-        },
-    )?;
-
-    // When num_rounds == 0 the final queries also serve as the PCS first-round binding.
-    // Track them with the same dedup-on-first-occurrence rule as the intermediate-round path.
-    let mut final_seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
-    let mut first_round_pairs: FirstRoundPairs<EF> = Vec::new();
-
-    let final_domain_gen = F::two_adic_generator(current_log_domain);
-    let final_fiber_step = final_domain_gen.exp_power_of_2(final_new_log_domain);
-
-    for (q, (&j, row_evals)) in final_indices.iter().zip(&final_rows).enumerate() {
-        let fold_val = query_fold_value(
-            row_evals,
-            j,
-            final_domain_gen,
-            final_fiber_step,
-            final_arity,
-            current_shift,
-            final_fold_beta,
-            prev_ctx,
-            num_rounds,
-            q,
-        )?;
-
-        let x_j = EF::from(final_new_shift) * EF::from(final_gen.exp_u64(j as u64));
-
-        let expected = eval_poly(&proof.final_polynomial, x_j);
-        if fold_val != expected {
-            return Err(StirError::FinalPolyMismatch);
-        }
-
-        if num_rounds == 0 && final_seen.insert(j) {
-            first_round_pairs.push((j, row_evals.clone()));
-        }
-    }
-
-    Ok(first_round_pairs)
+        commitment,
+        &final_indices,
+    )
 }
 
 /// Errors returned by [`verify_stir`].
@@ -793,4 +957,361 @@ where
         first_round_indices,
         first_round_fiber_evals,
     })
+}
+
+/// Source of the queried fibers of `B` external initial oracles, when there are none.
+type NoExternalFibersMulti<EF, MmcsError> =
+    fn(&[usize]) -> Result<Vec<Vec<EF>>, StirError<MmcsError>>;
+
+/// Verify `B` STIR proofs of possibly different degrees in lockstep, mirroring
+/// [`crate::prover::prove_stir_multi`].
+pub fn verify_stir_multi<F, EF, M, Challenger>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    proofs: &[&StirProof<EF, M, Challenger::Witness>],
+    challenger: &mut Challenger,
+) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
+    verify_stir_multi_inner(
+        configs,
+        proofs,
+        challenger,
+        None::<Vec<NoExternalFibersMulti<EF, M::Error>>>,
+    )
+}
+
+/// Verify `B` STIR proofs whose initial oracles are external, mirroring
+/// [`crate::prover::prove_stir_multi_from_external_codewords`].
+///
+/// `initial_fibers[i]` is called once with instance `i`'s sorted unique fold-domain indices,
+/// exactly as [`verify_stir_with_external_initial`]'s single-instance callback.
+pub fn verify_stir_multi_with_external_initial<F, EF, M, Challenger, IE, Src>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    proofs: &[&StirProof<EF, M, Challenger::Witness>],
+    challenger: &mut Challenger,
+    initial_fibers: Vec<Src>,
+) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error, IE>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+    Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
+{
+    verify_stir_multi_inner(configs, proofs, challenger, Some(initial_fibers))
+}
+
+/// Shared body of [`verify_stir_multi`] and [`verify_stir_multi_with_external_initial`].
+///
+/// Mirrors `prover::prove_stir_multi_inner`'s right-aligned lockstep schedule: at
+/// each global round, every active instance's grind witness must agree (checked via
+/// `PartialEq`, else [`StirError::InvalidProofShape`]), then the shared grind is checked once
+/// at the max of the active instances' bits.
+fn verify_stir_multi_inner<F, EF, M, Challenger, IE, Src>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    proofs: &[&StirProof<EF, M, Challenger::Witness>],
+    challenger: &mut Challenger,
+    external_fibers: Option<Vec<Src>>,
+) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error, IE>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+    Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
+{
+    let b = configs.len();
+    assert_eq!(proofs.len(), b, "one proof per instance");
+
+    for i in 0..b {
+        if proofs[i].round_proofs.len() != configs[i].num_rounds() {
+            return Err(StirError::InvalidProofShape);
+        }
+    }
+
+    let initial_is_external = external_fibers.is_some();
+    let mut external_fibers: Vec<Option<Src>> = external_fibers.map_or_else(
+        || (0..b).map(|_| None).collect(),
+        |v| {
+            assert_eq!(v.len(), b, "one external-fiber source per instance");
+            v.into_iter().map(Some).collect()
+        },
+    );
+
+    // The initial oracle is either committed by STIR — in which case its commitment enters the
+    // transcript here — or external, in which case the caller has already bound it and every
+    // proof must carry no commitment at all.
+    let mut shifts = Vec::with_capacity(b);
+    let mut log_domains = Vec::with_capacity(b);
+    for i in 0..b {
+        match (&proofs[i].initial_commitment, initial_is_external) {
+            (Some(commitment), false) => challenger.observe(commitment.clone()),
+            (None, true) => {}
+            _ => return Err(StirError::InvalidProofShape),
+        }
+        shifts.push(F::GENERATOR);
+        log_domains.push(configs[i].log_starting_domain_size());
+    }
+
+    let max_m = configs.iter().map(|c| c.num_rounds()).max().unwrap_or(0);
+    let offset = |i: usize| max_m - configs[i].num_rounds();
+
+    let mut prev_ctx: Vec<Option<VirtualRoundContext<EF>>> = (0..b).map(|_| None).collect();
+    let mut first_round_pairs: Vec<FirstRoundPairs<EF>> = (0..b).map(|_| Vec::new()).collect();
+
+    for r in 0..max_m {
+        let active: Vec<usize> = (0..b).filter(|&i| offset(i) <= r).collect();
+
+        let mut rvs: Vec<RoundVerifier<F, EF>> = active
+            .iter()
+            .map(|&i| {
+                RoundVerifier::<F, EF>::new(
+                    &configs[i].round_configs[r - offset(i)],
+                    shifts[i],
+                    log_domains[i],
+                )
+            })
+            .collect();
+
+        // [grind folding_pow_bits]: every active instance's replicated witness must agree.
+        let folding_witnesses: Vec<F> = active
+            .iter()
+            .map(|&i| proofs[i].round_proofs[r - offset(i)].folding_pow_witness)
+            .collect();
+        if folding_witnesses.windows(2).any(|w| w[0] != w[1]) {
+            return Err(StirError::InvalidProofShape);
+        }
+        let shared_folding_bits = active
+            .iter()
+            .map(|&i| configs[i].round_configs[r - offset(i)].folding_pow_bits)
+            .max()
+            .expect("`active` is non-empty for r < max_m");
+        if !challenger.check_witness(shared_folding_bits, folding_witnesses[0]) {
+            return Err(StirError::InvalidPowWitness { round: r });
+        }
+
+        // Phase 1: per-instance folding challenge and commitment absorb.
+        for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
+            let gamma: EF = challenger.sample_algebra_element();
+            challenger.observe(proofs[i].round_proofs[r - offset(i)].commitment.clone());
+            rv.set_gamma(gamma, shifts[i]);
+        }
+
+        // Phase 2: per-instance OOD sampling and answer absorb.
+        for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
+            let local_r = r - offset(i);
+            let rc = &configs[i].round_configs[local_r];
+            let rp = &proofs[i].round_proofs[local_r];
+            if rp.ood_answers.len() != rc.num_ood_samples {
+                return Err(StirError::InvalidProofShape);
+            }
+            rv.ood_points = sample_ood_points(
+                challenger,
+                rv.excluded_domains(shifts[i], log_domains[i]),
+                rc.num_ood_samples,
+            );
+            challenger.observe_algebra_slice(&rp.ood_answers);
+        }
+
+        // [grind pow_bits]: every active instance's replicated witness must agree.
+        let query_witnesses: Vec<F> = active
+            .iter()
+            .map(|&i| proofs[i].round_proofs[r - offset(i)].pow_witness)
+            .collect();
+        if query_witnesses.windows(2).any(|w| w[0] != w[1]) {
+            return Err(StirError::InvalidProofShape);
+        }
+        let shared_pow_bits = active
+            .iter()
+            .map(|&i| configs[i].round_configs[r - offset(i)].pow_bits)
+            .max()
+            .expect("`active` is non-empty for r < max_m");
+        if !challenger.check_witness(shared_pow_bits, query_witnesses[0]) {
+            return Err(StirError::InvalidPowWitness { round: r });
+        }
+
+        // Phase 3: per-instance combination challenge, query sampling, and fiber
+        // materialization/folding.
+        for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
+            let local_r = r - offset(i);
+            let rc = &configs[i].round_configs[local_r];
+            let r_comb: EF = challenger.sample_algebra_element();
+            rv.r_comb = r_comb;
+
+            let mut query_indices: Vec<usize> = Vec::with_capacity(rc.num_queries);
+            for _ in 0..rc.num_queries {
+                let j = challenger
+                    .sample_uniform_bits::<true>(rv.fold_log_domain)
+                    .expect("RESAMPLE = true: rejection loops internally, never errors");
+                query_indices.push(j);
+            }
+
+            let commitment = if local_r == 0 {
+                proofs[i].initial_commitment.as_ref()
+            } else {
+                Some(&proofs[i].round_proofs[local_r - 1].commitment)
+            };
+            let is_external = local_r == 0 && initial_is_external;
+
+            rv.fetch_and_fold(
+                configs[i],
+                local_r,
+                &proofs[i].round_proofs[local_r],
+                shifts[i],
+                log_domains[i],
+                prev_ctx[i].as_ref(),
+                is_external,
+                &mut external_fibers[i],
+                commitment,
+                &query_indices,
+            )?;
+        }
+
+        // Phase 4: per-instance ans/shake absorb, shake-check challenge, and consistency.
+        let mut finishes: Vec<(usize, RoundVerifyOutput<F, EF>)> = Vec::with_capacity(active.len());
+        for (&i, rv) in active.iter().zip(rvs) {
+            let local_r = r - offset(i);
+            let rp = &proofs[i].round_proofs[local_r];
+            let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
+
+            let max_ans_len = all_points.len();
+            if rp.ans_polynomial.len() > max_ans_len
+                || rp.shake_polynomial.len() > max_ans_len.saturating_sub(1)
+            {
+                return Err(StirError::InvalidProofShape);
+            }
+
+            challenger.observe_algebra_slice(&rp.ans_polynomial);
+            challenger.observe_algebra_slice(&rp.shake_polynomial);
+            let rho: EF = challenger.sample_algebra_element();
+
+            if !check_shake_consistency(
+                &rp.ans_polynomial,
+                &rp.shake_polynomial,
+                &all_points,
+                &all_values,
+                rho,
+            ) {
+                return Err(StirError::InvalidShakeConsistency { round: local_r });
+            }
+
+            finishes.push((i, rv.finish(rp.ans_polynomial.clone(), all_points)));
+        }
+
+        // Phase 5: touches no transcript state, so instance order no longer matters.
+        for (i, output) in finishes {
+            first_round_pairs[i].extend(output.first_round_pairs);
+            prev_ctx[i] = Some(output.ctx);
+            shifts[i] = output.next_shift;
+            log_domains[i] = output.next_log_domain;
+        }
+    }
+
+    // Final round: every instance reaches it on this same global step (right-alignment).
+    let final_folding_witnesses: Vec<F> =
+        proofs.iter().map(|p| p.final_folding_pow_witness).collect();
+    if final_folding_witnesses.windows(2).any(|w| w[0] != w[1]) {
+        return Err(StirError::InvalidProofShape);
+    }
+    let shared_final_folding_bits = configs
+        .iter()
+        .map(|c| c.final_folding_pow_bits)
+        .max()
+        .unwrap_or(0);
+    if !challenger.check_witness(shared_final_folding_bits, final_folding_witnesses[0]) {
+        return Err(StirError::InvalidPowWitness { round: max_m });
+    }
+
+    let mut fvs: Vec<FinalRoundVerifier<F, EF>> = (0..b)
+        .map(|i| {
+            FinalRoundVerifier::<F, EF>::new(
+                configs[i].log_folding_factor,
+                shifts[i],
+                log_domains[i],
+            )
+        })
+        .collect();
+
+    for i in 0..b {
+        let final_gamma: EF = challenger.sample_algebra_element();
+        fvs[i].set_gamma(final_gamma, shifts[i]);
+
+        let expected_final_len = configs[i].final_poly_len();
+        if proofs[i].final_polynomial.len() != expected_final_len {
+            return Err(StirError::InvalidProofShape);
+        }
+        challenger.observe_algebra_slice(&proofs[i].final_polynomial);
+    }
+
+    let final_query_witnesses: Vec<F> = proofs.iter().map(|p| p.final_pow_witness).collect();
+    if final_query_witnesses.windows(2).any(|w| w[0] != w[1]) {
+        return Err(StirError::InvalidProofShape);
+    }
+    let shared_final_pow_bits = configs.iter().map(|c| c.final_pow_bits).max().unwrap_or(0);
+    if !challenger.check_witness(shared_final_pow_bits, final_query_witnesses[0]) {
+        return Err(StirError::InvalidPowWitness { round: max_m });
+    }
+
+    for i in 0..b {
+        let mut final_indices: Vec<usize> = Vec::with_capacity(configs[i].final_queries);
+        for _ in 0..configs[i].final_queries {
+            let j = challenger
+                .sample_uniform_bits::<true>(fvs[i].final_new_log_domain)
+                .expect("RESAMPLE = true: rejection loops internally, never errors");
+            final_indices.push(j);
+        }
+
+        let commitment = if configs[i].num_rounds() == 0 {
+            proofs[i].initial_commitment.as_ref()
+        } else {
+            Some(
+                &proofs[i]
+                    .round_proofs
+                    .last()
+                    .expect("num_rounds() > 0")
+                    .commitment,
+            )
+        };
+        let is_external = configs[i].num_rounds() == 0 && initial_is_external;
+
+        let final_pairs = fvs[i].fetch_and_check(
+            configs[i],
+            proofs[i],
+            configs[i].num_rounds(),
+            shifts[i],
+            log_domains[i],
+            prev_ctx[i].as_ref(),
+            is_external,
+            &mut external_fibers[i],
+            commitment,
+            &final_indices,
+        )?;
+        first_round_pairs[i].extend(final_pairs);
+    }
+
+    Ok(first_round_pairs
+        .into_iter()
+        .map(|mut pairs| {
+            pairs.sort_by_key(|(j, _)| *j);
+            let (first_round_indices, first_round_fiber_evals): (Vec<_>, Vec<_>) =
+                pairs.into_iter().unzip();
+            StirVerifyOutputs {
+                first_round_indices,
+                first_round_fiber_evals,
+            }
+        })
+        .collect())
 }

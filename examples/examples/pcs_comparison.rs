@@ -166,10 +166,10 @@ fn run_univariate_pcs<P>(
     message: RowMajorMatrix<F>,
     base_challenger: &Challenger,
     queries: String,
+    observe: impl Fn(&mut Challenger, &P::Commitment),
 ) -> ProtocolReport
 where
     P: Pcs<EF, Challenger, Domain = TwoAdicMultiplicativeCoset<F>>,
-    Challenger: CanObserve<P::Commitment>,
 {
     let mut prover_challenger = base_challenger.clone();
 
@@ -177,7 +177,7 @@ where
     let (commit, prover_data) = pcs.commit([(domain, message)]);
     let commit_ms = t.elapsed().as_millis();
 
-    prover_challenger.observe(commit.clone());
+    observe(&mut prover_challenger, &commit);
     // UFCS spelling pins the challenger's field generic so trait selection is unambiguous
     // in the presence of the generic `P::Commitment` bound above.
     let zeta: EF =
@@ -192,7 +192,7 @@ where
     let values = openings[0][0][0].clone();
 
     let mut verifier_challenger = base_challenger.clone();
-    verifier_challenger.observe(commit.clone());
+    observe(&mut verifier_challenger, &commit);
     let derived: EF =
         <Challenger as FieldChallenger<F>>::sample_algebra_element(&mut verifier_challenger);
     assert_eq!(derived, zeta, "verifier challenger drifted from prover");
@@ -381,6 +381,7 @@ fn main() {
             message,
             &base_challenger,
             num_queries.to_string(),
+            |ch, commit| ch.observe(commit.clone()),
         ));
     }
 
@@ -417,6 +418,8 @@ fn main() {
             message,
             &base_challenger,
             queries,
+            // STIR commits one Merkle tree per distinct LDE height.
+            |ch, commit| commit.iter().for_each(|c| ch.observe(c.clone())),
         ));
     }
 
