@@ -14,7 +14,7 @@ use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
     check_shake_consistency, eval_degree_correction, eval_poly, eval_poly_at_base,
-    fold_domain_params, lagrange_eval_at, next_domain_shift, reduce_mod_x_pow_minus_c,
+    fold_domain_params, lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c,
     sample_ood_points, vanishing_poly_from_roots,
 };
 
@@ -217,7 +217,7 @@ where
         materialize_virtual_fiber::<F, EF>(row_evals, &subgroup_points, current_shift, prev_ctx)
             .ok_or(StirError::InvalidRoundConsistency { round, query })?;
 
-    Ok(lagrange_eval_at(
+    Ok(lagrange_interpolate_at(
         &subgroup_points,
         &current_fiber,
         fold_beta,

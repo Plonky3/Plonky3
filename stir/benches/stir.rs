@@ -109,10 +109,11 @@ fn bench_prove<F, EF, M, D, C>(
             BenchmarkId::from_parameter(1usize << log_degree),
             &log_degree,
             |b, _| {
-                b.iter(|| {
-                    let mut ch = challenger_template.clone();
-                    prove_stir(&config, poly.clone(), dft, &mut ch)
-                });
+                b.iter_batched(
+                    || (challenger_template.clone(), poly.clone()),
+                    |(mut ch, poly)| prove_stir(&config, poly, dft, &mut ch),
+                    BatchSize::LargeInput,
+                );
             },
         );
     }

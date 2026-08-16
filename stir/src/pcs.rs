@@ -176,6 +176,7 @@ where
         Val::TWO_ADICITY.saturating_sub(self.stir.log_blowup)
     }
 
+    #[instrument(name = "STIR PCS commit", skip_all)]
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
@@ -474,6 +475,7 @@ where
         (all_opened_values, bucket_proofs)
     }
 
+    #[instrument(name = "STIR PCS verify", skip_all)]
     fn verify(
         &self,
         commitments_with_opening_points: Vec<(
@@ -510,32 +512,6 @@ where
             return Err(StirError::InvalidProofShape);
         }
 
-        // Precompute alpha_pow_offset for each (commit, mat, point) triple. Tracked per
-        // log_h via a BTreeMap so the structure scales with the field's two-adicity rather
-        // than a hardcoded array length.
-        let mut height_num_reduced: alloc::collections::BTreeMap<usize, usize> =
-            alloc::collections::BTreeMap::new();
-        let alpha_offsets: Vec<Vec<Vec<Challenge>>> = commitments_with_opening_points
-            .iter()
-            .map(|(_, domain_claims)| {
-                domain_claims
-                    .iter()
-                    .map(|(domain, point_claims)| {
-                        let log_h = log2_strict_usize(domain.size() << self.stir.log_blowup);
-                        point_claims
-                            .iter()
-                            .map(|(_, vals)| {
-                                let height_count = height_num_reduced.entry(log_h).or_insert(0);
-                                let offset = alpha.exp_u64(*height_count as u64);
-                                *height_count += vals.len();
-                                offset
-                            })
-                            .collect()
-                    })
-                    .collect()
-            })
-            .collect();
-
         let global_max_width = commitments_with_opening_points
             .iter()
             .flat_map(|(_, domain_claims)| {
@@ -551,6 +527,44 @@ where
         let alpha_powers: Vec<Challenge> =
             Challenge::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied())
                 .collect_vec();
+
+        // Precompute, for each (commit, mat, point) triple: `alpha_pow_offset`, the power of
+        // `alpha` this point's contribution to the reduced opening is weighted by, and
+        // `y_combined`, the alpha-batched claimed value at that point. Both are pure
+        // functions of public input — independent of which bucket is being verified — so
+        // computing them once here (rather than inside the per-bucket, per-query,
+        // per-fiber-lane loop below) turns an `O(n_q * arity0)` recomputation per point into
+        // `O(1)`. `alpha_pow_offset` is tracked per log_h via a BTreeMap so the structure
+        // scales with the field's two-adicity rather than a hardcoded array length.
+        let mut height_num_reduced: alloc::collections::BTreeMap<usize, usize> =
+            alloc::collections::BTreeMap::new();
+        let point_data: Vec<Vec<Vec<(Challenge, Challenge)>>> = commitments_with_opening_points
+            .iter()
+            .map(|(_, domain_claims)| {
+                domain_claims
+                    .iter()
+                    .map(|(domain, point_claims)| {
+                        let log_h = log2_strict_usize(domain.size() << self.stir.log_blowup);
+                        point_claims
+                            .iter()
+                            .map(|(_, vals)| {
+                                let height_count = height_num_reduced.entry(log_h).or_insert(0);
+                                let offset = alpha.exp_u64(*height_count as u64);
+                                *height_count += vals.len();
+
+                                let y_combined: Challenge = vals
+                                    .iter()
+                                    .zip(alpha_powers.iter())
+                                    .map(|(&y, &ap)| y * ap)
+                                    .sum();
+
+                                (offset, y_combined)
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
 
         // Verify each height bucket's STIR sub-proof and input binding.
         for (bucket_idx, &log_h) in bucket_log_heights.iter().enumerate() {
@@ -596,6 +610,39 @@ where
                 |first_round_unique_js: &[usize]| -> Result<Vec<Vec<Challenge>>, Self::Error> {
                     let n_q = first_round_unique_js.len();
                     let mut expected_ro = vec![Challenge::zero_vec(arity0); n_q];
+
+                    // Distinct opening points among matrices active at this bucket height.
+                    // Matrices typically share opening points (e.g. one STARK's `zeta`), so
+                    // this list is usually far shorter than the matrix count.
+                    let bucket_points: Vec<Challenge> = commitments_with_opening_points
+                        .iter()
+                        .flat_map(|(_, domain_claims)| domain_claims.iter())
+                        .filter(|(domain, _)| {
+                            (domain.size() << self.stir.log_blowup) == bucket_height
+                        })
+                        .flat_map(|(_, point_claims)| point_claims.iter().map(|(point, _)| *point))
+                        .fold(Vec::new(), |mut points, point| {
+                            if !points.contains(&point) {
+                                points.push(point);
+                            }
+                            points
+                        });
+                    let n_bp = bucket_points.len();
+
+                    // Every `(query, fiber lane)` needs `1 / (point - fiber_point)` for each
+                    // distinct point in `bucket_points`. Collect every such difference for the
+                    // whole bucket and invert them all in one batch, rather than inverting each
+                    // one individually once per (query, lane, matrix, point) quadruple below.
+                    let mut denom_diffs = Vec::with_capacity(n_q * arity0 * n_bp);
+                    for &j in first_round_unique_js {
+                        let mut fiber_point = Val::GENERATOR * domain_gen.exp_u64(j as u64);
+                        for _ in 0..arity0 {
+                            let fp = Challenge::from(fiber_point);
+                            denom_diffs.extend(bucket_points.iter().map(|&point| point - fp));
+                            fiber_point *= fiber_step;
+                        }
+                    }
+                    let inv_denoms = batch_multiplicative_inverse(&denom_diffs);
 
                     for (commit_idx, ((commitment, domain_claims), per_commit_opening)) in
                         commitments_with_opening_points
@@ -668,9 +715,8 @@ where
                             )
                             .map_err(StirError::InputError)?;
 
-                        for (q_idx, &j) in first_round_unique_js.iter().enumerate() {
+                        for q_idx in 0..n_q {
                             let row_vals_by_mat = &opening.opened_values[q_idx];
-                            let mut fiber_point = Val::GENERATOR * domain_gen.exp_u64(j as u64);
 
                             #[allow(clippy::needless_range_loop)]
                             for l in 0..arity0 {
@@ -692,30 +738,24 @@ where
                                     let p_x: Challenge = row_vals
                                         .iter()
                                         .zip(alpha_powers.iter())
-                                        .map(|(&v, &ap)| Challenge::from(v) * ap)
+                                        .map(|(&v, &ap)| ap * v)
                                         .sum();
 
-                                    for (point_idx, (point, vals)) in
-                                        point_claims.iter().enumerate()
-                                    {
-                                        let alpha_pow_offset =
-                                            alpha_offsets[commit_idx][mat_idx][point_idx];
+                                    for (point_idx, (point, _)) in point_claims.iter().enumerate() {
+                                        let (alpha_pow_offset, y_combined) =
+                                            point_data[commit_idx][mat_idx][point_idx];
 
-                                        let y_combined: Challenge = vals
+                                        let bp_idx = bucket_points
                                             .iter()
-                                            .zip(alpha_powers.iter())
-                                            .map(|(&y, &ap)| y * ap)
-                                            .sum();
-
+                                            .position(|p| p == point)
+                                            .expect("point is in bucket_points by construction");
                                         let inv_denom =
-                                            (*point - Challenge::from(fiber_point)).inverse();
+                                            inv_denoms[(q_idx * arity0 + l) * n_bp + bp_idx];
 
                                         expected_ro[q_idx][l] +=
                                             alpha_pow_offset * (p_x - y_combined) * inv_denom;
                                     }
                                 }
-
-                                fiber_point *= fiber_step;
                             }
                         }
                     }
