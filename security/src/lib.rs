@@ -38,6 +38,7 @@ extern crate alloc;
 
 pub mod assumption;
 pub mod error;
+pub mod fixed;
 pub mod proximity;
 pub mod report;
 pub mod shape;
