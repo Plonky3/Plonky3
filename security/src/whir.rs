@@ -6,6 +6,8 @@
 //! protocol-level error budget pieces (OOD sampling, fold sumcheck,
 //! query-combination, folding PoW).
 
+pub mod hiding;
+
 pub use crate::assumption::SecurityAssumption;
 
 impl SecurityAssumption {
