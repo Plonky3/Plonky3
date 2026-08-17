@@ -29,6 +29,7 @@
 //! - On the Security of STARKs with FRI ([2024/1553](https://eprint.iacr.org/2024/1553))
 //! - On the Distribution of the Distances of Random Words ([2025/2010](https://eprint.iacr.org/2025/2010))
 //! - BCHKS25 — Improved LDR proximity gaps ([2025/2055](https://eprint.iacr.org/2025/2055))
+//! - HVZK-WHIR ([2026/391](https://eprint.iacr.org/2026/391))
 
 #![no_std]
 #![allow(clippy::too_many_arguments)]

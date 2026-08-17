@@ -64,6 +64,7 @@ mod constraint;
 mod mask;
 mod proof;
 mod prover;
+mod security;
 mod verifier;
 
 pub use adapter::HidingWhirPcs;
@@ -73,6 +74,11 @@ pub use config::{ZkConfigError, ZkParameters, ZkWhirConfig};
 pub use mask::{MaskCodeShape, MaskGroupShape};
 pub use proof::{BaseCaseZkProof, BlindedMask, MaskOpeningPair, ZkRoundProof, ZkWhirProof};
 pub use prover::HidingWhirProverData;
+pub use security::{
+    HidingBaseCaseSecurityReport, HidingBoundClassification, HidingCodeRole,
+    HidingCodeSecurityReport, HidingErrorBound, HidingGammaRoundReport, HidingListBound,
+    HidingQueryRoundReport,
+};
 pub use verifier::ZkVerifierError;
 
 #[cfg(test)]
