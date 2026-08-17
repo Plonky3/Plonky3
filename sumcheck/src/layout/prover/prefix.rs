@@ -6,6 +6,7 @@ use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{
     ExtensionField, Field, PackedFieldExtension, PackedValue, TwoAdicField, dot_product,
 };
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
@@ -113,8 +114,9 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
 
         // Current group: evaluate each column at the point.
         // Each entry yields an opening (carrying preprocessing residuals) plus the bare eval.
+        // Each column is an independent O(2^n) pass, so columns evaluate in parallel.
         let (current_openings, current_evals): (Vec<_>, Vec<EF>) = current
-            .iter()
+            .into_par_iter()
             .copied()
             .map(|poly_idx| {
                 let (eval, partial_evals) = point.eval(table.poly(poly_idx));
@@ -125,7 +127,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         // Next group: evaluate the repeat-last successor view at the same point.
         // The prefix layout folds the leading variables, so the successor is taken accordingly.
         let (next_openings, next_evals): (Vec<_>, Vec<EF>) = next
-            .iter()
+            .into_par_iter()
             .copied()
             .map(|poly_idx| {
                 let (eval, partial_evals) = point.eval_next_prefix(table.poly(poly_idx));

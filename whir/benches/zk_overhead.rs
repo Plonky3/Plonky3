@@ -316,6 +316,7 @@ fn report_proof_sizes(num_variables: usize) {
         },
     )
     .unwrap();
+    let security_report = config.hiding_base_case_security_report();
     let pcs = ZkPcs::new(config, Dft::default(), mmcs(), StdRng::seed_from_u64(4));
     let mut rng = SmallRng::seed_from_u64(3);
     let witness = Poly::<F>::rand(&mut rng, num_variables);
@@ -332,6 +333,7 @@ fn report_proof_sizes(num_variables: usize) {
         "proof size @ 2^{num_variables}: plain = {plain_size} B, zk = {zk_size} B, overhead = {:.2}x",
         zk_size as f64 / plain_size as f64,
     );
+    println!("hiding base-case security report @ 2^{num_variables}: {security_report:#?}");
 }
 
 fn bench_zk_overhead(c: &mut Criterion) {

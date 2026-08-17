@@ -311,7 +311,7 @@ where
 {
     println!(
         "Conjectured security: {} bits",
-        Proof::<SC>::conjectured_security(security_params).security_bits
+        proof.conjectured_security(security_params).security_bits
     );
     let proven = proof.proven_security(security_params);
     println!(

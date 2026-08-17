@@ -145,6 +145,10 @@ name = "p3-sha256"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-sha256-air"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-sumcheck"
 version_group = "plonky3"
 

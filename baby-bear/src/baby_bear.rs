@@ -26,6 +26,9 @@ impl BarrettParameters for BabyBearParameters {}
 
 impl FieldParameters for BabyBearParameters {
     const MONTY_GEN: BabyBear = BabyBear::new(31);
+
+    // Measured -3.5% on quotient evaluation (twoadic PCS, Poseidon2 AIR, aarch64+neon).
+    const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = true;
 }
 
 impl RelativelyPrimePower<7> for BabyBearParameters {

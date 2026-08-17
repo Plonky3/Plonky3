@@ -184,15 +184,12 @@ impl SecurityAssumption {
     /// - CB: δ = 1 − ρ − η
     #[must_use]
     pub fn log_1_delta(&self, log_inv_rate: usize) -> f64 {
-        let rate = 1. / f64::from(1 << log_inv_rate);
-
-        let delta = match self {
-            Self::UniqueDecoding => 0.5 * (1. - rate),
-            Self::JohnsonBound => 1. - libm::sqrt(rate) - libm::pow(2., self.log_eta(log_inv_rate)),
-            Self::CapacityBound => 1. - rate - libm::pow(2., self.log_eta(log_inv_rate)),
-        };
-
-        libm::log2(1. - delta)
+        let log_twenty_one_over_twenty = libm::log2(21. / 20.);
+        match self {
+            Self::UniqueDecoding => libm::log2(1. + libm::pow(2., -(log_inv_rate as f64))) - 1.,
+            Self::JohnsonBound => log_twenty_one_over_twenty - 0.5 * log_inv_rate as f64,
+            Self::CapacityBound => log_twenty_one_over_twenty - log_inv_rate as f64,
+        }
     }
 
     /// Number of queries needed for `(1 − δ)^t < 2^{−λ}`.
@@ -401,6 +398,29 @@ mod tests {
         // locks that down so a future refactor that strays into the eta path
         // under UD fails loudly instead of silently propagating a bogus value.
         let _ = SecurityAssumption::UniqueDecoding.log_eta(5);
+    }
+
+    #[test]
+    fn log_one_minus_delta_is_stable_at_large_inverse_rates() {
+        let log_twenty_one_over_twenty = libm::log2(21. / 20.);
+
+        for log_inv_rate in [31, 32, 63] {
+            let unique = SecurityAssumption::UniqueDecoding.log_1_delta(log_inv_rate);
+            let johnson = SecurityAssumption::JohnsonBound.log_1_delta(log_inv_rate);
+            let capacity = SecurityAssumption::CapacityBound.log_1_delta(log_inv_rate);
+
+            assert!(unique.is_finite());
+            assert!(johnson.is_finite());
+            assert!(capacity.is_finite());
+            assert!(
+                (unique - (libm::log2(1. + libm::pow(2., -(log_inv_rate as f64))) - 1.)).abs()
+                    < 1e-12
+            );
+            assert!(
+                (johnson - (log_twenty_one_over_twenty - 0.5 * log_inv_rate as f64)).abs() < 1e-12
+            );
+            assert!((capacity - (log_twenty_one_over_twenty - log_inv_rate as f64)).abs() < 1e-12);
+        }
     }
 
     /// Old prox-gap baseline used by the improvement test.

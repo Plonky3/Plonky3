@@ -27,16 +27,50 @@ jobs:
     strategy:
       matrix:
         include:
+          # Default and `parallel`-feature runs are split into separate legs
+          # so they execute as concurrent jobs instead of sequential steps.
           - os: ubuntu-latest
+            parallel: false
+          - os: ubuntu-latest
+            parallel: true
           - os: ubuntu-latest
             features: "+avx2"
+            parallel: false
+          - os: ubuntu-latest
+            features: "+avx2"
+            parallel: true
           - os: ubuntu-latest
             features: "+avx512f"
             # GitHub-hosted runners aren't guaranteed to have AVX-512 hardware,
             # so this leg only verifies the AVX-512 paths compile.
             compile_only: true
+            target: x86_64-unknown-linux-gnu
+            parallel: false
+          - os: ubuntu-latest
+            features: "+avx512f"
+            compile_only: true
+            target: x86_64-unknown-linux-gnu
+            parallel: true
+          - os: ubuntu-24.04-arm
+            features: "+sve2"
+            # GitHub's arm64 runners aren't guaranteed to have SVE2 hardware,
+            # so this leg only verifies the SVE2 paths compile.
+            compile_only: true
+            target: aarch64-unknown-linux-gnu
+            parallel: false
+          - os: ubuntu-24.04-arm
+            features: "+sve2"
+            compile_only: true
+            target: aarch64-unknown-linux-gnu
+            parallel: true
           - os: macos-latest
+            parallel: false
+          - os: macos-latest
+            parallel: true
           - os: windows-latest
+            parallel: false
+          - os: windows-latest
+            parallel: true
     runs-on: ${{ matrix.os }}
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
 
@@ -55,28 +89,45 @@ jobs:
       # Smarter cache for Rust builds; avoids overfilling the runner disk.
       - uses: Swatinem/rust-cache@v2
 
-      - name: Test
+      # nextest schedules every test from every binary in one pool instead of
+      # running binaries one at a time, so idle cores get filled by other
+      # crates' tests while a single long-running test is still executing.
+      - uses: taiki-e/install-action@v2
         if: ${{ !matrix.compile_only }}
-        run: cargo test
+        with:
+          tool: cargo-nextest
+
+      - name: Test
+        if: ${{ !matrix.compile_only && !matrix.parallel }}
+        run: cargo nextest run
+
+      - name: Test doctests
+        if: ${{ !matrix.compile_only && !matrix.parallel }}
+        # nextest doesn't run doctests, so cover them with plain `cargo test`.
+        run: cargo test --doc
 
       - name: Test with parallel
-        if: ${{ !matrix.compile_only }}
-        run: cargo test --features parallel
+        if: ${{ !matrix.compile_only && matrix.parallel }}
+        run: cargo nextest run --features parallel
+
+      - name: Test with parallel doctests
+        if: ${{ !matrix.compile_only && matrix.parallel }}
+        run: cargo test --doc --features parallel
 
       - name: Build
-        if: ${{ matrix.compile_only }}
-        # Keep AVX-512 RUSTFLAGS off host build scripts and proc macros.
-        run: cargo build --target x86_64-unknown-linux-gnu --all-targets
+        if: ${{ matrix.compile_only && !matrix.parallel }}
+        # Keep target-feature RUSTFLAGS off host build scripts and proc macros.
+        run: cargo build --target ${{ matrix.target }} --all-targets
 
       - name: Build with parallel
-        if: ${{ matrix.compile_only }}
-        run: cargo build --target x86_64-unknown-linux-gnu --all-targets --features parallel
+        if: ${{ matrix.compile_only && matrix.parallel }}
+        run: cargo build --target ${{ matrix.target }} --all-targets --features parallel
 
       - name: Test keccak (aarch64, no SHA3)
-        if: ${{ matrix.os == 'macos-latest' }}
+        if: ${{ matrix.os == 'macos-latest' && !matrix.parallel }}
         env:
           RUSTFLAGS: -C debuginfo=0 -C target-feature=-sha3
-        run: cargo test -p p3-keccak
+        run: cargo nextest run -p p3-keccak
 
   check_embedded:
     name: Build embedded
@@ -134,7 +185,9 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-poseidon2-air
           cargo build --verbose --target ${{ env.target }} -p p3-rescue
           cargo build --verbose --target ${{ env.target }} -p p3-sha256
+          cargo build --verbose --target ${{ env.target }} -p p3-sha256-air
           cargo build --verbose --target ${{ env.target }} -p p3-security
+          cargo build --verbose --target ${{ env.target }} -p p3-stir
           cargo build --verbose --target ${{ env.target }} -p p3-sumcheck
           cargo build --verbose --target ${{ env.target }} -p p3-symmetric
           cargo build --verbose --target ${{ env.target }} -p p3-uni-stark
@@ -178,6 +231,8 @@ jobs:
         run: cargo run --release --target ${{ env.run_target }} --bin wasm_smoke -p p3-goldilocks
       - name: Run wasm_bench under wasmtime
         run: cargo run --release --target ${{ env.run_target }} --bin wasm_bench -p p3-goldilocks
+      - name: Run wasm_merkle_bench under wasmtime
+        run: cargo run --release --target ${{ env.run_target }} --example wasm_merkle_bench -p p3-goldilocks
 
   lint:
     name: Formatting and Clippy
@@ -196,14 +251,11 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Install cargo-sort and taplo
-        run: |
-          cargo install cargo-sort
-          # `--locked` uses taplo-cli's shipped Cargo.lock, pinning its `time`
-          # dependency to a version whose impls do not collide with taplo's
-          # blanket `From` impls (an unlocked resolve picks a newer `time` that
-          # fails to compile with E0119).
-          cargo install taplo-cli --locked
+      # Prebuilt binaries instead of `cargo install`, which compiles both
+      # tools (and taplo's `time` dependency chain) from source every run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-sort,taplo
 
       - uses: Swatinem/rust-cache@v2
 

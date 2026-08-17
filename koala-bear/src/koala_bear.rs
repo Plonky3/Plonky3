@@ -51,6 +51,9 @@ impl BarrettParameters for KoalaBearParameters {}
 
 impl FieldParameters for KoalaBearParameters {
     const MONTY_GEN: KoalaBear = KoalaBear::new(3);
+
+    // Measured -15% on quotient evaluation (twoadic PCS, Poseidon2 AIR, aarch64+neon).
+    const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = true;
 }
 
 impl RelativelyPrimePower<3> for KoalaBearParameters {

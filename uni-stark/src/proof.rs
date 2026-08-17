@@ -27,12 +27,9 @@ pub struct Proof<SC: StarkGenericConfig> {
 impl<SC: StarkGenericConfig> Proof<SC> {
     /// Conjectured security level (in bits).
     ///
-    /// This is a parameter-space property and does not depend on `self`; the method
-    /// is exposed on [`Proof`] for parity with [`Self::proven_security`].
-    ///
     /// See [`ConjecturedSecurity`].
-    pub fn conjectured_security(params: &StarkSecurityParams) -> ConjecturedSecurity {
-        ConjecturedSecurity::compute_from_params(params)
+    pub fn conjectured_security(&self, params: &StarkSecurityParams) -> ConjecturedSecurity {
+        ConjecturedSecurity::compute_from_params(params, self.degree_bits)
     }
 
     /// Proven security level (in bits).

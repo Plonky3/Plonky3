@@ -7,7 +7,11 @@
 //! [`crate::fri`]; [`crate::whir`] currently exposes only the underlying WHIR
 //! error terms, not yet a [`LowDegreeTest`] impl.
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::error::ErrorBits;
+use crate::report::{LDT_LABEL, SecurityTerm};
 use crate::shape::{InstanceShape, StarkAirParams};
 
 /// A low-degree test whose per-regime error terms compose with the AIR +
@@ -34,4 +38,78 @@ pub trait LowDegreeTest {
 
     /// Conjectured LDT error (random-words / heuristic regime).
     fn conjectured_error(&self, shape: &InstanceShape) -> ErrorBits;
+
+    /// The conjectured regime's LDT terms, labeled per phase.
+    ///
+    /// [`crate::stark::conjectured_security_report`] takes the minimum over
+    /// these alongside the ALI, DEEP, and collision terms, so an implementation
+    /// that reports its phases separately keeps each one inspectable rather
+    /// than collapsing them into a single number — the same reason the proven
+    /// path is a [`crate::report::RegimeReport`] and not a scalar.
+    ///
+    /// The default returns [`Self::conjectured_error`] under
+    /// [`LDT_LABEL`], which is correct for any LDT whose conjectured error is
+    /// already a single composed bound. Override it when the protocol has
+    /// distinct rounds worth surfacing — [`crate::fri::FriRegime`] splits the
+    /// query phase from the commit-phase folding rounds.
+    ///
+    /// Each returned term must bound a **distinct round** of the protocol.
+    /// The composite takes the minimum rather than summing because an
+    /// adversary who breaks any single round breaks the LDT, so the attained
+    /// security is that of the weakest round — the round-by-round accounting
+    /// of [2024/1553](https://eprint.iacr.org/2024/1553) §2. Returning two
+    /// bounds on the *same* round would silently discard the tighter one.
+    fn conjectured_terms(&self, shape: &InstanceShape) -> Vec<SecurityTerm> {
+        vec![SecurityTerm::new(LDT_LABEL, self.conjectured_error(shape))]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A low-degree test that leaves every default in place, including
+    /// [`LowDegreeTest::conjectured_terms`], so the default body has a
+    /// dedicated test rather than relying on the first downstream `impl` —
+    /// currently [`crate::fri::FriRegime`], which overrides it — to exercise
+    /// it incidentally.
+    struct StubLdt;
+
+    impl LowDegreeTest for StubLdt {
+        fn log_blowup(&self) -> usize {
+            1
+        }
+
+        fn proven_error_udr(&self, _air: &StarkAirParams, _shape: &InstanceShape) -> ErrorBits {
+            ErrorBits::from_log2(0.0)
+        }
+
+        fn best_ldr(
+            &self,
+            _air: &StarkAirParams,
+            _shape: &InstanceShape,
+        ) -> Option<(usize, ErrorBits)> {
+            None
+        }
+
+        fn conjectured_error(&self, _shape: &InstanceShape) -> ErrorBits {
+            ErrorBits::from_log2(42.0)
+        }
+    }
+
+    #[test]
+    fn default_conjectured_terms_wraps_conjectured_error_under_ldt_label() {
+        let shape = InstanceShape {
+            log_trace_length: 0,
+            modulus_bits: 1,
+            collision_resistance: 1,
+            num_batched_functions: 1,
+        };
+
+        let terms = StubLdt.conjectured_terms(&shape);
+
+        assert_eq!(terms.len(), 1);
+        assert_eq!(terms[0].label, LDT_LABEL);
+        assert!((terms[0].bits.bits() - 42.0).abs() < 1e-12);
+    }
 }
