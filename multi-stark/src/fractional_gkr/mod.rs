@@ -67,13 +67,13 @@ pub struct FractionGkrProof<EF> {
     pub layers: Vec<FractionGkrLayerProof<EF>>,
 }
 
-/// The opening claim for the original fraction tables produced by the protocol.
+/// An unauthenticated opening claim for the original fraction tables.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FractionGkrOutput<EF> {
-    /// The transcript-derived point at which both tables are opened.
+    /// The transcript-derived point at which both tables are claimed to be opened.
     pub point: Point<EF>,
-    /// The multilinear evaluation of the numerator table at `point`.
+    /// The claimed multilinear evaluation of the numerator table at `point`.
     pub numerator: EF,
-    /// The multilinear evaluation of the denominator table at `point`.
+    /// The claimed multilinear evaluation of the denominator table at `point`.
     pub denominator: EF,
 }

@@ -27,8 +27,13 @@ pub enum FractionGkrError {
     LayerConsistency { layer: usize },
 }
 
-/// Verify that a fractional-GKR reduction has zero root numerator and recover
-/// its input-table opening claims.
+/// Verify the internal consistency of a zero-sum fractional-GKR reduction and
+/// return its input-table opening claim.
+///
+/// This function does not authenticate the returned numerator and denominator
+/// against committed input polynomials. To complete verification of the
+/// zero-sum statement, the caller must verify that the returned values are the
+/// openings of the corresponding input tables at the returned point.
 pub fn verify_fractional_gkr<F, EF, Challenger>(
     proof: &FractionGkrProof<EF>,
     num_variables: usize,

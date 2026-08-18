@@ -216,6 +216,8 @@ fn materialize_contributions_packed<F, EF>(
                             *next = if row + 1 + packing_width <= num_evals {
                                 *F::Packing::from_slice(&column[row + 1..row + 1 + packing_width])
                             } else {
+                                // Match ordinary AIR evaluation: at the final row, `next`
+                                // repeats the local row rather than wrapping to row zero.
                                 F::Packing::from_fn(|lane| {
                                     column[core::cmp::min(row + lane + 1, num_evals - 1)]
                                 })

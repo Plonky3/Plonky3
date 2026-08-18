@@ -212,9 +212,7 @@ impl<F: Field> LookupPlan<F> {
                                     "named global lookup bus `{name}` uses payload width {width}, \
                                      but its established width is {established_width}"
                                 ),
-                                LookupBus::Local { .. } => {
-                                    debug_assert_eq!(width, established_width);
-                                }
+                                _ => unreachable!(),
                             }
                             bus_id
                         }

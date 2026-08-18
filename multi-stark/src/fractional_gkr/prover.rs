@@ -551,7 +551,7 @@ where
             d1: denom.as_slice()[1],
         };
         let root_denominator = root_claims.d0 * root_claims.d1;
-        debug_assert_eq!(
+        assert_eq!(
             root_claims.d1 * root_claims.n0 + root_claims.d0 * root_claims.n1,
             EF::ZERO,
             "fraction GKR input fractions must sum to zero"
@@ -618,7 +618,7 @@ where
 
     let root_claims = fractions.pop().unwrap().unpack().into_constants();
     let root_denominator = root_claims.d0 * root_claims.d1;
-    debug_assert_eq!(
+    assert_eq!(
         root_claims.d1 * root_claims.n0 + root_claims.d0 * root_claims.n1,
         EF::ZERO,
         "fraction GKR input fractions must sum to zero"
