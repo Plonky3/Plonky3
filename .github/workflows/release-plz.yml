@@ -1,14 +1,15 @@
 name: Release-plz
 
 on:
-  # Fires on releases cut from main or a vX.Y.Z version branch (including -rcN
-  # pre-releases).
+  # Fires on releases cut from main, a vX.Y.Z stable branch, or an
+  # X.Y.Z-rc.N release-candidate branch (named after the rc version, no "v"
+  # prefix, see create_release.sh).
   pull_request:
     types: [closed]
     branches:
       - "main"
       - "v[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
   # Allow manual re-runs if publish fails (e.g., crates.io outage)
   workflow_dispatch:
 
