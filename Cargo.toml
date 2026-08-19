@@ -148,7 +148,7 @@ p3-zk-codes = { path = "zk-codes", version = "0.6.0" }
 [workspace.package]
 # General description field used for the sub-crates that are currently missing a description.
 description = "Plonky3 is a toolkit for implementing polynomial IOPs (PIOPs), such as PLONK and STARKs."
-version = "0.6.0"
+version = "0.7.0-rc.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Plonky3/Plonky3"
