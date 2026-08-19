@@ -45,6 +45,7 @@ p3-matrix = { path = "../matrix" }
 p3-poseidon1 = { path = "../poseidon1" }
 p3-stir = { path = "../stir" }
 p3-sumcheck = { path = "../sumcheck" }
+p3-util = { path = "../util" }
 p3-whir = { path = "../whir" }
 
 tracing.workspace = true
