@@ -71,8 +71,24 @@ if [ -n "$rc_version" ]; then
 
   # Every crate inherits `version.workspace = true`, so bumping the single
   # [workspace.package] version sets the whole workspace in lock-step.
+  old_version=$(grep -m1 -E '^version = "' Cargo.toml | sed -E 's/^version = "(.*)"$/\1/')
+  old_version_re=$(printf '%s' "$old_version" | sed -E 's/[.[\*^$]/\\&/g')
+
   sed -i.bak -E "s/^version = \".*\"/version = \"$rc_version\"/" Cargo.toml
+
+  # [workspace.dependencies] pins each internal crate's own version requirement
+  # separately, e.g. `p3-field = { path = "field", version = "0.6.0" }`. Bump
+  # those too, or crates still requiring the old version fail to resolve
+  # against the now-bumped local path packages.
+  sed -i.bak -E "s/(path = \"[^\"]+\", version = )\"$old_version_re\"/\1\"$rc_version\"/" Cargo.toml
   rm -f Cargo.toml.bak
+
+  check_binary_installed "cargo"
+  echo "Verifying dependency resolution..."
+  if ! cargo metadata --format-version 1 --quiet > /dev/null; then
+    echo "Error: cargo metadata failed after version bump. Aborting before commit."
+    exit 1
+  fi
 
   git switch -c "$pr_branch"
   git commit -m "chore: release $rc_version" Cargo.toml
