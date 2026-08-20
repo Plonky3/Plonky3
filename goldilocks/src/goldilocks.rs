@@ -42,13 +42,26 @@ pub struct Goldilocks {
 impl Serialize for Goldilocks {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // Emit the canonical representative so every field element has one encoding.
-        serializer.serialize_u64(self.as_canonical_u64())
+        let val = self.as_canonical_u64();
+        // Binary (non human-readable) formats get a fixed 8-byte encoding instead of
+        // the serializer's default varint, since every value here is a near-uniform
+        // 64-bit integer and varint saves nothing on average.
+        if serializer.is_human_readable() {
+            serializer.serialize_u64(val)
+        } else {
+            val.to_le_bytes().serialize(serializer)
+        }
     }
 }
 
 impl<'de> Deserialize<'de> for Goldilocks {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let val = u64::deserialize(d)?;
+        let human_readable = d.is_human_readable();
+        let val = if human_readable {
+            u64::deserialize(d)?
+        } else {
+            u64::from_le_bytes(<[u8; 8]>::deserialize(d)?)
+        };
         // Reject non-canonical encodings so a proof cannot be re-encoded without the witness.
         if val < P {
             Ok(Self::new(val))
