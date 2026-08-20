@@ -13,9 +13,9 @@ use thiserror::Error;
 use crate::config::{StirConfig, StirRoundConfig};
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    check_shake_consistency, eval_degree_correction, eval_poly, eval_poly_at_base,
-    fold_domain_params, lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c,
-    sample_ood_points, vanishing_poly_from_roots,
+    check_shake_consistency, eval_poly, eval_poly_at_base, fold_domain_params,
+    lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points,
+    vanishing_poly_from_roots,
 };
 
 /// `(index, row)` pairs for a round's queries, in draw order.
@@ -29,6 +29,10 @@ struct VirtualRoundContext<EF> {
     /// query can reduce it rather than re-multiplying every root.
     vanishing_coeffs: Vec<EF>,
     r_comb: EF,
+    /// `r_comb^(all_points.len() + 1)`, the degree-correction geometric sum's `r_comb` factor
+    /// at the round's fixed gap. Computed once per round rather than as part of a fresh
+    /// `(point * r_comb)^gap` exponentiation per fiber point.
+    r_comb_pow_gap1: EF,
 }
 
 /// Translate one opened row of the previous round's oracle into values of the current
@@ -59,6 +63,7 @@ where
     let arity = row_evals.len();
     let points: Vec<F> = subgroup_points.iter().map(|&x| shift * x).collect();
     let common_power = points[0].exp_u64(arity as u64);
+    let gap = ctx.all_points.len();
 
     let ans_rem = reduce_mod_x_pow_minus_c(&ctx.ans_poly, arity, common_power);
     let vanishing_rem = reduce_mod_x_pow_minus_c(&ctx.vanishing_coeffs, arity, common_power);
@@ -72,14 +77,39 @@ where
     }
     let vanishing_inverses = batch_multiplicative_inverse(&vanishing_values);
 
-    Some(
-        row_evals
+    // Degree-correction geometric sum `(1 - step^(gap+1)) / (1 - step)` per point, `step :=
+    // point * r_comb`. `step^(gap+1) = x^(gap+1) * r_comb^(gap+1)` splits into a cheap
+    // per-point base-field exponentiation and the round-constant `r_comb_pow_gap1`
+    // (`VirtualRoundContext::finish`), instead of a fresh extension-field exponentiation of
+    // `step` at every point. `step == 1` (density `1/|EF|`) needs the sum's `gap + 1` closed
+    // form rather than a division by zero, so it is excluded from the batch inversion below.
+    let steps: Vec<EF> = points.iter().map(|&x| ctx.r_comb * x).collect();
+    let denom_inverses = batch_multiplicative_inverse(
+        &steps
             .iter()
-            .zip(points)
-            .zip(vanishing_inverses)
-            .map(|((&g_value, x), vanishing_inverse)| {
-                let quotient = (g_value - eval_poly_at_base(&ans_rem, x)) * vanishing_inverse;
-                eval_degree_correction(quotient, EF::from(x), ctx.r_comb, ctx.all_points.len())
+            .map(|&step| {
+                if step == EF::ONE {
+                    EF::ONE
+                } else {
+                    EF::ONE - step
+                }
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    Some(
+        (0..arity)
+            .map(|i| {
+                let x = points[i];
+                let quotient =
+                    (row_evals[i] - eval_poly_at_base(&ans_rem, x)) * vanishing_inverses[i];
+                let geom = if steps[i] == EF::ONE {
+                    EF::from_usize(gap + 1)
+                } else {
+                    let x_pow = x.exp_u64((gap + 1) as u64);
+                    (EF::ONE - ctx.r_comb_pow_gap1 * x_pow) * denom_inverses[i]
+                };
+                quotient * geom
             })
             .collect(),
     )
@@ -394,12 +424,14 @@ where
     /// Touches no transcript state, so it may run after the caller has moved on to other
     /// instances.
     fn finish(self, ans_polynomial: Vec<EF>, all_points: Vec<EF>) -> RoundVerifyOutput<F, EF> {
+        let r_comb_pow_gap1 = self.r_comb.exp_u64((all_points.len() + 1) as u64);
         RoundVerifyOutput {
             ctx: VirtualRoundContext {
                 vanishing_coeffs: vanishing_poly_from_roots(&all_points),
                 ans_poly: ans_polynomial,
                 all_points,
                 r_comb: self.r_comb,
+                r_comb_pow_gap1,
             },
             next_shift: self.next_shift,
             next_log_domain: self.next_log_domain,
