@@ -147,6 +147,17 @@ struct Args {
     #[arg(long, default_value = "4")]
     stir_log_fold: usize,
 
+    /// STIR log_2 folding arity used only in round 0 (the fold of the initial oracle).
+    ///
+    /// Defaults to the paper-backed minimum (arity 4), which shrinks every first-round
+    /// query's fiber (`2^k0` LDE rows, times the committed width) without touching the
+    /// improved-rate schedule the later rounds are priced on — the win grows with
+    /// column width, since a first-round query reads `k0` whole rows of every
+    /// committed matrix. Set equal to `stir-log-fold` to recover a constant-arity
+    /// schedule.
+    #[arg(long, default_value = "2")]
+    stir_log_starting_fold: usize,
+
     /// FRI log_2 folding arity per round.
     #[arg(long, default_value = "1")]
     fri_log_arity: usize,
@@ -355,7 +366,6 @@ fn main() {
         args.log_message_size >= 3,
         "log-message-size must be at least 3 for the multi-table run (heights n, n + 1, n + 3)"
     );
-
     let log_height = args.log_message_size - args.log_width;
     let width = 1usize << args.log_width;
 
@@ -416,6 +426,7 @@ fn main() {
         let stir_params = StirParameters {
             log_blowup: args.rate,
             log_folding_factor: args.stir_log_fold,
+            log_starting_folding_factor: args.stir_log_starting_fold,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: args.security_level,
             max_pow_bits: args.pow_bits,
@@ -545,6 +556,7 @@ fn main() {
         let stir_params = StirParameters {
             log_blowup: args.rate,
             log_folding_factor: args.stir_log_fold,
+            log_starting_folding_factor: args.stir_log_starting_fold,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: args.security_level,
             max_pow_bits: args.pow_bits,

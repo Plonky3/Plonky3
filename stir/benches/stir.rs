@@ -59,6 +59,7 @@ fn make_stir_env(log_folding_factor: usize) -> (StirParameters<MyMmcs>, Dft, Cha
     let params = StirParameters {
         log_blowup: 1,
         log_folding_factor,
+        log_starting_folding_factor: log_folding_factor,
         soundness_type: SecurityAssumption::CapacityBound,
         security_level: 100,
         max_pow_bits: 0,
