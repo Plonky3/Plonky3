@@ -270,13 +270,38 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F>,
 {
+    // `shift^{-2^log_size}` per excluded domain, computed once in the base field (an
+    // inversion and an exponentiation cheaper than their extension-field counterparts) and
+    // reused for every candidate below, rather than an extension-field inversion redone once
+    // per domain per candidate.
+    let shift_inv_pows: [F; 3] =
+        excluded_domains.map(|(shift, log_size)| shift.inverse().exp_power_of_2(log_size));
+    let max_log_size = excluded_domains
+        .iter()
+        .map(|&(_, log_size)| log_size)
+        .max()
+        .unwrap_or(0);
+
     let mut ood_points: Vec<EF> = Vec::with_capacity(num_ood_samples);
     while ood_points.len() < num_ood_samples {
         let z: EF = challenger.sample_algebra_element();
-        let outside_all_domains = excluded_domains.iter().all(|&(shift, log_size)| {
-            let z_norm = z * EF::from(shift).inverse();
-            z_norm.exp_power_of_2(log_size) != EF::ONE || log_size == 0
-        });
+
+        // `z`'s doubling chain `z, z^2, z^4, ..., z^(2^max_log_size)`, shared across every
+        // excluded domain below instead of a fresh `exp_power_of_2` call (its own squaring
+        // chain from scratch) per domain.
+        let mut chain = Vec::with_capacity(max_log_size + 1);
+        chain.push(z);
+        for i in 0..max_log_size {
+            chain.push(chain[i].square());
+        }
+
+        let outside_all_domains =
+            excluded_domains
+                .iter()
+                .zip(&shift_inv_pows)
+                .all(|(&(_, log_size), &shift_inv_pow)| {
+                    log_size == 0 || chain[log_size] * shift_inv_pow != EF::ONE
+                });
         // Deduplicate OOD points.
         let not_dup = ood_points.iter().all(|&existing| existing != z);
         if outside_all_domains && not_dup {
