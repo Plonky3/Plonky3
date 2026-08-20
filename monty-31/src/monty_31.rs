@@ -167,14 +167,26 @@ impl<FP: MontyParameters> Distribution<MontyField31<FP>> for StandardUniform {
 impl<FP: FieldParameters> Serialize for MontyField31<FP> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // It's faster to Serialize and Deserialize in monty form.
-        serializer.serialize_u32(self.value)
+        // Binary (non human-readable) formats get a fixed 4-byte encoding instead of
+        // the serializer's default varint, since every value here is a near-uniform
+        // 31-bit integer and varint saves nothing on average.
+        if serializer.is_human_readable() {
+            serializer.serialize_u32(self.value)
+        } else {
+            self.value.to_le_bytes().serialize(serializer)
+        }
     }
 }
 
 impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // It's faster to Serialize and Deserialize in monty form.
-        let val = u32::deserialize(d)?;
+        let human_readable = d.is_human_readable();
+        let val = if human_readable {
+            u32::deserialize(d)?
+        } else {
+            u32::from_le_bytes(<[u8; 4]>::deserialize(d)?)
+        };
         if val < FP::PRIME {
             Ok(Self::new_monty(val))
         } else {

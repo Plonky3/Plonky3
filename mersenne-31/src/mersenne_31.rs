@@ -180,13 +180,26 @@ impl Distribution<Mersenne31> for StandardUniform {
 impl Serialize for Mersenne31 {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // Emit the canonical representative so every field element has one encoding.
-        serializer.serialize_u32(self.as_canonical_u32())
+        let val = self.as_canonical_u32();
+        // Binary (non human-readable) formats get a fixed 4-byte encoding instead of
+        // the serializer's default varint, since every value here is a near-uniform
+        // 31-bit integer and varint saves nothing on average.
+        if serializer.is_human_readable() {
+            serializer.serialize_u32(val)
+        } else {
+            val.to_le_bytes().serialize(serializer)
+        }
     }
 }
 
 impl<'a> Deserialize<'a> for Mersenne31 {
     fn deserialize<D: Deserializer<'a>>(d: D) -> Result<Self, D::Error> {
-        let val = u32::deserialize(d)?;
+        let human_readable = d.is_human_readable();
+        let val = if human_readable {
+            u32::deserialize(d)?
+        } else {
+            u32::from_le_bytes(<[u8; 4]>::deserialize(d)?)
+        };
         // Reject non-canonical encodings so a proof cannot be re-encoded without the witness.
         // `val == P` is field-equal to 0, so only `[0, P)` is canonical.
         if val < P {
