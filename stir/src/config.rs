@@ -14,8 +14,8 @@ use crate::soundness::{StirSoundness, combine_min_log_eta};
 /// Extra requirement round 0's `eta` must additionally satisfy so that the
 /// batch-degree-correction `Combine` step (§4.5) reaches the target security when merging
 /// `num_classes` height classes sharing this config's initial domain before the round-0
-/// fold. `ell` is Lemma 4.13's inflated error argument, consulted only under
-/// `SecurityAssumption::JohnsonBound`.
+/// fold. `ell` is Lemma 4.13's inflated error argument, consulted by both
+/// `SecurityAssumption` regimes' error terms.
 #[derive(Clone, Copy, Debug)]
 struct CombineRequirement {
     num_classes: usize,
@@ -228,8 +228,8 @@ where
     /// correlated agreement" guarantee actually apply to STIR's own decoding.
     ///
     /// `ell` is Lemma 4.13's error argument `num_classes·(d* + 1) − Σᵢ dᵢ` (dᵢ each
-    /// class's own, non-quotiented degree bound); only consulted under
-    /// `SecurityAssumption::JohnsonBound` — pass `0` under `CapacityBound`.
+    /// class's own, non-quotiented degree bound), consulted by both
+    /// `SecurityAssumption` regimes' error terms.
     ///
     /// # Panics
     ///
@@ -439,7 +439,6 @@ where
                 field_size_bits,
                 log_inv_rate,
                 log_degree,
-                c.num_classes,
                 c.ell,
                 buffered_security_level,
             );
