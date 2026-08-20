@@ -491,14 +491,6 @@ fn main() {
         ));
     }
 
-    print_report(
-        &format!(
-            "FRI vs STIR vs WHIR ({}-bit security, rho = 2^-{}, m = {}, width = 2^{})",
-            args.security_level, args.rate, args.log_message_size, args.log_width
-        ),
-        &reports,
-    );
-
     // Multi-table run: three tables batched into one commitment, with log heights
     // n, n + 1, and n + 3 (n + 3 is `--log-message-size`) and a shared column width.
     // This is closer to how a real prover commits several trace tables of different
@@ -649,6 +641,14 @@ fn main() {
             &base_challenger,
         ));
     }
+
+    print_report(
+        &format!(
+            "FRI vs STIR vs WHIR single-table ({}-bit security, rho = 2^-{}, m = {}, width = 2^{})",
+            args.security_level, args.rate, args.log_message_size, args.log_width
+        ),
+        &reports,
+    );
 
     print_report(
         &format!(
