@@ -455,7 +455,7 @@ fn main() {
             &base_challenger,
             queries,
             // STIR commits one Merkle tree per distinct LDE height.
-            |ch, commit| commit.iter().for_each(|c| ch.observe(c.clone())),
+            |ch, commit| ch.observe(commit.clone()),
         ));
     }
 
@@ -593,7 +593,7 @@ fn main() {
             &base_challenger,
             queries,
             // STIR commits one Merkle tree per distinct LDE height.
-            |ch, commit| commit.iter().for_each(|c| ch.observe(c.clone())),
+            |ch, commit| ch.observe(commit.clone()),
         ));
     }
 
