@@ -596,7 +596,9 @@ mod tests {
         let prev_layer: Vec<[u8; 32]> = (0..8).map(|_| rng.random()).collect();
         let compressor = DummyCompressionFunction;
         let expected: Vec<[u8; 32]> = prev_layer
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 let mut result = [0u8; 32];
                 for (i, r) in result.iter_mut().enumerate() {

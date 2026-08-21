@@ -66,7 +66,7 @@ fn backward_iterative_packed<const HALF_RADIX: usize, T: PackedFieldPow2>(
     // roots <-- [1, roots[1], ..., roots[HALF_RADIX-1], 1, roots[1], ...]
     let roots = T::from_fn(|i| roots[i % HALF_RADIX]);
 
-    input.chunks_exact_mut(2).for_each(|pair| {
+    input.as_chunks_mut::<2>().0.iter_mut().for_each(|pair| {
         let (x, y) = backward_butterfly_interleaved::<HALF_RADIX, _>(pair[0], pair[1], roots);
         pair[0] = x;
         pair[1] = y;
@@ -75,7 +75,7 @@ fn backward_iterative_packed<const HALF_RADIX: usize, T: PackedFieldPow2>(
 
 #[inline]
 fn backward_iterative_packed_radix_2<T: PackedFieldPow2>(input: &mut [T]) {
-    input.chunks_exact_mut(2).for_each(|pair| {
+    input.as_chunks_mut::<2>().0.iter_mut().for_each(|pair| {
         let x = pair[0];
         let y = pair[1];
         let (mut x, y) = x.interleave(y, 1);
