@@ -5,12 +5,15 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_multilinear_util::point::Point;
 use serde::{Deserialize, Serialize};
 
-use crate::{SumcheckError, extrapolate_01inf};
+use crate::SumcheckError;
+use crate::strategy::Basis;
 
 /// Sumcheck polynomial data
 ///
 /// Stores the polynomial evaluations for sumcheck rounds in a compact format.
-/// Each round stores `[h(0), h(inf)]` where `h(1)` is derived as `claimed_sum - h(0)`.
+/// Each round stores two evaluations: `[h(0), h(inf)]` in the evaluation
+/// basis (`h(1)` derived as `claimed_sum - h(0)`), or `[s(1), s(inf)]` in the
+/// projective basis (`s(0)` derived as `claimed_sum - s(inf)`).
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]
 pub struct SumcheckData<F, EF> {
     /// Polynomial evaluations for each sumcheck round.
@@ -49,17 +52,21 @@ impl<F, EF> SumcheckData<F, EF> {
     /// # Arguments
     ///
     /// * `challenger` - Fiat-Shamir transcript.
-    /// * `c0` - Constant coefficient `h(0)`.
-    /// * `c_inf` - Leading coefficient `h(inf)`.
+    /// * `c_a` - Finite-point value: `h(0)` (evaluation) or `s(1)` (projective).
+    /// * `c_inf` - Leading coefficient `h(inf)` / `s(inf)`.
     /// * `pow_bits` - PoW difficulty (0 to skip grinding).
     ///
     /// # Returns
     ///
     /// The sampled challenge `r`.
+    ///
+    /// The two values are recorded and absorbed verbatim; which basis defines
+    /// them is the caller's business, and must match the [`Basis`] the
+    /// verifier later passes to [`Self::verify_rounds`].
     pub fn observe_and_sample<Challenger, BF>(
         &mut self,
         challenger: &mut Challenger,
-        c0: EF,
+        c_a: EF,
         c_inf: EF,
         pow_bits: usize,
     ) -> EF
@@ -70,12 +77,13 @@ impl<F, EF> SumcheckData<F, EF> {
         Challenger: FieldChallenger<BF> + GrindingChallenger<Witness = F>,
     {
         // Record the polynomial coefficients in the proof.
-        self.polynomial_evaluations.push([c0, c_inf]);
+        self.polynomial_evaluations.push([c_a, c_inf]);
 
         // Absorb coefficients into the transcript.
         //
-        // We send (h(0), h(inf)). The verifier derives h(1) from the sum constraint.
-        challenger.observe_algebra_slice(&[c0, c_inf]);
+        // Two of the quadratic's three values cross the wire; the verifier
+        // derives the third from the basis-dependent round identity.
+        challenger.observe_algebra_slice(&[c_a, c_inf]);
 
         // Optional proof-of-work to increase prover cost.
         //
@@ -113,6 +121,7 @@ impl<F, EF> SumcheckData<F, EF> {
         claimed_sum: &mut EF,
         expected_rounds: usize,
         pow_bits: usize,
+        basis: Basis,
     ) -> Result<Point<EF>, SumcheckError>
     where
         F: TwoAdicField,
@@ -142,18 +151,21 @@ impl<F, EF> SumcheckData<F, EF> {
             });
         }
 
-        for (i, &[c0, c_inf]) in self.polynomial_evaluations.iter().enumerate() {
-            // Observe only the sent polynomial evaluations (h(0) and h(inf)).
-            challenger.observe_algebra_slice(&[c0, c_inf]);
+        for (i, &[c_a, c_inf]) in self.polynomial_evaluations.iter().enumerate() {
+            // Observe only the sent polynomial evaluations; their meaning is
+            // basis-dependent ([h(0), h(inf)] or [s(1), s(inf)]).
+            challenger.observe_algebra_slice(&[c_a, c_inf]);
 
             // Verify PoW (only if pow_bits > 0)
             if pow_bits > 0 && !challenger.check_witness(pow_bits, self.pow_witnesses[i]) {
                 return Err(SumcheckError::InvalidPowWitness);
             }
 
-            // Sample challenge and reconstruct h(r) from (h(0), h(1), h(inf)).
+            // Sample the challenge and reconstruct h(r); the basis-dependent
+            // round identity supplies the third quadratic value (shared with
+            // the prover via Basis::reduce_claim).
             let r: EF = challenger.sample_algebra_element();
-            *claimed_sum = extrapolate_01inf(c0, *claimed_sum - c0, c_inf, r);
+            *claimed_sum = basis.reduce_claim(c_a, c_inf, r, *claimed_sum);
             randomness.push(r);
         }
 
@@ -174,6 +186,7 @@ pub fn verify_final_sumcheck_rounds<F, EF, Challenger>(
     claimed_sum: &mut EF,
     rounds: usize,
     pow_bits: usize,
+    basis: Basis,
 ) -> Result<Point<EF>, SumcheckError>
 where
     F: TwoAdicField,
@@ -189,5 +202,5 @@ where
     })?;
 
     // `verify_rounds` binds the round count to `rounds`.
-    sumcheck.verify_rounds(challenger, claimed_sum, rounds, pow_bits)
+    sumcheck.verify_rounds(challenger, claimed_sum, rounds, pow_bits, basis)
 }

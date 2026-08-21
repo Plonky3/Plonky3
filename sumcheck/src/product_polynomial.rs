@@ -27,9 +27,9 @@ use p3_multilinear_util::poly::{Poly, PolyMaybePacked, PolyMaybePackedView};
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
+use crate::SumcheckData;
 use crate::constraints::Constraint;
-use crate::strategy::VariableOrder;
-use crate::{SumcheckData, extrapolate_01inf};
+use crate::strategy::{Basis, RoundMessage, VariableOrder};
 
 /// A paired representation of evaluation and weight polynomials for quadratic sumcheck.
 ///
@@ -339,34 +339,36 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         //
         // The strategy differs based on representation to maximize SIMD utilization.
         let order = self.order;
-        let (c0, c_inf) = match &self.inner {
+
+        // This prover binds evaluation-basis tables; the projective kernels
+        // are reachable through the same tag, wired up by their consumer.
+        let basis = Basis::Evaluation;
+        let RoundMessage { c_a, c_inf } = match &self.inner {
             MaybePacked::Packed { evals, weights } => {
                 // Packed round coefficients: SIMD-parallel per-lane accumulation.
-                let (c0, c_inf) = order.sumcheck_coefficients(evals.as_slice(), weights.as_slice());
+                let msg = basis.sumcheck_coefficients(order, evals.as_slice(), weights.as_slice());
 
                 // Horizontal reduction across SIMD lanes.
-                (
-                    EF::ExtensionPacking::to_ext_iter([c0]).sum(),
-                    EF::ExtensionPacking::to_ext_iter([c_inf]).sum(),
-                )
+                RoundMessage {
+                    c_a: EF::ExtensionPacking::to_ext_iter([msg.c_a]).sum(),
+                    c_inf: EF::ExtensionPacking::to_ext_iter([msg.c_inf]).sum(),
+                }
             }
             MaybePacked::Unpacked { evals, weights } => {
                 // Scalar round coefficients.
-                order.sumcheck_coefficients(evals.as_slice(), weights.as_slice())
+                basis.sumcheck_coefficients(order, evals.as_slice(), weights.as_slice())
             }
         };
 
         // Step 2-4: Commit to transcript, do PoW, and receive challenge.
-        let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
+        let r = sumcheck_data.observe_and_sample(challenger, c_a, c_inf, pow_bits);
 
         // Step 5: Fold both polynomials using the challenge.
         self.compress(r);
 
-        // Step 6: Update the claimed sum.
-        //
-        // h(r) = h(0)*(1-r) + h(1)*r + h(inf)*r*(r-1)
-        // where h(1) = claimed_sum - h(0).
-        *sum = extrapolate_01inf(c0, *sum - c0, c_inf, r);
+        // Step 6: Update the claimed sum, through the same round identity the
+        // verifier will apply to this message.
+        *sum = basis.reduce_claim(c_a, c_inf, r, *sum);
 
         // Sanity check: the updated sum should equal the inner product after folding.
         debug_assert_eq!(*sum, self.dot_product());
@@ -384,18 +386,20 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     /// touching the transcript or folding the polynomial.
     pub(crate) fn round_coefficients(&self) -> (EF, EF) {
         let order = self.order;
-        match &self.inner {
+        let basis = Basis::Evaluation;
+        let msg = match &self.inner {
             MaybePacked::Packed { evals, weights } => {
-                let (c0, c_inf) = order.sumcheck_coefficients(evals.as_slice(), weights.as_slice());
-                (
-                    EF::ExtensionPacking::to_ext_iter([c0]).sum(),
-                    EF::ExtensionPacking::to_ext_iter([c_inf]).sum(),
-                )
+                let msg = basis.sumcheck_coefficients(order, evals.as_slice(), weights.as_slice());
+                RoundMessage {
+                    c_a: EF::ExtensionPacking::to_ext_iter([msg.c_a]).sum(),
+                    c_inf: EF::ExtensionPacking::to_ext_iter([msg.c_inf]).sum(),
+                }
             }
             MaybePacked::Unpacked { evals, weights } => {
-                order.sumcheck_coefficients(evals.as_slice(), weights.as_slice())
+                basis.sumcheck_coefficients(order, evals.as_slice(), weights.as_slice())
             }
-        }
+        };
+        (msg.c_a, msg.c_inf)
     }
 
     /// Folds both product-polynomial sides by one verifier challenge.
@@ -576,7 +580,8 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::strategy::sumcheck_coefficients_prefix;
+    use crate::extrapolate_01inf;
+    use crate::strategy::{RoundMessage, sumcheck_coefficients_prefix};
 
     type F = BabyBear;
     type EF = BinomialExtensionField<BabyBear, 4>;
@@ -646,7 +651,10 @@ mod tests {
         let evals = Poly::new(vec![e0, e1]);
         let weights = Poly::new(vec![w0, w1]);
 
-        let (h0, h_inf) = sumcheck_coefficients_prefix(evals.as_slice(), weights.as_slice());
+        let RoundMessage {
+            c_a: h0,
+            c_inf: h_inf,
+        } = sumcheck_coefficients_prefix(evals.as_slice(), weights.as_slice());
 
         // h(0) = e0 * w0
         let expected_h0 = e0 * w0;
@@ -1226,7 +1234,7 @@ mod tests {
             // Compute sumcheck coefficients before folding.
             // Returns (h(0), h(inf)) where h is the univariate
             // polynomial h(X) = sum_{b in {0,1}^{n-1}} f(X, b) * w(X, b).
-            let (c0, c_inf) = match &poly.inner {
+            let RoundMessage { c_a: c0, c_inf } = match &poly.inner {
                 MaybePacked::Unpacked {
                     evals: small_evals,
                     weights: small_weights,

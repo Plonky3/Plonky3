@@ -15,7 +15,7 @@ use rand::rngs::SmallRng;
 use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::constraints::{Constraint, Statements};
 use crate::layout::{Layout, PrefixProver, SuffixProver, TableShape, Verifier};
-use crate::strategy::VariableOrder;
+use crate::strategy::{Basis, VariableOrder};
 use crate::test_util::{stacked_num_variables, table_point_schedule, table_specs_to_tables};
 use crate::{
     OpeningBatch, OpeningEvals, OpeningProtocol, SumcheckData, SumcheckError, TableSpec,
@@ -348,7 +348,13 @@ where
 
         verifier_randomness.extend(
             &proof[0]
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    0,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
         num_variables_inter -= FOLDING;
@@ -367,7 +373,13 @@ where
 
         verifier_randomness.extend(
             &proof[round]
-                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    FOLDING,
+                    0,
+                    Basis::Evaluation,
+                )
                 .unwrap(),
         );
         num_variables_inter -= FOLDING;
@@ -377,7 +389,13 @@ where
         &proof
             .last()
             .unwrap()
-            .verify_rounds(&mut verifier_challenger, &mut sum, num_variables_inter, 0)
+            .verify_rounds(
+                &mut verifier_challenger,
+                &mut sum,
+                num_variables_inter,
+                0,
+                Basis::Evaluation,
+            )
             .unwrap(),
     );
 
@@ -437,8 +455,15 @@ fn test_zero_rounds_returns_empty_point() {
     // Case 1: no data.
     let mut chal = challenger();
     let mut sum = EF::ZERO;
-    let point = verify_final_sumcheck_rounds::<F, EF, _>(None, &mut chal, &mut sum, 0, 0)
-        .expect("0 rounds + None must succeed");
+    let point = verify_final_sumcheck_rounds::<F, EF, _>(
+        None,
+        &mut chal,
+        &mut sum,
+        0,
+        0,
+        Basis::Evaluation,
+    )
+    .expect("0 rounds + None must succeed");
     assert!(point.as_slice().is_empty());
 
     // Case 2: data supplied but ignored.
@@ -448,8 +473,9 @@ fn test_zero_rounds_returns_empty_point() {
     };
     let mut chal = challenger();
     let mut sum = EF::ZERO;
-    let point = verify_final_sumcheck_rounds(Some(&data), &mut chal, &mut sum, 0, 0)
-        .expect("0 rounds + Some must succeed");
+    let point =
+        verify_final_sumcheck_rounds(Some(&data), &mut chal, &mut sum, 0, 0, Basis::Evaluation)
+            .expect("0 rounds + Some must succeed");
     assert!(point.as_slice().is_empty());
 }
 
@@ -460,8 +486,15 @@ fn test_missing_sumcheck_data() {
     let mut sum = EF::ZERO;
     let rounds = 3;
 
-    let err = verify_final_sumcheck_rounds::<F, EF, _>(None, &mut chal, &mut sum, rounds, 0)
-        .expect_err("None + rounds > 0 must error");
+    let err = verify_final_sumcheck_rounds::<F, EF, _>(
+        None,
+        &mut chal,
+        &mut sum,
+        rounds,
+        0,
+        Basis::Evaluation,
+    )
+    .expect_err("None + rounds > 0 must error");
 
     match err {
         // Inner field must echo the requested round count.
@@ -487,8 +520,15 @@ fn test_round_count_mismatch() {
         pow_witnesses: vec![],
     };
 
-    let err = verify_final_sumcheck_rounds(Some(&data), &mut chal, &mut sum, expected_rounds, 0)
-        .expect_err("length mismatch must error");
+    let err = verify_final_sumcheck_rounds(
+        Some(&data),
+        &mut chal,
+        &mut sum,
+        expected_rounds,
+        0,
+        Basis::Evaluation,
+    )
+    .expect_err("length mismatch must error");
 
     match err {
         SumcheckError::RoundCountMismatch { expected, actual } => {
@@ -515,7 +555,7 @@ fn test_verify_rounds_rejects_wrong_round_count() {
     };
 
     let err = data
-        .verify_rounds(&mut chal, &mut sum, expected_rounds, 0)
+        .verify_rounds(&mut chal, &mut sum, expected_rounds, 0, Basis::Evaluation)
         .expect_err("wrong round count must error");
 
     match err {
@@ -540,7 +580,7 @@ fn test_pow_witness_count_mismatch() {
     };
 
     let err = data
-        .verify_rounds(&mut chal, &mut sum, expected, 20)
+        .verify_rounds(&mut chal, &mut sum, expected, 20, Basis::Evaluation)
         .expect_err("witness-count mismatch must error before indexing");
 
     match err {
@@ -569,7 +609,13 @@ fn test_invalid_pow_witness() {
     };
 
     let err = data
-        .verify_rounds(&mut chal, &mut sum, data.num_rounds(), pow_bits)
+        .verify_rounds(
+            &mut chal,
+            &mut sum,
+            data.num_rounds(),
+            pow_bits,
+            Basis::Evaluation,
+        )
         .expect_err("zeroed witness must fail");
 
     assert!(matches!(err, SumcheckError::InvalidPowWitness));
