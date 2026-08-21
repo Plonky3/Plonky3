@@ -1138,7 +1138,7 @@ pub fn generic_batched_columnwise_dot_product<F, EF, R, I, const N: usize>(
 {
     for (row, scales) in items {
         let packed_scales = scales.map(EF::ExtensionPacking::from);
-        for (acc_c, r) in acc.chunks_exact_mut(N).zip(row) {
+        for (acc_c, r) in acc.as_chunks_mut::<N>().0.iter_mut().zip(row) {
             for (a, &s) in acc_c.iter_mut().zip(&packed_scales) {
                 *a += s * r;
             }

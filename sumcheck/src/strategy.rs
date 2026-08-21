@@ -144,18 +144,21 @@ where
             )
     } else {
         e_lo_main
-            .chunks_exact(K)
-            .zip(e_hi_main.chunks_exact(K))
-            .zip(w_lo_main.chunks_exact(K).zip(w_hi_main.chunks_exact(K)))
+            .as_chunks::<K>()
+            .0
+            .iter()
+            .zip(e_hi_main.as_chunks::<K>().0.iter())
+            .zip(
+                w_lo_main
+                    .as_chunks::<K>()
+                    .0
+                    .iter()
+                    .zip(w_hi_main.as_chunks::<K>().0.iter()),
+            )
             .fold(
                 (A::ZERO, A::ZERO),
                 |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
-                    let chunk = chunk_round_step::<B, A>(
-                        e_lo_c.try_into().unwrap(),
-                        e_hi_c.try_into().unwrap(),
-                        w_lo_c.try_into().unwrap(),
-                        w_hi_c.try_into().unwrap(),
-                    );
+                    let chunk = chunk_round_step::<B, A>(e_lo_c, e_hi_c, w_lo_c, w_hi_c);
                     round_reduce(acc, chunk)
                 },
             )
@@ -231,8 +234,10 @@ where
             )
     } else {
         evals_main
-            .chunks_exact(2 * K)
-            .zip(weights_main.chunks_exact(2 * K))
+            .as_chunks::<{ 2 * K }>()
+            .0
+            .iter()
+            .zip(weights_main.as_chunks::<{ 2 * K }>().0.iter())
             .fold((A::ZERO, A::ZERO), |acc, (e_chunk, w_chunk)| {
                 let (e_lo, e_hi) = gather_pairs::<B>(e_chunk);
                 let (w_lo, w_hi) = gather_pairs::<A>(w_chunk);

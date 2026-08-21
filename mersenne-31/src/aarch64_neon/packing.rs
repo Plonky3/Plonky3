@@ -537,6 +537,9 @@ fn mac_up_to_3(vs: &[uint32x4_t], svs: [uint32x4_t; 3]) -> (uint64x2_t, uint64x2
 /// into u64 lane accumulators. A safety fold of the accumulators every `2^28` row
 /// triples keeps them below `2^62` for any stream length, so the final two folds
 /// plus `reduce_sum` always produce canonical values.
+// `as_chunks` requires a standalone const-generic chunk size on stable; `N * D * 2` and
+// `D * 2` aren't standalone, so `chunks_exact`/`chunks_exact_mut` stay the only option here.
+#[allow(clippy::chunks_exact_to_as_chunks)]
 fn columnwise_kernel<EF, R, I, const N: usize, const D: usize>(
     out: &mut [EF::ExtensionPacking],
     mut items: I,
@@ -803,7 +806,7 @@ mod tests {
             let mut expected = EF::ExtensionPacking::zero_vec(packed_width * N);
             for (row, s) in items() {
                 let packed_scales = s.map(EF::ExtensionPacking::from);
-                for (acc_c, r) in expected.chunks_exact_mut(N).zip(row) {
+                for (acc_c, r) in expected.as_chunks_mut::<N>().0.iter_mut().zip(row) {
                     for (a, &ps) in acc_c.iter_mut().zip(&packed_scales) {
                         *a += ps * r;
                     }
