@@ -13,9 +13,10 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use p3_air::{Air, AirLayout, SymbolicAirBuilder, get_all_symbolic_constraints};
+use p3_air::{Air, AirLayout, BaseAir};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PrimeField64};
+use p3_lookup::InteractionSymbolicBuilder as SymbolicAirBuilder;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::generic_degree::{
@@ -24,11 +25,12 @@ use p3_sumcheck::generic_degree::{
 use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
-use crate::folder::MultilinearFolder;
+use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
+use crate::lookup::{ActiveLookupRuntime, AirLinkClaim, LookupRuntime};
 use crate::opening::{OpeningClaims, TableOpening};
 use crate::packed_ext::PackedExt;
-use crate::rounds::{AirShape, RoundStateBase, RoundStateExt, Stage};
-use crate::selectors::{BoundaryEvals, PeriodicError, periodic_evals_at};
+use crate::rounds::{AirDegrees, AirOpenings, RoundStateBase, RoundStateExt, Stage, StageCoupling};
+use crate::selectors::{BoundaryEvals, PeriodicError, periodic_evals_at, periodic_num_variables};
 
 /// Reasons the zerocheck verifier rejects a proof.
 #[derive(Debug, Error)]
@@ -39,6 +41,9 @@ pub enum ZerocheckError {
     /// The proof claimed a nonzero sum, but a zerocheck always sums to zero.
     #[error("zerocheck claimed sum is nonzero")]
     NonZeroClaimedSum,
+    /// The sumcheck claim does not match the lookup-derived AIR-link claim.
+    #[error("AIR sumcheck claimed sum does not match the lookup link")]
+    ClaimedSumMismatch,
     /// The current-row openings did not carry exactly one value per main column.
     #[error("zerocheck current-row opening count mismatch: expected {expected}, got {actual}")]
     OpeningCountMismatch {
@@ -102,19 +107,6 @@ pub struct ZerocheckProof<F, EF> {
     pub preprocessed_next: Vec<Vec<EF>>,
 }
 
-/// One AIR's opening values at its sub-point, held together while scattering back to caller order.
-#[derive(Clone)]
-struct AirOpenings<EF> {
-    /// Current-row value of each main column.
-    local: Vec<EF>,
-    /// Successor value of each main column the AIR reads on the next row.
-    next: Vec<EF>,
-    /// Current-row value of each preprocessed column.
-    preprocessed_local: Vec<EF>,
-    /// Successor value of each preprocessed column the AIR reads on the next row.
-    preprocessed_next: Vec<EF>,
-}
-
 /// A batched AIR zerocheck instance.
 ///
 /// Bundles the AIRs and the grinding parameter shared by the prover and verifier.
@@ -130,125 +122,106 @@ pub struct AirZerocheck<'a, A> {
 /// Per-round degree of an AIR's zerocheck sumcheck.
 ///
 /// The integrand is `eq(tau, x) * g(x)`.
-/// Its per-variable degree is the constraint degree plus one for the multilinear eq weight.
+/// Its per-variable degree is the larger native expression degree plus one
+/// for the multilinear eq weight.
 fn sumcheck_degree<F, EF, A>(air: &A) -> usize
 where
-    F: PrimeField64,
+    F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
-    air_degree(air) + 1
+    get_air_degrees::<F, EF, A>(air).max() + 1
 }
 
-/// Scores read off one symbolic evaluation of an AIR.
-struct SymbolicScores {
-    /// Largest per-variable degree among the asserted constraints, scored at domain size two.
-    ///
-    /// A materialized periodic column is multilinear and scores one per variable.
-    ///
-    /// ```text
-    ///     periodic lengths passed empty → each periodic value capped at domain size two
-    ///                                   → degree one, exactly like a trace column
-    /// ```
-    degree: usize,
-    /// Number of asserted base-field constraints.
-    num_base_constraints: usize,
-}
-
-/// Evaluate an AIR symbolically once and score its constraints.
-fn symbolic_scores<F, EF, A>(air: &A) -> SymbolicScores
+fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
 where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
     let layout = AirLayout::from_air::<F>(air);
-    let (base, ext) = get_all_symbolic_constraints::<F, EF, A>(air, layout);
-    let base_degree = base
+    layout.validate_against_air(air);
+
+    let mut builder = SymbolicAirBuilder::<F, EF>::new(layout);
+    air.eval(&mut builder);
+    assert!(
+        builder.exclusive_interactions().is_empty(),
+        "multi-STARK zerocheck does not support exclusive lookup interactions"
+    );
+
+    let base_constraints = builder.base_constraints();
+    let extension_constraints = builder.extension_constraints();
+    let has_constraints = !base_constraints.is_empty() || !extension_constraints.is_empty();
+    let symbolic_constraint_degree = base_constraints
         .iter()
-        .map(|c| c.poly_degree(2, &[]))
+        .map(|expression| expression.poly_degree(2, &[]))
+        .chain(
+            extension_constraints
+                .iter()
+                .map(|expression| expression.poly_degree(2, &[])),
+        )
         .max()
         .unwrap_or(0);
-    let ext_degree = ext.iter().map(|c| c.poly_degree(2, &[])).max().unwrap_or(0);
-    SymbolicScores {
-        degree: base_degree.max(ext_degree),
-        num_base_constraints: base.len(),
-    }
-}
+    let constraint_degree = if has_constraints {
+        air.max_constraint_degree()
+            .map_or(symbolic_constraint_degree, |degree| {
+                debug_assert!(
+                    degree >= symbolic_constraint_degree,
+                    "max_constraint_degree hint is below the symbolic constraint degree"
+                );
+                degree
+            })
+    } else {
+        0
+    };
 
-/// Per-variable constraint degree of an AIR, with the eq weight not yet applied.
-///
-/// The degree comes from one of two sources:
-/// - a constant-time hint supplied by the AIR, when present;
-/// - otherwise a symbolic pass that scores each constraint at domain size two.
-///
-/// At domain size two every column and boundary selector scores degree one, so the symbolic value
-/// is exact.
-///
-/// The hint must be at least the true degree:
-/// - a smaller hint drops evaluations from each round polynomial and breaks soundness;
-/// - a larger hint only inflates the proof and the per-row work.
-///
-/// A debug assertion pins the hint against the symbolic value.
-fn air_degree<F, EF, A>(air: &A) -> usize
-where
-    F: PrimeField64,
-    EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
-{
-    if let Some(degree) = air.max_constraint_degree() {
-        // A hint below the true constraint degree drops evaluations from each round polynomial.
-        // Reject such a hint in debug builds.
-        debug_assert!(
-            degree >= symbolic_scores::<F, EF, A>(air).degree,
-            "max_constraint_degree hint is below the symbolic constraint degree"
-        );
-        return degree;
-    }
+    let has_interactions =
+        !builder.global_interactions().is_empty() || !builder.local_interactions().is_empty();
+    let global_interaction_degree = builder
+        .global_interactions()
+        .iter()
+        .flat_map(|interaction| {
+            interaction
+                .fields
+                .iter()
+                .chain(core::iter::once(&interaction.count))
+        })
+        .map(|expression| expression.poly_degree(2, &[]))
+        .max()
+        .unwrap_or(0);
+    let local_interaction_degree = builder
+        .local_interactions()
+        .iter()
+        .flat_map(|interaction| &interaction.tuples)
+        .map(|(fields, count)| {
+            let fields_degree = fields
+                .iter()
+                .map(|expression| expression.poly_degree(2, &[]))
+                .max()
+                .unwrap_or(0);
+            let (count, _) = count.clone().into_parts();
+            fields_degree.max(count.poly_degree(2, &[]))
+        })
+        .max()
+        .unwrap_or(0);
+    let interaction_degree = global_interaction_degree.max(local_interaction_degree);
 
-    // No hint: fall back to the symbolic constraint degree.
-    symbolic_scores::<F, EF, A>(air).degree
-}
-
-/// Per-variable constraint degree and asserted base-constraint count of an AIR.
-///
-/// Runs one symbolic evaluation of the AIR, which both fills in whichever hint is absent and
-/// checks whichever hint is present.
-///
-/// The count must match the AIR exactly, unlike the degree, which need only be an upper bound.
-/// The prover weights the AIR's `i`-th constraint by `alpha^(n - 1 - i)` while the verifier folds
-/// the constraints it sees by Horner, so a count that is off by `d` scales the prover's batched
-/// value by `alpha^d` and the two sides no longer agree. Checking it here, once per AIR per
-/// proof, turns that mismatch into a named panic instead of an unverifiable proof.
-///
-/// # Panics
-///
-/// Panics if `max_constraint_degree()` is below the symbolic degree, or if `num_constraints()`
-/// disagrees with the symbolic constraint count.
-fn air_degree_and_constraints<F, EF, A>(air: &A) -> AirShape
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
-{
-    let hinted_degree = air.max_constraint_degree();
-    let hinted_count = air.num_constraints();
-
-    let scores = symbolic_scores::<F, EF, A>(air);
     assert!(
-        hinted_degree.is_none_or(|degree| degree >= scores.degree),
-        "max_constraint_degree hint is below the symbolic constraint degree"
+        !has_constraints || constraint_degree > 0,
+        "zerocheck requires every nonempty constraint family to have positive symbolic degree"
     );
     assert!(
-        hinted_count.is_none_or(|count| count == scores.num_base_constraints),
-        "num_constraints() = {:?} but symbolic evaluation found {} base constraints",
-        hinted_count,
-        scores.num_base_constraints,
+        !has_interactions || interaction_degree > 0,
+        "zerocheck requires every nonempty interaction family to have positive symbolic degree"
+    );
+    assert!(
+        has_constraints || has_interactions,
+        "zerocheck requires every AIR to contribute constraints or interactions"
     );
 
-    AirShape {
-        degree: hinted_degree.unwrap_or(scores.degree),
-        num_constraints: scores.num_base_constraints,
+    AirDegrees {
+        constraints: constraint_degree,
+        interactions: interaction_degree,
     }
 }
 
@@ -260,12 +233,58 @@ impl<'a, A> AirZerocheck<'a, A> {
         Self { airs, pow_bits }
     }
 
+    /// Check that prover inputs are aligned with the AIR batch and its declared layouts.
+    fn validate_inputs<F>(
+        &self,
+        tables: &[&Table<F>],
+        preprocessed: &[Option<&Table<F>>],
+        public_values: &[&[F]],
+    ) where
+        F: Field,
+        A: BaseAir<F>,
+    {
+        assert!(!self.airs.is_empty());
+        assert_eq!(self.airs.len(), tables.len());
+        assert_eq!(self.airs.len(), preprocessed.len());
+        assert_eq!(self.airs.len(), public_values.len());
+
+        self.airs
+            .iter()
+            .zip(tables)
+            .zip(preprocessed)
+            .zip(public_values)
+            .for_each(|(((&air, table), preprocessed), public_values)| {
+                let layout = AirLayout::from_air::<F>(air);
+                // A height-1 trace has zero variables and never activates a stage.
+                // Reject it here, matching the verifier's `log_height > 0` guard.
+                assert!(
+                    table.num_variables() > 0,
+                    "zerocheck requires each trace height to be at least two"
+                );
+                assert_eq!(table.num_polys(), layout.main_width);
+                assert_eq!(
+                    preprocessed.map_or(0, |table| table.num_polys()),
+                    layout.preprocessed_width
+                );
+                if let Some(preprocessed) = preprocessed {
+                    assert_eq!(preprocessed.num_variables(), table.num_variables());
+                }
+                assert_eq!(public_values.len(), air.num_public_values());
+                periodic_num_variables(
+                    layout.num_periodic_columns,
+                    &air.periodic_columns(),
+                    table.num_variables(),
+                )
+                .expect("periodic column declaration must fit the trace height");
+            });
+    }
+
     /// Prove that every AIR in the batch vanishes on its trace.
     ///
     /// `tables[i]`, `preprocessed[i]`, and `public_values[i]` correspond to `airs[i]`.
     ///
-    /// The caller must observe every trace commitment into the challenger before this call.
-    /// The public values are observed here, so the caller need not observe them.
+    /// The caller must observe every trace commitment and the public values into
+    /// the challenger before this call.
     ///
     /// Periodic columns, if any, are folded into the sumcheck but produce no opening claim.
     ///
@@ -274,7 +293,6 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// Panics if the input lengths disagree with the number of AIRs.
     /// Panics if a periodic column's period is not a power of two dividing the trace height.
     /// Panics if any trace height is less than two.
-    #[tracing::instrument(skip_all)]
     pub fn prove<F, EF, Challenger>(
         &self,
         preprocessed: &[Option<&Table<F>>],
@@ -301,42 +319,129 @@ impl<'a, A> AirZerocheck<'a, A> {
                     PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
                     PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
                 >,
+            > + for<'b> Air<InteractionMultilinearFolder<'b, F, F, EF>>
+            + for<'b> Air<
+                InteractionMultilinearFolder<
+                    'b,
+                    F,
+                    <F as Field>::Packing,
+                    <EF as ExtensionField<F>>::ExtensionPacking,
+                >,
+            > + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<
+                InteractionMultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
+                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
+                >,
             > + Air<SymbolicAirBuilder<F, EF>>,
         <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        assert!(!self.airs.is_empty());
-        assert_eq!(self.airs.len(), tables.len(),);
-        assert_eq!(self.airs.len(), preprocessed.len(),);
-        assert_eq!(self.airs.len(), public_values.len(),);
+        self.prove_with_lookup(
+            preprocessed,
+            tables,
+            public_values,
+            LookupRuntime::Inactive,
+            challenger,
+        )
+    }
 
-        let shapes = self
+    /// Lookup-aware prover entry point used by the complete multi-STARK protocol.
+    #[tracing::instrument(skip_all)]
+    pub(crate) fn prove_with_lookup<F, EF, Challenger>(
+        &self,
+        preprocessed: &[Option<&Table<F>>],
+        tables: &[&Table<F>],
+        public_values: &[&[F]],
+        lookup: LookupRuntime<EF>,
+        challenger: &mut Challenger,
+    ) -> (ZerocheckProof<F, EF>, Point<EF>)
+    where
+        F: PrimeField64,
+        EF: ExtensionField<F>,
+        A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
+            + for<'b> Air<
+                MultilinearFolder<
+                    'b,
+                    F,
+                    <F as Field>::Packing,
+                    <EF as ExtensionField<F>>::ExtensionPacking,
+                >,
+            > + for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<
+                MultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
+                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
+                >,
+            > + for<'b> Air<InteractionMultilinearFolder<'b, F, F, EF>>
+            + for<'b> Air<
+                InteractionMultilinearFolder<
+                    'b,
+                    F,
+                    <F as Field>::Packing,
+                    <EF as ExtensionField<F>>::ExtensionPacking,
+                >,
+            > + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<
+                InteractionMultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
+                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
+                >,
+            > + Air<SymbolicAirBuilder<F, EF>>,
+        <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        self.validate_inputs(tables, preprocessed, public_values);
+        lookup.validate(self.airs.len());
+        // Lower the protocol-boundary enum once. From here on, inactive lookup
+        // state is represented by empty setup collections, so the round hot
+        // loop does not branch on lookup activity.
+        let (
+            lookup_point,
+            lookup_claimed_sum,
+            mut claims_by_air,
+            theta_beta_powers,
+            mut links_by_air,
+        ) = match lookup {
+            LookupRuntime::Inactive => (
+                Point::new(Vec::new()),
+                EF::ZERO,
+                BTreeMap::new(),
+                Vec::new(),
+                BTreeMap::new(),
+            ),
+            LookupRuntime::Active(ActiveLookupRuntime {
+                claims_by_air,
+                air_link:
+                    AirLinkClaim {
+                        point,
+                        claimed_sum,
+                        theta_beta_powers,
+                        links_by_air,
+                    },
+            }) => (
+                point,
+                claimed_sum,
+                claims_by_air,
+                theta_beta_powers,
+                links_by_air,
+            ),
+        };
+
+        // Ordinary constraints and lookup links keep their native symbolic degrees.
+        // The round state evaluates an AIR up to the larger degree but stops
+        // accumulating the lower-degree family at its own final node.
+        let degrees = self
             .airs
             .iter()
-            .zip(tables.iter())
-            .zip(preprocessed.iter())
-            .zip(public_values.iter())
-            .map(|(((&air, table), preprocessed), public_values)| {
-                let layout = AirLayout::from_air::<F>(air);
-                // A height-1 trace has zero variables and never activates a stage.
-                // Reject it here, matching the verifier's `log_height > 0` guard.
-                assert!(
-                    table.num_variables() > 0,
-                    "zerocheck requires each trace height to be at least two"
-                );
-                assert_eq!(table.num_polys(), layout.main_width);
-                assert_eq!(
-                    preprocessed.map_or(0, |table| table.num_polys()),
-                    layout.preprocessed_width
-                );
-                if let Some(preprocessed) = preprocessed {
-                    assert_eq!(preprocessed.num_variables(), table.num_variables());
-                }
-                assert_eq!(public_values.len(), air.num_public_values());
-                air_degree_and_constraints::<F, EF, A>(air)
-            })
+            .map(|&air| get_air_degrees::<F, EF, A>(air))
             .collect::<Vec<_>>();
-        let max_degree = shapes.iter().map(|shape| shape.degree).max().unwrap();
 
         // Bucket AIR indices by trace height.
         // The map gives deterministic height order; stages are built largest-first below.
@@ -348,14 +453,53 @@ impl<'a, A> AirZerocheck<'a, A> {
                 .push(index);
         });
 
-        let log_height = indices_by_height.keys().copied().max().unwrap();
+        // All stages contribute to one transmitted round polynomial. Its internal
+        // evaluation buffer therefore uses the largest AIR degree; lower-degree
+        // groups are extrapolated only when they join the shared accumulator.
+        let max_degree = degrees.iter().copied().map(AirDegrees::max).max().unwrap();
+
+        // The global sumcheck cube must contain both the tallest AIR trace and the
+        // full fractional-GKR output point. Lookup block selectors can make that
+        // point longer than any trace, adding leading rounds before AIR stages activate.
+        let air_log_height = indices_by_height.keys().copied().max().unwrap();
+        let log_height = air_log_height.max(lookup_point.num_variables());
+
+        let (alpha, beta, eta, tau) = sample_zerocheck_challenges::<F, EF, Challenger>(
+            challenger,
+            log_height,
+            lookup_point.as_slice(),
+        );
+        let tau = Point::new(tau);
+        // Beta batches AIR contributions in caller order.
+        // When a stage activates, it selects the beta powers for its original AIR indices.
+        let beta_powers = beta.powers().collect_n(self.airs.len());
 
         // Each stage contains the AIRs sharing one trace height.
+        // Lookup claims and links are aligned here once using the same AIR indices.
         // Original AIR indices stay attached so final openings can return in caller order.
-        let stages = indices_by_height
+        let mut stages = indices_by_height
             .into_iter()
             .rev()
             .map(|(_, indices)| {
+                let claims = indices
+                    .iter()
+                    .filter_map(|&air_index| {
+                        claims_by_air
+                            .remove(&air_index)
+                            .map(|claim| (air_index, claim))
+                    })
+                    .collect();
+                let links = indices
+                    .iter()
+                    .filter_map(|&air_index| {
+                        links_by_air
+                            .remove(&air_index)
+                            .map(|link| (air_index, link))
+                    })
+                    .collect::<BTreeMap<_, _>>();
+
+                let coupling = StageCoupling::new(claims, links, theta_beta_powers.clone());
+
                 let tables = indices.iter().map(|&i| tables[i]).collect::<Vec<_>>();
                 let preprocessed = indices.iter().map(|&i| preprocessed[i]).collect::<Vec<_>>();
                 let airs = indices.iter().map(|&i| self.airs[i]).collect::<Vec<_>>();
@@ -363,55 +507,41 @@ impl<'a, A> AirZerocheck<'a, A> {
                     .iter()
                     .map(|&i| public_values[i])
                     .collect::<Vec<_>>();
-                let shapes = indices.iter().map(|&i| shapes[i]).collect::<Vec<_>>();
+                let degrees = indices.iter().map(|&i| degrees[i]).collect::<Vec<_>>();
                 Stage::new(
-                    &airs,
-                    &public_values,
-                    &indices,
-                    &preprocessed,
-                    &tables,
-                    &shapes,
+                    airs,
+                    public_values,
+                    indices,
+                    preprocessed,
+                    tables,
+                    degrees,
+                    coupling,
                 )
             })
-            .collect::<Vec<_>>();
+            .peekable();
 
-        // Bind all public values before any challenge depends on them.
-        // Trace commitments must already be in the transcript.
-        for values in public_values {
-            challenger.observe_algebra_slice(values);
-        }
-
-        let (alpha, beta, tau) =
-            sample_zerocheck_challenges::<F, EF, Challenger>(challenger, log_height);
-        let tau = Point::new(tau);
-        // Beta batches AIR contributions in caller order.
-        // When a stage activates, it selects the beta powers for its original AIR indices.
-        let beta_powers = beta.powers().collect_n(self.airs.len());
-
-        let mut proof = GenericDegreeProof {
-            claimed_sum: EF::ZERO,
-            round_polys: Vec::with_capacity(log_height),
-            pow_witnesses: Vec::with_capacity(if self.pow_bits > 0 { log_height } else { 0 }),
-        };
+        let claimed_sum = eta * lookup_claimed_sum;
 
         // A transmitted round polynomial is one degree wider than the internal one.
         // The zerocheck's equality weight contributes that extra degree.
-        // This is the width the verifier expects, so it is the width recorded.
         let transmitted_degree = max_degree + 1;
 
         // The rounds below drive the shared sumcheck transcript.
-        // They never touch the challenger directly.
-        // This loop therefore cannot drift from the verifier.
-        //
-        // Seeding binds the shape and the claimed sum.
-        // A zerocheck always fixes that sum to zero.
+        // They never touch the challenger directly, so this loop cannot drift from the
+        // verifier, which replays the same description.
         let mut transcript = ProverTranscript::<Challenger, F, EF>::new(
             challenger,
             log_height,
             transmitted_degree,
             self.pow_bits,
-            EF::ZERO,
+            claimed_sum,
         );
+
+        let mut proof = GenericDegreeProof {
+            claimed_sum,
+            round_polys: Vec::with_capacity(log_height),
+            pow_witnesses: Vec::with_capacity(if self.pow_bits > 0 { log_height } else { 0 }),
+        };
 
         let mut challenges = Vec::with_capacity(log_height);
         // Active stages live as folded extension states.
@@ -419,12 +549,13 @@ impl<'a, A> AirZerocheck<'a, A> {
         let mut states = Vec::<RoundStateExt<'_, '_, A, F, EF>>::new();
         let mut claims = Vec::<EF>::new();
 
+        // Before any height activates, the full lookup claim is dormant.
+        let mut pending_claim = claimed_sum;
+
         // All stages share the same global sumcheck point.
         // eq_prefix covers folded rounds; eq_suffix covers the tail still inside each state.
         let mut eq_prefix = EF::ONE;
         let mut eq_suffix = Poly::new_from_point(&tau.as_slice()[1..], EF::ONE);
-
-        let interpolator = RoundPolyInterpolator::new(max_degree);
 
         // Barycentric interpolators, indexed by internal degree, built once.
         // A lower-degree stage is extrapolated up to the batch's max degree.
@@ -433,13 +564,24 @@ impl<'a, A> AirZerocheck<'a, A> {
             .map(RoundPolyInterpolator::<EF>::new)
             .collect::<Vec<_>>();
 
-        let mut next_stage = 0;
         for round in 0..log_height {
             let num_vars = log_height - round;
             let tau_round = tau.as_slice()[round];
             let tau_round_inv = tau_round.inverse();
 
-            let mut round_poly_acc = EF::zero_vec(max_degree);
+            // `peek` only borrows the next stage; `next` below moves it into the round state.
+            let activates_stage = stages
+                .peek()
+                .is_some_and(|stage| num_vars == stage.num_vars);
+            let activating_claim = if activates_stage {
+                stages.peek().unwrap().lookup_claim(eta)
+            } else {
+                EF::ZERO
+            };
+            pending_claim -= activating_claim;
+
+            // Not-yet-active lookup stages remain represented by one dormant constant.
+            let mut round_poly_acc = alloc::vec![pending_claim; max_degree];
             let mut round_polys = Vec::with_capacity(states.len());
 
             // Existing stages already live over the extension field.
@@ -458,20 +600,19 @@ impl<'a, A> AirZerocheck<'a, A> {
             }
 
             // A stage activates when the global cube reaches its trace height.
-            // Its base-field trace is evaluated once, extended to the global degree, then folded.
+            // Its private lookup claim supplies the omitted node-one evaluation.
             let mut new_state = None;
-            if next_stage < stages.len() && num_vars == stages[next_stage].num_vars {
-                let stage = &stages[next_stage];
+            if activates_stage {
+                let stage = stages.next().unwrap();
                 let tau = Point::new(tau.as_slice()[round..].to_vec());
                 let betas = stage
                     .indices
                     .iter()
                     .map(|&air_index| beta_powers[air_index])
                     .collect::<Vec<_>>();
-                let mut state = RoundStateBase::new(&stages[next_stage], alpha, betas, &tau);
+                let mut state = RoundStateBase::new(stage, alpha, eta, betas, tau);
                 let round_poly = state.round_poly(&eq_suffix);
-                // A stage's first round runs on an unfolded trace, so its claim starts at zero.
-                let q1 = (EF::ZERO - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
+                let q1 = (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                 let unweighted_claim = round_poly[0] + q1;
                 let round_poly = interpolators[round_poly.len()].extend_evals(
                     &round_poly,
@@ -480,16 +621,15 @@ impl<'a, A> AirZerocheck<'a, A> {
                 );
                 EF::add_slices(&mut round_poly_acc, &round_poly);
                 new_state = Some((state, round_poly));
-                next_stage += 1;
             }
 
             // The verifier sees one global sumcheck round.
             // Convert the accumulated internal q-evals back to eq-weighted standard evals.
-            let claim = claims.iter().copied().sum::<EF>();
+            let interpolator = interpolators.last().unwrap();
             let (standard_evals, _) = standard_round_from_q_evals(
-                &interpolator,
+                interpolator,
                 &round_poly_acc,
-                claim,
+                claims.iter().copied().sum::<EF>() + activating_claim + pending_claim,
                 eq_prefix,
                 tau.as_slice()[round],
             );
@@ -500,7 +640,6 @@ impl<'a, A> AirZerocheck<'a, A> {
             // Store what the round produced alongside what it bound.
             proof.round_polys.push(standard_evals);
             proof.pow_witnesses.extend(witness);
-
             challenges.push(r);
 
             // Fold every already-active state at the sampled challenge.
@@ -517,9 +656,10 @@ impl<'a, A> AirZerocheck<'a, A> {
             }
 
             // The newly activated stage joins the active list only after this round.
-            // Its first claim starts from the zerocheck claim, which is zero.
+            // Its first reduced claim is folded from the private interaction claim
+            // supplied at activation (ordinary constraints contribute zero).
             if let Some((state, round_poly)) = new_state {
-                let q1 = (EF::ZERO - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
+                let q1 = (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                 let unweighted_claim = round_poly[0] + q1;
                 claims.push(interpolator.eval(&round_poly, unweighted_claim, r));
                 states.push(state.fold(r));
@@ -536,50 +676,24 @@ impl<'a, A> AirZerocheck<'a, A> {
         // Require that every described step was played.
         transcript.finish();
 
+        assert!(
+            stages.next().is_none(),
+            "every zerocheck stage must activate"
+        );
+        debug_assert_eq!(
+            pending_claim,
+            EF::ZERO,
+            "activated AIR interactions must reconstruct the fractional-GKR claim"
+        );
+
         // States are ordered by activation height, not caller AIR order.
-        // Scatter each AIR's openings back to its original index, then read them out in order.
-        let mut openings: Vec<Option<AirOpenings<EF>>> = alloc::vec![None; self.airs.len()];
-        for (stage, state) in stages.iter().zip(states) {
-            let (local, all_next, _) = state.evals();
-            let mut column_offset = 0;
-            for (((&air_index, table), preprocessed), &air) in stage
-                .indices
-                .iter()
-                .zip(stage.tables.iter())
-                .zip(stage.preprocessed.iter())
-                .zip(stage.airs.iter())
-            {
-                // Main columns occupy the first span of this AIR's merged block.
-                let main_offset = column_offset;
-                let main_end = main_offset + table.num_polys();
-                let next = air
-                    .main_next_row_columns()
-                    .into_iter()
-                    .map(|column| all_next[main_offset + column])
-                    .collect();
-                column_offset = main_end;
-
-                // Preprocessed columns follow immediately after the main columns.
-                let preprocessed_offset = column_offset;
-                let preprocessed_end =
-                    preprocessed_offset + preprocessed.map_or(0, |table| table.num_polys());
-                let preprocessed_next = air
-                    .preprocessed_next_row_columns()
-                    .into_iter()
-                    .map(|column| all_next[preprocessed_offset + column])
-                    .collect();
-                column_offset = preprocessed_end;
-
-                // Periodic columns come last in this AIR's block and carry no opening claim.
-                // Stepping over them reaches the next AIR's columns.
-                column_offset += air.num_periodic_columns();
-
-                openings[air_index] = Some(AirOpenings {
-                    local: local[main_offset..main_end].to_vec(),
-                    next,
-                    preprocessed_local: local[preprocessed_offset..preprocessed_end].to_vec(),
-                    preprocessed_next,
-                });
+        // Each state retains its original AIR indices and scatters its openings back here.
+        let mut openings = core::iter::repeat_with(|| None)
+            .take(self.airs.len())
+            .collect::<Vec<Option<AirOpenings<EF>>>>();
+        for state in states {
+            for (air_index, opening) in state.into_openings() {
+                openings[air_index] = Some(opening);
             }
         }
 
@@ -613,8 +727,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// The opened column values are trusted at this layer.
     /// Binding them to a commitment is the job of the polynomial commitment scheme in a later step.
     ///
-    /// The caller must observe every trace commitment into the challenger before this call.
-    /// The public values are observed here, so the caller need not observe them.
+    /// The caller must observe every trace commitment and the public values into
+    /// the challenger before this call.
     ///
     /// # Arguments
     ///
@@ -643,7 +757,28 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: PrimeField64,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>> + Air<SymbolicAirBuilder<F, EF>>,
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
+            + Air<SymbolicAirBuilder<F, EF>>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        self.verify_with_lookup(proof, log_heights, public_values, None, challenger)
+    }
+
+    pub(crate) fn verify_with_lookup<F, EF, Challenger>(
+        &self,
+        proof: &ZerocheckProof<F, EF>,
+        log_heights: &[usize],
+        public_values: &[&[F]],
+        lookup: Option<&AirLinkClaim<EF>>,
+        challenger: &mut Challenger,
+    ) -> Result<Point<EF>, ZerocheckError>
+    where
+        F: PrimeField64,
+        EF: ExtensionField<F>,
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
+            + Air<SymbolicAirBuilder<F, EF>>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         assert!(!self.airs.is_empty(), "zerocheck requires at least one AIR");
@@ -694,10 +829,11 @@ impl<'a, A> AirZerocheck<'a, A> {
         }
 
         // Verify the sumcheck reduction, then close on the proof's own opened values.
-        let reduction = self.verify_reduction::<F, EF, _>(
+        let reduction = self.verify_reduction_with_lookup::<F, EF, _>(
             &proof.sumcheck,
             log_heights,
             public_values,
+            lookup,
             challenger,
         )?;
         let main = proof
@@ -718,12 +854,13 @@ impl<'a, A> AirZerocheck<'a, A> {
                 TableOpening::new(local, next_columns, next_values)
             })
             .collect::<Vec<_>>();
-        self.check_constraint::<F, EF>(
+        self.check_constraint_with_lookup::<F, EF>(
             &reduction,
             &main,
             &preprocessed,
             log_heights,
             public_values,
+            lookup,
         )?;
         Ok(reduction.point)
     }
@@ -734,9 +871,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// The opened column values are not yet known.
     /// The committed verifier opens them through a commitment scheme.
     ///
-    /// The caller must observe every trace commitment into the challenger before this call.
-    /// The public values are observed here.
-    /// The caller therefore does not observe them separately.
+    /// The caller must observe every trace commitment and the public values into
+    /// the challenger before this call.
     ///
     /// # Arguments
     ///
@@ -762,16 +898,32 @@ impl<'a, A> AirZerocheck<'a, A> {
         A: Air<SymbolicAirBuilder<F, EF>>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        self.verify_reduction_with_lookup(sumcheck, log_heights, public_values, None, challenger)
+    }
+
+    pub(crate) fn verify_reduction_with_lookup<F, EF, Challenger>(
+        &self,
+        sumcheck: &GenericDegreeProof<F, EF>,
+        log_heights: &[usize],
+        public_values: &[&[F]],
+        lookup: Option<&AirLinkClaim<EF>>,
+        challenger: &mut Challenger,
+    ) -> Result<ZerocheckReduction<EF>, ZerocheckError>
+    where
+        F: PrimeField64,
+        EF: ExtensionField<F>,
+        A: Air<SymbolicAirBuilder<F, EF>>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
         assert!(!self.airs.is_empty(), "zerocheck requires at least one AIR");
         assert_eq!(self.airs.len(), public_values.len(),);
         assert_eq!(self.airs.len(), log_heights.len(),);
         assert!(log_heights.iter().all(|&log_height| log_height > 0),);
 
-        if sumcheck.claimed_sum != EF::ZERO {
-            return Err(ZerocheckError::NonZeroClaimedSum);
-        }
-
-        let max_log_height = log_heights.iter().copied().max().unwrap();
+        let air_log_height = log_heights.iter().copied().max().unwrap();
+        let max_log_height = lookup.map_or(air_log_height, |lookup| {
+            air_log_height.max(lookup.point.num_variables())
+        });
         let degree = self
             .airs
             .iter()
@@ -779,15 +931,18 @@ impl<'a, A> AirZerocheck<'a, A> {
             .max()
             .unwrap();
 
-        // Bind the public values before any challenge depends on them.
-        // The trace commitment must already be in the transcript.
-        for values in public_values {
-            challenger.observe_algebra_slice(values);
+        if lookup.is_none() && sumcheck.claimed_sum != EF::ZERO {
+            return Err(ZerocheckError::NonZeroClaimedSum);
         }
-
-        // Draw the same constraint scalar, AIR batching scalar, and zerocheck point the prover drew.
-        let (alpha, beta, tau) =
-            sample_zerocheck_challenges::<F, EF, Challenger>(challenger, max_log_height);
+        let (alpha, beta, eta, tau) = sample_zerocheck_challenges::<F, EF, Challenger>(
+            challenger,
+            max_log_height,
+            lookup.map_or(&[][..], |lookup| lookup.point.as_slice()),
+        );
+        let expected_claim = lookup.map_or(EF::ZERO, |lookup| eta * lookup.claimed_sum);
+        if sumcheck.claimed_sum != expected_claim {
+            return Err(ZerocheckError::ClaimedSumMismatch);
+        }
 
         let (point, final_sum) = sumcheck
             .verify(challenger, max_log_height, degree, self.pow_bits)
@@ -796,6 +951,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         Ok(ZerocheckReduction {
             alpha,
             beta,
+            eta,
             tau,
             point,
             final_sum,
@@ -824,9 +980,37 @@ impl<'a, A> AirZerocheck<'a, A> {
         public_values: &[&[F]],
     ) -> Result<(), ZerocheckError>
     where
+        F: PrimeField64,
+        EF: ExtensionField<F>,
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
+            + Air<SymbolicAirBuilder<F, EF>>,
+    {
+        self.check_constraint_with_lookup(
+            reduction,
+            main,
+            preprocessed,
+            log_heights,
+            public_values,
+            None,
+        )
+    }
+
+    pub(crate) fn check_constraint_with_lookup<F, EF>(
+        &self,
+        reduction: &ZerocheckReduction<EF>,
+        main: &[TableOpening<'_, EF>],
+        preprocessed: &[TableOpening<'_, EF>],
+        log_heights: &[usize],
+        public_values: &[&[F]],
+        lookup: Option<&AirLinkClaim<EF>>,
+    ) -> Result<(), ZerocheckError>
+    where
         F: Field,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>> + Air<SymbolicAirBuilder<F, EF>>,
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
+            + Air<SymbolicAirBuilder<F, EF>>,
     {
         assert!(!self.airs.is_empty(), "zerocheck requires at least one AIR");
         assert_eq!(self.airs.len(), public_values.len(),);
@@ -917,7 +1101,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                 claims.point.as_slice(),
             )?;
 
-            let air_g = MultilinearFolder::new(
+            let folder = MultilinearFolder::new(
                 &claims.local,
                 &next_row,
                 boundary,
@@ -925,9 +1109,23 @@ impl<'a, A> AirZerocheck<'a, A> {
                 reduction.alpha,
             )
             .with_preprocessed(&preprocessed_claims.local, &preprocessed_next_row)
-            .with_periodic(&periodic)
-            .eval_air(air);
-            g += beta * air_g;
+            .with_periodic(&periodic);
+            if let Some(lookup) = lookup {
+                if let Some(link) = lookup.links_by_air.get(&air_index) {
+                    let evaluations = InteractionMultilinearFolder::new(
+                        folder,
+                        link,
+                        &lookup.theta_beta_powers,
+                        true,
+                    )
+                    .eval_air(air);
+                    g += beta * evaluations.constraints + reduction.eta * evaluations.interactions;
+                } else {
+                    g += beta * folder.eval_air(air);
+                }
+            } else {
+                g += beta * folder.eval_air(air);
+            }
         }
 
         let eq_at_point = Point::eval_eq(&reduction.tau, reduction.point.as_slice());
@@ -948,6 +1146,8 @@ pub struct ZerocheckReduction<EF> {
     pub alpha: EF,
     /// Random scalar batching AIRs together in caller order.
     pub beta: EF,
+    /// Random scalar separating lookup-link expressions from ordinary constraints.
+    pub eta: EF,
     /// Zerocheck point sampled before the sumcheck.
     pub tau: Vec<EF>,
     /// Bound sumcheck point with every variable fixed to one challenge.
@@ -1034,17 +1234,21 @@ where
     (standard_evals, unweighted_sum)
 }
 
-/// Draw the constraint-batching scalar, AIR-batching scalar, and zerocheck point, in that order.
+/// Draw the constraint, AIR, optional lookup scalar, and zerocheck point, in that order.
 ///
 /// Prover and verifier call this identically so their transcripts stay in lockstep.
 ///
-/// Each zerocheck point coordinate is drawn nonzero.
+/// When lookup is active, its GKR point is fixed as the zerocheck point's suffix;
+/// only the missing leading coordinates are sampled.
+///
+/// Each sampled zerocheck point coordinate is nonzero.
 /// The prover divides by a coordinate when rebuilding a round message, so a zero would divide by zero.
 /// Resampling on both sides keeps the transcripts aligned, and a zero draw has negligible probability.
 fn sample_zerocheck_challenges<F, EF, Challenger>(
     challenger: &mut Challenger,
     log_height: usize,
-) -> (EF, EF, Vec<EF>)
+    lookup_point: &[EF],
+) -> (EF, EF, EF, Vec<EF>)
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -1053,18 +1257,28 @@ where
     // The batching scalar may take any value.
     let alpha = challenger.sample_algebra_element();
     let beta = challenger.sample_algebra_element();
+    let eta = if lookup_point.is_empty() {
+        EF::ZERO
+    } else {
+        challenger.sample_algebra_element()
+    };
 
-    // Draw each point coordinate, resampling past a zero.
-    let tau = (0..log_height)
-        .map(|_| {
-            let mut coord: EF = challenger.sample_algebra_element();
-            while coord.is_zero() {
-                coord = challenger.sample_algebra_element();
-            }
-            coord
-        })
-        .collect();
-    (alpha, beta, tau)
+    let fixed_suffix = lookup_point;
+    assert!(
+        fixed_suffix.len() <= log_height,
+        "lookup point cannot exceed the zerocheck height"
+    );
+    let mut tau = Vec::with_capacity(log_height);
+    tau.extend((fixed_suffix.len()..log_height).map(|_| {
+        let mut coord: EF = challenger.sample_algebra_element();
+        while coord.is_zero() {
+            coord = challenger.sample_algebra_element();
+        }
+        coord
+    }));
+    tau.extend_from_slice(fixed_suffix);
+
+    (alpha, beta, eta, tau)
 }
 
 #[cfg(test)]
@@ -1085,6 +1299,7 @@ mod tests {
     use p3_challenger::DuplexChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_lookup::{Count, InteractionBuilder};
     use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
@@ -1142,6 +1357,22 @@ mod tests {
             > + for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
             + for<'b> Air<
                 MultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
+                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
+                >,
+            > + for<'b> Air<InteractionMultilinearFolder<'b, F, F, EF>>
+            + for<'b> Air<
+                InteractionMultilinearFolder<
+                    'b,
+                    F,
+                    <F as Field>::Packing,
+                    <EF as ExtensionField<F>>::ExtensionPacking,
+                >,
+            > + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<
+                InteractionMultilinearFolder<
                     'b,
                     F,
                     PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
@@ -1210,31 +1441,71 @@ mod tests {
         }
     }
 
-    /// [`FibAir`] with a `num_constraints()` hint that undercounts its real five constraints.
-    struct BadHintFibAir;
+    struct InteractionDegreeAir;
 
-    impl<X> BaseAir<X> for BadHintFibAir {
+    struct ConstantInteractionAir;
+
+    impl<X> BaseAir<X> for ConstantInteractionAir {
         fn width(&self) -> usize {
-            NUM_COLS
-        }
-        fn num_public_values(&self) -> usize {
-            3
-        }
-        fn num_constraints(&self) -> Option<usize> {
-            Some(4)
+            1
         }
     }
 
-    impl<AB: AirBuilder> Air<AB> for BadHintFibAir {
+    impl<AB: InteractionBuilder> Air<AB> for ConstantInteractionAir {
         fn eval(&self, builder: &mut AB) {
-            FibAir.eval(builder);
+            builder.push_interaction(
+                "constant",
+                [AB::Expr::ONE],
+                Count::bounded(AB::Expr::ONE, 1),
+            );
+        }
+    }
+
+    impl<X> BaseAir<X> for InteractionDegreeAir {
+        fn width(&self) -> usize {
+            4
+        }
+    }
+
+    impl<AB: InteractionBuilder> Air<AB> for InteractionDegreeAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            let x0: AB::Expr = local[0].into();
+            let x1: AB::Expr = local[1].into();
+            let x2: AB::Expr = local[2].into();
+            let x3: AB::Expr = local[3].into();
+
+            builder.assert_zero(x0.clone() * x1.clone());
+            builder.push_interaction(
+                "degree",
+                [x0.clone() * x1.clone() * x2.clone()],
+                Count::bounded(x3.clone(), 1),
+            );
+            builder.push_local_interaction([(
+                alloc::vec![x0.clone()],
+                Count::bounded(x0 * x1 * x2 * x3, 1),
+            )]);
         }
     }
 
     #[test]
-    #[should_panic(expected = "num_constraints()")]
-    fn air_degree_and_constraints_rejects_a_wrong_hint() {
-        air_degree_and_constraints::<F, EF, _>(&BadHintFibAir);
+    fn interaction_aware_degree_includes_payloads_and_multiplicities() {
+        assert_eq!(
+            get_air_degrees::<F, EF, _>(&InteractionDegreeAir),
+            AirDegrees {
+                constraints: 2,
+                interactions: 4,
+            }
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "zerocheck requires every nonempty interaction family to have positive symbolic degree"
+    )]
+    fn interaction_aware_degree_rejects_constant_airs() {
+        get_air_degrees::<F, EF, _>(&ConstantInteractionAir);
     }
 
     /// Build a length-`n` Fibonacci trace seeded with `(0, 1)`.
@@ -2413,7 +2684,7 @@ mod tests {
         // A materialized periodic column is multilinear.
         // Scoring it at one per variable is therefore exact.
         let air = AllGroupsAir;
-        assert_eq!(air_degree::<F, EF, AllGroupsAir>(&air), 2);
+        assert_eq!(get_air_degrees::<F, EF, AllGroupsAir>(&air).constraints, 2);
         assert_eq!(sumcheck_degree::<F, EF, AllGroupsAir>(&air), 3);
 
         // Fixture state: 8 rows carrying all three column groups.

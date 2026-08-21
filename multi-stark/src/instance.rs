@@ -362,10 +362,12 @@ where
     }
 
     pub(super) fn main_points(&self, point: &Point<C::Challenge>) -> Vec<Point<C::Challenge>> {
-        let max_num_var = self.max_num_variables();
+        assert!(point.num_variables() >= self.max_num_variables());
+        // Lookup GKR may add leading block-selector coordinates beyond the
+        // tallest trace. PCS opens only the row-coordinate suffix of each table.
         self.num_variables()
             .iter()
-            .map(|num_var| point.split_at(max_num_var - num_var).1)
+            .map(|num_var| point.split_at(point.num_variables() - num_var).1)
             .collect()
     }
 
@@ -373,10 +375,15 @@ where
         &self,
         point: &Point<C::Challenge>,
     ) -> Vec<Point<C::Challenge>> {
-        let max_num_var = self.max_num_variables();
+        assert!(point.num_variables() >= self.max_num_variables());
+        // Preprocessed tables use the same trace-local suffix convention.
         self.iter()
             .filter(|instance| instance.air.preprocessed_width() != 0)
-            .map(|instance| point.split_at(max_num_var - instance.num_variables).1)
+            .map(|instance| {
+                point
+                    .split_at(point.num_variables() - instance.num_variables)
+                    .1
+            })
             .collect()
     }
 }
