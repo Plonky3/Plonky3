@@ -388,17 +388,21 @@ where
 /// polynomial those bytes describe, and one round arithmetic follows from
 /// each choice (eprint 2026/762, Section 3):
 ///
-/// | per round                  | [`Basis::Evaluation`]              | [`Basis::Projective`]                           |
-/// |----------------------------|------------------------------------|-------------------------------------------------|
-/// | a table entry is           | a value on the hypercube `{0,1}^n` | a monomial coefficient (a value on `{0,inf}^n`) |
-/// | binding `X = r`            | `a0 + (a1 - a0) * r`               | `a0 + a1 * r`                                   |
-/// | message sent               | `[h(0), h(inf)]`                   | `[s(1), s(inf)]`                                |
-/// | value the verifier derives | `h(1) := C - h(0)`                 | `s(0) := C - s(inf)`                            |
+/// | per round                  | [`Basis::Evaluation`]               | [`Basis::Projective`]                           |
+/// |----------------------------|-------------------------------------|-------------------------------------------------|
+/// | a table entry is           | a value on the hypercube `{0,1}^n`  | a monomial coefficient (a value on `{0,inf}^n`) |
+/// | binding `X = r`            | `a0 + (a1 - a0) * r`                | `a0 + a1 * r`                                   |
+/// | message sent               | `[h(0), h(inf)]`                    | `[s(1), s(inf)]`                                |
+/// | value the verifier derives | `h(1) := C - h(0)`                  | `s(0) := C - s(inf)`                            |
+/// | fold of committed data     | multilinear interpolation at `r`    | monomial (Horner) evaluation at `r`             |
+/// | weight tensor `(u_i, v_i)` | `prod((1 - r_i) * u_i + r_i * v_i)` | `prod(u_i + v_i * r_i)`                         |
 ///
-/// The rows are one package per column: a consumer must take an entire
-/// column, never a mix. That is what the tag buys. A [`RoundMessage`] alone
-/// cannot say which column produced it, so the two values only ever leave or
-/// re-enter the transcript through the basis that defines them.
+/// The rows are one package per column: a consumer that folds committed data
+/// (such as WHIR, where the sumcheck challenge is also the codeword folding
+/// challenge) must take an entire column, never a mix. That is what the tag
+/// buys. A [`RoundMessage`] alone cannot say which column produced it, so the
+/// two values only ever leave or re-enter the transcript through the basis
+/// that defines them.
 ///
 /// The claim invariant `C = dot(evals, weights)` is the same in both bases:
 /// the `{0,1}`-sum of products in the evaluation basis and the `{0,inf}`-sum
