@@ -2,8 +2,10 @@
 
 use alloc::vec::Vec;
 
-use p3_air::{Air, AirLayout, SymbolicAirBuilder, get_all_symbolic_constraints};
+use p3_air::{Air, AirLayout};
 use p3_field::{ExtensionField, Field};
+use p3_lookup::InteractionSymbolicBuilder as SymbolicAirBuilder;
+use p3_lookup::symbolic::get_all_interaction_symbolic_constraints;
 
 /// Structural facts about an AIR needed before any proving begins.
 ///
@@ -71,7 +73,7 @@ impl ConstraintMetadata {
                 //
                 //     base[i] : i-th base-field constraint
                 //     ext[j]  : j-th extension-field constraint (lookups / permutation args)
-                let (base, ext) = get_all_symbolic_constraints::<F, EF, A>(air, layout);
+                let (base, ext) = get_all_interaction_symbolic_constraints::<F, EF, A>(air, layout);
 
                 // Count covers base constraints only, matching the scope of the AIR's count hint.
                 let count = hinted_count.unwrap_or(base.len());
@@ -272,6 +274,14 @@ mod tests {
         assert_eq!(meta.next_row_main_columns, vec![0, 1]);
         // No preprocessed trace means no preprocessed shift claims.
         assert!(meta.next_row_preprocessed_columns.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "main_width does not match")]
+    fn metadata_validates_symbolic_layout() {
+        let mut layout = AirLayout::from_air::<F>(&FibAir);
+        layout.main_width += 1;
+        let _ = ConstraintMetadata::from_air::<F, EF, _>(&FibAir, layout);
     }
 
     #[test]
