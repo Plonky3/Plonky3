@@ -49,7 +49,7 @@ impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
         sha2::block_api::compress256(&mut state, core::slice::from_ref(block));
 
         let mut output = [0u8; 32];
-        for (chunk, word) in output.chunks_exact_mut(4).zip(state) {
+        for (chunk, word) in output.as_chunks_mut::<4>().0.iter_mut().zip(state) {
             chunk.copy_from_slice(&word.to_be_bytes());
         }
         output

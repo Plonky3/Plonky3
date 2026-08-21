@@ -207,7 +207,7 @@ impl<F: Field + PrimeCharacteristicRing> PeriodicAir<F> {
 
     fn valid_trace(&self, rows: usize) -> RowMajorMatrix<F> {
         let mut values = F::zero_vec(rows * 2);
-        for (i, row) in values.chunks_exact_mut(2).enumerate() {
+        for (i, row) in values.as_chunks_mut::<2>().0.iter_mut().enumerate() {
             row[0] = self.periodic[0][i % self.periodic[0].len()];
             row[1] = self.periodic[1][i % self.periodic[1].len()];
         }

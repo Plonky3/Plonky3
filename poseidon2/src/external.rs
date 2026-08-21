@@ -135,8 +135,8 @@ pub fn mds_light_permutation<
         4 | 8 | 12 | 16 | 20 | 24 | 32 => {
             // First, we apply M_4 to each consecutive four elements of the state.
             // In Appendix B's terminology, this replaces each x_i with x_i'.
-            for chunk in state.chunks_exact_mut(4) {
-                mdsmat.permute_mut(chunk.try_into().unwrap());
+            for chunk in state.as_chunks_mut::<4>().0.iter_mut() {
+                mdsmat.permute_mut(chunk);
             }
             // Now, we apply the outer circulant matrix (to compute the y_i values).
 

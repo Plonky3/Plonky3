@@ -1306,7 +1306,7 @@ where
             let second_c = second.get(c).copied().unwrap_or(EF::ZERO);
             let ratio = generator.exp_u64(c as u64);
             let mut scale = shift.exp_u64(c as u64);
-            for pair in row.chunks_exact_mut(2) {
+            for pair in row.as_chunks_mut::<2>().0.iter_mut() {
                 pair[0] = first_c * scale;
                 pair[1] = second_c * scale;
                 scale *= ratio;
@@ -1329,7 +1329,7 @@ where
             for ((first_slot, second_slot), pair) in first_block
                 .iter_mut()
                 .zip(second_block.iter_mut())
-                .zip(row.chunks_exact(2))
+                .zip(row.as_chunks::<2>().0.iter())
             {
                 *first_slot = pair[0];
                 *second_slot = pair[1];

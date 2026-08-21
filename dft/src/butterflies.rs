@@ -134,9 +134,12 @@ impl<F: Field> Butterfly<F> for DifButterfly<F> {
         debug_assert_eq!(shorts_1.len(), shorts_2.len());
         debug_assert_eq!(suffix_1.len(), suffix_2.len());
         let twiddle_packed = F::Packing::from(self.0);
-        let mut c1 = shorts_1.chunks_exact_mut(4);
-        let mut c2 = shorts_2.chunks_exact_mut(4);
-        for (p1, p2) in (&mut c1).zip(&mut c2) {
+        // Split off the unroll-4 body and its tail up front; `as_chunks_mut`
+        // types each chunk as `&mut [_; 4]`, so the indexing below is checked
+        // once by the compiler instead of per access.
+        let (c1, rem_1) = shorts_1.as_chunks_mut::<4>();
+        let (c2, rem_2) = shorts_2.as_chunks_mut::<4>();
+        for (p1, p2) in c1.iter_mut().zip(c2.iter_mut()) {
             let a1 = p1[0];
             let b1 = p1[1];
             let c1_ = p1[2];
@@ -154,11 +157,7 @@ impl<F: Field> Butterfly<F> for DifButterfly<F> {
             p2[2] = (c1_ - c2_) * twiddle_packed;
             p2[3] = (d1 - d2) * twiddle_packed;
         }
-        for (x_1, x_2) in c1
-            .into_remainder()
-            .iter_mut()
-            .zip(c2.into_remainder().iter_mut())
-        {
+        for (x_1, x_2) in rem_1.iter_mut().zip(rem_2.iter_mut()) {
             let sum = *x_1 + *x_2;
             *x_2 = (*x_1 - *x_2) * twiddle_packed;
             *x_1 = sum;
@@ -241,9 +240,12 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
         debug_assert_eq!(shorts_1.len(), shorts_2.len());
         debug_assert_eq!(suffix_1.len(), suffix_2.len());
         let twiddle_packed = F::Packing::from(self.0);
-        let mut c1 = shorts_1.chunks_exact_mut(4);
-        let mut c2 = shorts_2.chunks_exact_mut(4);
-        for (p1, p2) in (&mut c1).zip(&mut c2) {
+        // Split off the unroll-4 body and its tail up front; `as_chunks_mut`
+        // types each chunk as `&mut [_; 4]`, so the indexing below is checked
+        // once by the compiler instead of per access.
+        let (c1, rem_1) = shorts_1.as_chunks_mut::<4>();
+        let (c2, rem_2) = shorts_2.as_chunks_mut::<4>();
+        for (p1, p2) in c1.iter_mut().zip(c2.iter_mut()) {
             let a1 = p1[0];
             let b1 = p1[1];
             let c1_ = p1[2];
@@ -265,11 +267,7 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
             p1[3] = d1 + d2t;
             p2[3] = d1 - d2t;
         }
-        for (x_1, x_2) in c1
-            .into_remainder()
-            .iter_mut()
-            .zip(c2.into_remainder().iter_mut())
-        {
+        for (x_1, x_2) in rem_1.iter_mut().zip(rem_2.iter_mut()) {
             let x_2_twiddle = *x_2 * twiddle_packed;
             let new_x1 = *x_1 + x_2_twiddle;
             *x_2 = *x_1 - x_2_twiddle;
@@ -405,9 +403,12 @@ impl<F: Field> Butterfly<F> for ScaledDitButterfly<F> {
         let twiddle_times_scale_packed = F::Packing::from(self.twiddle_times_scale);
         // ScaledDitButterfly has 2 muls per butterfly (scale + twiddle_scale), so unroll-4
         // exposes 8 independent mul chains — better ILP than unroll-2's 4 chains.
-        let mut c1 = shorts_1.chunks_exact_mut(4);
-        let mut c2 = shorts_2.chunks_exact_mut(4);
-        for (p1, p2) in (&mut c1).zip(&mut c2) {
+        // Split off the unroll-4 body and its tail up front; `as_chunks_mut`
+        // types each chunk as `&mut [_; 4]`, so the indexing below is checked
+        // once by the compiler instead of per access.
+        let (c1, rem_1) = shorts_1.as_chunks_mut::<4>();
+        let (c2, rem_2) = shorts_2.as_chunks_mut::<4>();
+        for (p1, p2) in c1.iter_mut().zip(c2.iter_mut()) {
             let a1 = p1[0];
             let b1 = p1[1];
             let c1_ = p1[2];
@@ -433,11 +434,7 @@ impl<F: Field> Butterfly<F> for ScaledDitButterfly<F> {
             p1[3] = d1s + d2t;
             p2[3] = d1s - d2t;
         }
-        for (x_1, x_2) in c1
-            .into_remainder()
-            .iter_mut()
-            .zip(c2.into_remainder().iter_mut())
-        {
+        for (x_1, x_2) in rem_1.iter_mut().zip(rem_2.iter_mut()) {
             let x_1_scale = *x_1 * scale_packed;
             let x_2_twiddle_scale = *x_2 * twiddle_times_scale_packed;
             *x_1 = x_1_scale + x_2_twiddle_scale;
