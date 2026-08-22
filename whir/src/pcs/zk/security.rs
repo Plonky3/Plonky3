@@ -145,18 +145,18 @@ mod tests {
         assert_eq!(report.field_order_log2_floor, 123);
         assert!((report.field_order_log2_estimate - 123.954_738_749_797).abs() < 1e-12);
         assert_eq!(report.source.message_len, 16);
-        assert_eq!(report.source.randomness_len, 11);
-        assert_eq!(report.source.randomized_dimension, 27);
+        assert_eq!(report.source.randomness_len, 13);
+        assert_eq!(report.source.randomized_dimension, 29);
         assert_eq!(report.source.dyadic_dimension, 32);
         assert_eq!(report.source.domain_size, 4096);
-        assert_eq!(report.source.randomized_rate, 27. / 4096.);
+        assert_eq!(report.source.randomized_rate, 29. / 4096.);
         assert_eq!(report.source.analysis_log_inv_rate, Some(7));
         assert!(report.source.analysis_radius.is_some());
-        assert_eq!(report.source.requested_queries, 11);
-        assert_eq!(report.source.effective_queries, 11);
-        assert_eq!(report.query_round.shared_pow_bits, 13);
+        assert_eq!(report.source.requested_queries, 13);
+        assert_eq!(report.source.effective_queries, 13);
+        assert_eq!(report.query_round.shared_pow_bits, 10);
         assert!(
-            (report.query_round.source_with_pow.bits.unwrap() - 89.225_717_393_194_63).abs()
+            (report.query_round.source_with_pow.bits.unwrap() - 100.084_938_737_411_82).abs()
                 < 1e-12
         );
         assert_eq!(
@@ -167,8 +167,12 @@ mod tests {
             report.query_round.with_pow.classification,
             HidingBoundClassification::Conditional
         );
+        // The algebraic query bits alone still fall short of the target...
         assert!(report.query_round.before_pow.bits.unwrap() < report.target_bits as f64);
-        assert!(report.query_round.with_pow.bits.unwrap() < report.target_bits as f64);
+        // ...but the shared grind closes the gap: the terminal budget is a
+        // fixed point over the randomized code's own occupancy-corrected
+        // rate, so it delivers at least the requested security level.
+        assert!(report.query_round.with_pow.bits.unwrap() >= report.target_bits as f64);
         assert_eq!(
             report.gamma_round.combined.classification,
             HidingBoundClassification::Conditional
@@ -283,5 +287,30 @@ mod tests {
         assert!(report.gamma_round.product_list_over_field.vacuous);
         assert_eq!(report.gamma_round.combined.bits, Some(0.));
         assert!(report.gamma_round.combined.vacuous);
+    }
+
+    #[test]
+    fn terminal_budget_meets_target_security_level() {
+        // The terminal query/PoW pair is a fixed point over the randomized
+        // source code's own occupancy-corrected rate, so the weakest
+        // query-round bound (source or any mask, after the shared grind)
+        // must reach the requested security level for every regime.
+        for assumption in [
+            SecurityAssumption::UniqueDecoding,
+            SecurityAssumption::JohnsonBound,
+            SecurityAssumption::CapacityBound,
+        ] {
+            let report = classification_config(assumption).hiding_base_case_security_report();
+            let delivered = report.query_round.with_pow.bits.unwrap();
+            assert!(
+                delivered >= report.target_bits as f64,
+                "{assumption:?} delivered {delivered} bits against a target of {}",
+                report.target_bits,
+            );
+        }
+
+        let report =
+            stock_config(SecurityAssumption::CapacityBound).hiding_base_case_security_report();
+        assert!(report.query_round.with_pow.bits.unwrap() >= report.target_bits as f64);
     }
 }

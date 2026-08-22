@@ -10,7 +10,7 @@ use p3_util::log2_ceil_usize;
 use thiserror::Error;
 
 use super::mask::{MaskCodeShape, MaskGroupShape};
-use crate::parameters::{ProtocolParameters, WhirConfig, WhirConfigError};
+use crate::parameters::{ProtocolParameters, SecurityAssumption, WhirConfig, WhirConfigError};
 
 /// Reasons ZK parameters cannot extend a WHIR configuration.
 #[derive(Debug, Error)]
@@ -82,9 +82,26 @@ where
     /// case. Consequently, `commitment_ood_samples` and
     /// `final_folding_pow_bits` are not transcript steps here;
     /// `final_sumcheck_rounds` still determines the terminal message length.
+    /// `inner.final_queries` and `inner.final_pow_bits` size the plain
+    /// message code; the base case runs against a randomized code instead,
+    /// sized by [`Self::final_queries`] and [`Self::final_pow_bits`].
     pub inner: WhirConfig<EF, F, Challenger>,
     /// ZK extension parameters.
     pub zk: ZkParameters,
+    /// Spot checks against the base case's randomized terminal source code.
+    ///
+    /// The base case tests proximity to a code of dimension
+    /// `message_len + final_queries`, not the plain message code
+    /// `inner.final_queries` was sized against. Shadows `inner.final_queries`
+    /// for every field access on this type, so every base-case use site
+    /// picks it up automatically. Also serves as the terminal oracle's
+    /// randomness budget, i.e. `oracle_randomness[n_rounds]`.
+    pub final_queries: usize,
+    /// PoW bits bridging the gap between `final_queries` and
+    /// `security_level` at the randomized terminal code's rate.
+    ///
+    /// Shadows `inner.final_pow_bits` for every field access on this type.
+    pub final_pow_bits: usize,
     /// ZK randomness coefficients per limb of each committed oracle
     /// `u_0, ..., u_{n_rounds}`.
     ///
@@ -160,6 +177,28 @@ where
         let union = log2_ceil_usize(2 * n_rounds + 2);
         let mask_queries = soundness_type.queries(security_level + union, zk.mask_log_inv_rate);
 
+        // Re-derive the terminal query/PoW pair against the base case's
+        // actual code, not the plain message code `inner` was sized for.
+        //
+        // The base case tests proximity to a code of dimension
+        // `message_len + t`, where `t` is both the query count and the
+        // randomness length (the budget rule below). Growing `t` can push
+        // that dimension past a power-of-two boundary and lower the
+        // analysed rate, which then demands a larger `t`;
+        // `terminal_source_budget` iterates to that fixed point.
+        let final_config = inner.final_round_config();
+        let final_message_len = 1 << final_config.num_variables;
+        let final_domain_size = final_config.domain_size >> final_config.folding_factor;
+        let protocol_security_level = security_level.saturating_sub(inner.pow_bits);
+        let (final_queries, final_pow_bits) = terminal_source_budget(
+            soundness_type,
+            security_level,
+            protocol_security_level,
+            final_message_len,
+            final_domain_size,
+            inner.final_queries,
+        );
+
         // Per-oracle ZK budget.
         //
         //     oracle u_i, i < n_rounds  ->  opened by code-switch round i
@@ -171,7 +210,7 @@ where
                 if i < n_rounds {
                     inner.round_parameters[i].num_queries
                 } else {
-                    inner.final_queries
+                    final_queries
                 }
             })
             .collect();
@@ -248,6 +287,8 @@ where
         Ok(Self {
             inner,
             zk,
+            final_queries,
+            final_pow_bits,
             oracle_randomness,
             sumcheck_mask,
             switch_masks,
@@ -276,6 +317,43 @@ where
             });
         }
         groups
+    }
+}
+
+/// Occupancy-aware query count and PoW bits for the HVZK base case's
+/// randomized terminal source code.
+///
+/// The base case tests proximity to a code of dimension
+/// `message_len + t`, not the plain `message_len`-dimension message code
+/// `t` was initially seeded from. Growing `t` can push that dimension past
+/// a power-of-two boundary and lower the analysed rate, which then demands
+/// a larger `t`. This iterates to the least fixed point at or above
+/// `queries`; it terminates because the analysed rate only takes as many
+/// distinct values as `domain_size` has bits.
+fn terminal_source_budget(
+    soundness_type: SecurityAssumption,
+    security_level: usize,
+    protocol_security_level: usize,
+    message_len: usize,
+    domain_size: usize,
+    mut queries: usize,
+) -> (usize, usize) {
+    loop {
+        let dyadic_dimension = (message_len + queries).next_power_of_two();
+        if dyadic_dimension >= domain_size {
+            // No positive-rate code remains for any finite query count;
+            // report a count past the domain so the caller's slack check
+            // rejects the configuration with a typed error.
+            return (domain_size, 0);
+        }
+        let log_inv_rate = domain_size.ilog2() as usize - dyadic_dimension.ilog2() as usize;
+        let next_queries = soundness_type.queries(protocol_security_level, log_inv_rate);
+        if next_queries <= queries {
+            let pow_bits = 0_f64
+                .max(security_level as f64 - soundness_type.queries_error(log_inv_rate, queries));
+            return (queries, libm::ceil(pow_bits) as usize);
+        }
+        queries = next_queries;
     }
 }
 
@@ -371,13 +449,17 @@ mod tests {
 
     #[test]
     fn config_rejects_randomness_that_exceeds_oracle_slack() {
-        // n = 8, k = 3, and log inverse rate 1 give the initial oracle
+        // n = 8, k = 3, and log inverse rate 1 give the sole oracle
+        // (this schedule folds straight into the base case):
         //
         //     M = 2^(8 - 3) = 32 message rows
         //     H = 2 * M       = 64 outer rows
-        //     t = 35          = CapacityBound queries at 32-bit security.
         //
-        // The randomized limb would occupy M + t = 67 > H coefficients.
+        // Growing the query count to cover M's occupancy keeps pushing the
+        // randomized dimension's power-of-two envelope up until it reaches
+        // H, at which point no positive-rate code is left for any finite
+        // query count. The budget search reports that as a count past the
+        // domain, so the slack check rejects it deterministically.
         let protocol = ProtocolParameters {
             folding_factor: FoldingFactor::Constant(3),
             ..params()
@@ -391,7 +473,7 @@ mod tests {
         else {
             panic!("expected RandomnessExceedsSlack, got {err:?}");
         };
-        assert_eq!((round, randomness, slack), (0, 35, 32));
+        assert_eq!((round, randomness, slack), (0, 64, 32));
     }
 
     #[test]

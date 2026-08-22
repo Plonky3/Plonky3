@@ -224,8 +224,10 @@ fn zk_whir_end_to_end_single_round() {
 #[test]
 fn zk_whir_end_to_end_no_rounds() {
     // Degenerate pipeline: a single fold batch straight into the base case.
+    // A large enough final message keeps the randomized terminal code's
+    // occupancy-corrected rate inside the oracle's codeword slack.
     Setup::new(2)
-        .num_variables(6)
+        .num_variables(9)
         .folding_factor(FoldingFactor::Constant(3))
         .assert_round_trip();
 }
