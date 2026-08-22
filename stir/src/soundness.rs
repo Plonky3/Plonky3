@@ -123,91 +123,6 @@ fn minimum_eta_for_target(
     high
 }
 
-fn list_size_bits_at_log_eta(
-    assumption: SecurityAssumption,
-    log_degree: usize,
-    log_inv_rate: usize,
-    log_eta: f64,
-) -> f64 {
-    match assumption {
-        SecurityAssumption::UniqueDecoding => 0.,
-        SecurityAssumption::JohnsonBound => log_inv_rate as f64 / 2. - (1. + log_eta),
-        SecurityAssumption::CapacityBound => (log_degree + log_inv_rate) as f64 - log_eta,
-    }
-}
-
-fn prox_gaps_error_at_log_eta(
-    assumption: SecurityAssumption,
-    log_degree: usize,
-    log_inv_rate: usize,
-    field_size_bits: usize,
-    num_functions: usize,
-    log_eta: f64,
-) -> f64 {
-    assert!(
-        num_functions >= 2,
-        "num_functions must be >= 2 to compute proximity gaps error"
-    );
-
-    let exceptional_set_bits = match assumption {
-        SecurityAssumption::UniqueDecoding => (log_degree + log_inv_rate) as f64,
-        SecurityAssumption::JohnsonBound => {
-            // BCSS25 Theorem 1.5, dominant term, at the protocol's actual eta:
-            // m = max(ceil(sqrt(rho) / (2 eta)), 3).
-            let log_sqrt_rho_over_2eta = -(log_inv_rate as f64) / 2. - 1. - log_eta;
-            let m = libm::ceil(libm::pow(2., log_sqrt_rho_over_2eta)).max(3.);
-            let log_n = (log_degree + log_inv_rate) as f64;
-            let constant = libm::log2(2. * libm::pow(m + 0.5, 5.) / 3.);
-            log_n + constant + 1.5 * log_inv_rate as f64
-        }
-        SecurityAssumption::CapacityBound => (log_degree + 2 * log_inv_rate) as f64 - log_eta,
-    };
-
-    field_size_bits as f64 - (exceptional_set_bits + libm::log2(num_functions as f64 - 1.))
-}
-
-fn ood_error_at_log_eta(
-    assumption: SecurityAssumption,
-    log_degree: usize,
-    log_inv_rate: usize,
-    field_size_bits: usize,
-    ood_samples: usize,
-    log_eta: f64,
-) -> f64 {
-    if matches!(assumption, SecurityAssumption::UniqueDecoding) {
-        return 0.;
-    }
-
-    let list_size = list_size_bits_at_log_eta(assumption, log_degree, log_inv_rate, log_eta);
-    let error = 2. * list_size + (log_degree * ood_samples) as f64;
-    (ood_samples * field_size_bits) as f64 + 1. - error
-}
-
-fn fold_sumcheck_error_at_log_eta(
-    assumption: SecurityAssumption,
-    field_size_bits: usize,
-    log_degree: usize,
-    log_inv_rate: usize,
-    log_eta: f64,
-) -> f64 {
-    let list_size = list_size_bits_at_log_eta(assumption, log_degree, log_inv_rate, log_eta);
-    field_size_bits as f64 - (list_size + 1.)
-}
-
-fn queries_combination_error_at_log_eta(
-    assumption: SecurityAssumption,
-    field_size_bits: usize,
-    log_degree: usize,
-    log_inv_rate: usize,
-    ood_samples: usize,
-    num_queries: usize,
-    log_eta: f64,
-) -> f64 {
-    let list_size = list_size_bits_at_log_eta(assumption, log_degree, log_inv_rate, log_eta);
-    let log_combination = libm::log2((ood_samples + num_queries) as f64);
-    field_size_bits as f64 - (log_combination + list_size + 1.)
-}
-
 fn shake_check_error(field_size_bits: usize, num_queries: usize, num_ood_samples: usize) -> f64 {
     let num_points = (num_queries + num_ood_samples) as f64;
     field_size_bits as f64 - libm::log2(2. * num_points).max(0.)
@@ -277,8 +192,7 @@ impl StirSoundness for SecurityAssumption {
             upper,
             unprotected_target_bits,
             |eta| {
-                ood_error_at_log_eta(
-                    *self,
+                self.ood_error_at_log_eta(
                     log_degree,
                     log_inv_rate,
                     field_size_bits,
@@ -383,8 +297,7 @@ impl StirSoundness for SecurityAssumption {
             upper,
             unprotected_target_bits,
             |eta| {
-                ood_error_at_log_eta(
-                    *self,
+                self.ood_error_at_log_eta(
                     log_degree,
                     log_inv_rate,
                     field_size_bits,
@@ -410,21 +323,10 @@ impl StirSoundness for SecurityAssumption {
         log_inv_rate: usize,
         log_eta: f64,
     ) -> f64 {
-        let prox_gaps = prox_gaps_error_at_log_eta(
-            *self,
-            log_degree,
-            log_inv_rate,
-            field_size_bits,
-            2,
-            log_eta,
-        );
-        let sumcheck = fold_sumcheck_error_at_log_eta(
-            *self,
-            field_size_bits,
-            log_degree,
-            log_inv_rate,
-            log_eta,
-        );
+        let prox_gaps =
+            self.prox_gaps_error_at_log_eta(log_degree, log_inv_rate, field_size_bits, 2, log_eta);
+        let sumcheck =
+            self.fold_sumcheck_error_at_log_eta(field_size_bits, log_degree, log_inv_rate, log_eta);
         prox_gaps.min(sumcheck)
     }
 
@@ -439,8 +341,7 @@ impl StirSoundness for SecurityAssumption {
     ) -> f64 {
         let failure_base = self.stir_query_failure_base(log_inv_rate, eta);
         let query_failure = -(num_queries as f64) * libm::log2(failure_base);
-        let combination = queries_combination_error_at_log_eta(
-            *self,
+        let combination = self.queries_combination_error_at_log_eta(
             field_size_bits,
             log_degree,
             log_inv_rate,
@@ -460,8 +361,7 @@ impl StirSoundness for SecurityAssumption {
         num_queries: usize,
         num_ood_samples: usize,
     ) -> f64 {
-        let ood = ood_error_at_log_eta(
-            *self,
+        let ood = self.ood_error_at_log_eta(
             log_degree,
             log_inv_rate,
             field_size_bits,
@@ -565,7 +465,7 @@ mod tests {
                     >= target as f64
             );
             assert!(
-                ood_error_at_log_eta(jb, 20, 2, field_bits, 1, libm::log2(eta)) >= target as f64
+                jb.ood_error_at_log_eta(20, 2, field_bits, 1, libm::log2(eta)) >= target as f64
             );
         }
     }
@@ -634,7 +534,7 @@ mod tests {
         assert!(unprotected.is_finite());
         assert_eq!(
             unprotected,
-            ood_error_at_log_eta(cb, 20, 2, 124, 2, libm::log2(0.01))
+            cb.ood_error_at_log_eta(20, 2, 124, 2, libm::log2(0.01))
                 .min(shake_check_error(124, 40, 2))
         );
     }
@@ -646,12 +546,12 @@ mod tests {
         let smaller = safe - 20.;
 
         assert!(
-            prox_gaps_error_at_log_eta(cb, 20, 1, 155, 2, smaller)
-                < prox_gaps_error_at_log_eta(cb, 20, 1, 155, 2, safe)
+            cb.prox_gaps_error_at_log_eta(20, 1, 155, 2, smaller)
+                < cb.prox_gaps_error_at_log_eta(20, 1, 155, 2, safe)
         );
         assert!(
-            ood_error_at_log_eta(cb, 20, 1, 155, 2, smaller)
-                < ood_error_at_log_eta(cb, 20, 1, 155, 2, safe)
+            cb.ood_error_at_log_eta(20, 1, 155, 2, smaller)
+                < cb.ood_error_at_log_eta(20, 1, 155, 2, safe)
         );
     }
 }

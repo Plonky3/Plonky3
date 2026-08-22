@@ -100,7 +100,7 @@ type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
 type Challenger = DuplexChallenger<F, Poseidon16, 16, 8>;
 
 type FriPcsTy = TwoAdicFriPcs<F, Dft, ValMmcs, ChallengeMmcs>;
-type StirPcsTy = TwoAdicStirPcs<F, Dft, ValMmcs, ChallengeMmcs>;
+type StirPcsTy = TwoAdicStirPcs<F, Dft, ValMmcs, ChallengeMmcs, EF, Challenger>;
 type WhirLayout = SuffixProver<F, EF>;
 type WhirPcsTy = WhirProver<EF, F, Dft, ValMmcs, Challenger, WhirLayout>;
 

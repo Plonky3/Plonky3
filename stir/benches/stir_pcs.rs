@@ -27,7 +27,7 @@ type ValMmcs =
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Dft = Radix2DitParallel<Val>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
-type MyPcs = TwoAdicStirPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+type MyPcs = TwoAdicStirPcs<Val, Dft, ValMmcs, ChallengeMmcs, Challenge, Challenger>;
 
 /// Columns per committed matrix.
 const WIDTH: usize = 4;
