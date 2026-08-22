@@ -610,7 +610,7 @@ where
         current_shift: F,
         current_log_domain: usize,
     ) -> Self {
-        let final_log_arity = config.log_folding_factor;
+        let final_log_arity = config.final_log_folding_factor();
         let (final_new_log_domain, final_new_shift) =
             fold_domain_params(current_shift, current_log_domain, final_log_arity);
         Self {
@@ -630,7 +630,7 @@ where
     /// Fold at `final_gamma` and derive the final polynomial. The returned coefficients are
     /// the round's only prover message and must be absorbed by the caller.
     fn fold_and_derive(&mut self, current_oracle_codeword: &[EF], final_gamma: EF) -> &[EF] {
-        let final_log_arity = self.config.log_folding_factor;
+        let final_log_arity = self.config.final_log_folding_factor();
         // See the round-fold note in `RoundProver::fold_and_commit`: `gamma / current_shift`
         // over subgroup coordinates is the paper's coset fold at challenge `gamma`.
         let final_fold_beta = final_gamma * EF::from(self.current_shift.inverse());
@@ -704,7 +704,7 @@ where
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>,
 {
-    let final_arity = 1usize << config.log_folding_factor;
+    let final_arity = 1usize << config.final_log_folding_factor();
     let mut state = FinalRoundProver::new(config, dft, current_shift, current_log_domain);
 
     let final_folding_pow_witness = challenger.grind(config.final_folding_pow_bits);
@@ -776,8 +776,11 @@ where
 
     // Commit before moving the codeword into the round state, avoiding a full clone.
     let (initial_commit, initial_data) = if commit_initial {
-        let (commit, data) =
-            commit_as_fiber_matrix(&config.mmcs, &initial_codeword, config.log_folding_factor);
+        let (commit, data) = commit_as_fiber_matrix(
+            &config.mmcs,
+            &initial_codeword,
+            config.log_starting_folding_factor,
+        );
         challenger.observe(commit.clone());
         (Some(commit), Some(data))
     } else {
@@ -910,8 +913,11 @@ where
             "initial STIR codeword length must match the configured starting domain"
         );
         let (initial_commitment, commit_data) = if commit_initial {
-            let (commit, data) =
-                commit_as_fiber_matrix(&configs[i].mmcs, &codeword, configs[i].log_folding_factor);
+            let (commit, data) = commit_as_fiber_matrix(
+                &configs[i].mmcs,
+                &codeword,
+                configs[i].log_starting_folding_factor,
+            );
             challenger.observe(commit.clone());
             (Some(commit), Some(data))
         } else {
@@ -1122,7 +1128,7 @@ where
 
     let mut results = Vec::with_capacity(b);
     for (i, mut frp) in final_provers.into_iter().enumerate() {
-        let final_arity = 1usize << configs[i].log_folding_factor;
+        let final_arity = 1usize << configs[i].final_log_folding_factor();
         let query_indices: Vec<usize> = (0..configs[i].final_queries)
             .map(|_| {
                 challenger

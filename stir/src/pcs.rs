@@ -64,8 +64,8 @@ use crate::verifier::{StirError, verify_stir_multi_with_external_initial};
 pub struct InputOpenings<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
     /// `opened_values[k][m]` is the opened fiber-grouped row of matrix `m` at the `k`-th
     /// queried position, in the same query order the prover and verifier both derive from
-    /// public data. Each such row concatenates the `2^log_folding_factor` LDE rows of one
-    /// fiber, ordered by the bit-reversal of the fiber column index.
+    /// public data. Each such row concatenates the `2^log_starting_folding_factor` LDE rows
+    /// of one fiber, ordered by the bit-reversal of the fiber column index.
     pub opened_values: Vec<Vec<Vec<Val>>>,
     /// Compact multi-opening proof authenticating every row at once.
     pub opening_proof: InputMmcs::MultiProof,
@@ -82,12 +82,12 @@ struct HeightClass<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
 /// Prover data for [`TwoAdicStirPcs`].
 ///
 /// Matrices are committed in fiber-grouped form — each Merkle leaf holds
-/// `2^log_folding_factor` consecutive bit-reversed LDE rows, exactly the rows one first-round
-/// STIR query reads — and grouped into one tree per distinct LDE height, in descending height
-/// order. STIR runs an independent sub-proof per height bucket, so a single shared tree would
-/// force every bucket's openings to carry the rows of every *other* height as well, purely to
-/// recompute the authentication path. `placement` maps each matrix, in the order the caller
-/// committed them, to its `(class, index within class)`.
+/// `2^log_starting_folding_factor` consecutive bit-reversed LDE rows, exactly the rows one
+/// first-round STIR query reads — and grouped into one tree per distinct LDE height, in
+/// descending height order. STIR runs an independent sub-proof per height bucket, so a single
+/// shared tree would force every bucket's openings to carry the rows of every *other* height
+/// as well, purely to recompute the authentication path. `placement` maps each matrix, in the
+/// order the caller committed them, to its `(class, index within class)`.
 pub struct StirProverData<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
     classes: Vec<HeightClass<Val, InputMmcs>>,
     placement: Vec<(usize, usize)>,
@@ -251,7 +251,7 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
-        let min_height = 1usize << self.stir.log_folding_factor;
+        let min_height = 1usize << self.stir.log_starting_folding_factor;
         let mut widths = Vec::new();
         let mut heights = Vec::new();
         let ldes: Vec<_> = evaluations
@@ -261,12 +261,12 @@ where
                 assert!(
                     evals.height() >= min_height,
                     "STIR PCS: matrix height {} is below the minimum of 2^{} (= {}) required \
-                     by log_folding_factor = {}. Pad the matrix to at least this height before \
-                     committing, or lower log_folding_factor.",
+                     by log_starting_folding_factor = {}. Pad the matrix to at least this \
+                     height before committing, or lower log_starting_folding_factor.",
                     evals.height(),
-                    self.stir.log_folding_factor,
+                    self.stir.log_starting_folding_factor,
                     min_height,
-                    self.stir.log_folding_factor,
+                    self.stir.log_starting_folding_factor,
                 );
                 let shift = Val::GENERATOR / domain.shift();
                 let lde = self
@@ -276,7 +276,7 @@ where
                     .to_row_major_matrix();
                 widths.push(lde.width());
                 heights.push(lde.height());
-                group_fiber_rows(lde, self.stir.log_folding_factor)
+                group_fiber_rows(lde, self.stir.log_starting_folding_factor)
             })
             .collect();
         commit_by_height_class(&self.input_mmcs, ldes, heights, widths)
@@ -318,17 +318,17 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         _num_chunks: usize,
     ) -> Vec<RowMajorMatrix<Val>> {
-        let min_height = 1usize << self.stir.log_folding_factor;
+        let min_height = 1usize << self.stir.log_starting_folding_factor;
         evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
                     evals.height() >= min_height,
                     "STIR PCS quotient: matrix height {} is below 2^{} required by \
-                     log_folding_factor = {}.",
+                     log_starting_folding_factor = {}.",
                     evals.height(),
-                    self.stir.log_folding_factor,
-                    self.stir.log_folding_factor,
+                    self.stir.log_starting_folding_factor,
+                    self.stir.log_starting_folding_factor,
                 );
                 let shift = Val::GENERATOR / domain.shift();
                 self.dft
@@ -340,7 +340,8 @@ where
     }
 
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
-        let min_lde_height = 1usize << (self.stir.log_folding_factor + self.stir.log_blowup);
+        let min_lde_height =
+            1usize << (self.stir.log_starting_folding_factor + self.stir.log_blowup);
         let mut widths = Vec::with_capacity(ldes.len());
         let mut heights = Vec::with_capacity(ldes.len());
         let grouped: Vec<_> = ldes
@@ -349,16 +350,16 @@ where
                 assert!(
                     lde.height() >= min_lde_height,
                     "STIR PCS: pre-computed LDE height {} is below 2^{} (= {}) required by \
-                     log_folding_factor + log_blowup = {} + {}.",
+                     log_starting_folding_factor + log_blowup = {} + {}.",
                     lde.height(),
-                    self.stir.log_folding_factor + self.stir.log_blowup,
+                    self.stir.log_starting_folding_factor + self.stir.log_blowup,
                     min_lde_height,
-                    self.stir.log_folding_factor,
+                    self.stir.log_starting_folding_factor,
                     self.stir.log_blowup,
                 );
                 widths.push(lde.width());
                 heights.push(lde.height());
-                group_fiber_rows(lde, self.stir.log_folding_factor)
+                group_fiber_rows(lde, self.stir.log_starting_folding_factor)
             })
             .collect();
         commit_by_height_class(&self.input_mmcs, grouped, heights, widths)
@@ -528,8 +529,7 @@ where
             .map(
                 |((&log_h, stir_config), (stir_proof, first_round_query_indices))| {
                     let bucket_height = 1usize << log_h;
-                    // Folding factor is constant across rounds.
-                    let log_arity0 = stir_config.log_folding_factor;
+                    let log_arity0 = stir_config.log_starting_folding_factor;
 
                     let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> =
                         commitment_data_with_opening_points
@@ -702,9 +702,7 @@ where
             .zip(proof.iter().map(|(_, input_openings)| input_openings))
             .map(|((&log_h, stir_config), input_openings)| {
                 let bucket_height = 1usize << log_h;
-                // The folding factor is constant across rounds, so the same arity applies
-                // whether STIR ran with intermediate rounds or only a final round.
-                let log_arity0 = stir_config.log_folding_factor;
+                let log_arity0 = stir_config.log_starting_folding_factor;
                 let arity0 = 1usize << log_arity0;
 
                 // A queried input row sits at LDE position `p = j + l * fold_height0`, whose

@@ -24,16 +24,27 @@ pub struct StirParameters<M> {
     /// `log_folding_factor - 1` per round.
     pub log_blowup: usize,
 
-    /// Log₂ of the folding factor applied in every round.
+    /// Log₂ of the folding factor applied from round 1 onward, and by the final
+    /// direct-send stage when the schedule has at least one intermediate round.
     ///
-    /// Each round folds `2^log_folding_factor` evaluation points into one,
+    /// Each such round folds `2^log_folding_factor` evaluation points into one,
     /// reducing the degree by that same factor, while the committed domain is halved
     /// (LDE step). This decoupling causes the code rate to improve each round.
-    /// Must satisfy `log_folding_factor <= log_starting_degree`.
     ///
     /// The paper-backed STIR schedule implemented here requires `k ≥ 4`
     /// (`log_folding_factor ≥ 2`).
     pub log_folding_factor: usize,
+
+    /// Log₂ of the folding factor applied in round 0 (the fold of the initial oracle).
+    ///
+    /// Construction 5.2 allows every round's folding parameter to differ; this crate
+    /// exposes that generality only for round 0, since a smaller `k₀` shrinks each
+    /// first-round query's fiber (`2^log_starting_folding_factor` rows of the input,
+    /// times the input width) without touching the improved-rate schedule the later
+    /// rounds are priced on. Must satisfy `log_starting_folding_factor <= log_starting_degree`
+    /// and, like `log_folding_factor`, `log_starting_folding_factor ≥ 2` (`k₀ ≥ 4`).
+    /// Set equal to `log_folding_factor` to recover a constant-arity schedule.
+    pub log_starting_folding_factor: usize,
 
     /// Which Reed-Solomon proximity bound to assume for soundness analysis.
     pub soundness_type: SecurityAssumption,
@@ -142,8 +153,11 @@ pub struct StirConfig<F, EF, M, Challenger> {
     /// The effective inverse rate increases by `log_folding_factor - 1` each round.
     pub log_blowup: usize,
 
-    /// Log₂ of the folding arity. Constant across all rounds.
+    /// Log₂ of the folding arity used from round 1 onward.
     pub log_folding_factor: usize,
+
+    /// Log₂ of the folding arity used in round 0 (the fold of the initial oracle).
+    pub log_starting_folding_factor: usize,
 
     /// Per-round derived configurations for each intermediate STIR round.
     pub round_configs: Vec<StirRoundConfig<F>>,
@@ -187,16 +201,22 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if `log_folding_factor < 2` or if `log_folding_factor > log_starting_degree`.
+    /// Panics if `log_folding_factor < 2`, if `log_starting_folding_factor < 2`, or if
+    /// `log_starting_folding_factor > log_starting_degree`.
     pub fn new(log_starting_degree: usize, params: StirParameters<M>) -> Self {
         assert!(
             params.log_folding_factor >= 2,
             "the paper-backed STIR parameter schedule requires log_folding_factor >= 2 (k >= 4)"
         );
         assert!(
-            params.log_folding_factor <= log_starting_degree,
-            "Folding factor ({}) must be <= starting degree ({}).",
-            params.log_folding_factor,
+            params.log_starting_folding_factor >= 2,
+            "the paper-backed STIR parameter schedule requires log_starting_folding_factor >= 2 \
+             (k0 >= 4)"
+        );
+        assert!(
+            params.log_starting_folding_factor <= log_starting_degree,
+            "Starting folding factor ({}) must be <= starting degree ({}).",
+            params.log_starting_folding_factor,
             log_starting_degree
         );
 
@@ -229,23 +249,27 @@ where
         let field_size_bits = EF::bits();
         let log_blowup = params.log_blowup;
         let log_folding_factor = params.log_folding_factor;
+        let log_starting_folding_factor = params.log_starting_folding_factor;
         let security_level = params.security_level;
         let max_pow_bits = params.max_pow_bits;
         let algebraic_security_level = security_level - max_pow_bits;
         let num_ood_samples = params.soundness_type.stir_num_ood_samples();
 
-        // Determine number of intermediate rounds. We fold all the way down to a polynomial
-        // of size `2^log_final_degree` (where log_final_degree < log_folding_factor) and
-        // send it directly. Each round reduces log_degree by log_folding_factor.
-        let total_folds = log_starting_degree / log_folding_factor;
-        assert!(
-            total_folds > 0,
-            "STIR requires at least one fold before the final direct-send stage"
-        );
+        // Determine number of intermediate rounds. Round 0 folds by k0
+        // (`log_starting_folding_factor`); every fold after that, including the final
+        // direct-send stage, folds by k (`log_folding_factor`). We fold all the way down
+        // to a polynomial of size `2^log_final_degree` (where log_final_degree <
+        // log_folding_factor, whenever more than the k0 fold happens) and send it
+        // directly. When `log_starting_degree - log_starting_folding_factor` is itself
+        // already `< log_folding_factor`, the k0 fold IS the final fold and no further
+        // k-fold occurs.
+        let after_starting_fold = log_starting_degree - log_starting_folding_factor;
+        let extra_folds = after_starting_fold / log_folding_factor;
+        let total_folds = 1 + extra_folds;
 
         // Last fold produces the final polynomial; intermediate rounds = total_folds - 1.
         let num_rounds = total_folds.saturating_sub(1);
-        let log_final_degree = log_starting_degree - total_folds * log_folding_factor;
+        let log_final_degree = after_starting_fold - extra_folds * log_folding_factor;
 
         // Per-round target adds a union-bound buffer of `ceil(log2(num_terms))` so that
         // summing every algebraic failure mode across the protocol is bounded by
@@ -321,30 +345,35 @@ where
         };
 
         // Disjoint-coset side condition for round `i`. The schedule sets
-        // `shift_{i+1} = shift_i^k * GEN`, so `shift_{i+1}/shift_i = GEN^{k^{i+1}}`.
-        // Disjoint cosets `L_i ∩ L_{i+1} = ∅` requires that ratio ∉ H_i, i.e.
-        // `(GEN^{k^{i+1}})^{|H_i|} = GEN^{2^{N_i}} ≠ 1` where
-        //   `N_i = (i+1) * log_folding_factor + log_domain_i`.
-        // Holds for any field whose multiplicative order has nontrivial odd part
-        // (BabyBear, KoalaBear, Goldilocks, …); the assertion catches pathological fields.
-        let assert_disjoint_cosets = |round_index: usize, log_domain_i: usize| {
-            let n_i = (round_index + 1) * log_folding_factor + log_domain_i;
-            assert!(
-                F::GENERATOR.exp_power_of_2(n_i) != F::ONE,
-                "STIR round {round_index}: disjoint-coset schedule requires \
-                 Field::GENERATOR^(2^{n_i}) ≠ 1 (i.e. GEN^(k^{}) ∉ subgroup of size 2^{log_domain_i}).",
-                round_index + 1,
-            );
-        };
+        // `shift_{i+1} = shift_i^{k_i} * GEN` each round (`k_i` = that round's own folding
+        // factor), so `shift_i = GEN^{c_i}` for the nested recursion `c_{i+1} = c_i * k_i + 1`
+        // — not a plain power of the summed `k_j`'s. Disjoint cosets `L_i ∩ L_{i+1} = ∅`
+        // require `GEN` to avoid the size-`2^{log_domain_i}` subgroup reached at round `i`;
+        // we check the simpler `GEN^{2^{N_i}} ≠ 1` where `N_i = (Σ_{j≤i} log_folding_factor_j)
+        // + log_domain_i` is the cumulative folding-log through round `i`. Holds for any
+        // field whose multiplicative order has nontrivial odd part (BabyBear, KoalaBear,
+        // Goldilocks, …); the assertion catches pathological fields.
+        let assert_disjoint_cosets =
+            |round_index: usize, log_domain_i: usize, cumulative_log_folding: usize| {
+                let n_i = cumulative_log_folding + log_domain_i;
+                assert!(
+                    F::GENERATOR.exp_power_of_2(n_i) != F::ONE,
+                    "STIR round {round_index}: disjoint-coset schedule requires \
+                     Field::GENERATOR^(2^{n_i}) ≠ 1 (i.e. GEN ∉ subgroup of size \
+                     2^{log_domain_i} after the cumulative fold).",
+                );
+            };
 
         // Size eta against both classes of error: PoW-eligible folding/query terms target
         // `pow_target_bits`, while OOD and shake terms must reach the full buffered target.
+        // Round 0 folds by `log_starting_folding_factor` (k0), not the steady-state
+        // `log_folding_factor` used from round 1 on.
         let mut final_eta = params.soundness_type.stir_initial_eta(
             pow_target_bits,
             buffered_security_level,
             log_degree,
             log_inv_rate,
-            log_folding_factor,
+            log_starting_folding_factor,
             field_size_bits,
         );
         validate_eta(0, log_inv_rate, final_eta);
@@ -352,7 +381,13 @@ where
         // Round 0 reuses the `stir_initial_eta` already computed above; every subsequent
         // round derives eta from the previous round's query count via `stir_recursive_eta`.
         let mut prev_queries = 0;
+        let mut cumulative_log_folding = 0usize;
         for round in 0..num_rounds {
+            let round_log_folding_factor = if round == 0 {
+                log_starting_folding_factor
+            } else {
+                log_folding_factor
+            };
             if round != 0 {
                 final_eta = params.soundness_type.stir_recursive_eta(
                     pow_target_bits,
@@ -368,7 +403,8 @@ where
             }
 
             let num_queries = query_count(log_inv_rate, final_eta);
-            assert_disjoint_cosets(round, log_domain_size);
+            cumulative_log_folding += round_log_folding_factor;
+            assert_disjoint_cosets(round, log_domain_size, cumulative_log_folding);
 
             let fold_alg = params.soundness_type.fold_algebraic_bits_at_log_eta(
                 field_size_bits,
@@ -406,9 +442,9 @@ where
             round_configs.push(StirRoundConfig {
                 log_degree,
                 log_domain_size,
-                log_fold_domain_size: log_domain_size - log_folding_factor,
+                log_fold_domain_size: log_domain_size - round_log_folding_factor,
                 domain_shift,
-                log_folding_factor,
+                log_folding_factor: round_log_folding_factor,
                 eta: final_eta,
                 num_queries,
                 num_ood_samples,
@@ -417,10 +453,10 @@ where
             });
 
             prev_queries = num_queries;
-            log_degree -= log_folding_factor;
+            log_degree -= round_log_folding_factor;
             log_domain_size -= 1;
-            log_inv_rate += log_folding_factor - 1;
-            domain_shift = domain_shift.exp_power_of_2(log_folding_factor) * F::GENERATOR;
+            log_inv_rate += round_log_folding_factor - 1;
+            domain_shift = domain_shift.exp_power_of_2(round_log_folding_factor) * F::GENERATOR;
         }
 
         if total_folds != 1 {
@@ -462,6 +498,7 @@ where
             max_pow_bits: params.max_pow_bits,
             log_blowup,
             log_folding_factor: params.log_folding_factor,
+            log_starting_folding_factor,
             round_configs,
             log_final_degree,
             final_queries,
@@ -481,6 +518,19 @@ where
     /// Number of intermediate STIR rounds (excluding the final send).
     pub const fn num_rounds(&self) -> usize {
         self.round_configs.len()
+    }
+
+    /// Log₂ of the folding arity used by the final direct-send stage.
+    ///
+    /// This is `log_folding_factor` (the steady-state arity) unless the schedule has no
+    /// intermediate rounds, in which case round 0's fold IS the final fold and this
+    /// returns `log_starting_folding_factor` instead.
+    pub const fn final_log_folding_factor(&self) -> usize {
+        if self.num_rounds() == 0 {
+            self.log_starting_folding_factor
+        } else {
+            self.log_folding_factor
+        }
     }
 
     /// Number of codeword commitments produced (one per round + one for the input).
@@ -531,6 +581,7 @@ mod tests {
         StirParameters {
             log_blowup,
             log_folding_factor,
+            log_starting_folding_factor: log_folding_factor,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: 80,
             max_pow_bits: 20,
@@ -567,6 +618,7 @@ mod tests {
         let params = StirParameters {
             log_blowup: 1,
             log_folding_factor: 2,
+            log_starting_folding_factor: 2,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: 80,
             max_pow_bits: 20,
@@ -661,6 +713,7 @@ mod tests {
             StirParameters {
                 log_blowup: 2,
                 log_folding_factor: 2,
+                log_starting_folding_factor: 2,
                 soundness_type: SecurityAssumption::JohnsonBound,
                 security_level: 80,
                 max_pow_bits: 20,
@@ -674,6 +727,7 @@ mod tests {
             StirParameters {
                 log_blowup: 2,
                 log_folding_factor: 2,
+                log_starting_folding_factor: 2,
                 soundness_type: SecurityAssumption::CapacityBound,
                 security_level: 80,
                 max_pow_bits: 20,
@@ -698,6 +752,7 @@ mod tests {
             StirParameters {
                 log_blowup: 2,
                 log_folding_factor: 2,
+                log_starting_folding_factor: 2,
                 soundness_type: SecurityAssumption::JohnsonBound,
                 security_level: 100,
                 max_pow_bits: 0,
@@ -732,6 +787,7 @@ mod tests {
             StirParameters {
                 log_blowup: 2,
                 log_folding_factor: 2,
+                log_starting_folding_factor: 2,
                 soundness_type: SecurityAssumption::JohnsonBound,
                 security_level: 128,
                 max_pow_bits: 0,
@@ -783,6 +839,7 @@ mod tests {
                 StirParameters {
                     log_blowup: 1,
                     log_folding_factor: 2,
+                    log_starting_folding_factor: 2,
                     soundness_type: SecurityAssumption::CapacityBound,
                     security_level: 80,
                     max_pow_bits: 20,
@@ -842,27 +899,33 @@ mod tests {
         let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
         let field_size_bits = EF::bits();
 
-        // (log_starting_degree, log_blowup, log_folding_factor, security_level, max_pow_bits, soundness_type).
+        // (log_starting_degree, log_blowup, log_folding_factor, log_starting_folding_factor,
+        // security_level, max_pow_bits, soundness_type).
         let cb = SecurityAssumption::CapacityBound;
         let jb = SecurityAssumption::JohnsonBound;
         let cases = [
-            (8, 1, 2, 80, 20, cb),
-            (8, 2, 2, 80, 20, cb),
-            (8, 2, 2, 80, 20, jb),
-            (16, 1, 2, 80, 20, cb),
-            (4, 1, 2, 80, 20, cb),
-            (8, 1, 2, 16, 0, cb),
-            (12, 1, 3, 16, 0, cb),
-            (4, 1, 2, 16, 0, cb),
+            (8, 1, 2, 2, 80, 20, cb),
+            (8, 2, 2, 2, 80, 20, cb),
+            (8, 2, 2, 2, 80, 20, jb),
+            (16, 1, 2, 2, 80, 20, cb),
+            (4, 1, 2, 2, 80, 20, cb),
+            (8, 1, 2, 2, 16, 0, cb),
+            (12, 1, 3, 2, 16, 0, cb),
+            (4, 1, 2, 2, 16, 0, cb),
+            // k0 != k: round 0 folds by a different factor than every later round.
+            (16, 1, 3, 2, 80, 20, cb),
         ];
 
         {
-            for &(log_deg, log_blowup, log_fold, sec, max_pow, soundness_type) in &cases {
+            for &(log_deg, log_blowup, log_fold, log_starting_fold, sec, max_pow, soundness_type) in
+                &cases
+            {
                 let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(
                     log_deg,
                     StirParameters {
                         log_blowup,
                         log_folding_factor: log_fold,
+                        log_starting_folding_factor: log_starting_fold,
                         soundness_type,
                         security_level: sec,
                         max_pow_bits: max_pow,
@@ -871,7 +934,7 @@ mod tests {
                 );
 
                 // Mirror `StirConfig::new`'s buffered target.
-                let total_folds = log_deg / log_fold;
+                let total_folds = 1 + (log_deg - log_starting_fold) / log_fold;
                 let buffer = libm::ceil(libm::log2((6 * (total_folds - 1) + 3) as f64)) as usize;
                 let buffered = (sec + buffer) as f64;
                 // Recomputed algebraic bits use the same `libm` math as the config, so

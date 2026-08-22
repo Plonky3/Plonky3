@@ -674,7 +674,7 @@ where
     Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
 {
     let mut fv = FinalRoundVerifier::<F, EF>::new(
-        config.log_folding_factor,
+        config.final_log_folding_factor(),
         current_shift,
         current_log_domain,
     );
@@ -1238,7 +1238,7 @@ where
     let mut fvs: Vec<FinalRoundVerifier<F, EF>> = (0..b)
         .map(|i| {
             FinalRoundVerifier::<F, EF>::new(
-                configs[i].log_folding_factor,
+                configs[i].final_log_folding_factor(),
                 shifts[i],
                 log_domains[i],
             )

@@ -29,6 +29,18 @@
 //! description of the violated bound. Lower `stir-log-fold` or raise `rate` if that
 //! happens.
 //!
+//! # Multi-table run
+//!
+//! After the single-table comparison, the same three protocols run a second
+//! commit -> open -> verify cycle over three tables committed together in one batch,
+//! with log heights `n`, `n + 1`, and `n + 3` (`n + 3` is `--log-message-size`, so `n`
+//! is three less) and a shared column width set by `--multi-table-width`. This mirrors
+//! how a real prover batches multiple trace tables of different heights into a single
+//! commitment, rather than committing one uniform matrix. FRI and STIR batch the three
+//! matrices directly; WHIR stacks the three tables into one committed multilinear
+//! polynomial, so its round schedule is derived from the stacked size rather than from
+//! `log-message-size` directly.
+//!
 //! # Run
 //!
 //! Each protocol's internal tracing spans log at INFO by default; set `RUST_LOG=warn`
@@ -55,6 +67,7 @@ use p3_stir::{StirConfig, StirParameters, TwoAdicStirPcs};
 use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_util::log2_ceil_usize;
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::prover::WhirProver;
@@ -114,6 +127,12 @@ struct Args {
     #[arg(short = 'w', long, default_value = "0")]
     log_width: usize,
 
+    /// Column width shared by the three tables in the multi-table run, chosen to be
+    /// representative of a real trace table rather than the single-column default used
+    /// by the primary single-table comparison above.
+    #[arg(long, default_value = "32")]
+    multi_table_width: usize,
+
     /// Log_2 of the inverse rate of the starting Reed-Solomon code.
     #[arg(short = 'r', long, default_value = "1")]
     rate: usize,
@@ -127,6 +146,17 @@ struct Args {
     /// Matches `whir-fold` by default so both protocols fold at arity 16.
     #[arg(long, default_value = "4")]
     stir_log_fold: usize,
+
+    /// STIR log_2 folding arity used only in round 0 (the fold of the initial oracle).
+    ///
+    /// Defaults to the paper-backed minimum (arity 4), which shrinks every first-round
+    /// query's fiber (`2^k0` LDE rows, times the committed width) without touching the
+    /// improved-rate schedule the later rounds are priced on — the win grows with
+    /// column width, since a first-round query reads `k0` whole rows of every
+    /// committed matrix. Set equal to `stir-log-fold` to recover a constant-arity
+    /// schedule.
+    #[arg(long, default_value = "2")]
+    stir_log_starting_fold: usize,
 
     /// FRI log_2 folding arity per round.
     #[arg(long, default_value = "1")]
@@ -157,13 +187,13 @@ fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFac
     rates
 }
 
-/// Run one full commit -> open -> verify cycle for a univariate PCS (FRI or STIR) and
-/// report its timing, proof size, and query count.
+/// Run one full commit -> open -> verify cycle for a univariate PCS (FRI or STIR) over
+/// one or more matrices batched into a single commitment and opened at a shared
+/// out-of-domain point, then report timing, proof size, and query count.
 fn run_univariate_pcs<P>(
     label: &'static str,
     pcs: &P,
-    domain: TwoAdicMultiplicativeCoset<F>,
-    message: RowMajorMatrix<F>,
+    tables: Vec<(TwoAdicMultiplicativeCoset<F>, RowMajorMatrix<F>)>,
     base_challenger: &Challenger,
     queries: String,
     observe: impl Fn(&mut Challenger, &P::Commitment),
@@ -171,10 +201,11 @@ fn run_univariate_pcs<P>(
 where
     P: Pcs<EF, Challenger, Domain = TwoAdicMultiplicativeCoset<F>>,
 {
+    let domains: Vec<_> = tables.iter().map(|(domain, _)| *domain).collect();
     let mut prover_challenger = base_challenger.clone();
 
     let t = Instant::now();
-    let (commit, prover_data) = pcs.commit([(domain, message)]);
+    let (commit, prover_data) = pcs.commit(tables);
     let commit_ms = t.elapsed().as_millis();
 
     observe(&mut prover_challenger, &commit);
@@ -184,12 +215,13 @@ where
         <Challenger as FieldChallenger<F>>::sample_algebra_element(&mut prover_challenger);
 
     let t = Instant::now();
-    let (openings, proof) = pcs.open(
-        vec![(&prover_data, vec![vec![zeta]])],
-        &mut prover_challenger,
-    );
+    let opening_points = domains.iter().map(|_| vec![zeta]).collect();
+    let (openings, proof) = pcs.open(vec![(&prover_data, opening_points)], &mut prover_challenger);
     let open_ms = t.elapsed().as_millis();
-    let values = openings[0][0][0].clone();
+    let values: Vec<_> = openings[0]
+        .iter()
+        .map(|matrix_openings| matrix_openings[0].clone())
+        .collect();
 
     let mut verifier_challenger = base_challenger.clone();
     observe(&mut verifier_challenger, &commit);
@@ -198,8 +230,13 @@ where
     assert_eq!(derived, zeta, "verifier challenger drifted from prover");
 
     let t = Instant::now();
+    let matrices_with_openings = domains
+        .into_iter()
+        .zip(values)
+        .map(|(domain, vals)| (domain, vec![(zeta, vals)]))
+        .collect();
     pcs.verify(
-        vec![(commit, vec![(domain, vec![(zeta, values)])])],
+        vec![(commit, matrices_with_openings)],
         &proof,
         &mut verifier_challenger,
     )
@@ -282,12 +319,9 @@ fn run_whir(
     }
 }
 
-fn print_report(args: &Args, reports: &[ProtocolReport]) {
+fn print_report(title: &str, reports: &[ProtocolReport]) {
     println!();
-    println!(
-        "=== FRI vs STIR vs WHIR ({}-bit security, rho = 2^-{}, m = {}, width = 2^{}) ===",
-        args.security_level, args.rate, args.log_message_size, args.log_width
-    );
+    println!("=== {title} ===");
     println!(
         "  protocol | commit ms | open ms | total ms | verify us | proof bytes | proof KiB | queries"
     );
@@ -328,7 +362,10 @@ fn main() {
         args.log_width <= args.log_message_size,
         "log-width cannot exceed log-message-size"
     );
-
+    assert!(
+        args.log_message_size >= 3,
+        "log-message-size must be at least 3 for the multi-table run (heights n, n + 1, n + 3)"
+    );
     let log_height = args.log_message_size - args.log_width;
     let width = 1usize << args.log_width;
 
@@ -377,8 +414,7 @@ fn main() {
         reports.push(run_univariate_pcs(
             "fri",
             &pcs,
-            domain,
-            message,
+            vec![(domain, message)],
             &base_challenger,
             num_queries.to_string(),
             |ch, commit| ch.observe(commit.clone()),
@@ -390,10 +426,11 @@ fn main() {
         let stir_params = StirParameters {
             log_blowup: args.rate,
             log_folding_factor: args.stir_log_fold,
+            log_starting_folding_factor: args.stir_log_starting_fold,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: args.security_level,
             max_pow_bits: args.pow_bits,
-            mmcs: challenge_mmcs,
+            mmcs: challenge_mmcs.clone(),
         };
         let config =
             StirConfig::<F, EF, ChallengeMmcs, Challenger>::new(log_height, stir_params.clone());
@@ -414,8 +451,7 @@ fn main() {
         reports.push(run_univariate_pcs(
             "stir",
             &pcs,
-            domain,
-            message,
+            vec![(domain, message)],
             &base_challenger,
             queries,
             // STIR commits one Merkle tree per distinct LDE height.
@@ -452,7 +488,7 @@ fn main() {
         .pad_to_min_num_variables(args.whir_fold);
 
         let dft = Dft::new(1 << config.max_fft_size());
-        let pcs = WhirPcsTy::new(config, dft, val_mmcs);
+        let pcs = WhirPcsTy::new(config, dft, val_mmcs.clone());
 
         let mut domain_separator = DomainSeparator::new(vec![]);
         pcs.add_domain_separator::<DIGEST_ELEMS>(&mut domain_separator);
@@ -466,5 +502,171 @@ fn main() {
         ));
     }
 
-    print_report(&args, &reports);
+    // Multi-table run: three tables batched into one commitment, with log heights
+    // n, n + 1, and n + 3 (n + 3 is `--log-message-size`) and a shared column width.
+    // This is closer to how a real prover commits several trace tables of different
+    // heights together, rather than one uniform matrix.
+    let n = args.log_message_size - 3;
+    let heights = [n, n + 1, args.log_message_size];
+    let multi_width = args.multi_table_width;
+
+    let mut multi_reports = Vec::with_capacity(3);
+
+    // FRI: the closed-form query count doesn't depend on the committed heights, so it's
+    // unchanged from the single-table run above; only the batch of committed matrices
+    // and the DFT size (sized for the tallest table) differ.
+    {
+        let num_queries = (args.security_level - args.pow_bits)
+            .div_ceil(args.rate)
+            .max(1);
+        let fri_params = FriParameters {
+            log_blowup: args.rate,
+            log_final_poly_len: 0,
+            max_log_arity: args.fri_log_arity,
+            num_queries,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: args.pow_bits,
+            mmcs: challenge_mmcs.clone(),
+        };
+        let dft = Dft::new(1 << (args.log_message_size + args.rate));
+        let pcs = FriPcsTy::new(dft, val_mmcs.clone(), fri_params);
+        let mut rng = SmallRng::seed_from_u64(0xF12F);
+        let tables = heights
+            .iter()
+            .map(|&h| {
+                let domain =
+                    <FriPcsTy as Pcs<EF, Challenger>>::natural_domain_for_degree(&pcs, 1 << h);
+                let message = RowMajorMatrix::<F>::rand(&mut rng, 1 << h, multi_width);
+                (domain, message)
+            })
+            .collect();
+        multi_reports.push(run_univariate_pcs(
+            "fri",
+            &pcs,
+            tables,
+            &base_challenger,
+            num_queries.to_string(),
+            |ch, commit| ch.observe(commit.clone()),
+        ));
+    }
+
+    // STIR: the round/PoW schedule is derived once from the tallest table, and the
+    // shorter tables are folded in once the running codeword reaches their height.
+    {
+        let stir_params = StirParameters {
+            log_blowup: args.rate,
+            log_folding_factor: args.stir_log_fold,
+            log_starting_folding_factor: args.stir_log_starting_fold,
+            soundness_type: SecurityAssumption::CapacityBound,
+            security_level: args.security_level,
+            max_pow_bits: args.pow_bits,
+            mmcs: challenge_mmcs,
+        };
+        let config = StirConfig::<F, EF, ChallengeMmcs, Challenger>::new(
+            args.log_message_size,
+            stir_params.clone(),
+        );
+        let queries = config
+            .round_configs
+            .iter()
+            .map(|rc| rc.num_queries.to_string())
+            .chain(std::iter::once(config.final_queries.to_string()))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let dft = Dft::new(1 << (args.log_message_size + args.rate));
+        let pcs = StirPcsTy::new(dft, val_mmcs.clone(), stir_params);
+        let mut rng = SmallRng::seed_from_u64(0x571131);
+        let tables = heights
+            .iter()
+            .map(|&h| {
+                let domain =
+                    <StirPcsTy as Pcs<EF, Challenger>>::natural_domain_for_degree(&pcs, 1 << h);
+                let message = RowMajorMatrix::<F>::rand(&mut rng, 1 << h, multi_width);
+                (domain, message)
+            })
+            .collect();
+        multi_reports.push(run_univariate_pcs(
+            "stir",
+            &pcs,
+            tables,
+            &base_challenger,
+            queries,
+            // STIR commits one Merkle tree per distinct LDE height.
+            |ch, commit| commit.iter().for_each(|c| ch.observe(c.clone())),
+        ));
+    }
+
+    // WHIR: the three tables are stacked into one committed multilinear polynomial, so
+    // the round schedule is derived from the stacked size rather than from
+    // `log-message-size` directly.
+    {
+        let stacked_num_variables =
+            log2_ceil_usize(heights.iter().map(|&h| multi_width << h).sum::<usize>());
+        let folding_factor = FoldingFactor::Constant(args.whir_fold);
+        let params = ProtocolParameters {
+            security_level: args.security_level,
+            pow_bits: args.pow_bits,
+            round_log_inv_rates: default_round_log_inv_rates(
+                stacked_num_variables,
+                &folding_factor,
+            ),
+            folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: args.rate,
+        };
+        let config = WhirConfig::<EF, F, Challenger>::new(stacked_num_variables, params).unwrap();
+        if !config.check_pow_bits() {
+            warn!("WHIR requires more PoW bits than the configured budget for the multi-table run");
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x411123);
+        let tables = heights
+            .iter()
+            .map(|&h| Table::rand(&mut rng, multi_width, h))
+            .collect();
+        let witness = WhirLayout::new_witness(tables, args.whir_fold);
+        let protocol = OpeningProtocol::new(
+            heights
+                .iter()
+                .map(|&h| {
+                    TableSpec::new(
+                        TableShape::new(h, multi_width),
+                        vec![OpeningBatch::new((0..multi_width).collect(), Vec::new())],
+                    )
+                })
+                .collect(),
+        )
+        .pad_to_min_num_variables(args.whir_fold);
+
+        let dft = Dft::new(1 << config.max_fft_size());
+        let pcs = WhirPcsTy::new(config, dft, val_mmcs);
+
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<DIGEST_ELEMS>(&mut domain_separator);
+
+        multi_reports.push(run_whir(
+            &pcs,
+            witness,
+            protocol,
+            &domain_separator,
+            &base_challenger,
+        ));
+    }
+
+    print_report(
+        &format!(
+            "FRI vs STIR vs WHIR single-table ({}-bit security, rho = 2^-{}, m = {}, width = 2^{})",
+            args.security_level, args.rate, args.log_message_size, args.log_width
+        ),
+        &reports,
+    );
+
+    print_report(
+        &format!(
+            "FRI vs STIR vs WHIR multi-table ({}-bit security, rho = 2^-{}, heights = 2^{{{}, {}, {}}}, width = {})",
+            args.security_level, args.rate, heights[0], heights[1], heights[2], multi_width
+        ),
+        &multi_reports,
+    );
 }

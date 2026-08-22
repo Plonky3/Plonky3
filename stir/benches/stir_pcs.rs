@@ -54,6 +54,7 @@ fn make_pcs() -> (MyPcs, Challenger) {
     let stir_params = StirParameters {
         log_blowup: 1,
         log_folding_factor: 2,
+        log_starting_folding_factor: 2,
         soundness_type: SecurityAssumption::CapacityBound,
         security_level: 100,
         max_pow_bits: 20,
