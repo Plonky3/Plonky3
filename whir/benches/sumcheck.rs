@@ -10,7 +10,7 @@ use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCh
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
-use p3_sumcheck::strategy::sumcheck_coefficients_prefix;
+use p3_sumcheck::strategy::{Basis, sumcheck_coefficients_prefix};
 use p3_sumcheck::zk::{ZkLayout, ZkProver, ZkSumcheckData};
 use p3_sumcheck::{OpeningBatch, SumcheckData};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -142,7 +142,7 @@ where
 
 fn run_sumcheck<L: Layout<F, EF>>(prover: L, challenger: &mut Challenger, folding: usize) {
     let mut data = SumcheckData::default();
-    let (residual, randomness) = prover.into_sumcheck(&mut data, 0, challenger);
+    let (residual, randomness) = prover.into_sumcheck(&mut data, 0, challenger, Basis::Evaluation);
     assert_eq!(data.num_rounds(), folding);
     assert_eq!(randomness.num_variables(), folding);
     assert!(residual.num_variables() > 0);

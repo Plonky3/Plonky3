@@ -283,6 +283,18 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
             .map(|&var| Point::eval_select(var, row.as_slice()))
     }
 
+    /// Projective counterpart of [`Self::weights_at`]: the same stored weight
+    /// tensors read as monomial coefficients (see
+    /// [`Point::eval_select_projective`]).
+    pub fn weights_at_projective<'a>(
+        &'a self,
+        row: &'a Point<EF>,
+    ) -> impl Iterator<Item = EF> + 'a {
+        self.vars
+            .iter()
+            .map(|&var| Point::eval_select_projective(var, row.as_slice()))
+    }
+
     /// Verifies that a given polynomial satisfies all constraints in the statement.
     ///
     /// For each constraint `(z_i, s_i)`, this method interprets the evaluation table as

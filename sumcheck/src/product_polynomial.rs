@@ -133,6 +133,11 @@ pub struct ProductPolynomial<F: Field, EF: ExtensionField<F>> {
     inner: MaybePacked<F, EF>,
     /// Variable-binding direction consulted once per round.
     order: VariableOrder,
+    /// Table interpretation consulted once per round (see [`Basis`]).
+    ///
+    /// Defaults to [`Basis::Evaluation`]; [`Self::with_basis`] opts into the
+    /// projective (monomial-basis) round arithmetic of eprint 2026/762.
+    basis: Basis,
 }
 
 impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
@@ -159,6 +164,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         let mut poly = Self {
             inner: MaybePacked::Packed { evals, weights },
             order,
+            basis: Basis::Evaluation,
         };
 
         // Corner case: if the input is already small, switch to scalar mode.
@@ -177,12 +183,34 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         Self {
             inner: MaybePacked::Unpacked { evals, weights },
             order,
+            basis: Basis::Evaluation,
         }
     }
 
     /// Returns the variable-binding order used by this polynomial.
     pub const fn order(&self) -> VariableOrder {
         self.order
+    }
+
+    /// Returns the table interpretation used by this polynomial.
+    pub const fn basis(&self) -> Basis {
+        self.basis
+    }
+
+    /// Opts this polynomial into a table interpretation (see [`Basis`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the projective basis is paired with suffix binding; the
+    /// projective kernels are prefix-only.
+    #[must_use]
+    pub fn with_basis(mut self, basis: Basis) -> Self {
+        assert!(
+            basis == Basis::Evaluation || self.order == VariableOrder::Prefix,
+            "the projective basis is prefix-only"
+        );
+        self.basis = basis;
+        self
     }
 
     /// Returns the number of variables in the multilinear polynomials.
@@ -219,6 +247,10 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///
     /// * `point` - The evaluation point as a [`Point`].
     pub fn eval(&self, point: &Point<EF>) -> EF {
+        // The MLE of the table at `point`, in BOTH bases: the out-of-domain
+        // anchor is a binding linear functional of the committed bytes, so it
+        // is deliberately basis-independent. Monomial evaluation lives on
+        // `Poly` and serves the final opening instead.
         match &self.inner {
             MaybePacked::Packed { evals, .. } => evals.eval_packed(point),
             MaybePacked::Unpacked { evals, .. } => evals.eval_ext::<F>(point),
@@ -245,18 +277,18 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///
     /// * `r` - The verifier's challenge for this round.
     fn compress(&mut self, r: EF) {
-        // Read the order once; the inner arms share the same dispatch target.
-        let order = self.order;
+        // Read the tags once; the inner arms share the same dispatch target.
+        let (order, basis) = (self.order, self.basis);
         match &mut self.inner {
             // Apply folding to both packed polynomials.
             MaybePacked::Packed { evals, weights } => {
-                order.fix_var(evals, r);
-                order.fix_var(weights, r);
+                basis.fix_var(order, evals, r);
+                basis.fix_var(order, weights, r);
             }
             // Apply folding to both scalar polynomials.
             MaybePacked::Unpacked { evals, weights } => {
-                order.fix_var(evals, r);
-                order.fix_var(weights, r);
+                basis.fix_var(order, evals, r);
+                basis.fix_var(order, weights, r);
             }
         }
     }
@@ -289,7 +321,10 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
 
             if k == 0 {
                 // Unpack each packed element into its WIDTH scalar lanes, keeping the same order.
-                *self = Self::new_unpacked(self.order, evals.unpack(), weights.unpack());
+                // The basis must survive the representation change: dropping it here would
+                // silently switch the remaining rounds back to evaluation arithmetic.
+                *self = Self::new_unpacked(self.order, evals.unpack(), weights.unpack())
+                    .with_basis(self.basis);
             }
         }
     }
@@ -335,14 +370,13 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // Step 1: Compute sumcheck polynomial coefficients.
+        // Step 1: Compute the two-element round message.
         //
-        // The strategy differs based on representation to maximize SIMD utilization.
-        let order = self.order;
-
-        // This prover binds evaluation-basis tables; the projective kernels
-        // are reachable through the same tag, wired up by their consumer.
-        let basis = Basis::Evaluation;
+        // The representation arm maximizes SIMD utilization; the basis picks
+        // the message semantics (see [`RoundMessage`]): `c_a` is `h(0)` in the
+        // evaluation basis and `s(1)` in the projective basis, `c_inf` is the
+        // leading coefficient in both.
+        let (order, basis) = (self.order, self.basis);
         let RoundMessage { c_a, c_inf } = match &self.inner {
             MaybePacked::Packed { evals, weights } => {
                 // Packed round coefficients: SIMD-parallel per-lane accumulation.
@@ -366,8 +400,9 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         // Step 5: Fold both polynomials using the challenge.
         self.compress(r);
 
-        // Step 6: Update the claimed sum, through the same round identity the
-        // verifier will apply to this message.
+        // Step 6: Update the claimed sum to h(r); the round identity that
+        // supplies the third quadratic value is basis-dependent and lives in
+        // one place, shared with the verifier.
         *sum = basis.reduce_claim(c_a, c_inf, r, *sum);
 
         // Sanity check: the updated sum should equal the inner product after folding.
@@ -385,8 +420,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     /// Computes the plain quadratic coefficients for the current round without
     /// touching the transcript or folding the polynomial.
     pub(crate) fn round_coefficients(&self) -> (EF, EF) {
-        let order = self.order;
-        let basis = Basis::Evaluation;
+        let (order, basis) = (self.order, self.basis);
         let msg = match &self.inner {
             MaybePacked::Packed { evals, weights } => {
                 let msg = basis.sumcheck_coefficients(order, evals.as_slice(), weights.as_slice());
@@ -978,6 +1012,111 @@ mod tests {
     }
 
     #[test]
+    fn test_projective_round_multiple_rounds() {
+        // Drive full projective rounds through `round()`: message [s(1), s(inf)],
+        // reduction s(0) := C - s(inf), subtraction-free binding. The claim
+        // invariant is the same dot product as the evaluation basis, so
+        // dot_product() == sum must hold after every round (and the
+        // debug_assert inside round() checks the same).
+        let mut rng = SmallRng::seed_from_u64(123);
+        let num_variables = 4;
+        let num_evals = 1 << num_variables;
+
+        let evals: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
+        let weights: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
+
+        let mut poly = ProductPolynomial::<F, EF>::new_unpacked(
+            VariableOrder::Prefix,
+            Poly::new(evals),
+            Poly::new(weights),
+        )
+        .with_basis(Basis::Projective);
+
+        let mut sum = poly.dot_product();
+        let mut sumcheck_data = SumcheckData::default();
+        let mut challenger = make_challenger();
+
+        for expected_vars in (1..=num_variables).rev() {
+            assert_eq!(poly.num_variables(), expected_vars);
+
+            let _ = poly.round(&mut sumcheck_data, &mut challenger, &mut sum, 0);
+
+            // Invariant: dot_product == sum after each projective round.
+            assert_eq!(poly.dot_product(), sum);
+        }
+
+        assert_eq!(poly.num_variables(), 0);
+    }
+
+    #[test]
+    fn test_projective_round_packed_through_transition() {
+        // Same invariant as above, but starting packed and folding through the
+        // packed -> scalar transition, so both representation arms of the
+        // projective round path are exercised.
+        //
+        // The dot-product invariant alone cannot catch a basis dropped at the
+        // transition seam: the post-reset rounds stay internally coherent,
+        // just in the wrong basis. The final assertion below can: the fully
+        // bound table must equal the monomial evaluation of the ORIGINAL
+        // table at the sampled challenges, which only holds if every round
+        // bound projectively.
+        type EP = <EF as ExtensionField<F>>::ExtensionPacking;
+
+        let simd_width = <F as Field>::Packing::WIDTH;
+        let num_variables = log2_strict_usize(simd_width) + 2;
+        let num_evals = 1 << num_variables;
+
+        let mut rng = SmallRng::seed_from_u64(321);
+        let evals: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
+        let weights: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
+
+        let original_evals = Poly::new(evals.clone());
+
+        let packed_evals: Vec<EP> = evals.chunks(simd_width).map(EP::from_ext_slice).collect();
+        let packed_weights: Vec<EP> = weights.chunks(simd_width).map(EP::from_ext_slice).collect();
+
+        let mut poly = ProductPolynomial::<F, EF>::new_packed(
+            VariableOrder::Prefix,
+            Poly::new(packed_evals),
+            Poly::new(packed_weights),
+        )
+        .with_basis(Basis::Projective);
+
+        let mut sum = poly.dot_product();
+        let mut sumcheck_data = SumcheckData::default();
+        let mut challenger = make_challenger();
+
+        let mut challenges = Vec::new();
+        for expected_vars in (1..=num_variables).rev() {
+            assert_eq!(poly.num_variables(), expected_vars);
+            challenges.push(poly.round(&mut sumcheck_data, &mut challenger, &mut sum, 0));
+            assert_eq!(poly.dot_product(), sum);
+        }
+
+        assert_eq!(poly.num_variables(), 0);
+
+        // The transition-seam probe: ties every bind, before and after the
+        // packed -> scalar switch, to one monomial evaluation.
+        assert_eq!(
+            poly.evals().as_constant().unwrap(),
+            original_evals.eval_monomial(&Point::new(challenges)),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "prefix-only")]
+    fn test_projective_rejects_suffix_order() {
+        let evals: Vec<EF> = vec![EF::ONE; 4];
+        let weights: Vec<EF> = vec![EF::ONE; 4];
+        let _ = ProductPolynomial::<F, EF>::new_unpacked(
+            VariableOrder::Suffix,
+            Poly::new(evals),
+            Poly::new(weights),
+        )
+        .with_basis(Basis::Projective);
+    }
+
+    #[test]
     fn test_dot_product_packed_matches_scalar() {
         // Verify that Packed and Small variants compute the same dot product.
         type EP = <EF as ExtensionField<F>>::ExtensionPacking;
@@ -1210,6 +1349,40 @@ mod tests {
                 .sum();
 
             prop_assert_eq!(poly.dot_product(), expected);
+        }
+
+        /// The projective round path preserves the dot-product claim invariant
+        /// across full rounds, for random tables and variable counts.
+        #[test]
+        fn prop_projective_rounds_maintain_invariant(
+            k in 1usize..=6,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let num_evals = 1usize << k;
+
+            let evals: Vec<EF> = (0..num_evals)
+                .map(|_| EF::from_u64(u64::from(rng.random::<u32>())))
+                .collect();
+            let weights: Vec<EF> = (0..num_evals)
+                .map(|_| EF::from_u64(u64::from(rng.random::<u32>())))
+                .collect();
+
+            let mut poly = ProductPolynomial::<F, EF>::new_unpacked(
+                VariableOrder::Prefix,
+                Poly::new(evals),
+                Poly::new(weights),
+            )
+            .with_basis(Basis::Projective);
+
+            let mut sum = poly.dot_product();
+            let mut sumcheck_data = SumcheckData::default();
+            let mut challenger = make_challenger();
+
+            for _ in 0..k {
+                let _ = poly.round(&mut sumcheck_data, &mut challenger, &mut sum, 0);
+                prop_assert_eq!(poly.dot_product(), sum);
+            }
         }
 
         /// Verify that compress maintains the sumcheck invariant.

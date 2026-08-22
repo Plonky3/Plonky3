@@ -388,17 +388,21 @@ where
 /// polynomial those bytes describe, and one round arithmetic follows from
 /// each choice (eprint 2026/762, Section 3):
 ///
-/// | per round                  | [`Basis::Evaluation`]              | [`Basis::Projective`]                           |
-/// |----------------------------|------------------------------------|-------------------------------------------------|
-/// | a table entry is           | a value on the hypercube `{0,1}^n` | a monomial coefficient (a value on `{0,inf}^n`) |
-/// | binding `X = r`            | `a0 + (a1 - a0) * r`               | `a0 + a1 * r`                                   |
-/// | message sent               | `[h(0), h(inf)]`                   | `[s(1), s(inf)]`                                |
-/// | value the verifier derives | `h(1) := C - h(0)`                 | `s(0) := C - s(inf)`                            |
+/// | per round                  | [`Basis::Evaluation`]               | [`Basis::Projective`]                           |
+/// |----------------------------|-------------------------------------|-------------------------------------------------|
+/// | a table entry is           | a value on the hypercube `{0,1}^n`  | a monomial coefficient (a value on `{0,inf}^n`) |
+/// | binding `X = r`            | `a0 + (a1 - a0) * r`                | `a0 + a1 * r`                                   |
+/// | message sent               | `[h(0), h(inf)]`                    | `[s(1), s(inf)]`                                |
+/// | value the verifier derives | `h(1) := C - h(0)`                  | `s(0) := C - s(inf)`                            |
+/// | fold of committed data     | multilinear interpolation at `r`    | monomial (Horner) evaluation at `r`             |
+/// | weight tensor `(u_i, v_i)` | `prod((1 - r_i) * u_i + r_i * v_i)` | `prod(u_i + v_i * r_i)`                         |
 ///
-/// The rows are one package per column: a consumer must take an entire
-/// column, never a mix. That is what the tag buys. A [`RoundMessage`] alone
-/// cannot say which column produced it, so the two values only ever leave or
-/// re-enter the transcript through the basis that defines them.
+/// The rows are one package per column: a consumer that folds committed data
+/// (such as WHIR, where the sumcheck challenge is also the codeword folding
+/// challenge) must take an entire column, never a mix. That is what the tag
+/// buys. A [`RoundMessage`] alone cannot say which column produced it, so the
+/// two values only ever leave or re-enter the transcript through the basis
+/// that defines them.
 ///
 /// The claim invariant `C = dot(evals, weights)` is the same in both bases:
 /// the `{0,1}`-sum of products in the evaluation basis and the `{0,inf}`-sum
@@ -475,6 +479,33 @@ impl Basis {
             Self::Projective => extrapolate_01inf(claimed_sum - c_inf, c_a, c_inf, r),
         }
     }
+
+    /// Binds the active round variable of `poly` to challenge `r`.
+    ///
+    /// - [`Basis::Evaluation`]: `a0 + (a1 - a0) * r`, dispatching on `order`.
+    /// - [`Basis::Projective`]: the subtraction-free `a0 + a1 * r` (prefix
+    ///   only).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the projective basis is paired with suffix binding.
+    pub fn fix_var<A, Ch>(self, order: VariableOrder, poly: &mut Poly<A>, r: Ch)
+    where
+        A: Algebra<Ch> + Copy + Send + Sync,
+        Ch: Copy + Send + Sync,
+    {
+        match self {
+            Self::Evaluation => order.fix_var(poly, r),
+            Self::Projective => {
+                assert_eq!(
+                    order,
+                    VariableOrder::Prefix,
+                    "the projective basis is prefix-only"
+                );
+                poly.fix_prefix_var_mut_monomial(r);
+            }
+        }
+    }
 }
 
 /// Which side of the variable order is bound first by the sumcheck rounds.
@@ -532,6 +563,7 @@ impl VariableOrder {
         self,
         constraints: &[Constraint<F, EF>],
         challenge: &Point<EF>,
+        basis: Basis,
     ) -> EF
     where
         F: Field,
@@ -567,26 +599,44 @@ impl VariableOrder {
                 // Each statement group exposes its weights evaluated at the
                 // local challenge; the kinds differ only in how weights are formed.
                 for statement in constraint.statements() {
-                    match statement {
+                    match (statement, basis) {
                         // Equality weights: one term per recorded equality point.
-                        Statements::Eq(eq_statement) => {
+                        (Statements::Eq(eq_statement), Basis::Evaluation) => {
                             // Pair this group's weights with powers starting at the shift.
                             acc += dot_product::<EF, _, _>(
                                 eq_statement.weights_at(&local_challenge),
                                 constraint.challenge_powers(shift),
                             );
                         }
+                        // Projective: the same weight tensors read as monomial
+                        // coefficients, so the closed form changes.
+                        (Statements::Eq(eq_statement), Basis::Projective) => {
+                            acc += dot_product::<EF, _, _>(
+                                eq_statement.weights_at_projective(&local_challenge),
+                                constraint.challenge_powers(shift),
+                            );
+                        }
                         // Successor-view weights: equality through the repeat-last view.
-                        Statements::Next(next_statement) => {
+                        // Multi-stark only; the projective basis has no consumer for it.
+                        (Statements::Next(next_statement), Basis::Evaluation) => {
                             acc += dot_product::<EF, _, _>(
                                 next_statement.weights_at(&local_challenge),
                                 constraint.challenge_powers(shift),
                             );
                         }
+                        (Statements::Next(_), Basis::Projective) => {
+                            unimplemented!("Next statements are not supported projectively")
+                        }
                         // Selector weights: one term per single-variable selector.
-                        Statements::Select(sel_statement) => {
+                        (Statements::Select(sel_statement), Basis::Evaluation) => {
                             acc += dot_product::<EF, _, _>(
                                 sel_statement.weights_at(&local_challenge),
+                                constraint.challenge_powers(shift),
+                            );
+                        }
+                        (Statements::Select(sel_statement), Basis::Projective) => {
+                            acc += dot_product::<EF, _, _>(
+                                sel_statement.weights_at_projective(&local_challenge),
                                 constraint.challenge_powers(shift),
                             );
                         }
@@ -666,6 +716,15 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// Folds the residual product polynomial by one challenge and updates the
     /// claimed sum with the same quadratic extrapolation as the plain path.
     pub(crate) fn fold_round_with_coefficients(&mut self, c0: EF, c_inf: EF, gamma: EF) {
+        // This entry point hardcodes the evaluation-basis reduction; its only
+        // caller is the zk residual path, which does not consult the basis.
+        // Guard the assumption so a projective configuration cannot silently
+        // run evaluation arithmetic here.
+        debug_assert_eq!(
+            self.poly.basis(),
+            Basis::Evaluation,
+            "the zk residual path does not support the projective basis"
+        );
         self.sum = extrapolate_01inf(c0, self.sum - c0, c_inf, gamma);
         self.poly.fold_round(gamma);
         debug_assert_eq!(self.sum, self.poly.dot_product());
@@ -853,7 +912,11 @@ mod tests {
         let challenge = Point::rand(&mut rng, 20);
 
         // Fast path vs reference implementation must agree.
-        let got = VariableOrder::Prefix.eval_constraints_poly(&constraints, &challenge);
+        let got = VariableOrder::Prefix.eval_constraints_poly(
+            &constraints,
+            &challenge,
+            Basis::Evaluation,
+        );
         let expected =
             eval_constraints_poly_reference(VariableOrder::Prefix, &constraints, &challenge);
         assert_eq!(got, expected);
@@ -867,7 +930,11 @@ mod tests {
         let challenge = Point::rand(&mut rng, 20);
 
         // Fast path vs reference implementation must agree.
-        let got = VariableOrder::Suffix.eval_constraints_poly(&constraints, &challenge);
+        let got = VariableOrder::Suffix.eval_constraints_poly(
+            &constraints,
+            &challenge,
+            Basis::Evaluation,
+        );
         let expected =
             eval_constraints_poly_reference(VariableOrder::Suffix, &constraints, &challenge);
         assert_eq!(got, expected);
@@ -888,11 +955,11 @@ mod tests {
             let challenge = Point::rand(&mut rng, total_num_variables);
 
             prop_assert_eq!(
-                VariableOrder::Prefix.eval_constraints_poly(&constraints, &challenge),
+                VariableOrder::Prefix.eval_constraints_poly(&constraints, &challenge, Basis::Evaluation),
                 eval_constraints_poly_reference(VariableOrder::Prefix, &constraints, &challenge),
             );
             prop_assert_eq!(
-                VariableOrder::Suffix.eval_constraints_poly(&constraints, &challenge),
+                VariableOrder::Suffix.eval_constraints_poly(&constraints, &challenge, Basis::Evaluation),
                 eval_constraints_poly_reference(VariableOrder::Suffix, &constraints, &challenge),
             );
         }
