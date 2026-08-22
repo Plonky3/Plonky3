@@ -11,6 +11,31 @@ pub mod hiding;
 pub use crate::assumption::SecurityAssumption;
 
 impl SecurityAssumption {
+    /// [`Self::ood_error`] at an explicit `log_eta`, rather than the regime's own default
+    /// safety margin ([`Self::log_eta`]).
+    ///
+    /// A caller deriving its own schedule of `eta` values across a protocol (STIR's per-round
+    /// bisection, for instance) needs the OOD error at each of those working points, not just
+    /// at the regime's fixed default.
+    #[must_use]
+    pub const fn ood_error_at_log_eta(
+        &self,
+        log_degree: usize,
+        log_inv_rate: usize,
+        field_size_bits: usize,
+        ood_samples: usize,
+        log_eta: f64,
+    ) -> f64 {
+        if matches!(self, Self::UniqueDecoding) {
+            return 0.;
+        }
+
+        let list_size_bits = self.list_size_bits_at_log_eta(log_degree, log_inv_rate, log_eta);
+
+        let error = 2. * list_size_bits + (log_degree * ood_samples) as f64;
+        (ood_samples * field_size_bits) as f64 + 1. - error
+    }
+
     /// OOD sampling error (in bits). See Lemma 4.5 in STIR:
     /// `error = L⁺² · (degree / |F|)^reps`.
     /// The domain size is discounted as negligible relative to `|F|`.
@@ -22,14 +47,13 @@ impl SecurityAssumption {
         field_size_bits: usize,
         ood_samples: usize,
     ) -> f64 {
-        if matches!(self, Self::UniqueDecoding) {
-            return 0.;
-        }
-
-        let list_size_bits = self.list_size_bits(log_degree, log_inv_rate);
-
-        let error = 2. * list_size_bits + (log_degree * ood_samples) as f64;
-        (ood_samples * field_size_bits) as f64 + 1. - error
+        self.ood_error_at_log_eta(
+            log_degree,
+            log_inv_rate,
+            field_size_bits,
+            ood_samples,
+            self.log_eta_or_zero(log_inv_rate),
+        )
     }
 
     /// Smallest number of OOD samples (from the extension field) needed
@@ -77,8 +101,30 @@ impl SecurityAssumption {
         num_variables: usize,
         log_inv_rate: usize,
     ) -> f64 {
+        self.fold_sumcheck_error_at_log_eta(
+            field_size_bits,
+            num_variables,
+            log_inv_rate,
+            self.log_eta_or_zero(log_inv_rate),
+        )
+    }
+
+    /// [`Self::fold_sumcheck_error`] at an explicit `log_eta`, rather than the regime's own
+    /// default safety margin ([`Self::log_eta`]).
+    ///
+    /// A caller deriving its own schedule of `eta` values across a protocol (STIR's per-round
+    /// bisection, for instance) needs the fold-sumcheck error at each of those working
+    /// points, not just at the regime's fixed default.
+    #[must_use]
+    pub const fn fold_sumcheck_error_at_log_eta(
+        &self,
+        field_size_bits: usize,
+        num_variables: usize,
+        log_inv_rate: usize,
+        log_eta: f64,
+    ) -> f64 {
         // List size at the current proximity parameter and code rate.
-        let list_size = self.list_size_bits(num_variables, log_inv_rate);
+        let list_size = self.list_size_bits_at_log_eta(num_variables, log_inv_rate, log_eta);
 
         // Security = field size minus the adversary's advantage from list decoding.
         field_size_bits as f64 - (list_size + 1.)
@@ -100,8 +146,34 @@ impl SecurityAssumption {
         ood_samples: usize,
         num_queries: usize,
     ) -> f64 {
+        self.queries_combination_error_at_log_eta(
+            field_size_bits,
+            num_variables,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+            self.log_eta_or_zero(log_inv_rate),
+        )
+    }
+
+    /// [`Self::queries_combination_error`] at an explicit `log_eta`, rather than the regime's
+    /// own default safety margin ([`Self::log_eta`]).
+    ///
+    /// A caller deriving its own schedule of `eta` values across a protocol (STIR's per-round
+    /// bisection, for instance) needs the query-combination error at each of those working
+    /// points, not just at the regime's fixed default.
+    #[must_use]
+    pub fn queries_combination_error_at_log_eta(
+        &self,
+        field_size_bits: usize,
+        num_variables: usize,
+        log_inv_rate: usize,
+        ood_samples: usize,
+        num_queries: usize,
+        log_eta: f64,
+    ) -> f64 {
         // List size at the current proximity parameter.
-        let list_size = self.list_size_bits(num_variables, log_inv_rate);
+        let list_size = self.list_size_bits_at_log_eta(num_variables, log_inv_rate, log_eta);
 
         // Total number of evaluation points available for the combination.
         let log_combination = libm::log2((ood_samples + num_queries) as f64);
