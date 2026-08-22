@@ -41,6 +41,7 @@ p3-merkle-tree.workspace = true
 p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true
 p3-whir.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 rand = { workspace = true }
 
 [[bench]]

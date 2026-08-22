@@ -13,8 +13,8 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::zerocheck::ZerocheckError;
 use p3_multi_stark::{
-    ProverInstance, ProverInstances, VerificationError, VerifierInstance, VerifierInstances, prove,
-    setup, verify,
+    MultiStarkProof, ProverInstance, ProverInstances, VerificationError, VerifierInstance,
+    VerifierInstances, prove, setup, verify,
 };
 use p3_sumcheck::OpeningBatch;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
@@ -560,4 +560,75 @@ fn verify_rejects_tampered_public_values() {
         }
         other => panic!("expected a Merkle opening rejection, got {other:?}"),
     }
+}
+
+const WHIR_FIXTURE: &str = "tests/fixtures/multi_stark_whir_v1.postcard";
+
+/// A fixed Fibonacci instance shared by the WHIR compat-fixture generator and checker.
+fn whir_compat_case() -> (WhirConfigForTest, RowMajorMatrix<F>, [F; 3], usize) {
+    let n = 256;
+    let trace = fib_trace(n);
+    let pis = fib_public_values(n);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    (config, trace, pis, log_height)
+}
+
+fn write_fixture(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let full_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    if let Some(parent) = full_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(full_path, bytes)
+}
+
+fn read_fixture(path: &str) -> std::io::Result<Vec<u8>> {
+    let full_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+    std::fs::read(full_path)
+}
+
+#[test]
+fn verify_whir_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
+    let (config, _, pis, log_height) = whir_compat_case();
+    let airs = [&FibAir];
+    let (_, vk) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof_bytes = read_fixture(WHIR_FIXTURE).expect(
+        "Missing fixture. Run: cargo test -p p3-multi-stark --test whir_fibonacci -- --ignored",
+    );
+    let proof: MultiStarkProof<WhirConfigForTest> = postcard::from_bytes(&proof_bytes)?;
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, log_height, &pis)]),
+        &proof,
+        0,
+        &mut challenger(&config),
+    )?;
+    Ok(())
+}
+
+#[test]
+#[ignore]
+fn generate_whir_fixture() -> Result<(), Box<dyn std::error::Error>> {
+    // Regen: cargo test -p p3-multi-stark --test whir_fibonacci -- --ignored
+    let (config, trace, pis, _) = whir_compat_case();
+    let airs = [&FibAir];
+    let (pk, _) = setup(&config, &airs, &mut challenger(&config));
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
+        0,
+        &mut challenger(&config),
+    );
+
+    let bytes = postcard::to_allocvec(&proof)?;
+    write_fixture(WHIR_FIXTURE, &bytes)?;
+    Ok(())
 }
