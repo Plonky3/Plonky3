@@ -7,7 +7,7 @@ use p3_air::symbolic::{
     AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
     SymbolicVariable, SymbolicVariableExt,
 };
-use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder};
+use p3_air::{Air, AirBuilder, ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
@@ -16,6 +16,25 @@ use crate::builder::{
     SymbolicLocalInteraction,
 };
 use crate::count::Count;
+
+/// Evaluate an AIR with interaction support and return all asserted constraints.
+pub fn get_all_interaction_symbolic_constraints<F, EF, A>(
+    air: &A,
+    layout: AirLayout,
+) -> (
+    Vec<SymbolicExpression<F>>,
+    Vec<SymbolicExpressionExt<F, EF>>,
+)
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
+{
+    layout.validate_against_air(air);
+    let mut builder = InteractionSymbolicBuilder::new(layout);
+    air.eval(&mut builder);
+    (builder.base_constraints(), builder.extension_constraints())
+}
 
 /// Symbolic builder that captures constraints and bus interactions side by side.
 #[derive(Debug)]
@@ -62,10 +81,7 @@ impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
     }
 
     /// Symbolic extension-field constraints captured by the inner builder.
-    pub fn extension_constraints(&self) -> Vec<SymbolicExpressionExt<F, EF>>
-    where
-        SymbolicExpressionExt<F, EF>: Algebra<EF>,
-    {
+    pub fn extension_constraints(&self) -> Vec<SymbolicExpressionExt<F, EF>> {
         self.inner.extension_constraints()
     }
 
