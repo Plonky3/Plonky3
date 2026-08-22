@@ -914,7 +914,7 @@ mod babybear_pcs {
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     type Dft = Radix2DitParallel<Val>;
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
-    type MyPcs = TwoAdicStirPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    type MyPcs = TwoAdicStirPcs<Val, Dft, ValMmcs, ChallengeMmcs, Challenge, Challenger>;
     type FriPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 
     fn make_mmcs(perm: &Perm) -> (ValMmcs, ChallengeMmcs) {
@@ -1360,6 +1360,60 @@ mod babybear_pcs {
         ];
         <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
             .unwrap_or_else(|e| panic!("two-commitment same-bucket verification failed: {e:?}"));
+    }
+
+    /// A matrix opened at zero points carries no claim that could pin its width, so `verify`
+    /// must reject it with a named error rather than silently deriving width 0 and failing
+    /// with a `WrongWidth` error naming the Merkle layer instead of the actual cause.
+    #[test]
+    fn test_pcs_matrix_without_opening_points_rejected() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let width = 3;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat_a = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+        let mat_b = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) = <MyPcs as Pcs<Challenge, Challenger>>::commit(
+            &pcs,
+            vec![(domain, mat_a), (domain, mat_b)],
+        );
+        p_ch.observe(commit.clone());
+
+        let zeta: Challenge = p_ch.sample_algebra_element();
+
+        // `mat_a` is opened at `zeta`; `mat_b` is opened at no points at all.
+        let data_and_points = vec![(&data, vec![vec![zeta], vec![]])];
+        let (opening_values, proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        assert_eq!(v_zeta, zeta);
+
+        let opening_a = opening_values[0][0][0].clone();
+        let claims = vec![(
+            commit,
+            vec![(domain, vec![(zeta, opening_a)]), (domain, vec![])],
+        )];
+
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                p3_stir::StirError::MatrixWithoutOpeningPoints {
+                    commitment: 0,
+                    matrix: 1,
+                }
+            ),
+            "{err:?}"
+        );
     }
 
     /// A proof with the per-commitment input-openings vector dropped (truncated) must be

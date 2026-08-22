@@ -1,12 +1,14 @@
 //! STIR protocol configuration: user-facing parameters and derived per-round configs.
 
 use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, TwoAdicField};
+use thiserror::Error;
 
 use crate::SecurityAssumption;
 use crate::soundness::{StirSoundness, combine_min_log_eta};
@@ -199,6 +201,123 @@ pub struct StirConfig<F, EF, M, Challenger> {
     _phantom: PhantomData<(F, EF, Challenger)>,
 }
 
+/// Reasons [`StirConfig::try_new`] can fail to derive a round schedule reaching
+/// `security_level` for the requested parameters and starting degree.
+///
+/// Every condition that would otherwise panic in [`StirConfig::new`] has a corresponding
+/// variant here, so a caller deriving a config for a proof-controlled degree (e.g. per
+/// LDE-height bucket) can reject cleanly via [`StirConfig::try_new`] instead of aborting the
+/// process.
+#[derive(Clone, Debug, PartialEq, Error)]
+pub enum StirConfigError {
+    /// `log_folding_factor` was below the paper-backed schedule's minimum of 2 (k >= 4).
+    #[error(
+        "the paper-backed STIR parameter schedule requires log_folding_factor >= 2 (k >= 4), \
+         got {log_folding_factor}"
+    )]
+    FoldingFactorTooSmall { log_folding_factor: usize },
+
+    /// `log_starting_folding_factor` was below the paper-backed schedule's minimum of 2 (k0 >= 4).
+    #[error(
+        "the paper-backed STIR parameter schedule requires log_starting_folding_factor >= 2 \
+         (k0 >= 4), got {log_starting_folding_factor}"
+    )]
+    StartingFoldingFactorTooSmall { log_starting_folding_factor: usize },
+
+    /// `log_starting_folding_factor` exceeded `log_starting_degree`, so round 0's fold cannot run.
+    #[error(
+        "starting folding factor ({log_starting_folding_factor}) must be <= starting degree \
+         ({log_starting_degree})"
+    )]
+    StartingFoldingFactorExceedsDegree {
+        log_starting_folding_factor: usize,
+        log_starting_degree: usize,
+    },
+
+    /// `log_starting_degree + log_blowup` overflowed `usize`.
+    #[error("Initial domain exponent log_starting_degree + log_blowup overflows usize")]
+    InitialDomainExponentOverflow,
+
+    /// The initial domain exponent did not fit in `usize::BITS` bits.
+    #[error("Initial domain exponent {log_starting_domain} must be less than usize::BITS ({bits})")]
+    InitialDomainTooLarge {
+        log_starting_domain: usize,
+        bits: usize,
+    },
+
+    /// The initial domain exceeds the base field's two-adicity.
+    #[error(
+        "Initial domain size 2^{log_starting_domain} exceeds the two-adicity of the base \
+         field ({two_adicity})"
+    )]
+    InitialDomainExceedsTwoAdicity {
+        log_starting_domain: usize,
+        two_adicity: usize,
+    },
+
+    /// `SecurityAssumption::UniqueDecoding` was requested; the paper-backed schedule needs
+    /// a list-decoding regime.
+    #[error("the paper-backed STIR parameter schedule does not support UniqueDecoding")]
+    UnsupportedSoundnessType,
+
+    /// `max_pow_bits` left no positive algebraic security budget.
+    #[error("security_level ({security_level}) must be greater than max_pow_bits ({max_pow_bits})")]
+    SecurityLevelNotGreaterThanPow {
+        security_level: usize,
+        max_pow_bits: usize,
+    },
+
+    /// A derived `eta` violated the paper's side-condition bound for its stage.
+    #[error(
+        "round {round} produced eta = {eta}, which violates the paper's side-condition bound \
+         {upper_bound}"
+    )]
+    InvalidEta {
+        round: usize,
+        eta: f64,
+        upper_bound: f64,
+    },
+
+    /// A stage's algebraic security fell short of the buffered target by more than the
+    /// configured `max_pow_bits` can bridge.
+    #[error(
+        "{round} {label} requires {needed} PoW bits to reach buffered security target = \
+         {buffered_security_level} (security_level = {security_level} + union-bound buffer = \
+         {union_bound_buffer}, algebraic bits = {algebraic_bits:.4}), but max_pow_bits = \
+         {max_pow_bits}. Increase max_pow_bits, log_blowup, or use a larger field."
+    )]
+    PowBudgetExceeded {
+        round: String,
+        label: &'static str,
+        needed: usize,
+        buffered_security_level: usize,
+        security_level: usize,
+        union_bound_buffer: usize,
+        algebraic_bits: f64,
+        max_pow_bits: usize,
+    },
+
+    /// A stage's OOD/shake checks fell below the buffered target; these terms receive no
+    /// PoW credit.
+    #[error(
+        "{round} OOD/shake checks reach only {unprotected_alg:.4} bits, below the buffered \
+         target {buffered_security_level}; these challenges are not protected by the \
+         query-phase PoW"
+    )]
+    UnprotectedChecksBelowTarget {
+        round: String,
+        unprotected_alg: f64,
+        buffered_security_level: usize,
+    },
+
+    /// The disjoint-coset side condition failed for a pathological base field.
+    #[error(
+        "STIR round {round_index}: disjoint-coset schedule requires \
+         Field::GENERATOR^(2^{n_i}) != 1"
+    )]
+    NonDisjointCosets { round_index: usize, n_i: usize },
+}
+
 impl<F, EF, M, Challenger> StirConfig<F, EF, M, Challenger>
 where
     F: TwoAdicField,
@@ -209,16 +328,26 @@ where
     /// Derive a full STIR configuration from user-facing parameters.
     ///
     /// `log_starting_degree` is log₂ of the degree of the polynomial to commit to.
+    pub fn try_new(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+    ) -> Result<Self, StirConfigError> {
+        Self::try_new_impl(log_starting_degree, params, None)
+    }
+
+    /// Derive a full STIR configuration from user-facing parameters.
+    ///
+    /// `log_starting_degree` is log₂ of the degree of the polynomial to commit to.
     ///
     /// # Panics
     ///
-    /// Panics if `log_folding_factor < 2`, if `log_starting_folding_factor < 2`, or if
-    /// `log_starting_folding_factor > log_starting_degree`.
+    /// Panics if the requested parameters cannot reach `security_level` at this degree; see
+    /// [`Self::try_new`] for the fallible form and [`StirConfigError`] for the failure modes.
     pub fn new(log_starting_degree: usize, params: StirParameters<M>) -> Self {
-        Self::new_impl(log_starting_degree, params, None)
+        Self::try_new(log_starting_degree, params).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// Like [`Self::new`], but additionally inflates round 0's `eta` (and, transitively,
+    /// Like [`Self::try_new`], but additionally inflates round 0's `eta` (and, transitively,
     /// the whole schedule that follows from it) so the batch-degree-correction `Combine`
     /// step (§4.5) also reaches `params.security_level` when merging `num_classes` height
     /// classes that share this config's initial domain, immediately before the round-0
@@ -230,6 +359,21 @@ where
     /// `ell` is Lemma 4.13's error argument `num_classes·(d* + 1) − Σᵢ dᵢ` (dᵢ each
     /// class's own, non-quotiented degree bound), consulted by both
     /// `SecurityAssumption` regimes' error terms.
+    pub fn try_new_with_combine(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        num_classes: usize,
+        ell: u64,
+    ) -> Result<Self, StirConfigError> {
+        Self::try_new_impl(
+            log_starting_degree,
+            params,
+            Some(CombineRequirement { num_classes, ell }),
+        )
+    }
+
+    /// Like [`Self::new`], but additionally inflates round 0's `eta` per
+    /// [`Self::try_new_with_combine`].
     ///
     /// # Panics
     ///
@@ -240,59 +384,59 @@ where
         num_classes: usize,
         ell: u64,
     ) -> Self {
-        Self::new_impl(
-            log_starting_degree,
-            params,
-            Some(CombineRequirement { num_classes, ell }),
-        )
+        Self::try_new_with_combine(log_starting_degree, params, num_classes, ell)
+            .unwrap_or_else(|e| panic!("{e}"))
     }
 
-    fn new_impl(
+    fn try_new_impl(
         log_starting_degree: usize,
         params: StirParameters<M>,
         combine: Option<CombineRequirement>,
-    ) -> Self {
-        assert!(
-            params.log_folding_factor >= 2,
-            "the paper-backed STIR parameter schedule requires log_folding_factor >= 2 (k >= 4)"
-        );
-        assert!(
-            params.log_starting_folding_factor >= 2,
-            "the paper-backed STIR parameter schedule requires log_starting_folding_factor >= 2 \
-             (k0 >= 4)"
-        );
-        assert!(
-            params.log_starting_folding_factor <= log_starting_degree,
-            "Starting folding factor ({}) must be <= starting degree ({}).",
-            params.log_starting_folding_factor,
-            log_starting_degree
-        );
+    ) -> Result<Self, StirConfigError> {
+        if params.log_folding_factor < 2 {
+            return Err(StirConfigError::FoldingFactorTooSmall {
+                log_folding_factor: params.log_folding_factor,
+            });
+        }
+        if params.log_starting_folding_factor < 2 {
+            return Err(StirConfigError::StartingFoldingFactorTooSmall {
+                log_starting_folding_factor: params.log_starting_folding_factor,
+            });
+        }
+        if params.log_starting_folding_factor > log_starting_degree {
+            return Err(StirConfigError::StartingFoldingFactorExceedsDegree {
+                log_starting_folding_factor: params.log_starting_folding_factor,
+                log_starting_degree,
+            });
+        }
 
         let log_starting_domain = log_starting_degree
             .checked_add(params.log_blowup)
-            .expect("Initial domain exponent log_starting_degree + log_blowup overflows usize");
+            .ok_or(StirConfigError::InitialDomainExponentOverflow)?;
 
-        assert!(
-            log_starting_domain < usize::BITS as usize,
-            "Initial domain exponent {log_starting_domain} must be less than usize::BITS ({})",
-            usize::BITS
-        );
+        if log_starting_domain >= usize::BITS as usize {
+            return Err(StirConfigError::InitialDomainTooLarge {
+                log_starting_domain,
+                bits: usize::BITS as usize,
+            });
+        }
 
-        assert!(
-            log_starting_domain <= F::TWO_ADICITY,
-            "Initial domain size 2^{} exceeds the two-adicity of the base field ({}).",
-            log_starting_domain,
-            F::TWO_ADICITY,
-        );
+        if log_starting_domain > F::TWO_ADICITY {
+            return Err(StirConfigError::InitialDomainExceedsTwoAdicity {
+                log_starting_domain,
+                two_adicity: F::TWO_ADICITY,
+            });
+        }
 
-        assert!(
-            !matches!(params.soundness_type, SecurityAssumption::UniqueDecoding),
-            "the paper-backed STIR parameter schedule does not support UniqueDecoding"
-        );
-        assert!(
-            params.security_level > params.max_pow_bits,
-            "security_level must be greater than max_pow_bits"
-        );
+        if matches!(params.soundness_type, SecurityAssumption::UniqueDecoding) {
+            return Err(StirConfigError::UnsupportedSoundnessType);
+        }
+        if params.security_level <= params.max_pow_bits {
+            return Err(StirConfigError::SecurityLevelNotGreaterThanPow {
+                security_level: params.security_level,
+                max_pow_bits: params.max_pow_bits,
+            });
+        }
 
         let field_size_bits = EF::bits();
         let log_blowup = params.log_blowup;
@@ -342,19 +486,25 @@ where
         // A derived value > max_pow_bits is a hard misconfiguration: the user's parameters
         // do not deliver `security_level` bits over `total_folds` rounds even after
         // exhausting the PoW budget.
-        let derive_pow_bits = |label: &str, round: &str, algebraic_bits: f64| -> usize {
+        let derive_pow_bits = |label: &'static str,
+                               round: &str,
+                               algebraic_bits: f64|
+         -> Result<usize, StirConfigError> {
             let gap = (buffered_security_level as f64 - algebraic_bits).max(0.0);
             let needed = libm::ceil(gap) as usize;
-            assert!(
-                needed <= max_pow_bits,
-                "{round} {label} requires {needed} PoW bits to reach \
-                 buffered security target = {buffered_security_level} \
-                 (security_level = {security_level} + union-bound buffer = {union_bound_buffer}, \
-                 algebraic bits = {algebraic_bits}), \
-                 but max_pow_bits = {max_pow_bits}. Increase max_pow_bits, log_blowup, \
-                 or use a larger field.",
-            );
-            needed
+            if needed > max_pow_bits {
+                return Err(StirConfigError::PowBudgetExceeded {
+                    round: round.into(),
+                    label,
+                    needed,
+                    buffered_security_level,
+                    security_level,
+                    union_bound_buffer,
+                    algebraic_bits,
+                    max_pow_bits,
+                });
+            }
+            Ok(needed)
         };
 
         // Initial domain shift: use the multiplicative generator so the
@@ -383,18 +533,22 @@ where
                 .soundness_type
                 .stir_queries_for_base(pow_target_bits, failure_base)
         };
-        let validate_eta = |stage: usize, stage_log_inv_rate: usize, eta: f64| {
-            assert!(
-                params
+        let validate_eta =
+            |round: usize, stage_log_inv_rate: usize, eta: f64| -> Result<(), StirConfigError> {
+                if !params
                     .soundness_type
-                    .stir_eta_is_valid(stage_log_inv_rate, eta),
-                "round {stage} produced eta = {eta}, which violates the paper's side-condition \
-                 bound {}",
-                params
-                    .soundness_type
-                    .stir_eta_upper_bound(stage_log_inv_rate)
-            );
-        };
+                    .stir_eta_is_valid(stage_log_inv_rate, eta)
+                {
+                    return Err(StirConfigError::InvalidEta {
+                        round,
+                        eta,
+                        upper_bound: params
+                            .soundness_type
+                            .stir_eta_upper_bound(stage_log_inv_rate),
+                    });
+                }
+                Ok(())
+            };
 
         // Disjoint-coset side condition for round `i`. The schedule sets
         // `shift_{i+1} = shift_i^{k_i} * GEN` each round (`k_i` = that round's own folding
@@ -404,17 +558,17 @@ where
         // we check the simpler `GEN^{2^{N_i}} ≠ 1` where `N_i = (Σ_{j≤i} log_folding_factor_j)
         // + log_domain_i` is the cumulative folding-log through round `i`. Holds for any
         // field whose multiplicative order has nontrivial odd part (BabyBear, KoalaBear,
-        // Goldilocks, …); the assertion catches pathological fields.
-        let assert_disjoint_cosets =
-            |round_index: usize, log_domain_i: usize, cumulative_log_folding: usize| {
-                let n_i = cumulative_log_folding + log_domain_i;
-                assert!(
-                    F::GENERATOR.exp_power_of_2(n_i) != F::ONE,
-                    "STIR round {round_index}: disjoint-coset schedule requires \
-                     Field::GENERATOR^(2^{n_i}) ≠ 1 (i.e. GEN ∉ subgroup of size \
-                     2^{log_domain_i} after the cumulative fold).",
-                );
-            };
+        // Goldilocks, …); the check catches pathological fields.
+        let assert_disjoint_cosets = |round_index: usize,
+                                      log_domain_i: usize,
+                                      cumulative_log_folding: usize|
+         -> Result<(), StirConfigError> {
+            let n_i = cumulative_log_folding + log_domain_i;
+            if F::GENERATOR.exp_power_of_2(n_i) == F::ONE {
+                return Err(StirConfigError::NonDisjointCosets { round_index, n_i });
+            }
+            Ok(())
+        };
 
         // Size eta against both classes of error: PoW-eligible folding/query terms target
         // `pow_target_bits`, while OOD and shake terms must reach the full buffered target.
@@ -444,7 +598,7 @@ where
             );
             final_eta = final_eta.max(libm::pow(2., log_combine_eta));
         }
-        validate_eta(0, log_inv_rate, final_eta);
+        validate_eta(0, log_inv_rate, final_eta)?;
 
         // Round 0 reuses the `stir_initial_eta` already computed above; every subsequent
         // round derives eta from the previous round's query count via `stir_recursive_eta`.
@@ -467,12 +621,12 @@ where
                     field_size_bits,
                     prev_queries,
                 );
-                validate_eta(round, log_inv_rate, final_eta);
+                validate_eta(round, log_inv_rate, final_eta)?;
             }
 
             let num_queries = query_count(log_inv_rate, final_eta);
             cumulative_log_folding += round_log_folding_factor;
-            assert_disjoint_cosets(round, log_domain_size, cumulative_log_folding);
+            assert_disjoint_cosets(round, log_domain_size, cumulative_log_folding)?;
 
             let fold_alg = params.soundness_type.fold_algebraic_bits_at_log_eta(
                 field_size_bits,
@@ -497,15 +651,15 @@ where
                 num_ood_samples,
             );
             let round_label = format!("round {round}");
-            assert!(
-                unprotected_alg >= buffered_security_level as f64,
-                "{round_label} OOD/shake checks reach only {unprotected_alg:.4} bits, below \
-                 the buffered target {buffered_security_level}; these challenges are not \
-                 protected by the query-phase PoW. Use a larger challenge field or lower \
-                 security target."
-            );
-            let folding_pow_bits = derive_pow_bits("folding", &round_label, fold_alg);
-            let pow_bits = derive_pow_bits("query", &round_label, query_alg);
+            if unprotected_alg < buffered_security_level as f64 {
+                return Err(StirConfigError::UnprotectedChecksBelowTarget {
+                    round: round_label,
+                    unprotected_alg,
+                    buffered_security_level,
+                });
+            }
+            let folding_pow_bits = derive_pow_bits("folding", &round_label, fold_alg)?;
+            let pow_bits = derive_pow_bits("query", &round_label, query_alg)?;
 
             round_configs.push(StirRoundConfig {
                 log_degree,
@@ -538,7 +692,7 @@ where
                 field_size_bits,
                 prev_queries,
             );
-            validate_eta(num_rounds, log_inv_rate, final_eta);
+            validate_eta(num_rounds, log_inv_rate, final_eta)?;
         }
         let final_queries = query_count(log_inv_rate, final_eta);
 
@@ -556,10 +710,10 @@ where
             final_eta,
             final_queries,
         );
-        let final_folding_pow_bits = derive_pow_bits("folding", "final", final_fold_alg);
-        let final_pow_bits = derive_pow_bits("query", "final", final_query_alg);
+        let final_folding_pow_bits = derive_pow_bits("folding", "final", final_fold_alg)?;
+        let final_pow_bits = derive_pow_bits("query", "final", final_query_alg)?;
 
-        Self {
+        Ok(Self {
             log_starting_degree,
             soundness_type: params.soundness_type,
             security_level: params.security_level,
@@ -575,7 +729,7 @@ where
             final_folding_pow_bits,
             mmcs: params.mmcs,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Log₂ of the initial evaluation domain size.
@@ -1102,5 +1256,105 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A parameter set that is feasible at one starting degree can become infeasible at a
+    /// larger one (the schedule's algebraic security shrinks as more rounds are needed).
+    /// `try_new` must report this as an `Err`, not a panic — the fixed `StirParameters` are
+    /// reused across every LDE-height bucket a PCS commits to, so this is reachable from
+    /// proof-controlled data (the trace height) rather than only from a bad static config.
+    #[test]
+    fn try_new_rejects_infeasible_degree_without_panicking() {
+        use p3_challenger::DuplexChallenger;
+        use p3_commit::ExtensionMmcs;
+        use p3_field::Field;
+        use p3_field::extension::BinomialExtensionField;
+        use p3_merkle_tree::MerkleTreeMmcs;
+        use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+        use rand::SeedableRng;
+
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 5>;
+        type Perm = Poseidon2BabyBear<16>;
+        type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+        type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+        type PackedF = <F as Field>::Packing;
+        type ValMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+        type MyMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+        type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(7);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+
+        let params = |log_blowup| StirParameters {
+            log_blowup,
+            log_folding_factor: 4,
+            log_starting_folding_factor: 4,
+            soundness_type: SecurityAssumption::CapacityBound,
+            security_level: 100,
+            max_pow_bits: 0,
+            mmcs: MyMmcs::new(val_mmcs.clone()),
+        };
+
+        // Feasible at a moderate degree.
+        assert!(StirConfig::<F, EF, MyMmcs, MyChallenger>::try_new(20, params(1)).is_ok());
+
+        // Infeasible two rounds deeper, with the exact same parameters: the derived eta at a
+        // later round violates the paper's side-condition bound rather than reaching the
+        // configured security level.
+        let err = StirConfig::<F, EF, MyMmcs, MyChallenger>::try_new(22, params(1)).unwrap_err();
+        assert!(matches!(err, StirConfigError::InvalidEta { .. }), "{err}");
+    }
+
+    #[test]
+    fn new_panics_with_the_same_message_as_try_new_errors_with() {
+        extern crate std;
+
+        use alloc::string::ToString;
+
+        use p3_challenger::DuplexChallenger;
+        use p3_commit::ExtensionMmcs;
+        use p3_field::Field;
+        use p3_field::extension::BinomialExtensionField;
+        use p3_merkle_tree::MerkleTreeMmcs;
+        use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+        use rand::SeedableRng;
+
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 5>;
+        type Perm = Poseidon2BabyBear<16>;
+        type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+        type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+        type PackedF = <F as Field>::Packing;
+        type ValMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+        type MyMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+        type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(7);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+
+        let params = StirParameters {
+            log_blowup: 1,
+            log_folding_factor: 4,
+            log_starting_folding_factor: 4,
+            soundness_type: SecurityAssumption::CapacityBound,
+            security_level: 100,
+            max_pow_bits: 0,
+            mmcs: MyMmcs::new(val_mmcs),
+        };
+
+        let err = StirConfig::<F, EF, MyMmcs, MyChallenger>::try_new(22, params.clone())
+            .unwrap_err()
+            .to_string();
+        let panic_payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            StirConfig::<F, EF, MyMmcs, MyChallenger>::new(22, params)
+        }))
+        .unwrap_err();
+        let panic_message = panic_payload
+            .downcast_ref::<alloc::string::String>()
+            .unwrap();
+        assert_eq!(*panic_message, err);
     }
 }
