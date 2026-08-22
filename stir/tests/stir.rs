@@ -976,7 +976,7 @@ mod babybear_pcs {
 
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
-        commit.iter().for_each(|c| p_challenger.observe(c.clone()));
+        p_challenger.observe(commit.clone());
 
         let zeta: Challenge = p_challenger.sample_algebra_element();
 
@@ -987,7 +987,7 @@ mod babybear_pcs {
 
         // Verify.
         let mut v_challenger = challenger_template;
-        commit.iter().for_each(|c| v_challenger.observe(c.clone()));
+        v_challenger.observe(commit.clone());
         let v_zeta: Challenge = v_challenger.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1074,7 +1074,7 @@ mod babybear_pcs {
 
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
-        commit.iter().for_each(|c| p_challenger.observe(c.clone()));
+        p_challenger.observe(commit.clone());
 
         let zeta: Challenge = p_challenger.sample_algebra_element();
 
@@ -1084,7 +1084,7 @@ mod babybear_pcs {
             <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_challenger);
 
         let mut v_challenger = challenger_template;
-        commit.iter().for_each(|c| v_challenger.observe(c.clone()));
+        v_challenger.observe(commit.clone());
         let v_zeta: Challenge = v_challenger.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1178,9 +1178,7 @@ mod babybear_pcs {
         let mut stir_p_ch = Challenger::new(perm.clone());
         let (stir_commit, stir_data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&stir_pcs, [(stir_domain, mat)]);
-        stir_commit
-            .iter()
-            .for_each(|c| stir_p_ch.observe(c.clone()));
+        stir_p_ch.observe(stir_commit.clone());
         // STIR's input commitment hashes fiber-grouped leaves, so its root — and hence the
         // point derived from it — differs from FRI's over the same matrix. Proof size does
         // not depend on which point is opened, so the comparison stays like-for-like.
@@ -1192,9 +1190,7 @@ mod babybear_pcs {
         );
 
         let mut stir_v_ch = Challenger::new(perm);
-        stir_commit
-            .iter()
-            .for_each(|c| stir_v_ch.observe(c.clone()));
+        stir_v_ch.observe(stir_commit.clone());
         let stir_v_zeta: Challenge = stir_v_ch.sample_algebra_element();
         assert_eq!(stir_v_zeta, stir_zeta);
         let stir_claims = vec![(
@@ -1284,10 +1280,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain_a, mat_a)]);
-        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_a.clone());
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain_b, mat_b)]);
-        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_b.clone());
 
         let zeta: Challenge = p_ch.sample_algebra_element();
 
@@ -1298,8 +1294,8 @@ mod babybear_pcs {
 
         // Verify.
         let mut v_ch = challenger_template;
-        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
-        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1339,10 +1335,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
-        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_a.clone());
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
-        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_b.clone());
 
         let zeta: Challenge = p_ch.sample_algebra_element();
 
@@ -1351,8 +1347,8 @@ mod babybear_pcs {
             <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
 
         let mut v_ch = challenger_template;
-        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
-        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1384,10 +1380,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
-        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_a.clone());
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
-        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_b.clone());
 
         let zeta: Challenge = p_ch.sample_algebra_element();
         let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
@@ -1403,8 +1399,8 @@ mod babybear_pcs {
         }
 
         let mut v_ch = challenger_template;
-        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
-        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
         let _v_zeta: Challenge = v_ch.sample_algebra_element();
 
         let opening_a = opening_values[0][0][0].clone();
@@ -1439,10 +1435,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
-        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_a.clone());
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
-        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_b.clone());
 
         let zeta: Challenge = p_ch.sample_algebra_element();
         let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
@@ -1458,8 +1454,8 @@ mod babybear_pcs {
         }
 
         let mut v_ch = challenger_template;
-        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
-        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
         let _v_zeta: Challenge = v_ch.sample_algebra_element();
 
         let opening_a = opening_values[0][0][0].clone();
@@ -1492,7 +1488,7 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
-        commit.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit.clone());
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
@@ -1509,7 +1505,7 @@ mod babybear_pcs {
         }
 
         let mut v_ch = challenger_template;
-        commit.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1538,7 +1534,7 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
-        commit.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit.clone());
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
@@ -1547,7 +1543,7 @@ mod babybear_pcs {
         );
 
         let mut v_ch = challenger_template;
-        commit.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1578,7 +1574,7 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
-        commit.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit.clone());
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
@@ -1592,7 +1588,7 @@ mod babybear_pcs {
         proof[0].0.initial_commitment = Some(proof[0].0.round_proofs[0].commitment.clone());
 
         let mut v_ch = challenger_template;
-        commit.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         let claims = vec![(
             commit,

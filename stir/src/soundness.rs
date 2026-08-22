@@ -483,6 +483,72 @@ impl StirSoundness for SecurityAssumption {
     }
 }
 
+/// Minimum `log2(eta)` the batch-degree-correction "Combine" step (§4.5) needs merging
+/// `num_classes` height classes into a single codeword of degree `2^log_d_star` to reach
+/// `target_bits` of algebraic security, at distance `delta := 1 - B*(rho) - eta` (`B*` per
+/// the assumption: `sqrt(rho)` for `JohnsonBound`, `rho` for `CapacityBound`).
+///
+/// Using `eta` here — the *same* variable `stir_initial_eta` folds this into via `.max()` —
+/// is what pins `delta_combine` to exactly the schedule's own round-0 `delta_0`: Combine's
+/// guarantee ("if the merged codeword passes, each class has correlated agreement") is only
+/// sound if it covers at least as far as STIR's own round-0 acceptance radius, and sharing
+/// the variable makes that automatic rather than a separate value to keep in sync.
+///
+/// Both arms charge Lemma 7.3's round-by-round soundness of Construction 7.2 at the
+/// degree-gap-inflated multiplicity `ell`, not the raw class count: `err*` is the §4.1
+/// abstraction the lemma invokes regardless of which regime bounds it, so the conjectured
+/// route (Conjecture 5.6, `CapacityBound`) inflates by `ell` exactly like the provable one
+/// (Theorem 4.1, `JohnsonBound`).
+/// - `CapacityBound`: `err*(d*, rho, delta, ell) = (ell-1)*d* / (eta*rho^2*|F|)` (`c1=c2=1`).
+///   Lemma 7.3 also requires `delta < 1 - rho - 1/|L_0|`, which under `delta = 1 - rho - eta`
+///   needs `eta >= 2/|L_0|` — the same margin `stir_recursive_eta`'s `CapacityBound` arm
+///   keeps for later rounds.
+/// - `JohnsonBound`: Theorem 4.1's "far"-case `err*(d*, rho, delta, ell) = (ell-1)*d*^2 /
+///   (|F|*(2*eta)^7)` (Lemma 4.13's own route, valid only up to `delta < 1 - sqrt(rho)`, so
+///   `eta` must additionally stay `<= sqrt(rho)/20` — `stir_eta_upper_bound` enforces this
+///   once the returned value is `.max()`-folded into `stir_initial_eta`, checked by
+///   `validate_eta` in `StirConfig::new`). This regime satisfies the `1/|L_0|` side
+///   condition automatically.
+///
+/// `ell` is Lemma 4.13's error argument `num_classes·(d* + 1) − Σᵢ dᵢ` (dᵢ the untouched,
+/// i.e. not further quotiented, degree bound of each class's reduced-opening).
+pub(crate) fn combine_min_log_eta(
+    assumption: SecurityAssumption,
+    field_size_bits: usize,
+    log_inv_rate: usize,
+    log_d_star: usize,
+    ell: u64,
+    target_bits: usize,
+) -> f64 {
+    match assumption {
+        SecurityAssumption::CapacityBound => {
+            // bits = field_bits + log2(eta) + 2*log2(rho) - log2(ell-1) - log_d_star
+            //      = field_bits + log2(eta) - 2*log_inv_rate - log2(ell-1) - log_d_star
+            let log_ell_minus_1 = libm::log2((ell.saturating_sub(1)).max(1) as f64);
+            let log_eta_conjecture =
+                target_bits as f64 + 2. * log_inv_rate as f64 + log_ell_minus_1 + log_d_star as f64
+                    - field_size_bits as f64;
+
+            // Lemma 7.3's delta < 1 - rho - 1/|L_0| side condition, restated as a floor on
+            // eta (|L_0| = 2^(log_d_star + log_inv_rate), round 0's domain size).
+            let log_domain_size = (log_d_star + log_inv_rate) as f64;
+            let log_eta_side_condition = 1. - log_domain_size;
+
+            log_eta_conjecture.max(log_eta_side_condition)
+        }
+        SecurityAssumption::JohnsonBound => {
+            // bits = field_bits + 7*(1 + log2(eta)) - log2(ell-1) - 2*log_d_star
+            let log_ell_minus_1 = libm::log2((ell.saturating_sub(1)).max(1) as f64);
+            (target_bits as f64 - field_size_bits as f64 + log_ell_minus_1 + 2. * log_d_star as f64)
+                / 7.
+                - 1.
+        }
+        SecurityAssumption::UniqueDecoding => {
+            panic!("STIR's paper-backed parameter schedule does not support UniqueDecoding")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,6 +568,60 @@ mod tests {
                 ood_error_at_log_eta(jb, 20, 2, field_bits, 1, libm::log2(eta)) >= target as f64
             );
         }
+    }
+
+    #[test]
+    fn combine_min_log_eta_capacity_bound_matches_closed_form() {
+        // bits(eta) = field_bits + log2(eta) - 2*log_inv_rate - log2(ell-1) - log_d_star, so
+        // the minimum log2(eta) for a target is exactly solving that for log2(eta). Chosen so
+        // the Lemma 7.3 side-condition floor (eta >= 2/|L_0| = 2^(1 - 21)) does not bind.
+        let field_bits = 155;
+        let log_inv_rate = 1;
+        let log_d_star = 20;
+        let ell = 1 << 20;
+        let target_bits = 100;
+        let log_eta = combine_min_log_eta(
+            SecurityAssumption::CapacityBound,
+            field_bits,
+            log_inv_rate,
+            log_d_star,
+            ell,
+            target_bits,
+        );
+        let bits = target_bits as f64
+            - (field_bits as f64 + log_eta
+                - 2. * log_inv_rate as f64
+                - libm::log2((ell - 1) as f64)
+                - log_d_star as f64);
+        assert!(
+            libm::fabs(bits) < 1e-9,
+            "closed form does not round-trip: {bits}"
+        );
+    }
+
+    #[test]
+    fn combine_min_log_eta_capacity_bound_relaxes_with_smaller_ell() {
+        // A smaller ell needs a smaller (more negative) minimum log2(eta). Both values stay
+        // clear of the Lemma 7.3 side-condition floor (eta >= 2/|L_0| = 2^(1 - 21)).
+        let larger =
+            combine_min_log_eta(SecurityAssumption::CapacityBound, 155, 1, 20, 1 << 20, 100);
+        let smaller =
+            combine_min_log_eta(SecurityAssumption::CapacityBound, 155, 1, 20, 1 << 19, 100);
+        assert!(smaller < larger);
+    }
+
+    #[test]
+    fn combine_min_log_eta_johnson_bound_increases_with_more_groups() {
+        // A larger ell (more/taller classes) demands a larger minimum eta.
+        let fewer = combine_min_log_eta(SecurityAssumption::JohnsonBound, 192, 1, 20, 1 << 21, 100);
+        let more = combine_min_log_eta(SecurityAssumption::JohnsonBound, 192, 1, 20, 1 << 22, 100);
+        assert!(more > fewer);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not support UniqueDecoding")]
+    fn combine_min_log_eta_rejects_unique_decoding() {
+        combine_min_log_eta(SecurityAssumption::UniqueDecoding, 192, 1, 20, 4, 100);
     }
 
     #[test]

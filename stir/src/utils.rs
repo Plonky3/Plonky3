@@ -109,6 +109,74 @@ pub fn eval_degree_correction<F: Field>(value: F, point: F, r_comb: F, gap: usiz
     value * geom
 }
 
+/// Evaluate the batch-degree-correction `Combine` (§4.5, Definition 4.11) at every point of
+/// the coset `shift · ⟨g⟩` of size `2^log_domain`:
+/// `Combine(x) = Σᵢ rᵢ · fᵢ(x) · GeomSum(r_comb·x, gapᵢ)`.
+///
+/// `groups[i] = (r_i, gap_i, values_i)`: `r_i` is Definition 4.11's own per-group shifting
+/// coefficient (distinct from `r_comb`, the random point the geometric sum runs in), `gap_i =
+/// d* − dᵢ` is a degree count (not log), and `values_i[p]` is group `i`'s reduced-opening
+/// evaluated at `shift · g^p`, `p` in the same natural order as the returned codeword.
+///
+/// The geometric sum's numerator and denominator both advance by a fixed ratio (a power of
+/// `g`) across the coset, so each is seeded once per `POWER_CHUNK`-sized chunk (one
+/// exponentiation) instead of once per point — mirroring the degree-correction sweep in
+/// `RoundProver::finish`. The shared `(1 − r_comb·x)` denominators are inverted in one batch.
+pub fn combine_on_coset<F, EF>(
+    groups: &[(EF, usize, &[EF])],
+    r_comb: EF,
+    shift: F,
+    log_domain: usize,
+) -> Vec<EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField,
+{
+    let n = 1usize << log_domain;
+    let g = F::two_adic_generator(log_domain);
+    let step_start = r_comb * EF::from(shift);
+
+    const POWER_CHUNK: usize = 1 << 12;
+    let mut result = EF::zero_vec(n);
+
+    for &(r_i, gap, values) in groups {
+        assert_eq!(values.len(), n, "group values must span the full coset");
+
+        let mut denoms = EF::zero_vec(n);
+        denoms
+            .par_chunks_mut(POWER_CHUNK)
+            .enumerate()
+            .for_each(|(chunk_idx, chunk)| {
+                let mut step = step_start * EF::from(g.exp_u64((chunk_idx * POWER_CHUNK) as u64));
+                for d in chunk.iter_mut() {
+                    *d = EF::ONE - step;
+                    step *= EF::from(g);
+                }
+            });
+        let inv_denoms = batch_multiplicative_inverse(&denoms);
+        drop(denoms);
+
+        let g_hi = g.exp_u64((gap + 1) as u64);
+        let step_start_hi = step_start.exp_u64((gap + 1) as u64);
+        result
+            .par_chunks_mut(POWER_CHUNK)
+            .zip(values.par_chunks(POWER_CHUNK))
+            .zip(inv_denoms.par_chunks(POWER_CHUNK))
+            .enumerate()
+            .for_each(|(chunk_idx, ((res_chunk, val_chunk), inv_chunk))| {
+                let mut step_hi =
+                    step_start_hi * EF::from(g_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64));
+                for ((res, &val), &inv_denom) in res_chunk.iter_mut().zip(val_chunk).zip(inv_chunk)
+                {
+                    let numer = EF::ONE - step_hi;
+                    *res += r_i * val * numer * inv_denom;
+                    step_hi *= EF::from(g_hi);
+                }
+            });
+    }
+    result
+}
+
 /// Horner evaluation of an extension-coefficient polynomial at a **base-field** point.
 ///
 /// Identical to [`eval_poly`] on a lifted point, but each step is an extension-by-base
@@ -578,6 +646,59 @@ mod tests {
     fn test_eval_poly_zero() {
         let poly: Vec<F> = vec![];
         assert_eq!(eval_poly(&poly, F::from_u64(3)), F::ZERO);
+    }
+
+    /// Reference implementation of `combine_on_coset`: `eval_degree_correction` called
+    /// pointwise, with no chunked-power-sweep optimization.
+    fn naive_combine_on_coset(
+        groups: &[(EF, usize, &[EF])],
+        r_comb: EF,
+        shift: F,
+        log_domain: usize,
+    ) -> Vec<EF> {
+        let n = 1usize << log_domain;
+        let g = F::two_adic_generator(log_domain);
+        let mut x = shift;
+        let mut result = vec![EF::ZERO; n];
+        for (p, slot) in result.iter_mut().enumerate() {
+            let point = EF::from(x);
+            for &(r_i, gap, values) in groups {
+                *slot += eval_degree_correction(r_i * values[p], point, r_comb, gap);
+            }
+            x *= g;
+        }
+        result
+    }
+
+    #[test]
+    fn test_combine_on_coset_matches_naive_reference() {
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        let mut rng = SmallRng::seed_from_u64(7);
+        let shift = F::GENERATOR;
+
+        // log_domain=13 (2 chunks at POWER_CHUNK=4096) with 3 groups of varying gaps,
+        // including gap=0 (d*=d_i, the identity-DegCor case) and a large gap.
+        let log_domain = 13usize;
+        let n = 1usize << log_domain;
+        let values_a: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+        let values_b: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+        let values_c: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+        let r_a: EF = rng.random();
+        let r_b: EF = rng.random();
+        let r_c: EF = rng.random();
+        let r_comb: EF = rng.random();
+
+        let groups: Vec<(EF, usize, &[EF])> = vec![
+            (r_a, 0, values_a.as_slice()),
+            (r_b, 917_504, values_b.as_slice()),
+            (r_c, 12, values_c.as_slice()),
+        ];
+
+        let fast = combine_on_coset(&groups, r_comb, shift, log_domain);
+        let naive = naive_combine_on_coset(&groups, r_comb, shift, log_domain);
+        assert_eq!(fast, naive);
     }
 
     #[test]
