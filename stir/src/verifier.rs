@@ -760,7 +760,7 @@ where
 }
 
 /// Errors returned by [`verify_stir`].
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error, PartialEq)]
 pub enum StirError<MmcsError, InputError = ()> {
     /// A proof-of-work witness failed verification.
     #[error("Invalid proof-of-work witness in round {round}")]
@@ -790,6 +790,15 @@ pub enum StirError<MmcsError, InputError = ()> {
     #[error("Invalid proof shape")]
     InvalidProofShape,
 
+    /// A matrix in `commitment`'s batch was opened at zero points, so its width cannot be
+    /// pinned from the claimed evaluations. Every input matrix must be opened at >= 1 point.
+    #[error("Matrix {matrix} in commitment {commitment} was opened at zero points")]
+    MatrixWithoutOpeningPoints { commitment: usize, matrix: usize },
+
+    /// The requested STIR parameters cannot reach `security_level` at some LDE-height bucket.
+    #[error("STIR config error: {0}")]
+    Config(#[source] crate::config::StirConfigError),
+
     /// An error propagated from the input polynomial commitment scheme.
     #[error("Input error")]
     InputError(InputError),
@@ -809,6 +818,10 @@ impl<E1, IE1> StirError<E1, IE1> {
             }
             Self::FinalPolyMismatch => StirError::FinalPolyMismatch,
             Self::InvalidProofShape => StirError::InvalidProofShape,
+            Self::MatrixWithoutOpeningPoints { commitment, matrix } => {
+                StirError::MatrixWithoutOpeningPoints { commitment, matrix }
+            }
+            Self::Config(e) => StirError::Config(e),
             Self::InputError(e) => StirError::InputError(f(e)),
         }
     }

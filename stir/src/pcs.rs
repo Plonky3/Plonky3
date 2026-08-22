@@ -40,10 +40,10 @@
 //! its own matrices' heights.
 
 use alloc::borrow::Cow;
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
@@ -62,9 +62,10 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use serde::{Deserialize, Serialize};
+use spin::RwLock;
 use tracing::instrument;
 
-use crate::config::{StirConfig, StirParameters};
+use crate::config::{StirConfig, StirConfigError, StirParameters};
 use crate::proof::StirProof;
 use crate::prover::prove_stir_multi_from_external_codewords;
 use crate::utils::combine_on_coset;
@@ -140,22 +141,38 @@ fn lde_views<'a, Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>>(
         .collect()
 }
 
+/// STIR configs derived on demand, memoized by `log_stir_degree`.
+type StirConfigCache<Val, Challenge, StirMmcs, Challenger> = Arc<
+    RwLock<
+        alloc::collections::BTreeMap<usize, Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>>,
+    >,
+>;
+
 /// A polynomial commitment scheme using STIR to generate opening proofs.
 #[derive(Clone, Debug)]
-pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs> {
+pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> {
     dft: Dft,
     input_mmcs: InputMmcs,
     stir: StirParameters<StirMmcs>,
-    _phantom: PhantomData<Val>,
+    /// `StirConfig::new` runs an 80-iteration floating-point bisection to derive sound round
+    /// parameters. `open`/`verify` re-derive it per LDE-height bucket, and the same degree
+    /// recurs across calls and across proofs, so caching it here (bounded by the base
+    /// field's two-adicity) avoids repeating that derivation every time. Only the base
+    /// (non-`Combine`) construction is memoized: `Combine` configs are additionally keyed by
+    /// per-bucket runtime state (`num_classes`, `ell`) that does not collapse into this
+    /// single-`usize` cache key.
+    config_cache: StirConfigCache<Val, Challenge, StirMmcs, Challenger>,
 }
 
-impl<Val, Dft, InputMmcs, StirMmcs> TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs> {
-    pub const fn new(dft: Dft, input_mmcs: InputMmcs, stir: StirParameters<StirMmcs>) -> Self {
+impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
+    TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
+{
+    pub fn new(dft: Dft, input_mmcs: InputMmcs, stir: StirParameters<StirMmcs>) -> Self {
         Self {
             dft,
             input_mmcs,
             stir,
-            _phantom: PhantomData,
+            config_cache: Arc::new(RwLock::new(alloc::collections::BTreeMap::new())),
         }
     }
 
@@ -185,6 +202,43 @@ impl<Val, Dft, InputMmcs, StirMmcs> TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs
     }
 }
 
+impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
+    TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
+where
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
+    StirMmcs: Mmcs<Challenge>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger<Witness = Val>,
+{
+    /// Returns the derived STIR config for `log_stir_degree`, computing and caching it on
+    /// first use.
+    fn get_or_try_compute_stir_config(
+        &self,
+        log_stir_degree: usize,
+    ) -> Result<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>, StirConfigError> {
+        if let Some(config) = self.config_cache.read().get(&log_stir_degree) {
+            return Ok(config.clone());
+        }
+        let mut w_lock = self.config_cache.write();
+        if let Some(config) = w_lock.get(&log_stir_degree) {
+            return Ok(config.clone());
+        }
+        let config = Arc::new(StirConfig::try_new(log_stir_degree, self.stir.clone())?);
+        w_lock.insert(log_stir_degree, config.clone());
+        Ok(config)
+    }
+
+    /// Like [`Self::get_or_try_compute_stir_config`], but panics on an infeasible config —
+    /// for use on the prover side, where `open` cannot return a `Result`.
+    fn get_or_compute_stir_config(
+        &self,
+        log_stir_degree: usize,
+    ) -> Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>> {
+        self.get_or_try_compute_stir_config(log_stir_degree)
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+}
+
 /// One bucket's `Combine` state for the verifier: the sampled combination challenge and each
 /// present native height's `(r_i, gap_i)` coefficients (`None` when the bucket has only one
 /// class, so no `Combine` step ran).
@@ -194,7 +248,7 @@ type BucketCombine<Challenge> = Option<(
 )>;
 
 impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
-    for TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs>
+    for TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
 where
     Val: TwoAdicField,
     Dft: TwoAdicSubgroupDft<Val>,
@@ -511,6 +565,13 @@ where
                     .zip(opened_vals.iter())
                     .zip(data.log_native_heights.iter())
             {
+                // A matrix opened at no points contributes nothing to the reduced opening;
+                // skip the O(height * width) alpha-batched dot product below rather than
+                // computing it only to leave it unused.
+                if points_for_mat.is_empty() {
+                    continue;
+                }
+
                 let key = (data.log_shared_lde_height, log_native_h);
                 let ro = reduced_openings
                     .entry(key)
@@ -575,7 +636,7 @@ where
             })
             .collect();
 
-        let stir_configs: Vec<StirConfig<Val, Challenge, StirMmcs, Challenger>> =
+        let stir_configs: Vec<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>> =
             bucket_log_heights
                 .iter()
                 .zip(&bucket_native_heights)
@@ -585,22 +646,21 @@ where
                         let log_d_star = native_heights[0];
                         let ell: u64 = native_heights.len() as u64 * ((1u64 << log_d_star) + 1)
                             - native_heights.iter().map(|&d| 1u64 << d).sum::<u64>();
-                        StirConfig::<Val, Challenge, StirMmcs, Challenger>::new_with_combine(
-                            log_stir_degree,
-                            self.stir.clone(),
-                            native_heights.len(),
-                            ell,
+                        Arc::new(
+                            StirConfig::<Val, Challenge, StirMmcs, Challenger>::new_with_combine(
+                                log_stir_degree,
+                                self.stir.clone(),
+                                native_heights.len(),
+                                ell,
+                            ),
                         )
                     } else {
-                        StirConfig::<Val, Challenge, StirMmcs, Challenger>::new(
-                            log_stir_degree,
-                            self.stir.clone(),
-                        )
+                        self.get_or_compute_stir_config(log_stir_degree)
                     }
                 })
                 .collect();
         let stir_config_refs: Vec<&StirConfig<Val, Challenge, StirMmcs, Challenger>> =
-            stir_configs.iter().collect();
+            stir_configs.iter().map(AsRef::as_ref).collect();
 
         let initial_codewords: Vec<Vec<Challenge>> = bucket_log_heights
             .iter()
@@ -803,7 +863,7 @@ where
             })
             .collect();
 
-        let stir_configs: Vec<StirConfig<Val, Challenge, StirMmcs, Challenger>> =
+        let stir_configs: Vec<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>> =
             bucket_log_heights
                 .iter()
                 .zip(&bucket_native_heights)
@@ -813,22 +873,21 @@ where
                         let log_d_star = native_heights[0];
                         let ell: u64 = native_heights.len() as u64 * ((1u64 << log_d_star) + 1)
                             - native_heights.iter().map(|&d| 1u64 << d).sum::<u64>();
-                        StirConfig::<Val, Challenge, StirMmcs, Challenger>::new_with_combine(
+                        StirConfig::<Val, Challenge, StirMmcs, Challenger>::try_new_with_combine(
                             log_stir_degree,
                             self.stir.clone(),
                             native_heights.len(),
                             ell,
                         )
+                        .map(Arc::new)
                     } else {
-                        StirConfig::<Val, Challenge, StirMmcs, Challenger>::new(
-                            log_stir_degree,
-                            self.stir.clone(),
-                        )
+                        self.get_or_try_compute_stir_config(log_stir_degree)
                     }
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(StirError::Config)?;
         let stir_config_refs: Vec<&StirConfig<Val, Challenge, StirMmcs, Challenger>> =
-            stir_configs.iter().collect();
+            stir_configs.iter().map(AsRef::as_ref).collect();
         let stir_proofs: Vec<&StirProof<Challenge, StirMmcs, Val>> =
             proof.iter().map(|(p, _)| p).collect();
 
@@ -948,12 +1007,22 @@ where
                             return Err(StirError::InvalidProofShape);
                         }
 
+                        // Pin each matrix's width to its claimed evaluation count, never to
+                        // the proof: a matrix opened at no points carries no claim to pin its
+                        // width, so reject rather than silently deriving width 0 (mirrors
+                        // `fri::verifier::FriError::MatrixWithoutOpeningPoints`).
                         let mat_widths: Vec<usize> = domain_claims
                             .iter()
-                            .map(|(_, point_claims)| {
-                                point_claims.first().map(|(_, v)| v.len()).unwrap_or(0)
+                            .enumerate()
+                            .map(|(mat_idx, (_, point_claims))| {
+                                point_claims.first().map(|(_, v)| v.len()).ok_or(
+                                    StirError::MatrixWithoutOpeningPoints {
+                                        commitment: commit_idx,
+                                        matrix: mat_idx,
+                                    },
+                                )
                             })
-                            .collect();
+                            .collect::<Result<Vec<usize>, _>>()?;
 
                         // A matrix's native-height class, and each of its opening points'
                         // slot in `bucket_points`, are fixed for the whole commitment. Both
