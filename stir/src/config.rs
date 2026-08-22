@@ -345,12 +345,13 @@ where
         };
 
         // Disjoint-coset side condition for round `i`. The schedule sets
-        // `shift_{i+1} = shift_i^{k_i} * GEN` (`k_i` round `i`'s own folding factor), so
-        // `shift_{i+1}/shift_i = GEN^{k_i^{i+1}}`. Disjoint cosets `L_i ∩ L_{i+1} = ∅`
-        // requires that ratio ∉ H_i, i.e. `(GEN^{k_i^{i+1}})^{|H_i|} = GEN^{2^{N_i}} ≠ 1`
-        // where `N_i = (Σ_{j≤i} log_folding_factor_j) + log_domain_i`, the cumulative
-        // folding-log through and including round `i`. Holds for any field whose
-        // multiplicative order has nontrivial odd part (BabyBear, KoalaBear,
+        // `shift_{i+1} = shift_i^{k_i} * GEN` each round (`k_i` = that round's own folding
+        // factor), so `shift_i = GEN^{c_i}` for the nested recursion `c_{i+1} = c_i * k_i + 1`
+        // — not a plain power of the summed `k_j`'s. Disjoint cosets `L_i ∩ L_{i+1} = ∅`
+        // require `GEN` to avoid the size-`2^{log_domain_i}` subgroup reached at round `i`;
+        // we check the simpler `GEN^{2^{N_i}} ≠ 1` where `N_i = (Σ_{j≤i} log_folding_factor_j)
+        // + log_domain_i` is the cumulative folding-log through round `i`. Holds for any
+        // field whose multiplicative order has nontrivial odd part (BabyBear, KoalaBear,
         // Goldilocks, …); the assertion catches pathological fields.
         let assert_disjoint_cosets =
             |round_index: usize, log_domain_i: usize, cumulative_log_folding: usize| {
@@ -898,28 +899,33 @@ mod tests {
         let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
         let field_size_bits = EF::bits();
 
-        // (log_starting_degree, log_blowup, log_folding_factor, security_level, max_pow_bits, soundness_type).
+        // (log_starting_degree, log_blowup, log_folding_factor, log_starting_folding_factor,
+        // security_level, max_pow_bits, soundness_type).
         let cb = SecurityAssumption::CapacityBound;
         let jb = SecurityAssumption::JohnsonBound;
         let cases = [
-            (8, 1, 2, 80, 20, cb),
-            (8, 2, 2, 80, 20, cb),
-            (8, 2, 2, 80, 20, jb),
-            (16, 1, 2, 80, 20, cb),
-            (4, 1, 2, 80, 20, cb),
-            (8, 1, 2, 16, 0, cb),
-            (12, 1, 3, 16, 0, cb),
-            (4, 1, 2, 16, 0, cb),
+            (8, 1, 2, 2, 80, 20, cb),
+            (8, 2, 2, 2, 80, 20, cb),
+            (8, 2, 2, 2, 80, 20, jb),
+            (16, 1, 2, 2, 80, 20, cb),
+            (4, 1, 2, 2, 80, 20, cb),
+            (8, 1, 2, 2, 16, 0, cb),
+            (12, 1, 3, 2, 16, 0, cb),
+            (4, 1, 2, 2, 16, 0, cb),
+            // k0 != k: round 0 folds by a different factor than every later round.
+            (16, 1, 3, 2, 80, 20, cb),
         ];
 
         {
-            for &(log_deg, log_blowup, log_fold, sec, max_pow, soundness_type) in &cases {
+            for &(log_deg, log_blowup, log_fold, log_starting_fold, sec, max_pow, soundness_type) in
+                &cases
+            {
                 let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(
                     log_deg,
                     StirParameters {
                         log_blowup,
                         log_folding_factor: log_fold,
-                        log_starting_folding_factor: log_fold,
+                        log_starting_folding_factor: log_starting_fold,
                         soundness_type,
                         security_level: sec,
                         max_pow_bits: max_pow,
@@ -928,7 +934,7 @@ mod tests {
                 );
 
                 // Mirror `StirConfig::new`'s buffered target.
-                let total_folds = log_deg / log_fold;
+                let total_folds = 1 + (log_deg - log_starting_fold) / log_fold;
                 let buffer = libm::ceil(libm::log2((6 * (total_folds - 1) + 3) as f64)) as usize;
                 let buffered = (sec + buffer) as f64;
                 // Recomputed algebraic bits use the same `libm` math as the config, so
