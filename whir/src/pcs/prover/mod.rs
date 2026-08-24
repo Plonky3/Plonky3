@@ -191,7 +191,7 @@ where
         }
     }
 
-    #[instrument(skip_all, fields(round_number = round_index, log_size = self.num_variables - self.total_folded_through(round_index)))]
+    #[instrument(skip_all, level = "debug", fields(round_number = round_index, log_size = self.num_variables - self.total_folded_through(round_index)))]
     #[allow(clippy::too_many_lines)]
     fn round(
         &self,

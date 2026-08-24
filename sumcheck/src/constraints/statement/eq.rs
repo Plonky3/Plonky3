@@ -273,7 +273,7 @@ impl<F: Field> EqStatement<F> {
     /// The shift starts this group's powers where the previous group's powers ended.
     ///
     /// The const generic flag controls whether the weight accumulator is added to when true or overwritten when false.
-    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables(), shift))]
+    #[instrument(skip_all, level = "debug", fields(num_constraints = self.len(), num_variables = self.num_variables(), shift))]
     pub fn combine_hypercube<Base, const INITIALIZED: bool>(
         &self,
         acc_weights: &mut Poly<F>,
@@ -334,7 +334,7 @@ impl<F: Field> EqStatement<F> {
     ///
     /// - When the packing width spans at least half the variables, build each constraint's equality polynomial and pack it directly.
     /// - Otherwise split the variables at the midpoint, expand each half, and recombine them with a parallel dot product over the lanes.
-    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables(), shift))]
+    #[instrument(skip_all, level = "debug", fields(num_constraints = self.len(), num_variables = self.num_variables(), shift))]
     pub fn combine_hypercube_packed<Base, const INITIALIZED: bool>(
         &self,
         weights: &mut Poly<F::ExtensionPacking>,

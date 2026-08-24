@@ -43,7 +43,7 @@ impl<F: Copy + Send + Sync, M: Matrix<F>> CircleEvaluations<F, M> {
 }
 
 impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
-    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
+    #[instrument(skip_all, level = "debug", fields(dims = %self.values.dimensions()))]
     pub fn interpolate(self) -> RowMajorMatrix<F> {
         let len = self.domain.size() * self.values.width();
         self.interpolate_with_capacity(len)
@@ -105,7 +105,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         RowMajorMatrix::new(buf, w)
     }
 
-    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
+    #[instrument(skip_all, level = "debug", fields(dims = %self.values.dimensions()))]
     pub fn extrapolate(
         self,
         target_domain: CircleDomain<F>,
@@ -191,7 +191,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 }
 
 impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
-    #[instrument(skip_all, fields(dims = %coeffs.dimensions()))]
+    #[instrument(skip_all, level = "debug", fields(dims = %coeffs.dimensions()))]
     pub fn evaluate(domain: CircleDomain<F>, mut coeffs: RowMajorMatrix<F>) -> Self {
         let log_n = log2_strict_usize(coeffs.height());
         assert!(log_n <= domain.log_n);

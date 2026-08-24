@@ -713,7 +713,7 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// # Panics
     ///
     /// - Folding factor must not exceed the current number of remaining variables.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     pub fn compute_sumcheck_polynomials<Challenger>(
         &mut self,
         sumcheck_data: &mut SumcheckData<F, EF>,

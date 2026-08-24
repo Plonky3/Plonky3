@@ -125,7 +125,7 @@ pub(crate) struct VanishingParts<EF> {
 /// Compute the [`VanishingParts`] of the DEEP quotient at `zeta` for the given domain points.
 ///
 /// `points` must be the domain points in CFFT order.
-#[instrument(skip_all, fields(n = points.len()))]
+#[instrument(skip_all, level = "debug", fields(n = points.len()))]
 pub(crate) fn compute_vanishing_parts<F: ComplexExtendable, EF: ExtensionField<F>>(
     points: &[Point<F>],
     zeta: Point<EF>,
@@ -192,7 +192,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     /// so its values on the prefix determine it. Reducing the prefix and extrapolating a
     /// single extension-field column costs `1 / blowup` of the full-matrix traversal plus
     /// a narrow CFFT, instead of a full traversal.
-    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
+    #[instrument(skip_all, level = "debug", fields(dims = %self.values.dimensions()))]
     pub(crate) fn rowwise_alpha_reduce_lifted<EF: ExtensionField<F>>(
         &self,
         alpha: EF,

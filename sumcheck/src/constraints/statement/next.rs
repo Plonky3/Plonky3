@@ -151,7 +151,7 @@ impl<F: Field> NextStatement<F> {
     /// - `acc_sum`: scalar accumulator for the expected sum.
     /// - `challenge`: the batching challenge whose powers weight each constraint.
     /// - `shift`: offset of the first challenge power, so this group follows earlier groups.
-    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables()))]
+    #[instrument(skip_all, level = "debug", fields(num_constraints = self.len(), num_variables = self.num_variables()))]
     pub fn combine(&self, acc_weights: &mut Poly<F>, acc_sum: &mut F, challenge: F, shift: usize) {
         // Nothing to fold when this group holds no constraints.
         if self.constraints.is_empty() {
@@ -185,7 +185,7 @@ impl<F: Field> NextStatement<F> {
     ///
     /// Panics if the variable count is below the packing width.
     /// Panics if the packed buffer arity plus the packing width differs from the group's arity.
-    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables()))]
+    #[instrument(skip_all, level = "debug", fields(num_constraints = self.len(), num_variables = self.num_variables()))]
     pub fn combine_packed<Base>(
         &self,
         weights: &mut Poly<F::ExtensionPacking>,

@@ -633,7 +633,7 @@ where
     ///
     /// `degrees[i]` is the degree of AIR `i` after stripping the active eq factor.
     /// Every entry must be positive. The round degree is the maximum AIR degree.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn new(
         stage: &Stage<'air, 'data, A, F>,
         alpha: EF,
@@ -789,7 +789,7 @@ where
             .unwrap()
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn round_poly(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
@@ -803,7 +803,7 @@ where
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     fn round_poly_packed(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
@@ -955,7 +955,7 @@ where
         out
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn round_poly_unpacked(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
@@ -1065,7 +1065,7 @@ where
         out
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn fold(mut self, r: EF) -> RoundStateExt<'air, 'data, A, F, EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
@@ -1208,7 +1208,7 @@ where
     /// Computes the round polynomial evaluations, dispatching to the
     /// SIMD-packed kernel once there are enough residual rows to fill a
     /// packed lane, mirroring [`RoundStateBase::round_poly`].
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn round_poly(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
@@ -1229,7 +1229,7 @@ where
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     fn round_poly_unpacked(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
@@ -1378,7 +1378,7 @@ where
     /// columns. The AIR is driven through [`PackedExt`], which wraps the
     /// packed extension value so it supports arithmetic against the base
     /// field `F` directly (see that type's docs for why this is needed).
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     fn round_poly_packed(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         A: for<'b> Air<
@@ -1561,7 +1561,7 @@ where
         out
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn fold(&mut self, r: EF)
     where
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,

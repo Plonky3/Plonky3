@@ -324,7 +324,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     /// # Returns
     ///
     /// The verifier's challenge `r \in EF` for this round.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, level = "debug")]
     pub fn round<Challenger>(
         &mut self,
         sumcheck_data: &mut SumcheckData<F, EF>,
