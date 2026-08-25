@@ -35,6 +35,14 @@ impl Gf2 {
     const fn new(bit: u8) -> Self {
         Self(bit & 1)
     }
+
+    /// Construct a field element from its little-endian byte representation.
+    ///
+    /// Every byte is a valid input; only its least significant bit is used.
+    #[inline]
+    pub const fn from_le_bytes(bytes: [u8; 1]) -> Self {
+        Self::new(bytes[0])
+    }
 }
 
 impl Packable for Gf2 {}

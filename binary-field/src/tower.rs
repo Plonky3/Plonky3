@@ -150,6 +150,15 @@ macro_rules! binary_tower_level {
                     .expect("the norm of a nonzero element is nonzero");
                 Some(Self::join((a0 + a1.mul_alpha()) * norm_inv, a1 * norm_inv))
             }
+
+            /// Construct a field element from its little-endian byte representation.
+            ///
+            /// Every byte string of the right length is a valid input: `from_repr` masks
+            /// any bits above the canonical range.
+            #[inline]
+            pub fn from_le_bytes(bytes: [u8; core::mem::size_of::<$repr>()]) -> Self {
+                <Self as TowerLevel>::from_repr(<$repr>::from_le_bytes(bytes))
+            }
         }
 
         impl TowerLevel for $name {
@@ -384,8 +393,9 @@ mod tests {
     extern crate std;
 
     use std::println;
+    use std::vec::Vec;
 
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_field::{Field, PrimeCharacteristicRing, RawDataSerializable};
     use proptest::prelude::*;
 
     use super::*;
@@ -538,6 +548,49 @@ mod tests {
         // The levels that fill their backing integer accept every value of it.
         assert!(serde_json::from_str::<BinaryField8>("255").is_ok());
         assert!(serde_json::from_str::<BinaryField8>("256").is_err());
+    }
+
+    #[test]
+    fn bytes_round_trip_and_postcard() {
+        let a = BinaryField128::from_repr(0x8000_0000_0000_0000_0000_0000_0000_0001);
+        let bytes: Vec<u8> = a.into_bytes().into_iter().collect();
+        assert_eq!(bytes.len(), 16);
+        assert_eq!(BinaryField128::from_le_bytes(bytes.try_into().unwrap()), a);
+
+        let encoded = postcard::to_allocvec(&a).unwrap();
+        assert_eq!(postcard::from_bytes::<BinaryField128>(&encoded).unwrap(), a);
+    }
+
+    /// Every byte string of the right length round-trips to a field element for every level,
+    /// since [`RawDataSerializable::into_bytes`] and `from_le_bytes` are inverses on the full
+    /// `NUM_BYTES`-byte space, not just on canonical representatives.
+    #[test]
+    fn from_le_bytes_round_trips_every_level() {
+        macro_rules! assert_bytes_round_trip {
+            ($t:ty, $repr:ty, $val:expr) => {{
+                let a = <$t>::from_repr($val as $repr);
+                let bytes: Vec<u8> = a.into_bytes().into_iter().collect();
+                assert_eq!(bytes.len(), core::mem::size_of::<$repr>());
+                assert_eq!(<$t>::from_le_bytes(bytes.try_into().unwrap()), a);
+            }};
+        }
+
+        assert_bytes_round_trip!(BinaryField2, u8, 0b11);
+        assert_bytes_round_trip!(BinaryField4, u8, 0b1001);
+        assert_bytes_round_trip!(BinaryField8, u8, 0xab);
+        assert_bytes_round_trip!(BinaryField16, u16, 0x1234);
+        assert_bytes_round_trip!(BinaryField32, u32, 0x1234_5678);
+        assert_bytes_round_trip!(BinaryField64, u64, 0x0123_4567_89ab_cdef);
+        assert_bytes_round_trip!(
+            BinaryField128,
+            u128,
+            0x8000_0000_0000_0000_0000_0000_0000_0001
+        );
+    }
+
+    #[test]
+    fn field_testing_into_stream_matches_binary_field_128() {
+        p3_field_testing::test_into_stream::<BinaryField128>();
     }
 
     #[test]
