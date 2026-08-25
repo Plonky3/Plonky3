@@ -531,10 +531,9 @@ mod tests {
     }
 
     /// Serialization always emits the canonical byte, and deserialization rejects any byte
-    /// other than `0`/`1` — this is what makes finding #1's manual `Deserialize` impl (in
-    /// place of the derive) actually necessary: without it, deserializing untrusted or
-    /// corrupted bytes could silently construct a `Gf2` whose invariant (`.0 in {0, 1}`) is
-    /// broken, and that would propagate wrong results through arithmetic.
+    /// other than `0`/`1`. Without that rejection, deserializing corrupted or adversarial
+    /// bytes could construct a `Gf2` whose invariant (`.0 in {0, 1}`) is broken, silently
+    /// propagating an invalid field element through arithmetic.
     #[test]
     fn serde_round_trip_rejects_non_canonical_encodings() {
         assert_eq!(serde_json::to_string(&Gf2::ZERO).unwrap(), "0");

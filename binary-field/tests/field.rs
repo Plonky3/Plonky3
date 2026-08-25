@@ -6,8 +6,7 @@
 /// its `generate_from_small_int_tests!` sub-test hard-codes literals up to `108` as canonical
 /// representatives, which only holds for fields with `order() > 108`. `Gf2`'s canonical range
 /// is `{0, 1}`, so every literal above `1` makes `from_canonical_checked` return `None`, which
-/// the macro asserts is `Some`. Confirmed by invoking `test_prime_field!(Gf2)` directly: both
-/// of its sub-tests fail on the first non-canonical literal (`2`).
+/// the macro asserts is `Some`.
 ///
 /// The passing subset is listed explicitly below: `generate_from_int_tests!` restricted to the
 /// two values that are canonical for `Gf2` (`0` and `1`), across every integer type
@@ -59,7 +58,7 @@ mod binary_field_8 {
     const ZEROS: [F; 1] = [F::ZERO];
     const ONES: [F; 1] = [F::ONE];
 
-    /// Prime factorization of `2^8 - 1 = 255`, from Task 1.2's `tower.rs` `FACTORS_8`.
+    /// Prime factorization of `2^8 - 1 = 255`.
     fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 3] {
         [
             (BigUint::from(3u32), 1),
@@ -86,7 +85,7 @@ mod binary_field_16 {
     const ZEROS: [F; 1] = [F::ZERO];
     const ONES: [F; 1] = [F::ONE];
 
-    /// Prime factorization of `2^16 - 1 = 65535`, from Task 1.2's `tower.rs` `FACTORS_16`.
+    /// Prime factorization of `2^16 - 1 = 65535`.
     fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 4] {
         [
             (BigUint::from(3u32), 1),
@@ -114,7 +113,7 @@ mod binary_field_32 {
     const ZEROS: [F; 1] = [F::ZERO];
     const ONES: [F; 1] = [F::ONE];
 
-    /// Prime factorization of `2^32 - 1 = 4294967295`, from Task 1.2's `tower.rs` `FACTORS_32`.
+    /// Prime factorization of `2^32 - 1 = 4294967295`.
     fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 5] {
         [
             (BigUint::from(3u32), 1),
@@ -143,7 +142,7 @@ mod binary_field_64 {
     const ZEROS: [F; 1] = [F::ZERO];
     const ONES: [F; 1] = [F::ONE];
 
-    /// Prime factorization of `2^64 - 1`, from Task 1.2's `tower.rs` `FACTORS_64`.
+    /// Prime factorization of `2^64 - 1`.
     fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 7] {
         [
             (BigUint::from(3u32), 1),
@@ -174,7 +173,7 @@ mod binary_field_128 {
     const ZEROS: [F; 1] = [F::ZERO];
     const ONES: [F; 1] = [F::ONE];
 
-    /// Prime factorization of `2^128 - 1`, from Task 1.2's `tower.rs` `FACTORS_128`.
+    /// Prime factorization of `2^128 - 1`.
     fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 9] {
         [
             (BigUint::from(3u32), 1),
