@@ -499,13 +499,17 @@ where
 {
     let mut rng = SmallRng::seed_from_u64(1);
     let x = rng.random::<R>();
+    // Small exponents plus values straddling the 64- and 128-bit boundaries, where an
+    // implementation computing `2^e` as a fixed-width shift would overflow rather than
+    // collapse to `ZERO`.
+    const EXPONENTS: [u64; 9] = [1, 2, 7, 8, 63, 64, 127, 128, 255];
     for sample in [R::ZERO, R::ONE, x] {
         assert_eq!(
             sample.mul_2exp_u64(0),
             sample,
             "mul_2exp_u64(0) must be the identity"
         );
-        for e in 1..=8 {
+        for e in EXPONENTS {
             assert_eq!(
                 sample.mul_2exp_u64(e),
                 R::ZERO,
