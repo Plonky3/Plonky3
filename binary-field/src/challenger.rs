@@ -20,6 +20,14 @@ use crate::tower::TowerLevel;
 /// Fixing this at eight keeps the transcript independent of the target's pointer width.
 const BITS_SAMPLE_BYTES: usize = 8;
 
+/// The headroom, in bits, that a grinding request must leave below the witness field's width.
+///
+/// A candidate satisfies a `bits`-wide check with probability `2^-bits`, so a field of
+/// `n` bits offers `2^(n - bits)` expected successes. Eight bits of headroom keep that
+/// expectation at `>= 256`, so an exhaustive search that finds nothing is astronomically
+/// unlikely rather than merely improbable.
+const GRIND_MARGIN_BITS: usize = 8;
+
 /// A challenger for a binary tower field, driven by a challenger over bytes.
 ///
 /// A level of the Wiedemann tower is an exact number of bytes wide and every bit pattern of
@@ -181,8 +189,8 @@ where
     fn grind(&mut self, bits: usize) -> Self::Witness {
         assert!(bits < (usize::BITS as usize));
         assert!(
-            bits < F::bits(),
-            "requested bit count must fit within the field order"
+            bits + GRIND_MARGIN_BITS <= F::bits(),
+            "requested bit count leaves too small a margin against the witness field's size"
         );
 
         // Trivial case: 0 bits mean no PoW is required and any witness is valid.
@@ -445,10 +453,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic = "requested bit count must fit within the field order"]
+    #[should_panic = "requested bit count leaves too small a margin"]
     fn grind_rejects_a_request_wider_than_the_field() {
         let mut challenger = mk::<BinaryField32>();
         let _ = challenger.grind(32);
+    }
+
+    #[test]
+    #[should_panic = "requested bit count leaves too small a margin"]
+    fn grind_rejects_a_request_inside_the_margin() {
+        // Narrower than the field, but too close to it: only `2^7` expected witnesses.
+        let mut challenger = mk::<BinaryField32>();
+        let _ = challenger.grind(25);
     }
 
     #[test]
