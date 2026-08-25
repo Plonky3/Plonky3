@@ -29,7 +29,7 @@ use crate::clmul::{HAS_HARDWARE_CLMUL, mul_64, mul_128, square_64, square_128};
 use crate::{Gf2, tables};
 
 /// One level of the Wiedemann tower. `Repr` is the backing integer; `LOG_BITS` is `k` for `GF(2^(2^k))`.
-pub(crate) trait TowerLevel: Field {
+pub trait TowerLevel: Field {
     type Repr: Copy;
     const LOG_BITS: usize;
     /// Build an element from a bit pattern, discarding the bits above `2^LOG_BITS`.
@@ -44,6 +44,11 @@ pub(crate) trait TowerLevel: Field {
     /// # Panics
     /// Panics if the stream ends before a whole element has been read.
     fn from_le_byte_iter(bytes: impl Iterator<Item = u8>) -> Self;
+    /// The `i`-th vector of the Cantor basis of this level.
+    ///
+    /// # Panics
+    /// Panics if `i` is at least the bit width `2^LOG_BITS` of this level.
+    fn cantor_basis(i: usize) -> Self;
 }
 
 /// The panic message shared by every [`TowerLevel::from_le_byte_iter`] implementation.
@@ -73,6 +78,13 @@ impl TowerLevel for Gf2 {
     #[inline]
     fn from_le_byte_iter(mut bytes: impl Iterator<Item = u8>) -> Self {
         Self::from_le_bytes([bytes.next().expect(BYTE_STREAM_ENDED)])
+    }
+
+    /// `GF(2)` holds only `v_0 = 1`.
+    #[inline]
+    fn cantor_basis(i: usize) -> Self {
+        assert!(i < 1, "Cantor basis index out of range");
+        Self::ONE
     }
 }
 
@@ -221,6 +233,13 @@ macro_rules! binary_tower_level {
                     *byte = bytes.next().expect(BYTE_STREAM_ENDED);
                 }
                 Self::from_le_bytes(buffer)
+            }
+
+            #[inline]
+            fn cantor_basis(i: usize) -> Self {
+                assert!(i < $bits, "Cantor basis index out of range");
+                // `v_i < 2^(2^k)` for `i < 2^k`, so the cast is exact at every level.
+                Self::from_repr(crate::cantor::CANTOR_BASIS_128[i] as $repr)
             }
         }
 
