@@ -751,6 +751,18 @@ pub fn test_binary_ops<R: PrimeCharacteristicRing + Eq + Copy>(
     );
 }
 
+/// Checks the fixed enumeration used for interpolation nodes.
+pub fn test_interpolation_nodes<F: Field>() {
+    assert_eq!(F::interpolation_node(0), F::ZERO);
+    assert_eq!(F::interpolation_node(1), F::ONE);
+    let nodes: Vec<F> = (0..64).map(F::interpolation_node).collect();
+    for (i, a) in nodes.iter().enumerate() {
+        for b in &nodes[..i] {
+            assert_ne!(a, b, "interpolation nodes must be pairwise distinct");
+        }
+    }
+}
+
 /// Tests the optimized implementation of `powers.take(n).collect()`
 pub fn test_powers_collect<F: Field>() {
     // Small using serial implementation
@@ -1117,6 +1129,10 @@ macro_rules! test_field {
             #[test]
             fn test_powers_collect() {
                 $crate::test_powers_collect::<$field>();
+            }
+            #[test]
+            fn test_interpolation_nodes() {
+                $crate::test_interpolation_nodes::<$field>();
             }
             #[test]
             fn test_ring_axioms_proptest() {

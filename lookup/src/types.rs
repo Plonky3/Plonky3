@@ -376,10 +376,10 @@ pub fn check_multiplicity_height_bound<F: PrimeField>(
         });
 
     // Compare against the exact characteristic `p`, valid for any prime size.
-    if weighted_height_sum >= F::order() {
+    if weighted_height_sum >= F::PrimeSubfield::order() {
         return Err(LookupError::MultiplicityHeightBoundExceeded {
             weighted_height_sum,
-            field_bits: F::bits(),
+            field_bits: F::PrimeSubfield::bits(),
         });
     }
     Ok(())
@@ -649,7 +649,10 @@ mod tests {
                 field_bits,
             } => {
                 assert_eq!(weighted_height_sum, BigUint::from(1u128 << 31));
-                assert_eq!(field_bits, F::bits());
+                assert_eq!(
+                    field_bits,
+                    <F as PrimeCharacteristicRing>::PrimeSubfield::bits()
+                );
             }
             other => panic!("wrong error variant: {other:?}"),
         }

@@ -1058,6 +1058,19 @@ pub trait Field:
         crate::sqrt::tonelli_shanks(*self)
     }
 
+    /// The `i`-th element of a fixed injective enumeration of `Self`, used as an
+    /// interpolation node. Must satisfy `interpolation_node(0) == ZERO` and
+    /// `interpolation_node(1) == ONE`, and be injective on every index a protocol
+    /// can use (round-polynomial degrees are tiny; `0..64` is the tested range).
+    ///
+    /// The default maps `i` through the prime subfield and is injective only while
+    /// `i` is below the characteristic. Fields of characteristic below `2^32` must
+    /// override it.
+    #[must_use]
+    fn interpolation_node(i: usize) -> Self {
+        Self::from_usize(i)
+    }
+
     /// Add two slices of field elements together, returning the result in the first slice.
     ///
     /// Makes use of packing to speed up the addition.
