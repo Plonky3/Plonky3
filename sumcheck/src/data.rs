@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use serde::{Deserialize, Serialize};
 
@@ -124,8 +124,8 @@ impl<F, EF> SumcheckData<F, EF> {
         basis: Basis,
     ) -> Result<Point<EF>, SumcheckError>
     where
-        F: TwoAdicField,
-        EF: ExtensionField<F> + TwoAdicField,
+        F: Field,
+        EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Bind the round count to the protocol-fixed value before folding anything.
@@ -189,8 +189,8 @@ pub fn verify_final_sumcheck_rounds<F, EF, Challenger>(
     basis: Basis,
 ) -> Result<Point<EF>, SumcheckError>
 where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
+    F: Field,
+    EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
     if rounds == 0 {
