@@ -169,6 +169,15 @@ impl Field for Gf2 {
         BigUint::from(2u8)
     }
 
+    /// An element of `GF(2)` is exactly one bit wide.
+    ///
+    /// The default implementation returns `order().bits()`, which over-reports by one whenever
+    /// the order is an exact power of two.
+    #[inline]
+    fn bits() -> usize {
+        1
+    }
+
     /// The enumeration `interpolation_node(0) = 0, interpolation_node(1) = 1` is the only
     /// injective enumeration of the two elements of `GF(2)` satisfying `Field::interpolation_node`'s
     /// contract. It is not injective beyond index `1`.
@@ -516,7 +525,7 @@ mod tests {
     #[test]
     fn field_order_and_interpolation_nodes() {
         assert_eq!(Gf2::order(), num_bigint::BigUint::from(2u8));
-        assert_eq!(Gf2::bits(), 2);
+        assert_eq!(Gf2::bits(), 1);
         assert_eq!(Gf2::interpolation_node(0), Gf2::ZERO);
         assert_eq!(Gf2::interpolation_node(1), Gf2::ONE);
     }
