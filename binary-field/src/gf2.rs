@@ -13,12 +13,16 @@ use p3_field::{
 };
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The prime field `GF(2) = {0, 1}`, with addition given by `XOR` and multiplication by `AND`.
 ///
 /// This is the base case of the characteristic-2 tower `GF(2) ⊂ GF(4) ⊂ … ⊂ GF(2^128)`.
-#[derive(Copy, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+///
+/// The serde encoding is canonical: every field element has exactly one valid byte
+/// representation (see the manual [`Deserialize`] impl below).
+#[derive(Copy, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[repr(transparent)]
 #[must_use]
 pub struct Gf2(u8);
@@ -34,6 +38,19 @@ impl Gf2 {
 }
 
 impl Packable for Gf2 {}
+
+impl<'de> Deserialize<'de> for Gf2 {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let val = u8::deserialize(d)?;
+        // Reject non-canonical encodings so a proof cannot be re-encoded without the witness.
+        // Only `0` and `1` are canonical for `GF(2)`.
+        if val < 2 {
+            Ok(Self(val))
+        } else {
+            Err(D::Error::custom("Value is out of range"))
+        }
+    }
+}
 
 impl Display for Gf2 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -296,7 +313,11 @@ ring_sum!(Gf2);
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_field::integers::QuotientMap;
+    use p3_field::{
+        Field, PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64,
+        RawDataSerializable,
+    };
 
     use super::Gf2;
 
@@ -310,5 +331,198 @@ mod tests {
         assert_eq!(Gf2::ZERO.try_inverse(), None);
         assert_eq!(Gf2::from_u64(7), Gf2::ONE);
         assert_eq!(Gf2::from_u64(6), Gf2::ZERO);
+    }
+
+    // `p3_field_testing`'s `test_prime_field!`/`test_prime_field_64!`/`test_prime_field_32!`
+    // are not usable against `Gf2`: they hard-code assumptions that only hold for fields with
+    // a "reasonably large" order (e.g. `generate_from_small_int_tests!` asserts
+    // `from_canonical_checked` is `Some` for literal test values up to `108`;
+    // `generate_from_large_u_int_tests!`/`generate_from_large_i_int_tests!` unconditionally
+    // call `.halve()`, which is undefined in characteristic 2; and
+    // `test_prime_field_32!`'s raw-data-serializable/JSON-boundary sub-tests assume a 4-byte,
+    // ~31-bit representative). The tests below cover the same ground by hand, adapted to
+    // `GF(2)`'s actual canonical range of `{0, 1}`.
+
+    /// Every integer type required by `PrimeField`'s `QuotientMap<Int>` bound reduces mod 2,
+    /// and `from_canonical_checked`/`from_canonical_unchecked` agree with `from_int` exactly on
+    /// `{0, 1}` and reject (or are only guaranteed correct for) everything else.
+    #[test]
+    fn quotient_map_covers_every_integer_type() {
+        macro_rules! check_unsigned {
+            ($int:ty) => {
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(0), Gf2::ZERO);
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(1), Gf2::ONE);
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(2), Gf2::ZERO);
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(3), Gf2::ONE);
+                assert_eq!(
+                    <Gf2 as QuotientMap<$int>>::from_int(<$int>::MAX),
+                    Gf2::ONE
+                );
+                assert_eq!(
+                    <Gf2 as QuotientMap<$int>>::from_canonical_checked(0),
+                    Some(Gf2::ZERO)
+                );
+                assert_eq!(
+                    <Gf2 as QuotientMap<$int>>::from_canonical_checked(1),
+                    Some(Gf2::ONE)
+                );
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_canonical_checked(2), None);
+                assert_eq!(
+                    <Gf2 as QuotientMap<$int>>::from_canonical_checked(<$int>::MAX),
+                    None
+                );
+                unsafe {
+                    assert_eq!(
+                        <Gf2 as QuotientMap<$int>>::from_canonical_unchecked(0),
+                        Gf2::ZERO
+                    );
+                    assert_eq!(
+                        <Gf2 as QuotientMap<$int>>::from_canonical_unchecked(1),
+                        Gf2::ONE
+                    );
+                }
+            };
+        }
+        macro_rules! check_signed {
+            ($int:ty) => {
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(0), Gf2::ZERO);
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(1), Gf2::ONE);
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(-1), Gf2::ONE);
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(-2), Gf2::ZERO);
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(-3), Gf2::ONE);
+                assert_eq!(
+                    <Gf2 as QuotientMap<$int>>::from_int(<$int>::MIN),
+                    Gf2::ZERO
+                );
+                assert_eq!(
+                    <Gf2 as QuotientMap<$int>>::from_int(<$int>::MAX),
+                    Gf2::ONE
+                );
+                assert_eq!(
+                    <Gf2 as QuotientMap<$int>>::from_canonical_checked(0),
+                    Some(Gf2::ZERO)
+                );
+                assert_eq!(
+                    <Gf2 as QuotientMap<$int>>::from_canonical_checked(1),
+                    Some(Gf2::ONE)
+                );
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_canonical_checked(2), None);
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_canonical_checked(-1), None);
+                assert_eq!(
+                    <Gf2 as QuotientMap<$int>>::from_canonical_checked(<$int>::MIN),
+                    None
+                );
+                unsafe {
+                    assert_eq!(
+                        <Gf2 as QuotientMap<$int>>::from_canonical_unchecked(0),
+                        Gf2::ZERO
+                    );
+                    assert_eq!(
+                        <Gf2 as QuotientMap<$int>>::from_canonical_unchecked(1),
+                        Gf2::ONE
+                    );
+                }
+            };
+        }
+
+        check_unsigned!(u8);
+        check_unsigned!(u16);
+        check_unsigned!(u32);
+        check_unsigned!(u64);
+        check_unsigned!(u128);
+        check_unsigned!(usize);
+        check_signed!(i8);
+        check_signed!(i16);
+        check_signed!(i32);
+        check_signed!(i64);
+        check_signed!(i128);
+        check_signed!(isize);
+    }
+
+    /// Large values reduce mod 2 rather than saturating or panicking, on both sides of a
+    /// `u8`-internal-representation boundary (256) and near the top of wider integer ranges.
+    #[test]
+    fn quotient_map_large_value_reduction() {
+        assert_eq!(<Gf2 as QuotientMap<u16>>::from_int(60_000), Gf2::ZERO);
+        assert_eq!(<Gf2 as QuotientMap<u16>>::from_int(60_001), Gf2::ONE);
+        assert_eq!(
+            <Gf2 as QuotientMap<u32>>::from_int(4_000_000_000),
+            Gf2::ZERO
+        );
+        assert_eq!(
+            <Gf2 as QuotientMap<u32>>::from_int(4_000_000_001),
+            Gf2::ONE
+        );
+        assert_eq!(
+            <Gf2 as QuotientMap<u64>>::from_int(18_000_000_000_000_000_002),
+            Gf2::ZERO
+        );
+        assert_eq!(
+            <Gf2 as QuotientMap<u128>>::from_int(u128::MAX - 1),
+            Gf2::ZERO
+        );
+        assert_eq!(<Gf2 as QuotientMap<i32>>::from_int(-2_000_000_001), Gf2::ONE);
+        assert_eq!(
+            <Gf2 as QuotientMap<i64>>::from_int(-9_000_000_000_000_000_002),
+            Gf2::ZERO
+        );
+        assert_eq!(
+            <Gf2 as QuotientMap<i128>>::from_int(i128::MIN + 1),
+            Gf2::ONE
+        );
+    }
+
+    #[test]
+    fn as_canonical_and_raw_bytes() {
+        assert_eq!(Gf2::ORDER_U32, 2);
+        assert_eq!(Gf2::ORDER_U64, 2);
+        assert_eq!(Gf2::ZERO.as_canonical_u32(), 0);
+        assert_eq!(Gf2::ONE.as_canonical_u32(), 1);
+        assert_eq!(Gf2::ZERO.as_canonical_u64(), 0);
+        assert_eq!(Gf2::ONE.as_canonical_u64(), 1);
+        assert_eq!(
+            Gf2::ONE.as_canonical_biguint(),
+            num_bigint::BigUint::from(1u8)
+        );
+        assert_eq!(
+            Gf2::ZERO.as_canonical_biguint(),
+            num_bigint::BigUint::from(0u8)
+        );
+
+        assert_eq!(Gf2::NUM_BYTES, 1);
+        let mut ones_bytes = Gf2::ONE.into_bytes().into_iter();
+        assert_eq!(ones_bytes.next(), Some(1u8));
+        assert_eq!(ones_bytes.next(), None);
+        let mut zeros_bytes = Gf2::ZERO.into_bytes().into_iter();
+        assert_eq!(zeros_bytes.next(), Some(0u8));
+        assert_eq!(zeros_bytes.next(), None);
+    }
+
+    #[test]
+    fn field_order_and_interpolation_nodes() {
+        assert_eq!(Gf2::order(), num_bigint::BigUint::from(2u8));
+        assert_eq!(Gf2::bits(), 2);
+        assert_eq!(Gf2::interpolation_node(0), Gf2::ZERO);
+        assert_eq!(Gf2::interpolation_node(1), Gf2::ONE);
+    }
+
+    /// Serialization always emits the canonical byte, and deserialization rejects any byte
+    /// other than `0`/`1` — this is what makes finding #1's manual `Deserialize` impl (in
+    /// place of the derive) actually necessary: without it, deserializing untrusted or
+    /// corrupted bytes could silently construct a `Gf2` whose invariant (`.0 in {0, 1}`) is
+    /// broken, and that would propagate wrong results through arithmetic.
+    #[test]
+    fn serde_round_trip_rejects_non_canonical_encodings() {
+        assert_eq!(serde_json::to_string(&Gf2::ZERO).unwrap(), "0");
+        assert_eq!(serde_json::to_string(&Gf2::ONE).unwrap(), "1");
+
+        let decoded_zero: Gf2 = serde_json::from_str("0").unwrap();
+        let decoded_one: Gf2 = serde_json::from_str("1").unwrap();
+        assert_eq!(decoded_zero, Gf2::ZERO);
+        assert_eq!(decoded_one, Gf2::ONE);
+
+        // Every byte other than 0/1 must be rejected, not silently truncated into range.
+        assert!(serde_json::from_str::<Gf2>("2").is_err());
+        assert!(serde_json::from_str::<Gf2>("255").is_err());
     }
 }
