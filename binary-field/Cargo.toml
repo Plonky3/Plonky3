@@ -10,14 +10,20 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+p3-challenger.workspace = true
 p3-field.workspace = true
+p3-maybe-rayon.workspace = true
+p3-symmetric.workspace = true
+
 num-bigint.workspace = true
 paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
+tracing.workspace = true
 
 [dev-dependencies]
 p3-field-testing.workspace = true
+p3-keccak.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
 serde_json.workspace = true

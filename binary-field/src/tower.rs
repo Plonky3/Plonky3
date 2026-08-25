@@ -37,7 +37,16 @@ pub(crate) trait TowerLevel: Field {
     fn to_repr(self) -> Self::Repr;
     /// Multiply by the generator `X_{k−1}` of this level over the one below.
     fn mul_alpha(self) -> Self;
+    /// Build an element from the next [`RawDataSerializable::NUM_BYTES`] bytes of a
+    /// little-endian byte stream, discarding the bits above `2^LOG_BITS`.
+    ///
+    /// # Panics
+    /// Panics if the stream ends before a whole element has been read.
+    fn from_le_byte_iter(bytes: impl Iterator<Item = u8>) -> Self;
 }
+
+/// The panic message shared by every [`TowerLevel::from_le_byte_iter`] implementation.
+const BYTE_STREAM_ENDED: &str = "byte stream ended before a whole element was read";
 
 impl TowerLevel for Gf2 {
     type Repr = u8;
@@ -58,6 +67,11 @@ impl TowerLevel for Gf2 {
     #[inline]
     fn mul_alpha(self) -> Self {
         self
+    }
+
+    #[inline]
+    fn from_le_byte_iter(mut bytes: impl Iterator<Item = u8>) -> Self {
+        Self::from_le_bytes([bytes.next().expect(BYTE_STREAM_ENDED)])
     }
 }
 
@@ -182,6 +196,15 @@ macro_rules! binary_tower_level {
             fn mul_alpha(self) -> Self {
                 let (c0, c1) = self.split();
                 Self::join(c1, c0 + c1.mul_alpha())
+            }
+
+            #[inline]
+            fn from_le_byte_iter(mut bytes: impl Iterator<Item = u8>) -> Self {
+                let mut buffer = [0u8; core::mem::size_of::<$repr>()];
+                for byte in &mut buffer {
+                    *byte = bytes.next().expect(BYTE_STREAM_ENDED);
+                }
+                Self::from_le_bytes(buffer)
             }
         }
 
@@ -626,6 +649,48 @@ mod tests {
             BinaryField4::from_le_bytes([0b1010_0111]),
             BinaryField4::from_repr(0b0111)
         );
+    }
+
+    /// `from_le_byte_iter` reads exactly `NUM_BYTES` bytes off the front of the stream and
+    /// agrees with `from_le_bytes` on them, leaving the rest for the next element.
+    #[test]
+    fn from_le_byte_iter_consumes_one_element_worth_of_bytes() {
+        macro_rules! assert_reads_one_element {
+            ($t:ty, $repr:ty) => {{
+                let width = core::mem::size_of::<$repr>();
+                let stream: Vec<u8> = (0..2 * width as u8).map(|i| i.wrapping_mul(37)).collect();
+
+                let mut iter = stream.iter().copied();
+                let first = <$t as TowerLevel>::from_le_byte_iter(&mut iter);
+                let second = <$t as TowerLevel>::from_le_byte_iter(&mut iter);
+
+                assert_eq!(iter.next(), None, "the stream must be fully consumed");
+                assert_eq!(
+                    first,
+                    <$t>::from_le_bytes(stream[..width].try_into().unwrap())
+                );
+                assert_eq!(
+                    second,
+                    <$t>::from_le_bytes(stream[width..].try_into().unwrap())
+                );
+            }};
+        }
+
+        assert_reads_one_element!(Gf2, u8);
+        assert_reads_one_element!(BinaryField2, u8);
+        assert_reads_one_element!(BinaryField4, u8);
+        assert_reads_one_element!(BinaryField8, u8);
+        assert_reads_one_element!(BinaryField16, u16);
+        assert_reads_one_element!(BinaryField32, u32);
+        assert_reads_one_element!(BinaryField64, u64);
+        assert_reads_one_element!(BinaryField128, u128);
+    }
+
+    #[test]
+    #[should_panic = "byte stream ended before a whole element was read"]
+    fn from_le_byte_iter_rejects_a_truncated_stream() {
+        let truncated = [0u8; 15];
+        let _ = BinaryField128::from_le_byte_iter(truncated.into_iter());
     }
 
     #[test]
