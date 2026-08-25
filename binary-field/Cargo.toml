@@ -1,0 +1,20 @@
+[package]
+name = "p3-binary-field"
+description = "Characteristic-2 tower fields GF(2) ⊂ GF(4) ⊂ … ⊂ GF(2^128) for Plonky3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-field.workspace = true
+num-bigint.workspace = true
+paste.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+[lints]
+workspace = true
