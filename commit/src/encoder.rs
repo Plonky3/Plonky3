@@ -49,7 +49,9 @@ mod tests {
         let message = RowMajorMatrix::<BabyBear>::rand(&mut rng, 8, 3);
 
         let mut padded = message.clone();
-        padded.values.resize(message.values.len() * 4, BabyBear::ZERO);
+        padded
+            .values
+            .resize(message.values.len() * 4, BabyBear::ZERO);
         let expected = dft.dft_batch(padded).to_row_major_matrix();
 
         assert_eq!(dft.encode_batch(message, 2), expected);
