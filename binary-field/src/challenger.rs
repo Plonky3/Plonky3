@@ -20,12 +20,15 @@ use crate::tower::TowerLevel;
 /// Fixing this at eight keeps the transcript independent of the target's pointer width.
 const BITS_SAMPLE_BYTES: usize = 8;
 
-/// The headroom, in bits, that a grinding request must leave below the witness field's width.
+/// The headroom, in bits, that a grinding request must leave below the width of the
+/// candidate space `grind` actually searches.
 ///
-/// A candidate satisfies a `bits`-wide check with probability `2^-bits`, so a field of
-/// `n` bits offers `2^(n - bits)` expected successes. Eight bits of headroom keep that
-/// expectation at `>= 256`, so an exhaustive search that finds nothing is astronomically
-/// unlikely rather than merely improbable.
+/// `grind` enumerates candidates with a 64-bit counter, so that space is `min(F::bits(),
+/// 64)` bits wide even for fields wider than `u64`. A candidate satisfies a `bits`-wide
+/// check with probability `2^-bits`, so a search space of `w` bits offers `2^(w - bits)`
+/// expected successes. Eight bits of headroom keep that expectation at `>= 256`, so an
+/// exhaustive search that finds nothing is astronomically unlikely rather than merely
+/// improbable.
 const GRIND_MARGIN_BITS: usize = 8;
 
 /// A challenger for a binary tower field, driven by a challenger over bytes.
@@ -187,16 +190,16 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
-        assert!(bits < (usize::BITS as usize));
-        assert!(
-            bits + GRIND_MARGIN_BITS <= F::bits(),
-            "requested bit count leaves too small a margin against the witness field's size"
-        );
-
         // Trivial case: 0 bits mean no PoW is required and any witness is valid.
         if bits == 0 {
             return F::ZERO;
         }
+
+        assert!(bits < (usize::BITS as usize));
+        assert!(
+            bits + GRIND_MARGIN_BITS <= F::bits().min(u64::BITS as usize),
+            "requested bit count leaves too small a margin against the witness field's size"
+        );
 
         // Candidates are enumerated by a 64-bit counter, which exhausts the field only for
         // the levels narrower than `GF(2^64)`.
@@ -237,7 +240,7 @@ mod tests {
     use p3_symmetric::{Hash, MerkleCap};
 
     use crate::challenger::{BITS_SAMPLE_BYTES, BinaryChallenger};
-    use crate::{BinaryField8, BinaryField32, BinaryField128};
+    use crate::{BinaryField8, BinaryField32, BinaryField128, Gf2};
 
     type Inner = HashChallenger<u8, Keccak256Hash, 32>;
 
@@ -467,6 +470,46 @@ mod tests {
         let _ = challenger.grind(25);
     }
 
+    /// An inner challenger that always samples zero bytes, so every candidate trivially
+    /// satisfies `check_witness`. This lets a test drive `grind` at bit widths whose real
+    /// exhaustive search would otherwise be intractably slow to actually run.
+    #[derive(Clone)]
+    struct AlwaysZeroInner;
+
+    impl CanObserve<u8> for AlwaysZeroInner {
+        fn observe(&mut self, _value: u8) {}
+    }
+
+    impl CanSample<u8> for AlwaysZeroInner {
+        fn sample(&mut self) -> u8 {
+            0
+        }
+    }
+
+    #[test]
+    #[should_panic = "requested bit count leaves too small a margin"]
+    fn grind_rejects_a_request_the_u64_cap_no_longer_allows() {
+        // `BinaryField128`'s candidates are enumerated by a 64-bit counter, so the real
+        // search space is 64 bits wide, not the field's 128. Before accounting for that
+        // cap, this request wrongly passed the margin check (`63 + 8 <= 128`) while the
+        // real candidate space only offered `2^(64 - 63) = 2` expected witnesses.
+        let mut challenger = mk::<BinaryField128>();
+        let _ = challenger.grind(63);
+    }
+
+    #[test]
+    fn grind_accepts_the_widest_request_the_u64_cap_allows() {
+        // The u64-capped search space is 64 bits wide, so `64 - GRIND_MARGIN_BITS = 56` is
+        // the widest request the margin should still allow on `BinaryField128`. An inner
+        // challenger that always samples zero bytes makes every candidate an accepted
+        // witness, so the search completes immediately regardless of how wide `bits` is,
+        // letting this exercise the real `grind` path instead of just its assertions.
+        let mut challenger: BinaryChallenger<BinaryField128, AlwaysZeroInner> =
+            BinaryChallenger::new(AlwaysZeroInner);
+        let witness = challenger.grind(56);
+        assert!(challenger.check_witness(56, witness));
+    }
+
     #[test]
     fn a_bitstring_sample_reads_a_fixed_number_of_bytes() {
         // The width of one bitstring draw must not depend on the target's pointer width,
@@ -510,6 +553,23 @@ mod tests {
 
         let witness = challenger.grind(0);
         assert_eq!(witness, BinaryField128::ZERO);
+
+        // The transcript must be untouched.
+        for _ in 0..32 {
+            let expected: u8 = shadow.inner.sample();
+            assert_eq!(challenger.inner.sample(), expected);
+        }
+    }
+
+    #[test]
+    fn grind_of_zero_bits_is_free_on_a_level_narrower_than_the_margin() {
+        // `Gf2`'s single bit is narrower than `GRIND_MARGIN_BITS`: the zero-bits short
+        // circuit must run before the margin assertion, or this would panic.
+        let mut challenger = mk::<Gf2>();
+        let mut shadow = challenger.clone();
+
+        let witness = challenger.grind(0);
+        assert_eq!(witness, Gf2::ZERO);
 
         // The transcript must be untouched.
         for _ in 0..32 {
