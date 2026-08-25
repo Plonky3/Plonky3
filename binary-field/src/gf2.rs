@@ -494,6 +494,12 @@ mod tests {
         let mut zeros_bytes = Gf2::ZERO.into_bytes().into_iter();
         assert_eq!(zeros_bytes.next(), Some(0u8));
         assert_eq!(zeros_bytes.next(), None);
+
+        assert_eq!(Gf2::from_le_bytes([0]), Gf2::ZERO);
+        assert_eq!(Gf2::from_le_bytes([1]), Gf2::ONE);
+        // Every byte is a valid input: only its least significant bit is used.
+        assert_eq!(Gf2::from_le_bytes([2]), Gf2::ZERO);
+        assert_eq!(Gf2::from_le_bytes([255]), Gf2::ONE);
     }
 
     #[test]
