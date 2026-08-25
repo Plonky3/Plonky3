@@ -27,11 +27,12 @@ impl<EF: Field> RoundPolyInterpolator<EF> {
     ///
     /// - `degree`: the per-variable degree, so the domain has `degree + 1` nodes.
     pub fn new(degree: usize) -> Self {
-        // Domain: the integer nodes 0, 1, …, degree lifted into the field.
-        let x_coords: Vec<EF> = (0..=degree).map(EF::from_usize).collect();
+        // Domain: the first `degree + 1` interpolation nodes of the field.
+        let x_coords: Vec<EF> = (0..=degree).map(EF::interpolation_node).collect();
 
-        // Integer nodes are pairwise distinct, so the weights always exist.
-        let weights = barycentric_weights(&x_coords).expect("integer nodes are pairwise distinct");
+        // Interpolation nodes are pairwise distinct, so the weights always exist.
+        let weights =
+            barycentric_weights(&x_coords).expect("interpolation nodes are pairwise distinct");
 
         Self { x_coords, weights }
     }
@@ -92,7 +93,7 @@ impl<EF: Field> RoundPolyInterpolator<EF> {
         // Each appended entry `i` carries node `i + 1`, extrapolated from the input.
         extended.extend(
             (evals.len()..target_len)
-                .map(|i| self.eval(evals, sum_constraint, EF::from_usize(i + 1))),
+                .map(|i| self.eval(evals, sum_constraint, EF::interpolation_node(i + 1))),
         );
         extended
     }

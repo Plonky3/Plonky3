@@ -590,7 +590,7 @@ impl<EF: Field> DegreeGroup<EF> {
                 self.last_evals[index]
             } else {
                 // Above this group's degree: extrapolate to the stage's top nodes.
-                self.eval(tau, EF::from_usize(node))
+                self.eval(tau, EF::interpolation_node(node))
             };
             *acc += value;
         }

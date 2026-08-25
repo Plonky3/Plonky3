@@ -939,7 +939,7 @@ where
     // The weighted message carries one extra degree from the equality factor.
     // Extrapolate the internal polynomial to that top node.
     let degree = evals.len() + 1;
-    let last = interpolator.eval(evals, unweighted_sum, EF::from_usize(degree));
+    let last = interpolator.eval(evals, unweighted_sum, EF::interpolation_node(degree));
 
     // Weight every transmitted node, skipping node one as the verifier rebuilds it.
     //
@@ -949,7 +949,7 @@ where
     let standard_evals = (0..=degree)
         .filter(|&node| node != 1)
         .zip(evals.iter().copied().chain(core::iter::once(last)))
-        .map(|(node, q)| eq_prefix * Point::eval_eq(&[tau], &[EF::from_usize(node)]) * q)
+        .map(|(node, q)| eq_prefix * Point::eval_eq(&[tau], &[EF::interpolation_node(node)]) * q)
         .collect();
 
     (standard_evals, unweighted_sum)
