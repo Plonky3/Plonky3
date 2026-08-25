@@ -161,7 +161,8 @@ mod tests {
         }
     }
 
-    /// `v_0, …, v_{2^k−1}` spans `GF(2^(2^k))`, so `v_i` fits in `2^⌈log2(i+1)⌉` bits.
+    /// `v_0, …, v_{2^k−1}` spans `GF(2^(2^k))`, so `v_i` fits in `2^⌈log2(i+1)⌉` bits, and
+    /// every vector past `v_0` is the root of `x² + x = v_{i−1}` whose lowest bit is clear.
     fn check_nesting<F: TowerLevel>(count: usize)
     where
         F::Repr: Into<u128>,
@@ -172,6 +173,11 @@ mod tests {
             assert!(
                 width >= 128 || repr < 1u128 << width,
                 "v_{i} escapes GF(2^{width})"
+            );
+            assert_eq!(
+                repr & 1,
+                u128::from(i == 0),
+                "v_{i} is not the even representation"
             );
         }
     }
