@@ -649,7 +649,7 @@ mod tests {
                 field_bits,
             } => {
                 assert_eq!(weighted_height_sum, BigUint::from(1u128 << 31));
-                assert_eq!(field_bits, F::PrimeSubfield::bits());
+                assert_eq!(field_bits, <F as PrimeCharacteristicRing>::PrimeSubfield::bits());
             }
             other => panic!("wrong error variant: {other:?}"),
         }
