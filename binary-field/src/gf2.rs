@@ -43,6 +43,17 @@ impl Gf2 {
     pub const fn from_le_bytes(bytes: [u8; 1]) -> Self {
         Self::new(bytes[0])
     }
+
+    /// The bottom of the recursion that the tower levels above multiply through.
+    ///
+    /// `GF(2)` has no faster multiplication to dispatch to, so this is `Mul` itself; it exists
+    /// so that the tower's reference multiplication never routes through a level whose `Mul`
+    /// has been swapped out for a hardware fast path.
+    #[doc(hidden)]
+    #[inline]
+    pub fn reference_mul(self, rhs: Self) -> Self {
+        self * rhs
+    }
 }
 
 impl Packable for Gf2 {}

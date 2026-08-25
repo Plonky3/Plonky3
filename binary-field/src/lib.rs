@@ -3,6 +3,7 @@
 extern crate alloc;
 
 mod challenger;
+mod clmul;
 mod extension;
 mod gf2;
 mod tower;
