@@ -82,7 +82,7 @@ macro_rules! binary_tower_level {
 
         impl $name {
             /// The number of bits of an element.
-            const BITS: usize = $bits;
+            pub(crate) const BITS: usize = $bits;
 
             /// Selects the bits of a canonical representative.
             const MASK: $repr = <$repr>::MAX >> (<$repr>::BITS as usize - $bits);

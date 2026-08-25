@@ -1,5 +1,6 @@
 #![no_std]
 
+mod extension;
 mod gf2;
 mod tower;
 
