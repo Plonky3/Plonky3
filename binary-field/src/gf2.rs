@@ -523,6 +523,18 @@ mod tests {
     }
 
     #[test]
+    #[should_panic = "halve is undefined in characteristic 2"]
+    fn halve_panics() {
+        let _halved = Gf2::ONE.halve();
+    }
+
+    #[test]
+    #[should_panic = "div_2exp_u64 is undefined in characteristic 2"]
+    fn div_2exp_u64_panics() {
+        let _divided = Gf2::ONE.div_2exp_u64(1);
+    }
+
+    #[test]
     fn field_order_and_interpolation_nodes() {
         assert_eq!(Gf2::order(), num_bigint::BigUint::from(2u8));
         assert_eq!(Gf2::bits(), 1);
