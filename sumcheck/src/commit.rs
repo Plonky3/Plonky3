@@ -1,11 +1,10 @@
 //! Base-field commitment used by the sumcheck opening protocol.
 
 use p3_challenger::CanObserve;
-use p3_commit::Mmcs;
-use p3_dft::TwoAdicSubgroupDft;
-use p3_field::TwoAdicField;
+use p3_commit::{Encoder, Mmcs};
+use p3_field::Field;
 use p3_matrix::Matrix;
-use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView};
 use p3_multilinear_util::poly::Poly;
 use tracing::info_span;
 
@@ -14,16 +13,16 @@ use crate::strategy::VariableOrder;
 /// Encodes and commits the initial base-field polynomial.
 ///
 /// This is the first WHIR commitment. It lays out the polynomial according to
-/// the residual variable order, applies the Reed-Solomon expansion with `dft`,
-/// commits the resulting codeword matrix with `mmcs`, and observes the Merkle
-/// root in the transcript.
+/// the residual variable order, applies the Reed-Solomon expansion with
+/// `encoder`, commits the resulting codeword matrix with `mmcs`, and observes
+/// the Merkle root in the transcript.
 ///
-/// Prefix order transposes the local folding block before padding so the first
-/// folded variables become columns. Suffix order keeps the folding block as the
-/// row width and only zero-pads the row count.
-pub fn commit_base<F, Dft, MT, Challenger>(
+/// Prefix order transposes the local folding block so the first folded
+/// variables become columns. Suffix order keeps the folding block as the row
+/// width. The encoder owns the expansion, so neither branch pads.
+pub fn commit_base<F, E, MT, Challenger>(
     order: VariableOrder,
-    dft: &Dft,
+    encoder: &E,
     mmcs: &MT,
     challenger: &mut Challenger,
     poly: &Poly<F>,
@@ -31,54 +30,131 @@ pub fn commit_base<F, Dft, MT, Challenger>(
     starting_log_inv_rate: usize,
 ) -> (MT::Commitment, MT::ProverData<DenseMatrix<F>>)
 where
-    F: TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F>,
+    F: Field,
+    E: Encoder<F>,
     MT: Mmcs<F>,
     Challenger: CanObserve<MT::Commitment>,
 {
     let num_variables = poly.num_variables();
-    let height = 1 << (num_variables + starting_log_inv_rate - folding);
+    let width = 1 << folding;
 
-    let encoded = match order {
-        VariableOrder::Prefix => {
-            let padded = info_span!("transpose & pad").in_scope(|| {
-                let width = 1 << folding;
-
-                // Allocate the zero-padded codeword buffer once.
-                // Trailing rows stay zero and become the Reed-Solomon expansion.
-                let mut values = F::zero_vec(height * width);
-
-                // Transpose the folding blocks straight into the leading rows.
-                // This reuses the cache-blocked transpose with no extra allocation.
-                let folded =
-                    RowMajorMatrixView::new(poly.as_slice(), 1 << (num_variables - folding));
-                folded.transpose_into(&mut RowMajorMatrixViewMut::new(
-                    &mut values[..1 << num_variables],
-                    width,
-                ));
-
-                RowMajorMatrix::new(values, width)
-            });
-            info_span!("dft", height = padded.height(), width = padded.width())
-                .in_scope(|| dft.dft_batch(padded).to_row_major_matrix())
-        }
-        VariableOrder::Suffix => {
-            let padded = info_span!("pad").in_scope(|| {
-                let width = 1 << folding;
-                let src = poly.as_slice();
-
-                // Folding blocks are already contiguous, so copy them into the
-                // leading rows of one zero-padded buffer; no realloc on pad.
-                let mut values = F::zero_vec(height * width);
-                values[..src.len()].copy_from_slice(src);
-                RowMajorMatrix::new(values, width)
-            });
-            info_span!("dft", height = padded.height(), width = padded.width())
-                .in_scope(|| dft.dft_batch(padded).to_row_major_matrix())
-        }
+    let message = match order {
+        VariableOrder::Prefix => info_span!("transpose").in_scope(|| {
+            // Transposing the folding blocks turns the first folded variables into columns.
+            RowMajorMatrixView::new(poly.as_slice(), 1 << (num_variables - folding)).transpose()
+        }),
+        // Folding blocks are already contiguous, so the row width alone selects them.
+        VariableOrder::Suffix => RowMajorMatrix::new(poly.as_slice().to_vec(), width),
     };
+
+    let encoded = info_span!("encode", height = message.height(), width = message.width())
+        .in_scope(|| encoder.encode_batch(message, starting_log_inv_rate));
 
     let (root, prover_data) = info_span!("commit_matrix").in_scope(|| mmcs.commit_matrix(encoded));
     challenger.observe(root.clone());
     (root, prover_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::CanObserve;
+    use p3_commit::{Encoder, Mmcs};
+    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_multilinear_util::poly::Poly;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::commit_base;
+    use crate::strategy::VariableOrder;
+
+    type F = BabyBear;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type PackedF = <F as Field>::Packing;
+    type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+
+    /// Doubles every message entry and appends zero rows. Not a DFT, and not linear-code
+    /// shaped: it exists only to show that `commit_base` commits exactly what the encoder
+    /// returns, applied to the message layout the variable order prescribes.
+    #[derive(Clone, Debug)]
+    struct DoublingEncoder;
+
+    impl Encoder<F> for DoublingEncoder {
+        fn encode_batch(
+            &self,
+            mut message: RowMajorMatrix<F>,
+            log_inv_rate: usize,
+        ) -> RowMajorMatrix<F> {
+            message.values.iter_mut().for_each(|v| *v = v.double());
+            message
+                .values
+                .resize(message.values.len() << log_inv_rate, F::ZERO);
+            message
+        }
+    }
+
+    /// A challenger that only has to absorb the root.
+    struct RootObserver;
+
+    impl<T> CanObserve<T> for RootObserver {
+        fn observe(&mut self, _value: T) {}
+    }
+
+    fn mmcs() -> MyMmcs {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0)
+    }
+
+    /// `commit_base` must commit `encoder.encode_batch(message)` for the message layout of
+    /// the given variable order: the transposed folding blocks in prefix order, the
+    /// contiguous folding blocks in suffix order.
+    fn check_commits_encoder_output(order: VariableOrder, expected_message: RowMajorMatrix<F>) {
+        const NUM_VARIABLES: usize = 5;
+        const FOLDING: usize = 2;
+        const LOG_INV_RATE: usize = 1;
+
+        let poly = Poly::new(
+            (0..1 << NUM_VARIABLES)
+                .map(F::from_usize)
+                .collect::<Vec<_>>(),
+        );
+        let mmcs = mmcs();
+
+        let (root, _data) = commit_base(
+            order,
+            &DoublingEncoder,
+            &mmcs,
+            &mut RootObserver,
+            &poly,
+            FOLDING,
+            LOG_INV_RATE,
+        );
+
+        let expected_codeword = DoublingEncoder.encode_batch(expected_message, LOG_INV_RATE);
+        let (expected_root, _) = mmcs.commit_matrix(expected_codeword);
+        assert_eq!(root, expected_root);
+    }
+
+    #[test]
+    fn prefix_commits_the_transposed_message() {
+        // The polynomial is viewed as 4 rows of 2^(5-2) = 8 columns, then transposed.
+        let expected =
+            RowMajorMatrix::new((0..32).map(F::from_usize).collect::<Vec<_>>(), 1 << 3).transpose();
+        check_commits_encoder_output(VariableOrder::Prefix, expected);
+    }
+
+    #[test]
+    fn suffix_commits_the_contiguous_message() {
+        // The folding blocks are already contiguous: 8 rows of 2^FOLDING = 4 columns.
+        let expected = RowMajorMatrix::new((0..32).map(F::from_usize).collect::<Vec<_>>(), 1 << 2);
+        check_commits_encoder_output(VariableOrder::Suffix, expected);
+    }
 }
