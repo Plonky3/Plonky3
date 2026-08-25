@@ -315,8 +315,7 @@ ring_sum!(Gf2);
 mod tests {
     use p3_field::integers::QuotientMap;
     use p3_field::{
-        Field, PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64,
-        RawDataSerializable,
+        Field, PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64, RawDataSerializable,
     };
 
     use super::Gf2;
@@ -354,10 +353,7 @@ mod tests {
                 assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(1), Gf2::ONE);
                 assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(2), Gf2::ZERO);
                 assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(3), Gf2::ONE);
-                assert_eq!(
-                    <Gf2 as QuotientMap<$int>>::from_int(<$int>::MAX),
-                    Gf2::ONE
-                );
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(<$int>::MAX), Gf2::ONE);
                 assert_eq!(
                     <Gf2 as QuotientMap<$int>>::from_canonical_checked(0),
                     Some(Gf2::ZERO)
@@ -390,14 +386,8 @@ mod tests {
                 assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(-1), Gf2::ONE);
                 assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(-2), Gf2::ZERO);
                 assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(-3), Gf2::ONE);
-                assert_eq!(
-                    <Gf2 as QuotientMap<$int>>::from_int(<$int>::MIN),
-                    Gf2::ZERO
-                );
-                assert_eq!(
-                    <Gf2 as QuotientMap<$int>>::from_int(<$int>::MAX),
-                    Gf2::ONE
-                );
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(<$int>::MIN), Gf2::ZERO);
+                assert_eq!(<Gf2 as QuotientMap<$int>>::from_int(<$int>::MAX), Gf2::ONE);
                 assert_eq!(
                     <Gf2 as QuotientMap<$int>>::from_canonical_checked(0),
                     Some(Gf2::ZERO)
@@ -449,10 +439,7 @@ mod tests {
             <Gf2 as QuotientMap<u32>>::from_int(4_000_000_000),
             Gf2::ZERO
         );
-        assert_eq!(
-            <Gf2 as QuotientMap<u32>>::from_int(4_000_000_001),
-            Gf2::ONE
-        );
+        assert_eq!(<Gf2 as QuotientMap<u32>>::from_int(4_000_000_001), Gf2::ONE);
         assert_eq!(
             <Gf2 as QuotientMap<u64>>::from_int(18_000_000_000_000_000_002),
             Gf2::ZERO
@@ -461,7 +448,10 @@ mod tests {
             <Gf2 as QuotientMap<u128>>::from_int(u128::MAX - 1),
             Gf2::ZERO
         );
-        assert_eq!(<Gf2 as QuotientMap<i32>>::from_int(-2_000_000_001), Gf2::ONE);
+        assert_eq!(
+            <Gf2 as QuotientMap<i32>>::from_int(-2_000_000_001),
+            Gf2::ONE
+        );
         assert_eq!(
             <Gf2 as QuotientMap<i64>>::from_int(-9_000_000_000_000_000_002),
             Gf2::ZERO
