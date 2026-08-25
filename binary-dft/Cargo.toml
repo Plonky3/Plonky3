@@ -1,0 +1,28 @@
+[package]
+name = "p3-binary-dft"
+description = "Additive NTT over F_2-linear subspaces of the Plonky3 binary tower fields"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[dependencies]
+p3-binary-field.workspace = true
+p3-commit.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+p3-util.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true
