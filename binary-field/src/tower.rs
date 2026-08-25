@@ -603,6 +603,31 @@ mod tests {
         );
     }
 
+    /// `from_le_bytes` must be total: every byte string of the right length is a valid
+    /// element, not just the ones a masked-already `from_repr` call would ever feed it. The
+    /// sub-byte levels store fewer bits than their `u8` backing integer holds, so a decoder
+    /// that skipped masking could construct a value whose high bits are set and diverge from
+    /// the canonical representative of the same field element.
+    #[test]
+    fn from_le_bytes_masks_out_of_range_high_bits() {
+        assert_eq!(
+            BinaryField2::from_le_bytes([0xff]),
+            BinaryField2::from_repr(0b11)
+        );
+        assert_eq!(
+            BinaryField2::from_le_bytes([0b1010_0110]),
+            BinaryField2::from_repr(0b10)
+        );
+        assert_eq!(
+            BinaryField4::from_le_bytes([0xff]),
+            BinaryField4::from_repr(0b1111)
+        );
+        assert_eq!(
+            BinaryField4::from_le_bytes([0b1010_0111]),
+            BinaryField4::from_repr(0b0111)
+        );
+    }
+
     #[test]
     fn field_testing_into_stream_matches_binary_field_128() {
         p3_field_testing::test_into_stream::<BinaryField128>();
