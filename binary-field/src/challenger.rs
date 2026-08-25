@@ -114,12 +114,20 @@ where
     F: TowerLevel,
     Inner: CanSample<u8>,
 {
+    /// Sample a bitstring by masking bytes taken from the inner stream.
+    ///
+    /// A challenger that bit-decomposes a sampled field element can only extract as many
+    /// bits as that element carries, and so has to bound the request by the field order.
+    /// This one instead reads its entropy straight off the inner byte stream, so how many
+    /// bits are available per call does not depend on `F`'s width at all: a challenger over
+    /// a narrow level can still draw a query index far wider than one of its own elements.
+    ///
+    /// The one real bound is that the result must fit in a `usize`, which also keeps it
+    /// within the `u64` the bytes are read into.
     fn sample_bits(&mut self, bits: usize) -> usize {
-        assert!(bits < (usize::BITS as usize));
-        // The field has `2^F::bits()` elements, so `2^bits < |F|` is `bits < F::bits()`.
         assert!(
-            bits < F::bits(),
-            "requested bit count must fit within the field order"
+            bits < (usize::BITS as usize),
+            "requested bit count must fit within a usize"
         );
         let bytes: [u8; BITS_SAMPLE_BYTES] = self.inner.sample_array();
         let rand_u64 = u64::from_le_bytes(bytes);
@@ -399,13 +407,41 @@ mod tests {
         }
     }
 
+    /// The bits come from the inner byte stream, not from a sampled element, so a request
+    /// wider than the field itself is well defined and must be served.
     #[test]
-    #[should_panic = "requested bit count must fit within the field order"]
-    fn sample_bits_rejects_a_request_wider_than_the_field() {
-        // `GF(2^32)` has `2^32` elements, so a 32-bit request is already out of range.
-        assert_eq!(<BinaryField32 as Field>::bits(), 32);
-        let mut challenger = mk::<BinaryField32>();
-        let _ = challenger.sample_bits(32);
+    fn sample_bits_is_not_limited_by_the_width_of_the_field() {
+        // A `GF(2^8)` challenger sampling `GF(2^128)` challenges still has to produce
+        // query indices of a realistic width.
+        assert_eq!(<BinaryField8 as Field>::bits(), 8);
+        let mut challenger = mk::<BinaryField8>();
+        let sampled = challenger.sample_bits(24);
+        assert!(sampled < (1 << 24));
+
+        let mut inner = mk_inner();
+        let bytes: [u8; BITS_SAMPLE_BYTES] = core::array::from_fn(|_| inner.sample());
+        assert_eq!(sampled, (u64::from_le_bytes(bytes) & 0xff_ffff) as usize);
+
+        // The uniform-bit entry point inherits the same reach.
+        let mut challenger = mk::<BinaryField8>();
+        assert_eq!(challenger.sample_uniform_bits::<true>(24).unwrap(), sampled);
+        let mut challenger = mk::<BinaryField8>();
+        assert_eq!(
+            challenger.sample_uniform_bits::<false>(24).unwrap(),
+            sampled
+        );
+
+        // Right up to the widest request a `usize` can hold.
+        let widest = usize::BITS as usize - 1;
+        let mut challenger = mk::<BinaryField8>();
+        assert!(challenger.sample_bits(widest) < (1 << widest));
+    }
+
+    #[test]
+    #[should_panic = "requested bit count must fit within a usize"]
+    fn sample_bits_rejects_a_request_wider_than_a_usize() {
+        let mut challenger = mk::<BinaryField128>();
+        let _ = challenger.sample_bits(usize::BITS as usize);
     }
 
     #[test]
