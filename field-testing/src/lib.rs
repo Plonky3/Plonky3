@@ -258,7 +258,7 @@ where
     );
 }
 
-/// Identical to [`test_ring_with_eq`], except it omits the `halve` identities, which
+/// Identical to [`test_ring_with_eq()`], except it omits the `halve` identities, which
 /// [`PrimeCharacteristicRing::halve`] does not support in characteristic 2.
 #[allow(clippy::eq_op)]
 pub fn test_ring_with_eq_char2<R: PrimeCharacteristicRing + Copy + Eq>(zeros: &[R], ones: &[R])
