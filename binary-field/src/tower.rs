@@ -16,9 +16,10 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use num_bigint::BigUint;
 use p3_field::op_assign_macros::{
-    impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign, ring_sum,
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
+    impl_sub_assign, impl_sub_base_field, ring_sum,
 };
-use p3_field::{Field, Packable, PrimeCharacteristicRing, RawDataSerializable};
+use p3_field::{Algebra, Field, Packable, PrimeCharacteristicRing, RawDataSerializable};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
@@ -370,6 +371,20 @@ macro_rules! binary_tower_level {
         impl_mul_methods!($name);
         impl_div_methods!($name, $name);
         ring_sum!($name);
+
+        impl From<Gf2> for $name {
+            /// `GF(2)` is the prime subfield of every level, embedded as `{ZERO, ONE}`.
+            #[inline]
+            fn from(x: Gf2) -> Self {
+                Self::from_prime_subfield(x)
+            }
+        }
+
+        impl_add_base_field!($name, Gf2);
+        impl_sub_base_field!($name, Gf2);
+        impl_mul_base_field!($name, Gf2);
+
+        impl Algebra<Gf2> for $name {}
     };
 }
 
@@ -627,6 +642,66 @@ mod tests {
         assert_defining_relation!(BinaryField32, u32, 32);
         assert_defining_relation!(BinaryField64, u64, 64);
         assert_defining_relation!(BinaryField128, u128, 128);
+    }
+
+    /// `GF(2)` is the prime subfield of the whole tower, so every level is a `GF(2)`-algebra:
+    /// the embedding is a ring homomorphism and each mixed operator agrees with embedding first.
+    #[test]
+    fn every_level_is_an_algebra_over_gf2() {
+        /// Statically require the full `Algebra<Gf2>` bound, not merely the operators.
+        const fn assert_algebra_over_gf2<T: Algebra<Gf2>>() {}
+
+        macro_rules! assert_gf2_algebra {
+            ($t:ty) => {{
+                assert_algebra_over_gf2::<$t>();
+
+                assert_eq!(<$t>::from(Gf2::ZERO), <$t>::ZERO);
+                assert_eq!(<$t>::from(Gf2::ONE), <$t>::ONE);
+
+                for x in [Gf2::ZERO, Gf2::ONE] {
+                    for y in [Gf2::ZERO, Gf2::ONE] {
+                        assert_eq!(<$t>::from(x + y), <$t>::from(x) + <$t>::from(y));
+                        assert_eq!(<$t>::from(x * y), <$t>::from(x) * <$t>::from(y));
+                    }
+                }
+
+                for a in [
+                    <$t>::ZERO,
+                    <$t>::ONE,
+                    <$t>::GENERATOR,
+                    <$t>::GENERATOR.square(),
+                ] {
+                    for bit in [Gf2::ZERO, Gf2::ONE] {
+                        let embedded = <$t>::from(bit);
+
+                        assert_eq!(a + bit, a + embedded);
+                        assert_eq!(a - bit, a - embedded);
+                        assert_eq!(a * bit, a * embedded);
+                        assert_eq!(bit + a, embedded + a);
+                        assert_eq!(bit - a, embedded - a);
+                        assert_eq!(bit * a, embedded * a);
+
+                        let mut acc = a;
+                        acc += bit;
+                        assert_eq!(acc, a + embedded);
+                        let mut acc = a;
+                        acc -= bit;
+                        assert_eq!(acc, a - embedded);
+                        let mut acc = a;
+                        acc *= bit;
+                        assert_eq!(acc, a * embedded);
+                    }
+                }
+            }};
+        }
+
+        assert_gf2_algebra!(BinaryField2);
+        assert_gf2_algebra!(BinaryField4);
+        assert_gf2_algebra!(BinaryField8);
+        assert_gf2_algebra!(BinaryField16);
+        assert_gf2_algebra!(BinaryField32);
+        assert_gf2_algebra!(BinaryField64);
+        assert_gf2_algebra!(BinaryField128);
     }
 
     #[test]
