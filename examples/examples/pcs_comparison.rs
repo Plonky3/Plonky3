@@ -173,6 +173,32 @@ struct ProtocolReport {
     queries: String,
 }
 
+/// Verification takes a few milliseconds, so a single un-warmed call cannot resolve the
+/// few-percent differences this table exists to compare — code layout, allocator state and
+/// frequency scaling all move more than that between runs. Every row therefore warms the
+/// caches once and reports the median of a short timed run. Commit and open are seconds
+/// apiece, so the extra verifications cost nothing by comparison.
+const VERIFY_WARMUP_RUNS: usize = 1;
+const VERIFY_TIMED_RUNS: usize = 10;
+
+/// Median wall-clock of `verify_once` in microseconds, discarding the warm-up calls.
+///
+/// `verify_once` is responsible for supplying a fresh challenger each call, since verification
+/// consumes transcript state.
+fn median_verify_us(mut verify_once: impl FnMut()) -> u128 {
+    let mut samples = Vec::with_capacity(VERIFY_TIMED_RUNS);
+    for run in 0..VERIFY_WARMUP_RUNS + VERIFY_TIMED_RUNS {
+        let t = Instant::now();
+        verify_once();
+        let elapsed = t.elapsed().as_micros();
+        if run >= VERIFY_WARMUP_RUNS {
+            samples.push(elapsed);
+        }
+    }
+    samples.sort_unstable();
+    samples[VERIFY_TIMED_RUNS / 2]
+}
+
 /// Per-round inverse-rate schedule matching WHIR's default protocol parameters.
 fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFactor) -> Vec<usize> {
     let (num_rounds, _) = folding_factor
@@ -229,19 +255,21 @@ where
         <Challenger as FieldChallenger<F>>::sample_algebra_element(&mut verifier_challenger);
     assert_eq!(derived, zeta, "verifier challenger drifted from prover");
 
-    let t = Instant::now();
-    let matrices_with_openings = domains
+    let matrices_with_openings: Vec<_> = domains
         .into_iter()
         .zip(values)
         .map(|(domain, vals)| (domain, vec![(zeta, vals)]))
         .collect();
-    pcs.verify(
-        vec![(commit, matrices_with_openings)],
-        &proof,
-        &mut verifier_challenger,
-    )
-    .unwrap_or_else(|_| panic!("{label} verify failed"));
-    let verify_us = t.elapsed().as_micros();
+
+    let verify_us = median_verify_us(|| {
+        let mut challenger = verifier_challenger.clone();
+        pcs.verify(
+            vec![(commit.clone(), matrices_with_openings.clone())],
+            &proof,
+            &mut challenger,
+        )
+        .unwrap_or_else(|_| panic!("{label} verify failed"));
+    });
 
     let proof_bytes = postcard::to_allocvec(&proof)
         .unwrap_or_else(|_| panic!("{label} proof failed to serialize"))
@@ -262,7 +290,7 @@ where
 fn run_whir(
     pcs: &WhirPcsTy,
     witness: <WhirPcsTy as MultilinearPcs<EF, Challenger>>::Witness,
-    protocol: OpeningProtocol,
+    protocol: &OpeningProtocol,
     domain_separator: &DomainSeparator<EF, F>,
     base_challenger: &Challenger,
 ) -> ProtocolReport {
@@ -286,16 +314,17 @@ fn run_whir(
     let mut verifier_challenger = base_challenger.clone();
     domain_separator.observe_domain_separator(&mut verifier_challenger);
 
-    let t = Instant::now();
-    <WhirPcsTy as MultilinearPcs<EF, Challenger>>::verify(
-        pcs,
-        &commitment,
-        &proof,
-        &mut verifier_challenger,
-        protocol,
-    )
-    .expect("whir verify failed");
-    let verify_us = t.elapsed().as_micros();
+    let verify_us = median_verify_us(|| {
+        let mut challenger = verifier_challenger.clone();
+        <WhirPcsTy as MultilinearPcs<EF, Challenger>>::verify(
+            pcs,
+            &commitment,
+            &proof,
+            &mut challenger,
+            protocol.clone(),
+        )
+        .expect("whir verify failed");
+    });
 
     let proof_bytes = postcard::to_allocvec(&proof)
         .expect("whir proof failed to serialize")
@@ -496,7 +525,7 @@ fn main() {
         reports.push(run_whir(
             &pcs,
             witness,
-            protocol,
+            &protocol,
             &domain_separator,
             &base_challenger,
         ));
@@ -656,7 +685,7 @@ fn main() {
         multi_reports.push(run_whir(
             &pcs,
             witness,
-            protocol,
+            &protocol,
             &domain_separator,
             &base_challenger,
         ));

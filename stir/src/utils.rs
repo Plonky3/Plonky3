@@ -285,6 +285,12 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F>,
 {
+    // Nothing to sample, and nothing to precompute for it: keeps the contract identical to
+    // evaluating the predicate lazily, which did no inversions at all in this case.
+    if num_ood_samples == 0 {
+        return Vec::new();
+    }
+
     // `shift^{-2^log_size}` per excluded domain, computed once in the base field (an
     // inversion and an exponentiation cheaper than their extension-field counterparts) and
     // reused for every candidate below, rather than an extension-field inversion redone once
@@ -295,28 +301,36 @@ where
         .iter()
         .map(|&(_, log_size)| log_size)
         .max()
-        .unwrap_or(0);
+        .expect("three excluded domains");
 
     let mut ood_points: Vec<EF> = Vec::with_capacity(num_ood_samples);
     while ood_points.len() < num_ood_samples {
         let z: EF = challenger.sample_algebra_element();
 
-        // `z`'s doubling chain `z, z^2, z^4, ..., z^(2^max_log_size)`, shared across every
-        // excluded domain below instead of a fresh `exp_power_of_2` call (its own squaring
-        // chain from scratch) per domain.
-        let mut chain = Vec::with_capacity(max_log_size + 1);
-        chain.push(z);
-        for i in 0..max_log_size {
-            chain.push(chain[i].square());
+        // One doubling chain `z, z^2, z^4, ..., z^(2^max_log_size)` walked once, recording
+        // `z^(2^log_size)` for each excluded domain as it passes — instead of a fresh
+        // `exp_power_of_2` call (its own squaring chain from scratch) per domain. There are
+        // exactly three domains, so the recording slots are a fixed-size array.
+        let mut z_pows = [EF::ONE; 3];
+        let mut acc = z;
+        for l in 0..=max_log_size {
+            for (slot, &(_, log_size)) in z_pows.iter_mut().zip(&excluded_domains) {
+                if log_size == l {
+                    *slot = acc;
+                }
+            }
+            if l < max_log_size {
+                acc = acc.square();
+            }
         }
 
-        let outside_all_domains =
-            excluded_domains
-                .iter()
-                .zip(&shift_inv_pows)
-                .all(|(&(_, log_size), &shift_inv_pow)| {
-                    log_size == 0 || chain[log_size] * shift_inv_pow != EF::ONE
-                });
+        let outside_all_domains = excluded_domains
+            .iter()
+            .zip(&shift_inv_pows)
+            .zip(&z_pows)
+            .all(|((&(_, log_size), &shift_inv_pow), &z_pow)| {
+                log_size == 0 || z_pow * shift_inv_pow != EF::ONE
+            });
         // Deduplicate OOD points.
         let not_dup = ood_points.iter().all(|&existing| existing != z);
         if outside_all_domains && not_dup {
@@ -673,7 +687,8 @@ pub fn lagrange_interpolate_at<F: Field, EF: ExtensionField<F>>(
 
 #[cfg(test)]
 mod tests {
-    use p3_baby_bear::BabyBear;
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use proptest::prelude::*;
@@ -684,11 +699,116 @@ mod tests {
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type TestChallenger = DuplexChallenger<F, Perm, 16, 8>;
 
     #[test]
     fn test_eval_poly_zero() {
         let poly: Vec<F> = vec![];
         assert_eq!(eval_poly(&poly, F::from_u64(3)), F::ZERO);
+    }
+
+    #[test]
+    fn eval_degree_correction_matches_the_geometric_sum_it_stands_for() {
+        // Three places evaluate this same sum: `eval_degree_correction`, the chunked sweep in
+        // `combine_on_coset`, and the split form `materialize_virtual_fiber` inlines. Only the
+        // first two are compared to each other (by the tests above), and their shared
+        // reference is this function — so it is pinned here to an independent oracle, plain
+        // summation, rather than to another implementation of itself.
+        //
+        // `geom = Σ_{l=0}^{gap} step^l`, so `gap = 2`, `step = 2` gives `1 + 2 + 4 = 7`.
+        assert_eq!(
+            eval_degree_correction(EF::ONE, EF::from_u64(2), EF::ONE, 2),
+            EF::from_u64(7)
+        );
+
+        let x = EF::from_u64(5);
+        // The last case makes `step = x * r` exactly one, the branch an honest transcript
+        // reaches with probability ~1/|EF| and which end-to-end coverage therefore never hits.
+        let cases = [
+            (x, EF::from_u64(3)),
+            (x, EF::ONE),
+            (EF::from_u64(7), EF::from_u64(11)),
+            (x, x.inverse()),
+        ];
+
+        for gap in [0usize, 1, 5, 40] {
+            for (point, r_comb) in cases {
+                let step = point * r_comb;
+
+                let mut expected = EF::ZERO;
+                let mut power = EF::ONE;
+                for _ in 0..=gap {
+                    expected += power;
+                    power *= step;
+                }
+                assert_eq!(
+                    eval_degree_correction(EF::ONE, point, r_comb, gap),
+                    expected,
+                    "gap={gap} point={point:?} r_comb={r_comb:?}"
+                );
+
+                // The factored form `materialize_virtual_fiber` evaluates, which splits
+                // `step^(gap+1)` into a round-constant `r_comb^(gap+1)` and a per-point
+                // `x^(gap+1)`.
+                let gap_plus_1 = (gap + 1) as u64;
+                let split = if step == EF::ONE {
+                    EF::from_usize(gap + 1)
+                } else {
+                    (EF::ONE - r_comb.exp_u64(gap_plus_1) * point.exp_u64(gap_plus_1))
+                        * (EF::ONE - step).inverse()
+                };
+                assert_eq!(
+                    split, expected,
+                    "gap={gap} point={point:?} r_comb={r_comb:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sample_ood_points_returns_nothing_for_zero_samples() {
+        let mut rng = SmallRng::seed_from_u64(3);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let mut challenger = TestChallenger::new(perm);
+        let excluded = [(F::GENERATOR, 4), (F::GENERATOR, 3), (F::GENERATOR, 2)];
+        let points: Vec<EF> = sample_ood_points(&mut challenger, excluded, 0);
+        assert!(points.is_empty());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        /// The hoisted `shift^{-2^log_size}` and the shared squaring chain must compose back
+        /// into `(z / shift)^{2^log_size}`. The oracle is the original three-line predicate,
+        /// evaluated independently below; `log_sizes` are drawn freely so that equal sizes, a
+        /// zero size, and the maximum sitting at each of the three positions all occur.
+        #[test]
+        fn sample_ood_points_avoids_every_excluded_domain(
+            log_sizes in prop::collection::vec(0usize..=8, 3..=3),
+            shift_seeds in prop::collection::vec(1u64..(1 << 20), 3..=3),
+            num_ood_samples in 1usize..=3,
+            seed: u64,
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let perm = Perm::new_from_rng_128(&mut rng);
+            let mut challenger = TestChallenger::new(perm);
+
+            let excluded: [(F, usize); 3] =
+                core::array::from_fn(|i| (F::from_u64(shift_seeds[i]), log_sizes[i]));
+
+            let points: Vec<EF> = sample_ood_points(&mut challenger, excluded, num_ood_samples);
+            prop_assert_eq!(points.len(), num_ood_samples);
+
+            for (i, &z) in points.iter().enumerate() {
+                for &(shift, log_size) in &excluded {
+                    let outside = (z * EF::from(shift).inverse()).exp_power_of_2(log_size)
+                        != EF::ONE;
+                    prop_assert!(log_size == 0 || outside);
+                }
+                prop_assert!(!points[..i].contains(&z));
+            }
+        }
     }
 
     /// Reference implementation of `combine_on_coset`: `eval_degree_correction` called
