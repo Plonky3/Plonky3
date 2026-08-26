@@ -21,6 +21,19 @@ pub struct LchNtt<F> {
     _marker: PhantomData<F>,
 }
 
+/// The number of field elements one butterfly task covers on each side of a block.
+///
+/// Stage `j` has `2^(ℓ − 1 − j)` blocks of `half = 2^j · width` elements per side, so cutting
+/// each side into pieces of this size leaves `n · width / (2 · BUTTERFLY_GRAIN)` pieces at
+/// every stage, independent of `j`: the wide stages, which have too few blocks to fill a
+/// machine, are split from within instead. Stages with `half ≤ BUTTERFLY_GRAIN` keep a single
+/// piece per side and pay nothing for the extra level.
+///
+/// At roughly twenty nanoseconds per `GF(2^128)` butterfly a piece of this size is tens of
+/// microseconds of work, orders of magnitude above the cost of handing a task to another
+/// thread, while still leaving hundreds of pieces per stage at the smallest useful heights.
+const BUTTERFLY_GRAIN: usize = 1 << 10;
+
 impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
     fn shifted_ntt_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
         let width = mat.width();
@@ -37,11 +50,17 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
                 .for_each(|(blk, block)| {
                     let t = base + domain_point::<F>(blk << 1);
                     let (lo, hi) = block.split_at_mut(half);
-                    for (u, v) in lo.iter_mut().zip(hi) {
-                        // (u, v) ↦ (u + t·v, u + t·v + v)
-                        *u += t * *v;
-                        *v += *u;
-                    }
+                    // Pairs are independent across the block, so a block wider than the grain
+                    // is split further rather than run on a single thread.
+                    lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                        .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                        .for_each(|(lo, hi)| {
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                // (u, v) ↦ (u + t·v, u + t·v + v)
+                                *u += t * *v;
+                                *v += *u;
+                            }
+                        });
                 });
         }
         mat
@@ -61,11 +80,17 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
                 .for_each(|(blk, block)| {
                     let t = base + domain_point::<F>(blk << 1);
                     let (lo, hi) = block.split_at_mut(half);
-                    for (u, v) in lo.iter_mut().zip(hi) {
-                        // (u', v') ↦ (u = u' + t·v, v = u' + v')
-                        *v += *u;
-                        *u += t * *v;
-                    }
+                    // Pairs are independent across the block, so a block wider than the grain
+                    // is split further rather than run on a single thread.
+                    lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                        .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                        .for_each(|(lo, hi)| {
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                // (u', v') ↦ (u = u' + t·v, v = u' + v')
+                                *v += *u;
+                                *u += t * *v;
+                            }
+                        });
                 });
         }
         mat
