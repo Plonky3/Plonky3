@@ -7,6 +7,7 @@ mod challenger;
 mod clmul;
 mod extension;
 mod gf2;
+mod tables;
 mod tower;
 
 pub use challenger::BinaryChallenger;

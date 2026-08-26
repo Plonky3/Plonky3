@@ -139,6 +139,9 @@ fn bench_mul(c: &mut Criterion) {
 }
 
 fn bench_square(c: &mut Criterion) {
+    bench_square_level!(c, BinaryField8, 8);
+    bench_square_level!(c, BinaryField16, 16);
+    bench_square_level!(c, BinaryField32, 32);
     bench_square_level!(c, BinaryField64, 64);
     bench_square_level!(c, BinaryField128, 128);
 }
