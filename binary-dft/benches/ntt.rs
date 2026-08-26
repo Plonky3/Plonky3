@@ -46,7 +46,7 @@ where
             b.iter_batched(
                 || coeffs.clone(),
                 |m| ntt.ntt_batch(m),
-                BatchSize::LargeInput,
+                BatchSize::PerIteration,
             );
         });
     }
@@ -72,7 +72,7 @@ fn bench_encode(c: &mut Criterion) {
                 b.iter_batched(
                     || message.clone(),
                     |m| encoder.encode_batch(m, LOG_INV_RATE),
-                    BatchSize::LargeInput,
+                    BatchSize::PerIteration,
                 );
             },
         );
@@ -86,7 +86,7 @@ fn bench_encode(c: &mut Criterion) {
                 b.iter_batched(
                     || message.clone(),
                     |m| encoder.encode_batch(m, LOG_INV_RATE),
-                    BatchSize::LargeInput,
+                    BatchSize::PerIteration,
                 );
             },
         );
