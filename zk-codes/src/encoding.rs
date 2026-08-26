@@ -6,6 +6,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use rand::Rng;
 
 /// A randomized encoding such that any `t` codeword positions reveal nothing about the message.
+///
+/// The plain, non-hiding counterpart is `p3_commit::Encoder`.
 pub trait ZkEncoding<F: Field> {
     /// The codeword type produced by the encoding.
     type Codeword;

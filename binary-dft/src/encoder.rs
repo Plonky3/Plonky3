@@ -20,12 +20,8 @@ pub struct AdditiveRsEncoder<F, Ntt = LchNtt<F>> {
     _marker: PhantomData<F>,
 }
 
-/// The alphabet is fixed at `BinaryField128` (D9).
-///
-/// `p3-commit`'s blanket `impl<F: TwoAdicField, D: TwoAdicSubgroupDft<F>> Encoder<F> for D`
-/// leaves no room for a downstream impl that is generic over the field: a further-downstream
-/// crate could implement `TwoAdicSubgroupDft` for this type, so the compiler will not accept the
-/// negative reasoning. Naming the field resolves it.
+/// The alphabet is fixed at `BinaryField128` (D9), as [`Encoder`] requires of every impl outside
+/// `p3-commit`'s blanket one.
 impl<Ntt: AdditiveNtt<BinaryField128>> Encoder<BinaryField128>
     for AdditiveRsEncoder<BinaryField128, Ntt>
 {

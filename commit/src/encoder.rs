@@ -6,6 +6,15 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 
 /// A linear code applied to every column of a matrix.
+///
+/// The blanket impl below covers every [`TwoAdicSubgroupDft`], which restricts what an
+/// implementor may write: `impl<F: Field> Encoder<F> for MyEncoder` overlaps it and is rejected
+/// (E0119), since a downstream crate could implement [`TwoAdicSubgroupDft`] for `MyEncoder`. An
+/// impl must therefore name the concrete field(s) it encodes over, as in
+/// `impl Encoder<MyField> for MyEncoder`.
+///
+/// The randomized counterpart is `p3_zk_codes::ZkEncoding`, whose codewords additionally hide the
+/// message from a bounded number of queries.
 pub trait Encoder<F: Field> {
     /// Encodes each column of `message` into a codeword.
     ///
