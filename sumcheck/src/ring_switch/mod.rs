@@ -2,6 +2,7 @@
 //! claim about a small-field multilinear to a claim about its packed extension-field
 //! multilinear.
 
+pub mod equality;
 pub mod pack;
 pub mod tensor;
 pub mod weights;
