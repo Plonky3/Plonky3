@@ -330,9 +330,14 @@ macro_rules! binary_tower_level {
 
             /// The enumeration by bit pattern: `interpolation_node(i)` is the element whose
             /// coefficients over `GF(2)` are the bits of `i`. It is injective for `i < 2^BITS`.
+            ///
+            /// # Panics
+            /// Panics if `i >= 2^BITS`. `from_repr` masks, so an out-of-range index would
+            /// otherwise alias an earlier node in release builds and break an interpolation
+            /// argument silently; the check is paid once per node at setup, never in a loop.
             #[inline]
             fn interpolation_node(i: usize) -> Self {
-                debug_assert!(
+                assert!(
                     usize::BITS as usize <= Self::BITS || i < (1usize << Self::BITS),
                     "interpolation node index out of range"
                 );
@@ -775,6 +780,26 @@ mod tests {
             BinaryField128::interpolation_node(5),
             BinaryField128::from_repr(5)
         );
+    }
+
+    /// The last index a level can enumerate is `2^BITS - 1`; anything above it would be masked
+    /// back onto an earlier node.
+    #[test]
+    fn interpolation_nodes_cover_the_whole_level() {
+        assert_eq!(
+            BinaryField4::interpolation_node(15),
+            BinaryField4::from_repr(15)
+        );
+        assert_eq!(
+            BinaryField8::interpolation_node(255),
+            BinaryField8::from_repr(255)
+        );
+    }
+
+    #[test]
+    #[should_panic = "interpolation node index out of range"]
+    fn interpolation_node_rejects_an_index_beyond_the_level() {
+        let _node = BinaryField8::interpolation_node(256);
     }
 
     #[test]

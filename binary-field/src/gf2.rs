@@ -180,9 +180,14 @@ impl Field for Gf2 {
 
     /// The enumeration `interpolation_node(0) = 0, interpolation_node(1) = 1` is the only
     /// injective enumeration of the two elements of `GF(2)` satisfying `Field::interpolation_node`'s
-    /// contract. It is not injective beyond index `1`.
+    /// contract.
+    ///
+    /// # Panics
+    /// Panics if `i > 1`. `new` keeps only the low bit, so a larger index would otherwise alias
+    /// one of the two nodes and break an interpolation argument silently.
     #[inline]
     fn interpolation_node(i: usize) -> Self {
+        assert!(i < 2, "interpolation node index out of range");
         Self::new(i as u8)
     }
 }
@@ -540,6 +545,12 @@ mod tests {
         assert_eq!(Gf2::bits(), 1);
         assert_eq!(Gf2::interpolation_node(0), Gf2::ZERO);
         assert_eq!(Gf2::interpolation_node(1), Gf2::ONE);
+    }
+
+    #[test]
+    #[should_panic = "interpolation node index out of range"]
+    fn interpolation_node_rejects_an_index_beyond_the_field() {
+        let _node = Gf2::interpolation_node(2);
     }
 
     /// Serialization always emits the canonical byte, and deserialization rejects any byte

@@ -1060,8 +1060,11 @@ pub trait Field:
 
     /// The `i`-th element of a fixed injective enumeration of `Self`, used as an
     /// interpolation node. Must satisfy `interpolation_node(0) == ZERO` and
-    /// `interpolation_node(1) == ONE`, and be injective on every index a protocol
-    /// can use (round-polynomial degrees are tiny; `0..64` is the tested range).
+    /// `interpolation_node(1) == ONE`, and be injective for every `i` below the size
+    /// of the field — no enumeration can do better, and a field smaller than the
+    /// degree of the polynomial being interpolated is unusable for that protocol
+    /// anyway. Round-polynomial degrees are tiny, so `0..min(64, |Self|)` is the
+    /// tested range.
     ///
     /// The default maps `i` through the prime subfield and is injective only while
     /// `i` is below the characteristic. Fields of characteristic below `2^32` must
