@@ -12,7 +12,7 @@
 //! size are then run through one STIR instance together (as many domain sizes as distinct
 //! shared domains, "buckets" below); within a bucket, if more than one native-height class is
 //! present, they are merged into a single codeword via batch degree correction
-//! ([`combine_on_coset`](crate::utils::combine_on_coset), §4.5's `Combine`) before STIR runs,
+//! ([`crate::utils::combine_on_coset`], §4.5's `Combine`) before STIR runs,
 //! at the tallest class's degree and full proximity radius (no per-class query-count floor).
 //! The prover returns the deduplicated first-round STIR query indices alongside the IOP
 //! proof; at those positions the prover also opens the input LDE matrices (via `InputMmcs`)
@@ -27,6 +27,17 @@
 //! second time: whenever STIR needs its queried fibers, the verifier rebuilds them from the
 //! input MMCS openings at exactly the positions STIR sampled. No hand-mirrored transcript
 //! replay is needed.
+//!
+//! **Cost profile**: opening and verification get cheaper — one STIR instance per commitment
+//! instead of one per height class — but committing gets more expensive, and the trade moves
+//! with the height spread. A matrix at native height `2^h` alongside a tallest matrix at
+//! `2^H` pays a `2^(H - h + log_blowup)` blowup instead of `2^log_blowup`, in both its DFT and
+//! its share of the Merkle tree (the tree is `2^(H + log_blowup)` rows deep and carries every
+//! matrix's full width in each leaf, so hashing goes from `Σᵢ 2^(hᵢ + b)·widthᵢ` to
+//! `2^(H + b)·Σᵢ widthᵢ`). Callers committing matrices whose heights differ by many octaves —
+//! or more classes than the `Combine` feasibility envelope on [`StirParameters`] admits —
+//! should split them across separate `commit()` calls, which keeps each shared domain close to
+//! its own matrices' heights.
 
 use alloc::borrow::Cow;
 use alloc::vec;
@@ -56,7 +67,7 @@ use tracing::instrument;
 use crate::config::{StirConfig, StirParameters};
 use crate::proof::StirProof;
 use crate::prover::prove_stir_multi_from_external_codewords;
-use crate::utils::{combine_on_coset, eval_degree_correction};
+use crate::utils::combine_on_coset;
 use crate::verifier::{StirError, verify_stir_multi_with_external_initial};
 
 /// Batched openings of one input commitment's LDE matrices at the STIR-derived query
@@ -98,31 +109,6 @@ pub struct StirProverData<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
     log_native_heights: Vec<usize>,
     /// Log2 of the shared LDE domain every matrix in this commitment was extended onto.
     log_shared_lde_height: usize,
-}
-
-/// Commit fiber-grouped LDEs (all sharing one height) in a single tree, recording each
-/// matrix's own native height and column count for later alpha-batching/`Combine` grouping.
-fn commit_shared_domain<Val, InputMmcs>(
-    input_mmcs: &InputMmcs,
-    grouped: Vec<RowMajorMatrix<Val>>,
-    log_native_heights: Vec<usize>,
-    widths: Vec<usize>,
-    log_shared_lde_height: usize,
-) -> (InputMmcs::Commitment, StirProverData<Val, InputMmcs>)
-where
-    Val: Send + Sync + Clone,
-    InputMmcs: Mmcs<Val>,
-{
-    let (commitment, data) = input_mmcs.commit(grouped);
-    (
-        commitment,
-        StirProverData {
-            data,
-            widths,
-            log_native_heights,
-            log_shared_lde_height,
-        },
-    )
 }
 
 /// Reinterpret a bit-reversed LDE as a matrix whose rows are whole STIR fibers.
@@ -172,6 +158,31 @@ impl<Val, Dft, InputMmcs, StirMmcs> TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs
             _phantom: PhantomData,
         }
     }
+
+    /// Commit fiber-grouped LDEs (all sharing one height) in a single tree, recording each
+    /// matrix's own native height and column count for later alpha-batching/`Combine` grouping.
+    fn commit_shared_domain(
+        &self,
+        grouped: Vec<RowMajorMatrix<Val>>,
+        log_native_heights: Vec<usize>,
+        widths: Vec<usize>,
+        log_shared_lde_height: usize,
+    ) -> (InputMmcs::Commitment, StirProverData<Val, InputMmcs>)
+    where
+        Val: Send + Sync + Clone,
+        InputMmcs: Mmcs<Val>,
+    {
+        let (commitment, data) = self.input_mmcs.commit(grouped);
+        (
+            commitment,
+            StirProverData {
+                data,
+                widths,
+                log_native_heights,
+                log_shared_lde_height,
+            },
+        )
+    }
 }
 
 /// One bucket's `Combine` state for the verifier: the sampled combination challenge and each
@@ -203,7 +214,9 @@ where
     type Commitment = InputMmcs::Commitment;
     type ProverData = StirProverData<Val, InputMmcs>;
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
-    /// Proof structure: one entry per distinct LDE-height bucket (descending).
+    /// Proof structure: one entry per distinct shared LDE height across the commitments
+    /// (descending). Every matrix in a single `commit()` shares one LDE domain, so a
+    /// commitment contributes to exactly one entry.
     ///
     /// Each bucket contains:
     /// - `stir_proof`: the STIR IOP proof for that bucket (per-round IOP messages; the initial
@@ -267,6 +280,8 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 let log_native_height = log2_strict_usize(domain.size());
+                // Effective per-matrix blowup: `log_blowup` for the tallest matrix, and one
+                // extra bit per octave of height below it. See the module-level cost note.
                 let extra_bits = log_shared_lde_height - log_native_height;
                 let shift = Val::GENERATOR / domain.shift();
                 let lde = self
@@ -279,13 +294,7 @@ where
                 group_fiber_rows(lde, self.stir.log_starting_folding_factor)
             })
             .collect();
-        commit_shared_domain(
-            &self.input_mmcs,
-            grouped,
-            log_native_heights,
-            widths,
-            log_shared_lde_height,
-        )
+        self.commit_shared_domain(grouped, log_native_heights, widths, log_shared_lde_height)
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -404,13 +413,7 @@ where
                 group_fiber_rows(extended, self.stir.log_starting_folding_factor)
             })
             .collect();
-        commit_shared_domain(
-            &self.input_mmcs,
-            grouped,
-            log_native_heights,
-            widths,
-            log_shared_lde_height,
-        )
+        self.commit_shared_domain(grouped, log_native_heights, widths, log_shared_lde_height)
     }
 
     #[instrument(name = "STIR PCS open", skip_all)]
@@ -603,7 +606,7 @@ where
             .iter()
             .map(|&log_shared_h| {
                 combined_bucket_codeword::<Val, Challenge, Challenger>(
-                    &reduced_openings,
+                    &mut reduced_openings,
                     log_shared_h,
                     challenger,
                 )
@@ -844,7 +847,7 @@ where
 
                 let log_d_star = native_heights[0];
                 let r_comb: Challenge = challenger.sample_algebra_element();
-                let (_, coeffs) =
+                let coeffs =
                     combine_coefficients(r_comb, log_d_star, native_heights.iter().copied());
                 Some((r_comb, native_heights.iter().copied().zip(coeffs).collect()))
             })
@@ -868,7 +871,9 @@ where
             .zip(&stir_configs)
             .zip(proof.iter().map(|(_, input_openings)| input_openings))
             .zip(bucket_combine)
-            .map(|(((&log_h, stir_config), input_openings), combine_info)| {
+            .zip(&bucket_native_heights)
+            .map(
+                |((((&log_h, stir_config), input_openings), combine_info), native_heights)| {
                 let bucket_height = 1usize << log_h;
                 let log_arity0 = stir_config.log_starting_folding_factor;
                 let arity0 = 1usize << log_arity0;
@@ -884,12 +889,11 @@ where
                 move |first_round_unique_js: &[usize]| -> Result<Vec<Vec<Challenge>>, Self::Error> {
                     let n_q = first_round_unique_js.len();
 
-                    // One accumulator per native-height class present in this bucket; merged
-                    // into the final expected codeword fibers after the accumulation loop.
-                    let mut expected_ro_by_class: alloc::collections::BTreeMap<
-                        usize,
-                        Vec<Vec<Challenge>>,
-                    > = alloc::collections::BTreeMap::new();
+                    // One accumulator per native-height class present in this bucket, indexed
+                    // as `native_heights` is (descending); merged into the final expected
+                    // codeword fibers after the accumulation loop.
+                    let mut expected_ro_by_class: Vec<Vec<Vec<Challenge>>> =
+                        vec![vec![Challenge::zero_vec(arity0); n_q]; native_heights.len()];
 
                     // Distinct opening points among matrices active at this bucket. Matrices
                     // typically share opening points (e.g. one STARK's `zeta`), so this list
@@ -951,6 +955,36 @@ where
                             })
                             .collect();
 
+                        // A matrix's native-height class, and each of its opening points'
+                        // slot in `bucket_points`, are fixed for the whole commitment. Both
+                        // are resolved once here rather than once per
+                        // `(query, lane, matrix, point)`, which is where the innermost loop
+                        // below would otherwise re-scan `bucket_points` linearly.
+                        let mat_class_indices: Vec<usize> = domain_claims
+                            .iter()
+                            .map(|(domain, _)| {
+                                let log_native_h = log2_strict_usize(domain.size());
+                                native_heights
+                                    .iter()
+                                    .position(|&h| h == log_native_h)
+                                    .expect("bucket_native_heights is built from these claims")
+                            })
+                            .collect();
+                        let mat_point_slots: Vec<Vec<usize>> = domain_claims
+                            .iter()
+                            .map(|(_, point_claims)| {
+                                point_claims
+                                    .iter()
+                                    .map(|(point, _)| {
+                                        bucket_points
+                                            .iter()
+                                            .position(|p| p == point)
+                                            .expect("point is in bucket_points by construction")
+                                    })
+                                    .collect()
+                            })
+                            .collect();
+
                         // Every matrix in the commitment shares this bucket's domain, so all
                         // of them are opened. Matrices are committed fiber-grouped:
                         // `2^log_arity0` LDE rows per committed row.
@@ -991,10 +1025,9 @@ where
                                 // of the grouped row.
                                 let slot = reverse_bits_len(l, log_arity0);
 
-                                for (mat_idx, (domain, point_claims)) in
-                                    domain_claims.iter().enumerate()
+                                for (mat_idx, point_slots) in
+                                    mat_point_slots.iter().enumerate()
                                 {
-                                    let log_native_h = log2_strict_usize(domain.size());
                                     let width = mat_widths[mat_idx];
                                     let row_vals =
                                         &row_vals_by_mat[mat_idx][slot * width..][..width];
@@ -1004,18 +1037,12 @@ where
                                         .map(|(&v, &ap)| ap * v)
                                         .sum();
 
-                                    let ro_class = expected_ro_by_class
-                                        .entry(log_native_h)
-                                        .or_insert_with(|| vec![Challenge::zero_vec(arity0); n_q]);
+                                    let ro_class =
+                                        &mut expected_ro_by_class[mat_class_indices[mat_idx]];
 
-                                    for (point_idx, (point, _)) in point_claims.iter().enumerate() {
+                                    for (point_idx, &bp_idx) in point_slots.iter().enumerate() {
                                         let (alpha_pow_offset, y_combined) =
                                             point_data[commit_idx][mat_idx][point_idx];
-
-                                        let bp_idx = bucket_points
-                                            .iter()
-                                            .position(|p| p == point)
-                                            .expect("point is in bucket_points by construction");
                                         let inv_denom =
                                             inv_denoms[(q_idx * arity0 + l) * n_bp + bp_idx];
 
@@ -1036,38 +1063,82 @@ where
                             if expected_ro_by_class.len() != 1 {
                                 return Err(StirError::InvalidProofShape);
                             }
-                            Ok(expected_ro_by_class.into_values().next().unwrap())
+                            Ok(expected_ro_by_class.into_iter().next().unwrap())
                         }
                         Some((r_comb, coeffs_by_height)) => {
                             // SHAPE CHECK: every expected class must be present.
                             if expected_ro_by_class.len() != coeffs_by_height.len() {
                                 return Err(StirError::InvalidProofShape);
                             }
+
+                            // Pointwise mirror of the prover's `combine_on_coset`, evaluated
+                            // only at the queried lanes. The `1 − r_comb·x` denominators do
+                            // not depend on the class, so they are swept once for the whole
+                            // fiber set and inverted in a single batch rather than once per
+                            // `(class, query, lane)`.
+                            let mut fiber_steps = Vec::with_capacity(n_q * arity0);
+                            let mut denoms = Vec::with_capacity(n_q * arity0);
+                            for &j in first_round_unique_js {
+                                let mut fiber_point =
+                                    Val::GENERATOR * domain_gen.exp_u64(j as u64);
+                                for _ in 0..arity0 {
+                                    let step = *r_comb * fiber_point;
+                                    fiber_steps.push(step);
+                                    denoms.push(Challenge::ONE - step);
+                                    fiber_point *= fiber_step;
+                                }
+                            }
+
+                            // The queried lanes are distinct coset points, so at most one can
+                            // reach `step = 1`, where the geometric sum degenerates to
+                            // `gap + 1`. Substituting a unit keeps the batch inversion defined
+                            // and makes that lane's numerator vanish, so the sweep below
+                            // contributes nothing there and the closed form is added back —
+                            // the same handling `combine_on_coset` applies on the prover side.
+                            let degenerate = denoms.iter().position(|d| d.is_zero());
+                            if let Some(lane) = degenerate {
+                                denoms[lane] = Challenge::ONE;
+                            }
+                            let inv_denoms = batch_multiplicative_inverse(&denoms);
+
                             let mut combined = vec![Challenge::zero_vec(arity0); n_q];
-                            for (log_native_h, ro_class) in &expected_ro_by_class {
+                            for (&log_native_h, ro_class) in
+                                native_heights.iter().zip(&expected_ro_by_class)
+                            {
                                 let &(r_i, gap) = coeffs_by_height
-                                    .get(log_native_h)
+                                    .get(&log_native_h)
                                     .ok_or(StirError::InvalidProofShape)?;
-                                for (q_idx, &j) in first_round_unique_js.iter().enumerate() {
-                                    let mut fiber_point =
-                                        Val::GENERATOR * domain_gen.exp_u64(j as u64);
+
+                                // Within a query the lanes advance by the fixed base-field
+                                // ratio `fiber_step^(gap+1)`, so the numerator sweep costs one
+                                // extension exponentiation per query instead of one per lane.
+                                let gap_plus_1 = (gap + 1) as u64;
+                                let lane_ratio = fiber_step.exp_u64(gap_plus_1);
+                                for q_idx in 0..n_q {
+                                    let base = q_idx * arity0;
+                                    let mut step_hi = fiber_steps[base].exp_u64(gap_plus_1);
                                     for l in 0..arity0 {
-                                        let x = Challenge::from(fiber_point);
-                                        combined[q_idx][l] += eval_degree_correction(
-                                            r_i * ro_class[q_idx][l],
-                                            x,
-                                            *r_comb,
-                                            gap,
-                                        );
-                                        fiber_point *= fiber_step;
+                                        combined[q_idx][l] += r_i
+                                            * ro_class[q_idx][l]
+                                            * (Challenge::ONE - step_hi)
+                                            * inv_denoms[base + l];
+                                        step_hi *= lane_ratio;
                                     }
+                                }
+
+                                if let Some(lane) = degenerate {
+                                    let (q_idx, l) = (lane / arity0, lane % arity0);
+                                    combined[q_idx][l] += r_i
+                                        * ro_class[q_idx][l]
+                                        * Challenge::from_usize(gap + 1);
                                 }
                             }
                             Ok(combined)
                         }
                     }
-                }
-            })
+                    }
+                },
+            )
             .collect();
 
         // Any transcript-touching step stays inside `verify_stir_multi_with_external_initial`;
@@ -1088,34 +1159,47 @@ where
 /// is the first class's own degree, giving it `gap = 0` and, per `r_1 := 1`, a trivial
 /// coefficient).
 ///
-/// Returns `(d*, [(r_i, gap_i)])` where `gap_i = d* - dᵢ` (a degree count, not log) is what
+/// Returns `[(r_i, gap_i)]` where `gap_i = d* - dᵢ` (a degree count, not log) is what
 /// `eval_degree_correction`/`combine_on_coset` expect directly.
+///
+/// # Panics
+///
+/// If any `log_d` exceeds `log_d_star`. Both call sites read `log_d_star` off the head of the
+/// same descending list they pass in, so this holds by construction — but the invariant lives
+/// outside the function, and an unchecked `d* - dᵢ` would wrap in release and yield a wrong
+/// codeword rather than a failure.
 fn combine_coefficients<EF: Field>(
     r_comb: EF,
     log_d_star: usize,
     sorted_log_ds: impl Iterator<Item = usize>,
-) -> (u64, Vec<(EF, usize)>) {
+) -> Vec<(EF, usize)> {
     let d_star = 1u64 << log_d_star;
     let mut running_exp = 0u64;
-    let coeffs = sorted_log_ds
+    sorted_log_ds
         .map(|log_d| {
             let r_i = r_comb.exp_u64(running_exp);
-            let gap = (d_star - (1u64 << log_d)) as usize;
+            let gap = d_star
+                .checked_sub(1u64 << log_d)
+                .expect("classes must be sorted descending, so every dᵢ <= d*")
+                as usize;
             running_exp += 1 + gap as u64;
             (r_i, gap)
         })
-        .collect();
-    (d_star, coeffs)
+        .collect()
 }
 
 /// Merge one shared-LDE-height bucket's native-height classes into a single codeword on
 /// their shared domain, via `Combine` (§4.5) when more than one class is present.
 ///
-/// `reduced_openings` is keyed by `(log_shared_lde_height, log_native_height)`; this pulls
-/// out every class at `log_shared_h`, descending by native height, and returns the natural
+/// `reduced_openings` is keyed by `(log_shared_lde_height, log_native_height)`; this removes
+/// every class at `log_shared_h`, descending by native height, and returns the natural
 /// (not yet bit-reversed) combined codeword STIR should run on.
+///
+/// Each class's codeword is taken out of the map rather than borrowed so it can be
+/// un-bit-reversed in place: at PCS scale a class spans the whole shared domain, so cloning
+/// them all would double peak memory for the duration of `Combine`.
 fn combined_bucket_codeword<Val, Challenge, Challenger>(
-    reduced_openings: &alloc::collections::BTreeMap<(usize, usize), Vec<Challenge>>,
+    reduced_openings: &mut alloc::collections::BTreeMap<(usize, usize), Vec<Challenge>>,
     log_shared_h: usize,
     challenger: &mut Challenger,
 ) -> Vec<Challenge>
@@ -1124,36 +1208,36 @@ where
     Challenge: ExtensionField<Val> + TwoAdicField,
     Challenger: FieldChallenger<Val>,
 {
-    let mut classes: Vec<(usize, &Vec<Challenge>)> = reduced_openings
-        .iter()
-        .filter(|((h, _), _)| *h == log_shared_h)
-        .map(|(&(_, log_d), ro)| (log_d, ro))
+    let mut log_ds: Vec<usize> = reduced_openings
+        .keys()
+        .filter(|(h, _)| *h == log_shared_h)
+        .map(|&(_, log_d)| log_d)
         .collect();
-    classes.sort_unstable_by(|(a, _), (b, _)| b.cmp(a));
-
-    if classes.len() == 1 {
-        let mut natural = classes[0].1.clone();
-        reverse_slice_index_bits(&mut natural);
-        return natural;
-    }
-
-    let log_d_star = classes[0].0;
-    let r_comb: Challenge = challenger.sample_algebra_element();
-    let (_, coeffs) =
-        combine_coefficients(r_comb, log_d_star, classes.iter().map(|&(log_d, _)| log_d));
+    log_ds.sort_unstable_by(|a, b| b.cmp(a));
 
     // `combine_on_coset` indexes its inputs (and produces its output) in natural order, but
     // `reduced_openings` is bit-reversed (built from the bit-reversed LDE matrices), so each
     // class's codeword is un-reversed before combining; the combined result is then already
     // in the natural order STIR expects, with no further reversal needed.
-    let natural_ros: Vec<Vec<Challenge>> = classes
+    let mut natural_ros: Vec<Vec<Challenge>> = log_ds
         .iter()
-        .map(|&(_, ro)| {
-            let mut natural = ro.clone();
+        .map(|&log_d| {
+            let mut natural = reduced_openings
+                .remove(&(log_shared_h, log_d))
+                .expect("key came from this map");
             reverse_slice_index_bits(&mut natural);
             natural
         })
         .collect();
+
+    if natural_ros.len() == 1 {
+        return natural_ros.pop().expect("checked non-empty above");
+    }
+
+    let log_d_star = log_ds[0];
+    let r_comb: Challenge = challenger.sample_algebra_element();
+    let coeffs = combine_coefficients(r_comb, log_d_star, log_ds.iter().copied());
+
     let groups: Vec<(Challenge, usize, &[Challenge])> = coeffs
         .into_iter()
         .zip(&natural_ros)
@@ -1194,4 +1278,49 @@ fn compute_inverse_denominators<'a, F: TwoAdicField, EF: ExtensionField<F>>(
             (z, inv_diffs)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+
+    use super::*;
+
+    type EF = BinomialExtensionField<BabyBear, 4>;
+
+    #[test]
+    fn combine_coefficients_matches_definition_4_11() {
+        // Definition 4.11 fixes `r_1 = 1` and `r_i = r^{(i-1) + Σ_{j<i}(d* - d_j)}`. Pinning
+        // the exponents to that closed form rather than to the running-sum recurrence itself
+        // is what keeps the two from drifting together: a wrong `r_i` still produces a
+        // low-degree combined codeword, so prover and verifier would agree on a
+        // miscomputation and STIR would accept it.
+        //
+        // The exponents are what make class `i` occupy the consecutive power block
+        // `[e_i, e_i + gap_i]`, with the blocks tiling `[0, ell - 1]` without overlap. For
+        // `d_i = [8, 4, 2]` and `d* = 8` the gaps are `[0, 4, 6]`, so the blocks are
+        // `[0,0] | [1,5] | [6,12]` — exponents `[0, 1, 6]` and `ell = 13`.
+        let r_comb = EF::from_u64(3);
+        let coeffs = combine_coefficients(r_comb, 3, [3usize, 2, 1].into_iter());
+
+        assert_eq!(
+            coeffs,
+            vec![(EF::ONE, 0), (r_comb.exp_u64(1), 4), (r_comb.exp_u64(6), 6),]
+        );
+
+        // The blocks tile exactly `Σᵢ (gapᵢ + 1)`, which is the `ell` the config's Combine
+        // soundness accounting is charged at.
+        let ell: usize = coeffs.iter().map(|&(_, gap)| gap + 1).sum();
+        assert_eq!(ell, 13);
+    }
+
+    #[test]
+    #[should_panic(expected = "classes must be sorted descending")]
+    fn combine_coefficients_rejects_a_class_above_d_star() {
+        // `d_i > d*` would wrap the `d* - d_i` subtraction in release and yield a wrong
+        // codeword rather than a failure, so the precondition is checked rather than assumed.
+        let _ = combine_coefficients(EF::from_u64(3), 3, [3usize, 4].into_iter());
+    }
 }
