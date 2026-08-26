@@ -5,8 +5,8 @@
 //! map both operands into the polynomial basis, multiply and reduce there, and map back.
 //!
 //! Only the `64 × 64 → 128` carryless product is architecture-specific. The wider product is
-//! Karatsuba on top of it, and the reduction is plain shifts and `XOR`s, so everything except a
-//! single instruction is shared, portable code that the tests exercise on every target.
+//! built from it, and the reduction is plain shifts and `XOR`s, so everything except a single
+//! instruction is shared, portable code that the tests exercise on every target.
 
 mod basis;
 
@@ -75,16 +75,20 @@ fn clmul_64x64(a: u64, b: u64) -> u128 {
 
 /// The `256`-bit carryless product of two 128-bit polynomials, as `(low, high)`.
 ///
-/// Karatsuba over the 64-bit halves: with `a = a0 + a1·x^64` and `b = b0 + b1·x^64`, the middle
-/// coefficient `a0·b1 + a1·b0` is `(a0 + a1)·(b0 + b1) + a0·b0 + a1·b1`, so three products
-/// suffice instead of four.
+/// Schoolbook over the 64-bit halves: with `a = a0 + a1·x^64` and `b = b0 + b1·x^64`, the four
+/// half products give the low, middle and high coefficients directly.
+///
+/// Karatsuba writes the middle coefficient as `(a0 + a1)·(b0 + b1) + a0·b0 + a1·b1` and so
+/// needs only three products, but it pays four extra `XOR`s for them and puts two of those on
+/// the critical path ahead of the product they feed. A hardware carryless multiply is cheap
+/// enough that the trade goes the other way.
 #[inline]
 fn clmul_128x128(a: u128, b: u128) -> (u128, u128) {
     let (a0, a1) = (a as u64, (a >> 64) as u64);
     let (b0, b1) = (b as u64, (b >> 64) as u64);
     let low = clmul_64x64(a0, b0);
     let high = clmul_64x64(a1, b1);
-    let middle = clmul_64x64(a0 ^ a1, b0 ^ b1) ^ low ^ high;
+    let middle = clmul_64x64(a0, b1) ^ clmul_64x64(a1, b0);
     (low ^ (middle << 64), high ^ (middle >> 64))
 }
 
@@ -144,7 +148,7 @@ pub(crate) fn square_64(a: u64) -> u64 {
 ///
 /// With `p = p0 + p1·x^64`, the middle coefficient of `p²` is `2·p0·p1`, which vanishes in
 /// characteristic 2. So `p² = p0² + p1²·x^128` exactly: two carryless products with nothing to
-/// fold between them, where [`clmul_128x128`] needs three and a middle term.
+/// fold between them, where [`clmul_128x128`] needs four and a middle term.
 #[inline]
 pub(crate) fn square_128(a: u128) -> u128 {
     let poly = basis::tower_to_poly_128(a);
@@ -209,9 +213,9 @@ mod tests {
             prop_assert_eq!(super::clmul_64x64(a, b), super::scalar_clmul_64x64(a, b));
         }
 
-        /// Karatsuba must reproduce the bit-serial 256-bit product.
+        /// The half-product decomposition must reproduce the bit-serial 256-bit product.
         #[test]
-        fn karatsuba_matches_the_bit_serial_product(a: u128, b: u128) {
+        fn the_wide_product_matches_the_bit_serial_one(a: u128, b: u128) {
             prop_assert_eq!(super::clmul_128x128(a, b), scalar_clmul_128x128(a, b));
         }
 
