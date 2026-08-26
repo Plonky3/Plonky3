@@ -4,6 +4,7 @@
 
 pub mod pack;
 pub mod tensor;
+pub mod weights;
 
 pub use pack::{compute_s_hat, pack, packed_vars};
 
