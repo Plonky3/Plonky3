@@ -17,7 +17,6 @@ test-util = ["dep:p3-baby-bear"]
 p3-baby-bear = { workspace = true, optional = true }
 p3-challenger.workspace = true
 p3-commit.workspace = true
-p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
@@ -33,6 +32,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-dft = { path = "../dft" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }
