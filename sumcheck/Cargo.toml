@@ -34,6 +34,7 @@ tracing.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-binary-field = { path = "../binary-field" }
 p3-dft = { path = "../dft" }
+p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }

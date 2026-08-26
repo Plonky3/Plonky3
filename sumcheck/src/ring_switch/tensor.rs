@@ -66,6 +66,28 @@ impl<F: Field, EF: ExtensionField<F>> TensorAlgebra<F, EF> {
         }
     }
 
+    /// The `F`-coefficients in row-major order: entry `u * DIMENSION + v` is the coefficient
+    /// of `β_u ⊗ β_v`.
+    ///
+    /// These are what a transcript should absorb, since they are what crosses the wire; the
+    /// two readings below are derived from them.
+    pub fn coefficients(&self) -> &[F] {
+        &self.coeffs
+    }
+
+    /// Adds `delta` into the coefficient at `index`, to exercise the rejection paths that a
+    /// tampered element must trigger.
+    #[cfg(test)]
+    pub(crate) fn perturb_for_test(&mut self, index: usize, delta: F) {
+        self.coeffs[index] += delta;
+    }
+
+    /// Drops all but the first `len` coefficients, to exercise the malformed-element path.
+    #[cfg(test)]
+    pub(crate) fn truncate_for_test(&mut self, len: usize) {
+        self.coeffs.truncate(len);
+    }
+
     /// The columns, each read as an `EF`: column `v` is `Σ_u m[u][v] · β_u`.
     pub fn columns(&self) -> Vec<EF> {
         let d = Self::DIMENSION;
