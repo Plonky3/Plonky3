@@ -34,10 +34,17 @@ impl<Ntt: AdditiveNtt<BinaryField128>> Encoder<BinaryField128>
         mut message: RowMajorMatrix<BinaryField128>,
         log_inv_rate: usize,
     ) -> RowMajorMatrix<BinaryField128> {
-        // Appending zero rows extends every column's coefficient vector in place.
-        message
-            .values
-            .resize(message.values.len() << log_inv_rate, BinaryField128::ZERO);
+        if log_inv_rate > 0 {
+            // Appending zero rows extends every column's coefficient vector.
+            let len = message.values.len();
+            let padded_len = u32::try_from(log_inv_rate)
+                .ok()
+                .and_then(|rate| len.checked_shl(rate))
+                .expect("log_inv_rate must be smaller than the width of usize");
+            let mut values = BinaryField128::zero_vec(padded_len);
+            values[..len].copy_from_slice(&message.values);
+            message.values = values;
+        }
         self.ntt.ntt_batch(message)
     }
 }

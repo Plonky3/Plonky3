@@ -23,10 +23,17 @@ impl<F: TwoAdicField, D: TwoAdicSubgroupDft<F>> Encoder<F> for D {
         mut message: RowMajorMatrix<F>,
         log_inv_rate: usize,
     ) -> RowMajorMatrix<F> {
-        // Appending zero rows extends every column's coefficient vector in place.
-        message
-            .values
-            .resize(message.values.len() << log_inv_rate, F::ZERO);
+        if log_inv_rate > 0 {
+            // Appending zero rows extends every column's coefficient vector.
+            let len = message.values.len();
+            let padded_len = u32::try_from(log_inv_rate)
+                .ok()
+                .and_then(|rate| len.checked_shl(rate))
+                .expect("log_inv_rate must be smaller than the width of usize");
+            let mut values = F::zero_vec(padded_len);
+            values[..len].copy_from_slice(&message.values);
+            message.values = values;
+        }
         self.dft_batch(message).to_row_major_matrix()
     }
 }
