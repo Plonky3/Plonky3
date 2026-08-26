@@ -40,6 +40,7 @@ p3-symmetric = { path = "../symmetric" }
 
 criterion.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
+proptest.workspace = true
 rand = { workspace = true, features = ["std"] }
 
 [[bench]]

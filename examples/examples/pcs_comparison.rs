@@ -455,7 +455,7 @@ fn main() {
             &base_challenger,
             queries,
             // STIR commits one Merkle tree per distinct LDE height.
-            |ch, commit| commit.iter().for_each(|c| ch.observe(c.clone())),
+            |ch, commit| ch.observe(commit.clone()),
         ));
     }
 
@@ -550,8 +550,12 @@ fn main() {
         ));
     }
 
-    // STIR: the round/PoW schedule is derived once from the tallest table, and the
-    // shorter tables are folded in once the running codeword reaches their height.
+    // STIR: every table here shares one `commit()` call, so the real prover extends
+    // all three onto one shared LDE domain (sized to the tallest) and merges their
+    // native-height classes via `Combine` (§7, Construction 7.2) before STIR runs.
+    // Reconstruct that same bucket (`ell` per Lemma 4.13, matching what `p3_stir`'s
+    // PCS impl computes internally) so the printed schedule reflects what actually
+    // proves, not a plain single-height instance.
     {
         let stir_params = StirParameters {
             log_blowup: args.rate,
@@ -562,9 +566,13 @@ fn main() {
             max_pow_bits: args.pow_bits,
             mmcs: challenge_mmcs,
         };
-        let config = StirConfig::<F, EF, ChallengeMmcs, Challenger>::new(
+        let ell: u64 = heights.len() as u64 * ((1u64 << args.log_message_size) + 1)
+            - heights.iter().map(|&h| 1u64 << h).sum::<u64>();
+        let config = StirConfig::<F, EF, ChallengeMmcs, Challenger>::new_with_combine(
             args.log_message_size,
             stir_params.clone(),
+            heights.len(),
+            ell,
         );
         let queries = config
             .round_configs
@@ -592,8 +600,8 @@ fn main() {
             tables,
             &base_challenger,
             queries,
-            // STIR commits one Merkle tree per distinct LDE height.
-            |ch, commit| commit.iter().for_each(|c| ch.observe(c.clone())),
+            // STIR commits one shared Merkle tree for every table in this call.
+            |ch, commit| ch.observe(commit.clone()),
         ));
     }
 

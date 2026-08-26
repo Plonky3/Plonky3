@@ -11,9 +11,45 @@ use p3_field::{ExtensionField, TwoAdicField};
 use crate::SecurityAssumption;
 use crate::soundness::StirSoundness;
 
+/// Extra requirement round 0's `eta` must additionally satisfy so that the
+/// batch-degree-correction `Combine` step (§4.5) reaches the target security when merging
+/// `num_classes` height classes sharing this config's initial domain before the round-0
+/// fold. `ell` is Lemma 4.13's inflated error argument, consulted by both
+/// `SecurityAssumption` regimes' error terms.
+#[derive(Clone, Copy, Debug)]
+struct CombineRequirement {
+    num_classes: usize,
+    ell: u64,
+}
+
 /// User-facing STIR protocol parameters.
 ///
 /// These are the inputs from which the full [`StirConfig`] is derived.
+///
+/// # Combine feasibility envelope
+///
+/// [`StirConfig::new`] is feasible over a wide range of these parameters, but
+/// [`StirConfig::new_with_combine`] — the §7 Construction 7.2 path the PCS takes when one
+/// commitment holds matrices of more than one native height — is not. Merging classes of total
+/// multiplicity `ell` into a degree-`d* = 2^log_d_star` codeword costs roughly `2·log_d_star`
+/// bits of challenge field, because the `dᵢ` are distinct powers of two and so every degree gap
+/// is within a factor of two of `d*` however tight the height spread is.
+///
+/// Solving the `CapacityBound` requirement against the `eta <= rho/2` side condition gives a
+/// closed form for when Combine fits:
+///
+/// ```text
+/// EF::bits() >= security_level + union_bound_buffer + 3*log_blowup + 1
+///               + log2(ell - 1) + log_d_star
+/// ```
+///
+/// At `d* = 2^20`, `log_blowup = 1` and 100-bit security that is ~151 bits, so a 155-bit
+/// quintic extension fits with a few bits to spare and narrower challenge fields do not.
+/// `JohnsonBound` does not fit at production scale at all: the largest permitted
+/// `eta = sqrt(rho)/20` pins BCSS25's multiplicity at `m = 10`, which retains only ~95 bits at
+/// the same shape.
+/// Outside the envelope, derivation reports the shortfall rather than silently weakening the
+/// parameters; callers that need wider height spreads should commit the outliers separately.
 #[derive(Clone, Debug)]
 pub struct StirParameters<M> {
     /// Log₂ of the inverse rate of the initial Reed-Solomon code.
@@ -204,6 +240,56 @@ where
     /// Panics if `log_folding_factor < 2`, if `log_starting_folding_factor < 2`, or if
     /// `log_starting_folding_factor > log_starting_degree`.
     pub fn new(log_starting_degree: usize, params: StirParameters<M>) -> Self {
+        Self::new_with_optional_combine(log_starting_degree, params, None)
+    }
+
+    /// Like [`Self::new`], but additionally inflates round 0's `eta` (and, transitively,
+    /// the whole schedule that follows from it) so the batch-degree-correction `Combine`
+    /// step (§4.5) also reaches `params.security_level` when merging `num_classes` height
+    /// classes that share this config's initial domain, immediately before the round-0
+    /// fold. Sharing `eta` between STIR's own round-0 acceptance radius and `Combine`'s
+    /// error term (rather than checking `Combine` against a separately assumed radius)
+    /// is what makes `Combine`'s "if the merged codeword passes, each class has
+    /// correlated agreement" guarantee actually apply to STIR's own decoding.
+    ///
+    /// `ell` is Lemma 4.13's error argument `num_classes·(d* + 1) − Σᵢ dᵢ` (dᵢ each
+    /// class's own, non-quotiented degree bound), consulted by both
+    /// `SecurityAssumption` regimes' error terms.
+    ///
+    /// # Panics
+    ///
+    /// Every condition of [`Self::new`], plus: if `num_classes < 2` (a single class needs no
+    /// `Combine`, so [`Self::new`] is the correct entry point), if `ell < num_classes as u64`
+    /// (every class contributes at least one to the multiplicity), or if the parameters fall
+    /// outside the feasibility envelope documented on [`StirParameters`].
+    pub fn new_with_combine(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        num_classes: usize,
+        ell: u64,
+    ) -> Self {
+        assert!(
+            num_classes >= 2,
+            "new_with_combine requires at least 2 height classes (got {num_classes}); a single \
+             class needs no Combine, so use StirConfig::new"
+        );
+        assert!(
+            ell >= num_classes as u64,
+            "Combine multiplicity ell = {ell} is below the class count {num_classes}; every \
+             class contributes at least one to ell = Σᵢ (gapᵢ + 1)"
+        );
+        Self::new_with_optional_combine(
+            log_starting_degree,
+            params,
+            Some(CombineRequirement { num_classes, ell }),
+        )
+    }
+
+    fn new_with_optional_combine(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        combine: Option<CombineRequirement>,
+    ) -> Self {
         assert!(
             params.log_folding_factor >= 2,
             "the paper-backed STIR parameter schedule requires log_folding_factor >= 2 (k >= 4)"
@@ -276,12 +362,16 @@ where
         // `2^{-security_level}`. Exact term count: each of the `total_folds - 1`
         // intermediate rounds has six independent terms (query tier: query
         // failure, OOD, random-combination, shake-check; folding tier: proximity-gaps,
-        // sumcheck); the final stage has three (folding tier + final query failure).
-        // The buffer applies to every per-event term. OOD and shake-check must reach the
-        // buffered target algebraically because the query-phase grind does not protect them.
+        // sumcheck); the final stage has three (folding tier + final query failure); a
+        // `Combine` bucket adds one more (Theorem 7.1's `ε_com` term, §4.5).
+        // The buffer applies to every per-event term. OOD, shake-check, and Combine must
+        // reach the buffered target algebraically because the query-phase grind does not
+        // protect them.
         const TERMS_PER_INTERMEDIATE_ROUND: usize = 6;
         const FINAL_STAGE_TERMS: usize = 3;
-        let num_alg_terms = TERMS_PER_INTERMEDIATE_ROUND * (total_folds - 1) + FINAL_STAGE_TERMS;
+        let combine_term = usize::from(combine.is_some_and(|c| c.num_classes >= 2));
+        let num_alg_terms =
+            TERMS_PER_INTERMEDIATE_ROUND * (total_folds - 1) + FINAL_STAGE_TERMS + combine_term;
         let union_bound_buffer = libm::ceil(libm::log2(num_alg_terms as f64)) as usize;
         let buffered_security_level = security_level + union_bound_buffer;
 
@@ -376,6 +466,45 @@ where
             log_starting_folding_factor,
             field_size_bits,
         );
+        // Combine (§4.5) is not PoW-eligible (it runs once, before the query phase's
+        // grind), so — like OOD and shake-check — it must reach the full buffered target
+        // on its own. Evaluated at `log_degree`/`log_inv_rate` as they stand here: round
+        // 0's own starting degree and rate, matching what Combine merges at (immediately
+        // before the round-0 fold).
+        if let Some(c) = combine.filter(|c| c.num_classes >= 2) {
+            let combine_eta = params.soundness_type.stir_combine_eta(
+                field_size_bits,
+                log_inv_rate,
+                log_degree,
+                c.ell,
+                buffered_security_level,
+            );
+            // Reported here rather than left to `validate_eta` below: the schedule's own
+            // `stir_initial_eta` is always within the ceiling, so a round-0 violation is
+            // always Combine's, and the caller needs the envelope to act on it.
+            assert!(
+                params
+                    .soundness_type
+                    .stir_eta_is_valid(log_inv_rate, combine_eta),
+                "Combine over {} height classes (multiplicity ell = {}) at degree 2^{log_degree} \
+                 needs eta = {combine_eta}, above the {:?} side-condition ceiling {}. \
+                 CapacityBound admits Combine only when EF::bits() >= security_level + \
+                 union_bound_buffer + 3*log_blowup + 1 + log2(ell - 1) + log_d_star \
+                 (= {} + {union_bound_buffer} + {} + 1 + {:.2} + {log_degree} = {:.2}; \
+                 EF::bits() = {field_size_bits}). Widen the challenge field, lower \
+                 security_level, raise log_blowup, or narrow the committed height spread.",
+                c.num_classes,
+                c.ell,
+                params.soundness_type,
+                params.soundness_type.stir_eta_upper_bound(log_inv_rate),
+                security_level,
+                3 * log_inv_rate,
+                libm::log2(c.ell.saturating_sub(1).max(1) as f64),
+                (security_level + union_bound_buffer + 3 * log_inv_rate + 1 + log_degree) as f64
+                    + libm::log2(c.ell.saturating_sub(1).max(1) as f64),
+            );
+            final_eta = final_eta.max(combine_eta);
+        }
         validate_eta(0, log_inv_rate, final_eta);
 
         // Round 0 reuses the `stir_initial_eta` already computed above; every subsequent

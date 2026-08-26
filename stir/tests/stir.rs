@@ -976,7 +976,7 @@ mod babybear_pcs {
 
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
-        commit.iter().for_each(|c| p_challenger.observe(c.clone()));
+        p_challenger.observe(commit.clone());
 
         let zeta: Challenge = p_challenger.sample_algebra_element();
 
@@ -987,7 +987,7 @@ mod babybear_pcs {
 
         // Verify.
         let mut v_challenger = challenger_template;
-        commit.iter().for_each(|c| v_challenger.observe(c.clone()));
+        v_challenger.observe(commit.clone());
         let v_zeta: Challenge = v_challenger.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1074,7 +1074,7 @@ mod babybear_pcs {
 
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
-        commit.iter().for_each(|c| p_challenger.observe(c.clone()));
+        p_challenger.observe(commit.clone());
 
         let zeta: Challenge = p_challenger.sample_algebra_element();
 
@@ -1084,7 +1084,7 @@ mod babybear_pcs {
             <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_challenger);
 
         let mut v_challenger = challenger_template;
-        commit.iter().for_each(|c| v_challenger.observe(c.clone()));
+        v_challenger.observe(commit.clone());
         let v_zeta: Challenge = v_challenger.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1178,9 +1178,7 @@ mod babybear_pcs {
         let mut stir_p_ch = Challenger::new(perm.clone());
         let (stir_commit, stir_data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&stir_pcs, [(stir_domain, mat)]);
-        stir_commit
-            .iter()
-            .for_each(|c| stir_p_ch.observe(c.clone()));
+        stir_p_ch.observe(stir_commit.clone());
         // STIR's input commitment hashes fiber-grouped leaves, so its root — and hence the
         // point derived from it — differs from FRI's over the same matrix. Proof size does
         // not depend on which point is opened, so the comparison stays like-for-like.
@@ -1192,9 +1190,7 @@ mod babybear_pcs {
         );
 
         let mut stir_v_ch = Challenger::new(perm);
-        stir_commit
-            .iter()
-            .for_each(|c| stir_v_ch.observe(c.clone()));
+        stir_v_ch.observe(stir_commit.clone());
         let stir_v_zeta: Challenge = stir_v_ch.sample_algebra_element();
         assert_eq!(stir_v_zeta, stir_zeta);
         let stir_claims = vec![(
@@ -1284,10 +1280,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain_a, mat_a)]);
-        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_a.clone());
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain_b, mat_b)]);
-        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_b.clone());
 
         let zeta: Challenge = p_ch.sample_algebra_element();
 
@@ -1298,8 +1294,8 @@ mod babybear_pcs {
 
         // Verify.
         let mut v_ch = challenger_template;
-        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
-        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1339,10 +1335,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
-        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_a.clone());
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
-        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_b.clone());
 
         let zeta: Challenge = p_ch.sample_algebra_element();
 
@@ -1351,8 +1347,8 @@ mod babybear_pcs {
             <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
 
         let mut v_ch = challenger_template;
-        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
-        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1384,10 +1380,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
-        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_a.clone());
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
-        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_b.clone());
 
         let zeta: Challenge = p_ch.sample_algebra_element();
         let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
@@ -1403,8 +1399,8 @@ mod babybear_pcs {
         }
 
         let mut v_ch = challenger_template;
-        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
-        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
         let _v_zeta: Challenge = v_ch.sample_algebra_element();
 
         let opening_a = opening_values[0][0][0].clone();
@@ -1439,10 +1435,10 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit_a, data_a) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
-        commit_a.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_a.clone());
         let (commit_b, data_b) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
-        commit_b.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit_b.clone());
 
         let zeta: Challenge = p_ch.sample_algebra_element();
         let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
@@ -1458,8 +1454,8 @@ mod babybear_pcs {
         }
 
         let mut v_ch = challenger_template;
-        commit_a.iter().for_each(|c| v_ch.observe(c.clone()));
-        commit_b.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
         let _v_zeta: Challenge = v_ch.sample_algebra_element();
 
         let opening_a = opening_values[0][0][0].clone();
@@ -1492,7 +1488,7 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
-        commit.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit.clone());
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
@@ -1509,7 +1505,7 @@ mod babybear_pcs {
         }
 
         let mut v_ch = challenger_template;
-        commit.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1524,6 +1520,232 @@ mod babybear_pcs {
 
     /// Tampering with the alpha-batched opening value (the claimed `f_i(z)`) should be
     /// rejected by the input-MMCS binding check inside `pcs::verify`.
+    /// Commit and open honestly at `prove_log_degrees`, then verify against
+    /// `claim_log_degrees`. Every native height in the claims must give the same shared LDE
+    /// height as the honest commitment, so the two sides agree on the bucket and disagree
+    /// only on how many `Combine` classes it holds.
+    fn verify_with_claimed_degrees(
+        prove_log_degrees: &[usize],
+        claim_log_degrees: &[usize],
+    ) -> Result<(), <MyPcs as Pcs<Challenge, Challenger>>::Error> {
+        #[allow(unused_imports)]
+        use p3_commit::Pcs as _;
+
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let domains_and_polys: Vec<_> = prove_log_degrees
+            .iter()
+            .map(|&log_d| {
+                let d = 1 << log_d;
+                (
+                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, d),
+                    RowMajorMatrix::<Val>::rand(&mut rng, d, 3),
+                )
+            })
+            .collect();
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
+        p_ch.observe(commit.clone());
+        let zeta: Challenge = p_ch.sample_algebra_element();
+
+        let points: Vec<Vec<Challenge>> = prove_log_degrees.iter().map(|_| vec![zeta]).collect();
+        let (opening_values, proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, vec![(&data, points)], &mut p_ch);
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        assert_eq!(v_zeta, zeta);
+
+        let claims: Vec<_> = claim_log_degrees
+            .iter()
+            .zip(opening_values.first().unwrap().iter())
+            .map(|(&log_d, mat_openings)| {
+                let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                    &pcs,
+                    1 << log_d,
+                );
+                (domain, vec![(zeta, mat_openings[0].clone())])
+            })
+            .collect();
+
+        <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            vec![(commit, claims)],
+            &proof,
+            &mut v_ch,
+        )
+    }
+
+    #[test]
+    fn test_pcs_verify_rejects_understated_native_height() {
+        // Prover sees one class (no `Combine`, no `r_comb` drawn); the verifier is told matrix
+        // 1 sits at 2^6, so it sees two classes, draws `r_comb`, and applies degree
+        // correction. The degree-correction gap is the only thing binding a short class's
+        // degree bound, so this is what stops a prover passing a degree-2^8 polynomial off as
+        // a degree-2^6 one.
+        let err = verify_with_claimed_degrees(&[8, 8], &[8, 6])
+            .expect_err("an understated native height must be rejected");
+        assert!(
+            matches!(err, p3_stir::StirError::InvalidProofShape),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn test_pcs_verify_rejects_overstated_native_height() {
+        // The mirror image: the prover ran `Combine` over two classes, the verifier is told
+        // there is only one and skips it entirely.
+        let err = verify_with_claimed_degrees(&[8, 6], &[8, 8])
+            .expect_err("an overstated native height must be rejected");
+        assert!(
+            matches!(err, p3_stir::StirError::InvalidProofShape),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn test_pcs_honest_claims_verify_across_native_height_classes() {
+        // Control for the two rejections above: the same shape passes when claimed honestly.
+        verify_with_claimed_degrees(&[8, 6], &[8, 6])
+            .unwrap_or_else(|e| panic!("honest multi-class proof must verify: {e:?}"));
+    }
+
+    #[test]
+    fn test_pcs_tampered_opening_in_short_combine_class_fails() {
+        #[allow(unused_imports)]
+        use p3_commit::Pcs as _;
+
+        // `test_pcs_tampered_opening_value_fails` runs at a single height, so it never
+        // exercises a `Combine`d bucket. Perturbing the *short* class specifically is what
+        // catches a wrong per-class coefficient or degree-correction gap: a mistake there
+        // still yields a low-degree combined codeword, so only a value that must not fit can
+        // separate the two.
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+        let log_degrees = [8usize, 6];
+
+        let domains_and_polys: Vec<_> = log_degrees
+            .iter()
+            .map(|&log_d| {
+                let d = 1 << log_d;
+                (
+                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, d),
+                    RowMajorMatrix::<Val>::rand(&mut rng, d, 3),
+                )
+            })
+            .collect();
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
+        p_ch.observe(commit.clone());
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
+        let (opening_values, proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, vec![(&data, points)], &mut p_ch);
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        assert_eq!(v_zeta, zeta);
+
+        let mut tampered_short = opening_values[0][1][0].clone();
+        tampered_short[0] += Challenge::from(Val::ONE);
+
+        let claims: Vec<_> = domains_and_polys
+            .iter()
+            .enumerate()
+            .map(|(mat_idx, (domain, _))| {
+                let vals = if mat_idx == 1 {
+                    tampered_short.clone()
+                } else {
+                    opening_values[0][mat_idx][0].clone()
+                };
+                (*domain, vec![(zeta, vals)])
+            })
+            .collect();
+
+        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            vec![(commit, claims)],
+            &proof,
+            &mut v_ch,
+        );
+        assert!(
+            res.is_err(),
+            "PCS verify must reject a tampered opening in the short Combine class"
+        );
+    }
+
+    #[test]
+    fn test_pcs_johnson_bound_multiple_native_height_classes() {
+        // Every other PCS test here runs under `CapacityBound`. The Johnson regime derives
+        // `Combine`'s eta from BCSS25's multiplicity `m`, which grows fast enough in `d*` that
+        // this shape is right at the edge of feasibility — so it is the configuration that
+        // actually exercises the round-0 eta ceiling rather than passing it comfortably.
+        #[allow(unused_imports)]
+        use p3_commit::Pcs as _;
+
+        let perm = Perm::new_from_rng_128(&mut seeded_rng());
+        let (val_mmcs, challenge_mmcs) = make_mmcs(&perm);
+        let stir_params = StirParameters {
+            log_blowup: 1,
+            log_folding_factor: 2,
+            log_starting_folding_factor: 2,
+            soundness_type: SecurityAssumption::JohnsonBound,
+            security_level: 64,
+            max_pow_bits: 0,
+            mmcs: challenge_mmcs,
+        };
+        let pcs = MyPcs::new(Dft::default(), val_mmcs, stir_params);
+        let challenger_template = Challenger::new(perm);
+
+        let log_degrees = [14usize, 12];
+        let mut rng = seeded_rng();
+        let domains_and_polys: Vec<_> = log_degrees
+            .iter()
+            .map(|&log_d| {
+                let d = 1 << log_d;
+                (
+                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, d),
+                    RowMajorMatrix::<Val>::rand(&mut rng, d, 1),
+                )
+            })
+            .collect();
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
+        p_ch.observe(commit.clone());
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
+        let (opening_values, proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, vec![(&data, points)], &mut p_ch);
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        assert_eq!(v_zeta, zeta);
+
+        let claims: Vec<_> = domains_and_polys
+            .iter()
+            .zip(opening_values.first().unwrap().iter())
+            .map(|((domain, _), mat_openings)| (*domain, vec![(zeta, mat_openings[0].clone())]))
+            .collect();
+
+        <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            vec![(commit, claims)],
+            &proof,
+            &mut v_ch,
+        )
+        .unwrap_or_else(|e| panic!("JohnsonBound PCS verification failed: {e:?}"));
+    }
+
     #[test]
     fn test_pcs_tampered_opening_value_fails() {
         let (pcs, challenger_template) = get_pcs();
@@ -1538,7 +1760,7 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
-        commit.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit.clone());
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
@@ -1547,7 +1769,7 @@ mod babybear_pcs {
         );
 
         let mut v_ch = challenger_template;
-        commit.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
 
@@ -1578,7 +1800,7 @@ mod babybear_pcs {
         let mut p_ch = challenger_template.clone();
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
-        commit.iter().for_each(|c| p_ch.observe(c.clone()));
+        p_ch.observe(commit.clone());
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
@@ -1592,7 +1814,7 @@ mod babybear_pcs {
         proof[0].0.initial_commitment = Some(proof[0].0.round_proofs[0].commitment.clone());
 
         let mut v_ch = challenger_template;
-        commit.iter().for_each(|c| v_ch.observe(c.clone()));
+        v_ch.observe(commit.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         let claims = vec![(
             commit,
