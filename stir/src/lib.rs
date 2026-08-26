@@ -55,7 +55,7 @@ mod soundness;
 pub mod utils;
 pub mod verifier;
 
-pub use config::{StirConfig, StirConfigError, StirParameters, StirRoundConfig};
+pub use config::{Stage, StirConfig, StirConfigError, StirParameters, StirRoundConfig};
 pub use p3_security::whir::SecurityAssumption;
 pub use pcs::TwoAdicStirPcs;
 pub use proof::{StirProof, StirQueryOpenings, StirRoundProof};

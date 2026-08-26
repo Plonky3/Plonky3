@@ -2,6 +2,8 @@
 
 use p3_security::whir::SecurityAssumption;
 
+use crate::config::StirConfigError;
+
 pub(crate) trait StirSoundness {
     fn stir_num_ood_samples(&self) -> usize;
 
@@ -19,7 +21,7 @@ pub(crate) trait StirSoundness {
         log_inv_rate: usize,
         log_folding_factor: usize,
         field_size_bits: usize,
-    ) -> f64;
+    ) -> Result<f64, StirConfigError>;
 
     #[allow(clippy::too_many_arguments)]
     fn stir_recursive_eta(
@@ -32,7 +34,7 @@ pub(crate) trait StirSoundness {
         log_folding_factor: usize,
         field_size_bits: usize,
         prev_queries: usize,
-    ) -> f64;
+    ) -> Result<f64, StirConfigError>;
 
     fn stir_combine_eta(
         &self,
@@ -41,9 +43,13 @@ pub(crate) trait StirSoundness {
         log_d_star: usize,
         ell: u64,
         target_bits: usize,
-    ) -> f64;
+    ) -> Result<f64, StirConfigError>;
 
-    fn stir_queries_for_base(&self, security_bits: usize, failure_base: f64) -> usize;
+    fn stir_queries_for_base(
+        &self,
+        security_bits: usize,
+        failure_base: f64,
+    ) -> Result<usize, StirConfigError>;
 
     fn fold_algebraic_bits_at_log_eta(
         &self,
@@ -85,35 +91,45 @@ fn rate_from_log_inv_rate(log_inv_rate: usize) -> f64 {
     libm::pow(2., -(log_inv_rate as f64))
 }
 
-fn log2_field_minus_domain(field_size_bits: usize, log_domain_size: usize) -> f64 {
-    assert!(
-        field_size_bits > log_domain_size,
-        "challenge field must contain points outside the evaluation domain"
-    );
+fn log2_field_minus_domain(
+    field_size_bits: usize,
+    log_domain_size: usize,
+) -> Result<f64, StirConfigError> {
+    if field_size_bits <= log_domain_size {
+        return Err(StirConfigError::FieldTooSmallForDomain {
+            field_size_bits,
+            log_domain_size,
+        });
+    }
     let ratio = libm::pow(2., log_domain_size as f64 - field_size_bits as f64);
-    field_size_bits as f64 + libm::log2(1. - ratio)
+    Ok(field_size_bits as f64 + libm::log2(1. - ratio))
 }
 
-fn query_count_from_failure_base(security_bits: usize, failure_base: f64) -> usize {
-    assert!(
-        failure_base > 0. && failure_base < 1.,
-        "STIR query-count formula requires a failure base in (0, 1), got {failure_base}"
-    );
-    libm::ceil(security_bits as f64 / -libm::log2(failure_base)) as usize
+fn query_count_from_failure_base(
+    security_bits: usize,
+    failure_base: f64,
+) -> Result<usize, StirConfigError> {
+    if !(failure_base > 0. && failure_base < 1.) {
+        return Err(StirConfigError::InvalidFailureBase { failure_base });
+    }
+    Ok(libm::ceil(security_bits as f64 / -libm::log2(failure_base)) as usize)
 }
 
 fn minimum_eta_for_target(
     upper_bound: f64,
     target_bits: usize,
     mut bits_at_eta: impl FnMut(f64) -> f64,
-    label: &str,
-) -> f64 {
+    label: &'static str,
+) -> Result<f64, StirConfigError> {
     let upper_bits = bits_at_eta(upper_bound);
-    assert!(
-        upper_bits >= target_bits as f64,
-        "{label} reaches only {upper_bits:.4} bits at the largest permitted eta \
-         ({upper_bound}); target is {target_bits} bits"
-    );
+    if upper_bits < target_bits as f64 {
+        return Err(StirConfigError::EtaInfeasibleForTarget {
+            label,
+            upper_bits,
+            upper_bound,
+            target_bits,
+        });
+    }
 
     // Every bound used here is monotone in eta: a larger safety gap means a
     // smaller list and a smaller BCSS25 exceptional set. Keep `high` feasible
@@ -129,7 +145,7 @@ fn minimum_eta_for_target(
             low = mid;
         }
     }
-    high
+    Ok(high)
 }
 
 /// Algebraic bits §7 Construction 7.2's batch degree correction ("Combine") retains merging
@@ -213,7 +229,7 @@ impl StirSoundness for SecurityAssumption {
         log_inv_rate: usize,
         log_folding_factor: usize,
         field_size_bits: usize,
-    ) -> f64 {
+    ) -> Result<f64, StirConfigError> {
         let upper = self.stir_eta_upper_bound(log_inv_rate);
         let ood_samples = self.stir_num_ood_samples();
 
@@ -229,7 +245,7 @@ impl StirSoundness for SecurityAssumption {
                 )
             },
             "initial STIR folding bound",
-        );
+        )?;
         let ood_eta = minimum_eta_for_target(
             upper,
             unprotected_target_bits,
@@ -243,7 +259,7 @@ impl StirSoundness for SecurityAssumption {
                 )
             },
             "initial STIR OOD bound",
-        );
+        )?;
 
         let schedule_eta = match self {
             // The old BCIKS-form 1/7-power expression is intentionally not
@@ -276,7 +292,7 @@ impl StirSoundness for SecurityAssumption {
             }
         };
 
-        schedule_eta.max(fold_eta).max(ood_eta)
+        Ok(schedule_eta.max(fold_eta).max(ood_eta))
     }
 
     fn stir_recursive_eta(
@@ -289,10 +305,10 @@ impl StirSoundness for SecurityAssumption {
         log_folding_factor: usize,
         field_size_bits: usize,
         prev_queries: usize,
-    ) -> f64 {
+    ) -> Result<f64, StirConfigError> {
         let k = 1usize << log_folding_factor;
         let log_domain = log_domain_size as f64;
-        let log_field_minus_domain = log2_field_minus_domain(field_size_bits, log_domain_size);
+        let log_field_minus_domain = log2_field_minus_domain(field_size_bits, log_domain_size)?;
 
         let schedule_eta = match self {
             Self::JohnsonBound => {
@@ -334,7 +350,7 @@ impl StirSoundness for SecurityAssumption {
                 )
             },
             "recursive STIR folding bound",
-        );
+        )?;
         let ood_eta = minimum_eta_for_target(
             upper,
             unprotected_target_bits,
@@ -348,9 +364,9 @@ impl StirSoundness for SecurityAssumption {
                 )
             },
             "recursive STIR OOD bound",
-        );
+        )?;
 
-        schedule_eta.max(fold_eta).max(ood_eta)
+        Ok(schedule_eta.max(fold_eta).max(ood_eta))
     }
 
     /// Smallest `eta` at which §7 Construction 7.2's batch degree correction ("Combine")
@@ -382,9 +398,11 @@ impl StirSoundness for SecurityAssumption {
     /// multiplicity at `m = 10`, which at `log_d_star = 20`, `log_inv_rate = 1` and a 155-bit
     /// challenge field retains only ~95 bits.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If no permitted `eta` reaches `target_bits`.
+    /// [`StirConfigError::EtaInfeasibleForTarget`] if no permitted `eta` reaches
+    /// `target_bits`, and [`StirConfigError::UnsupportedSoundnessType`] under
+    /// `UniqueDecoding`.
     fn stir_combine_eta(
         &self,
         field_size_bits: usize,
@@ -392,7 +410,12 @@ impl StirSoundness for SecurityAssumption {
         log_d_star: usize,
         ell: u64,
         target_bits: usize,
-    ) -> f64 {
+    ) -> Result<f64, StirConfigError> {
+        // Checked before any derivation, since `stir_eta_upper_bound` has no answer here.
+        if matches!(self, Self::UniqueDecoding) {
+            return Err(StirConfigError::UnsupportedSoundnessType);
+        }
+
         let eta = minimum_eta_for_target(
             self.stir_eta_upper_bound(log_inv_rate),
             target_bits,
@@ -407,20 +430,24 @@ impl StirSoundness for SecurityAssumption {
                 )
             },
             "Combine batch-degree-correction bound",
-        );
+        )?;
 
         match self {
             // `2/|L_0|` with `|L_0| = 2^(log_d_star + log_inv_rate)`, round 0's domain size.
-            Self::CapacityBound => eta.max(libm::pow(2., 1. - (log_d_star + log_inv_rate) as f64)),
-            // The Johnson regime satisfies the `1/|L_0|` side condition automatically.
-            Self::JohnsonBound => eta,
-            Self::UniqueDecoding => {
-                panic!("STIR's paper-backed parameter schedule does not support UniqueDecoding")
+            Self::CapacityBound => {
+                Ok(eta.max(libm::pow(2., 1. - (log_d_star + log_inv_rate) as f64)))
             }
+            // The Johnson regime satisfies the `1/|L_0|` side condition automatically.
+            Self::JohnsonBound => Ok(eta),
+            Self::UniqueDecoding => Err(StirConfigError::UnsupportedSoundnessType),
         }
     }
 
-    fn stir_queries_for_base(&self, security_bits: usize, failure_base: f64) -> usize {
+    fn stir_queries_for_base(
+        &self,
+        security_bits: usize,
+        failure_base: f64,
+    ) -> Result<usize, StirConfigError> {
         let _ = self;
         query_count_from_failure_base(security_bits, failure_base)
     }
@@ -501,7 +528,9 @@ mod tests {
         let jb = SecurityAssumption::JohnsonBound;
 
         for (target, field_bits) in [(100, 155), (128, 192)] {
-            let eta = jb.stir_initial_eta(target, target, 20, 2, 2, field_bits);
+            let eta = jb
+                .stir_initial_eta(target, target, 20, 2, 2, field_bits)
+                .unwrap();
             assert!(jb.stir_eta_is_valid(2, eta));
             assert!(
                 jb.fold_algebraic_bits_at_log_eta(field_bits, 20, 2, libm::log2(eta))
@@ -563,13 +592,10 @@ mod tests {
         let log_d_star = 20;
         let ell = 1 << 20;
         let target_bits = 100;
-        let log_eta = libm::log2(SecurityAssumption::CapacityBound.stir_combine_eta(
-            field_bits,
-            log_inv_rate,
-            log_d_star,
-            ell,
-            target_bits,
-        ));
+        let eta = SecurityAssumption::CapacityBound
+            .stir_combine_eta(field_bits, log_inv_rate, log_d_star, ell, target_bits)
+            .expect("feasible at these parameters");
+        let log_eta = libm::log2(eta);
         let bits = target_bits as f64
             - (field_bits as f64 + log_eta
                 - 2. * log_inv_rate as f64
@@ -586,8 +612,8 @@ mod tests {
         // A smaller ell needs a smaller minimum eta. Both values stay clear of the Lemma 7.3
         // side-condition floor (eta >= 2/|L_0| = 2^(1 - 21)).
         let cb = SecurityAssumption::CapacityBound;
-        let larger = cb.stir_combine_eta(155, 1, 20, 1 << 20, 100);
-        let smaller = cb.stir_combine_eta(155, 1, 20, 1 << 19, 100);
+        let larger = cb.stir_combine_eta(155, 1, 20, 1 << 20, 100).unwrap();
+        let smaller = cb.stir_combine_eta(155, 1, 20, 1 << 19, 100).unwrap();
         assert!(smaller < larger);
     }
 
@@ -597,7 +623,9 @@ mod tests {
         // Lemma 7.3's `delta < 1 - rho - 1/|L_0|` floor, `eta >= 2^(1 - (log_d_star + lir))`.
         let cb = SecurityAssumption::CapacityBound;
         let (log_d_star, log_inv_rate) = (20, 1);
-        let eta = cb.stir_combine_eta(155, log_inv_rate, log_d_star, 2, 100);
+        let eta = cb
+            .stir_combine_eta(155, log_inv_rate, log_d_star, 2, 100)
+            .unwrap();
         assert_eq!(eta, libm::pow(2., 1. - (log_d_star + log_inv_rate) as f64));
     }
 
@@ -605,8 +633,8 @@ mod tests {
     fn combine_eta_johnson_bound_increases_with_more_groups() {
         // A larger ell (more/taller classes) demands a larger minimum eta.
         let jb = SecurityAssumption::JohnsonBound;
-        let fewer = jb.stir_combine_eta(192, 1, 20, 1 << 21, 100);
-        let more = jb.stir_combine_eta(192, 1, 20, 1 << 22, 100);
+        let fewer = jb.stir_combine_eta(192, 1, 20, 1 << 21, 100).unwrap();
+        let more = jb.stir_combine_eta(192, 1, 20, 1 << 22, 100).unwrap();
         assert!(more > fewer);
     }
 
@@ -627,9 +655,24 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "does not support UniqueDecoding")]
     fn combine_eta_rejects_unique_decoding() {
-        SecurityAssumption::UniqueDecoding.stir_combine_eta(192, 1, 20, 4, 100);
+        assert_eq!(
+            SecurityAssumption::UniqueDecoding.stir_combine_eta(192, 1, 20, 4, 100),
+            Err(StirConfigError::UnsupportedSoundnessType)
+        );
+    }
+
+    #[test]
+    fn combine_eta_reports_infeasibility_instead_of_panicking() {
+        // The Johnson regime cannot fit Combine at production scale; the caller gets the
+        // shortfall rather than an abort, which is what `StirConfig::try_new` relies on.
+        let err = SecurityAssumption::JohnsonBound
+            .stir_combine_eta(155, 1, 20, (1u64 << 20) + (1 << 19) + 3, 106)
+            .expect_err("JB + Combine must not fit at this scale");
+        assert!(
+            matches!(err, StirConfigError::EtaInfeasibleForTarget { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]

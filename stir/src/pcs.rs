@@ -141,12 +141,30 @@ fn lde_views<'a, Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>>(
         .collect()
 }
 
-/// STIR configs derived on demand, memoized by `log_stir_degree`.
+/// Key identifying a derived STIR config: the bucket's degree plus, when §7's `Combine` runs,
+/// the class count and multiplicity that size round 0's `eta`.
+///
+/// `(log_stir_degree, 1, 0)` is the canonical no-`Combine` key; it cannot collide with a
+/// `Combine` key, since [`StirConfig::try_new_with_combine`] rejects `num_classes < 2`.
+type StirConfigKey = (usize, usize, u64);
+
+/// STIR configs derived on demand, memoized by [`StirConfigKey`].
 type StirConfigCache<Val, Challenge, StirMmcs, Challenger> = Arc<
     RwLock<
-        alloc::collections::BTreeMap<usize, Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>>,
+        alloc::collections::BTreeMap<
+            StirConfigKey,
+            Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>,
+        >,
     >,
 >;
+
+/// Cap on memoized configs.
+///
+/// The key space is bounded by the base field's two-adicity and the height shapes a caller
+/// actually commits, but `verify` derives its keys from claim shapes, so a hard cap keeps a
+/// pathological caller from growing the map without bound. Past the cap, derivation still
+/// returns a correct config — just an unmemoized one.
+const CONFIG_CACHE_CAPACITY: usize = 256;
 
 /// A polynomial commitment scheme using STIR to generate opening proofs.
 #[derive(Clone, Debug)]
@@ -154,13 +172,13 @@ pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> 
     dft: Dft,
     input_mmcs: InputMmcs,
     stir: StirParameters<StirMmcs>,
-    /// `StirConfig::new` runs an 80-iteration floating-point bisection to derive sound round
-    /// parameters. `open`/`verify` re-derive it per LDE-height bucket, and the same degree
-    /// recurs across calls and across proofs, so caching it here (bounded by the base
-    /// field's two-adicity) avoids repeating that derivation every time. Only the base
-    /// (non-`Combine`) construction is memoized: `Combine` configs are additionally keyed by
-    /// per-bucket runtime state (`num_classes`, `ell`) that does not collapse into this
-    /// single-`usize` cache key.
+    /// `StirConfig::try_new` runs an 80-iteration floating-point bisection per stage to
+    /// derive sound round parameters. `open`/`verify` re-derive it per LDE-height bucket, and
+    /// bucket shapes recur across calls and across proofs of the same statement, so caching
+    /// them here avoids repeating that derivation every time. `Combine` configs are keyed by
+    /// their `(num_classes, ell)` alongside the degree: with matrices sharing one domain, a
+    /// commitment holding several native heights always takes the `Combine` branch, so a
+    /// degree-only key would miss on exactly the shape this PCS exists for.
     config_cache: StirConfigCache<Val, Challenge, StirMmcs, Challenger>,
 }
 
@@ -210,22 +228,43 @@ where
     StirMmcs: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger<Witness = Val>,
 {
-    /// Returns the derived STIR config for `log_stir_degree`, computing and caching it on
-    /// first use.
+    /// Returns the derived STIR config for one bucket, computing and caching it on first use.
+    ///
+    /// `combine` carries the bucket's `(num_classes, ell)` when more than one native-height
+    /// class shares its domain and §7's `Combine` therefore runs, and is `None` otherwise.
     fn get_or_try_compute_stir_config(
         &self,
         log_stir_degree: usize,
+        combine: Option<(usize, u64)>,
     ) -> Result<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>, StirConfigError> {
-        if let Some(config) = self.config_cache.read().get(&log_stir_degree) {
+        let key: StirConfigKey = combine.map_or((log_stir_degree, 1, 0), |(classes, ell)| {
+            (log_stir_degree, classes, ell)
+        });
+
+        if let Some(config) = self.config_cache.read().get(&key) {
             return Ok(config.clone());
         }
-        let mut w_lock = self.config_cache.write();
-        if let Some(config) = w_lock.get(&log_stir_degree) {
-            return Ok(config.clone());
+
+        // Derived before the write guard is taken: `spin::RwLock` does not park, so holding it
+        // across the bisection would make a thread missing on *any* key busy-spin for the
+        // whole derivation — under rayon, possibly while the holder is descheduled. The
+        // derivation is idempotent, so a racing duplicate is harmless: the loser's `Arc` is
+        // simply dropped in favour of whichever landed first.
+        let config = Arc::new(match combine {
+            Some((num_classes, ell)) => StirConfig::try_new_with_combine(
+                log_stir_degree,
+                self.stir.clone(),
+                num_classes,
+                ell,
+            )?,
+            None => StirConfig::try_new(log_stir_degree, self.stir.clone())?,
+        });
+
+        let mut cache = self.config_cache.write();
+        if cache.len() >= CONFIG_CACHE_CAPACITY && !cache.contains_key(&key) {
+            return Ok(config);
         }
-        let config = Arc::new(StirConfig::try_new(log_stir_degree, self.stir.clone())?);
-        w_lock.insert(log_stir_degree, config.clone());
-        Ok(config)
+        Ok(cache.entry(key).or_insert(config).clone())
     }
 
     /// Like [`Self::get_or_try_compute_stir_config`], but panics on an infeasible config —
@@ -233,9 +272,23 @@ where
     fn get_or_compute_stir_config(
         &self,
         log_stir_degree: usize,
+        combine: Option<(usize, u64)>,
     ) -> Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>> {
-        self.get_or_try_compute_stir_config(log_stir_degree)
+        self.get_or_try_compute_stir_config(log_stir_degree, combine)
             .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// A bucket's `Combine` key: `None` when only one native-height class shares the domain.
+    ///
+    /// `ell` is Lemma 4.13's multiplicity `num_classes·(d* + 1) − Σᵢ dᵢ`, with `d*` the
+    /// tallest class's degree (`native_heights` is descending).
+    fn combine_key(native_heights: &[usize]) -> Option<(usize, u64)> {
+        (native_heights.len() >= 2).then(|| {
+            let d_star = 1u64 << native_heights[0];
+            let ell = native_heights.len() as u64 * (d_star + 1)
+                - native_heights.iter().map(|&d| 1u64 << d).sum::<u64>();
+            (native_heights.len(), ell)
+        })
     }
 }
 
@@ -565,12 +618,16 @@ where
                     .zip(opened_vals.iter())
                     .zip(data.log_native_heights.iter())
             {
-                // A matrix opened at no points contributes nothing to the reduced opening;
-                // skip the O(height * width) alpha-batched dot product below rather than
-                // computing it only to leave it unused.
-                if points_for_mat.is_empty() {
-                    continue;
-                }
+                // A matrix opened at no points would contribute nothing to the reduced
+                // opening, but the verifier still counts it as a native-height class (it reads
+                // class membership off the claimed domains), so skipping it here would emit a
+                // proof that cannot verify. `verify` rejects the same shape up front; this is
+                // the prover-side mirror.
+                assert!(
+                    !points_for_mat.is_empty(),
+                    "STIR PCS: matrix at native height 2^{log_native_h} was opened at no \
+                     points; every committed matrix must be opened at least once"
+                );
 
                 let key = (data.log_shared_lde_height, log_native_h);
                 let ro = reduced_openings
@@ -642,21 +699,10 @@ where
                 .zip(&bucket_native_heights)
                 .map(|(&log_h, native_heights)| {
                     let log_stir_degree = log_h.saturating_sub(self.stir.log_blowup).max(1);
-                    if native_heights.len() >= 2 {
-                        let log_d_star = native_heights[0];
-                        let ell: u64 = native_heights.len() as u64 * ((1u64 << log_d_star) + 1)
-                            - native_heights.iter().map(|&d| 1u64 << d).sum::<u64>();
-                        Arc::new(
-                            StirConfig::<Val, Challenge, StirMmcs, Challenger>::new_with_combine(
-                                log_stir_degree,
-                                self.stir.clone(),
-                                native_heights.len(),
-                                ell,
-                            ),
-                        )
-                    } else {
-                        self.get_or_compute_stir_config(log_stir_degree)
-                    }
+                    self.get_or_compute_stir_config(
+                        log_stir_degree,
+                        Self::combine_key(native_heights),
+                    )
                 })
                 .collect();
         let stir_config_refs: Vec<&StirConfig<Val, Challenge, StirMmcs, Challenger>> =
@@ -731,6 +777,25 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
+        // SHAPE CHECK, before anything reaches the transcript: a matrix opened at no points
+        // carries no claim to pin its width, and the prover skips it entirely — so it would
+        // not create a native-height class where the verifier, reading class membership off
+        // the claimed domains, still counts one. That disagreement decides whether `Combine`
+        // runs and therefore whether `r_comb` is drawn, so it has to be settled before the
+        // transcript can fork on it. Depends only on the public claims (mirrors
+        // `fri::verifier::FriError::MatrixWithoutOpeningPoints`).
+        for (commitment, domain_claims) in commitments_with_opening_points
+            .iter()
+            .enumerate()
+            .map(|(commit_idx, (_, domain_claims))| (commit_idx, domain_claims))
+        {
+            for (matrix, (_, point_claims)) in domain_claims.iter().enumerate() {
+                if point_claims.is_empty() {
+                    return Err(StirError::MatrixWithoutOpeningPoints { commitment, matrix });
+                }
+            }
+        }
+
         // Observe all opened values to keep the transcript in sync.
         for (_, domain_claims) in &commitments_with_opening_points {
             for (_, point_claims) in domain_claims {
@@ -869,20 +934,10 @@ where
                 .zip(&bucket_native_heights)
                 .map(|(&log_h, native_heights)| {
                     let log_stir_degree = log_h.saturating_sub(self.stir.log_blowup).max(1);
-                    if native_heights.len() >= 2 {
-                        let log_d_star = native_heights[0];
-                        let ell: u64 = native_heights.len() as u64 * ((1u64 << log_d_star) + 1)
-                            - native_heights.iter().map(|&d| 1u64 << d).sum::<u64>();
-                        StirConfig::<Val, Challenge, StirMmcs, Challenger>::try_new_with_combine(
-                            log_stir_degree,
-                            self.stir.clone(),
-                            native_heights.len(),
-                            ell,
-                        )
-                        .map(Arc::new)
-                    } else {
-                        self.get_or_try_compute_stir_config(log_stir_degree)
-                    }
+                    self.get_or_try_compute_stir_config(
+                        log_stir_degree,
+                        Self::combine_key(native_heights),
+                    )
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(StirError::Config)?;
@@ -1008,21 +1063,17 @@ where
                         }
 
                         // Pin each matrix's width to its claimed evaluation count, never to
-                        // the proof: a matrix opened at no points carries no claim to pin its
-                        // width, so reject rather than silently deriving width 0 (mirrors
-                        // `fri::verifier::FriError::MatrixWithoutOpeningPoints`).
+                        // the proof. Every matrix has at least one claim — the up-front check
+                        // in `verify` rejects otherwise before the transcript is touched.
                         let mat_widths: Vec<usize> = domain_claims
                             .iter()
-                            .enumerate()
-                            .map(|(mat_idx, (_, point_claims))| {
-                                point_claims.first().map(|(_, v)| v.len()).ok_or(
-                                    StirError::MatrixWithoutOpeningPoints {
-                                        commitment: commit_idx,
-                                        matrix: mat_idx,
-                                    },
-                                )
+                            .map(|(_, point_claims)| {
+                                point_claims
+                                    .first()
+                                    .map(|(_, v)| v.len())
+                                    .expect("rejected up front in verify")
                             })
-                            .collect::<Result<Vec<usize>, _>>()?;
+                            .collect();
 
                         // A matrix's native-height class, and each of its opening points'
                         // slot in `bucket_points`, are fixed for the whole commitment. Both
@@ -1351,9 +1402,18 @@ fn compute_inverse_denominators<'a, F: TwoAdicField, EF: ExtensionField<F>>(
 
 #[cfg(test)]
 mod tests {
-    use p3_baby_bear::BabyBear;
+    use alloc::format;
+
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_commit::ExtensionMmcs;
+    use p3_dft::Radix2DitParallel;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_security::whir::SecurityAssumption;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::SeedableRng;
 
     use super::*;
 
@@ -1391,5 +1451,120 @@ mod tests {
         // `d_i > d*` would wrap the `d* - d_i` subtraction in release and yield a wrong
         // codeword rather than a failure, so the precondition is checked rather than assumed.
         let _ = combine_coefficients(EF::from_u64(3), 3, [3usize, 4].into_iter());
+    }
+
+    type TestVal = BabyBear;
+    type TestPerm = Poseidon2BabyBear<16>;
+    type TestHash = PaddingFreeSponge<TestPerm, 16, 8, 8>;
+    type TestCompress = TruncatedPermutation<TestPerm, 2, 8, 16>;
+    type TestPacked = <TestVal as Field>::Packing;
+    type TestValMmcs = MerkleTreeMmcs<TestPacked, TestPacked, TestHash, TestCompress, 2, 8>;
+    type TestStirMmcs = ExtensionMmcs<TestVal, EF, TestValMmcs>;
+    type TestChallenger = DuplexChallenger<TestVal, TestPerm, 16, 8>;
+    type TestPcs = TwoAdicStirPcs<
+        TestVal,
+        Radix2DitParallel<TestVal>,
+        TestValMmcs,
+        TestStirMmcs,
+        EF,
+        TestChallenger,
+    >;
+    type TestConfig = StirConfig<TestVal, EF, TestStirMmcs, TestChallenger>;
+
+    /// Every value the schedule derives, in one comparable string. `StirConfig` has no
+    /// `PartialEq`, and only the derived schedule matters here — the `mmcs` field is cloned
+    /// straight from the shared parameters.
+    fn schedule_fingerprint(config: &TestConfig) -> alloc::string::String {
+        format!(
+            "{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{:?}",
+            config.soundness_type,
+            config.log_starting_degree,
+            config.security_level,
+            config.max_pow_bits,
+            config.log_blowup,
+            config.log_folding_factor,
+            config.log_starting_folding_factor,
+            config.log_final_degree,
+            config.final_queries,
+            config.final_eta,
+            config.final_pow_bits,
+            config.final_folding_pow_bits,
+            config.round_configs,
+        )
+    }
+
+    fn test_pcs_and_params() -> (TestPcs, StirParameters<TestStirMmcs>) {
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(11);
+        let perm = TestPerm::new_from_rng_128(&mut rng);
+        let val_mmcs = TestValMmcs::new(TestHash::new(perm.clone()), TestCompress::new(perm), 0);
+        let stir = StirParameters {
+            log_blowup: 1,
+            log_folding_factor: 2,
+            log_starting_folding_factor: 2,
+            soundness_type: SecurityAssumption::CapacityBound,
+            security_level: 32,
+            max_pow_bits: 0,
+            mmcs: TestStirMmcs::new(val_mmcs.clone()),
+        };
+        (
+            TwoAdicStirPcs::new(Radix2DitParallel::default(), val_mmcs, stir.clone()),
+            stir,
+        )
+    }
+
+    #[test]
+    fn cached_configs_match_a_fresh_derivation() {
+        // An under-specified cache key is silent in the worst way: a proof produced under one
+        // config and checked under another. Deriving the same shapes twice through the cache
+        // and comparing against an uncached derivation is what catches it — in particular that
+        // two buckets sharing a degree but differing in class count do not collide.
+        let (pcs, stir) = test_pcs_and_params();
+
+        let shapes: [(usize, Option<(usize, u64)>); 4] = [
+            (8, None),
+            // Same degree, but merging two classes: a degree-only key would alias these.
+            (8, Some((2, 194))),
+            (8, Some((3, 300))),
+            (6, None),
+        ];
+
+        for (log_stir_degree, combine) in shapes {
+            let expected = match combine {
+                Some((num_classes, ell)) => TestConfig::try_new_with_combine(
+                    log_stir_degree,
+                    stir.clone(),
+                    num_classes,
+                    ell,
+                ),
+                None => TestConfig::try_new(log_stir_degree, stir.clone()),
+            }
+            .expect("feasible shape");
+
+            // Twice: the first call populates the entry, the second must return the same one.
+            for round in 0..2 {
+                let cached = pcs
+                    .get_or_try_compute_stir_config(log_stir_degree, combine)
+                    .expect("feasible shape");
+                assert_eq!(
+                    schedule_fingerprint(&cached),
+                    schedule_fingerprint(&expected),
+                    "deg={log_stir_degree} combine={combine:?} round={round}"
+                );
+            }
+        }
+
+        // One entry per distinct shape, so nothing aliased and nothing was inserted twice.
+        assert_eq!(pcs.config_cache.read().len(), shapes.len());
+    }
+
+    #[test]
+    fn cache_errors_are_not_memoized() {
+        // A garbage claim shape must not be able to occupy a cache slot permanently.
+        let (pcs, _) = test_pcs_and_params();
+        assert!(
+            pcs.get_or_try_compute_stir_config(8, Some((2, 1))).is_err(),
+            "ell below the class count must be rejected"
+        );
+        assert!(pcs.config_cache.read().is_empty());
     }
 }

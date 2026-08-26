@@ -1362,48 +1362,129 @@ mod babybear_pcs {
             .unwrap_or_else(|e| panic!("two-commitment same-bucket verification failed: {e:?}"));
     }
 
-    /// A matrix opened at zero points carries no claim that could pin its width, so `verify`
-    /// must reject it with a named error rather than silently deriving width 0 and failing
-    /// with a `WrongWidth` error naming the Merkle layer instead of the actual cause.
+    /// Committing a matrix and then opening it at no points would emit a proof that cannot
+    /// verify: the verifier reads native-height class membership off the claimed domains, so
+    /// it still counts the matrix as a class even though the prover contributed nothing for
+    /// it. Rejecting in `open` turns that into a named prover error rather than a mystery
+    /// proof.
     #[test]
-    fn test_pcs_matrix_without_opening_points_rejected() {
+    #[should_panic(expected = "was opened at no points")]
+    fn test_pcs_open_rejects_matrix_without_opening_points() {
         let (pcs, challenger_template) = get_pcs();
         let mut rng = seeded_rng();
 
         let log_d = 6;
-        let width = 3;
         let domain =
             <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
-        let mat_a = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
-        let mat_b = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+        let mat_a = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 3);
+        let mat_b = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 3);
 
-        let mut p_ch = challenger_template.clone();
+        let mut p_ch = challenger_template;
         let (commit, data) = <MyPcs as Pcs<Challenge, Challenger>>::commit(
             &pcs,
             vec![(domain, mat_a), (domain, mat_b)],
         );
-        p_ch.observe(commit.clone());
-
+        p_ch.observe(commit);
         let zeta: Challenge = p_ch.sample_algebra_element();
 
         // `mat_a` is opened at `zeta`; `mat_b` is opened at no points at all.
         let data_and_points = vec![(&data, vec![vec![zeta], vec![]])];
+        let _ = <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+    }
+
+    /// The degenerate extreme of the above: nothing is opened at all, so the prover would
+    /// otherwise emit a proof with no STIR instances in it.
+    #[test]
+    #[should_panic(expected = "was opened at no points")]
+    fn test_pcs_open_rejects_a_commitment_opened_at_no_points() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 3);
+
+        let mut p_ch = challenger_template;
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        p_ch.observe(commit);
+
+        let data_and_points = vec![(&data, vec![vec![]])];
+        let _ = <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+    }
+
+    /// Prove honestly at `prove_log_degrees`, then verify with matrix `emptied`'s claims
+    /// stripped to no points. Returns the verifier's result together with a challenger that
+    /// was never handed to `verify`, so the caller can check how far the transcript got.
+    fn verify_with_matrix_claims_emptied(
+        prove_log_degrees: &[usize],
+        emptied: usize,
+    ) -> (
+        Result<(), <MyPcs as Pcs<Challenge, Challenger>>::Error>,
+        Challenger,
+        Challenger,
+    ) {
+        #[allow(unused_imports)]
+        use p3_commit::Pcs as _;
+
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let domains_and_polys: Vec<_> = prove_log_degrees
+            .iter()
+            .map(|&log_d| {
+                let d = 1 << log_d;
+                (
+                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, d),
+                    RowMajorMatrix::<Val>::rand(&mut rng, d, 3),
+                )
+            })
+            .collect();
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
+        p_ch.observe(commit.clone());
+        let zeta: Challenge = p_ch.sample_algebra_element();
+
+        let points: Vec<Vec<Challenge>> = prove_log_degrees.iter().map(|_| vec![zeta]).collect();
         let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, vec![(&data, points)], &mut p_ch);
 
         let mut v_ch = challenger_template;
         v_ch.observe(commit.clone());
         let v_zeta: Challenge = v_ch.sample_algebra_element();
         assert_eq!(v_zeta, zeta);
+        let untouched = v_ch.clone();
 
-        let opening_a = opening_values[0][0][0].clone();
-        let claims = vec![(
-            commit,
-            vec![(domain, vec![(zeta, opening_a)]), (domain, vec![])],
-        )];
+        let claims: Vec<_> = domains_and_polys
+            .iter()
+            .zip(opening_values.first().unwrap().iter())
+            .enumerate()
+            .map(|(mat_idx, ((domain, _), mat_openings))| {
+                let point_claims = if mat_idx == emptied {
+                    vec![]
+                } else {
+                    vec![(zeta, mat_openings[0].clone())]
+                };
+                (*domain, point_claims)
+            })
+            .collect();
 
-        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .unwrap_err();
+        let result = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            vec![(commit, claims)],
+            &proof,
+            &mut v_ch,
+        );
+        (result, v_ch, untouched)
+    }
+
+    #[test]
+    fn test_pcs_matrix_without_opening_points_rejected() {
+        let (result, _, _) = verify_with_matrix_claims_emptied(&[6, 6], 1);
+        let err = result.expect_err("a matrix claimed at no points must be rejected");
         assert!(
             matches!(
                 err,
@@ -1413,6 +1494,35 @@ mod babybear_pcs {
                 }
             ),
             "{err:?}"
+        );
+    }
+
+    #[test]
+    fn test_pcs_matrix_without_opening_points_rejected_before_the_transcript_forks() {
+        // With distinct native heights the emptied matrix is the *only* member of its class,
+        // so whether it counts decides whether `Combine` runs and therefore whether `r_comb`
+        // is drawn. Rejecting before anything reaches the transcript is what keeps the cause
+        // legible: were the check left inside the per-bucket work, the config divergence
+        // would surface first, as an unrelated-looking failure.
+        let (result, mut used, mut untouched) = verify_with_matrix_claims_emptied(&[8, 6], 1);
+        let err = result.expect_err("a matrix claimed at no points must be rejected");
+        assert!(
+            matches!(
+                err,
+                p3_stir::StirError::MatrixWithoutOpeningPoints {
+                    commitment: 0,
+                    matrix: 1,
+                }
+            ),
+            "{err:?}"
+        );
+
+        // Nothing was observed or sampled, so the two challengers still agree.
+        let after: Challenge = used.sample_algebra_element();
+        let expected: Challenge = untouched.sample_algebra_element();
+        assert_eq!(
+            after, expected,
+            "verify touched the transcript before rejecting"
         );
     }
 
