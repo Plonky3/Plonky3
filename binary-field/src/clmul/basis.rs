@@ -10,8 +10,9 @@
 //! with `X_{−1} = 1`. Any images `ξ_k ∈ P_n` satisfying those same relations therefore extend
 //! uniquely to a `GF(2)`-algebra homomorphism `N: T_n → P_n`; because `T_n` is a field, `N` is
 //! injective, and since both sides have dimension `n` over `GF(2)` it is an isomorphism. So it
-//! suffices to pin down the `ξ_k` — `derivation_reproduces_the_generator_images` recomputes them
-//! from scratch and `generator_images_satisfy_the_tower_relations` checks the relations.
+//! suffices to pin down the `ξ_k` — the relations are asserted at compile time by
+//! `relations_hold`, and `derivation_reproduces_the_generator_images` recomputes the images from
+//! scratch to show they are the ones the derivation yields.
 //!
 //! `N` sends the tower basis element indexed by the bit pattern `j` to `∏_{i ∈ bits(j)} ξ_i`.
 //! Those `n` images are the columns of `N`; the columns of `M = N⁻¹` come from Gaussian
@@ -69,6 +70,33 @@ pub(super) const fn poly_mul(a: u128, b: u128, bits: usize, tail: u128) -> u128 
     }
     acc
 }
+
+/// Whether the images satisfy `ξ_k² + ξ_{k−1}·ξ_k + 1 = 0` for every `k`, with `ξ_{−1} = 1`.
+///
+/// This is what makes `N` a field isomorphism rather than merely an invertible `GF(2)`-linear
+/// map: invertibility alone says nothing about multiplicativity, and almost every invertible
+/// matrix over `GF(2)` fails to be multiplicative. Asserting it below puts the property in the
+/// build rather than in the test suite, so no `ξ` can be wrong in a crate that compiles.
+const fn relations_hold(bits: usize, tail: u128, xi: &[u128]) -> bool {
+    let mut k = 0;
+    while k < xi.len() {
+        let previous = if k == 0 { 1 } else { xi[k - 1] };
+        if poly_mul(xi[k], xi[k], bits, tail) ^ poly_mul(previous, xi[k], bits, tail) ^ 1 != 0 {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+const _: () = assert!(
+    relations_hold(64, TAIL_64, &XI_64),
+    "XI_64 violates the tower relations"
+);
+const _: () = assert!(
+    relations_hold(128, TAIL_128, &XI_128),
+    "XI_128 violates the tower relations"
+);
 
 /// The columns of `N`: the image of each tower basis element `∏_{i ∈ bits(j)} ξ_i`.
 ///
