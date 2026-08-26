@@ -9,6 +9,10 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# criterion pulls rayon transitively and rayon does not build on wasi.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion.workspace = true
+
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 
@@ -30,7 +34,6 @@ p3-multilinear-util = { path = "../multilinear-util" }
 p3-sumcheck = { path = "../sumcheck" }
 p3-symmetric = { path = "../symmetric" }
 
-criterion.workspace = true
 proptest.workspace = true
 rand.workspace = true
 
