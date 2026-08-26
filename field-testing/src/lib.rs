@@ -1061,10 +1061,15 @@ pub fn test_binary_ops<R: PrimeCharacteristicRing + Eq + Copy>(
 }
 
 /// Checks the fixed enumeration used for interpolation nodes.
+///
+/// `0..64` is the tested range, capped by the size of the field: a field with fewer than 64
+/// elements cannot enumerate 64 distinct ones, and injectivity is only ever asked for on the
+/// indices a protocol can reach.
 pub fn test_interpolation_nodes<F: Field>() {
     assert_eq!(F::interpolation_node(0), F::ZERO);
     assert_eq!(F::interpolation_node(1), F::ONE);
-    let nodes: Vec<F> = (0..64).map(F::interpolation_node).collect();
+    let count = usize::try_from(F::order()).unwrap_or(usize::MAX).min(64);
+    let nodes: Vec<F> = (0..count).map(F::interpolation_node).collect();
     for (i, a) in nodes.iter().enumerate() {
         for b in &nodes[..i] {
             assert_ne!(a, b, "interpolation nodes must be pairwise distinct");

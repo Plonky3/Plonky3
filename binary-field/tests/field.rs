@@ -1,6 +1,6 @@
-//! Generic field-testing suites: the per-level `test_binary_field!` base suite for every
-//! byte-aligned tower level, `Gf2`'s own coverage, and the extension structure between all
-//! byte-aligned tower level pairs.
+//! Generic field-testing suites: the per-level `test_binary_field!` base suite for every tower
+//! level, `Gf2`'s own coverage, and the extension structure between all byte-aligned tower level
+//! pairs.
 
 /// `p3_field_testing::test_prime_field!` is not usable against [`Gf2`](p3_binary_field::Gf2):
 /// its `generate_from_small_int_tests!` sub-test hard-codes literals up to `108` as canonical
@@ -46,6 +46,52 @@ mod gf2_prime_field {
         generate_from_int_tests!(Gf2, 0isize, Gf2::ZERO);
         generate_from_int_tests!(Gf2, 1isize, Gf2::ONE);
     }
+}
+
+mod binary_field_2 {
+    use num_bigint::BigUint;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field_testing::test_binary_field;
+
+    type F = p3_binary_field::BinaryField2;
+
+    const ZEROS: [F; 1] = [F::ZERO];
+    const ONES: [F; 1] = [F::ONE];
+
+    /// Prime factorization of `2^2 - 1 = 3`.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 1] {
+        [(BigUint::from(3u32), 1)]
+    }
+
+    test_binary_field!(
+        super::F,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
+}
+
+mod binary_field_4 {
+    use num_bigint::BigUint;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field_testing::test_binary_field;
+
+    type F = p3_binary_field::BinaryField4;
+
+    const ZEROS: [F; 1] = [F::ZERO];
+    const ONES: [F; 1] = [F::ONE];
+
+    /// Prime factorization of `2^4 - 1 = 15`.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 2] {
+        [(BigUint::from(3u32), 1), (BigUint::from(5u32), 1)]
+    }
+
+    test_binary_field!(
+        super::F,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
 }
 
 mod binary_field_8 {
