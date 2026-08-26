@@ -483,8 +483,9 @@ fn main() {
             vec![(domain, message)],
             &base_challenger,
             queries,
-            // STIR commits one Merkle tree per distinct LDE height.
-            |ch, commit| ch.observe(commit.clone()),
+            // STIR commits one Merkle tree per shared-domain group; a single table is one
+            // group, hence one root.
+            |ch, commit| commit.iter().for_each(|root| ch.observe(root.clone())),
         ));
     }
 
@@ -579,12 +580,14 @@ fn main() {
         ));
     }
 
-    // STIR: every table here shares one `commit()` call, so the real prover extends
-    // all three onto one shared LDE domain (sized to the tallest) and merges their
-    // native-height classes via `Combine` (§7, Construction 7.2) before STIR runs.
-    // Reconstruct that same bucket (`ell` per Lemma 4.13, matching what `p3_stir`'s
-    // PCS impl computes internally) so the printed schedule reflects what actually
-    // proves, not a plain single-height instance.
+    // STIR: every table here shares one `commit()` call, and the three heights span exactly
+    // `DEFAULT_MAX_LOG_HEIGHT_SPREAD` octaves, so they land in one shared-domain group: the
+    // real prover extends all three onto one LDE domain (sized to the tallest) and merges
+    // their native-height classes via `Combine` (§7, Construction 7.2) before STIR runs.
+    // Reconstruct that same bucket (`ell` per Lemma 4.13, matching what `p3_stir`'s PCS impl
+    // computes internally) so the printed schedule reflects what actually proves, not a plain
+    // single-height instance. A wider height spread would be split across several groups, and
+    // this reconstruction would then describe only the tallest.
     {
         let stir_params = StirParameters {
             log_blowup: args.rate,
@@ -629,8 +632,9 @@ fn main() {
             tables,
             &base_challenger,
             queries,
-            // STIR commits one shared Merkle tree for every table in this call.
-            |ch, commit| ch.observe(commit.clone()),
+            // STIR commits one Merkle tree per shared-domain group: the tables here are
+            // partitioned by bounded height spread, so this is one root per group.
+            |ch, commit| commit.iter().for_each(|root| ch.observe(root.clone())),
         ));
     }
 
