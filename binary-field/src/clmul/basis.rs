@@ -241,13 +241,13 @@ pub(super) fn poly_to_tower_64(v: u64) -> u64 {
 
 /// `GF(2^128)` from the tower basis to the polynomial basis.
 #[inline]
-pub(super) fn tower_to_poly_128(v: u128) -> u128 {
+pub(crate) fn tower_to_poly_128(v: u128) -> u128 {
     apply_128(&TOWER_TO_POLY_128, v)
 }
 
 /// `GF(2^128)` from the polynomial basis back to the tower basis.
 #[inline]
-pub(super) fn poly_to_tower_128(v: u128) -> u128 {
+pub(crate) fn poly_to_tower_128(v: u128) -> u128 {
     apply_128(&POLY_TO_TOWER_128, v)
 }
 
