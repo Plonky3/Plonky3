@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 
+use itertools::izip;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{
@@ -13,9 +14,9 @@ use thiserror::Error;
 use crate::config::{StirConfig, StirRoundConfig};
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    check_shake_consistency, eval_degree_correction, eval_poly, eval_poly_at_base,
-    fold_domain_params, lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c,
-    sample_ood_points, vanishing_poly_from_roots,
+    check_shake_consistency, eval_poly, eval_poly_at_base, fold_domain_params,
+    lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points,
+    vanishing_poly_from_roots,
 };
 
 /// `(index, row)` pairs for a round's queries, in draw order.
@@ -24,11 +25,18 @@ type FirstRoundPairs<EF> = Vec<(usize, Vec<EF>)>;
 #[derive(Clone)]
 struct VirtualRoundContext<EF> {
     ans_poly: Vec<EF>,
-    all_points: Vec<EF>,
     /// Coefficient form of `prod_{y in all_points} (X - y)`, built once per round so that each
     /// query can reduce it rather than re-multiplying every root.
     vanishing_coeffs: Vec<EF>,
     r_comb: EF,
+    /// The round's degree-correction gap: the number of points `ans` interpolates. Held here
+    /// rather than recovered from the point list at every use, so that it and the cached
+    /// `r_comb_pow_gap1` below are always derived from the same value.
+    gap: usize,
+    /// `r_comb^(gap + 1)`, the degree-correction geometric sum's `r_comb` factor at the
+    /// round's fixed gap. Computed once per round rather than as part of a fresh
+    /// `(point * r_comb)^(gap + 1)` exponentiation per fiber point.
+    r_comb_pow_gap1: EF,
 }
 
 /// Translate one opened row of the previous round's oracle into values of the current
@@ -59,27 +67,51 @@ where
     let arity = row_evals.len();
     let points: Vec<F> = subgroup_points.iter().map(|&x| shift * x).collect();
     let common_power = points[0].exp_u64(arity as u64);
+    let gap = ctx.gap;
 
     let ans_rem = reduce_mod_x_pow_minus_c(&ctx.ans_poly, arity, common_power);
     let vanishing_rem = reduce_mod_x_pow_minus_c(&ctx.vanishing_coeffs, arity, common_power);
 
-    let vanishing_values: Vec<EF> = points
+    let mut denoms: Vec<EF> = points
         .iter()
         .map(|&x| eval_poly_at_base(&vanishing_rem, x))
         .collect();
-    if vanishing_values.contains(&EF::ZERO) {
+    // A vanishing evaluation of zero means this fiber meets the round's interpolation nodes,
+    // which is a malformed round. Checked before the degree-correction denominator is folded
+    // in, so it can never be confused with the `step == 1` case handled below.
+    if denoms.contains(&EF::ZERO) {
         return None;
     }
-    let vanishing_inverses = batch_multiplicative_inverse(&vanishing_values);
+
+    // Degree-correction geometric sum `(1 - step^(gap+1)) / (1 - step)` per point, `step :=
+    // point * r_comb`. `step^(gap+1) = x^(gap+1) * r_comb^(gap+1)` splits into a cheap
+    // per-point base-field exponentiation and the round-constant `r_comb_pow_gap1`
+    // (`VirtualRoundContext::finish`), instead of a fresh extension-field exponentiation of
+    // `step` at every point.
+    //
+    // The quotient's vanishing denominator and the geometric sum's `(1 - step)` denominator
+    // are formed in place as a single product and inverted together, mirroring the way
+    // `RoundProver::finish` fuses the same two factors. `step == 1` (density `1/|EF|`) needs
+    // the sum's `gap + 1` closed form rather than a division by zero, so that lane's
+    // vanishing denominator is left unscaled and the closed form is applied to it directly.
+    let steps: Vec<EF> = points.iter().map(|&x| ctx.r_comb * x).collect();
+    for (denom, &step) in denoms.iter_mut().zip(&steps) {
+        if step != EF::ONE {
+            *denom *= EF::ONE - step;
+        }
+    }
+    let inverses = batch_multiplicative_inverse(&denoms);
 
     Some(
-        row_evals
-            .iter()
-            .zip(points)
-            .zip(vanishing_inverses)
-            .map(|((&g_value, x), vanishing_inverse)| {
-                let quotient = (g_value - eval_poly_at_base(&ans_rem, x)) * vanishing_inverse;
-                eval_degree_correction(quotient, EF::from(x), ctx.r_comb, ctx.all_points.len())
+        izip!(row_evals, &points, &steps, &inverses)
+            .map(|(&row_eval, &x, &step, &inverse)| {
+                let quotient = (row_eval - eval_poly_at_base(&ans_rem, x)) * inverse;
+                if step == EF::ONE {
+                    quotient * EF::from_usize(gap + 1)
+                } else {
+                    let x_pow = x.exp_u64((gap + 1) as u64);
+                    quotient * (EF::ONE - ctx.r_comb_pow_gap1 * x_pow)
+                }
             })
             .collect(),
     )
@@ -393,13 +425,16 @@ where
 
     /// Touches no transcript state, so it may run after the caller has moved on to other
     /// instances.
-    fn finish(self, ans_polynomial: Vec<EF>, all_points: Vec<EF>) -> RoundVerifyOutput<F, EF> {
+    fn finish(self, ans_polynomial: Vec<EF>, all_points: &[EF]) -> RoundVerifyOutput<F, EF> {
+        let gap = all_points.len();
+        let r_comb_pow_gap1 = self.r_comb.exp_u64((gap + 1) as u64);
         RoundVerifyOutput {
             ctx: VirtualRoundContext {
-                vanishing_coeffs: vanishing_poly_from_roots(&all_points),
+                vanishing_coeffs: vanishing_poly_from_roots(all_points),
                 ans_poly: ans_polynomial,
-                all_points,
                 r_comb: self.r_comb,
+                gap,
+                r_comb_pow_gap1,
             },
             next_shift: self.next_shift,
             next_log_domain: self.next_log_domain,
@@ -528,7 +563,7 @@ where
         return Err(StirError::InvalidShakeConsistency { round });
     }
 
-    Ok(rv.finish(rp.ans_polynomial.clone(), all_points))
+    Ok(rv.finish(rp.ans_polynomial.clone(), &all_points))
 }
 
 /// One instance's in-flight final round, advanced in the order the transcript demands.
@@ -1208,7 +1243,7 @@ where
                 return Err(StirError::InvalidShakeConsistency { round: local_r });
             }
 
-            finishes.push((i, rv.finish(rp.ans_polynomial.clone(), all_points)));
+            finishes.push((i, rv.finish(rp.ans_polynomial.clone(), &all_points)));
         }
 
         // Phase 5: touches no transcript state, so instance order no longer matters.
