@@ -444,7 +444,7 @@ struct RoundFinish<F, EF: Field, M: Mmcs<EF>> {
 /// and query points, answer them, commit the folded oracle, and evaluate the next virtual
 /// witness directly on the next round's domain.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all)]
+#[instrument(skip_all, level = "debug")]
 fn prove_round<F, EF, Dft, M, Challenger>(
     config: &StirConfig<F, EF, M, Challenger>,
     round: usize,

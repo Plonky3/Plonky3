@@ -105,7 +105,7 @@ where
 {
     type Witness = F;
 
-    #[instrument(name = "grind for proof-of-work witness", skip_all)]
+    #[instrument(name = "grind for proof-of-work witness", skip_all, level = "debug")]
     fn grind(&mut self, bits: usize) -> Self::Witness {
         // Ensure `bits` is small enough to be used in a shift.
         assert!(bits < 64, "bit count must be valid");
@@ -240,14 +240,22 @@ where
     P: CryptographicPermutation<[F; WIDTH]>
         + CryptographicPermutation<[<F as Field>::Packing; WIDTH]>,
 {
-    #[instrument(name = "grind uniform for proof-of-work witness", skip_all)]
+    #[instrument(
+        name = "grind uniform for proof-of-work witness",
+        skip_all,
+        level = "debug"
+    )]
     fn grind_uniform(&mut self, bits: usize) -> Self::Witness {
         // Call the generic grinder with the "resample" checking logic.
         self.grind_generic(bits, |challenger, witness| {
             challenger.check_witness_uniform(bits, witness)
         })
     }
-    #[instrument(name = "grind uniform may error for proof-of-work witness", skip_all)]
+    #[instrument(
+        name = "grind uniform may error for proof-of-work witness",
+        skip_all,
+        level = "debug"
+    )]
     fn grind_uniform_may_error(&mut self, bits: usize) -> Self::Witness {
         // Call the generic grinder with the "error" checking logic.
         self.grind_generic(bits, |challenger, witness| {
@@ -296,7 +304,7 @@ where
 {
     type Witness = F;
 
-    #[instrument(name = "grind for proof-of-work witness", skip_all)]
+    #[instrument(name = "grind for proof-of-work witness", skip_all, level = "debug")]
     fn grind(&mut self, bits: usize) -> Self::Witness {
         assert!(bits < (usize::BITS as usize), "bit count must be valid");
         // Evaluate the bound in `u64` to keep the shift within its type width.

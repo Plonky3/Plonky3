@@ -259,7 +259,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     chunks=2: 0 1 1 0 0 1 1 0 0 1 1 0 0 1 1 0
     chunks=4: 0 1 2 3 3 2 1 0 0 1 2 3 3 2 1 0
     */
-    #[instrument(skip_all, fields(log_n = %coset.log_n))]
+    #[instrument(skip_all, level = "debug", fields(log_n = %coset.log_n))]
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
         let pts = coset.points().collect_vec();
         let n = pts.len();

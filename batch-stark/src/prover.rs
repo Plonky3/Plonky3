@@ -730,7 +730,7 @@ where
 ///
 /// The output is written directly into a pre-allocated buffer through
 /// disjoint mutable pointer access, avoiding an intermediate `collect`.
-#[instrument(name = "compute quotient polynomial", skip_all)]
+#[instrument(name = "compute quotient polynomial", skip_all, level = "debug")]
 #[allow(clippy::too_many_arguments)]
 pub fn quotient_values<SC, A, Mat, LG>(
     pcs: &SC::Pcs,

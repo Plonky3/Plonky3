@@ -12,7 +12,7 @@ use tracing::instrument;
 /// # Panics
 ///
 /// Panics if the height of the matrix is not a power of two.
-#[instrument(skip_all, fields(dims = %mat.dimensions()))]
+#[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions()))]
 pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
     mat: &mut DenseMatrix<F, S>,
 ) {

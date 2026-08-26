@@ -372,7 +372,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     ///
     /// 3. **Challenge combination**: Dot each row of the select matrix
     ///    with the challenge power vector to produce the weight polynomial.
-    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables()))]
+    #[instrument(skip_all, level = "debug", fields(num_constraints = self.len(), num_variables = self.num_variables()))]
     pub fn combine(
         &self,
         acc_weights: &mut Poly<EF>,
@@ -489,7 +489,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     ///    power table.
     /// 4. For each pair of rows (left packed, right scalar), compute the
     ///    weighted dot product with the challenge powers.
-    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables()))]
+    #[instrument(skip_all, level = "debug", fields(num_constraints = self.len(), num_variables = self.num_variables()))]
     pub fn combine_packed(
         &self,
         weights: &mut Poly<EF::ExtensionPacking>,

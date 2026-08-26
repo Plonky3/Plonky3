@@ -118,7 +118,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
     }
 
     /// Compute twiddle factors, or take memoized ones if already available.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, level = "debug")]
     fn update_twiddles(&self, fft_len: usize) {
         // As we don't save the twiddles for the final layer where
         // the only twiddle is 1, roots_of_unity_table(fft_len)
@@ -206,7 +206,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
 {
     type Evaluations = BitReversedMatrixView<RowMajorMatrix<MontyField31<MP>>>;
 
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
+    #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits))]
     fn dft_batch(&self, mut mat: RowMajorMatrix<MontyField31<MP>>) -> Self::Evaluations
     where
         MP: MontyParameters + FieldParameters + TwoAdicData,
@@ -240,7 +240,7 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         mat.bit_reverse_rows()
     }
 
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
+    #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits))]
     fn idft_batch(&self, mat: RowMajorMatrix<MontyField31<MP>>) -> RowMajorMatrix<MontyField31<MP>>
     where
         MP: MontyParameters + FieldParameters + TwoAdicData,
