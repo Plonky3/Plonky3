@@ -15,6 +15,11 @@ Little-endian targets only. The tower-basis coefficients of an element are borro
 as a slice of the level below, which is sound only where the byte layout coincides with the
 numeric representation; a compile-time assertion rejects big-endian targets.
 
+`from_u64` and the other `PrimeCharacteristicRing` integer constructors go through the prime
+subfield `GF(2)`, so they carry the parity of their argument rather than its bit pattern:
+`from_u64(2)` is zero. `from_le_bytes` and `interpolation_node` are the bit-pattern
+constructors.
+
 Two deliberate scope boundaries:
 
 - `TowerLevel` — the trait carrying `LOG_BITS`, `from_repr`, `to_repr` and `mul_alpha` — is
