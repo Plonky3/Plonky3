@@ -13,7 +13,7 @@
 //! A prover who tampers with a coefficient to pass one reading breaks the other.
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ pub mod pack;
 pub mod tensor;
 pub mod weights;
 
-use equality::equality_element;
+use equality::{equality_element, equality_element_reference};
 pub use pack::{compute_s_hat, pack, packed_vars};
 use tensor::TensorAlgebra;
 use weights::{batched_weights, initial_sum};
@@ -71,6 +71,28 @@ pub enum RingSwitchError {
     /// The surviving claim does not close the sumcheck against the equality element.
     #[error("Ring switching: the surviving claim does not close the sumcheck")]
     FinalCheck,
+}
+
+/// `e = eq̃(φ0(r_high), φ1(r'))`, formed by whichever route the characteristic of `F` admits.
+///
+/// The Remark 3.4 recurrence needs `eq̃(X, Y) = Π_i (1 − X_i − Y_i)`, which holds only when
+/// `2 = 0`, and costs `O(ℓ' · d)`. Elsewhere the element is summed over the hypercube from its
+/// definition, at `O(2^ℓ')`. That asymmetry is real: the second branch shows the reduction is
+/// not specific to characteristic 2, not that it is ready to be run at scale over an
+/// odd-characteristic field.
+fn equality_element_for_characteristic<F, EF>(
+    r_high: &Point<EF>,
+    r_challenge: &Point<EF>,
+) -> TensorAlgebra<F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    if F::PrimeSubfield::ONE + F::PrimeSubfield::ONE == F::PrimeSubfield::ZERO {
+        equality_element(r_high, r_challenge)
+    } else {
+        equality_element_reference(r_high, r_challenge)
+    }
 }
 
 /// The `κ` batching challenges `r'' ∈ EF^κ`, drawn identically by both sides.
@@ -162,6 +184,10 @@ where
 /// number of rounds is rejected by [`SumcheckData::verify_rounds`] instead of desynchronising
 /// the transcript.
 ///
+/// The characteristic of `F` selects how the tensor-algebra equality element is formed, so the
+/// reduction runs over any extension; in odd characteristic that step costs `O(2^ℓ')` rather
+/// than `O(ℓ' · d)`.
+///
 /// # Panics
 /// Panics unless `r` names at least the `κ` packed variables. Everything read out of `proof`
 /// is validated and reported as an error.
@@ -226,7 +252,7 @@ where
 
     // The batched rows of the equality element are `A(r')`, so the sumcheck closes on
     // `A(r') · t'(r')`.
-    let e = equality_element::<F, EF>(&r_high, &r_prime);
+    let e = equality_element_for_characteristic::<F, EF>(&r_high, &r_prime);
     if sum != initial_sum::<F, EF>(&e, &r_batch) * proof.final_eval {
         return Err(RingSwitchError::FinalCheck);
     }
@@ -286,23 +312,58 @@ mod tests {
         );
     }
 
-    /// Perturbing one base coefficient of `ŝ` is caught: either the column check fails, or the
-    /// batched sumcheck path does. Both readings are of the same coefficients, which is what
-    /// leaves a cheating prover nowhere to stand.
+    /// A tampered `ŝ` that passes the column check is still caught by the row reading. The
+    /// claim handed to the verifier is the perturbed element's own column reading, formed the
+    /// way the verifier forms it, so the first check passes by construction and only the row
+    /// arm can reject. Both readings are of the same coefficients, which is what leaves a
+    /// cheating prover nowhere to stand.
     #[test]
     fn a_perturbed_tensor_element_is_rejected() {
         let ell = 6;
         let t = base_poly(ell, 17);
         let packed = pack::<F, EF>(&t);
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(18), ell);
-        let s = t.eval_base(&r);
 
         let mut p_chal = challenger();
         let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
         proof.s_hat.perturb_for_test(0, F::ONE);
 
+        let (_, r_low) = r.split_at(ell - packed_vars::<F, EF>());
+        let eq_low = Poly::<EF>::new_from_point(r_low.as_slice(), EF::ONE);
+        let tampered_claim: EF = proof
+            .s_hat
+            .columns()
+            .iter()
+            .zip(eq_low.as_slice())
+            .map(|(&column, &weight)| column * weight)
+            .sum();
+
         let mut v_chal = challenger();
-        assert!(verify_ring_switch::<F, EF, _>(&proof, &r, s, &mut v_chal).is_err());
+        assert_eq!(
+            verify_ring_switch::<F, EF, _>(&proof, &r, tampered_claim, &mut v_chal),
+            Err(RingSwitchError::FinalCheck)
+        );
+    }
+
+    /// The surviving claim is pinned by the final check: perturbing `s'` on an otherwise
+    /// honest proof is rejected.
+    #[test]
+    fn a_perturbed_final_claim_is_rejected() {
+        let ell = 6;
+        let t = base_poly(ell, 33);
+        let packed = pack::<F, EF>(&t);
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(34), ell);
+        let s = t.eval_base(&r);
+
+        let mut p_chal = challenger();
+        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        proof.final_eval += EF::ONE;
+
+        let mut v_chal = challenger();
+        assert_eq!(
+            verify_ring_switch::<F, EF, _>(&proof, &r, s, &mut v_chal),
+            Err(RingSwitchError::FinalCheck)
+        );
     }
 
     /// The evaluation point must name at least the packed variables, or the split that
