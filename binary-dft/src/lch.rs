@@ -37,7 +37,7 @@ pub struct LchNtt<F> {
 /// At roughly twenty nanoseconds per `GF(2^128)` butterfly a piece of this size is tens of
 /// microseconds of work, orders of magnitude above the cost of handing a task to another
 /// thread, while still leaving hundreds of pieces per stage at the smallest useful heights.
-const BUTTERFLY_GRAIN: usize = 1 << 10;
+pub(crate) const BUTTERFLY_GRAIN: usize = 1 << 10;
 
 impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
     fn shifted_ntt_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {

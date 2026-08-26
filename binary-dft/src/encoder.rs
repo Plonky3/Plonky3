@@ -7,15 +7,18 @@ use p3_commit::Encoder;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 
-use crate::lch::LchNtt;
+use crate::poly::PolyBasisNtt;
 use crate::traits::AdditiveNtt;
 
 /// Reed–Solomon over the additive NTT domain.
 ///
 /// The message holds the low-index novel-basis coefficients of each column, so the codeword is
 /// the evaluation of `f̂(Ŵ_0(x), …, Ŵ_{k−1}(x))` on `S_{k + log_inv_rate}`.
+///
+/// The alphabet is `BinaryField128`, where [`PolyBasisNtt`] is the faster transform and falls
+/// back to [`LchNtt`](crate::LchNtt) on a target without a carryless multiply, so it is the default.
 #[derive(Clone, Debug, Default)]
-pub struct AdditiveRsEncoder<F, Ntt = LchNtt<F>> {
+pub struct AdditiveRsEncoder<F, Ntt = PolyBasisNtt> {
     ntt: Ntt,
     _marker: PhantomData<F>,
 }
