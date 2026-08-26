@@ -74,23 +74,53 @@ impl SecurityAssumption {
         }
     }
 
-    /// `log₂(L⁺)` for the regime's list size at distance δ.
+    /// `log₂(η)`, or `0.` for [`Self::UniqueDecoding`], where no eta term applies and every
+    /// `_at_log_eta` formula ignores the value in its UD branch.
+    ///
+    /// Public alongside the `_at_log_eta` family: a caller feeding those its own schedule of
+    /// eta values still needs this convention to reproduce the fixed-eta entry points, and
+    /// has no other way to spell "the regime's default" for `UniqueDecoding`.
     #[must_use]
-    pub const fn list_size_bits(&self, log_degree: usize, log_inv_rate: usize) -> f64 {
+    pub const fn log_eta_or_zero(&self, log_inv_rate: usize) -> f64 {
+        match self {
+            Self::UniqueDecoding => 0.,
+            _ => self.log_eta(log_inv_rate),
+        }
+    }
+
+    /// `log₂(L⁺)` for the regime's list size at an explicit `log_eta`, rather than the
+    /// regime's own default safety margin ([`Self::log_eta`]).
+    ///
+    /// A caller deriving its own schedule of `eta` values across a protocol (STIR's per-round
+    /// bisection, for instance) needs the list size at each of those working points, not just
+    /// at the regime's fixed default; [`Self::list_size_bits`] is the
+    /// `log_eta = self.log_eta(log_inv_rate)` specialization of this.
+    #[must_use]
+    pub const fn list_size_bits_at_log_eta(
+        &self,
+        log_degree: usize,
+        log_inv_rate: usize,
+        log_eta: f64,
+    ) -> f64 {
         match self {
             // In UD the list size is 1
             Self::UniqueDecoding => 0.,
 
             // By the JB, RS codes are (1 - sqrt(rho) - eta, (2*eta*sqrt(rho))^-1)-list decodable.
             Self::JohnsonBound => {
-                let log_eta = self.log_eta(log_inv_rate);
                 let log_inv_sqrt_rate: f64 = log_inv_rate as f64 / 2.;
                 log_inv_sqrt_rate - (1. + log_eta)
             }
 
             // In CB we assume that RS codes are (1 - rho - eta, d/rho*eta)-list decodable (see Conjecture 5.6 in STIR).
-            Self::CapacityBound => (log_degree + log_inv_rate) as f64 - self.log_eta(log_inv_rate),
+            Self::CapacityBound => (log_degree + log_inv_rate) as f64 - log_eta,
         }
+    }
+
+    /// `log₂(L⁺)` for the regime's list size at distance δ.
+    #[must_use]
+    pub const fn list_size_bits(&self, log_degree: usize, log_inv_rate: usize) -> f64 {
+        self.list_size_bits_at_log_eta(log_degree, log_inv_rate, self.log_eta_or_zero(log_inv_rate))
     }
 
     /// Proximity-gap error in bits for combining `num_functions` functions
@@ -113,36 +143,72 @@ impl SecurityAssumption {
         field_size_bits: usize,
         num_functions: usize,
     ) -> f64 {
+        self.prox_gaps_error_at_log_eta(
+            log_degree,
+            log_inv_rate,
+            field_size_bits,
+            num_functions,
+            self.log_eta_or_zero(log_inv_rate),
+        )
+    }
+
+    /// [`Self::prox_gaps_error`] at an explicit `log_eta`, rather than the regime's own
+    /// default safety margin ([`Self::log_eta`]).
+    ///
+    /// A caller deriving its own schedule of `eta` values across a protocol (STIR's per-round
+    /// bisection, for instance) needs the proximity-gap error at each of those working
+    /// points, not just at the regime's fixed default. On [`SecurityAssumption::JohnsonBound`]
+    /// this derives the \[BCSS25\] proximity parameter `m = max(ceil(√ρ / (2η)), 3)` from
+    /// `log_eta` and defers to [`Self::prox_gaps_error_jb_at_m`] — at
+    /// `log_eta = self.log_eta(log_inv_rate)` that derivation reduces to exactly `m = 10`,
+    /// [`Self::prox_gaps_error`]'s fixed safety choice.
+    #[must_use]
+    pub fn prox_gaps_error_at_log_eta(
+        &self,
+        log_degree: usize,
+        log_inv_rate: usize,
+        field_size_bits: usize,
+        num_functions: usize,
+        log_eta: f64,
+    ) -> f64 {
         assert!(
             num_functions >= 2,
             "num_functions must be >= 2 to compute proximity gaps error",
         );
 
-        // Note that this does not include the field_size
-        let error = match self {
+        match self {
             // In UD the error is |L|/|F| = d/(rho*|F|)
-            Self::UniqueDecoding => (log_degree + log_inv_rate) as f64,
+            Self::UniqueDecoding => {
+                let error = (log_degree + log_inv_rate) as f64;
+                let num_functions_1_log = libm::log2(num_functions as f64 - 1.);
+                field_size_bits as f64 - (error + num_functions_1_log)
+            }
 
             // From Theorem 1.5 in [BCSS25] "On Proximity Gaps for Reed-Solomon Codes":
             //
             // For gamma < J(delta) - eta, the number of exceptional z's is bounded by:
             //   a > (2(m + 1/2)^5 + 3(m + 1/2)*gamma*rho) / (3*rho^(3/2)) * n + (m + 1/2) / sqrt(rho)
             //
-            // With eta = sqrt(rho)/20 (safe gap), m = max(ceil(sqrt(rho)/(2*eta)), 3) = max(10, 3) = 10.
-            //
-            // This improves over [BCI+20] which had:
-            //   log_2(a) = 2*log_degree + 3.5*log_inv_rate + 23.24
-            Self::JohnsonBound => jb_prox_gaps_dominant_term_bits(log_degree, log_inv_rate, 10),
+            // m = max(ceil(sqrt(rho)/(2*eta)), 3).
+            Self::JohnsonBound => {
+                let log_sqrt_rho_over_2eta = -(log_inv_rate as f64) / 2. - 1. - log_eta;
+                let m = libm::ceil(libm::pow(2., log_sqrt_rho_over_2eta)).max(3.) as usize;
+                Self::prox_gaps_error_jb_at_m(
+                    log_degree,
+                    log_inv_rate,
+                    field_size_bits,
+                    num_functions,
+                    m,
+                )
+            }
 
             // In CB we assume the error is degree/(eta*rho^2)
             Self::CapacityBound => {
-                (log_degree + 2 * log_inv_rate) as f64 - self.log_eta(log_inv_rate)
+                let error = (log_degree + 2 * log_inv_rate) as f64 - log_eta;
+                let num_functions_1_log = libm::log2(num_functions as f64 - 1.);
+                field_size_bits as f64 - (error + num_functions_1_log)
             }
-        };
-
-        // Error is (num_functions - 1) * error/|F|;
-        let num_functions_1_log = libm::log2(num_functions as f64 - 1.);
-        field_size_bits as f64 - (error + num_functions_1_log)
+        }
     }
 
     /// Johnson-bound proximity-gap error (\[BCSS25\] Theorem 1.5, dominant
@@ -498,6 +564,522 @@ mod tests {
                  expected log_2({}) = {expected_loss:.1} bits, got {loss:.6}",
                 num_functions - 1
             );
+        }
+    }
+
+    /// Field size used by the known-answer table below: a degree-5 extension of KoalaBear.
+    const TABLE_FIELD_BITS: usize = 155;
+
+    #[test]
+    fn fixed_eta_formulas_match_their_recorded_values() {
+        // These five entry points feed WHIR's, FRI's and STIR's derived parameters, so any
+        // drift in them silently changes every protocol's security. Freezing the values is
+        // the point: a property test would need the pre-refactor implementation as its
+        // oracle, and that no longer exists.
+        //
+        // Columns: list_size_bits, prox_gaps_error(num_functions = 17),
+        // ood_error(ood_samples = 2), fold_sumcheck_error,
+        // queries_combination_error(ood_samples = 2, num_queries = 40).
+        #[allow(clippy::type_complexity)]
+        let table: [(SecurityAssumption, usize, usize, [f64; 5]); 45] = [
+            (
+                SecurityAssumption::JohnsonBound,
+                1,
+                10,
+                [
+                    4.321928094887362,
+                    122.12337538682735,
+                    282.35614381022526,
+                    149.67807190511263,
+                    144.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                1,
+                20,
+                [
+                    4.321928094887362,
+                    112.12337538682735,
+                    262.35614381022526,
+                    149.67807190511263,
+                    144.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                1,
+                24,
+                [
+                    4.321928094887362,
+                    108.12337538682735,
+                    254.35614381022526,
+                    149.67807190511263,
+                    144.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                2,
+                10,
+                [
+                    5.321928094887362,
+                    119.62337538682735,
+                    280.35614381022526,
+                    148.67807190511263,
+                    143.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                2,
+                20,
+                [
+                    5.321928094887362,
+                    109.62337538682735,
+                    260.35614381022526,
+                    148.67807190511263,
+                    143.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                2,
+                24,
+                [
+                    5.321928094887362,
+                    105.62337538682735,
+                    252.35614381022526,
+                    148.67807190511263,
+                    143.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                3,
+                10,
+                [
+                    6.321928094887362,
+                    117.12337538682735,
+                    278.35614381022526,
+                    147.67807190511263,
+                    142.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                3,
+                20,
+                [
+                    6.321928094887362,
+                    107.12337538682735,
+                    258.35614381022526,
+                    147.67807190511263,
+                    142.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                3,
+                24,
+                [
+                    6.321928094887362,
+                    103.12337538682735,
+                    250.35614381022526,
+                    147.67807190511263,
+                    142.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                4,
+                10,
+                [
+                    7.321928094887362,
+                    114.62337538682735,
+                    276.35614381022526,
+                    146.67807190511263,
+                    141.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                4,
+                20,
+                [
+                    7.321928094887362,
+                    104.62337538682735,
+                    256.35614381022526,
+                    146.67807190511263,
+                    141.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                4,
+                24,
+                [
+                    7.321928094887362,
+                    100.62337538682735,
+                    248.35614381022526,
+                    146.67807190511263,
+                    141.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                8,
+                10,
+                [
+                    11.321928094887362,
+                    104.62337538682735,
+                    268.35614381022526,
+                    142.67807190511263,
+                    137.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                8,
+                20,
+                [
+                    11.321928094887362,
+                    94.62337538682735,
+                    248.35614381022526,
+                    142.67807190511263,
+                    137.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::JohnsonBound,
+                8,
+                24,
+                [
+                    11.321928094887362,
+                    90.62337538682735,
+                    240.35614381022526,
+                    142.67807190511263,
+                    137.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                1,
+                10,
+                [
+                    16.32192809488736,
+                    133.67807190511263,
+                    258.35614381022526,
+                    137.67807190511263,
+                    132.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                1,
+                20,
+                [
+                    26.32192809488736,
+                    123.67807190511263,
+                    218.35614381022526,
+                    127.67807190511263,
+                    122.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                1,
+                24,
+                [
+                    30.32192809488736,
+                    119.67807190511263,
+                    202.35614381022526,
+                    123.67807190511263,
+                    118.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                2,
+                10,
+                [
+                    18.32192809488736,
+                    130.67807190511263,
+                    254.35614381022526,
+                    135.67807190511263,
+                    130.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                2,
+                20,
+                [
+                    28.32192809488736,
+                    120.67807190511263,
+                    214.35614381022526,
+                    125.67807190511263,
+                    120.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                2,
+                24,
+                [
+                    32.32192809488736,
+                    116.67807190511263,
+                    198.35614381022526,
+                    121.67807190511263,
+                    116.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                3,
+                10,
+                [
+                    20.32192809488736,
+                    127.67807190511263,
+                    250.35614381022526,
+                    133.67807190511263,
+                    128.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                3,
+                20,
+                [
+                    30.32192809488736,
+                    117.67807190511263,
+                    210.35614381022526,
+                    123.67807190511263,
+                    118.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                3,
+                24,
+                [
+                    34.32192809488736,
+                    113.67807190511263,
+                    194.35614381022526,
+                    119.67807190511263,
+                    114.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                4,
+                10,
+                [
+                    22.32192809488736,
+                    124.67807190511263,
+                    246.35614381022526,
+                    131.67807190511263,
+                    126.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                4,
+                20,
+                [
+                    32.32192809488736,
+                    114.67807190511263,
+                    206.35614381022526,
+                    121.67807190511263,
+                    116.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                4,
+                24,
+                [
+                    36.32192809488736,
+                    110.67807190511263,
+                    190.35614381022526,
+                    117.67807190511263,
+                    112.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                8,
+                10,
+                [
+                    30.32192809488736,
+                    112.67807190511263,
+                    230.35614381022526,
+                    123.67807190511263,
+                    118.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                8,
+                20,
+                [
+                    40.32192809488736,
+                    102.67807190511263,
+                    190.35614381022526,
+                    113.67807190511263,
+                    108.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::CapacityBound,
+                8,
+                24,
+                [
+                    44.32192809488736,
+                    98.67807190511263,
+                    174.35614381022526,
+                    109.67807190511263,
+                    104.28575448233389,
+                ],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                1,
+                10,
+                [0.0, 140.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                1,
+                20,
+                [0.0, 130.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                1,
+                24,
+                [0.0, 126.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                2,
+                10,
+                [0.0, 139.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                2,
+                20,
+                [0.0, 129.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                2,
+                24,
+                [0.0, 125.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                3,
+                10,
+                [0.0, 138.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                3,
+                20,
+                [0.0, 128.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                3,
+                24,
+                [0.0, 124.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                4,
+                10,
+                [0.0, 137.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                4,
+                20,
+                [0.0, 127.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                4,
+                24,
+                [0.0, 123.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                8,
+                10,
+                [0.0, 133.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                8,
+                20,
+                [0.0, 123.0, 0.0, 154.0, 148.60768257722123],
+            ),
+            (
+                SecurityAssumption::UniqueDecoding,
+                8,
+                24,
+                [0.0, 119.0, 0.0, 154.0, 148.60768257722123],
+            ),
+        ];
+
+        for (assumption, log_inv_rate, log_degree, expected) in table {
+            let actual = [
+                assumption.list_size_bits(log_degree, log_inv_rate),
+                assumption.prox_gaps_error(log_degree, log_inv_rate, TABLE_FIELD_BITS, 17),
+                assumption.ood_error(log_degree, log_inv_rate, TABLE_FIELD_BITS, 2),
+                assumption.fold_sumcheck_error(TABLE_FIELD_BITS, log_degree, log_inv_rate),
+                assumption.queries_combination_error(
+                    TABLE_FIELD_BITS,
+                    log_degree,
+                    log_inv_rate,
+                    2,
+                    40,
+                ),
+            ];
+            assert_eq!(
+                actual, expected,
+                "{assumption:?} log_inv_rate={log_inv_rate} log_degree={log_degree}"
+            );
+        }
+    }
+
+    #[test]
+    fn jb_prox_gaps_default_eta_is_m_10() {
+        // `prox_gaps_error`'s Johnson branch delegates to `prox_gaps_error_jb_at_m` through a
+        // `f64 -> usize` round-trip whose input lands one ULP *below* 10 — on the correct side
+        // of the `ceil`, but only just. Reassociating the `log_eta` expression could push the
+        // residue the other way, making `m = 11` and moving every JB proximity-gap error by
+        // about 0.65 bits, with nothing else in the suite noticing.
+        let jb = SecurityAssumption::JohnsonBound;
+        for log_inv_rate in 0..=32 {
+            for log_degree in [10, 20, 24] {
+                for num_functions in [2, 3, 17] {
+                    assert_eq!(
+                        jb.prox_gaps_error(log_degree, log_inv_rate, 128, num_functions),
+                        SecurityAssumption::prox_gaps_error_jb_at_m(
+                            log_degree,
+                            log_inv_rate,
+                            128,
+                            num_functions,
+                            10,
+                        ),
+                        "log_inv_rate={log_inv_rate} log_degree={log_degree} \
+                         num_functions={num_functions}"
+                    );
+                }
+            }
         }
     }
 }
