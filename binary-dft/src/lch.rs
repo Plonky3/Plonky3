@@ -16,6 +16,11 @@ use crate::traits::AdditiveNtt;
 /// Twiddles are index shifts (D8): at stage `j` and butterfly block `blk` the twiddle is
 /// `W_j(shift) + domain_point(blk << 1)`, so there is no twiddle table and no per-size
 /// precomputation.
+///
+/// `W_j` is `F_2`-linear and `domain_point(0)` is zero, so over the subspace itself — the
+/// coset with `shift = 0` — the first block of every stage has a zero twiddle and its
+/// butterfly collapses to a single addition. The inner loop takes that as a separate case,
+/// which removes one multiply in `2/ℓ` of them.
 #[derive(Clone, Debug, Default)]
 pub struct LchNtt<F> {
     _marker: PhantomData<F>,
@@ -55,10 +60,17 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
                     lo.par_chunks_mut(BUTTERFLY_GRAIN)
                         .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
                         .for_each(|(lo, hi)| {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                // (u, v) ↦ (u + t·v, u + t·v + v)
-                                *u += t * *v;
-                                *v += *u;
+                            if t.is_zero() {
+                                // (u, v) ↦ (u, u + v)
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    *v += *u;
+                                }
+                            } else {
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    // (u, v) ↦ (u + t·v, u + t·v + v)
+                                    *u += t * *v;
+                                    *v += *u;
+                                }
                             }
                         });
                 });
@@ -85,10 +97,17 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
                     lo.par_chunks_mut(BUTTERFLY_GRAIN)
                         .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
                         .for_each(|(lo, hi)| {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                // (u', v') ↦ (u = u' + t·v, v = u' + v')
-                                *v += *u;
-                                *u += t * *v;
+                            if t.is_zero() {
+                                // (u', v') ↦ (u = u', v = u' + v')
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    *v += *u;
+                                }
+                            } else {
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    // (u', v') ↦ (u = u' + t·v, v = u' + v')
+                                    *v += *u;
+                                    *u += t * *v;
+                                }
                             }
                         });
                 });
