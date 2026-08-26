@@ -132,76 +132,17 @@ fn minimum_eta_for_target(
     high
 }
 
-fn list_size_bits_at_log_eta(
-    assumption: SecurityAssumption,
-    log_degree: usize,
-    log_inv_rate: usize,
-    log_eta: f64,
-) -> f64 {
-    match assumption {
-        SecurityAssumption::UniqueDecoding => 0.,
-        SecurityAssumption::JohnsonBound => log_inv_rate as f64 / 2. - (1. + log_eta),
-        SecurityAssumption::CapacityBound => (log_degree + log_inv_rate) as f64 - log_eta,
-    }
-}
-
-/// Log2 of the exceptional set a proximity-gaps argument charges over a degree-`2^log_degree`
-/// code at rate `2^-log_inv_rate`, evaluated at distance `delta = 1 - B*(rho) - eta`.
+/// Algebraic bits §7 Construction 7.2's batch degree correction ("Combine") retains merging
+/// classes of total multiplicity `ell` into a single codeword of degree `2^log_d_star`, at
+/// `delta = 1 - B*(rho) - eta`.
 ///
-/// Every proximity-gaps-shaped error in this file is this quantity plus `log2(multiplicity - 1)`
-/// subtracted from the field size. Both batching arguments STIR runs — the random linear
-/// combination of `num_functions` oracles, and §7's `ell`-fold batch degree correction — differ
-/// only in that multiplicity, so they share one bound per regime instead of each deriving its
-/// own.
-fn prox_gaps_exceptional_set_bits_at_log_eta(
-    assumption: SecurityAssumption,
-    log_degree: usize,
-    log_inv_rate: usize,
-    log_eta: f64,
-) -> f64 {
-    match assumption {
-        SecurityAssumption::UniqueDecoding => (log_degree + log_inv_rate) as f64,
-        SecurityAssumption::JohnsonBound => {
-            // BCSS25 Theorem 1.5, dominant term, at the protocol's actual eta:
-            // m = max(ceil(sqrt(rho) / (2 eta)), 3).
-            let log_sqrt_rho_over_2eta = -(log_inv_rate as f64) / 2. - 1. - log_eta;
-            let m = libm::ceil(libm::pow(2., log_sqrt_rho_over_2eta)).max(3.);
-            let log_n = (log_degree + log_inv_rate) as f64;
-            let constant = libm::log2(2. * libm::pow(m + 0.5, 5.) / 3.);
-            log_n + constant + 1.5 * log_inv_rate as f64
-        }
-        SecurityAssumption::CapacityBound => (log_degree + 2 * log_inv_rate) as f64 - log_eta,
-    }
-}
-
-fn prox_gaps_error_at_log_eta(
-    assumption: SecurityAssumption,
-    log_degree: usize,
-    log_inv_rate: usize,
-    field_size_bits: usize,
-    num_functions: usize,
-    log_eta: f64,
-) -> f64 {
-    assert!(
-        num_functions >= 2,
-        "num_functions must be >= 2 to compute proximity gaps error"
-    );
-
-    let exceptional_set_bits =
-        prox_gaps_exceptional_set_bits_at_log_eta(assumption, log_degree, log_inv_rate, log_eta);
-
-    field_size_bits as f64 - (exceptional_set_bits + libm::log2(num_functions as f64 - 1.))
-}
-
-/// Algebraic bits §7 Construction 7.2's batch degree correction retains merging classes of total
-/// multiplicity `ell` into a single codeword of degree `2^log_d_star`, at `delta = 1 - B*(rho) -
-/// eta`.
-///
-/// This is [`prox_gaps_error_at_log_eta`] with the linear combination's `num_functions - 1`
-/// replaced by Lemma 4.13's degree-gap-inflated `ell - 1`: `err*` is the §4.1 abstraction both
-/// lemmas invoke, so the conjectured route (Conjecture 5.6, `CapacityBound`) and the provable one
-/// (BCSS25 Theorem 1.5, `JohnsonBound`) each inflate by `ell` exactly as they do by the oracle
-/// count.
+/// This is [`SecurityAssumption::prox_gaps_error_at_log_eta`] with the linear combination's
+/// oracle count replaced by Lemma 4.13's degree-gap-inflated `ell`: `err*` is the §4.1
+/// abstraction both lemmas invoke, so the conjectured route (Conjecture 5.6, `CapacityBound`)
+/// and the provable one (BCSS25 Theorem 1.5, `JohnsonBound`) each inflate by `ell` exactly as
+/// they do by the oracle count. Sharing the function, rather than restating either regime's
+/// bound, is what keeps `eta` from being derived off two different Johnson-regime bounds
+/// depending on which term is asked about.
 fn combine_error_at_log_eta(
     assumption: SecurityAssumption,
     log_d_star: usize,
@@ -210,53 +151,18 @@ fn combine_error_at_log_eta(
     ell: u64,
     log_eta: f64,
 ) -> f64 {
-    let exceptional_set_bits =
-        prox_gaps_exceptional_set_bits_at_log_eta(assumption, log_d_star, log_inv_rate, log_eta);
+    // `ell >= 2` holds for any genuine Combine (two classes already give `ell >= 3`); the
+    // clamp keeps the shared assert unreachable from here, and the saturating conversion keeps
+    // the bound conservative rather than wrapping on a 32-bit target.
+    let multiplicity = usize::try_from(ell.max(2)).unwrap_or(usize::MAX);
 
-    field_size_bits as f64
-        - (exceptional_set_bits + libm::log2(ell.saturating_sub(1).max(1) as f64))
-}
-
-fn ood_error_at_log_eta(
-    assumption: SecurityAssumption,
-    log_degree: usize,
-    log_inv_rate: usize,
-    field_size_bits: usize,
-    ood_samples: usize,
-    log_eta: f64,
-) -> f64 {
-    if matches!(assumption, SecurityAssumption::UniqueDecoding) {
-        return 0.;
-    }
-
-    let list_size = list_size_bits_at_log_eta(assumption, log_degree, log_inv_rate, log_eta);
-    let error = 2. * list_size + (log_degree * ood_samples) as f64;
-    (ood_samples * field_size_bits) as f64 + 1. - error
-}
-
-fn fold_sumcheck_error_at_log_eta(
-    assumption: SecurityAssumption,
-    field_size_bits: usize,
-    log_degree: usize,
-    log_inv_rate: usize,
-    log_eta: f64,
-) -> f64 {
-    let list_size = list_size_bits_at_log_eta(assumption, log_degree, log_inv_rate, log_eta);
-    field_size_bits as f64 - (list_size + 1.)
-}
-
-fn queries_combination_error_at_log_eta(
-    assumption: SecurityAssumption,
-    field_size_bits: usize,
-    log_degree: usize,
-    log_inv_rate: usize,
-    ood_samples: usize,
-    num_queries: usize,
-    log_eta: f64,
-) -> f64 {
-    let list_size = list_size_bits_at_log_eta(assumption, log_degree, log_inv_rate, log_eta);
-    let log_combination = libm::log2((ood_samples + num_queries) as f64);
-    field_size_bits as f64 - (log_combination + list_size + 1.)
+    assumption.prox_gaps_error_at_log_eta(
+        log_d_star,
+        log_inv_rate,
+        field_size_bits,
+        multiplicity,
+        log_eta,
+    )
 }
 
 fn shake_check_error(field_size_bits: usize, num_queries: usize, num_ood_samples: usize) -> f64 {
@@ -328,8 +234,7 @@ impl StirSoundness for SecurityAssumption {
             upper,
             unprotected_target_bits,
             |eta| {
-                ood_error_at_log_eta(
-                    *self,
+                self.ood_error_at_log_eta(
                     log_degree,
                     log_inv_rate,
                     field_size_bits,
@@ -434,8 +339,7 @@ impl StirSoundness for SecurityAssumption {
             upper,
             unprotected_target_bits,
             |eta| {
-                ood_error_at_log_eta(
-                    *self,
+                self.ood_error_at_log_eta(
                     log_degree,
                     log_inv_rate,
                     field_size_bits,
@@ -528,21 +432,10 @@ impl StirSoundness for SecurityAssumption {
         log_inv_rate: usize,
         log_eta: f64,
     ) -> f64 {
-        let prox_gaps = prox_gaps_error_at_log_eta(
-            *self,
-            log_degree,
-            log_inv_rate,
-            field_size_bits,
-            2,
-            log_eta,
-        );
-        let sumcheck = fold_sumcheck_error_at_log_eta(
-            *self,
-            field_size_bits,
-            log_degree,
-            log_inv_rate,
-            log_eta,
-        );
+        let prox_gaps =
+            self.prox_gaps_error_at_log_eta(log_degree, log_inv_rate, field_size_bits, 2, log_eta);
+        let sumcheck =
+            self.fold_sumcheck_error_at_log_eta(field_size_bits, log_degree, log_inv_rate, log_eta);
         prox_gaps.min(sumcheck)
     }
 
@@ -557,8 +450,7 @@ impl StirSoundness for SecurityAssumption {
     ) -> f64 {
         let failure_base = self.stir_query_failure_base(log_inv_rate, eta);
         let query_failure = -(num_queries as f64) * libm::log2(failure_base);
-        let combination = queries_combination_error_at_log_eta(
-            *self,
+        let combination = self.queries_combination_error_at_log_eta(
             field_size_bits,
             log_degree,
             log_inv_rate,
@@ -578,8 +470,7 @@ impl StirSoundness for SecurityAssumption {
         num_queries: usize,
         num_ood_samples: usize,
     ) -> f64 {
-        let ood = ood_error_at_log_eta(
-            *self,
+        let ood = self.ood_error_at_log_eta(
             log_degree,
             log_inv_rate,
             field_size_bits,
@@ -617,17 +508,17 @@ mod tests {
                     >= target as f64
             );
             assert!(
-                ood_error_at_log_eta(jb, 20, 2, field_bits, 1, libm::log2(eta)) >= target as f64
+                jb.ood_error_at_log_eta(20, 2, field_bits, 1, libm::log2(eta)) >= target as f64
             );
         }
     }
 
     #[test]
     fn combine_error_matches_prox_gaps_error_at_matching_multiplicity() {
-        // Combine charges the same exceptional set as the linear-combination proximity-gaps
-        // argument, with `num_functions - 1` replaced by `ell - 1`. At `ell = num_functions`
-        // the two must therefore agree exactly, in both regimes — this is what keeps the file
-        // from deriving eta off two different Johnson-regime bounds.
+        // Combine charges the same bound as the linear-combination proximity-gaps argument,
+        // with the oracle count replaced by `ell`. At `ell = num_functions` the two must
+        // therefore agree exactly, in both regimes — which pins the delegation's mapping of
+        // `(log_d_star, ell)` onto `(log_degree, num_functions)`.
         for assumption in [
             SecurityAssumption::JohnsonBound,
             SecurityAssumption::CapacityBound,
@@ -645,8 +536,7 @@ mod tests {
                                     num_functions as u64,
                                     log_eta,
                                 ),
-                                prox_gaps_error_at_log_eta(
-                                    assumption,
+                                assumption.prox_gaps_error_at_log_eta(
                                     log_d_star,
                                     log_inv_rate,
                                     155,
@@ -752,7 +642,7 @@ mod tests {
         assert!(unprotected.is_finite());
         assert_eq!(
             unprotected,
-            ood_error_at_log_eta(cb, 20, 2, 124, 2, libm::log2(0.01))
+            cb.ood_error_at_log_eta(20, 2, 124, 2, libm::log2(0.01))
                 .min(shake_check_error(124, 40, 2))
         );
     }
@@ -764,12 +654,12 @@ mod tests {
         let smaller = safe - 20.;
 
         assert!(
-            prox_gaps_error_at_log_eta(cb, 20, 1, 155, 2, smaller)
-                < prox_gaps_error_at_log_eta(cb, 20, 1, 155, 2, safe)
+            cb.prox_gaps_error_at_log_eta(20, 1, 155, 2, smaller)
+                < cb.prox_gaps_error_at_log_eta(20, 1, 155, 2, safe)
         );
         assert!(
-            ood_error_at_log_eta(cb, 20, 1, 155, 2, smaller)
-                < ood_error_at_log_eta(cb, 20, 1, 155, 2, safe)
+            cb.ood_error_at_log_eta(20, 1, 155, 2, smaller)
+                < cb.ood_error_at_log_eta(20, 1, 155, 2, safe)
         );
     }
 }
