@@ -1,3 +1,5 @@
+//! The additive NTT interface shared by the reference and fast transforms.
+
 use p3_binary_field::TowerLevel;
 use p3_matrix::dense::RowMajorMatrix;
 

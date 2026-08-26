@@ -53,6 +53,7 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
 
         for j in 0..log_n {
             let half = (1 << j) * width;
+            // Twiddles as derived in `shifted_ntt_batch`, with the stages run in reverse.
             let base = subspace_polynomial::<F>(j, shift);
             mat.values
                 .par_chunks_mut(half << 1)
