@@ -46,7 +46,7 @@ fn table() -> Table<F> {
 }
 
 /// `commit_base` over `BinaryField128` reproduces the Merkle root of a matrix encoded by hand
-/// with the reference transform. This pins the message layout as well as the encoding.
+/// with the reference transform. This pins the message layout as well as the transform.
 #[test]
 fn commit_base_matches_hand_encoding() {
     let mut rng = SmallRng::seed_from_u64(1);

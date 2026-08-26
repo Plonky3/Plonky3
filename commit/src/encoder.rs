@@ -20,6 +20,10 @@ pub trait Encoder<F: Field> {
     ///
     /// `message` has height `2^k`; the result has the same width and height
     /// `2^(k + log_inv_rate)`. Output row `i` is codeword symbol `i`.
+    ///
+    /// # Panics
+    /// Panics if the height of `message` is not a power of two, or if `log_inv_rate` is at least
+    /// the width of `usize`.
     fn encode_batch(&self, message: RowMajorMatrix<F>, log_inv_rate: usize) -> RowMajorMatrix<F>;
 }
 

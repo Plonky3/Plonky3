@@ -3,15 +3,24 @@ use p3_matrix::dense::RowMajorMatrix;
 
 /// An additive NTT: evaluation of the novel polynomial basis on an `F_2`-linear subspace.
 ///
-/// Columns hold coefficients in the novel polynomial basis `X_i = ∏_j W_j^{bit_j(i)}`; output
-/// row `i` is the evaluation at `shift + domain_point(i)`. Both sides are in natural order.
+/// Columns hold coefficients in the novel polynomial basis `X_i = ∏_j Ŵ_j^{bit_j(i)}`, the
+/// products of normalised subspace polynomials; output row `i` is the evaluation at
+/// `shift + domain_point(i)`. Both sides are in natural order.
 ///
-/// Heights must be powers of two no larger than the bit width of `F`.
+/// Heights are powers of two, and `ℓ = log2(height)` is at most the bit width `2^LOG_BITS` of
+/// `F`: `S_ℓ` is spanned by the first `ℓ` Cantor basis vectors, of which there are only that many.
 pub trait AdditiveNtt<F: TowerLevel>: Clone + Default {
     /// Evaluates each column on the coset `shift + S_ℓ`.
+    ///
+    /// # Panics
+    /// Panics if the height of `mat` is not a power of two, or if `ℓ` exceeds the bit width of
+    /// `F`, since `S_ℓ` then calls for a Cantor basis vector this level does not have.
     fn shifted_ntt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F>;
 
     /// Inverse of [`shifted_ntt_batch`](Self::shifted_ntt_batch).
+    ///
+    /// # Panics
+    /// Panics under the same conditions as [`shifted_ntt_batch`](Self::shifted_ntt_batch).
     fn shifted_intt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F>;
 
     /// Evaluates each column on `S_ℓ`.
@@ -28,6 +37,10 @@ pub trait AdditiveNtt<F: TowerLevel>: Clone + Default {
     ///
     /// Because `S_ℓ` is the index prefix of the larger domain, the input rows reappear as the
     /// prefix of the output.
+    ///
+    /// # Panics
+    /// Panics unless `ℓ + added_bits` is at most the bit width of `F`, on top of the conditions
+    /// of [`shifted_ntt_batch`](Self::shifted_ntt_batch).
     fn lde_batch(&self, mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
         self.shifted_lde_batch(mat, added_bits, F::ZERO)
     }

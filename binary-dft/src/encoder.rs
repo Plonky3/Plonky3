@@ -13,7 +13,7 @@ use crate::traits::AdditiveNtt;
 /// Reed–Solomon over the additive NTT domain.
 ///
 /// The message holds the low-index novel-basis coefficients of each column, so the codeword is
-/// the evaluation of `f̂(W_0(x), …, W_{k−1}(x))` on `S_{k + log_inv_rate}`.
+/// the evaluation of `f̂(Ŵ_0(x), …, Ŵ_{k−1}(x))` on `S_{k + log_inv_rate}`.
 #[derive(Clone, Debug, Default)]
 pub struct AdditiveRsEncoder<F, Ntt = LchNtt<F>> {
     ntt: Ntt,
