@@ -123,6 +123,7 @@ mod babybear_stir {
         let params = StirParameters {
             log_blowup,
             log_folding_factor,
+            log_starting_folding_factor: log_folding_factor,
             soundness_type,
             security_level,
             max_pow_bits,
@@ -191,6 +192,74 @@ mod babybear_stir {
         let mut v_ch = challenger;
         verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
             .expect("verification of num_rounds == 0 protocol failed");
+    }
+
+    /// `(params, dft, challenger)` with an explicit, possibly different, round-0 folding
+    /// factor — the other `make_*` helpers above always set `log_starting_folding_factor`
+    /// equal to `log_folding_factor`.
+    fn make_two_tier_params(
+        log_blowup: usize,
+        log_starting_folding_factor: usize,
+        log_folding_factor: usize,
+    ) -> (StirParameters<MyMmcs>, Dft, Challenger) {
+        let perm = Perm::new_from_rng_128(&mut seeded_rng());
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+        let val_mmcs = ValMmcs::new(hash, compress, 0);
+        let mmcs = MyMmcs::new(val_mmcs);
+
+        let params = StirParameters {
+            log_blowup,
+            log_folding_factor,
+            log_starting_folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            security_level: 16,
+            max_pow_bits: 0,
+            mmcs,
+        };
+        (params, Dft::default(), Challenger::new(perm))
+    }
+
+    #[test]
+    fn test_prove_verify_two_tier_folding_schedule() {
+        // Round 0 folds by k0=4 (log=2); every later round, and the final direct-send
+        // stage, folds by k=8 (log=3). log_starting_degree=10 gives after_starting_fold=8,
+        // extra_folds=2 (floor(8/3)), total_folds=3, num_rounds=2 (round0=k0, round1=k),
+        // log_final_degree=2 — exercises both arities across an intermediate round and the
+        // final stage.
+        let (params, dft, challenger) = make_two_tier_params(1, 2, 3);
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(10, params.clone());
+        assert_eq!(config.num_rounds(), 2);
+        assert_eq!(config.round_configs[0].log_folding_factor, 2);
+        assert_eq!(config.round_configs[1].log_folding_factor, 3);
+        assert_eq!(config.final_log_folding_factor(), 3);
+        assert_eq!(config.log_final_degree, 2);
+
+        do_test_stir_prove_verify::<F, EF, Dft, MyMmcs, Challenger>(&params, &dft, &challenger, 10);
+    }
+
+    #[test]
+    fn test_prove_verify_two_tier_zero_intermediate_rounds() {
+        // after_starting_fold = 5 - 2 = 3 < 4 = k, so round 0's k0-fold IS the final fold:
+        // exercises `final_log_folding_factor()` returning k0 (not the steady-state k) when
+        // num_rounds == 0.
+        let (params, dft, challenger) = make_two_tier_params(1, 2, 4);
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(5, params);
+        assert_eq!(config.num_rounds(), 0);
+        assert_eq!(config.final_log_folding_factor(), 2);
+        assert_eq!(config.log_final_degree, 3);
+
+        let mut rng = seeded_rng();
+        let degree = 1usize << 5;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let mut p_ch = challenger.clone();
+        let (proof, _idx) = prove_stir(&config, poly_coeffs, &dft, &mut p_ch);
+        assert!(proof.round_proofs.is_empty());
+
+        let mut v_ch = challenger;
+        verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
+            .expect("verification of two-tier num_rounds == 0 protocol failed");
     }
 
     // ---------------------------------------------------------------------------
@@ -741,6 +810,7 @@ mod koalabear_stir {
         let params = StirParameters {
             log_blowup,
             log_folding_factor,
+            log_starting_folding_factor: log_folding_factor,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: 16,
             max_pow_bits: 0,
@@ -801,6 +871,7 @@ mod goldilocks_stir {
         let params = StirParameters {
             log_blowup,
             log_folding_factor,
+            log_starting_folding_factor: log_folding_factor,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: 16,
             max_pow_bits: 0,
@@ -861,6 +932,7 @@ mod babybear_pcs {
         let stir_params = StirParameters {
             log_blowup: 1,
             log_folding_factor: 2,
+            log_starting_folding_factor: 2,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: 16,
             max_pow_bits: 0,
@@ -961,6 +1033,76 @@ mod babybear_pcs {
         do_test_pcs(&[4, 6, 8]);
     }
 
+    #[test]
+    fn test_pcs_two_tier_multiple_different_degrees() {
+        // Round 0 folds by k0=4 (log=2); every later round folds by k=8 (log=3) —
+        // exercises the PCS-layer input fiber grouping and reconstruction
+        // (`log_starting_folding_factor`) across multiple height buckets under a schedule
+        // that changes arity after round 0.
+        #[allow(unused_imports)]
+        use p3_commit::Pcs as _;
+
+        let perm = Perm::new_from_rng_128(&mut seeded_rng());
+        let (val_mmcs, challenge_mmcs) = make_mmcs(&perm);
+        let stir_params = StirParameters {
+            log_blowup: 1,
+            log_folding_factor: 3,
+            log_starting_folding_factor: 2,
+            soundness_type: SecurityAssumption::CapacityBound,
+            security_level: 16,
+            max_pow_bits: 0,
+            mmcs: challenge_mmcs,
+        };
+        let pcs = MyPcs::new(Dft::default(), val_mmcs, stir_params);
+        let challenger_template = Challenger::new(perm);
+
+        let log_degrees = [4, 6, 8];
+        let mut rng = seeded_rng();
+        let mut p_challenger = challenger_template.clone();
+
+        let domains_and_polys: Vec<_> = log_degrees
+            .iter()
+            .map(|&log_d| {
+                let d = 1 << log_d;
+                let width = 3;
+                (
+                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, d),
+                    RowMajorMatrix::<Val>::rand(&mut rng, d, width),
+                )
+            })
+            .collect();
+
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
+        commit.iter().for_each(|c| p_challenger.observe(c.clone()));
+
+        let zeta: Challenge = p_challenger.sample_algebra_element();
+
+        let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
+        let data_and_points = vec![(&data, points)];
+        let (opening_values, proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_challenger);
+
+        let mut v_challenger = challenger_template;
+        commit.iter().for_each(|c| v_challenger.observe(c.clone()));
+        let v_zeta: Challenge = v_challenger.sample_algebra_element();
+        assert_eq!(v_zeta, zeta);
+
+        let claims: Vec<_> = domains_and_polys
+            .iter()
+            .zip(opening_values.first().unwrap().iter())
+            .map(|((domain, _), mat_openings)| (*domain, vec![(zeta, mat_openings[0].clone())]))
+            .collect();
+
+        <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            vec![(commit, claims)],
+            &proof,
+            &mut v_challenger,
+        )
+        .unwrap_or_else(|e| panic!("two-tier PCS verification failed: {e:?}"));
+    }
+
     fn compare_stir_proof_size_with_binary_fri(
         log_degree: usize,
         log_folding_factor: usize,
@@ -988,6 +1130,7 @@ mod babybear_pcs {
         let stir_params = StirParameters {
             log_blowup: 1,
             log_folding_factor,
+            log_starting_folding_factor: log_folding_factor,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: SECURITY_BITS,
             max_pow_bits: 0,
@@ -1498,6 +1641,7 @@ mod babybear_stir_multi {
         let params = StirParameters {
             log_blowup,
             log_folding_factor,
+            log_starting_folding_factor: log_folding_factor,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level,
             max_pow_bits,
