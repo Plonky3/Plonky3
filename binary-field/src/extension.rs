@@ -10,6 +10,7 @@
 //! `GF(2^8)` are excluded because they do not fill their backing integer, and so their chunks
 //! would not all be canonical representatives.
 
+use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 use core::{ptr, slice};
 
@@ -100,6 +101,19 @@ macro_rules! binary_tower_extension {
                     Self::from_repr(repr)
                 })
             }
+
+            /// The tower basis coincides with the byte layout, so the coefficients of the whole
+            /// buffer are its bytes read in order.
+            #[inline]
+            fn flatten_to_base(vec: Vec<Self>) -> Vec<$lower> {
+                let mut out = Vec::with_capacity(
+                    vec.len() * <$upper as BasedVectorSpace<$lower>>::DIMENSION,
+                );
+                for x in &vec {
+                    out.extend_from_slice(x.as_basis_coefficients_slice());
+                }
+                out
+            }
         }
 
         impl ExtensionField<$lower> for $upper {
@@ -187,6 +201,8 @@ binary_tower_extension!(BinaryField128, u128, BinaryField64, u64);
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use p3_field::extension::HasFrobenius;
     use p3_field::{BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
 
@@ -467,6 +483,50 @@ mod tests {
             <BinaryField128 as BasedVectorSpace<BinaryField64>>::from_basis_coefficients_slice(&[]),
             None
         );
+    }
+
+    /// Flattening concatenates each element's coefficient bytes in memory order, and
+    /// reconstituting inverts it.
+    #[test]
+    fn flatten_and_reconstitute_round_trip() {
+        let elems: Vec<BinaryField128> = (0..64u128)
+            .map(|i| {
+                BinaryField128::from_repr(i.wrapping_mul(0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c834))
+            })
+            .collect();
+
+        // Every coefficient position must take a nonzero value somewhere in the fixture,
+        // or a shift that lands in the wrong position could OR in zeros and still round-trip.
+        for pos in 0..16 {
+            assert!(
+                elems.iter().any(|e| {
+                    BasedVectorSpace::<BinaryField8>::as_basis_coefficients_slice(e)[pos]
+                        != BinaryField8::ZERO
+                }),
+                "coefficient position {pos} is never nonzero"
+            );
+        }
+
+        let flat =
+            <BinaryField128 as BasedVectorSpace<BinaryField8>>::flatten_to_base(elems.clone());
+        assert_eq!(flat.len(), elems.len() * 16);
+        for (i, e) in elems.iter().enumerate() {
+            assert_eq!(&flat[i * 16..(i + 1) * 16], e.as_basis_coefficients_slice());
+        }
+
+        let back = <BinaryField128 as BasedVectorSpace<BinaryField8>>::reconstitute_from_base(flat);
+        assert_eq!(back, elems);
+    }
+
+    /// Every byte of every `GF(2^8)` value survives a pack and an unpack.
+    #[test]
+    fn reconstitute_is_exhaustive_over_the_byte_level() {
+        let all: Vec<BinaryField8> = (0..=u8::MAX).map(BinaryField8::from_repr).collect();
+        let packed =
+            <BinaryField16 as BasedVectorSpace<BinaryField8>>::reconstitute_from_base(all.clone());
+        assert_eq!(packed.len(), 128);
+        let flat = <BinaryField16 as BasedVectorSpace<BinaryField8>>::flatten_to_base(packed);
+        assert_eq!(flat, all);
     }
 
     /// The embedding is multiplicative and additive, i.e. a ring homomorphism.
