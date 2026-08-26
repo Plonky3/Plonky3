@@ -1,7 +1,7 @@
-//! Tower arithmetic, comparing the recursive reference multiplication against whatever `Mul`
-//! dispatches to on the host.
+//! Tower arithmetic, comparing the recursive reference routines against whatever `Mul` and
+//! `square` dispatch to on the host.
 //!
-//! The two are the same routine below `GF(2^64)`; at 64 and 128 bits `Mul` takes the
+//! The two are the same routine below `GF(2^64)`; at 64 and 128 bits both operators take the
 //! carryless-multiply fast path where the target has the instruction for it. Rerunning with
 //! `RUSTFLAGS="-C target-feature=-aes"` (AArch64) or without `+pclmulqdq` (x86-64) measures the
 //! same code with the fast path turned off.
@@ -74,12 +74,73 @@ macro_rules! bench_level {
     }};
 }
 
+/// Latency and throughput of squaring one level, against the multiplication that computes the
+/// same value.
+///
+/// Each step mixes the next operand into the accumulator before squaring, so the chain cannot
+/// be folded away at compile time and both benchmarks pay the same `XOR`.
+macro_rules! bench_square_level {
+    ($c:expr, $t:ty, $bits:literal) => {{
+        let mut rng = SmallRng::seed_from_u64(1);
+        let operands: Vec<$t> = (0..REPS).map(|_| rng.random::<$t>()).collect();
+
+        let mut group = $c.benchmark_group(concat!("square/", $bits));
+
+        group.bench_function("square/latency", |b| {
+            b.iter(|| {
+                black_box(&operands)
+                    .iter()
+                    .fold(<$t>::ONE, |acc, &y| (acc + y).square())
+            });
+        });
+        group.bench_function("mul/latency", |b| {
+            b.iter(|| {
+                black_box(&operands).iter().fold(<$t>::ONE, |acc, &y| {
+                    let x = acc + y;
+                    x * x
+                })
+            });
+        });
+
+        group.bench_function("square/throughput", |b| {
+            b.iter(|| {
+                let mut acc = [<$t>::ONE; LANES];
+                for chunk in black_box(&operands).chunks_exact(LANES) {
+                    for (lane, &y) in acc.iter_mut().zip(chunk) {
+                        *lane = (*lane + y).square();
+                    }
+                }
+                acc
+            });
+        });
+        group.bench_function("mul/throughput", |b| {
+            b.iter(|| {
+                let mut acc = [<$t>::ONE; LANES];
+                for chunk in black_box(&operands).chunks_exact(LANES) {
+                    for (lane, &y) in acc.iter_mut().zip(chunk) {
+                        let x = *lane + y;
+                        *lane = x * x;
+                    }
+                }
+                acc
+            });
+        });
+
+        group.finish();
+    }};
+}
+
 fn bench_mul(c: &mut Criterion) {
     bench_level!(c, BinaryField8, 8);
     bench_level!(c, BinaryField16, 16);
     bench_level!(c, BinaryField32, 32);
     bench_level!(c, BinaryField64, 64);
     bench_level!(c, BinaryField128, 128);
+}
+
+fn bench_square(c: &mut Criterion) {
+    bench_square_level!(c, BinaryField64, 64);
+    bench_square_level!(c, BinaryField128, 128);
 }
 
 fn bench_inverse(c: &mut Criterion) {
@@ -133,5 +194,11 @@ fn bench_mul_alpha(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_mul, bench_inverse, bench_mul_alpha);
+criterion_group!(
+    benches,
+    bench_mul,
+    bench_square,
+    bench_inverse,
+    bench_mul_alpha
+);
 criterion_main!(benches);

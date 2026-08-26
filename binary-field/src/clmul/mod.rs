@@ -17,9 +17,9 @@ mod x86_64;
 
 /// Whether the target has a carryless-multiply instruction.
 ///
-/// The bit-serial fallback below keeps [`mul_64`] and [`mul_128`] correct everywhere, but it is
-/// far slower than the recursive tower multiplication, so `Mul` only routes through this module
-/// when the instruction is really there.
+/// The bit-serial fallback below keeps every routine in this module correct everywhere, but it
+/// is far slower than the recursive tower arithmetic, so `Mul` and `square` only route through
+/// this module when the instruction is really there.
 ///
 /// This is a compile-time decision, and neither feature is in the baseline of most targets:
 /// `aarch64-apple-darwin` has `aes`, but generic AArch64 Linux and every `x86_64` target need
@@ -130,6 +130,28 @@ pub(crate) fn mul_128(a: u128, b: u128) -> u128 {
     basis::poly_to_tower_128(reduce_128(low, high))
 }
 
+/// Squaring in `GF(2^64)`, taking and returning the tower representation.
+///
+/// The change of basis is linear and applied once here, where a product of two operands pays
+/// for it twice.
+#[inline]
+pub(crate) fn square_64(a: u64) -> u64 {
+    let poly = basis::tower_to_poly_64(a);
+    basis::poly_to_tower_64(reduce_64(clmul_64x64(poly, poly)))
+}
+
+/// Squaring in `GF(2^128)`, taking and returning the tower representation.
+///
+/// With `p = p0 + p1·x^64`, the middle coefficient of `p²` is `2·p0·p1`, which vanishes in
+/// characteristic 2. So `p² = p0² + p1²·x^128` exactly: two carryless products with nothing to
+/// fold between them, where [`clmul_128x128`] needs three and a middle term.
+#[inline]
+pub(crate) fn square_128(a: u128) -> u128 {
+    let poly = basis::tower_to_poly_128(a);
+    let (p0, p1) = (poly as u64, (poly >> 64) as u64);
+    basis::poly_to_tower_128(reduce_128(clmul_64x64(p0, p0), clmul_64x64(p1, p1)))
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -167,6 +189,18 @@ mod tests {
             let x = BinaryField64::from_repr(a);
             let y = BinaryField64::from_repr(b);
             prop_assert_eq!(super::mul_64(a, b), x.reference_mul(y).to_repr());
+        }
+
+        #[test]
+        fn clmul_square_matches_reference(a: u128) {
+            let x = BinaryField128::from_repr(a);
+            prop_assert_eq!(super::square_128(a), x.reference_mul(x).to_repr());
+        }
+
+        #[test]
+        fn clmul_64_square_matches_reference(a: u64) {
+            let x = BinaryField64::from_repr(a);
+            prop_assert_eq!(super::square_64(a), x.reference_mul(x).to_repr());
         }
 
         /// Whichever backend the target selected must agree with the bit-serial definition.
