@@ -14,7 +14,7 @@ use crate::traits::AdditiveNtt;
 ///
 /// The forward transform evaluates `Σ_i d_i · X_i(x)` directly, with the normalised subspace
 /// polynomials taken from the product definition `Ŵ_j(x) = ∏_{s ∈ S_j}(x − s) / ∏_{s ∈ S_j}(v_j − s)`.
-/// It therefore depends on none of D8's identities and is a genuine oracle for the fast `LchNtt`.
+/// It therefore depends on none of D8's identities and is a genuine oracle for the fast [`crate::LchNtt`].
 /// The cost is `O(n² log n)`; keep test sizes at or below `2^10`.
 #[derive(Clone, Debug, Default)]
 pub struct NaiveAdditiveNtt<F> {
