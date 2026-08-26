@@ -2,7 +2,10 @@
 //! claim about a small-field multilinear to a claim about its packed extension-field
 //! multilinear.
 
+pub mod pack;
 pub mod tensor;
+
+pub use pack::{compute_s_hat, pack, packed_vars};
 
 #[cfg(test)]
 pub(crate) mod test_util;
