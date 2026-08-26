@@ -45,6 +45,33 @@ mod tests {
 
     use super::{domain_point, subspace_polynomial};
 
+    /// The image of every single-bit index is the matching Cantor basis vector, which pins the
+    /// basis itself and not merely some graded `F_2`-linear reparametrisation of it.
+    #[test]
+    fn domain_point_images_are_the_cantor_basis() {
+        for r in 0..8 {
+            assert_eq!(
+                domain_point::<BinaryField8>(1 << r),
+                BinaryField8::cantor_basis(r),
+                "r={r}"
+            );
+        }
+        for r in 0..usize::BITS as usize {
+            assert_eq!(
+                domain_point::<BinaryField128>(1 << r),
+                BinaryField128::cantor_basis(r),
+                "r={r}"
+            );
+        }
+    }
+
+    /// An index reaching past the basis of its level is rejected rather than silently masked.
+    #[test]
+    #[should_panic = "Cantor basis index out of range"]
+    fn domain_point_rejects_an_index_past_the_basis() {
+        let _ = domain_point::<BinaryField8>(1 << 8);
+    }
+
     /// `domain_point` is `F_2`-linear in its index.
     #[test]
     fn domain_point_is_linear_in_the_index() {

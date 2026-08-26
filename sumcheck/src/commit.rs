@@ -100,11 +100,16 @@ mod tests {
         }
     }
 
-    /// A challenger that only has to absorb the root.
-    struct RootObserver;
+    /// A challenger that only has to absorb the root, and counts how often it is asked to.
+    #[derive(Default)]
+    struct RootObserver {
+        count: usize,
+    }
 
     impl<T> CanObserve<T> for RootObserver {
-        fn observe(&mut self, _value: T) {}
+        fn observe(&mut self, _value: T) {
+            self.count += 1;
+        }
     }
 
     fn mmcs() -> MyMmcs {
@@ -128,15 +133,17 @@ mod tests {
         );
         let mmcs = mmcs();
 
+        let mut observer = RootObserver::default();
         let (root, _data) = commit_base(
             order,
             &DoublingEncoder,
             &mmcs,
-            &mut RootObserver,
+            &mut observer,
             &poly,
             FOLDING,
             LOG_INV_RATE,
         );
+        assert_eq!(observer.count, 1, "the root must be absorbed exactly once");
 
         let expected_codeword = DoublingEncoder.encode_batch(expected_message, LOG_INV_RATE);
         let (expected_root, _) = mmcs.commit_matrix(expected_codeword);
