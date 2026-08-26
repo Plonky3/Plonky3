@@ -21,6 +21,13 @@ p3-maybe-rayon.workspace = true
 p3-util.workspace = true
 
 [dev-dependencies]
+p3-challenger = { path = "../challenger" }
+p3-keccak = { path = "../keccak" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-multilinear-util = { path = "../multilinear-util" }
+p3-sumcheck = { path = "../sumcheck" }
+p3-symmetric = { path = "../symmetric" }
+
 proptest.workspace = true
 rand.workspace = true
 
