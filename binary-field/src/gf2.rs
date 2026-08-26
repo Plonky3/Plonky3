@@ -21,8 +21,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// This is the base case of the characteristic-2 tower `GF(2) ⊂ GF(4) ⊂ … ⊂ GF(2^128)`.
 ///
 /// The serde encoding is canonical: every field element has exactly one valid byte
-/// representation (see the manual [`Deserialize`] impl below).
+/// representation (see the manual [`Deserialize`] impl below). `#[serde(transparent)]` makes the
+/// derived [`Serialize`] emit the backing integer itself, which is what that impl reads back.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
 #[repr(transparent)]
 #[must_use]
 pub struct Gf2(u8);

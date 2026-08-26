@@ -91,8 +91,11 @@ macro_rules! binary_tower_level {
         /// coefficient of `X`.
         ///
         /// The serde encoding is canonical: every field element has exactly one valid byte
-        /// representation (see the manual [`Deserialize`] impl below).
+        /// representation (see the manual [`Deserialize`] impl below). `#[serde(transparent)]`
+        /// makes the derived [`Serialize`] emit the backing integer itself, which is what that
+        /// impl reads back.
         #[derive(Copy, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+        #[serde(transparent)]
         #[repr(transparent)]
         #[must_use]
         pub struct $name($repr);
