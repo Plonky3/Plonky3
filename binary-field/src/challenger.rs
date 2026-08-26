@@ -42,6 +42,23 @@ const GRIND_MARGIN_BITS: usize = 8;
 /// **Sampling**: reads the little-endian bytes of the element from the inner challenger.
 /// Since the field has exactly `2^(8·NUM_BYTES)` elements, uniform bytes give a uniform
 /// field element.
+///
+/// **Proof of work**: unlike the field and bit sampling above, which work at every level,
+/// grinding is only viable in the wider ones. [`GrindingChallenger::grind`] enumerates
+/// candidates with a 64-bit counter and demands `GRIND_MARGIN_BITS` of headroom below that
+/// space, which puts a ceiling of `min(F::bits(), 64) − GRIND_MARGIN_BITS` on the width of a
+/// single request:
+///
+/// | witness field | largest supported `bits` |
+/// | --- | --- |
+/// | [`BinaryField2`](crate::BinaryField2), [`BinaryField4`](crate::BinaryField4), [`BinaryField8`](crate::BinaryField8) | none: every nonzero request panics |
+/// | [`BinaryField16`](crate::BinaryField16) | 8 |
+/// | [`BinaryField32`](crate::BinaryField32) | 24 |
+/// | [`BinaryField64`](crate::BinaryField64) | 56 |
+/// | [`BinaryField128`](crate::BinaryField128) | 56, bounded by the counter rather than the field |
+///
+/// So the levels below `GF(2^32)` implement [`GrindingChallenger`] without being usable
+/// proof-of-work witness types, and a 128-bit witness buys no more width than a 64-bit one.
 #[derive(Clone, Debug)]
 pub struct BinaryChallenger<F, Inner> {
     inner: Inner,
@@ -188,6 +205,9 @@ where
 {
     type Witness = F;
 
+    /// # Panics
+    /// Panics unless `bits + GRIND_MARGIN_BITS <= min(F::bits(), 64)`. See the per-level
+    /// ceiling tabulated on [`BinaryChallenger`].
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
         // Trivial case: 0 bits mean no PoW is required and any witness is valid.
