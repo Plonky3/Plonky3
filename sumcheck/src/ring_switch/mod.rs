@@ -39,12 +39,12 @@ use crate::product_polynomial::ProductPolynomial;
 use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 
 pub mod equality;
-pub mod pack;
+pub mod packing;
 pub mod tensor;
 pub mod weights;
 
 use equality::{equality_element, equality_element_reference};
-pub use pack::{compute_s_hat, pack, packed_vars};
+pub use packing::{compute_s_hat, pack, packed_vars};
 use tensor::TensorAlgebra;
 use weights::{batch_rows, batched_weights};
 

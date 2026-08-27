@@ -73,7 +73,7 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
-    use crate::ring_switch::pack::{compute_s_hat, pack};
+    use crate::ring_switch::packing::{compute_s_hat, pack};
     use crate::ring_switch::test_util::{EF, F, base_poly};
 
     /// `Poly::new_from_point` indexes its table in the same MSB-first order as
