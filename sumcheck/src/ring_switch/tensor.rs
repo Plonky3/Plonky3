@@ -13,10 +13,25 @@ use core::ops::AddAssign;
 use p3_field::{BasedVectorSpace, ExtensionField, Field};
 use serde::{Deserialize, Serialize};
 
+use super::RingSwitchError;
+
 /// An element of `EF ⊗_F EF`, held as a `DIMENSION × DIMENSION` matrix over `F`.
 ///
 /// See the module documentation for the basis convention this relies on.
+///
+/// Both readings index the matrix as `DIMENSION × DIMENSION`, so every value of this type
+/// carries exactly `DIMENSION²` coefficients. The only route from untrusted bytes to a value
+/// is [`TryFrom<Vec<F>>`], which the [`Deserialize`] impl goes through, so a deserialized
+/// element is already the right shape.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    into = "Vec<F>",
+    try_from = "Vec<F>",
+    bound(
+        serialize = "F: Field, EF: ExtensionField<F>",
+        deserialize = "F: Field, EF: ExtensionField<F>"
+    )
+)]
 pub struct TensorAlgebra<F, EF> {
     /// Row-major `DIMENSION × DIMENSION`: `coeffs[u * DIMENSION + v]` is the coefficient of
     /// `β_u ⊗ β_v`.
@@ -40,13 +55,17 @@ impl<F: Field, EF: ExtensionField<F>> TensorAlgebra<F, EF> {
     ///
     /// Since `β_0 = 1`, `1 ⊗ 1` has coefficient `1` at `(u, v) = (0, 0)` and `0` everywhere
     /// else.
+    ///
+    /// # Panics
+    /// Debug builds check the `β_0 = 1` convention this placement relies on.
     pub fn one() -> Self {
-        let mut coeffs = vec![F::ZERO; Self::DIMENSION * Self::DIMENSION];
-        coeffs[0] = F::ONE;
-        Self {
-            coeffs,
-            _marker: PhantomData,
-        }
+        debug_assert!(
+            <EF as BasedVectorSpace<F>>::ith_basis_element(0) == Some(EF::ONE),
+            "the tensor algebra places 1 ⊗ 1 at (0, 0), which needs the basis convention β_0 = 1"
+        );
+        let mut t = Self::zero();
+        t.coeffs[0] = F::ONE;
+        t
     }
 
     /// `a ⊗ b`.
@@ -64,6 +83,14 @@ impl<F: Field, EF: ExtensionField<F>> TensorAlgebra<F, EF> {
             coeffs,
             _marker: PhantomData,
         }
+    }
+
+    /// Whether the element carries the `DIMENSION²` coefficients both readings index.
+    ///
+    /// Every constructor here produces a well-formed element; this is the check a consumer
+    /// applies to an element it did not build itself.
+    pub const fn is_well_formed(&self) -> bool {
+        self.coeffs.len() == Self::DIMENSION * Self::DIMENSION
     }
 
     /// The `F`-coefficients in row-major order: entry `u * DIMENSION + v` is the coefficient
@@ -125,8 +152,39 @@ impl<F: Field, EF: ExtensionField<F>> TensorAlgebra<F, EF> {
     }
 }
 
+/// The checked constructor: `coeffs` must be the `DIMENSION²` row-major coefficients.
+impl<F: Field, EF: ExtensionField<F>> TryFrom<Vec<F>> for TensorAlgebra<F, EF> {
+    type Error = RingSwitchError;
+
+    fn try_from(coeffs: Vec<F>) -> Result<Self, Self::Error> {
+        let expected = Self::DIMENSION * Self::DIMENSION;
+        if coeffs.len() == expected {
+            Ok(Self {
+                coeffs,
+                _marker: PhantomData,
+            })
+        } else {
+            Err(RingSwitchError::MalformedTensor {
+                expected,
+                actual: coeffs.len(),
+            })
+        }
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> From<TensorAlgebra<F, EF>> for Vec<F> {
+    fn from(tensor: TensorAlgebra<F, EF>) -> Self {
+        tensor.coeffs
+    }
+}
+
 impl<F: Field, EF> AddAssign for TensorAlgebra<F, EF> {
     fn add_assign(&mut self, rhs: Self) {
+        debug_assert_eq!(
+            self.coeffs.len(),
+            rhs.coeffs.len(),
+            "adding tensor elements of different shapes would truncate to the shorter one"
+        );
         for (c, r) in self.coeffs.iter_mut().zip(rhs.coeffs) {
             *c += r;
         }
@@ -135,10 +193,13 @@ impl<F: Field, EF> AddAssign for TensorAlgebra<F, EF> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use p3_binary_field::TowerLevel;
     use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 
     use super::TensorAlgebra;
+    use crate::ring_switch::RingSwitchError;
     use crate::ring_switch::test_util::{EF, F};
 
     /// `a ⊗ b` read by columns is `a` scaled by each coefficient of `b`, and by rows is `b`
@@ -195,5 +256,41 @@ mod tests {
         assert!(t.columns()[1..].iter().all(|c| *c == EF::ZERO));
         assert_eq!(t.rows()[0], EF::ONE);
         assert!(t.rows()[1..].iter().all(|r| *r == EF::ZERO));
+    }
+
+    /// A coefficient vector of the wrong length has no `DIMENSION × DIMENSION` reading, so
+    /// the constructor rejects it rather than building an element that indexes out of range.
+    #[test]
+    fn a_wrong_length_coefficient_vector_is_rejected() {
+        let dimension = TensorAlgebra::<F, EF>::DIMENSION;
+        let expected = dimension * dimension;
+
+        let well_formed = TensorAlgebra::<F, EF>::try_from(vec![F::ZERO; expected]).unwrap();
+        assert!(well_formed.is_well_formed());
+
+        assert_eq!(
+            TensorAlgebra::<F, EF>::try_from(vec![F::ZERO; expected - 1]),
+            Err(RingSwitchError::MalformedTensor {
+                expected,
+                actual: expected - 1,
+            })
+        );
+    }
+
+    /// Serialization round-trips through the checked constructor, so the shape invariant
+    /// survives the wire.
+    #[test]
+    fn serialization_round_trips() {
+        let t = TensorAlgebra::<F, EF>::exterior_product(EF::from_repr(3), EF::from_repr(5));
+        let bytes = serde_json::to_vec(&t).unwrap();
+        let decoded: TensorAlgebra<F, EF> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(t, decoded);
+    }
+
+    /// A short coefficient vector on the wire is rejected by the deserializer itself.
+    #[test]
+    fn deserializing_a_short_coefficient_vector_fails() {
+        let bytes = serde_json::to_vec(&vec![F::ZERO; 1]).unwrap();
+        assert!(serde_json::from_slice::<TensorAlgebra<F, EF>>(&bytes).is_err());
     }
 }

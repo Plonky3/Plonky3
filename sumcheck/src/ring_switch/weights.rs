@@ -1,4 +1,5 @@
-//! The batched weight multilinear `A(X)` and the row reading of `ŝ` (Construction 3.1).
+//! The batched weight multilinear `A(X)` and the batched row reading of a tensor element
+//! (Construction 3.1).
 
 use alloc::vec::Vec;
 
@@ -38,13 +39,17 @@ pub fn batched_weights<F: Field, EF: ExtensionField<F>>(
     Poly::new(weights)
 }
 
-/// `s_0 = Σ_u eq̃(hypercube(u, κ), r'') · ŝ^u`, the sumcheck's initial claim, derived by the
-/// verifier from the row reading of `ŝ` rather than sent by the prover.
+/// `Σ_u eq̃(hypercube(u, κ), r'') · m^u`, where `m^u` is row `u` of `tensor` read as an `EF`:
+/// the rows batched against the equality table of `r_batch`.
+///
+/// Both ends of the sumcheck are this same operation on a different tensor element. On `ŝ` it
+/// gives the initial claim `s_0`, which the verifier derives rather than receives. On the
+/// equality element `e` it gives `A(r')`, the weight the surviving claim is scaled by.
 ///
 /// # Panics
 /// Panics unless `r_batch` names exactly the `κ = log2([EF:F])` batching variables.
-pub fn initial_sum<F: Field, EF: ExtensionField<F>>(
-    s_hat: &TensorAlgebra<F, EF>,
+pub fn batch_rows<F: Field, EF: ExtensionField<F>>(
+    tensor: &TensorAlgebra<F, EF>,
     r_batch: &Point<EF>,
 ) -> EF {
     assert_eq!(
@@ -53,7 +58,7 @@ pub fn initial_sum<F: Field, EF: ExtensionField<F>>(
         "r_batch must name exactly the kappa batching variables"
     );
     let eq_batch = Poly::<EF>::new_from_point(r_batch.as_slice(), EF::ONE);
-    s_hat
+    tensor
         .rows()
         .iter()
         .zip(eq_batch.as_slice())
@@ -107,7 +112,7 @@ mod tests {
             .zip(packed.as_slice())
             .map(|(a, p)| *a * *p)
             .sum();
-        assert_eq!(dot, initial_sum::<F, EF>(&s_hat, &r_batch));
+        assert_eq!(dot, batch_rows::<F, EF>(&s_hat, &r_batch));
     }
 
     /// The unbatched identity, checked row by row so a failure localises.
@@ -121,8 +126,7 @@ mod tests {
         let rows = compute_s_hat::<F, EF>(&packed, &r_high).rows();
         let eq = Poly::<EF>::new_from_point(r_high.as_slice(), EF::ONE);
 
-        #[allow(clippy::needless_range_loop)]
-        for u in 0..16 {
+        for (u, row) in rows.iter().enumerate() {
             let expected: EF = eq
                 .as_slice()
                 .iter()
@@ -131,7 +135,7 @@ mod tests {
                     *p * EF::from(BasedVectorSpace::<F>::as_basis_coefficients_slice(e)[u])
                 })
                 .sum();
-            assert_eq!(rows[u], expected, "row {u}");
+            assert_eq!(*row, expected, "row {u}");
         }
     }
 
@@ -147,16 +151,16 @@ mod tests {
         let _ = batched_weights::<F, EF>(&r_high, &r_batch);
     }
 
-    /// The same guard on `initial_sum`: a wrong-length `r_batch` must panic rather than
+    /// The same guard on `batch_rows`: a wrong-length `r_batch` must panic rather than
     /// silently drop rows of `ŝ` from the sumcheck's initial claim.
     #[test]
     #[should_panic(expected = "r_batch must name exactly the kappa batching variables")]
-    fn initial_sum_rejects_a_short_r_batch() {
+    fn batch_rows_rejects_a_short_r_batch() {
         let r_high = Point::<EF>::rand(&mut SmallRng::seed_from_u64(13), 0);
         let t = base_poly(4, 14);
         let packed = pack::<F, EF>(&t);
         let s_hat = compute_s_hat::<F, EF>(&packed, &r_high);
         let r_batch = Point::<EF>::rand(&mut SmallRng::seed_from_u64(15), 3);
-        let _ = initial_sum::<F, EF>(&s_hat, &r_batch);
+        let _ = batch_rows::<F, EF>(&s_hat, &r_batch);
     }
 }

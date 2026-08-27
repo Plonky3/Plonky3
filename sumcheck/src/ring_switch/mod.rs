@@ -11,6 +11,20 @@
 //! The tensor element `ŝ` is the only prover message the two checks share: the verifier reads
 //! it by columns to test the incoming claim, and by rows to derive the sumcheck's initial sum.
 //! A prover who tampers with a coefficient to pass one reading breaks the other.
+//!
+//! # Soundness
+//!
+//! The reduction's own soundness error is `(κ + 2ℓ') / |EF|` (eprint 2024/504 §3.2, Theorem
+//! 3.5), split as:
+//!
+//! - `κ/|EF|` from the Schwartz–Zippel argument on the `r''` batching draw, which collapses
+//!   the `κ` row claims into one; and
+//! - `2ℓ'/|EF|` for the `ℓ'` rounds of degree-2 sumcheck.
+//!
+//! That figure is wired into **no** soundness estimator: nothing here touches `p3-security`,
+//! and neither the reduction nor its callers subtract it from any security target. A caller
+//! composing this reduction into a proof system must account for it in that system's own
+//! error budget, on top of whatever the commitment scheme discharging `t'(r') = s'` costs.
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
@@ -32,13 +46,17 @@ pub mod weights;
 use equality::{equality_element, equality_element_reference};
 pub use pack::{compute_s_hat, pack, packed_vars};
 use tensor::TensorAlgebra;
-use weights::{batched_weights, initial_sum};
+use weights::{batch_rows, batched_weights};
 
 #[cfg(test)]
 pub(crate) mod test_util;
 
 /// The messages one ring-switching reduction puts on the wire.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "F: Field, EF: ExtensionField<F>",
+    deserialize = "F: Field, EF: ExtensionField<F>"
+))]
 pub struct RingSwitchProof<F, EF> {
     /// `ŝ = Σ_w eq̃(r_high, w) ⊗ t'(w)`, read by columns and by rows.
     pub s_hat: TensorAlgebra<F, EF>,
@@ -77,21 +95,21 @@ pub enum RingSwitchError {
 ///
 /// The Remark 3.4 recurrence needs `eq̃(X, Y) = Π_i (1 − X_i − Y_i)`, which holds only when
 /// `2 = 0`, and costs `O(ℓ' · d)`. Elsewhere the element is summed over the hypercube from its
-/// definition, at `O(2^ℓ')`. That asymmetry is real: the second branch shows the reduction is
-/// not specific to characteristic 2, not that it is ready to be run at scale over an
-/// odd-characteristic field.
+/// definition, at `O(2^ℓ' · d²)` — each of the `2^ℓ'` terms is a `d × d` exterior product.
+/// That asymmetry is real: the second branch shows the reduction is not specific to
+/// characteristic 2, not that it is ready to be run at scale over an odd-characteristic field.
 fn equality_element_for_characteristic<F, EF>(
     r_high: &Point<EF>,
-    r_challenge: &Point<EF>,
+    r_prime: &Point<EF>,
 ) -> TensorAlgebra<F, EF>
 where
     F: Field,
     EF: ExtensionField<F>,
 {
     if F::PrimeSubfield::ONE + F::PrimeSubfield::ONE == F::PrimeSubfield::ZERO {
-        equality_element(r_high, r_challenge)
+        equality_element(r_high, r_prime)
     } else {
-        equality_element_reference(r_high, r_challenge)
+        equality_element_reference(r_high, r_prime)
     }
 }
 
@@ -113,6 +131,13 @@ where
 ///
 /// Returns the proof, the sumcheck's random point `r'`, and the surviving claim's value
 /// `s' = t'(r')`.
+///
+/// Every value that reaches the proof is computed from `packed`; `t` is read only by the debug
+/// assertion that `packed` is its packing.
+///
+/// The sumcheck runs on a scalar [`ProductPolynomial`]. For the binary tower
+/// `EF::ExtensionPacking` is `EF` itself, so packing the operands would buy nothing there;
+/// over an extension with a wider packing it leaves throughput unclaimed.
 ///
 /// # Panics
 /// Panics unless `r` names at least the `κ` packed variables and `packed` has exactly the
@@ -160,7 +185,7 @@ where
     // reading of `ŝ`.
     let weights = batched_weights::<F, EF>(&r_high, &r_batch);
     let poly = ProductPolynomial::new_unpacked(VariableOrder::Prefix, packed.clone(), weights);
-    let mut prover = SumcheckProver::new(poly, initial_sum::<F, EF>(&s_hat, &r_batch));
+    let mut prover = SumcheckProver::new(poly, batch_rows::<F, EF>(&s_hat, &r_batch));
     let mut sumcheck = SumcheckData::default();
     let r_prime =
         prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, ell_prime, 0, None);
@@ -185,8 +210,8 @@ where
 /// the transcript.
 ///
 /// The characteristic of `F` selects how the tensor-algebra equality element is formed, so the
-/// reduction runs over any extension; in odd characteristic that step costs `O(2^ℓ')` rather
-/// than `O(ℓ' · d)`.
+/// reduction runs over any extension; in odd characteristic that step costs `O(2^ℓ' · d²)`
+/// rather than `O(ℓ' · d)`.
 ///
 /// # Panics
 /// Panics unless `r` names at least the `κ` packed variables. Everything read out of `proof`
@@ -216,11 +241,12 @@ where
 
     // `columns` and `rows` index a `DIMENSION × DIMENSION` matrix, so a short `ŝ` must be
     // rejected before either reading is taken.
-    let dimension = TensorAlgebra::<F, EF>::DIMENSION;
-    let expected = dimension * dimension;
-    let actual = proof.s_hat.coefficients().len();
-    if actual != expected {
-        return Err(RingSwitchError::MalformedTensor { expected, actual });
+    if !proof.s_hat.is_well_formed() {
+        let dimension = TensorAlgebra::<F, EF>::DIMENSION;
+        return Err(RingSwitchError::MalformedTensor {
+            expected: dimension * dimension,
+            actual: proof.s_hat.coefficients().len(),
+        });
     }
 
     let (r_high, r_low) = r.split_at(ell_prime);
@@ -243,7 +269,7 @@ where
     // The sumcheck's initial sum is derived from `ŝ`'s rows, never sent, which is what makes a
     // dishonest `ŝ` catchable: the two readings are of the same coefficients.
     let r_batch = sample_batching_point::<F, EF, _>(challenger);
-    let mut sum = initial_sum::<F, EF>(&proof.s_hat, &r_batch);
+    let mut sum = batch_rows::<F, EF>(&proof.s_hat, &r_batch);
 
     let r_prime =
         proof
@@ -253,7 +279,7 @@ where
     // The batched rows of the equality element are `A(r')`, so the sumcheck closes on
     // `A(r') · t'(r')`.
     let e = equality_element_for_characteristic::<F, EF>(&r_high, &r_prime);
-    if sum != initial_sum::<F, EF>(&e, &r_batch) * proof.final_eval {
+    if sum != batch_rows::<F, EF>(&e, &r_batch) * proof.final_eval {
         return Err(RingSwitchError::FinalCheck);
     }
 

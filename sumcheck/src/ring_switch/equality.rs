@@ -13,17 +13,17 @@ use super::tensor::TensorAlgebra;
 /// `e ← e + φ0(r_high_i)·e + φ1(r'_i)·e`. Costs `2·ℓ'·d` extension multiplications.
 ///
 /// # Panics
-/// Panics unless `r_high` and `r_challenge` have the same length, and unless `F` has
+/// Panics unless `r_high` and `r_prime` have the same length, and unless `F` has
 /// characteristic 2 — in odd characteristic the recurrence needs a third term and this
 /// function does not implement it.
 pub fn equality_element<F: Field, EF: ExtensionField<F>>(
     r_high: &Point<EF>,
-    r_challenge: &Point<EF>,
+    r_prime: &Point<EF>,
 ) -> TensorAlgebra<F, EF> {
     assert_eq!(
         r_high.num_variables(),
-        r_challenge.num_variables(),
-        "r_high and r_challenge must name the same number of variables"
+        r_prime.num_variables(),
+        "r_high and r_prime must name the same number of variables"
     );
     assert_eq!(
         F::PrimeSubfield::ONE + F::PrimeSubfield::ONE,
@@ -37,10 +37,10 @@ pub fn equality_element<F: Field, EF: ExtensionField<F>>(
     for i in 0..r_high.num_variables() {
         let mut by_high = e.clone();
         by_high.scale_columns(r_high[i]);
-        let mut by_chal = e.clone();
-        by_chal.scale_rows(r_challenge[i]);
+        let mut by_prime = e.clone();
+        by_prime.scale_rows(r_prime[i]);
         e += by_high;
-        e += by_chal;
+        e += by_prime;
     }
     e
 }
@@ -50,21 +50,21 @@ pub fn equality_element<F: Field, EF: ExtensionField<F>>(
 /// of odd characteristic.
 ///
 /// # Panics
-/// Panics unless `r_high` and `r_challenge` have the same length.
+/// Panics unless `r_high` and `r_prime` have the same length.
 pub fn equality_element_reference<F: Field, EF: ExtensionField<F>>(
     r_high: &Point<EF>,
-    r_challenge: &Point<EF>,
+    r_prime: &Point<EF>,
 ) -> TensorAlgebra<F, EF> {
     assert_eq!(
         r_high.num_variables(),
-        r_challenge.num_variables(),
-        "r_high and r_challenge must name the same number of variables"
+        r_prime.num_variables(),
+        "r_high and r_prime must name the same number of variables"
     );
 
     let eq_high = Poly::<EF>::new_from_point(r_high.as_slice(), EF::ONE);
-    let eq_chal = Poly::<EF>::new_from_point(r_challenge.as_slice(), EF::ONE);
+    let eq_prime = Poly::<EF>::new_from_point(r_prime.as_slice(), EF::ONE);
     let mut e = TensorAlgebra::zero();
-    for (&a, &b) in eq_high.as_slice().iter().zip(eq_chal.as_slice()) {
+    for (&a, &b) in eq_high.as_slice().iter().zip(eq_prime.as_slice()) {
         e += TensorAlgebra::exterior_product(a, b);
     }
     e
@@ -87,10 +87,10 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(11);
         for ell_prime in 0..=4 {
             let r_high = Point::<EF>::rand(&mut rng, ell_prime);
-            let r_chal = Point::<EF>::rand(&mut rng, ell_prime);
+            let r_prime = Point::<EF>::rand(&mut rng, ell_prime);
             assert_eq!(
-                equality_element::<F, EF>(&r_high, &r_chal),
-                equality_element_reference::<F, EF>(&r_high, &r_chal),
+                equality_element::<F, EF>(&r_high, &r_prime),
+                equality_element_reference::<F, EF>(&r_high, &r_prime),
                 "ell' = {ell_prime}"
             );
         }
@@ -103,10 +103,10 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(12);
         let ell_prime = 3;
         let r_high = Point::<EF>::rand(&mut rng, ell_prime);
-        let r_chal = Point::<EF>::rand(&mut rng, ell_prime);
+        let r_prime = Point::<EF>::rand(&mut rng, ell_prime);
         let r_batch = Point::<EF>::rand(&mut rng, 4);
 
-        let rows = equality_element::<F, EF>(&r_high, &r_chal).rows();
+        let rows = equality_element::<F, EF>(&r_high, &r_prime).rows();
         let eq_batch = Poly::<EF>::new_from_point(r_batch.as_slice(), EF::ONE);
         let batched: EF = rows
             .iter()
@@ -115,7 +115,7 @@ mod tests {
             .sum();
 
         let weights = batched_weights::<F, EF>(&r_high, &r_batch);
-        assert_eq!(batched, weights.eval_ext::<F>(&r_chal));
+        assert_eq!(batched, weights.eval_ext::<F>(&r_prime));
     }
 
     /// The degenerate case the whole recurrence starts from.
