@@ -9,8 +9,15 @@
 //! commitment to `t'` is the caller's business.
 //!
 //! The tensor element `ŝ` is the only prover message the two checks share: the verifier reads
-//! it by columns to test the incoming claim, and by rows to derive the sumcheck's initial sum.
-//! A prover who tampers with a coefficient to pass one reading breaks the other.
+//! it by columns to test the incoming claim, and derives the sumcheck's initial sum from its
+//! rows itself rather than take that sum from the prover. That makes this a reduction, not a
+//! filter: a false input claim survives as a false surviving claim `t'(r') = s'` rather than
+//! being rejected outright, and a prover who tampers with `ŝ` and adapts the rest of the proof
+//! to the sum that tampering implies is not caught by [`verify_ring_switch`] — only by the
+//! caller discharging `s'` against a commitment to `t'`. What the row reading buys is the
+//! `κ/|EF|` term of the soundness bound below: a tampered `ŝ` shifts the derived initial sum
+//! away from the value an honest packing would produce, at the Schwartz–Zippel rate of the
+//! batching draw.
 //!
 //! # Soundness
 //!
@@ -89,6 +96,14 @@ pub enum RingSwitchError {
     /// The surviving claim does not close the sumcheck against the equality element.
     #[error("Ring switching: the surviving claim does not close the sumcheck")]
     FinalCheck,
+
+    /// The sumcheck carries PoW witnesses this reduction never grinds for, so a proof carrying
+    /// junk witnesses would otherwise verify identically to one carrying none.
+    #[error("Ring switching: the sumcheck carries {actual} PoW witnesses, expected none")]
+    NonEmptyPowWitnesses {
+        /// The number of witnesses the proof supplied.
+        actual: usize,
+    },
 }
 
 /// `e = eq̃(φ0(r_high), φ1(r'))`, formed by whichever route the characteristic of `F` admits.
@@ -138,6 +153,11 @@ where
 /// The sumcheck runs on a scalar [`ProductPolynomial`]. For the binary tower
 /// `EF::ExtensionPacking` is `EF` itself, so packing the operands would buy nothing there;
 /// over an extension with a wider packing it leaves throughput unclaimed.
+///
+/// `(r', s')` is transcript-bound on return: `final_eval` is observed into `challenger`
+/// alongside `s_hat` and the sumcheck's own rounds before this function returns. `r` itself is
+/// not bound by this reduction — a caller composing it into a larger protocol must bind `r`
+/// before invoking this function.
 ///
 /// # Panics
 /// Panics unless `r` names at least the `κ` packed variables and `packed` has exactly the
@@ -191,6 +211,7 @@ where
         prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, ell_prime, 0, None);
 
     let final_eval = packed.eval_ext::<F>(&r_prime);
+    challenger.observe_algebra_element(final_eval);
     (
         RingSwitchProof {
             s_hat,
@@ -213,13 +234,20 @@ where
 /// reduction runs over any extension; in odd characteristic that step costs `O(2^ℓ' · d²)`
 /// rather than `O(ℓ' · d)`.
 ///
+/// `(r', s')` is transcript-bound on return: this function observes `proof.final_eval` into
+/// `challenger` at the same point [`prove_ring_switch`] does, before returning it as part of
+/// the surviving claim. `r` is not bound by this reduction; `claimed_sum` is, indirectly,
+/// through the column check against the observed `ŝ`. A caller composing this into a larger
+/// protocol must bind `r` itself before invoking it.
+///
 /// # Panics
 /// Panics unless `r` names at least the `κ` packed variables. Everything read out of `proof`
 /// is validated and reported as an error.
 ///
 /// # Errors
-/// Returns [`RingSwitchError`] for a malformed `ŝ`, a claim that disagrees with `ŝ`'s columns,
-/// a failed sumcheck round, or a final claim that does not close the sumcheck.
+/// Returns [`RingSwitchError`] for a malformed `ŝ`, a non-empty `pow_witnesses` (this reduction
+/// never grinds), a claim that disagrees with `ŝ`'s columns, a failed sumcheck round, or a
+/// final claim that does not close the sumcheck.
 pub fn verify_ring_switch<F, EF, Challenger>(
     proof: &RingSwitchProof<F, EF>,
     r: &Point<EF>,
@@ -249,6 +277,14 @@ where
         });
     }
 
+    // This reduction never grinds, so a proof carrying PoW witnesses is carrying data that is
+    // neither checked nor bound to the transcript; reject it outright instead of ignoring it.
+    if !proof.sumcheck.pow_witnesses.is_empty() {
+        return Err(RingSwitchError::NonEmptyPowWitnesses {
+            actual: proof.sumcheck.pow_witnesses.len(),
+        });
+    }
+
     let (r_high, r_low) = r.split_at(ell_prime);
     challenger.observe_slice(proof.s_hat.coefficients());
 
@@ -275,6 +311,7 @@ where
         proof
             .sumcheck
             .verify_rounds(challenger, &mut sum, ell_prime, 0, Basis::Evaluation)?;
+    challenger.observe_algebra_element(proof.final_eval);
 
     // The batched rows of the equality element are `A(r')`, so the sumcheck closes on
     // `A(r') · t'(r')`.
@@ -288,6 +325,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use p3_challenger::CanObserve;
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::point::Point;
     use rand::SeedableRng;
@@ -338,11 +376,18 @@ mod tests {
         );
     }
 
-    /// A tampered `ŝ` that passes the column check is still caught by the row reading. The
-    /// claim handed to the verifier is the perturbed element's own column reading, formed the
-    /// way the verifier forms it, so the first check passes by construction and only the row
-    /// arm can reject. Both readings are of the same coefficients, which is what leaves a
-    /// cheating prover nowhere to stand.
+    /// A `ŝ` perturbed after proving is rejected. The claim handed to the verifier is the
+    /// perturbed element's own column reading, formed the way the verifier forms it, so the
+    /// column check passes by construction; the rejection comes from the final check instead.
+    ///
+    /// This does not, on its own, demonstrate that the reduction catches a prover who tampers
+    /// with `ŝ` and adapts the rest of the proof to it: perturbing `ŝ` after the honest sumcheck
+    /// was already recorded moves the verifier's derived `r''` and every later round challenge
+    /// away from the values those recorded messages were generated under, so verification fails
+    /// here even in a hypothetical design where the sumcheck's initial sum were prover-supplied.
+    /// An adaptive prover — one who tampers with `ŝ` first and then runs the genuine sumcheck
+    /// from the sum that tampered `ŝ` implies — is not caught by this check; see the module
+    /// docs for what does and does not stop that prover.
     #[test]
     fn a_perturbed_tensor_element_is_rejected() {
         let ell = 6;
@@ -390,6 +435,154 @@ mod tests {
             verify_ring_switch::<F, EF, _>(&proof, &r, s, &mut v_chal),
             Err(RingSwitchError::FinalCheck)
         );
+    }
+
+    /// Perturbing one round message desynchronises every challenge sampled after it, so the
+    /// proof fails at the final check rather than being caught round-by-round.
+    #[test]
+    fn a_perturbed_round_message_is_rejected() {
+        let ell = 6;
+        let t = base_poly(ell, 35);
+        let packed = pack::<F, EF>(&t);
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(36), ell);
+        let s = t.eval_base(&r);
+
+        let mut p_chal = challenger();
+        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        proof.sumcheck.polynomial_evaluations[0][0] += EF::ONE;
+
+        let mut v_chal = challenger();
+        assert_eq!(
+            verify_ring_switch::<F, EF, _>(&proof, &r, s, &mut v_chal),
+            Err(RingSwitchError::FinalCheck)
+        );
+    }
+
+    /// A proof is bound to the evaluation point it was produced for: verifying it against a
+    /// different point of the same length is rejected, even though `r` itself is never observed
+    /// into the transcript — `r_high` and `r_low` both feed checks the verifier forms locally
+    /// from `r`, not from anything the proof carries.
+    #[test]
+    fn a_proof_does_not_verify_against_a_different_point() {
+        let ell = 6;
+        let t = base_poly(ell, 37);
+        let packed = pack::<F, EF>(&t);
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(38), ell);
+
+        let mut p_chal = challenger();
+        let (proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+
+        let other_r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(39), ell);
+        let other_s = t.eval_base(&other_r);
+
+        let mut v_chal = challenger();
+        assert_eq!(
+            verify_ring_switch::<F, EF, _>(&proof, &other_r, other_s, &mut v_chal),
+            Err(RingSwitchError::ClaimMismatch)
+        );
+    }
+
+    /// This reduction never grinds, so a proof carrying PoW witnesses must be rejected rather
+    /// than accepted with junk data nothing checks.
+    #[test]
+    fn a_proof_with_pow_witnesses_is_rejected() {
+        let ell = 6;
+        let t = base_poly(ell, 40);
+        let packed = pack::<F, EF>(&t);
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(41), ell);
+        let s = t.eval_base(&r);
+
+        let mut p_chal = challenger();
+        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        proof.sumcheck.pow_witnesses.push(F::ONE);
+
+        let mut v_chal = challenger();
+        assert_eq!(
+            verify_ring_switch::<F, EF, _>(&proof, &r, s, &mut v_chal),
+            Err(RingSwitchError::NonEmptyPowWitnesses { actual: 1 })
+        );
+    }
+
+    /// An adaptive prover who tampers with `ŝ` before proving, then runs a genuine sumcheck from
+    /// the sum that tampered `ŝ` implies, is accepted by `verify_ring_switch` — with a surviving
+    /// claim that is false. This is the reduction working as documented, not a soundness gap: a
+    /// false input claim survives as a false surviving claim, caught only when the caller
+    /// discharges it against a commitment to the real packed polynomial, which this test does
+    /// not do. Contrast with `a_perturbed_tensor_element_is_rejected`, which perturbs `ŝ` after
+    /// proving and is rejected for an unrelated reason — transcript desynchronisation.
+    #[test]
+    fn an_adaptive_cheat_on_s_hat_is_accepted_with_a_false_surviving_claim() {
+        let ell = 6;
+        let t = base_poly(ell, 43);
+        let packed = pack::<F, EF>(&t);
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(44), ell);
+        let kappa = packed_vars::<F, EF>();
+        let ell_prime = ell - kappa;
+        let (r_high, r_low) = r.split_at(ell_prime);
+
+        // Tamper with `ŝ` before it ever reaches the transcript, unlike the post-hoc
+        // perturbation above.
+        let mut s_hat = compute_s_hat::<F, EF>(&packed, &r_high);
+        s_hat.perturb_for_test(0, F::ONE);
+
+        // The claim that makes the column check pass for the tampered element, formed the way
+        // the verifier forms it.
+        let eq_low = Poly::<EF>::new_from_point(r_low.as_slice(), EF::ONE);
+        let claimed_sum: EF = s_hat
+            .columns()
+            .iter()
+            .zip(eq_low.as_slice())
+            .map(|(&column, &weight)| column * weight)
+            .sum();
+
+        let mut chal = challenger();
+        chal.observe_slice(s_hat.coefficients());
+        let r_batch = sample_batching_point::<F, EF, _>(&mut chal);
+
+        // The genuine sumcheck's initial sum, derived from the tampered `ŝ` exactly as the
+        // verifier will derive it — not the true dot product of any real polynomial.
+        let shifted_sum = batch_rows::<F, EF>(&s_hat, &r_batch);
+
+        // A product polynomial that actually dots to `shifted_sum`: nothing downstream of this
+        // point checks that the evaluations are `packed`'s, only that the recorded rounds are
+        // internally consistent, so perturbing one evaluation is enough.
+        let weights = batched_weights::<F, EF>(&r_high, &r_batch);
+        let honest_sum = batch_rows::<F, EF>(&compute_s_hat::<F, EF>(&packed, &r_high), &r_batch);
+        let index = weights
+            .as_slice()
+            .iter()
+            .position(|&w| w != EF::ZERO)
+            .expect("a generic r_high, r_batch pair leaves no weight identically zero");
+        let mut fake_evals = packed.as_slice().to_vec();
+        fake_evals[index] += (shifted_sum - honest_sum) * weights.as_slice()[index].inverse();
+        let fake_packed = Poly::new(fake_evals);
+
+        let poly = ProductPolynomial::new_unpacked(VariableOrder::Prefix, fake_packed, weights);
+        let mut prover = SumcheckProver::new(poly, shifted_sum);
+        let mut sumcheck = SumcheckData::default();
+        let r_prime =
+            prover.compute_sumcheck_polynomials(&mut sumcheck, &mut chal, ell_prime, 0, None);
+        let sum_final = prover.claimed_sum();
+
+        // `final_eval` set to whatever the final identity needs, computed the same way the
+        // verifier computes it.
+        let e = equality_element_for_characteristic::<F, EF>(&r_high, &r_prime);
+        let a_r_prime = batch_rows::<F, EF>(&e, &r_batch);
+        let final_eval = sum_final * a_r_prime.inverse();
+
+        let proof = RingSwitchProof {
+            s_hat,
+            sumcheck,
+            final_eval,
+        };
+
+        let mut v_chal = challenger();
+        let (r_prime_v, s_prime_v) =
+            verify_ring_switch::<F, EF, _>(&proof, &r, claimed_sum, &mut v_chal).unwrap();
+
+        assert_eq!(r_prime_v, r_prime);
+        assert_eq!(s_prime_v, final_eval);
+        assert_ne!(s_prime_v, packed.eval_ext::<F>(&r_prime_v));
     }
 
     /// The evaluation point must name at least the packed variables, or the split that
