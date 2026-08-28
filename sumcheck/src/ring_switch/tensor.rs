@@ -53,19 +53,28 @@ impl<F: Field, EF: ExtensionField<F>> TensorAlgebra<F, EF> {
 
     /// The multiplicative identity `1 ⊗ 1`.
     ///
-    /// Since `β_0 = 1`, `1 ⊗ 1` has coefficient `1` at `(u, v) = (0, 0)` and `0` everywhere
-    /// else.
-    ///
-    /// # Panics
-    /// Debug builds check the `β_0 = 1` convention this placement relies on.
+    /// Formed from the coefficients of `EF::ONE` rather than placed at `(0, 0)`, so it is
+    /// correct for any basis rather than only for the `β_0 = 1` convention the rest of this
+    /// module documents. It seeds the equality-element recurrence, where a wrong identity
+    /// would be a silent completeness failure in release builds.
     pub fn one() -> Self {
-        debug_assert!(
-            <EF as BasedVectorSpace<F>>::ith_basis_element(0) == Some(EF::ONE),
-            "the tensor algebra places 1 ⊗ 1 at (0, 0), which needs the basis convention β_0 = 1"
-        );
-        let mut t = Self::zero();
-        t.coeffs[0] = F::ONE;
-        t
+        Self::exterior_product(EF::ONE, EF::ONE)
+    }
+
+    /// Adds `a ⊗ b` into `self`, without forming the product as a separate element.
+    ///
+    /// `ŝ` and the odd-characteristic equality element are both a sum of `2^ℓ'` exterior
+    /// products; going through [`Self::exterior_product`] there would allocate and free a
+    /// `DIMENSION²` buffer per term.
+    pub fn add_exterior_product(&mut self, a: EF, b: EF) {
+        let d = Self::DIMENSION;
+        let a_coeffs = a.as_basis_coefficients_slice();
+        let b_coeffs = b.as_basis_coefficients_slice();
+        for (u, &au) in a_coeffs.iter().enumerate() {
+            for (v, &bv) in b_coeffs.iter().enumerate() {
+                self.coeffs[u * d + v] += au * bv;
+            }
+        }
     }
 
     /// `a ⊗ b`.

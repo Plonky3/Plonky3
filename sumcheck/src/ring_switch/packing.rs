@@ -1,7 +1,10 @@
 //! Packing a base-field multilinear into an extension-field one (Construction 3.1), and
 //! reading `ŝ` by columns.
 
+use alloc::vec::Vec;
+
 use p3_field::{BasedVectorSpace, ExtensionField, Field};
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
@@ -39,7 +42,15 @@ pub fn pack<F: Field, EF: ExtensionField<F>>(t: &Poly<F>) -> Poly<EF> {
     ))
 }
 
+/// The hypercube points one thread accumulates before its partial `ŝ` is combined with the
+/// rest. Large enough that the `DIMENSION²` accumulator is amortised, small enough to keep
+/// every core fed at the heights this reduction runs at.
+const S_HAT_CHUNK: usize = 1 << 12;
+
 /// `ŝ = Σ_w eq̃(r_high, w) ⊗ t'(w)`.
+///
+/// Accumulated in place, one partial element per chunk: forming each `eq̃(r_high, w) ⊗ t'(w)`
+/// as its own value would allocate and free a `DIMENSION²` buffer per hypercube point.
 ///
 /// # Panics
 /// Panics unless `r_high` names exactly `packed`'s variables.
@@ -53,11 +64,24 @@ pub fn compute_s_hat<F: Field, EF: ExtensionField<F>>(
         "r_high must name exactly the packed polynomial's variables"
     );
     let eq = Poly::<EF>::new_from_point(r_high.as_slice(), EF::ONE);
-    let mut s_hat = TensorAlgebra::zero();
-    for (&e, &p) in eq.as_slice().iter().zip(packed.as_slice()) {
-        s_hat += TensorAlgebra::exterior_product(e, p);
-    }
-    s_hat
+    let partials: Vec<TensorAlgebra<F, EF>> = eq
+        .as_slice()
+        .par_chunks(S_HAT_CHUNK)
+        .zip(packed.as_slice().par_chunks(S_HAT_CHUNK))
+        .map(|(eq_chunk, packed_chunk)| {
+            let mut acc = TensorAlgebra::zero();
+            for (&e, &p) in eq_chunk.iter().zip(packed_chunk) {
+                acc.add_exterior_product(e, p);
+            }
+            acc
+        })
+        .collect();
+    partials
+        .into_iter()
+        .fold(TensorAlgebra::zero(), |mut acc, partial| {
+            acc += partial;
+            acc
+        })
 }
 
 #[cfg(test)]

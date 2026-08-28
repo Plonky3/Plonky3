@@ -25,8 +25,25 @@
 //! 3.5), split as:
 //!
 //! - `κ/|EF|` from the Schwartz–Zippel argument on the `r''` batching draw, which collapses
-//!   the `κ` row claims into one; and
+//!   the `2^κ` row claims into one — the draw names `κ` variables, which is where the `κ`
+//!   comes from; and
 //! - `2ℓ'/|EF|` for the `ℓ'` rounds of degree-2 sumcheck.
+//!
+//! Both terms are stated for the interactive protocol. This module is Fiat–Shamir compiled and
+//! offers no grinding knob — `pow_bits` is zero on both sides and a proof carrying PoW
+//! witnesses is rejected — so under Fiat–Shamir the `κ/|EF|` term is a per-attempt probability
+//! a prover may retry against, at roughly `|EF|/κ` hashes. That is out of reach at
+//! `|EF| = 2^128`; a composing protocol instantiating this over a small `EF` must supply the
+//! grinding itself, outside this call.
+//!
+//! `r` is bound by the reduction. Both sides observe it before `ŝ`, so the bound above holds
+//! unconditionally rather than resting on the caller having bound `r` first. Without that
+//! binding the proof would be replayable: `ŝ` is a function of `r_high` alone, so the same
+//! proof verifies verbatim at every `r_low`, and the verifier's one `r_high`-dependent test —
+//! `A(r')` in the final check — is `F`-linear in each coordinate of `r_high`, so whenever that
+//! map is singular a prover can shift `r_high` into its kernel and have a false input claim
+//! accepted alongside a *true* surviving claim, which is the one direction a caller
+//! discharging `s'` against a commitment cannot catch.
 //!
 //! That figure is wired into **no** soundness estimator: nothing here touches `p3-security`,
 //! and neither the reduction nor its callers subtract it from any security target. A caller
@@ -154,10 +171,9 @@ where
 /// `EF::ExtensionPacking` is `EF` itself, so packing the operands would buy nothing there;
 /// over an extension with a wider packing it leaves throughput unclaimed.
 ///
-/// `(r', s')` is transcript-bound on return: `final_eval` is observed into `challenger`
-/// alongside `s_hat` and the sumcheck's own rounds before this function returns. `r` itself is
-/// not bound by this reduction — a caller composing it into a larger protocol must bind `r`
-/// before invoking this function.
+/// The evaluation point and the surviving claim are both transcript-bound: `r` is observed
+/// before `s_hat`, and `final_eval` alongside `s_hat` and the sumcheck's own rounds before this
+/// function returns. A caller composing this into a larger protocol need not bind `r` itself.
 ///
 /// # Panics
 /// Panics unless `r` names at least the `κ` packed variables and `packed` has exactly the
@@ -194,6 +210,11 @@ where
 
     let (r_high, _) = r.split_at(ell_prime);
 
+    // Bind the evaluation point first. `ŝ` is a function of `r_high` alone, and every later
+    // check the verifier forms from `r` it forms locally, so without this the proof would be
+    // replayable against a different point.
+    challenger.observe_algebra_slice(r.as_slice());
+
     // Send `ŝ`, binding the transcript to the base coefficients that cross the wire rather
     // than to either of the readings derived from them.
     let s_hat = compute_s_hat::<F, EF>(packed, &r_high);
@@ -210,7 +231,10 @@ where
     let r_prime =
         prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, ell_prime, 0, None);
 
-    let final_eval = packed.eval_ext::<F>(&r_prime);
+    // After the last round the evaluation side has been folded to a single value, which is
+    // `t'(r')` — the same number a fresh `packed.eval_ext(&r_prime)` would recompute in
+    // another full pass over the packed evaluations.
+    let final_eval = prover.evals().as_slice()[0];
     challenger.observe_algebra_element(final_eval);
     (
         RingSwitchProof {
@@ -234,11 +258,12 @@ where
 /// reduction runs over any extension; in odd characteristic that step costs `O(2^ℓ' · d²)`
 /// rather than `O(ℓ' · d)`.
 ///
-/// `(r', s')` is transcript-bound on return: this function observes `proof.final_eval` into
-/// `challenger` at the same point [`prove_ring_switch`] does, before returning it as part of
-/// the surviving claim. `r` is not bound by this reduction; `claimed_sum` is, indirectly,
-/// through the column check against the observed `ŝ`. A caller composing this into a larger
-/// protocol must bind `r` itself before invoking it.
+/// `r` and `(r', s')` are transcript-bound: this function observes `r` before `ŝ` and
+/// `proof.final_eval` after the rounds, at the same two points [`prove_ring_switch`] does, so a
+/// proof is usable only against the point it was produced for. `claimed_sum` is bound
+/// indirectly, through the column check against the observed `ŝ`. Both structural rejections
+/// below happen before the challenger is touched, so a malformed proof cannot leave a
+/// half-advanced transcript.
 ///
 /// # Panics
 /// Panics unless `r` names at least the `κ` packed variables. Everything read out of `proof`
@@ -286,6 +311,7 @@ where
     }
 
     let (r_high, r_low) = r.split_at(ell_prime);
+    challenger.observe_algebra_slice(r.as_slice());
     challenger.observe_slice(proof.s_hat.coefficients());
 
     // The incoming claim must be the `eq̃(·, r_low)`-combination of `ŝ`'s columns. This is the
@@ -458,13 +484,17 @@ mod tests {
         );
     }
 
-    /// A proof is bound to the evaluation point it was produced for: verifying it against a
-    /// different point of the same length is rejected, even though `r` itself is never observed
-    /// into the transcript — `r_high` and `r_low` both feed checks the verifier forms locally
-    /// from `r`, not from anything the proof carries.
+    /// A proof is bound to the evaluation point it was produced for. `ŝ` is a function of
+    /// `r_high` alone, so without `r` in the transcript the same proof would verify verbatim
+    /// at every `r_low`, against the honest claim at each of those points — a true statement
+    /// each time, but it makes the proof a transferable object rather than one tied to a
+    /// point. Observing `r` is what rejects it. The column check still passes here, since the
+    /// claim supplied really is `ŝ`'s column reading at the new `r_low`; the rejection comes
+    /// from the challenges the observed `r` moved.
     #[test]
-    fn a_proof_does_not_verify_against_a_different_point() {
+    fn a_proof_does_not_verify_against_a_different_low_point() {
         let ell = 6;
+        let kappa = packed_vars::<F, EF>();
         let t = base_poly(ell, 37);
         let packed = pack::<F, EF>(&t);
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(38), ell);
@@ -472,13 +502,51 @@ mod tests {
         let mut p_chal = challenger();
         let (proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
 
-        let other_r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(39), ell);
+        // Same `r_high`, one coordinate of `r_low` moved, with the honest claim there.
+        let (r_high, r_low) = r.split_at(ell - kappa);
+        let mut moved = r_low.as_slice().to_vec();
+        moved[0] += EF::ONE;
+        let mut coords = r_high.as_slice().to_vec();
+        coords.extend_from_slice(&moved);
+        let other_r = Point::new(coords);
         let other_s = t.eval_base(&other_r);
 
         let mut v_chal = challenger();
         assert_eq!(
             verify_ring_switch::<F, EF, _>(&proof, &other_r, other_s, &mut v_chal),
-            Err(RingSwitchError::ClaimMismatch)
+            Err(RingSwitchError::FinalCheck)
+        );
+    }
+
+    /// The `r_high` half is bound too, and this is the arm that matters. The verifier's only
+    /// `r_high`-dependent test is `A(r')` in the final check, which is `F`-linear in each
+    /// coordinate of `r_high`; wherever that map is singular, an unbound `r` would let a prover
+    /// shift `r_high` into its kernel and have a false input claim accepted alongside a *true*
+    /// surviving claim — the one direction a caller discharging `s'` against a commitment
+    /// cannot catch. Here the claim is `ŝ`'s column reading at the unchanged `r_low`, so the
+    /// column arm passes by construction and only the transcript can reject.
+    #[test]
+    fn a_proof_does_not_verify_against_a_different_high_point() {
+        let ell = 6;
+        let kappa = packed_vars::<F, EF>();
+        let t = base_poly(ell, 45);
+        let packed = pack::<F, EF>(&t);
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(46), ell);
+        let s = t.eval_base(&r);
+
+        let mut p_chal = challenger();
+        let (proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+
+        let (r_high, r_low) = r.split_at(ell - kappa);
+        let mut moved = r_high.as_slice().to_vec();
+        moved[0] += EF::ONE;
+        moved.extend_from_slice(r_low.as_slice());
+        let other_r = Point::new(moved);
+
+        let mut v_chal = challenger();
+        assert_eq!(
+            verify_ring_switch::<F, EF, _>(&proof, &other_r, s, &mut v_chal),
+            Err(RingSwitchError::FinalCheck)
         );
     }
 
@@ -536,6 +604,7 @@ mod tests {
             .sum();
 
         let mut chal = challenger();
+        chal.observe_algebra_slice(r.as_slice());
         chal.observe_slice(s_hat.coefficients());
         let r_batch = sample_batching_point::<F, EF, _>(&mut chal);
 
@@ -610,8 +679,10 @@ mod tests {
     }
 
     /// A packed polynomial that is not the packing of `t` would prove a claim about a
-    /// different multilinear. Debug builds catch it.
+    /// different multilinear. Debug builds catch it; release builds do not run the guard, so
+    /// neither does this test.
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "the packed polynomial must be the packing of t")]
     fn prove_rejects_a_packed_polynomial_that_is_not_the_packing() {
         let t = base_poly(6, 23);

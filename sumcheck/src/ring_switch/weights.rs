@@ -4,6 +4,7 @@
 use alloc::vec::Vec;
 
 use p3_field::{BasedVectorSpace, ExtensionField, Field};
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
@@ -27,7 +28,7 @@ pub fn batched_weights<F: Field, EF: ExtensionField<F>>(
     let eq_batch = Poly::<EF>::new_from_point(r_batch.as_slice(), EF::ONE);
     let weights: Vec<EF> = eq
         .as_slice()
-        .iter()
+        .par_iter()
         .map(|e| {
             BasedVectorSpace::<F>::as_basis_coefficients_slice(e)
                 .iter()
