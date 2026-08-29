@@ -82,6 +82,11 @@ pub struct AirShape {
     pub num_composed_constraints: u32,
     /// Maximum constraint degree over all AIRs.
     pub max_constraint_degree: u32,
+    /// Maximum number of out-of-domain points referenced per committed column: `2` for an AIR
+    /// that opens `local` and `next` rotations, `1` if it has no transition constraint.
+    ///
+    /// Read by the out-of-domain round, independent of [`Self::num_deep_terms`].
+    pub max_combo: u32,
     /// Total committed columns opened by a DEEP-quotient batching argument, plus one slot per
     /// out-of-domain point, or `None` when the protocol performs no α/β column-batching reduction
     /// over its committed openings. The budget's out-of-domain round is charged regardless of this

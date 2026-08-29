@@ -101,16 +101,12 @@ pub const fn security_report(
 
     // The out-of-domain point is rejection-sampled outside the trace and LDE domains but is not
     // ground. A violated constraint leaves the DEEP-ALI identity a nonzero polynomial in that
-    // point of degree at most `(max_constraint_degree + 1) · height`. Lifting evaluates the
-    // shorter AIRs at powers of the same point, so all of them pay the maximum height.
-    let out_of_domain = round(
-        OUT_OF_DOMAIN_LABEL,
-        instance,
-        air.max_constraint_degree as u64 + 1,
-        instance.log_max_height,
-        0,
-        cap,
-    );
+    // point of degree at most `(max_constraint_degree + 1) · height + (max_combo − 1) ·
+    // (max_constraint_degree − 1)`: one factor of the identity's degree per out-of-domain point
+    // referenced, plus a flat term per extra point from the shared numerator. Lifting evaluates
+    // the shorter AIRs at powers of the same point, so all of them pay the maximum height.
+    let out_of_domain =
+        out_of_domain_round(instance, air.max_constraint_degree, air.max_combo, cap);
 
     // The DEEP quotient batches every committed column and out-of-domain point by powers of two
     // further challenges, giving a univariate whose degree is the number of batched terms.
@@ -182,6 +178,28 @@ const fn round(
     SecurityTerm::new(label, min(bits, cap))
 }
 
+/// Bounds the out-of-domain round: error `((d + 1) · H + (combo − 1) · (d − 1)) / |E|`, with `H`
+/// the trace height and `combo` the number of out-of-domain points referenced per column. Unlike
+/// [`round`], the extra `(combo − 1) · (d − 1)` term is additive rather than a multiple of `H`, so
+/// it is folded into the size directly instead of decomposed into a coefficient and a log-size.
+/// This round is always charged — there is no "no such round" case to special-case at zero.
+const fn out_of_domain_round(
+    instance: &InstanceShape,
+    max_constraint_degree: u32,
+    max_combo: u32,
+    cap: u64,
+) -> SecurityTerm {
+    let d = max_constraint_degree as u64;
+    let height = 1u64 << instance.log_max_height;
+    let extra_points = (max_combo as u64).saturating_sub(1);
+    let size = (d + 1) * height + extra_points * d.saturating_sub(1);
+
+    let error = fixed::ceil_log2(size);
+    let bits = instance.field_bits.saturating_sub(error);
+
+    SecurityTerm::new(OUT_OF_DOMAIN_LABEL, min(bits, cap))
+}
+
 const fn min(a: u64, b: u64) -> u64 {
     if a < b { a } else { b }
 }
@@ -217,6 +235,7 @@ mod tests {
         AirShape {
             num_composed_constraints: 531,
             max_constraint_degree: 9,
+            max_combo: 2,
             num_deep_terms: Some(130),
             lookup: LookupShape {
                 fractions_per_row: 27,
@@ -299,6 +318,7 @@ mod tests {
         let large = AirShape {
             num_composed_constraints: 4096,
             max_constraint_degree: 9,
+            max_combo: 2,
             num_deep_terms: Some(1024),
             lookup: LookupShape {
                 fractions_per_row: 64,

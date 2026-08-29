@@ -3,12 +3,7 @@
 //! the same conjectured-security math can never drift apart silently.
 //!
 //! See `budget`'s module doc for the folding-accounting and DEEP-quotient-batching design notes
-//! this test exercises. The out-of-domain round is the one place the two formulas genuinely
-//! differ (not just fixed-point vs. `f64`): `budget`'s out-of-domain round assumes a single
-//! out-of-domain point per column (`factor = (d + 1)·height`), while `deep::deep_ali_error`
-//! accounts for `max_combo` points (`factor = d·(height + combo − 1) + (height − 1)`). At
-//! `combo = 2` these differ by exactly `d − 1`, so [`ood_tolerance`] bounds that gap analytically
-//! rather than folding it into a flat epsilon.
+//! this test exercises.
 
 use p3_security::budget::report::{
     COLLISION_LABEL, COMPOSITION_LABEL, DEEP_COMPOSITION_LABEL, FOLDING_LABEL, LOOKUP_LABEL,
@@ -55,6 +50,9 @@ const LARGE: AirVector = AirVector {
 
 const PARAM_ROWS: &[(u32, u32, u32, u32)] = &[(27, 17, 12, 4), (100, 0, 0, 0), (150, 31, 31, 31)];
 
+/// Out-of-domain points referenced per column: `local` and `next` rotations.
+const OOD_MAX_COMBO: u32 = 2;
+
 fn to_f64(fixed_bits: u64) -> f64 {
     fixed_bits as f64 / fixed::ONE as f64
 }
@@ -89,12 +87,6 @@ const fn cap(bits: f64) -> f64 {
     }
 }
 
-fn ood_tolerance(max_constraint_degree: u32, log_max_height: u32) -> f64 {
-    let d = max_constraint_degree as f64;
-    let height = 2f64.powi(log_max_height as i32);
-    (1.0 + (d - 1.0) / ((d + 1.0) * height)).log2() + TIGHT_TOL
-}
-
 #[test]
 fn every_round_direction_and_tightness() {
     for air_vector in [&SMALL, &LARGE] {
@@ -111,6 +103,7 @@ fn every_round_direction_and_tightness() {
             let air_shape = AirShape {
                 num_composed_constraints: air_vector.num_composed_constraints,
                 max_constraint_degree: air_vector.max_constraint_degree,
+                max_combo: OOD_MAX_COMBO,
                 num_deep_terms: Some(air_vector.num_deep_terms),
                 lookup: LookupShape {
                     fractions_per_row: air_vector.fractions_per_row,
@@ -214,23 +207,18 @@ fn check_ood(report: &SecurityReport, air_vector: &AirVector, log_max_height: u3
     let stark_air = StarkAirParams {
         num_constraints: air_vector.num_composed_constraints as usize,
         max_constraint_degree: air_vector.max_constraint_degree as usize,
-        max_combo: 2,
+        max_combo: OOD_MAX_COMBO as usize,
     };
     let p3_bits = cap(deep::deep_ali_error(&stark_air, &f64_instance(log_max_height), 1.0).bits());
 
-    // `tolerance` is the analytic gap between the two formulas (see this file's module doc) plus
-    // `TIGHT_TOL` of rounding slop; the direction check below bounds one side of that gap, and the
-    // tightness check bounds the other against the analytic gap alone.
-    let tolerance = ood_tolerance(air_vector.max_constraint_degree, log_max_height);
-    let exact_gap = tolerance - TIGHT_TOL;
     assert!(
-        fixed_bits <= p3_bits + tolerance,
-        "ood: {fixed_bits} > {p3_bits} + {tolerance} at h={log_max_height}"
+        fixed_bits <= p3_bits + TIGHT_TOL,
+        "ood: {fixed_bits} > {p3_bits} at h={log_max_height}"
     );
     assert!(
-        p3_bits + exact_gap - fixed_bits < TIGHT_TOL,
+        p3_bits - fixed_bits < TIGHT_TOL,
         "ood: gap {} >= tolerance at h={log_max_height}, fixed drifted conservative",
-        p3_bits + exact_gap - fixed_bits
+        p3_bits - fixed_bits
     );
 }
 
@@ -301,6 +289,7 @@ fn collision_term_is_the_cap() {
     let air_shape = AirShape {
         num_composed_constraints: LARGE.num_composed_constraints,
         max_constraint_degree: LARGE.max_constraint_degree,
+        max_combo: OOD_MAX_COMBO,
         num_deep_terms: Some(LARGE.num_deep_terms),
         lookup: LookupShape {
             fractions_per_row: LARGE.fractions_per_row,
