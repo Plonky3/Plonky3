@@ -9,7 +9,6 @@ use p3_field::extension::BinomialExtensionField;
 use p3_keccak::Keccak256Hash;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::ring_switch::equality::equality_element;
 use p3_sumcheck::ring_switch::{pack, packed_vars, prove_ring_switch, verify_ring_switch};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -41,8 +40,7 @@ fn binary_8_into_128() {
         let s = t.eval_base(&r);
 
         let mut p_chal = binary_challenger();
-        let (proof, r_prime_p, s_prime_p) =
-            prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (proof, r_prime_p, s_prime_p) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
 
         let mut v_chal = binary_challenger();
         let (r_prime_v, s_prime_v) =
@@ -69,8 +67,7 @@ fn binary_8_into_16() {
         let s = t.eval_base(&r);
 
         let mut p_chal = binary_challenger();
-        let (proof, r_prime_p, s_prime_p) =
-            prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (proof, r_prime_p, s_prime_p) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
 
         let mut v_chal = binary_challenger();
         let (r_prime_v, s_prime_v) =
@@ -97,8 +94,7 @@ fn baby_bear_into_degree_four() {
         let s = t.eval_base(&r);
 
         let mut p_chal = baby_bear_challenger();
-        let (proof, r_prime_p, s_prime_p) =
-            prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (proof, r_prime_p, s_prime_p) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
 
         let mut v_chal = baby_bear_challenger();
         let (r_prime_v, s_prime_v) =
@@ -115,17 +111,4 @@ fn baby_bear_into_degree_four() {
 #[should_panic = "power-of-two extension degree"]
 fn a_degree_five_extension_is_rejected() {
     let _ = packed_vars::<BabyBear, BinomialExtensionField<BabyBear, 5>>();
-}
-
-/// The characteristic-2 recurrence must refuse an odd-characteristic field rather than
-/// silently returning a wrong equality element; that field must go through
-/// `equality_element_reference` instead.
-#[test]
-#[should_panic = "use equality_element_reference there"]
-fn equality_element_rejects_odd_characteristic() {
-    type F = BabyBear;
-    type EF = BinomialExtensionField<BabyBear, 4>;
-
-    let empty = Point::<EF>::new(Vec::new());
-    let _ = equality_element::<F, EF>(&empty, &empty);
 }

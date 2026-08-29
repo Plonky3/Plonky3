@@ -31,8 +31,9 @@
 //!
 //! Both terms are stated for the interactive protocol. This module is Fiat–Shamir compiled and
 //! offers no grinding knob — `pow_bits` is zero on both sides and a proof carrying PoW
-//! witnesses is rejected — so under Fiat–Shamir the `κ/|EF|` term is a per-attempt probability
-//! a prover may retry against, at roughly `|EF|/κ` hashes. That is out of reach at
+//! witnesses is rejected — so the bound as a whole is a per-attempt probability rather than a
+//! total one: the `r''` draw and every round challenge alike are functions of messages the
+//! prover chooses, and a prover may resample any of them. That is out of reach at
 //! `|EF| = 2^128`; a composing protocol instantiating this over a small `EF` must supply the
 //! grinding itself, outside this call.
 //!
@@ -40,10 +41,11 @@
 //! unconditionally rather than resting on the caller having bound `r` first. Without that
 //! binding the proof would be replayable: `ŝ` is a function of `r_high` alone, so the same
 //! proof verifies verbatim at every `r_low`, and the verifier's one `r_high`-dependent test —
-//! `A(r')` in the final check — is `F`-linear in each coordinate of `r_high`, so whenever that
-//! map is singular a prover can shift `r_high` into its kernel and have a false input claim
-//! accepted alongside a *true* surviving claim, which is the one direction a caller
-//! discharging `s'` against a commitment cannot catch.
+//! `A(r')` in the final check — is multi-affine over `EF` in the coordinates of `r_high`. Move
+//! a single coordinate by `δ` and the change it induces in `A(r')` is `F`-linear in `δ`, so
+//! wherever that map is singular a prover can pick a nonzero `δ` from its kernel and have a
+//! false input claim accepted alongside a *true* surviving claim, which is the one direction a
+//! caller discharging `s'` against a commitment cannot catch.
 //!
 //! That figure is wired into **no** soundness estimator: nothing here touches `p3-security`,
 //! and neither the reduction nor its callers subtract it from any security target. A caller
@@ -51,7 +53,7 @@
 //! error budget, on top of whatever the commitment scheme discharging `t'(r') = s'` costs.
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
@@ -67,7 +69,7 @@ pub mod packing;
 pub mod tensor;
 pub mod weights;
 
-use equality::{equality_element, equality_element_reference};
+use equality::equality_element;
 pub use packing::{compute_s_hat, pack, packed_vars};
 use tensor::TensorAlgebra;
 use weights::{batch_rows, batched_weights};
@@ -123,28 +125,6 @@ pub enum RingSwitchError {
     },
 }
 
-/// `e = eq̃(φ0(r_high), φ1(r'))`, formed by whichever route the characteristic of `F` admits.
-///
-/// The Remark 3.4 recurrence needs `eq̃(X, Y) = Π_i (1 − X_i − Y_i)`, which holds only when
-/// `2 = 0`, and costs `O(ℓ' · d)`. Elsewhere the element is summed over the hypercube from its
-/// definition, at `O(2^ℓ' · d²)` — each of the `2^ℓ'` terms is a `d × d` exterior product.
-/// That asymmetry is real: the second branch shows the reduction is not specific to
-/// characteristic 2, not that it is ready to be run at scale over an odd-characteristic field.
-fn equality_element_for_characteristic<F, EF>(
-    r_high: &Point<EF>,
-    r_prime: &Point<EF>,
-) -> TensorAlgebra<F, EF>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    if F::PrimeSubfield::ONE + F::PrimeSubfield::ONE == F::PrimeSubfield::ZERO {
-        equality_element(r_high, r_prime)
-    } else {
-        equality_element_reference(r_high, r_prime)
-    }
-}
-
 /// The `κ` batching challenges `r'' ∈ EF^κ`, drawn identically by both sides.
 fn sample_batching_point<F, EF, Challenger>(challenger: &mut Challenger) -> Point<EF>
 where
@@ -164,8 +144,11 @@ where
 /// Returns the proof, the sumcheck's random point `r'`, and the surviving claim's value
 /// `s' = t'(r')`.
 ///
-/// Every value that reaches the proof is computed from `packed`; `t` is read only by the debug
-/// assertion that `packed` is its packing.
+/// Takes only the packed polynomial: every value that reaches the proof is computed from it,
+/// and the claim it proves is a statement about it. Callers hold `t` and obtain `packed` from
+/// [`pack`]; a `packed` that is not the packing of the `t` the claim is about proves a
+/// statement about a different multilinear, which nothing here can detect and which the
+/// caller's commitment to `packed` is what pins down.
 ///
 /// The sumcheck runs on a scalar [`ProductPolynomial`]. For the binary tower
 /// `EF::ExtensionPacking` is `EF` itself, so packing the operands would buy nothing there;
@@ -177,9 +160,8 @@ where
 ///
 /// # Panics
 /// Panics unless `r` names at least the `κ` packed variables and `packed` has exactly the
-/// `ℓ − κ` variables that leaves. Debug builds also check that `packed` is the packing of `t`.
+/// `ℓ − κ` variables that leaves.
 pub fn prove_ring_switch<F, EF, Challenger>(
-    t: &Poly<F>,
     packed: &Poly<EF>,
     r: &Point<EF>,
     challenger: &mut Challenger,
@@ -202,12 +184,6 @@ where
         "the packed polynomial must have the {ell_prime} variables the evaluation point leaves \
          once the packed ones are removed"
     );
-    debug_assert_eq!(
-        pack::<F, EF>(t),
-        *packed,
-        "the packed polynomial must be the packing of t"
-    );
-
     let (r_high, _) = r.split_at(ell_prime);
 
     // Bind the evaluation point first. `ŝ` is a function of `r_high` alone, and every later
@@ -253,10 +229,6 @@ where
 /// The round count is taken from `r`, which the verifier owns, so a proof carrying a different
 /// number of rounds is rejected by [`SumcheckData::verify_rounds`] instead of desynchronising
 /// the transcript.
-///
-/// The characteristic of `F` selects how the tensor-algebra equality element is formed, so the
-/// reduction runs over any extension; in odd characteristic that step costs `O(2^ℓ' · d²)`
-/// rather than `O(ℓ' · d)`.
 ///
 /// `r` and `(r', s')` are transcript-bound: this function observes `r` before `ŝ` and
 /// `proof.final_eval` after the rounds, at the same two points [`prove_ring_switch`] does, so a
@@ -341,7 +313,7 @@ where
 
     // The batched rows of the equality element are `A(r')`, so the sumcheck closes on
     // `A(r') · t'(r')`.
-    let e = equality_element_for_characteristic::<F, EF>(&r_high, &r_prime);
+    let e = equality_element::<F, EF>(&r_high, &r_prime);
     if sum != batch_rows::<F, EF>(&e, &r_batch) * proof.final_eval {
         return Err(RingSwitchError::FinalCheck);
     }
@@ -370,8 +342,7 @@ mod tests {
         let s = t.eval_base(&r);
 
         let mut p_chal = challenger();
-        let (proof, r_prime_p, s_prime_p) =
-            prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (proof, r_prime_p, s_prime_p) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
 
         let mut v_chal = challenger();
         let (r_prime_v, s_prime_v) =
@@ -393,7 +364,7 @@ mod tests {
         let s = t.eval_base(&r);
 
         let mut p_chal = challenger();
-        let (proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (proof, _, _) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
 
         let mut v_chal = challenger();
         assert_eq!(
@@ -422,7 +393,7 @@ mod tests {
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(18), ell);
 
         let mut p_chal = challenger();
-        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
         proof.s_hat.perturb_for_test(0, F::ONE);
 
         let (_, r_low) = r.split_at(ell - packed_vars::<F, EF>());
@@ -453,7 +424,7 @@ mod tests {
         let s = t.eval_base(&r);
 
         let mut p_chal = challenger();
-        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
         proof.final_eval += EF::ONE;
 
         let mut v_chal = challenger();
@@ -474,7 +445,7 @@ mod tests {
         let s = t.eval_base(&r);
 
         let mut p_chal = challenger();
-        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
         proof.sumcheck.polynomial_evaluations[0][0] += EF::ONE;
 
         let mut v_chal = challenger();
@@ -500,7 +471,7 @@ mod tests {
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(38), ell);
 
         let mut p_chal = challenger();
-        let (proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (proof, _, _) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
 
         // Same `r_high`, one coordinate of `r_low` moved, with the honest claim there.
         let (r_high, r_low) = r.split_at(ell - kappa);
@@ -519,12 +490,13 @@ mod tests {
     }
 
     /// The `r_high` half is bound too, and this is the arm that matters. The verifier's only
-    /// `r_high`-dependent test is `A(r')` in the final check, which is `F`-linear in each
-    /// coordinate of `r_high`; wherever that map is singular, an unbound `r` would let a prover
-    /// shift `r_high` into its kernel and have a false input claim accepted alongside a *true*
-    /// surviving claim — the one direction a caller discharging `s'` against a commitment
-    /// cannot catch. Here the claim is `ŝ`'s column reading at the unchanged `r_low`, so the
-    /// column arm passes by construction and only the transcript can reject.
+    /// `r_high`-dependent test is `A(r')` in the final check; moving one coordinate of `r_high`
+    /// by `δ` changes it by an `F`-linear function of `δ`, and wherever that function is
+    /// singular an unbound `r` would let a prover pick a nonzero `δ` from its kernel and have a
+    /// false input claim accepted alongside a *true* surviving claim — the one direction a
+    /// caller discharging `s'` against a commitment cannot catch. Here the claim is `ŝ`'s
+    /// column reading at the unchanged `r_low`, so the column arm passes by construction and
+    /// only the transcript can reject.
     #[test]
     fn a_proof_does_not_verify_against_a_different_high_point() {
         let ell = 6;
@@ -535,7 +507,7 @@ mod tests {
         let s = t.eval_base(&r);
 
         let mut p_chal = challenger();
-        let (proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (proof, _, _) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
 
         let (r_high, r_low) = r.split_at(ell - kappa);
         let mut moved = r_high.as_slice().to_vec();
@@ -561,7 +533,7 @@ mod tests {
         let s = t.eval_base(&r);
 
         let mut p_chal = challenger();
-        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
         proof.sumcheck.pow_witnesses.push(F::ONE);
 
         let mut v_chal = challenger();
@@ -635,7 +607,7 @@ mod tests {
 
         // `final_eval` set to whatever the final identity needs, computed the same way the
         // verifier computes it.
-        let e = equality_element_for_characteristic::<F, EF>(&r_high, &r_prime);
+        let e = equality_element::<F, EF>(&r_high, &r_prime);
         let a_r_prime = batch_rows::<F, EF>(&e, &r_batch);
         let final_eval = sum_final * a_r_prime.inverse();
 
@@ -663,7 +635,7 @@ mod tests {
         let packed = pack::<F, EF>(&t);
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(20), 3);
         let mut chal = challenger();
-        let _ = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut chal);
+        let _ = prove_ring_switch::<F, EF, _>(&packed, &r, &mut chal);
     }
 
     /// A packed polynomial of the wrong arity must panic rather than be zipped against a
@@ -675,21 +647,7 @@ mod tests {
         let packed = pack::<F, EF>(&t);
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(22), 6);
         let mut chal = challenger();
-        let _ = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut chal);
-    }
-
-    /// A packed polynomial that is not the packing of `t` would prove a claim about a
-    /// different multilinear. Debug builds catch it; release builds do not run the guard, so
-    /// neither does this test.
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "the packed polynomial must be the packing of t")]
-    fn prove_rejects_a_packed_polynomial_that_is_not_the_packing() {
-        let t = base_poly(6, 23);
-        let packed = pack::<F, EF>(&base_poly(6, 24));
-        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(25), 6);
-        let mut chal = challenger();
-        let _ = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut chal);
+        let _ = prove_ring_switch::<F, EF, _>(&packed, &r, &mut chal);
     }
 
     /// The verifier's own point is subject to the same requirement.
@@ -702,7 +660,7 @@ mod tests {
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(27), ell);
 
         let mut p_chal = challenger();
-        let (proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (proof, _, _) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
 
         let short = Point::<EF>::rand(&mut SmallRng::seed_from_u64(28), 3);
         let mut v_chal = challenger();
@@ -720,7 +678,7 @@ mod tests {
         let s = t.eval_base(&r);
 
         let mut p_chal = challenger();
-        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
         proof.sumcheck.polynomial_evaluations.pop();
 
         let mut v_chal = challenger();
@@ -746,7 +704,7 @@ mod tests {
         let s = t.eval_base(&r);
 
         let mut p_chal = challenger();
-        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&t, &packed, &r, &mut p_chal);
+        let (mut proof, _, _) = prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
         proof.s_hat.truncate_for_test(1);
 
         let dimension = TensorAlgebra::<F, EF>::DIMENSION;

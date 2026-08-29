@@ -8,9 +8,9 @@
 
 use std::hint::black_box;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_binary_field::{BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -197,11 +197,53 @@ fn bench_mul_alpha(c: &mut Criterion) {
     group.finish();
 }
 
+/// Elements flattened by one iteration of [`bench_flatten_to_base`].
+const FLATTEN_LEN: usize = 1 << 20;
+
+/// The tower's `flatten_to_base` against `p3-field`'s default, which the tower overrides.
+///
+/// The default is reproduced here rather than called, since the override shadows it: it takes
+/// `as_basis_coefficients_slice().to_vec()` per element, so it heap-allocates once per field
+/// element on a buffer the override allocates once for.
+fn bench_flatten_to_base(c: &mut Criterion) {
+    let mut rng = SmallRng::seed_from_u64(1);
+    let elems: Vec<BinaryField128> = (0..FLATTEN_LEN).map(|_| rng.random()).collect();
+
+    let mut group = c.benchmark_group("flatten_to_base/BinaryField128");
+
+    group.bench_function("p3-field default", |b| {
+        b.iter_batched(
+            || elems.clone(),
+            |v| {
+                let out: Vec<BinaryField8> = v
+                    .into_iter()
+                    .flat_map(|x| {
+                        BasedVectorSpace::<BinaryField8>::as_basis_coefficients_slice(&x).to_vec()
+                    })
+                    .collect();
+                black_box(out)
+            },
+            BatchSize::PerIteration,
+        );
+    });
+
+    group.bench_function("tower override", |b| {
+        b.iter_batched(
+            || elems.clone(),
+            |v| black_box(<BinaryField128 as BasedVectorSpace<BinaryField8>>::flatten_to_base(v)),
+            BatchSize::PerIteration,
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_mul,
     bench_square,
     bench_inverse,
-    bench_mul_alpha
+    bench_mul_alpha,
+    bench_flatten_to_base
 );
 criterion_main!(benches);

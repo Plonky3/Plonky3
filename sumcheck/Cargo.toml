@@ -48,5 +48,9 @@ serde_json.workspace = true
 name = "sumcheck"
 harness = false
 
+[[bench]]
+name = "ring_switch"
+harness = false
+
 [lints]
 workspace = true
