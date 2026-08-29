@@ -70,8 +70,12 @@ pub(crate) fn lagrange_weights_01inf<F: Field>(r: F) -> [F; 3] {
 ///
 /// # Output Ordering
 ///
-/// Lexicographic by multi-index `(i_0, i_1, ..., i_{k-1})` where each `i_j`
-/// ranges over the three basis functions (0, 1, inf).
+/// Index `sum_j i_j * 3^j` holds `prod_j L_{i_j}(r_j)`, where each `i_j` ranges
+/// over the three basis functions (0, 1, inf). So `i_0` is the **least**
+/// significant digit and the weights for `r_0` vary fastest.
+///
+/// For `k = 2` that is `weights[3 * i_1 + i_0] = L_{i_0}(r_0) * L_{i_1}(r_1)`,
+/// which is what `test_lagrange_weights_multi_k2` pins.
 pub fn lagrange_weights_01inf_multi<F: Field>(rs: &[F]) -> Vec<F> {
     let total = 3usize.pow(rs.len() as u32);
     let mut current = Vec::with_capacity(total);
