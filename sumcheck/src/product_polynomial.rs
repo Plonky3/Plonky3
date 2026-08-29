@@ -144,6 +144,13 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     /// - `evals`   — packed evaluations of the sumchecked polynomial.
     /// - `weights` — packed evaluations of the weight polynomial.
     ///
+    /// # Storage is not guaranteed
+    ///
+    /// The transition check runs immediately, so the result is not necessarily
+    /// packed. A [`VariableOrder::Suffix`] pair is unpacked up front: packed
+    /// storage cannot bind the suffix variable, which lives inside the SIMD
+    /// lanes. See [`Self::transition`].
+    ///
     /// # Panics
     ///
     /// - Evaluation and weight polynomials must share the same arity.
@@ -261,35 +268,52 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         }
     }
 
-    /// Transitions from packed to scalar mode if the polynomial is small enough.
+    /// Transitions from packed to scalar mode when packed storage no longer serves.
     ///
     /// This is called after each fold operation to check if we should switch representations.
-    /// The transition occurs when the packed representation has only a single element
-    /// (i.e., `num_variables() == 0` in the packed view).
     ///
-    /// # Transition Condition
+    /// # Transition Conditions
     ///
     /// ```text
-    /// if packed_num_variables == 0:
-    ///     -> Unpack to scalar and switch to Small variant
+    /// if packed_num_variables == 0:      -> unpack: SIMD is pure overhead
+    /// if order == Suffix:                -> unpack: packed cannot bind the suffix variable
     /// ```
     ///
-    /// # Why Transition?
+    /// ## Only one packed element left
     ///
-    /// When only one packed element remains, SIMD operations become pure overhead:
+    /// SIMD operations become pure overhead:
     /// - No parallelism benefit (only one "lane group" of work)
     /// - Extra unpacking/repacking costs per operation
     ///
     /// Scalar mode eliminates this overhead for the final rounds.
+    ///
+    /// ## Suffix binding
+    ///
+    /// The packed layout puts `WIDTH` *consecutive* hypercube points in the lanes
+    /// of one packed element, so the lanes hold the **last** `log2(WIDTH)`
+    /// variables. Both suffix kernels — [`crate::strategy::sumcheck_coefficients_suffix`]
+    /// and `fix_suffix_var_mut` — bind the last variable of the slice they are
+    /// handed. On a packed slice that is `X_{n-1-log2(WIDTH)}`, not `X_{n-1}`:
+    /// the variable a suffix round is supposed to bind is inside the lanes, which
+    /// a slice-adjacent fold cannot reach.
+    ///
+    /// Prefix binding is unaffected, since `X_0` is the top bit of the packed
+    /// element index in both representations.
+    ///
+    /// Serving suffix binding from packed storage would need a cross-lane fold.
+    /// Until there is one, unpack up front so the rounds are computed over the
+    /// variable the order actually names.
     fn transition(&mut self) {
+        // Read the order before borrowing `inner`; both conditions consult it.
+        let order = self.order;
         if let MaybePacked::Packed { evals, weights } = &mut self.inner {
             // Check if we've folded down to a single packed element.
             let k = evals.num_variables();
             assert_eq!(k, weights.num_variables());
 
-            if k == 0 {
+            if k == 0 || order == VariableOrder::Suffix {
                 // Unpack each packed element into its WIDTH scalar lanes, keeping the same order.
-                *self = Self::new_unpacked(self.order, evals.unpack(), weights.unpack());
+                *self = Self::new_unpacked(order, evals.unpack(), weights.unpack());
             }
         }
     }
@@ -1289,6 +1313,69 @@ mod tests {
 
             // Invariant: dot_product == sum after round.
             prop_assert_eq!(poly.dot_product(), sum);
+        }
+    }
+    /// Packing is a pure storage change, so a packed pair and a scalar pair
+    /// built from the same evaluations must run the *same* sumcheck: identical
+    /// round messages, under either binding order.
+    ///
+    /// This failed for [`VariableOrder::Suffix`] before `transition` learned to
+    /// unpack it. `Poly::pack` puts `WIDTH` consecutive hypercube points in the
+    /// lanes of one packed element, so the suffix kernels — which bind the last
+    /// variable of the slice they are handed — bound `X_{n-1-log2(WIDTH)}`
+    /// instead of `X_{n-1}` and silently produced a different transcript.
+    #[test]
+    fn packed_and_unpacked_run_the_same_sumcheck() {
+        let width = <F as Field>::Packing::WIDTH;
+        let log_width = log2_strict_usize(width);
+        let mut rng = SmallRng::seed_from_u64(0x5EED);
+
+        // Drives every round and returns the round messages sent to the verifier.
+        fn run(mut poly: ProductPolynomial<F, EF>, mut sum: EF) -> Vec<[EF; 2]> {
+            let mut data = SumcheckData::<F, EF>::default();
+            let mut challenger = make_challenger();
+            for _ in 0..poly.num_variables() {
+                let _ = poly.round(&mut data, &mut challenger, &mut sum, 0);
+            }
+            data.polynomial_evaluations().to_vec()
+        }
+
+        for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
+            for num_variables in (log_width + 1)..=(log_width + 3) {
+                let evals = Poly::<EF>::rand(&mut rng, num_variables);
+                let weights = Poly::<EF>::rand(&mut rng, num_variables);
+
+                // The claimed sum both representations start from.
+                let sum: EF = evals
+                    .as_slice()
+                    .iter()
+                    .zip(weights.as_slice())
+                    .map(|(&e, &w)| e * w)
+                    .sum();
+
+                // The two hold the same polynomial: `pack` only regroups storage.
+                let packed_evals = evals.pack::<F, EF>();
+                let probe = Point::new((0..num_variables).map(|_| rng.random()).collect());
+                assert_eq!(
+                    packed_evals.eval_packed::<F, EF>(&probe),
+                    evals.eval_ext::<F>(&probe),
+                    "pack changed the polynomial"
+                );
+
+                let unpacked = run(
+                    ProductPolynomial::new_unpacked(order, evals.clone(), weights.clone()),
+                    sum,
+                );
+                let packed = run(
+                    ProductPolynomial::new_packed(order, packed_evals, weights.pack::<F, EF>()),
+                    sum,
+                );
+
+                assert_eq!(
+                    packed, unpacked,
+                    "{order:?}, {num_variables} variables, SIMD width {width}"
+                );
+            }
         }
     }
 }

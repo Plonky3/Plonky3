@@ -178,7 +178,12 @@ where
     rand_ext::<B>(rng, k).pack::<B::F, B::EF>()
 }
 
-/// Packed product polynomial with independent random evals and weights.
+/// Product polynomial with independent random evals and weights.
+///
+/// The pair is handed to `new_packed`, but only prefix binding actually keeps
+/// packed storage: `ProductPolynomial` unpacks a suffix-bound pair up front,
+/// because the suffix variable lives inside the SIMD lanes. The suffix rows of
+/// the prover benches therefore measure the scalar kernel.
 fn rand_product_poly<B: BenchField>(
     order: VariableOrder,
     rng: &mut SmallRng,
