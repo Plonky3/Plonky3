@@ -40,6 +40,14 @@ jobs:
           - os: ubuntu-latest
             features: "+avx2"
             parallel: true
+          # PCLMULQDQ is present on essentially every x86_64 CPU since ~2010, so the
+          # carryless-multiply paths can be tested rather than merely compiled.
+          - os: ubuntu-latest
+            features: "+pclmulqdq"
+            parallel: false
+          - os: ubuntu-latest
+            features: "+pclmulqdq"
+            parallel: true
           - os: ubuntu-latest
             features: "+avx512f"
             # GitHub-hosted runners aren't guaranteed to have AVX-512 hardware,
@@ -84,7 +92,7 @@ jobs:
       - name: Set flags
         if: ${{ matrix.features }}
         run: |
-          # Append AVX2/AVX-512 to existing flags so we keep -C debuginfo=0.
+          # Append the leg's target features to existing flags so we keep -C debuginfo=0.
           echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
 
       # Smarter cache for Rust builds; avoids overfilling the runner disk.
@@ -155,6 +163,7 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-air
           cargo build --verbose --target ${{ env.target }} -p p3-baby-bear
           cargo build --verbose --target ${{ env.target }} -p p3-batch-stark
+          cargo build --verbose --target ${{ env.target }} -p p3-binary-field
           cargo build --verbose --target ${{ env.target }} -p p3-blake3
           cargo build --verbose --target ${{ env.target }} -p p3-blake3-air
           cargo build --verbose --target ${{ env.target }} -p p3-bn254
