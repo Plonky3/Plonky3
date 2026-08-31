@@ -3,9 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{
-    ExtensionField, Field, PackedFieldExtension, PackedValue, TwoAdicField, dot_product,
-};
+use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -40,7 +38,7 @@ pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     pub(crate) poly: Poly<F>,
 }
 
-impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
+impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
     fn from_witness(witness: Witness<F>) -> Self {
         // Move the witness fields out so the prover owns them outright.
         let parts = witness.into_parts();
@@ -330,7 +328,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
     }
 }
 
-impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
+impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
     /// Builds the residual equality weights in packed form.
     ///
     /// Two routes produce the identical polynomial; each call takes the cheaper one:
