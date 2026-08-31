@@ -4,6 +4,7 @@ members = [
     "air",
     "baby-bear",
     "batch-stark",
+    "binary-field",
     "blake3",
     "blake3-air",
     "bn254",
@@ -104,6 +105,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 # Local dependencies
 p3-air = { path = "air", version = "0.6.0" }
 p3-baby-bear = { path = "baby-bear", version = "0.6.0" }
+p3-binary-field = { path = "binary-field", version = "0.6.0" }
 p3-blake3 = { path = "blake3", version = "0.6.0" }
 p3-blake3-air = { path = "blake3-air", version = "0.6.0" }
 p3-bn254 = { path = "bn254", version = "0.6.0" }

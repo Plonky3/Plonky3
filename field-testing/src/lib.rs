@@ -258,6 +258,218 @@ where
     );
 }
 
+/// Identical to [`test_ring_with_eq()`], except it omits the `halve` identities, which
+/// [`PrimeCharacteristicRing::halve`] does not support in characteristic 2.
+#[allow(clippy::eq_op)]
+pub fn test_ring_with_eq_char2<R: PrimeCharacteristicRing + Copy + Eq>(zeros: &[R], ones: &[R])
+where
+    StandardUniform: Distribution<R> + Distribution<[R; 16]>,
+{
+    // zeros should be a vector containing different representatives of `R::ZERO`.
+    // ones should be a vector containing different representatives of `R::ONE`.
+    let mut rng = SmallRng::seed_from_u64(1);
+    let x = rng.random::<R>();
+    let y = rng.random::<R>();
+    let z = rng.random::<R>();
+    assert_eq!(R::ONE + R::NEG_ONE, R::ZERO, "Error 1 + (-1) =/= 0");
+    assert_eq!(R::NEG_ONE + R::TWO, R::ONE, "Error -1 + 2 =/= 1");
+    assert_eq!(x + (-x), R::ZERO, "Error x + (-x) =/= 0");
+    assert_eq!(R::ONE + R::ONE, R::TWO, "Error 1 + 1 =/= 2");
+    assert_eq!(-(-x), x, "Error when testing double negation");
+    assert_eq!(x + x, x * R::TWO, "Error when comparing x * 2 to x + x");
+    assert_eq!(
+        x * R::TWO,
+        x.double(),
+        "Error when comparing x.double() to x * 2"
+    );
+
+    // Check different representatives of Zero.
+    for zero in zeros.iter().copied() {
+        assert_eq!(zero, R::ZERO);
+        assert_eq!(x + zero, x, "Error when testing additive identity right.");
+        assert_eq!(zero + x, x, "Error when testing additive identity left.");
+        assert_eq!(x - zero, x, "Error when testing subtracting zero.");
+        assert_eq!(zero - x, -x, "Error when testing subtracting  from zero.");
+        assert_eq!(
+            x * zero,
+            zero,
+            "Error when testing right multiplication by 0."
+        );
+        assert_eq!(
+            zero * x,
+            zero,
+            "Error when testing left multiplication by 0."
+        );
+    }
+
+    // Check different representatives of One.
+    for one in ones.iter().copied() {
+        assert_eq!(one, R::ONE);
+        assert_eq!(one * one, one);
+        assert_eq!(
+            x * one,
+            x,
+            "Error when testing multiplicative identity right."
+        );
+        assert_eq!(
+            one * x,
+            x,
+            "Error when testing multiplicative identity left."
+        );
+    }
+
+    assert_eq!(
+        x * R::NEG_ONE,
+        -x,
+        "Error when testing right multiplication by -1."
+    );
+    assert_eq!(
+        R::NEG_ONE * x,
+        -x,
+        "Error when testing left multiplication by -1."
+    );
+    assert_eq!(x * x, x.square(), "Error when testing x * x = x.square()");
+    assert_eq!(
+        x * x * x,
+        x.cube(),
+        "Error when testing x * x * x = x.cube()"
+    );
+    assert_eq!(x + y, y + x, "Error when testing commutativity of addition");
+    assert_eq!(
+        (x - y),
+        -(y - x),
+        "Error when testing anticommutativity of sub."
+    );
+    assert_eq!(
+        x * y,
+        y * x,
+        "Error when testing commutativity of multiplication."
+    );
+    assert_eq!(
+        x + (y + z),
+        (x + y) + z,
+        "Error when testing associativity of addition"
+    );
+    assert_eq!(
+        x * (y * z),
+        (x * y) * z,
+        "Error when testing associativity of multiplication."
+    );
+    assert_eq!(
+        x - (y - z),
+        (x - y) + z,
+        "Error when testing subtraction and addition"
+    );
+    assert_eq!(
+        x - (y + z),
+        (x - y) - z,
+        "Error when testing subtraction and addition"
+    );
+    assert_eq!(
+        (x + y) - z,
+        x + (y - z),
+        "Error when testing subtraction and addition"
+    );
+    assert_eq!(
+        x * (-y),
+        -(x * y),
+        "Error when testing distributivity of mul and right neg."
+    );
+    assert_eq!(
+        (-x) * y,
+        -(x * y),
+        "Error when testing distributivity of mul and left neg."
+    );
+
+    assert_eq!(
+        x * (y + z),
+        x * y + x * z,
+        "Error when testing distributivity of add and left mul."
+    );
+    assert_eq!(
+        (x + y) * z,
+        x * z + y * z,
+        "Error when testing distributivity of add and right mul."
+    );
+    assert_eq!(
+        x * (y - z),
+        x * y - x * z,
+        "Error when testing distributivity of sub and left mul."
+    );
+    assert_eq!(
+        (x - y) * z,
+        x * z - y * z,
+        "Error when testing distributivity of sub and right mul."
+    );
+
+    let vec1: [R; 64] = rng.random();
+    let vec2: [R; 64] = rng.random();
+    test_sums(&vec1[..16].try_into().unwrap());
+    test_dot_product(&vec1, &vec2);
+
+    assert_eq!(
+        x.exp_const_u64::<0>(),
+        R::ONE,
+        "Error when comparing x.exp_const_u64::<0> to R::ONE."
+    );
+    assert_eq!(
+        x.exp_const_u64::<1>(),
+        x,
+        "Error when comparing x.exp_const_u64::<3> to x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<2>(),
+        x * x,
+        "Error when comparing x.exp_const_u64::<3> to x*x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<3>(),
+        x * x * x,
+        "Error when comparing x.exp_const_u64::<3> to x*x*x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<4>(),
+        x * x * x * x,
+        "Error when comparing x.exp_const_u64::<3> to x*x*x*x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<5>(),
+        x * x * x * x * x,
+        "Error when comparing x.exp_const_u64::<5> to x*x*x*x*x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<6>(),
+        x * x * x * x * x * x,
+        "Error when comparing x.exp_const_u64::<7> to x*x*x*x*x*x."
+    );
+    assert_eq!(
+        x.exp_const_u64::<7>(),
+        x * x * x * x * x * x * x,
+        "Error when comparing x.exp_const_u64::<7> to x*x*x*x*x*x*x."
+    );
+
+    test_binary_ops(zeros, ones, x, y, z);
+
+    // Edge case tests with special values
+    for &a in &[R::ZERO, R::ONE, R::TWO, R::NEG_ONE] {
+        for &b in &[R::ZERO, R::ONE, R::TWO, R::NEG_ONE] {
+            assert_eq!(a + b, b + a, "commutativity with special values");
+            assert_eq!(a * b, b * a, "commutativity with special values");
+        }
+        assert_eq!(a * a, a.square(), "square with special value");
+        assert_eq!(a * a * a, a.cube(), "cube with special value");
+    }
+
+    // Test that Product of empty iterator returns ONE (the multiplicative identity)
+    let empty: [R; 0] = [];
+    let product_result: R = empty.into_iter().product();
+    assert_eq!(
+        product_result,
+        R::ONE,
+        "Product of empty iterator should return ONE, not ZERO"
+    );
+}
+
 pub fn test_mul_2exp_u64<R: PrimeCharacteristicRing + Eq>()
 where
     StandardUniform: Distribution<R>,
@@ -276,6 +488,49 @@ where
     for i in 128..256 {
         assert_eq!(x.clone().mul_2exp_u64(i), x.clone() * R::TWO.exp_u64(i));
     }
+}
+
+/// In characteristic 2, `2 == 0`, so `mul_2exp_u64(e)` collapses to `ZERO` for every
+/// `e >= 1` (and is the identity at `e == 0`). Replaces [`test_mul_2exp_u64`], which
+/// compares against multiplication by `2^e` computed as if `2` were nonzero.
+pub fn test_mul_2exp_u64_is_zero_above_e0<R: PrimeCharacteristicRing + Eq>()
+where
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let x = rng.random::<R>();
+    // Small exponents plus values straddling the 64- and 128-bit boundaries, where an
+    // implementation computing `2^e` as a fixed-width shift would overflow rather than
+    // collapse to `ZERO`.
+    const EXPONENTS: [u64; 9] = [1, 2, 7, 8, 63, 64, 127, 128, 255];
+    for sample in [R::ZERO, R::ONE, x] {
+        assert_eq!(
+            sample.mul_2exp_u64(0),
+            sample,
+            "mul_2exp_u64(0) must be the identity"
+        );
+        for e in EXPONENTS {
+            assert_eq!(
+                sample.mul_2exp_u64(e),
+                R::ZERO,
+                "mul_2exp_u64({e}) must be ZERO in characteristic 2"
+            );
+        }
+    }
+}
+
+/// [`PrimeCharacteristicRing::halve`] is documented to panic in characteristic 2.
+///
+/// Must be invoked from a `#[should_panic]` test.
+pub fn test_halve_panics_char2<R: PrimeCharacteristicRing>() {
+    let _halved = R::ONE.halve();
+}
+
+/// [`PrimeCharacteristicRing::div_2exp_u64`] is documented to panic in characteristic 2.
+///
+/// Must be invoked from a `#[should_panic]` test.
+pub fn test_div_2exp_u64_panics_char2<R: PrimeCharacteristicRing>() {
+    let _divided = R::ONE.div_2exp_u64(1);
 }
 
 pub fn test_div_2exp_u64<R: PrimeCharacteristicRing + Eq>()
@@ -349,6 +604,26 @@ where
     }
 }
 
+/// Identical to [`test_inverse`], except it omits the `2.inverse() == 1.halve()` check,
+/// since `2 == 0` is not invertible in characteristic 2.
+pub fn test_inverse_char2<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    assert_eq!(None, F::ZERO.try_inverse());
+    assert_eq!(Some(F::ONE), F::ONE.try_inverse());
+    assert_eq!(F::NEG_ONE.inverse(), F::NEG_ONE, "-1 is its own inverse");
+    let mut rng = SmallRng::seed_from_u64(1);
+    for _ in 0..1000 {
+        let x = rng.random::<F>();
+        if !x.is_zero() && !x.is_one() {
+            let z = x.inverse();
+            assert_ne!(x, z);
+            assert_eq!(x * z, F::ONE);
+        }
+    }
+}
+
 /// Test that [`Field::try_sqrt`] agrees with squaring.
 ///
 /// Assumes the field has characteristic `!= 2`, so that roughly half of all
@@ -394,6 +669,40 @@ where
         non_residues > 0,
         "expected to sample a quadratic non-residue"
     );
+}
+
+/// Test that [`Field::try_sqrt`] agrees with squaring, in characteristic 2.
+///
+/// Every finite field of characteristic 2 is perfect, so the Frobenius endomorphism
+/// `x -> x^2` is a bijection and every element has a (unique) square root. Unlike
+/// [`test_sqrt`], this does not expect to find any quadratic non-residues.
+pub fn test_sqrt_char2<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    assert_eq!(F::ZERO.try_sqrt(), Some(F::ZERO));
+    assert_eq!(
+        F::ONE.try_sqrt().map(|r| r.square()),
+        Some(F::ONE),
+        "1 must be a square"
+    );
+
+    let mut rng = SmallRng::seed_from_u64(0x59A7);
+    for _ in 0..1000 {
+        let x = rng.random::<F>();
+
+        // The square of any element is a quadratic residue, and any returned
+        // root must square back to it.
+        let square = x.square();
+        let root = square.try_sqrt().expect("x^2 is always a square");
+        assert_eq!(root.square(), square, "sqrt(x^2)^2 == x^2");
+
+        // Every element of a characteristic-2 field is itself a square.
+        let r = x
+            .try_sqrt()
+            .expect("every element is a square in characteristic 2");
+        assert_eq!(r.square(), x, "try_sqrt(x)^2 == x");
+    }
 }
 
 /// Verify [`batch_multiplicative_inverse`] against the naive per-element inverse
@@ -752,10 +1061,15 @@ pub fn test_binary_ops<R: PrimeCharacteristicRing + Eq + Copy>(
 }
 
 /// Checks the fixed enumeration used for interpolation nodes.
+///
+/// `0..64` is the tested range, capped by the size of the field: a field with fewer than 64
+/// elements cannot enumerate 64 distinct ones, and injectivity is only ever asked for on the
+/// indices a protocol can reach.
 pub fn test_interpolation_nodes<F: Field>() {
     assert_eq!(F::interpolation_node(0), F::ZERO);
     assert_eq!(F::interpolation_node(1), F::ONE);
-    let nodes: Vec<F> = (0..64).map(F::interpolation_node).collect();
+    let count = usize::try_from(F::order()).unwrap_or(usize::MAX).min(64);
+    let nodes: Vec<F> = (0..count).map(F::interpolation_node).collect();
     for (i, a) in nodes.iter().enumerate() {
         for b in &nodes[..i] {
             assert_ne!(a, b, "interpolation nodes must be pairwise distinct");
@@ -783,6 +1097,46 @@ pub fn test_powers_collect<F: Field>() {
         .collect();
 
     let base = F::TWO;
+    let shift = F::GENERATOR;
+
+    // Manual implementation of `Powers`
+    let expected_iter = successors(Some(shift), |prev| Some(*prev * base));
+
+    for num_powers in num_powers_tests {
+        let expected: Vec<_> = expected_iter.clone().take(num_powers).collect();
+        let actual = base.shifted_powers(shift).collect_n(num_powers);
+        assert_eq!(
+            expected, actual,
+            "Got different powers when taking {num_powers}"
+        );
+    }
+}
+
+/// Identical to [`test_powers_collect`], except it uses `F::GENERATOR` (nonzero, and not
+/// `ONE`) as the base instead of `F::TWO`. In characteristic 2, `TWO == ZERO`, so
+/// `test_powers_collect`'s sequence of powers degenerates to `[shift, ZERO, ZERO, ...]` for
+/// every tested length: both the optimized `collect_n` path and the reference `successors`
+/// chain hit that same degenerate case identically, so the test would pass while exercising
+/// essentially none of the packed/serial `collect_n` machinery it exists to cover.
+pub fn test_powers_collect_char2<F: Field>() {
+    // Small using serial implementation
+    let small_powers_serial = [0, 1, 2, 3, 4, 15];
+    // Small using packed implementation
+    let small_powers_packed = [16, 17];
+    // Large powers of two
+    let powers_of_two = [5, 6, 7, 8, 9, 10, 13];
+
+    let num_powers_tests: Vec<usize> = small_powers_serial
+        .into_iter()
+        .chain(small_powers_packed)
+        .chain(powers_of_two.iter().flat_map(|exp| {
+            // Check boundaries at power of 2
+            let n = 1 << exp;
+            [n - 1, n, n + 1]
+        }))
+        .collect();
+
+    let base = F::GENERATOR;
     let shift = F::GENERATOR;
 
     // Manual implementation of `Powers`
@@ -1040,6 +1394,48 @@ where
     });
 }
 
+/// Identical to [`test_ring_axioms_proptest`], except it omits the `halve` roundtrip
+/// check, which [`PrimeCharacteristicRing::halve`] does not support in characteristic 2.
+pub fn test_ring_axioms_proptest_char2<R>()
+where
+    R: PrimeCharacteristicRing + Copy + Eq + core::fmt::Debug + 'static,
+    StandardUniform: Distribution<R>,
+{
+    let config = ProptestConfig::with_cases(256);
+    proptest!(config, |(x in arb_field::<R>(), y in arb_field::<R>(), z in arb_field::<R>())| {
+        // Commutativity
+        prop_assert_eq!(x + y, y + x, "addition commutativity");
+        prop_assert_eq!(x * y, y * x, "multiplication commutativity");
+
+        // Associativity
+        prop_assert_eq!(x + (y + z), (x + y) + z, "addition associativity");
+        prop_assert_eq!(x * (y * z), (x * y) * z, "multiplication associativity");
+
+        // Distributivity
+        prop_assert_eq!(x * (y + z), x * y + x * z, "left distributivity");
+        prop_assert_eq!((x + y) * z, x * z + y * z, "right distributivity");
+
+        // Negation
+        prop_assert_eq!(x + (-x), R::ZERO, "additive inverse");
+        prop_assert_eq!(-(-x), x, "double negation");
+
+        // Subtraction identities
+        prop_assert_eq!(x - (y - z), (x - y) + z, "sub-sub identity");
+        prop_assert_eq!(x - (y + z), (x - y) - z, "sub-add identity");
+
+        // Square and cube
+        prop_assert_eq!(x * x, x.square(), "square");
+        prop_assert_eq!(x * x * x, x.cube(), "cube");
+
+        // Double
+        prop_assert_eq!(x.double(), x + x, "double");
+
+        // Multiplication by zero and negative one
+        prop_assert_eq!(x * R::ZERO, R::ZERO, "x * 0 == 0");
+        prop_assert_eq!(R::NEG_ONE * x, -x, "-1 * x == -x");
+    });
+}
+
 /// Test field axioms (inverse, division) with deterministic edge cases
 /// and 256 random non-zero (x, y, z) triplets via proptest.
 pub fn test_field_axioms_proptest<F>()
@@ -1049,6 +1445,44 @@ where
 {
     // Deterministic edge cases
     assert_eq!(F::TWO.inverse(), F::ONE.halve());
+    assert_eq!(F::NEG_ONE.inverse(), F::NEG_ONE, "-1 is its own inverse");
+    assert_eq!(
+        F::GENERATOR.inverse() * F::GENERATOR,
+        F::ONE,
+        "generator inverse roundtrip"
+    );
+
+    // Proptest: 256 random triplets, all non-zero
+    let config = ProptestConfig::with_cases(256);
+    proptest!(config, |(x in arb_field::<F>(), y in arb_field::<F>(), z in arb_field::<F>())| {
+        // Skip if any element is zero
+        if x.is_zero() || y.is_zero() || z.is_zero() {
+            return Ok(());
+        }
+
+        // Inverse properties
+        prop_assert_eq!(x * x.inverse(), F::ONE, "x * x^-1 == 1");
+        prop_assert_eq!(x.inverse().inverse(), x, "double inverse");
+        prop_assert_eq!(x.square().inverse(), x.inverse().square(), "square-inverse commutativity");
+
+        // Division roundtrip
+        prop_assert_eq!((x / y) * y, x, "division roundtrip");
+
+        // Division associativity
+        prop_assert_eq!(x / (y * z), (x / y) / z, "division-multiplication associativity");
+        prop_assert_eq!((x * y) / z, x * (y / z), "multiplication-division associativity");
+    });
+}
+
+/// Identical to [`test_field_axioms_proptest`], except it omits the
+/// `2.inverse() == 1.halve()` edge case, since `2 == 0` is not invertible in
+/// characteristic 2.
+pub fn test_field_axioms_proptest_char2<F>()
+where
+    F: Field + core::fmt::Debug + 'static,
+    StandardUniform: Distribution<F>,
+{
+    // Deterministic edge cases
     assert_eq!(F::NEG_ONE.inverse(), F::NEG_ONE, "-1 is its own inverse");
     assert_eq!(
         F::GENERATOR.inverse() * F::GENERATOR,
@@ -1141,6 +1575,97 @@ macro_rules! test_field {
             #[test]
             fn test_field_axioms_proptest() {
                 $crate::test_field_axioms_proptest::<$field>();
+            }
+        }
+
+        // Looks a little strange but we also check that everything works
+        // when the field is considered as a trivial extension of itself.
+        mod trivial_extension_tests {
+            #[test]
+            fn test_to_from_trivial_extension() {
+                $crate::test_to_from_extension_field::<$field, $field>();
+            }
+
+            #[test]
+            fn test_trivial_packed_extension() {
+                $crate::test_packed_extension::<$field, $field>();
+            }
+        }
+    };
+}
+
+/// A [`test_field!`]-equivalent suite for fields of characteristic 2.
+///
+/// `PrimeCharacteristicRing::{halve, div_2exp_u64}` are documented to panic
+/// unconditionally in characteristic 2, so this replaces [`test_div_2exp_u64`] with
+/// [`test_halve_panics_char2`] and [`test_div_2exp_u64_panics_char2`], which pin that
+/// panic, and swaps every other halve-dependent (or otherwise characteristic-2-degenerate)
+/// check for a characteristic-2-safe sibling (`test_ring_with_eq_char2`,
+/// `test_mul_2exp_u64_is_zero_above_e0`, `test_inverse_char2`, `test_sqrt_char2`,
+/// `test_powers_collect_char2`, `test_ring_axioms_proptest_char2`,
+/// `test_field_axioms_proptest_char2`).
+#[macro_export]
+macro_rules! test_binary_field {
+    ($field:ty, $zeros: expr, $ones: expr, $factors: expr) => {
+        mod ring_tests {
+            use p3_field::PrimeCharacteristicRing;
+
+            #[test]
+            fn test_ring_with_eq() {
+                $crate::test_ring_with_eq_char2::<$field>($zeros, $ones);
+            }
+            #[test]
+            fn test_mul_2exp_u64() {
+                $crate::test_mul_2exp_u64_is_zero_above_e0::<$field>();
+            }
+            #[test]
+            #[should_panic]
+            fn test_halve_panics() {
+                $crate::test_halve_panics_char2::<$field>();
+            }
+            #[test]
+            #[should_panic]
+            fn test_div_2exp_u64_panics() {
+                $crate::test_div_2exp_u64_panics_char2::<$field>();
+            }
+        }
+
+        mod field_tests {
+            #[test]
+            fn test_inverse() {
+                $crate::test_inverse_char2::<$field>();
+            }
+            #[test]
+            fn test_batch_multiplicative_inverse() {
+                $crate::test_batch_multiplicative_inverse::<$field>();
+            }
+            #[test]
+            fn test_sqrt() {
+                $crate::test_sqrt_char2::<$field>();
+            }
+            #[test]
+            fn test_generator() {
+                $crate::test_generator::<$field>($factors);
+            }
+            #[test]
+            fn test_streaming() {
+                $crate::test_into_stream::<$field>();
+            }
+            #[test]
+            fn test_powers_collect() {
+                $crate::test_powers_collect_char2::<$field>();
+            }
+            #[test]
+            fn test_interpolation_nodes() {
+                $crate::test_interpolation_nodes::<$field>();
+            }
+            #[test]
+            fn test_ring_axioms_proptest() {
+                $crate::test_ring_axioms_proptest_char2::<$field>();
+            }
+            #[test]
+            fn test_field_axioms_proptest() {
+                $crate::test_field_axioms_proptest_char2::<$field>();
             }
         }
 
