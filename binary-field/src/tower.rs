@@ -28,8 +28,18 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::clmul::{HAS_HARDWARE_CLMUL, mul_64, mul_128, square_64, square_128};
 use crate::{Gf2, tables};
 
+/// Seals [`TowerLevel`] against implementation outside this crate.
+///
+/// `domain_point`, `AdditiveNtt` and every identity `p3-binary-dft` builds on assume
+/// `cantor_basis` is *the* Cantor basis — `v_0 = 1` and `v_i² + v_i = v_{i−1}` — not merely some
+/// `F_2`-linearly independent sequence. An external implementation satisfying none of that would
+/// fail silently, with wrong evaluations rather than a compile error, wherever those assume it.
+mod private {
+    pub trait Sealed {}
+}
+
 /// One level of the Wiedemann tower. `Repr` is the backing integer; `LOG_BITS` is `k` for `GF(2^(2^k))`.
-pub trait TowerLevel: Field {
+pub trait TowerLevel: Field + private::Sealed {
     type Repr: Copy;
     const LOG_BITS: usize;
     /// Build an element from a bit pattern, discarding the bits above `2^LOG_BITS`.
@@ -53,6 +63,8 @@ pub trait TowerLevel: Field {
 
 /// The panic message shared by every [`TowerLevel::from_le_byte_iter`] implementation.
 const BYTE_STREAM_ENDED: &str = "byte stream ended before a whole element was read";
+
+impl private::Sealed for Gf2 {}
 
 impl TowerLevel for Gf2 {
     type Repr = u8;
@@ -203,6 +215,8 @@ macro_rules! binary_tower_level {
                 <Self as TowerLevel>::from_repr(<$repr>::from_le_bytes(bytes))
             }
         }
+
+        impl private::Sealed for $name {}
 
         impl TowerLevel for $name {
             type Repr = $repr;
