@@ -190,10 +190,40 @@ where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
         A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>,
     {
+        Self::from_airs_and_degrees_with_lookup_budgets(
+            config,
+            airs,
+            trace_ext_degree_bits,
+            &vec![0; airs.len()],
+        )
+    }
+
+    /// As [`Self::from_airs_and_degrees`], but each AIR may specify a lookup-packing budget
+    /// floor: `pack_same_bus` is called with `max(free_budget, lookup_budget_overrides[i])`
+    /// instead of only the free (quotient-chunk-preserving) budget. A `0` override reproduces
+    /// [`Self::from_airs_and_degrees`] exactly. A caller raising an override past the free
+    /// ceiling deliberately spends more quotient chunks on that instance to commit fewer aux
+    /// columns — the resulting chunk count must still fit the PCS's blowup
+    /// (`num_quotient_chunks <= 1 << log_blowup`), which this function does not itself enforce.
+    pub fn from_airs_and_degrees_with_lookup_budgets<A>(
+        config: &SC,
+        airs: &[A],
+        trace_ext_degree_bits: &[usize],
+        lookup_budget_overrides: &[usize],
+    ) -> Self
+    where
+        SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
+        A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>,
+    {
         assert_eq!(
             airs.len(),
             trace_ext_degree_bits.len(),
             "airs and trace_ext_degree_bits must have the same length"
+        );
+        assert_eq!(
+            airs.len(),
+            lookup_budget_overrides.len(),
+            "airs and lookup_budget_overrides must have the same length"
         );
 
         let pcs = config.pcs();
@@ -266,7 +296,8 @@ where
         let lookups: Vec<Lookups<Val<SC>>> = airs
             .iter()
             .zip(trace_ext_degree_bits.iter())
-            .map(|(air, &ext_db)| {
+            .zip(lookup_budget_overrides.iter())
+            .map(|((air, &ext_db), &override_budget)| {
                 // Base trace length `N` (before any ZK extension), matching what the
                 // prover and verifier feed the degree model for this instance.
                 let trace_len = 1usize << (ext_db - is_zk);
@@ -287,22 +318,29 @@ where
                 //
                 //     log2_ceil((d + is_zk).max(2) - 1) <= log_chunks
                 //  => d <= 2^log_chunks + 1 - is_zk
-                let budget = (1usize << log_chunks) + 1 - is_zk;
+                let free_budget = (1usize << log_chunks) + 1 - is_zk;
+                let budget = free_budget.max(override_budget);
                 let packed = unpacked.pack_same_bus(&lookup_gadget, budget);
 
-                // The fold must not have moved the quotient bucket.
-                debug_assert_eq!(
-                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
-                        air,
-                        AirLayout::from_air(air),
-                        trace_len,
-                        &packed,
-                        is_zk,
-                        &lookup_gadget,
-                    ),
-                    log_chunks,
-                    "same-bus packing must preserve the quotient chunk count"
-                );
+                if override_budget <= free_budget {
+                    // No deliberate override: the fold must not have moved the quotient bucket,
+                    // exactly as before.
+                    debug_assert_eq!(
+                        get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                            air,
+                            AirLayout::from_air(air),
+                            trace_len,
+                            &packed,
+                            is_zk,
+                            &lookup_gadget,
+                        ),
+                        log_chunks,
+                        "same-bus packing must preserve the quotient chunk count when no override is set"
+                    );
+                }
+                // A deliberate override is allowed to raise the bucket; the caller is
+                // responsible for keeping the resulting chunk count within the PCS's blowup
+                // and for re-deriving the AIR layout from `packed`, not `unpacked`.
 
                 packed
             })

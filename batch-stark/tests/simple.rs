@@ -2799,3 +2799,63 @@ fn test_invalid_permutation_opening_len_rejected() {
         "Verifier should reject permutation opening with wrong length"
     );
 }
+
+// --- Lookup-packing budget override ---
+
+/// Build a single `MulAirLookups` instance whose global lookups all target the same bus,
+/// so `pack_same_bus` has multiple same-bus interactions available to fold.
+fn mul_air_with_n_same_bus_lookups(reps: usize) -> (DemoAirWithLookups, usize) {
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(mul_air, false, true, vec!["Bus".to_string(); reps]);
+    let log_height = 4; // 16 rows
+    (DemoAirWithLookups::MulLookups(mul_air_lookups), log_height)
+}
+
+#[test]
+fn from_airs_and_degrees_with_lookup_budgets_at_zero_matches_the_free_budget() {
+    let config = make_config(2028);
+    let (air, log_height) = mul_air_with_n_same_bus_lookups(4);
+    let airs = [air];
+
+    let default = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let overridden = ProverData::<MyConfig>::from_airs_and_degrees_with_lookup_budgets(
+        &config,
+        &airs,
+        &[log_height],
+        &[0],
+    );
+
+    assert_eq!(
+        format!("{:?}", default.common.lookups),
+        format!("{:?}", overridden.common.lookups),
+        "a zero override must reproduce the free-budget packing exactly"
+    );
+}
+
+#[test]
+fn from_airs_and_degrees_with_lookup_budgets_packs_past_the_free_budget() {
+    let config = make_config(2029);
+    let (air, log_height) = mul_air_with_n_same_bus_lookups(4);
+    let airs = [air];
+
+    let free = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let free_num_lookups = free.common.lookups[0].len();
+
+    // A large override forces every same-bus interaction into one column.
+    let forced = ProverData::<MyConfig>::from_airs_and_degrees_with_lookup_budgets(
+        &config,
+        &airs,
+        &[log_height],
+        &[usize::MAX],
+    );
+    let forced_num_lookups = forced.common.lookups[0].len();
+
+    assert!(
+        forced_num_lookups < free_num_lookups,
+        "override must pack past the free ceiling: free={free_num_lookups}, forced={forced_num_lookups}"
+    );
+    assert_eq!(
+        forced_num_lookups, 1,
+        "usize::MAX budget packs all 4 same-bus interactions into 1 column"
+    );
+}
