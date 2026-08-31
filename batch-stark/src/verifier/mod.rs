@@ -4,8 +4,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 pub use data::VerifierData;
-use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
+use p3_air::{Air, BaseAir};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
@@ -22,11 +22,277 @@ use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
 use crate::common::CommonData;
-use crate::config::{Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val};
+use crate::config::{Challenge, Commitment, Domain, PcsError, StarkGenericConfig as SGC, Val};
 use crate::error::BatchVerificationError;
-use crate::proof::BatchProof;
+use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof};
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::transcript::BatchTranscript;
+
+/// Builds the `commitments_with_opening_points` a batch-STARK proof's PCS opening argument is
+/// checked against: one round per commitment (an optional ZK-randomization round, the trace
+/// round, the quotient-chunks round, an optional preprocessed round, an optional permutation
+/// round), each pairing a commitment with the domains/points/claimed-evaluations
+/// [`Pcs::verify`] checks it at.
+///
+/// This is exactly what [`verify_batch`] builds internally before calling `pcs.verify` — pulled
+/// out so a caller that has already sampled `zeta` from its own transcript replay (and already
+/// has the per-instance shape data `verify_batch`'s own precompute loop derives) can build the
+/// same structure without needing a live `A: Air<...>` reference for anything beyond
+/// [`BaseAir::main_next_row_columns`]/[`BaseAir::preprocessed_next_row_columns`] — e.g. a
+/// recursive verifier that reads trace width and quotient degree from the proof's own
+/// opened-value shape instead of a live AIR.
+///
+/// # Arguments
+///
+/// - `zeta` — the out-of-domain point, already sampled from the transcript.
+/// - `ext_domain_sizes`, `preprocessed_widths`, `log_num_quotient_chunks`,
+///   `num_quotient_chunks` — per-instance, derived exactly as `verify_batch`'s own precompute
+///   loop computes them.
+///
+/// Performs no transcript interaction and no shape validation beyond what the construction
+/// itself requires (e.g. matching quotient-chunk counts): a caller needing `verify_batch`'s
+/// full set of proof-shape checks should either call `verify_batch` directly or replicate the
+/// checks it needs itself.
+///
+/// # Returns
+///
+/// `(commitments_with_opening_points, quotient_domains)` — the second element is each
+/// instance's quotient-chunk domains, a byproduct of this construction that `verify_batch`
+/// also needs for its own post-opening constraint check.
+#[expect(clippy::too_many_arguments)]
+#[expect(clippy::type_complexity)]
+pub fn commitments_with_opening_points<SC, A>(
+    config: &SC,
+    airs: &[A],
+    zeta: Challenge<SC>,
+    commitments: &BatchCommitments<Commitment<SC>>,
+    opened_values: &BatchOpenedValues<Challenge<SC>>,
+    common: &CommonData<SC>,
+    degree_bits: &[usize],
+    ext_domain_sizes: &[usize],
+    preprocessed_widths: &[usize],
+    log_num_quotient_chunks: &[usize],
+    num_quotient_chunks: &[usize],
+) -> Result<
+    (
+        Vec<(
+            Commitment<SC>,
+            Vec<(Domain<SC>, Vec<(Challenge<SC>, Vec<Challenge<SC>>)>)>,
+        )>,
+        Vec<Vec<Domain<SC>>>,
+    ),
+    BatchVerificationError<PcsError<SC>>,
+>
+where
+    SC: SGC,
+    A: BaseAir<Val<SC>>,
+{
+    let pcs = config.pcs();
+    let mut coms_to_verify = vec![];
+
+    // Trace round: per instance, open at zeta and zeta_next
+    let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = ext_domain_sizes
+        .iter()
+        .map(|&ext_size| {
+            (
+                pcs.natural_domain_for_degree(ext_size >> config.is_zk()),
+                pcs.natural_domain_for_degree(ext_size),
+            )
+        })
+        .unzip();
+
+    if let Some(random_commit) = &commitments.random {
+        coms_to_verify.push((
+            random_commit.clone(),
+            ext_trace_domains
+                .iter()
+                .zip(opened_values.instances.iter())
+                .map(|(domain, inst_opened_vals)| {
+                    // We already checked that random is present for each instance when ZK is enabled.
+                    let random_vals = inst_opened_vals.base_opened_values.random.as_ref().unwrap();
+                    (*domain, vec![(zeta, random_vals.clone())])
+                })
+                .collect::<Vec<_>>(),
+        ));
+    }
+
+    let trace_round: Vec<_> = ext_trace_domains
+        .iter()
+        .zip(opened_values.instances.iter())
+        .enumerate()
+        .map(|(i, (ext_dom, inst_opened_vals))| {
+            let mut points = vec![(
+                zeta,
+                inst_opened_vals.base_opened_values.trace_local.clone(),
+            )];
+            if !airs[i].main_next_row_columns().is_empty() {
+                let zeta_next = trace_domains[i]
+                    .next_point(zeta)
+                    .ok_or(VerificationError::NextPointUnavailable)?;
+                points.push((
+                    zeta_next,
+                    inst_opened_vals
+                        .base_opened_values
+                        .trace_next
+                        .clone()
+                        .expect("checked in shape validation"),
+                ));
+            }
+            Ok((*ext_dom, points))
+        })
+        .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
+    coms_to_verify.push((commitments.main.clone(), trace_round));
+
+    // Quotient chunks round: flatten per-instance chunks to match commit order.
+    // Use extended domains for the outer commit domain, with size = base_degree * num_quotient_chunks.
+    let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
+        .map(|i| {
+            let ext_db = degree_bits[i];
+            let log_num_chunks = log_num_quotient_chunks[i];
+            let n_chunks = num_quotient_chunks[i];
+            let ext_dom = ext_trace_domains[i];
+            let (quotient_domain_log_size, quotient_domain_size) =
+                checked_log_size_sum(ext_db, log_num_chunks).ok_or_else(|| {
+                    InvalidProofShapeError::QuotientDomainTooLarge {
+                        air: Some(i),
+                        maximum: usize::BITS as usize - 1,
+                        got: ext_db.saturating_add(log_num_chunks),
+                    }
+                })?;
+            let qdom = ext_dom
+                .try_create_disjoint_domain(quotient_domain_size)
+                .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
+                    air: Some(i),
+                    maximum: pcs.log_max_lde_height(),
+                    got: quotient_domain_log_size,
+                })?;
+            Ok(qdom.split_domains(n_chunks))
+        })
+        .collect::<Result<Vec<_>, InvalidProofShapeError>>()?;
+
+    // When ZK is enabled, the size of the quotient chunks' domains doubles.
+    let randomized_quotient_chunks_domains = quotient_domains
+        .iter()
+        .map(|doms| {
+            doms.iter()
+                .map(|dom| pcs.natural_domain_for_degree(dom.size() << (config.is_zk())))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    // Build the per-matrix openings for the aggregated quotient commitment.
+    let mut qc_round = Vec::new();
+    for (i, domains) in randomized_quotient_chunks_domains.iter().enumerate() {
+        let inst_qcs = &opened_values.instances[i]
+            .base_opened_values
+            .quotient_chunks;
+        for (d, vals) in zip_eq(
+            domains.iter(),
+            inst_qcs,
+            VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
+                air: i,
+            }),
+        )? {
+            qc_round.push((*d, vec![(zeta, vals.clone())]));
+        }
+    }
+    coms_to_verify.push((commitments.quotient_chunks.clone(), qc_round));
+
+    // Preprocessed rounds: a single global commitment with one matrix per
+    // instance that has preprocessed columns.
+    if let Some(global) = &common.preprocessed {
+        let mut pre_round = Vec::new();
+
+        for (matrix_index, &inst_idx) in global.matrix_to_instance.iter().enumerate() {
+            let pre_w = preprocessed_widths[inst_idx];
+            if pre_w == 0 {
+                return Err(
+                    InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx }.into(),
+                );
+            }
+
+            let inst = &opened_values.instances[inst_idx];
+            let local = inst
+                .base_opened_values
+                .preprocessed_local
+                .as_ref()
+                .ok_or_else(|| {
+                    VerificationError::from(InvalidProofShapeError::MissingPreprocessedValues {
+                        air: inst_idx,
+                    })
+                })?;
+
+            // Validate that the preprocessed data's extended degree matches what we expect.
+            let ext_db = degree_bits[inst_idx];
+
+            let meta = global.instances[inst_idx].as_ref().ok_or_else(|| {
+                VerificationError::from(InvalidProofShapeError::PreprocessedMetadataMismatch {
+                    air: inst_idx,
+                })
+            })?;
+            if meta.matrix_index != matrix_index || meta.degree_bits != ext_db {
+                return Err(
+                    InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx }.into(),
+                );
+            }
+
+            let meta_db = meta.degree_bits;
+            let pre_domain = pcs.natural_domain_for_degree(1 << meta_db);
+            if !airs[inst_idx].preprocessed_next_row_columns().is_empty() {
+                let next = inst
+                    .base_opened_values
+                    .preprocessed_next
+                    .as_ref()
+                    .ok_or_else(|| {
+                        VerificationError::from(InvalidProofShapeError::MissingPreprocessedValues {
+                            air: inst_idx,
+                        })
+                    })?;
+                let zeta_next_i = trace_domains[inst_idx]
+                    .next_point(zeta)
+                    .ok_or(VerificationError::NextPointUnavailable)?;
+
+                pre_round.push((
+                    pre_domain,
+                    vec![(zeta, local.clone()), (zeta_next_i, next.clone())],
+                ));
+            } else {
+                pre_round.push((pre_domain, vec![(zeta, local.clone())]));
+            }
+        }
+
+        coms_to_verify.push((global.commitment.clone(), pre_round));
+    }
+
+    if commitments.permutation.is_some() {
+        let permutation_commit = commitments.permutation.clone().unwrap();
+        let mut permutation_round = Vec::new();
+        for (i, (ext_dom, inst_opened_vals)) in ext_trace_domains
+            .iter()
+            .zip(opened_values.instances.iter())
+            .enumerate()
+        {
+            if inst_opened_vals.permutation_local.len() != inst_opened_vals.permutation_next.len() {
+                return Err(LookupError::PermutationLengthMismatch { air: i }.into());
+            }
+            if !inst_opened_vals.permutation_local.is_empty() {
+                let zeta_next = trace_domains[i]
+                    .next_point(zeta)
+                    .ok_or(VerificationError::NextPointUnavailable)?;
+                permutation_round.push((
+                    *ext_dom,
+                    vec![
+                        (zeta, inst_opened_vals.permutation_local.clone()),
+                        (zeta_next, inst_opened_vals.permutation_next.clone()),
+                    ],
+                ));
+            }
+        }
+        coms_to_verify.push((permutation_commit, permutation_round));
+    }
+
+    Ok((coms_to_verify, quotient_domains))
+}
 
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A>(
@@ -284,213 +550,31 @@ where
     // Sample OOD point.
     let zeta = transcript.sample_zeta();
 
-    // Build commitments_with_opening_points to verify openings.
-    let mut coms_to_verify = vec![];
-
-    // Trace round: per instance, open at zeta and zeta_next
-    let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = ext_domain_sizes
-        .iter()
-        .map(|&ext_size| {
-            (
-                pcs.natural_domain_for_degree(ext_size >> config.is_zk()),
-                pcs.natural_domain_for_degree(ext_size),
-            )
-        })
-        .unzip();
-
-    if let Some(random_commit) = &commitments.random {
-        coms_to_verify.push((
-            random_commit.clone(),
-            ext_trace_domains
-                .iter()
-                .zip(opened_values.instances.iter())
-                .map(|(domain, inst_opened_vals)| {
-                    // We already checked that random is present for each instance when ZK is enabled.
-                    let random_vals = inst_opened_vals.base_opened_values.random.as_ref().unwrap();
-                    (*domain, vec![(zeta, random_vals.clone())])
-                })
-                .collect::<Vec<_>>(),
-        ));
-    }
-
-    let trace_round: Vec<_> = ext_trace_domains
-        .iter()
-        .zip(opened_values.instances.iter())
-        .enumerate()
-        .map(|(i, (ext_dom, inst_opened_vals))| {
-            let mut points = vec![(
-                zeta,
-                inst_opened_vals.base_opened_values.trace_local.clone(),
-            )];
-            if !airs[i].main_next_row_columns().is_empty() {
-                let zeta_next = trace_domains[i]
-                    .next_point(zeta)
-                    .ok_or(VerificationError::NextPointUnavailable)?;
-                points.push((
-                    zeta_next,
-                    inst_opened_vals
-                        .base_opened_values
-                        .trace_next
-                        .clone()
-                        .expect("checked in shape validation"),
-                ));
-            }
-            Ok((*ext_dom, points))
-        })
-        .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
-    coms_to_verify.push((commitments.main.clone(), trace_round));
-
-    // Quotient chunks round: flatten per-instance chunks to match commit order.
-    // Use extended domains for the outer commit domain, with size = base_degree * num_quotient_chunks.
-    let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
-        .map(|i| {
-            let ext_db = degree_bits[i];
-            let log_num_chunks = log_num_quotient_chunks[i];
-            let n_chunks = num_quotient_chunks[i];
-            let ext_dom = ext_trace_domains[i];
-            let (quotient_domain_log_size, quotient_domain_size) =
-                checked_log_size_sum(ext_db, log_num_chunks).ok_or_else(|| {
-                    InvalidProofShapeError::QuotientDomainTooLarge {
-                        air: Some(i),
-                        maximum: usize::BITS as usize - 1,
-                        got: ext_db.saturating_add(log_num_chunks),
-                    }
-                })?;
-            let qdom = ext_dom
-                .try_create_disjoint_domain(quotient_domain_size)
-                .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
-                    air: Some(i),
-                    maximum: pcs.log_max_lde_height(),
-                    got: quotient_domain_log_size,
-                })?;
-            Ok(qdom.split_domains(n_chunks))
-        })
-        .collect::<Result<Vec<_>, InvalidProofShapeError>>()?;
-
-    // When ZK is enabled, the size of the quotient chunks' domains doubles.
-    let randomized_quotient_chunks_domains = quotient_domains
-        .iter()
-        .map(|doms| {
-            doms.iter()
-                .map(|dom| pcs.natural_domain_for_degree(dom.size() << (config.is_zk())))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    // Build the per-matrix openings for the aggregated quotient commitment.
-    let mut qc_round = Vec::new();
-    for (i, domains) in randomized_quotient_chunks_domains.iter().enumerate() {
-        let inst_qcs = &opened_values.instances[i]
-            .base_opened_values
-            .quotient_chunks;
-        for (d, vals) in zip_eq(
-            domains.iter(),
-            inst_qcs,
-            VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
-                air: i,
-            }),
-        )? {
-            qc_round.push((*d, vec![(zeta, vals.clone())]));
-        }
-    }
-    coms_to_verify.push((commitments.quotient_chunks.clone(), qc_round));
-
-    // Preprocessed rounds: a single global commitment with one matrix per
-    // instance that has preprocessed columns.
-    if let Some(global) = &common.preprocessed {
-        let mut pre_round = Vec::new();
-
-        for (matrix_index, &inst_idx) in global.matrix_to_instance.iter().enumerate() {
-            let pre_w = preprocessed_widths[inst_idx];
-            if pre_w == 0 {
-                return Err(
-                    InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx }.into(),
-                );
-            }
-
-            let inst = &opened_values.instances[inst_idx];
-            let local = inst
-                .base_opened_values
-                .preprocessed_local
-                .as_ref()
-                .ok_or_else(|| {
-                    VerificationError::from(InvalidProofShapeError::MissingPreprocessedValues {
-                        air: inst_idx,
-                    })
-                })?;
-
-            // Validate that the preprocessed data's extended degree matches what we expect.
-            let ext_db = degree_bits[inst_idx];
-
-            let meta = global.instances[inst_idx].as_ref().ok_or_else(|| {
-                VerificationError::from(InvalidProofShapeError::PreprocessedMetadataMismatch {
-                    air: inst_idx,
-                })
-            })?;
-            if meta.matrix_index != matrix_index || meta.degree_bits != ext_db {
-                return Err(
-                    InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx }.into(),
-                );
-            }
-
-            let meta_db = meta.degree_bits;
-            let pre_domain = pcs.natural_domain_for_degree(1 << meta_db);
-            if !airs[inst_idx].preprocessed_next_row_columns().is_empty() {
-                let next = inst
-                    .base_opened_values
-                    .preprocessed_next
-                    .as_ref()
-                    .ok_or_else(|| {
-                        VerificationError::from(InvalidProofShapeError::MissingPreprocessedValues {
-                            air: inst_idx,
-                        })
-                    })?;
-                let zeta_next_i = trace_domains[inst_idx]
-                    .next_point(zeta)
-                    .ok_or(VerificationError::NextPointUnavailable)?;
-
-                pre_round.push((
-                    pre_domain,
-                    vec![(zeta, local.clone()), (zeta_next_i, next.clone())],
-                ));
-            } else {
-                pre_round.push((pre_domain, vec![(zeta, local.clone())]));
-            }
-        }
-
-        coms_to_verify.push((global.commitment.clone(), pre_round));
-    }
-
-    if is_lookup {
-        let permutation_commit = commitments.permutation.clone().unwrap();
-        let mut permutation_round = Vec::new();
-        for (i, (ext_dom, inst_opened_vals)) in ext_trace_domains
-            .iter()
-            .zip(opened_values.instances.iter())
-            .enumerate()
-        {
-            if inst_opened_vals.permutation_local.len() != inst_opened_vals.permutation_next.len() {
-                return Err(LookupError::PermutationLengthMismatch { air: i }.into());
-            }
-            if !inst_opened_vals.permutation_local.is_empty() {
-                let zeta_next = trace_domains[i]
-                    .next_point(zeta)
-                    .ok_or(VerificationError::NextPointUnavailable)?;
-                permutation_round.push((
-                    *ext_dom,
-                    vec![
-                        (zeta, inst_opened_vals.permutation_local.clone()),
-                        (zeta_next, inst_opened_vals.permutation_next.clone()),
-                    ],
-                ));
-            }
-        }
-        coms_to_verify.push((permutation_commit, permutation_round));
-    }
+    let (coms_to_verify, quotient_domains) = commitments_with_opening_points(
+        config,
+        airs,
+        zeta,
+        commitments,
+        opened_values,
+        common,
+        degree_bits,
+        &ext_domain_sizes,
+        &preprocessed_widths,
+        &log_num_quotient_chunks,
+        &num_quotient_chunks,
+    )?;
 
     // Verify all openings via PCS.
     pcs.verify(coms_to_verify, opening_proof, &mut transcript.challenger)
         .map_err(VerificationError::InvalidOpeningArgument)?;
+
+    // Un-extended trace domains, one per instance — needed below for periodic-column
+    // evaluation. `commitments_with_opening_points` derives the same domains internally but
+    // doesn't expose them, since only the caller's own post-opening constraint check needs them.
+    let trace_domains: Vec<Domain<SC>> = ext_domain_sizes
+        .iter()
+        .map(|&ext_size| pcs.natural_domain_for_degree(ext_size >> config.is_zk()))
+        .collect();
 
     // Now check constraint equality per instance.
     // For each instance, recombine quotient from chunks at zeta and compare to folded constraints.

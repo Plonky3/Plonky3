@@ -775,4 +775,306 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
         Ok(())
     }
+
+    /// Reconstructs one full, self-sufficient Merkle authentication path per query from a
+    /// pruned multiproof.
+    ///
+    /// [`verify_batch_pruned`](Self::verify_batch_pruned) only checks the final digest of
+    /// each amortized group against the commitment; it never needs a usable per-query path,
+    /// so it never records one. Some callers do need that — e.g. an in-circuit verifier built
+    /// around a single-path-per-query gadget, with no notion of a shared/amortized proof. This
+    /// walks the exact same amortized frontier (so it costs no more hashing than verification
+    /// does) but additionally scatters each level's "other children" into *every* query's own
+    /// path, not just the group lead's — including query pairs that only merge partway up the
+    /// tree, whose later-level siblings are otherwise nowhere in the pruned proof at all.
+    ///
+    /// Arguments match [`verify_batch_pruned`](Self::verify_batch_pruned) minus `commit`: this
+    /// function does not check anything against a commitment. A caller that also wants that
+    /// check should call `verify_batch_pruned` (or verify each returned path against the
+    /// commitment itself); the two do the same walk and either can be skipped once the other
+    /// has run.
+    ///
+    /// # Returns
+    ///
+    /// One [`MerkleAuthPath`] per entry of `indices`, in the same order (duplicates included) —
+    /// the same shape a pre-pruning, per-query proof would have supplied directly.
+    pub fn restore_and_recompute_paths<R>(
+        &self,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+        opened_values: &[Vec<R>],
+        proof: &PrunedMerklePaths<PW::Value, DIGEST_ELEMS>,
+    ) -> Result<Vec<MerkleAuthPath<PW::Value, DIGEST_ELEMS>>, MerkleTreeError>
+    where
+        R: AsRef<[P::Value]> + PartialEq,
+        P: PackedValue,
+        PW: PackedValue,
+        H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+            + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+            + Sync,
+        C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
+            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
+            + Sync,
+        PW::Value: Eq + Clone,
+        [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
+    {
+        let max_height =
+            validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
+        let arity_schedule = self.proof_arity_schedule(dimensions)?;
+        let full_sibling_count: usize = arity_schedule.iter().map(|step| step - 1).sum();
+
+        let n_originals = indices.len();
+        if opened_values.len() != n_originals {
+            return Err(WrongBatchSize);
+        }
+
+        if n_originals == 0 {
+            return if proof.sibling_hashes.is_empty() {
+                Ok(vec![])
+            } else {
+                Err(PrunedProofError::SiblingCountMismatch {
+                    expected: 0,
+                    got: proof.sibling_hashes.len(),
+                }
+                .into())
+            };
+        }
+
+        let mut sorted_unique: Vec<usize> = indices.to_vec();
+        sorted_unique.sort_unstable();
+        sorted_unique.dedup();
+        let n_unique = sorted_unique.len();
+
+        let &highest = sorted_unique.last().expect("nonempty query set");
+        if highest >= max_height {
+            return Err(IndexOutOfBounds {
+                max_height,
+                index: highest,
+            });
+        }
+
+        let mut reps: Vec<Option<usize>> = vec![None; n_unique];
+        for (orig_idx, &leaf) in indices.iter().enumerate() {
+            let slot = sorted_unique
+                .binary_search(&leaf)
+                .expect("leaf came from the query set");
+            match reps[slot] {
+                None => reps[slot] = Some(orig_idx),
+                Some(rep_idx) => {
+                    if opened_values[rep_idx] != opened_values[orig_idx] {
+                        return Err(PrunedProofError::InconsistentDuplicateOpenings { slot }.into());
+                    }
+                }
+            }
+        }
+        let reps: Vec<usize> = reps
+            .into_iter()
+            .map(|r| r.expect("every unique slot is one of the queries"))
+            .collect();
+
+        let mut restored =
+            restore_paths(proof, &sorted_unique, &arity_schedule, full_sibling_count)?;
+
+        for &rep in &reps {
+            if opened_values[rep].len() != dimensions.len() {
+                return Err(WrongBatchSize);
+            }
+            check_widths(dimensions, &opened_values[rep])?;
+        }
+
+        let mut heights_tallest_first = dimensions
+            .iter()
+            .enumerate()
+            .sorted_by_key(|(_, dims)| Reverse(dims.height))
+            .peekable();
+
+        let mut curr_height_padded = padded_len(max_height, N);
+        let leaf_height_npt = max_height.next_power_of_two();
+
+        let leaf_matrix_indices: Vec<usize> = heights_tallest_first
+            .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == leaf_height_npt)
+            .map(|(i, _)| i)
+            .collect();
+
+        let mut digests: Vec<[PW::Value; DIGEST_ELEMS]> = reps
+            .iter()
+            .map(|&rep| {
+                self.hash.hash_iter_slices(
+                    leaf_matrix_indices
+                        .iter()
+                        .map(|&mi| opened_values[rep][mi].as_ref()),
+                )
+            })
+            .collect();
+
+        let mut node_indices: Vec<usize> = sorted_unique.clone();
+        let mut lead: Vec<usize> = (0..n_unique).collect();
+        let mut sibling_cursor: Vec<usize> = vec![0usize; n_unique];
+        let mut group_lo: Vec<usize> = (0..n_unique).collect();
+        let mut group_hi: Vec<usize> = (1..=n_unique).collect();
+
+        let default_digest = [PW::Value::default(); DIGEST_ELEMS];
+
+        let mut new_digests: Vec<[PW::Value; DIGEST_ELEMS]> = Vec::with_capacity(n_unique);
+        let mut new_indices: Vec<usize> = Vec::with_capacity(n_unique);
+        let mut new_lead: Vec<usize> = Vec::with_capacity(n_unique);
+        let mut new_cursor: Vec<usize> = Vec::with_capacity(n_unique);
+        let mut new_group_lo: Vec<usize> = Vec::with_capacity(n_unique);
+        let mut new_group_hi: Vec<usize> = Vec::with_capacity(n_unique);
+
+        // Prefix sums of per-level chunk sizes, matching `pruning::total_siblings_for_levels`:
+        // the level-`l` chunk of a full path starts at `chunk_base[l]`.
+        let mut chunk_base: Vec<usize> = Vec::with_capacity(arity_schedule.len() + 1);
+        chunk_base.push(0);
+        for &step in &arity_schedule {
+            chunk_base.push(chunk_base.last().unwrap() + (step - 1));
+        }
+
+        for (level, &step) in arity_schedule.iter().enumerate() {
+            let num_siblings_per_path = step - 1;
+
+            new_digests.clear();
+            new_indices.clear();
+            new_lead.clear();
+            new_cursor.clear();
+            new_group_lo.clear();
+            new_group_hi.clear();
+
+            let mut i = 0;
+            while i < digests.len() {
+                let parent_idx = node_indices[i] / step;
+                let group_start = parent_idx * step;
+
+                let mut j = i + 1;
+                while j < digests.len() && node_indices[j] / step == parent_idx {
+                    j += 1;
+                }
+
+                let lead_path = lead[i];
+                let lead_pos = node_indices[i] - group_start;
+                let cursor_start = sibling_cursor[i];
+                // Clone out of `restored` up front: this level's own writes below touch
+                // `restored[lead_path]` too whenever `lead_path` is one of this group's
+                // original slots, which would otherwise conflict with this borrow.
+                let lead_siblings: Vec<[PW::Value; DIGEST_ELEMS]> = restored[lead_path].siblings
+                    [cursor_start..cursor_start + num_siblings_per_path]
+                    .to_vec();
+
+                let mut inputs = [default_digest; N];
+                let mut filled = [false; N];
+                for k in i..j {
+                    let pos = node_indices[k] - group_start;
+                    inputs[pos] = digests[k];
+                    filled[pos] = true;
+                }
+
+                let mut sib_idx = 0;
+                for k in 0..step {
+                    if k == lead_pos {
+                        continue;
+                    }
+                    if !filled[k] {
+                        inputs[k] = lead_siblings[sib_idx];
+                    }
+                    sib_idx += 1;
+                }
+
+                // Every pre-merge entry in this group gives its own "other children" view —
+                // at this level's own position, not the group lead's — to every original
+                // query slot it represents (a range of one, unless it merged earlier).
+                for k in i..j {
+                    let own_pos = node_indices[k] - group_start;
+                    for (pos, &child) in inputs.iter().enumerate().take(step) {
+                        if pos == own_pos {
+                            continue;
+                        }
+                        let offset = if pos < own_pos { pos } else { pos - 1 };
+                        for item in restored.iter_mut().take(group_hi[k]).skip(group_lo[k]) {
+                            item.siblings[chunk_base[level] + offset] = child;
+                        }
+                    }
+                }
+
+                new_digests.push(self.compress.compress(inputs));
+                new_indices.push(parent_idx);
+                new_lead.push(lead_path);
+                new_cursor.push(cursor_start + num_siblings_per_path);
+                new_group_lo.push(group_lo[i]);
+                new_group_hi.push(group_hi[j - 1]);
+
+                i = j;
+            }
+
+            core::mem::swap(&mut digests, &mut new_digests);
+            core::mem::swap(&mut node_indices, &mut new_indices);
+            core::mem::swap(&mut lead, &mut new_lead);
+            core::mem::swap(&mut sibling_cursor, &mut new_cursor);
+            core::mem::swap(&mut group_lo, &mut new_group_lo);
+            core::mem::swap(&mut group_hi, &mut new_group_hi);
+
+            let logical_next = curr_height_padded / step;
+            curr_height_padded = padded_len(logical_next, N);
+
+            let logical_next_npt = logical_next.next_power_of_two();
+            let next_height = heights_tallest_first
+                .peek()
+                .map(|(_, dims)| dims.height)
+                .filter(|h| h.next_power_of_two() == logical_next_npt);
+            if let Some(next_height) = next_height {
+                let inject_matrix_indices: Vec<usize> = heights_tallest_first
+                    .peeking_take_while(|(_, dims)| dims.height == next_height)
+                    .map(|(i, _)| i)
+                    .collect();
+
+                for g in 0..digests.len() {
+                    let rep_orig = reps[lead[g]];
+
+                    for (slot, &member_orig) in
+                        reps.iter().enumerate().take(group_hi[g]).skip(group_lo[g])
+                    {
+                        if slot == lead[g] {
+                            continue;
+                        }
+                        for &mi in &inject_matrix_indices {
+                            if opened_values[member_orig][mi] != opened_values[rep_orig][mi] {
+                                return Err(PrunedProofError::InconsistentGroupOpening {
+                                    slot,
+                                    matrix: mi,
+                                }
+                                .into());
+                            }
+                        }
+                    }
+
+                    let next_height_digest = self.hash.hash_iter_slices(
+                        inject_matrix_indices
+                            .iter()
+                            .map(|&mi| opened_values[rep_orig][mi].as_ref()),
+                    );
+
+                    let inject_inputs: [_; N] = core::array::from_fn(|k| {
+                        if k == 0 {
+                            digests[g]
+                        } else if k == 1 {
+                            next_height_digest
+                        } else {
+                            default_digest
+                        }
+                    });
+                    digests[g] = self.compress.compress(inject_inputs);
+                }
+            }
+        }
+
+        // Expand back to the caller's original (possibly duplicated) query order.
+        indices
+            .iter()
+            .map(|&leaf| {
+                let slot = sorted_unique
+                    .binary_search(&leaf)
+                    .expect("leaf came from the query set");
+                Ok(restored[slot].clone())
+            })
+            .collect()
+    }
 }

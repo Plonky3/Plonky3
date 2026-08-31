@@ -144,7 +144,7 @@ where
 /// A chain of FRI input openings allowing a verifier to check a sequence of
 /// FRI folds and rolls. The first element of each pair indicates the round of
 /// fri in which the input should be rolled in. The second element is the opening.
-type FriOpenings<F> = Vec<(usize, F)>;
+pub type FriOpenings<F> = Vec<(usize, F)>;
 
 /// Verifies a FRI proof.
 ///
@@ -468,7 +468,7 @@ where
 /// - `rows_by_round`: Collector for this query's reconstructed evaluation row at each round.
 #[expect(clippy::too_many_arguments)]
 #[inline]
-fn fold_query<Folding, F, EF, M>(
+pub fn fold_query<Folding, F, EF, M>(
     folding: &Folding,
     query: usize,
     start_index: &mut usize,
@@ -614,7 +614,7 @@ where
 ///   and openings of those matrices at a collection of points.
 #[expect(clippy::type_complexity)]
 #[inline]
-fn open_inputs<Val, Challenge, InputMmcs, FriMmcs>(
+pub fn open_inputs<Val, Challenge, InputMmcs, FriMmcs>(
     params: &FriParameters<FriMmcs>,
     log_global_max_height: usize,
     indices: &[usize],

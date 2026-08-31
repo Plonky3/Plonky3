@@ -1027,4 +1027,63 @@ mod tests {
             .verify_batch(&cap2, &dims, 0, BatchOpeningRef::new(&opening2, &proof2))
             .unwrap();
     }
+
+    /// Cross-checks `restore_and_recompute_paths` against the trusted single-query
+    /// `verify_batch`: every path it hands back must, on its own, authenticate its query
+    /// against the real commitment — proving the restored siblings are correct, not just
+    /// self-consistent. Exercises the two cases that matter most:
+    /// - a mixed-height batch, so restoration must fold the injected matrix's digest
+    ///   correctly (injection never appears in the pruned proof itself, see `mmcs/mod.rs`'s
+    ///   module docs);
+    /// - two queries (0 and 2) that only merge one level *above* the injection point, so their
+    ///   later-level sibling is nowhere in `verify_batch_pruned`'s own bookkeeping — only this
+    ///   function computes it;
+    /// - a duplicate query index, exercising the original-order expansion.
+    #[test]
+    fn restore_and_recompute_paths_matches_single_query_verification() {
+        let mut rng = SmallRng::seed_from_u64(7);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        // Same shapes as `commit_mixed`: mat_1 height 5 (padded to 8) injects mat_2 (height 3)
+        // right after the first level of binary compression.
+        let mat_1 = RowMajorMatrix::<F>::rand(&mut rng, 5, 2);
+        let mat_2 = RowMajorMatrix::<F>::rand(&mut rng, 3, 3);
+        let dims = vec![
+            Dimensions {
+                width: 2,
+                height: 5,
+            },
+            Dimensions {
+                width: 3,
+                height: 3,
+            },
+        ];
+
+        let (commit, prover_data) = mmcs.commit(vec![mat_1, mat_2]);
+
+        let query_indices = vec![0usize, 2, 0];
+        let (opened_values, pruned_proof) = mmcs.open_multi_batch(&query_indices, &prover_data);
+
+        let restored = mmcs
+            .restore_and_recompute_paths(&dims, &query_indices, &opened_values, &pruned_proof)
+            .expect("restoration succeeds for a mixed-height batch with a post-injection merge");
+        assert_eq!(restored.len(), query_indices.len());
+
+        for (q, &index) in query_indices.iter().enumerate() {
+            assert_eq!(restored[q].leaf_index, index);
+            mmcs.verify_batch(
+                &commit,
+                &dims,
+                index,
+                BatchOpeningRef::new(&opened_values[q], &restored[q].siblings),
+            )
+            .expect("a restored path must independently authenticate its query");
+        }
+
+        // The two occurrences of query 0 must restore identically.
+        assert_eq!(restored[0], restored[2]);
+    }
 }
