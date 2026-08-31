@@ -11,7 +11,11 @@ use p3_matrix::dense::RowMajorMatrix;
 ///
 /// Heights are powers of two, and `ℓ = log2(height)` is at most the bit width `2^LOG_BITS` of
 /// `F`: `S_ℓ` is spanned by the first `ℓ` Cantor basis vectors, of which there are only that many.
-pub trait AdditiveNtt<F: TowerLevel>: Clone + Default {
+///
+/// No `Clone + Default` supertrait: an implementation carrying state — a precomputed twiddle
+/// table, a configurable grain, a non-Cantor subspace basis — should not be ruled out by the
+/// interface. [`AdditiveRsEncoder`](crate::AdditiveRsEncoder) requires those bounds itself.
+pub trait AdditiveNtt<F: TowerLevel> {
     /// Evaluates each column on the coset `shift + S_ℓ`.
     ///
     /// # Panics
@@ -54,11 +58,22 @@ pub trait AdditiveNtt<F: TowerLevel>: Clone + Default {
         added_bits: usize,
         shift: F,
     ) -> RowMajorMatrix<F> {
-        let mut coeffs = self.shifted_intt_batch(mat, shift);
-        // Zero-padding the coefficients keeps the same polynomial on the larger domain.
-        coeffs
-            .values
-            .resize(coeffs.values.len() << added_bits, F::ZERO);
-        self.shifted_ntt_batch(coeffs, shift)
+        let coeffs = self.shifted_intt_batch(mat, shift);
+        let width = coeffs.width;
+        let len = coeffs.values.len();
+        let padded_len = u32::try_from(added_bits)
+            .ok()
+            .and_then(|bits| len.checked_shl(bits))
+            // `checked_shl` only rejects a shift amount that is too wide; it does not detect
+            // the value itself overflowing, so recovering `len` from the shifted result is
+            // what actually proves no bits were lost.
+            .filter(|&padded| padded >> added_bits == len)
+            .expect("extended codeword length overflows usize");
+
+        // Zero-padding the coefficients keeps the same polynomial on the larger domain. `F::zero_vec`
+        // plus a `copy_from_slice` avoids `Vec::resize`'s reallocate-and-memcpy of the whole prefix.
+        let mut values = F::zero_vec(padded_len);
+        values[..len].copy_from_slice(&coeffs.values);
+        self.shifted_ntt_batch(RowMajorMatrix::new(values, width), shift)
     }
 }

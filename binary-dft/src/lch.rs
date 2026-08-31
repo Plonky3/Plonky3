@@ -34,9 +34,9 @@ pub struct LchNtt<F> {
 /// machine, are split from within instead. Stages with `half ≤ BUTTERFLY_GRAIN` keep a single
 /// piece per side and pay nothing for the extra level.
 ///
-/// At roughly twenty nanoseconds per `GF(2^128)` butterfly a piece of this size is tens of
-/// microseconds of work, orders of magnitude above the cost of handing a task to another
-/// thread, while still leaving hundreds of pieces per stage at the smallest useful heights.
+/// At a few nanoseconds per butterfly a piece of this size is microseconds of work, well above
+/// the cost of handing a task to another thread, while still leaving hundreds of pieces per
+/// stage at the smallest useful heights.
 pub(crate) const BUTTERFLY_GRAIN: usize = 1 << 10;
 
 impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
@@ -54,25 +54,31 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
                 .enumerate()
                 .for_each(|(blk, block)| {
                     let t = base + domain_point::<F>(blk << 1);
+                    let zero = t.is_zero();
                     let (lo, hi) = block.split_at_mut(half);
+                    let butterfly = |lo: &mut [F], hi: &mut [F]| {
+                        if zero {
+                            // (u, v) ↦ (u, u + v)
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                *v += *u;
+                            }
+                        } else {
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                // (u, v) ↦ (u + t·v, u + t·v + v)
+                                *u += t * *v;
+                                *v += *u;
+                            }
+                        }
+                    };
                     // Pairs are independent across the block, so a block wider than the grain
                     // is split further rather than run on a single thread.
-                    lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                        .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                        .for_each(|(lo, hi)| {
-                            if t.is_zero() {
-                                // (u, v) ↦ (u, u + v)
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    *v += *u;
-                                }
-                            } else {
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    // (u, v) ↦ (u + t·v, u + t·v + v)
-                                    *u += t * *v;
-                                    *v += *u;
-                                }
-                            }
-                        });
+                    if half <= BUTTERFLY_GRAIN {
+                        butterfly(lo, hi);
+                    } else {
+                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                    }
                 });
         }
         mat
@@ -91,25 +97,31 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
                 .enumerate()
                 .for_each(|(blk, block)| {
                     let t = base + domain_point::<F>(blk << 1);
+                    let zero = t.is_zero();
                     let (lo, hi) = block.split_at_mut(half);
+                    let butterfly = |lo: &mut [F], hi: &mut [F]| {
+                        if zero {
+                            // (u', v') ↦ (u = u', v = u' + v')
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                *v += *u;
+                            }
+                        } else {
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                // (u', v') ↦ (u = u' + t·v, v = u' + v')
+                                *v += *u;
+                                *u += t * *v;
+                            }
+                        }
+                    };
                     // Pairs are independent across the block, so a block wider than the grain
                     // is split further rather than run on a single thread.
-                    lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                        .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                        .for_each(|(lo, hi)| {
-                            if t.is_zero() {
-                                // (u', v') ↦ (u = u', v = u' + v')
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    *v += *u;
-                                }
-                            } else {
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    // (u', v') ↦ (u = u' + t·v, v = u' + v')
-                                    *v += *u;
-                                    *u += t * *v;
-                                }
-                            }
-                        });
+                    if half <= BUTTERFLY_GRAIN {
+                        butterfly(lo, hi);
+                    } else {
+                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                    }
                 });
         }
         mat
@@ -118,6 +130,8 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use p3_binary_field::{
         BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, TowerLevel,
     };
@@ -224,6 +238,45 @@ mod tests {
             let evals = ntt.shifted_ntt_batch(coeffs.clone(), shift);
             prop_assert_eq!(ntt.shifted_intt_batch(evals, shift), coeffs);
         }
+
+        /// `LchNtt`'s low-degree extension agrees with the oracle's, on a coset too, and the
+        /// input rows reappear as the prefix: the correspondence Phase 3 folds along.
+        #[test]
+        fn lch_lde_matches_naive(
+            log_n in 0usize..=6,
+            added in 0usize..=3,
+            width in 1usize..=3,
+            seed in any::<u64>(),
+            shift in any::<u64>(),
+        ) {
+            let coeffs = matrix::<BinaryField16>(log_n, width, seed);
+            let shift = sample::<BinaryField16>(shift);
+
+            let lde = LchNtt::<BinaryField16>::default()
+                .shifted_lde_batch(coeffs.clone(), added, shift);
+            let naive = NaiveAdditiveNtt::<BinaryField16>::default()
+                .shifted_lde_batch(coeffs.clone(), added, shift);
+            prop_assert_eq!(&lde, &naive);
+            prop_assert_eq!(&lde.values[..coeffs.values.len()], &coeffs.values[..]);
+        }
+    }
+
+    /// An index of `S_ℓ` past the bit width of `F` calls for a Cantor basis vector this level
+    /// does not have.
+    #[test]
+    #[should_panic]
+    fn shifted_ntt_batch_rejects_l_past_the_bit_width() {
+        // `BinaryField8` has `2^LOG_BITS = 8` Cantor basis vectors, indices `0..8`.
+        let coeffs = matrix::<BinaryField8>((1 << BinaryField8::LOG_BITS) + 1, 1, 0);
+        let _ = LchNtt::<BinaryField8>::default().ntt_batch(coeffs);
+    }
+
+    /// A height that is not a power of two has no well-defined `ℓ`.
+    #[test]
+    #[should_panic]
+    fn shifted_ntt_batch_rejects_a_non_power_of_two_height() {
+        let coeffs = RowMajorMatrix::new(vec![sample::<BinaryField8>(0); 3], 1);
+        let _ = LchNtt::<BinaryField8>::default().ntt_batch(coeffs);
     }
 
     /// The transform is `F_2`-linear in the coefficient vector.

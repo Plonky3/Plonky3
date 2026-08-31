@@ -149,7 +149,7 @@ mod tests {
     use crate::tower::TowerLevel;
     use crate::{
         BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
-        BinaryField128, Gf2,
+        BinaryField128, Gf2, tables,
     };
 
     /// `v_0 = 1` and `v_i² + v_i = v_{i−1}`, checked in each level's own arithmetic.
@@ -218,16 +218,41 @@ mod tests {
 
     #[test]
     fn basis_is_nested_and_independent() {
+        check_nesting::<BinaryField2>(2);
+        check_nesting::<BinaryField4>(4);
+        check_nesting::<BinaryField8>(8);
+        check_nesting::<BinaryField16>(16);
+        check_nesting::<BinaryField32>(32);
+        check_nesting::<BinaryField64>(64);
         check_nesting::<BinaryField128>(128);
+
+        check_independent::<BinaryField2>(2);
+        check_independent::<BinaryField4>(4);
+        check_independent::<BinaryField8>(8);
+        check_independent::<BinaryField16>(16);
+        check_independent::<BinaryField32>(32);
+        check_independent::<BinaryField64>(64);
         check_independent::<BinaryField128>(128);
     }
 
-    /// The two smallest vectors are pinned: `v_0 = 1`, and `v_1` is the generator `X_0` of
-    /// `GF(4)` over `GF(2)`, whose bit pattern is `0b10`.
+    /// A handful of the smallest vectors are pinned by literal value, independent of the table
+    /// itself: `v_0 = 1` and `v_1 = 0b10` are the generator `X_0` of `GF(4)` over `GF(2)` by
+    /// definition, and `v_2, v_3` are checked against the byte-level `GF(2^8)` arithmetic tables
+    /// (`tables::square`), a code path the tower's own recursive squaring never exercises. A
+    /// hand-edited table that flipped a root would still satisfy `check_recurrence` and
+    /// `check_nesting` — both only check the table against itself — so this guards against
+    /// exactly that: it fails if the table changes without the byte tables changing too.
     #[test]
     fn smallest_vectors_are_pinned() {
         assert_eq!(BinaryField128::cantor_basis(0).to_repr(), 1);
         assert_eq!(BinaryField128::cantor_basis(1).to_repr(), 2);
+
+        let v2 = u8::try_from(BinaryField128::cantor_basis(2).to_repr()).unwrap();
+        let v3 = u8::try_from(BinaryField128::cantor_basis(3).to_repr()).unwrap();
+        assert_eq!(tables::square(v2) ^ v2, 2, "v_2^2 + v_2 = v_1");
+        assert_eq!(tables::square(v3) ^ v3, v2, "v_3^2 + v_3 = v_2");
+        assert_eq!(v2 & 1, 0, "v_2 is not the even representation");
+        assert_eq!(v3 & 1, 0, "v_3 is not the even representation");
     }
 
     #[test]

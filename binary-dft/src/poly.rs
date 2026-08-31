@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use p3_binary_field::{BinaryField128, poly_basis};
+use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -46,11 +46,16 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
 
         let width = mat.width();
         let log_n = log2_strict_usize(mat.height());
-        let mut values: Vec<u128> = mat
-            .values
-            .par_iter()
-            .map(|&x| poly_basis::from_tower(x))
+        // `BinaryField128` is `#[repr(transparent)]` over `u128`, so this reuses `mat.values`'s
+        // allocation instead of allocating a second codeword buffer: `to_repr` is the identity
+        // bit pattern, and the specialised `Vec` collect below reinterprets the buffer in place.
+        let mut values: Vec<u128> = core::mem::take(&mut mat.values)
+            .into_iter()
+            .map(BinaryField128::to_repr)
             .collect();
+        values
+            .par_iter_mut()
+            .for_each(|v| *v = poly_basis::from_tower(BinaryField128::from_repr(*v)));
 
         for j in (0..log_n).rev() {
             let half = (1 << j) * width;
@@ -60,28 +65,34 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
                 .enumerate()
                 .for_each(|(blk, block)| {
                     let t = twiddle(base, blk);
+                    let zero = t == 0;
                     let (lo, hi) = block.split_at_mut(half);
-                    lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                        .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                        .for_each(|(lo, hi)| {
-                            if t == 0 {
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    *v ^= *u;
-                                }
-                            } else {
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    *u ^= poly_basis::mul(t, *v);
-                                    *v ^= *u;
-                                }
+                    let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
+                        if zero {
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                *v ^= *u;
                             }
-                        });
+                        } else {
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                *u ^= poly_basis::mul(t, *v);
+                                *v ^= *u;
+                            }
+                        }
+                    };
+                    if half <= BUTTERFLY_GRAIN {
+                        butterfly(lo, hi);
+                    } else {
+                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                    }
                 });
         }
 
-        mat.values
+        values
             .par_iter_mut()
-            .zip(values.par_iter())
-            .for_each(|(x, &v)| *x = poly_basis::to_tower(v));
+            .for_each(|v| *v = poly_basis::to_tower(*v).to_repr());
+        mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
     }
 
@@ -96,11 +107,14 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
 
         let width = mat.width();
         let log_n = log2_strict_usize(mat.height());
-        let mut values: Vec<u128> = mat
-            .values
-            .par_iter()
-            .map(|&x| poly_basis::from_tower(x))
+        // See `shifted_ntt_batch`: reuses `mat.values`'s allocation instead of a second buffer.
+        let mut values: Vec<u128> = core::mem::take(&mut mat.values)
+            .into_iter()
+            .map(BinaryField128::to_repr)
             .collect();
+        values
+            .par_iter_mut()
+            .for_each(|v| *v = poly_basis::from_tower(BinaryField128::from_repr(*v)));
 
         for j in 0..log_n {
             let half = (1 << j) * width;
@@ -110,28 +124,34 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
                 .enumerate()
                 .for_each(|(blk, block)| {
                     let t = twiddle(base, blk);
+                    let zero = t == 0;
                     let (lo, hi) = block.split_at_mut(half);
-                    lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                        .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                        .for_each(|(lo, hi)| {
-                            if t == 0 {
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    *v ^= *u;
-                                }
-                            } else {
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    *v ^= *u;
-                                    *u ^= poly_basis::mul(t, *v);
-                                }
+                    let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
+                        if zero {
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                *v ^= *u;
                             }
-                        });
+                        } else {
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                *v ^= *u;
+                                *u ^= poly_basis::mul(t, *v);
+                            }
+                        }
+                    };
+                    if half <= BUTTERFLY_GRAIN {
+                        butterfly(lo, hi);
+                    } else {
+                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                    }
                 });
         }
 
-        mat.values
+        values
             .par_iter_mut()
-            .zip(values.par_iter())
-            .for_each(|(x, &v)| *x = poly_basis::to_tower(v));
+            .for_each(|v| *v = poly_basis::to_tower(*v).to_repr());
+        mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
     }
 }
@@ -198,5 +218,38 @@ mod tests {
             let evals = ntt.shifted_ntt_batch(coeffs.clone(), shift);
             prop_assert_eq!(ntt.shifted_intt_batch(evals, shift), coeffs);
         }
+
+        /// `PolyBasisNtt`'s low-degree extension agrees with the oracle's, on a coset too, and
+        /// the input rows reappear as the prefix: the correspondence Phase 3 folds along.
+        #[test]
+        fn poly_basis_lde_matches_naive(
+            log_n in 0usize..=6,
+            added in 0usize..=3,
+            width in 1usize..=3,
+            seed in any::<u64>(),
+            shift in any::<u64>(),
+        ) {
+            let coeffs = matrix(log_n, width, seed);
+            let shift = BinaryField128::from_le_byte_iter(
+                shift.to_le_bytes().into_iter().cycle(),
+            );
+
+            let lde = PolyBasisNtt::default().shifted_lde_batch(coeffs.clone(), added, shift);
+            let naive = NaiveAdditiveNtt::<BinaryField128>::default()
+                .shifted_lde_batch(coeffs.clone(), added, shift);
+            prop_assert_eq!(&lde, &naive);
+            prop_assert_eq!(&lde.values[..coeffs.values.len()], &coeffs.values[..]);
+        }
+    }
+
+    /// A height that is not a power of two has no well-defined `ℓ`. `ℓ` exceeding the bit width
+    /// of `BinaryField128` is covered generically at [`LchNtt`](crate::LchNtt), where the level
+    /// is a type parameter and the panic is cheap to reach; at a fixed `BinaryField128` it is
+    /// only reachable through a matrix of `2^129` rows, which is not a test worth writing.
+    #[test]
+    #[should_panic]
+    fn shifted_ntt_batch_rejects_a_non_power_of_two_height() {
+        let coeffs = RowMajorMatrix::new(matrix(0, 1, 0).values.repeat(3), 1);
+        let _ = PolyBasisNtt::default().ntt_batch(coeffs);
     }
 }

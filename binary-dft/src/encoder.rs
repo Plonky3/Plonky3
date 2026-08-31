@@ -17,6 +17,9 @@ use crate::traits::AdditiveNtt;
 ///
 /// The alphabet is `BinaryField128`, where [`PolyBasisNtt`] is the faster transform and falls
 /// back to [`LchNtt`](crate::LchNtt) on a target without a carryless multiply, so it is the default.
+///
+/// `F` is phantom: [`Encoder`] is only implemented below for `F = BinaryField128`, and stays
+/// that way as long as the alphabet is fixed (D9), so the parameter carries no other instance.
 #[derive(Clone, Debug, Default)]
 pub struct AdditiveRsEncoder<F, Ntt = PolyBasisNtt> {
     ntt: Ntt,
@@ -39,7 +42,11 @@ impl<Ntt: AdditiveNtt<BinaryField128>> Encoder<BinaryField128>
             let padded_len = u32::try_from(log_inv_rate)
                 .ok()
                 .and_then(|rate| len.checked_shl(rate))
-                .expect("log_inv_rate must be smaller than the width of usize");
+                // `checked_shl` only rejects a shift amount that is too wide; it does not
+                // detect the value itself overflowing, so recovering `len` from the shifted
+                // result is what actually proves no bits were lost.
+                .filter(|&padded| padded >> log_inv_rate == len)
+                .expect("codeword length overflows usize");
             let mut values = BinaryField128::zero_vec(padded_len);
             values[..len].copy_from_slice(&message.values);
             message.values = values;
@@ -50,6 +57,8 @@ impl<Ntt: AdditiveNtt<BinaryField128>> Encoder<BinaryField128>
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use p3_binary_field::BinaryField128;
     use p3_commit::Encoder;
     use p3_field::PrimeCharacteristicRing;
@@ -89,5 +98,12 @@ mod tests {
         let encoded = AdditiveRsEncoder::<F>::default().encode_batch(message.clone(), 1);
         let direct = AdditiveRsEncoder::<F>::default().encode_batch(message, 0);
         assert_eq!(&encoded.values[..direct.values.len()], &direct.values[..]);
+    }
+
+    #[test]
+    #[should_panic = "codeword length overflows usize"]
+    fn encode_batch_panics_when_the_codeword_length_overflows() {
+        let message = RowMajorMatrix::new(vec![F::ZERO; 2], 1);
+        let _ = AdditiveRsEncoder::<F>::default().encode_batch(message, usize::BITS as usize - 1);
     }
 }

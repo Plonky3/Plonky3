@@ -3,8 +3,7 @@
 use p3_challenger::CanObserve;
 use p3_commit::{Encoder, Mmcs};
 use p3_field::Field;
-use p3_matrix::Matrix;
-use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_multilinear_util::poly::Poly;
 use tracing::info_span;
 
@@ -19,7 +18,11 @@ use crate::strategy::VariableOrder;
 ///
 /// Prefix order transposes the local folding block so the first folded
 /// variables become columns. Suffix order keeps the folding block as the row
-/// width. The encoder owns the expansion, so neither branch pads.
+/// width. The message is built directly at codeword height, with the tail
+/// left at `F::ZERO`, and passed to `encoder` at `log_inv_rate = 0`: an
+/// already-padded message at rate zero is the same computation as padding an
+/// unexpanded one at the real rate, so this is exactly what the encoder would
+/// have built internally, without the extra allocation and copy.
 pub fn commit_base<F, E, MT, Challenger>(
     order: VariableOrder,
     encoder: &E,
@@ -37,18 +40,25 @@ where
 {
     let num_variables = poly.num_variables();
     let width = 1 << folding;
+    let message_height = 1 << (num_variables - folding);
+    let codeword_height = message_height << starting_log_inv_rate;
 
-    let message = match order {
+    let mut values = F::zero_vec(codeword_height * width);
+    match order {
         VariableOrder::Prefix => info_span!("transpose").in_scope(|| {
             // Transposing the folding blocks turns the first folded variables into columns.
-            RowMajorMatrixView::new(poly.as_slice(), 1 << (num_variables - folding)).transpose()
+            let view = RowMajorMatrixView::new(poly.as_slice(), message_height);
+            let mut prefix =
+                RowMajorMatrixViewMut::new(&mut values[..message_height * width], width);
+            view.transpose_into(&mut prefix);
         }),
         // Folding blocks are already contiguous, so the row width alone selects them.
-        VariableOrder::Suffix => RowMajorMatrix::new(poly.as_slice().to_vec(), width),
+        VariableOrder::Suffix => values[..poly.as_slice().len()].copy_from_slice(poly.as_slice()),
     };
+    let message = RowMajorMatrix::new(values, width);
 
-    let encoded = info_span!("encode", height = message.height(), width = message.width())
-        .in_scope(|| encoder.encode_batch(message, starting_log_inv_rate));
+    let encoded = info_span!("encode", height = codeword_height, width)
+        .in_scope(|| encoder.encode_batch(message, 0));
 
     let (root, prover_data) = info_span!("commit_matrix").in_scope(|| mmcs.commit_matrix(encoded));
     challenger.observe(root.clone());

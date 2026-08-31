@@ -141,4 +141,17 @@ mod tests {
         assert_eq!(extended.height(), evals.height() * 4);
         assert_eq!(&extended.values[..evals.values.len()], &evals.values[..]);
     }
+
+    /// The Cantor basis makes the normalisation trivial. Assert that rather than believing it:
+    /// `normalised_subspace_poly` divides by `∏_{m ∈ S_j}(v_j − m)` and this pins that divisor
+    /// to `1`, independently of the `x² + x` recurrence the fast transform relies on instead.
+    #[test]
+    fn the_normalisation_divisor_is_one() {
+        for j in 0..8 {
+            let divisor = (0..1usize << j)
+                .map(|m| BinaryField8::cantor_basis(j) + domain_point::<BinaryField8>(m))
+                .product::<BinaryField8>();
+            assert_eq!(divisor, BinaryField8::ONE, "j={j}");
+        }
+    }
 }
