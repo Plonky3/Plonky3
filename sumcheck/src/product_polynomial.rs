@@ -64,7 +64,7 @@ use crate::strategy::{Basis, RoundMessage, VariableOrder};
 ///
 /// # Transition Logic
 ///
-/// The representation transitions from `Packed` to `Small` when:
+/// The representation transitions from `Packed` to `Unpacked` when:
 ///
 /// ```text
 /// num_variables <= log_2(SIMD_WIDTH)
@@ -72,6 +72,13 @@ use crate::strategy::{Basis, RoundMessage, VariableOrder};
 ///
 /// This occurs after sufficient rounds of folding reduce the polynomial size below the
 /// SIMD efficiency threshold.
+///
+/// # Packed implies prefix binding
+///
+/// `Packed` only ever holds [`VariableOrder::Prefix`] data. The lanes carry the last
+/// `log_2(SIMD_WIDTH)` variables, so a suffix round cannot reach the variable it names.
+/// [`ProductPolynomial::new_packed`] unpacks a suffix pair before it is ever stored
+/// packed, which is why the transition above tests only the size condition.
 #[derive(Debug, Clone)]
 enum MaybePacked<F: Field, EF: ExtensionField<F>> {
     /// SIMD-packed representation for large polynomials.
@@ -136,7 +143,7 @@ pub struct ProductPolynomial<F: Field, EF: ExtensionField<F>> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
-    /// Creates a packed variant and runs an immediate transition check.
+    /// Creates a packed variant, unpacking immediately when packed storage cannot serve it.
     ///
     /// # Arguments
     ///
@@ -146,10 +153,29 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///
     /// # Storage is not guaranteed
     ///
-    /// The transition check runs immediately, so the result is not necessarily
-    /// packed. A [`VariableOrder::Suffix`] pair is unpacked up front: packed
-    /// storage cannot bind the suffix variable, which lives inside the SIMD
-    /// lanes. See [`Self::transition`].
+    /// The result is not necessarily packed. Two pairs are unpacked here, and together
+    /// they establish the invariant that packed storage only ever holds prefix-ordered
+    /// data large enough to be worth packing:
+    ///
+    /// - A [`VariableOrder::Suffix`] pair, for the reason below.
+    /// - A pair already folded down to a single packed element, by the transition check.
+    ///
+    /// ## Why a suffix pair cannot stay packed
+    ///
+    /// The packed layout puts `WIDTH` *consecutive* hypercube points in the lanes
+    /// of one packed element, so the lanes hold the **last** `log2(WIDTH)`
+    /// variables. Both suffix kernels — [`crate::strategy::sumcheck_coefficients_suffix`]
+    /// and `fix_suffix_var_mut` — bind the last variable of the slice they are
+    /// handed. On a packed slice that is `X_{n-1-log2(WIDTH)}`, not `X_{n-1}`:
+    /// the variable a suffix round is supposed to bind is inside the lanes, which
+    /// a slice-adjacent fold cannot reach.
+    ///
+    /// Prefix binding is unaffected, since `X_0` is the top bit of the packed
+    /// element index in both representations.
+    ///
+    /// Serving suffix binding from packed storage would need a cross-lane fold.
+    /// Until there is one, unpack up front so the rounds are computed over the
+    /// variable the order actually names.
     ///
     /// # Panics
     ///
@@ -161,6 +187,13 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ) -> Self {
         // Paired polynomials must share the same variable space.
         assert_eq!(evals.num_variables(), weights.num_variables());
+
+        // `order` is fixed for the life of the polynomial and `Packed` is built only
+        // here, so settling suffix once at construction keeps `Packed => Prefix` true
+        // for every later round without re-testing it per round.
+        if order == VariableOrder::Suffix {
+            return Self::new_unpacked(order, evals.unpack(), weights.unpack());
+        }
 
         // Wrap the packed pair; the order tag fits in one byte.
         let mut poly = Self {
@@ -272,11 +305,10 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///
     /// This is called after each fold operation to check if we should switch representations.
     ///
-    /// # Transition Conditions
+    /// # Transition Condition
     ///
     /// ```text
     /// if packed_num_variables == 0:      -> unpack: SIMD is pure overhead
-    /// if order == Suffix:                -> unpack: packed cannot bind the suffix variable
     /// ```
     ///
     /// ## Only one packed element left
@@ -287,31 +319,21 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///
     /// Scalar mode eliminates this overhead for the final rounds.
     ///
-    /// ## Suffix binding
+    /// ## Binding order is not re-checked
     ///
-    /// The packed layout puts `WIDTH` *consecutive* hypercube points in the lanes
-    /// of one packed element, so the lanes hold the **last** `log2(WIDTH)`
-    /// variables. Both suffix kernels — [`crate::strategy::sumcheck_coefficients_suffix`]
-    /// and `fix_suffix_var_mut` — bind the last variable of the slice they are
-    /// handed. On a packed slice that is `X_{n-1-log2(WIDTH)}`, not `X_{n-1}`:
-    /// the variable a suffix round is supposed to bind is inside the lanes, which
-    /// a slice-adjacent fold cannot reach.
-    ///
-    /// Prefix binding is unaffected, since `X_0` is the top bit of the packed
-    /// element index in both representations.
-    ///
-    /// Serving suffix binding from packed storage would need a cross-lane fold.
-    /// Until there is one, unpack up front so the rounds are computed over the
-    /// variable the order actually names.
+    /// A suffix-ordered pair never reaches this function still packed:
+    /// [`Self::new_packed`] unpacks it before storing, and `order` cannot change
+    /// afterwards. `Packed` therefore implies [`VariableOrder::Prefix`], which
+    /// packed storage folds correctly, so only the size condition remains.
     fn transition(&mut self) {
-        // Read the order before borrowing `inner`; both conditions consult it.
+        // Read the order before borrowing `inner`.
         let order = self.order;
         if let MaybePacked::Packed { evals, weights } = &mut self.inner {
             // Check if we've folded down to a single packed element.
             let k = evals.num_variables();
             assert_eq!(k, weights.num_variables());
 
-            if k == 0 || order == VariableOrder::Suffix {
+            if k == 0 {
                 // Unpack each packed element into its WIDTH scalar lanes, keeping the same order.
                 *self = Self::new_unpacked(order, evals.unpack(), weights.unpack());
             }
@@ -1319,7 +1341,7 @@ mod tests {
     /// built from the same evaluations must run the *same* sumcheck: identical
     /// round messages, under either binding order.
     ///
-    /// This failed for [`VariableOrder::Suffix`] before `transition` learned to
+    /// This failed for [`VariableOrder::Suffix`] before `new_packed` learned to
     /// unpack it. `Poly::pack` puts `WIDTH` consecutive hypercube points in the
     /// lanes of one packed element, so the suffix kernels — which bind the last
     /// variable of the slice they are handed — bound `X_{n-1-log2(WIDTH)}`
