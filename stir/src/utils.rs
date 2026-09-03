@@ -445,12 +445,19 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
 /// Lagrange basis sums to one — and so is non-zero for every `rho` outside the node set,
 /// which is exactly what the rejection below enforces.
 ///
-/// Returns `true` if the check passes. Both `ans` (by the caller's length bound) and `I` have
-/// degree `< n`, so a caller that binds `ans` and the node set into the transcript before
-/// drawing `rho` gets soundness error at most `(n - 1) / |F|`.
+/// Returns `true` if the check passes. For `n >= 1`, both `ans` (by the caller's length bound)
+/// and `I` have degree `< n`, so a caller that binds `ans` and the node set into the transcript
+/// before drawing `rho` gets soundness error at most `(n - 1) / |F|`. An empty node set is
+/// interpolated only by the zero polynomial, and is decided exactly rather than at `rho`.
 pub fn check_ans_interpolates<F: Field>(ans: &[F], points: &[F], values: &[F], rho: F) -> bool {
     if points.len() != values.len() {
         return false;
+    }
+
+    // No node constrains `ans`, so the barycentric sums below would both be empty and accept
+    // anything. The empty node set is interpolated only by the zero polynomial.
+    if points.is_empty() {
+        return ans.iter().all(|c| c.is_zero());
     }
 
     // At an interpolation node the barycentric denominators vanish and the identity says
@@ -1116,6 +1123,9 @@ mod tests {
             &vals,
             F::from_u64(5)
         ));
+        // An empty node set constrains nothing, so only the zero polynomial passes.
+        assert!(check_ans_interpolates(&[], &[], &[], F::from_u64(5)));
+        assert!(!check_ans_interpolates(&ans, &[], &[], F::from_u64(5)));
     }
 
     #[test]

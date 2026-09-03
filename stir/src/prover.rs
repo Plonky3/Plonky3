@@ -295,12 +295,16 @@ where
 
     /// The prefix of `fold_coeffs` that can be non-zero.
     ///
-    /// `fold_coeffs` spans the fold domain, but the folded polynomial's true degree is bounded
-    /// by the round's degree schedule (a fixed factor smaller); evaluating only that prefix
-    /// cuts Horner's work by the same factor.
+    /// `fold_coeffs` runs to whatever length the fold's source implied — the fold domain when
+    /// the round folded a committed codeword, the folded sub-coset when it folded a virtual
+    /// witness — and either can reach past the folded polynomial's true degree, which the
+    /// round's degree schedule bounds. Evaluating only that prefix skips the trailing zeros.
     fn truncated_fold_coeffs(&self) -> &[EF] {
         let rc = &self.config.round_configs[self.round];
         let folded_degree_bound = 1usize << (rc.log_degree - self.log_arity);
+        // The clamp below would silently shorten the prefix rather than fail, so the bound is
+        // pinned here.
+        debug_assert!(folded_degree_bound <= self.fold_coeffs.len());
         &self.fold_coeffs[..folded_degree_bound.min(self.fold_coeffs.len())]
     }
 
@@ -406,6 +410,11 @@ where
         let log_witness_len = self.config.round_configs[self.round].log_degree - self.log_arity;
         let log_sub_coset = log_witness_len.max(log_answer_len).min(next_log_domain);
         let sub_coset_len = 1usize << log_sub_coset;
+        // No degree/folding schedule the config can produce makes the cap at the next domain
+        // binding. Were it ever to bind, the sub-coset would silently alias `f_{i+1}` or
+        // truncate the evaluations below rather than fail, so both widths are pinned here.
+        debug_assert!(log_witness_len <= log_sub_coset);
+        debug_assert!(log_answer_len <= log_sub_coset);
 
         let (ans_evals, vanishing_evals) = tracing::debug_span!("eval_low_degree_pair_on_coset")
             .in_scope(|| {
@@ -697,8 +706,13 @@ where
             }
             Oracle::Coeffs(coeffs) => {
                 // The fold's coefficients past `final_len` are zero, since the witness they
-                // come from respects the round's degree bound.
+                // come from respects the round's degree bound. The truncation below would
+                // silently drop a non-zero tail rather than fail, so the bound is pinned here.
                 let mut folded = fold_poly_coeffs(coeffs, final_gamma, final_log_arity);
+                debug_assert!(
+                    folded.len() >= final_len && folded[final_len..].iter().all(|c| c.is_zero()),
+                    "the folded witness must respect the final degree bound"
+                );
                 folded.resize(final_len, EF::ZERO);
                 folded
             }

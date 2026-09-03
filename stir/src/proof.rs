@@ -62,11 +62,13 @@ pub struct StirRoundProof<EF: Field, M: Mmcs<EF>, Witness> {
     /// Answer polynomial coefficients.
     ///
     /// The unique polynomial `Ans(X)` of degree `< |P|` interpolating `(y_i, v_i)` for every
-    /// `y_i ∈ P` (OOD + queried points) and its claimed value `v_i`. Sent by the prover so the
-    /// verifier avoids the O(|P|²) Newton interpolation; the verifier instead checks
-    /// `Ans(rho)` against the barycentric interpolant through `(y_i, v_i)` at a random `rho`.
-    /// `ans_polynomial` is observed in the transcript before `rho` is sampled, so a malicious
-    /// prover cannot fit `Ans` to a known `rho`.
+    /// `y_i ∈ P` (OOD + queried points) and its claimed value `v_i`. The verifier needs `Ans`
+    /// in coefficient form — every later round evaluates it on each queried fiber — so the
+    /// prover sends the coefficients and the verifier only confirms them, checking `Ans(rho)`
+    /// against the barycentric interpolant through `(y_i, v_i)` at a random `rho` instead of
+    /// rebuilding them by Newton's divided differences. `ans_polynomial` is observed in the
+    /// transcript before `rho` is sampled, so a malicious prover cannot fit `Ans` to a known
+    /// `rho`.
     pub ans_polynomial: Vec<EF>,
 
     /// Merkle openings for the STIR queries, sharing one pruned multi-opening proof.
