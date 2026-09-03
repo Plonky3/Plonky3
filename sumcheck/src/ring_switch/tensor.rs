@@ -134,17 +134,20 @@ impl<F: Field, EF: ExtensionField<F>> TensorAlgebra<F, EF> {
 
     /// The rows, each read as an `EF`: row `u` is `Σ_v m[u][v] · β_v`.
     pub fn rows(&self) -> Vec<EF> {
+        self.rows_iter().collect()
+    }
+
+    /// The rows in order, read one at a time rather than materialised together.
+    pub fn rows_iter(&self) -> impl Iterator<Item = EF> + '_ {
         let d = Self::DIMENSION;
-        (0..d)
-            .map(|u| EF::from_basis_coefficients_fn(|v| self.coeffs[u * d + v]))
-            .collect()
+        (0..d).map(move |u| EF::from_basis_coefficients_fn(|v| self.coeffs[u * d + v]))
     }
 
     /// `φ0(a) · self`: scales each column, read as an `EF`, by `a`.
     pub fn scale_columns(&mut self, a: EF) {
         let d = Self::DIMENSION;
-        for (v, col) in self.columns().into_iter().enumerate() {
-            let scaled = col * a;
+        for v in 0..d {
+            let scaled = EF::from_basis_coefficients_fn(|u| self.coeffs[u * d + v]) * a;
             for (u, coeff) in scaled.as_basis_coefficients_slice().iter().enumerate() {
                 self.coeffs[u * d + v] = *coeff;
             }
@@ -154,9 +157,11 @@ impl<F: Field, EF: ExtensionField<F>> TensorAlgebra<F, EF> {
     /// `φ1(a) · self`: scales each row, read as an `EF`, by `a`.
     pub fn scale_rows(&mut self, a: EF) {
         let d = Self::DIMENSION;
-        for (u, row) in self.rows().into_iter().enumerate() {
-            let scaled = (row * a).as_basis_coefficients_slice().to_vec();
-            self.coeffs[u * d..(u + 1) * d].copy_from_slice(&scaled);
+        for u in 0..d {
+            let scaled = EF::from_basis_coefficients_fn(|v| self.coeffs[u * d + v]) * a;
+            for (v, coeff) in scaled.as_basis_coefficients_slice().iter().enumerate() {
+                self.coeffs[u * d + v] = *coeff;
+            }
         }
     }
 }

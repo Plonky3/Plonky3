@@ -102,17 +102,26 @@ macro_rules! binary_tower_extension {
                 })
             }
 
-            /// The tower basis coincides with the byte layout, so the coefficients of the whole
-            /// buffer are its bytes read in order.
+            /// The tower basis coincides with the byte layout, so the whole buffer already *is*
+            /// its coefficients: flattening is one copy, not one per element.
+            ///
+            /// The inverse direction is not symmetric, and `reconstitute_from_base` keeps the
+            /// default that builds a fresh buffer: a `Vec<$lower>` is allocated at `$lower`'s
+            /// alignment, which is weaker than `$upper`'s, and freeing an allocation under a
+            /// `Layout` whose alignment differs from the one it was made with is undefined
+            /// behaviour.
             #[inline]
             fn flatten_to_base(vec: Vec<Self>) -> Vec<$lower> {
-                let mut out = Vec::with_capacity(
-                    vec.len() * <$upper as BasedVectorSpace<$lower>>::DIMENSION,
-                );
-                for x in &vec {
-                    out.extend_from_slice(x.as_basis_coefficients_slice());
-                }
-                out
+                let d = <$upper as BasedVectorSpace<$lower>>::DIMENSION;
+
+                // SAFETY: exactly the argument in `as_basis_coefficients_slice` above, extended
+                // to the whole buffer: a `Vec<$upper>` is `vec.len()` contiguous, padding-free
+                // `$upper` values, each of which is `d` contiguous `$lower` values in tower-basis
+                // order. The const assertions there cover the endianness, size, alignment and
+                // canonicity this relies on. The slice borrows `vec`, so it cannot outlive it.
+                let flat: &[$lower] =
+                    unsafe { slice::from_raw_parts(vec.as_ptr().cast::<$lower>(), vec.len() * d) };
+                flat.to_vec()
             }
         }
 

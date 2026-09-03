@@ -12,9 +12,13 @@
 //! it by columns to test the incoming claim, and derives the sumcheck's initial sum from its
 //! rows itself rather than take that sum from the prover. That makes this a reduction, not a
 //! filter: a false input claim survives as a false surviving claim `t'(r') = s'` rather than
-//! being rejected outright, and a prover who tampers with `ŝ` and adapts the rest of the proof
-//! to the sum that tampering implies is not caught by [`verify_ring_switch`] — only by the
-//! caller discharging `s'` against a commitment to `t'`. What the row reading buys is the
+//! being rejected outright — except with probability bounded by the error below, whose
+//! `2ℓ'/|EF|` term covers the degenerate `A(r') = 0` case, where the final check reads
+//! `sum == 0`, constrains `s'` not at all, and lets a false input claim survive as a *true*
+//! surviving claim, which is the one direction a caller discharging `s'` against a commitment
+//! cannot catch. A prover who tampers with `ŝ` and adapts the rest of the proof to the sum that
+//! tampering implies is not caught by [`verify_ring_switch`] either — only by the caller
+//! discharging `s'` against a commitment to `t'`. What the row reading buys is the
 //! `κ/|EF|` term of the soundness bound below: a tampered `ŝ` shifts the derived initial sum
 //! away from the value an honest packing would produce, at the Schwartz–Zippel rate of the
 //! batching draw.
@@ -69,10 +73,12 @@ pub mod packing;
 pub mod tensor;
 pub mod weights;
 
-use equality::equality_element;
+pub use equality::equality_element;
+use packing::compute_s_hat_with_eq;
 pub use packing::{compute_s_hat, pack, packed_vars};
-use tensor::TensorAlgebra;
-use weights::{batch_rows, batched_weights};
+pub use tensor::TensorAlgebra;
+use weights::batched_weights_with_eq;
+pub use weights::{batch_rows, batched_weights};
 
 #[cfg(test)]
 pub(crate) mod test_util;
@@ -191,16 +197,21 @@ where
     // replayable against a different point.
     challenger.observe_algebra_slice(r.as_slice());
 
+    // `ŝ` and the weight multilinear are both readings of the same `eq̃(r_high, ·)` table, so it
+    // is built once, shared, and freed before the rounds rather than held across them.
+    let eq = Poly::<EF>::new_from_point(r_high.as_slice(), EF::ONE);
+
     // Send `ŝ`, binding the transcript to the base coefficients that cross the wire rather
     // than to either of the readings derived from them.
-    let s_hat = compute_s_hat::<F, EF>(packed, &r_high);
+    let s_hat = compute_s_hat_with_eq::<F, EF>(packed, &eq);
     challenger.observe_slice(s_hat.coefficients());
 
     let r_batch = sample_batching_point::<F, EF, _>(challenger);
 
     // `ℓ'` rounds on `h(X) = A(X) · t'(X)`, whose sum over the hypercube is the batched row
     // reading of `ŝ`.
-    let weights = batched_weights::<F, EF>(&r_high, &r_batch);
+    let weights = batched_weights_with_eq::<F, EF>(&eq, &r_batch);
+    drop(eq);
     let poly = ProductPolynomial::new_unpacked(VariableOrder::Prefix, packed.clone(), weights);
     let mut prover = SumcheckProver::new(poly, batch_rows::<F, EF>(&s_hat, &r_batch));
     let mut sumcheck = SumcheckData::default();
@@ -337,7 +348,7 @@ mod tests {
     fn the_reduction_round_trips() {
         let ell = 7;
         let t = base_poly(ell, 13);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(14), ell);
         let s = t.eval_base(&r);
 
@@ -359,7 +370,7 @@ mod tests {
     fn a_wrong_claim_is_rejected() {
         let ell = 6;
         let t = base_poly(ell, 15);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(16), ell);
         let s = t.eval_base(&r);
 
@@ -389,7 +400,7 @@ mod tests {
     fn a_perturbed_tensor_element_is_rejected() {
         let ell = 6;
         let t = base_poly(ell, 17);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t);
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(18), ell);
 
         let mut p_chal = challenger();
@@ -419,7 +430,7 @@ mod tests {
     fn a_perturbed_final_claim_is_rejected() {
         let ell = 6;
         let t = base_poly(ell, 33);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(34), ell);
         let s = t.eval_base(&r);
 
@@ -440,7 +451,7 @@ mod tests {
     fn a_perturbed_round_message_is_rejected() {
         let ell = 6;
         let t = base_poly(ell, 35);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(36), ell);
         let s = t.eval_base(&r);
 
@@ -467,7 +478,7 @@ mod tests {
         let ell = 6;
         let kappa = packed_vars::<F, EF>();
         let t = base_poly(ell, 37);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(38), ell);
 
         let mut p_chal = challenger();
@@ -502,7 +513,7 @@ mod tests {
         let ell = 6;
         let kappa = packed_vars::<F, EF>();
         let t = base_poly(ell, 45);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(46), ell);
         let s = t.eval_base(&r);
 
@@ -528,7 +539,7 @@ mod tests {
     fn a_proof_with_pow_witnesses_is_rejected() {
         let ell = 6;
         let t = base_poly(ell, 40);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(41), ell);
         let s = t.eval_base(&r);
 
@@ -554,7 +565,7 @@ mod tests {
     fn an_adaptive_cheat_on_s_hat_is_accepted_with_a_false_surviving_claim() {
         let ell = 6;
         let t = base_poly(ell, 43);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t);
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(44), ell);
         let kappa = packed_vars::<F, EF>();
         let ell_prime = ell - kappa;
@@ -632,7 +643,7 @@ mod tests {
     #[should_panic(expected = "the evaluation point must name at least the 4 packed variables")]
     fn prove_rejects_a_point_shorter_than_the_packed_variables() {
         let t = base_poly(6, 19);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t);
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(20), 3);
         let mut chal = challenger();
         let _ = prove_ring_switch::<F, EF, _>(&packed, &r, &mut chal);
@@ -644,7 +655,7 @@ mod tests {
     #[should_panic(expected = "the packed polynomial must have the 2 variables")]
     fn prove_rejects_a_packed_polynomial_of_the_wrong_arity() {
         let t = base_poly(7, 21);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t);
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(22), 6);
         let mut chal = challenger();
         let _ = prove_ring_switch::<F, EF, _>(&packed, &r, &mut chal);
@@ -656,7 +667,7 @@ mod tests {
     fn verify_rejects_a_point_shorter_than_the_packed_variables() {
         let ell = 6;
         let t = base_poly(ell, 26);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t);
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(27), ell);
 
         let mut p_chal = challenger();
@@ -673,7 +684,7 @@ mod tests {
     fn verify_rejects_a_proof_with_the_wrong_round_count() {
         let ell = 6;
         let t = base_poly(ell, 29);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(30), ell);
         let s = t.eval_base(&r);
 
@@ -699,7 +710,7 @@ mod tests {
     fn verify_rejects_a_malformed_tensor() {
         let ell = 6;
         let t = base_poly(ell, 31);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(32), ell);
         let s = t.eval_base(&r);
 

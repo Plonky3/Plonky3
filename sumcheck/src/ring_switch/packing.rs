@@ -27,10 +27,13 @@ pub fn packed_vars<F: Field, EF: ExtensionField<F>>() -> usize {
 /// Packs `2^ℓ` base evaluations into `2^(ℓ − κ)` extension ones: entry `d·w + j` becomes
 /// basis coefficient `j` of packed element `w`.
 ///
+/// Consumes `t`, whose evaluation table the reconstitution reads once and does not retain; a
+/// caller that wants the base polynomial afterwards clones it here.
+///
 /// # Panics
 /// Panics unless `[EF:F]` is a power of two and `t` has at least the `κ` variables one packed
 /// element absorbs — fewer evaluations than `d` do not fill a single packed element.
-pub fn pack<F: Field, EF: ExtensionField<F>>(t: &Poly<F>) -> Poly<EF> {
+pub fn pack<F: Field, EF: ExtensionField<F>>(t: Poly<F>) -> Poly<EF> {
     let kappa = packed_vars::<F, EF>();
     assert!(
         t.num_variables() >= kappa,
@@ -38,14 +41,20 @@ pub fn pack<F: Field, EF: ExtensionField<F>>(t: &Poly<F>) -> Poly<EF> {
         t.num_variables()
     );
     Poly::new(<EF as BasedVectorSpace<F>>::reconstitute_from_base(
-        t.as_slice().to_vec(),
+        t.into_evals(),
     ))
 }
 
 /// The hypercube points one thread accumulates before its partial `ŝ` is combined with the
 /// rest. Large enough that the `DIMENSION²` accumulator is amortised, small enough to keep
 /// every core fed at the heights this reduction runs at.
+#[cfg(not(test))]
 const S_HAT_CHUNK: usize = 1 << 12;
+
+/// Small enough under test that every case above one sumcheck variable splits into several
+/// chunks, so the partial-combination fold is on the path the tests below take.
+#[cfg(test)]
+const S_HAT_CHUNK: usize = 1 << 1;
 
 /// `ŝ = Σ_w eq̃(r_high, w) ⊗ t'(w)`.
 ///
@@ -58,12 +67,25 @@ pub fn compute_s_hat<F: Field, EF: ExtensionField<F>>(
     packed: &Poly<EF>,
     r_high: &Point<EF>,
 ) -> TensorAlgebra<F, EF> {
+    compute_s_hat_with_eq::<F, EF>(
+        packed,
+        &Poly::<EF>::new_from_point(r_high.as_slice(), EF::ONE),
+    )
+}
+
+/// [`compute_s_hat`] from a prepared `eq̃(r_high, ·)` table, for a caller that already holds one.
+///
+/// # Panics
+/// Panics unless `eq` names exactly `packed`'s variables.
+pub(crate) fn compute_s_hat_with_eq<F: Field, EF: ExtensionField<F>>(
+    packed: &Poly<EF>,
+    eq: &Poly<EF>,
+) -> TensorAlgebra<F, EF> {
     assert_eq!(
-        r_high.num_variables(),
+        eq.num_variables(),
         packed.num_variables(),
         "r_high must name exactly the packed polynomial's variables"
     );
-    let eq = Poly::<EF>::new_from_point(r_high.as_slice(), EF::ONE);
     let partials: Vec<TensorAlgebra<F, EF>> = eq
         .as_slice()
         .par_chunks(S_HAT_CHUNK)
@@ -99,7 +121,7 @@ mod tests {
     #[test]
     fn packing_consumes_the_suffix_variables() {
         let t = base_poly(6, 1);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         assert_eq!(packed.num_variables(), 6 - 4);
         for (w, e) in packed.as_slice().iter().enumerate() {
             for j in 0..16 {
@@ -122,7 +144,7 @@ mod tests {
         let kappa = packed_vars::<G, EG>();
         let mut rng = SmallRng::seed_from_u64(seed);
         let t = Poly::<G>::rand(&mut rng, ell);
-        let packed = pack::<G, EG>(&t);
+        let packed = pack::<G, EG>(t.clone());
         let r = Point::<EG>::rand(&mut rng, ell);
         let (r_high, r_low) = r.split_at(ell - kappa);
 
@@ -169,7 +191,7 @@ mod tests {
     fn the_packed_evaluation_is_lossy() {
         let ell = 6;
         let t = base_poly(ell, 4);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t.clone());
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(5), ell);
         let (r_high, _) = r.split_at(ell - 4);
 
@@ -189,6 +211,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "packing needs at least the 4 variables")]
     fn packing_rejects_a_polynomial_shorter_than_one_packed_element() {
-        let _ = pack::<F, EF>(&base_poly(2, 6));
+        let _ = pack::<F, EF>(base_poly(2, 6));
     }
 }

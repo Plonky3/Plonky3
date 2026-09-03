@@ -3,11 +3,12 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{BasedVectorSpace, ExtensionField, Field};
+use p3_field::{Algebra, BasedVectorSpace, ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
+use super::packing::packed_vars;
 use super::tensor::TensorAlgebra;
 
 /// The batched weight multilinear `A(w) = Σ_u eq̃(hypercube(u, κ), r'') · A_{w,u}`, where
@@ -19,22 +20,44 @@ pub fn batched_weights<F: Field, EF: ExtensionField<F>>(
     r_high: &Point<EF>,
     r_batch: &Point<EF>,
 ) -> Poly<EF> {
+    batched_weights_with_eq::<F, EF>(
+        &Poly::<EF>::new_from_point(r_high.as_slice(), EF::ONE),
+        r_batch,
+    )
+}
+
+/// [`batched_weights`] from a prepared `eq̃(r_high, ·)` table, for a caller that already holds
+/// one.
+///
+/// The `A_{w,u}` are the base-field coefficients of `eq[w]`, so each entry of the result is the
+/// `eq_batch`-combination of one element's coefficients — a linear combination of `d` extension
+/// elements with base-field scalars, which is what [`Algebra::batched_linear_combination`]
+/// specialises.
+///
+/// Tabulating `eq_batch[u] · c` for every `c ∈ F` up front would replace those `d` products per
+/// point with `d` lookups, but that is a specialisation to a base field small enough to
+/// enumerate, and `p3-field` carries no predicate for that today.
+///
+/// # Panics
+/// Panics unless `r_batch` names exactly the `κ = log2([EF:F])` batching variables.
+pub(crate) fn batched_weights_with_eq<F: Field, EF: ExtensionField<F>>(
+    eq: &Poly<EF>,
+    r_batch: &Point<EF>,
+) -> Poly<EF> {
     assert_eq!(
-        1 << r_batch.num_variables(),
-        TensorAlgebra::<F, EF>::DIMENSION,
+        r_batch.num_variables(),
+        packed_vars::<F, EF>(),
         "r_batch must name exactly the kappa batching variables"
     );
-    let eq = Poly::<EF>::new_from_point(r_high.as_slice(), EF::ONE);
     let eq_batch = Poly::<EF>::new_from_point(r_batch.as_slice(), EF::ONE);
     let weights: Vec<EF> = eq
         .as_slice()
         .par_iter()
         .map(|e| {
-            BasedVectorSpace::<F>::as_basis_coefficients_slice(e)
-                .iter()
-                .zip(eq_batch.as_slice())
-                .map(|(&a, &w)| w * EF::from(a))
-                .sum()
+            <EF as Algebra<F>>::batched_linear_combination(
+                eq_batch.as_slice(),
+                BasedVectorSpace::<F>::as_basis_coefficients_slice(e),
+            )
         })
         .collect();
     Poly::new(weights)
@@ -54,16 +77,15 @@ pub fn batch_rows<F: Field, EF: ExtensionField<F>>(
     r_batch: &Point<EF>,
 ) -> EF {
     assert_eq!(
-        1 << r_batch.num_variables(),
-        TensorAlgebra::<F, EF>::DIMENSION,
+        r_batch.num_variables(),
+        packed_vars::<F, EF>(),
         "r_batch must name exactly the kappa batching variables"
     );
     let eq_batch = Poly::<EF>::new_from_point(r_batch.as_slice(), EF::ONE);
     tensor
-        .rows()
-        .iter()
+        .rows_iter()
         .zip(eq_batch.as_slice())
-        .map(|(&row, &w)| row * w)
+        .map(|(row, &w)| row * w)
         .sum()
 }
 
@@ -96,7 +118,7 @@ mod tests {
     fn rows_and_weights_agree_with_the_packed_values() {
         let ell = 6;
         let t = base_poly(ell, 7);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t);
         let mut rng = SmallRng::seed_from_u64(8);
         let r = Point::<EF>::rand(&mut rng, ell);
         let (r_high, _) = r.split_at(ell - 4);
@@ -121,7 +143,7 @@ mod tests {
     fn each_row_is_its_own_weighted_sum() {
         let ell = 5;
         let t = base_poly(ell, 9);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t);
         let r_high = Point::<EF>::rand(&mut SmallRng::seed_from_u64(10), ell - 4);
 
         let rows = compute_s_hat::<F, EF>(&packed, &r_high).rows();
@@ -159,7 +181,7 @@ mod tests {
     fn batch_rows_rejects_a_short_r_batch() {
         let r_high = Point::<EF>::rand(&mut SmallRng::seed_from_u64(13), 0);
         let t = base_poly(4, 14);
-        let packed = pack::<F, EF>(&t);
+        let packed = pack::<F, EF>(t);
         let s_hat = compute_s_hat::<F, EF>(&packed, &r_high);
         let r_batch = Point::<EF>::rand(&mut SmallRng::seed_from_u64(15), 3);
         let _ = batch_rows::<F, EF>(&s_hat, &r_batch);

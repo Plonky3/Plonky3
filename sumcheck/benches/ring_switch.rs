@@ -35,7 +35,7 @@ const fn challenger() -> Challenger {
 fn fixture(ell: usize) -> (Poly<F>, Poly<EF>, Point<EF>, EF) {
     let mut rng = SmallRng::seed_from_u64(1);
     let t = Poly::<F>::rand(&mut rng, ell);
-    let packed = pack::<F, EF>(&t);
+    let packed = pack::<F, EF>(t.clone());
     let r = Point::<EF>::rand(&mut rng, ell);
     let s = t.eval_base(&r);
     (t, packed, r, s)
@@ -47,7 +47,7 @@ fn bench_pack(c: &mut Criterion) {
         let t = Poly::<F>::rand(&mut SmallRng::seed_from_u64(1), ell);
         group.throughput(Throughput::Elements(1u64 << ell));
         group.bench_with_input(BenchmarkId::from_parameter(ell), &ell, |b, _| {
-            b.iter(|| black_box(pack::<F, EF>(black_box(&t))));
+            b.iter(|| black_box(pack::<F, EF>(black_box(t.clone()))));
         });
     }
     group.finish();
