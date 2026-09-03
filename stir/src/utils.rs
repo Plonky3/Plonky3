@@ -120,9 +120,10 @@ pub fn eval_degree_correction<F: Field>(value: F, point: F, r_comb: F, gap: usiz
 ///
 /// The geometric sum's numerator and denominator both advance by a fixed ratio (a power of
 /// `g`) across the coset, so each is seeded once per `POWER_CHUNK`-sized chunk (one
-/// exponentiation) instead of once per point — mirroring the degree-correction sweep in
-/// `RoundProver::finish`. The `(1 − r_comb·x)` denominators do not depend on the group, so
-/// they are swept and inverted once for all of `groups` rather than once per group.
+/// exponentiation) and then advanced by a base-field multiply — mirroring the
+/// degree-correction sweep in `RoundProver::finish`. The `(1 − r_comb·x)` denominators do not
+/// depend on the group, so they are swept, inverted, and applied once for all of `groups`
+/// rather than once per group.
 pub fn combine_on_coset<F, EF>(
     groups: &[(EF, usize, &[EF])],
     r_comb: EF,
@@ -135,7 +136,7 @@ where
 {
     let n = 1usize << log_domain;
     let g = F::two_adic_generator(log_domain);
-    let step_start = r_comb * EF::from(shift);
+    let step_start = r_comb * shift;
 
     const POWER_CHUNK: usize = 1 << 12;
     let mut result = EF::zero_vec(n);
@@ -145,10 +146,10 @@ where
         .par_chunks_mut(POWER_CHUNK)
         .enumerate()
         .for_each(|(chunk_idx, chunk)| {
-            let mut step = step_start * EF::from(g.exp_u64((chunk_idx * POWER_CHUNK) as u64));
+            let mut step = step_start * g.exp_u64((chunk_idx * POWER_CHUNK) as u64);
             for d in chunk.iter_mut() {
                 *d = EF::ONE - step;
-                step *= EF::from(g);
+                step *= g;
             }
         });
 
@@ -167,25 +168,32 @@ where
     for &(r_i, gap, values) in groups {
         assert_eq!(values.len(), n, "group values must span the full coset");
 
+        // `r_i · (1 − step^(gap+1))` is swept directly, folding the group's shifting
+        // coefficient into the geometric numerator so that each point costs one product with
+        // its value rather than a separate multiplication by `r_i` and by the denominator.
         let g_hi = g.exp_u64((gap + 1) as u64);
-        let step_start_hi = step_start.exp_u64((gap + 1) as u64);
+        let r_step_start_hi = r_i * step_start.exp_u64((gap + 1) as u64);
         result
             .par_chunks_mut(POWER_CHUNK)
             .zip(values.par_chunks(POWER_CHUNK))
-            .zip(inv_denoms.par_chunks(POWER_CHUNK))
             .enumerate()
-            .for_each(|(chunk_idx, ((res_chunk, val_chunk), inv_chunk))| {
-                let mut step_hi =
-                    step_start_hi * EF::from(g_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64));
-                for ((res, &val), &inv_denom) in res_chunk.iter_mut().zip(val_chunk).zip(inv_chunk)
-                {
-                    let numer = EF::ONE - step_hi;
-                    *res += r_i * val * numer * inv_denom;
-                    step_hi *= EF::from(g_hi);
+            .for_each(|(chunk_idx, (res_chunk, val_chunk))| {
+                let mut r_step_hi =
+                    r_step_start_hi * g_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
+                for (res, &val) in res_chunk.iter_mut().zip(val_chunk) {
+                    *res += val * (r_i - r_step_hi);
+                    r_step_hi *= g_hi;
                 }
             });
+    }
 
-        if let Some(p) = degenerate {
+    result
+        .par_iter_mut()
+        .zip(inv_denoms.par_iter())
+        .for_each(|(res, &inv_denom)| *res *= inv_denom);
+
+    if let Some(p) = degenerate {
+        for &(r_i, gap, values) in groups {
             result[p] += r_i * values[p] * EF::from_usize(gap + 1);
         }
     }
