@@ -545,30 +545,38 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // Right half → scalar power table.
         let right = batch_pows(right);
 
-        // Broadcast challenge powers into packed form for dot products.
+        // Challenge powers weighting each constraint.
         let alphas = challenge
             .shifted_powers(challenge.exp_u64(shift as u64))
-            .collect_n(n)
-            .into_iter()
-            .map(EF::ExtensionPacking::from)
-            .collect::<Vec<_>>();
+            .collect_n(n);
 
         // For each right-half row, dot all left-half rows against it
         // (weighted by the challenge powers) and accumulate into the
-        // packed weight polynomial.
+        // packed weight polynomial. The right-half entry and its challenge
+        // power are constant across the left-half rows, so they are folded
+        // into a single broadcast coefficient per constraint first.
         weights
             .as_mut_slice()
             .par_chunks_mut(left.height())
             .zip(right.par_row_slices())
-            .for_each(|(out, right)| {
-                out.iter_mut().zip(left.rows()).for_each(|(out, left)| {
-                    *out += left
-                        .zip(right.iter())
-                        .zip(alphas.iter())
-                        .map(|((left, &right), &alpha)| alpha * (left * right))
-                        .sum::<EF::ExtensionPacking>();
-                });
-            });
+            .for_each_init(
+                || Vec::with_capacity(n),
+                |scaled, (out, right)| {
+                    scaled.clear();
+                    scaled.extend(
+                        right
+                            .iter()
+                            .zip(alphas.iter())
+                            .map(|(&right, &alpha)| EF::ExtensionPacking::from(alpha * right)),
+                    );
+                    out.iter_mut().zip(left.rows()).for_each(|(out, left)| {
+                        *out += left
+                            .zip(scaled.iter())
+                            .map(|(left, &scaled)| scaled * left)
+                            .sum::<EF::ExtensionPacking>();
+                    });
+                },
+            );
     }
 
     /// Batches expected evaluation values into a single target sum using challenge powers.
