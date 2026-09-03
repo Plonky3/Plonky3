@@ -8,14 +8,14 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
-use crate::domain::{domain_point, subspace_polynomial};
+use crate::domain::{domain_point, domain_point_steps, subspace_polynomial};
 use crate::traits::AdditiveNtt;
 
 /// The Lin–Chung–Han additive NTT over the Cantor-basis domain.
 ///
 /// Twiddles are index shifts (D8): at stage `j` and butterfly block `blk` the twiddle is
-/// `W_j(shift) + domain_point(blk << 1)`, so there is no twiddle table and no per-size
-/// precomputation.
+/// `W_j(shift) + domain_point(blk << 1)`, so the only per-size precomputation is the `ℓ − 1 − j`
+/// increments that consecutive blocks of a stage differ by.
 ///
 /// `W_j` is `F_2`-linear and `domain_point(0)` is zero, so over the subspace itself — the
 /// coset with `shift = 0` — the first block of every stage has a zero twiddle and its
@@ -32,7 +32,8 @@ pub struct LchNtt<F> {
 /// each side into pieces of this size leaves `n · width / (2 · BUTTERFLY_GRAIN)` pieces at
 /// every stage, independent of `j`: the wide stages, which have too few blocks to fill a
 /// machine, are split from within instead. Stages with `half ≤ BUTTERFLY_GRAIN` keep a single
-/// piece per side and pay nothing for the extra level.
+/// piece per side and instead gather `BUTTERFLY_GRAIN / half` whole blocks into one task, so a
+/// task is a piece of this size on either side of the crossover.
 ///
 /// At a few nanoseconds per butterfly a piece of this size is microseconds of work, well above
 /// the cost of handing a task to another thread, while still leaving hundreds of pieces per
@@ -49,35 +50,43 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
             // D8: the block starting at row `b` of the coset `shift + S_ℓ` has twiddle
             // `W_j(shift) + point(b >> j)`, and block `blk` starts at row `blk << (j + 1)`.
             let base = subspace_polynomial::<F>(j, shift);
+            let steps = domain_point_steps::<F>(log_n - 1 - j);
+            let per_task = (BUTTERFLY_GRAIN / half).max(1);
             mat.values
-                .par_chunks_mut(half << 1)
+                .par_chunks_mut(per_task * (half << 1))
                 .enumerate()
-                .for_each(|(blk, block)| {
-                    let t = base + domain_point::<F>(blk << 1);
-                    let zero = t.is_zero();
-                    let (lo, hi) = block.split_at_mut(half);
-                    let butterfly = |lo: &mut [F], hi: &mut [F]| {
-                        if zero {
-                            // (u, v) ↦ (u, u + v)
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v += *u;
-                            }
-                        } else {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                // (u, v) ↦ (u + t·v, u + t·v + v)
-                                *u += t * *v;
-                                *v += *u;
-                            }
+                .for_each(|(task, group)| {
+                    let first = task * per_task;
+                    let mut t = base + domain_point::<F>(first << 1);
+                    for (i, block) in group.chunks_mut(half << 1).enumerate() {
+                        if i != 0 {
+                            t += steps[(first + i).trailing_zeros() as usize];
                         }
-                    };
-                    // Pairs are independent across the block, so a block wider than the grain
-                    // is split further rather than run on a single thread.
-                    if half <= BUTTERFLY_GRAIN {
-                        butterfly(lo, hi);
-                    } else {
-                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                        let zero = t.is_zero();
+                        let (lo, hi) = block.split_at_mut(half);
+                        let butterfly = |lo: &mut [F], hi: &mut [F]| {
+                            if zero {
+                                // (u, v) ↦ (u, u + v)
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    *v += *u;
+                                }
+                            } else {
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    // (u, v) ↦ (u + t·v, u + t·v + v)
+                                    *u += t * *v;
+                                    *v += *u;
+                                }
+                            }
+                        };
+                        // Pairs are independent across the block, so a block wider than the
+                        // grain is split further rather than run on a single thread.
+                        if half <= BUTTERFLY_GRAIN {
+                            butterfly(lo, hi);
+                        } else {
+                            lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                                .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                                .for_each(|(lo, hi)| butterfly(lo, hi));
+                        }
                     }
                 });
         }
@@ -92,35 +101,43 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
             let half = (1 << j) * width;
             // Twiddles as derived in `shifted_ntt_batch`, with the stages run in reverse.
             let base = subspace_polynomial::<F>(j, shift);
+            let steps = domain_point_steps::<F>(log_n - 1 - j);
+            let per_task = (BUTTERFLY_GRAIN / half).max(1);
             mat.values
-                .par_chunks_mut(half << 1)
+                .par_chunks_mut(per_task * (half << 1))
                 .enumerate()
-                .for_each(|(blk, block)| {
-                    let t = base + domain_point::<F>(blk << 1);
-                    let zero = t.is_zero();
-                    let (lo, hi) = block.split_at_mut(half);
-                    let butterfly = |lo: &mut [F], hi: &mut [F]| {
-                        if zero {
-                            // (u', v') ↦ (u = u', v = u' + v')
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v += *u;
-                            }
-                        } else {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                // (u', v') ↦ (u = u' + t·v, v = u' + v')
-                                *v += *u;
-                                *u += t * *v;
-                            }
+                .for_each(|(task, group)| {
+                    let first = task * per_task;
+                    let mut t = base + domain_point::<F>(first << 1);
+                    for (i, block) in group.chunks_mut(half << 1).enumerate() {
+                        if i != 0 {
+                            t += steps[(first + i).trailing_zeros() as usize];
                         }
-                    };
-                    // Pairs are independent across the block, so a block wider than the grain
-                    // is split further rather than run on a single thread.
-                    if half <= BUTTERFLY_GRAIN {
-                        butterfly(lo, hi);
-                    } else {
-                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                        let zero = t.is_zero();
+                        let (lo, hi) = block.split_at_mut(half);
+                        let butterfly = |lo: &mut [F], hi: &mut [F]| {
+                            if zero {
+                                // (u', v') ↦ (u = u', v = u' + v')
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    *v += *u;
+                                }
+                            } else {
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    // (u', v') ↦ (u = u' + t·v, v = u' + v')
+                                    *v += *u;
+                                    *u += t * *v;
+                                }
+                            }
+                        };
+                        // Pairs are independent across the block, so a block wider than the
+                        // grain is split further rather than run on a single thread.
+                        if half <= BUTTERFLY_GRAIN {
+                            butterfly(lo, hi);
+                        } else {
+                            lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                                .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                                .for_each(|(lo, hi)| butterfly(lo, hi));
+                        }
                     }
                 });
         }

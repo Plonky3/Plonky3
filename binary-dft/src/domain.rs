@@ -1,5 +1,7 @@
 //! The additive NTT domain: `F_2`-linear subspaces spanned by the Cantor basis.
 
+use alloc::vec::Vec;
+
 use p3_binary_field::TowerLevel;
 
 /// The `index`-th point of the additive NTT domain, `Σ_r bit_r(index) · v_r`.
@@ -22,6 +24,26 @@ pub fn domain_point<F: TowerLevel>(index: usize) -> F {
         r += 1;
     }
     point
+}
+
+/// The increments of `domain_point(index << 1)` as `index` runs upwards from zero.
+///
+/// `domain_point` is `F_2`-linear in its index and `(index − 1) ^ index` is the mask of bits
+/// `0..=k` for `k = index.trailing_zeros()`, so consecutive points differ by
+/// `steps[k] = Σ_{r ≤ k} v_{r+1}`. The `count` entries returned cover every `index` below
+/// `2^count`.
+///
+/// # Panics
+/// Panics if `count` is at least the bit width of `F`.
+#[must_use]
+pub(crate) fn domain_point_steps<F: TowerLevel>(count: usize) -> Vec<F> {
+    let mut point = F::ZERO;
+    (0..count)
+        .map(|r| {
+            point += F::cantor_basis(r + 1);
+            point
+        })
+        .collect()
 }
 
 /// The subspace polynomial `W_j` of `S_j`, defined by `W_0(x) = x` and
