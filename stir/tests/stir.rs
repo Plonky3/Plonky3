@@ -4,6 +4,8 @@
 //! that the proof verifies. Tests cover BabyBear (quartic extension), KoalaBear (quartic
 //! extension), and Goldilocks (quadratic extension).
 
+use core::fmt::Debug;
+
 use p3_challenger::{
     CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
 };
@@ -13,10 +15,13 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_stir::SecurityAssumption;
 use p3_stir::config::{StirConfig, StirParameters};
-use p3_stir::prover::prove_stir;
-use p3_stir::verifier::verify_stir;
+use p3_stir::proof::StirProof;
+use p3_stir::prover::{codeword_from_coeffs, prove_stir, prove_stir_from_external_codeword};
+use p3_stir::verifier::{verify_stir, verify_stir_with_external_initial};
+use p3_stir::{
+    ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, SecurityAssumption, StirError,
+};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
@@ -24,6 +29,14 @@ use rand::{RngExt, SeedableRng};
 
 fn seeded_rng() -> SmallRng {
     SmallRng::seed_from_u64(42)
+}
+
+/// The shape error inside a `StirError`, or a panic naming what came instead.
+fn shape_of<E: Debug, IE: Debug>(err: StirError<E, IE>) -> ProofShapeError {
+    match err {
+        StirError::InvalidProofShape(shape) => shape,
+        other => panic!("expected a shape error, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +391,13 @@ mod babybear_stir {
         let mut v_ch = challenger;
         let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
             .expect_err("tampered pow_witness must be rejected");
-        assert!(matches!(err, p3_stir::StirError::InvalidPowWitness { .. }));
+        assert!(
+            matches!(
+                err,
+                StirError::InvalidPowWitness { round } if round == RoundLabel::Round(round_with_pow)
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -402,7 +421,7 @@ mod babybear_stir {
         assert!(
             matches!(
                 err,
-                p3_stir::StirError::InvalidPowWitness { round } if round == round_with_pow
+                StirError::InvalidPowWitness { round } if round == RoundLabel::Round(round_with_pow)
             ),
             "expected InvalidPowWitness in round {round_with_pow}, got {err:?}"
         );
@@ -424,7 +443,15 @@ mod babybear_stir {
         let mut v_ch = challenger;
         let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
             .expect_err("tampered final_pow_witness must be rejected");
-        assert!(matches!(err, p3_stir::StirError::InvalidPowWitness { .. }));
+        assert!(
+            matches!(
+                err,
+                StirError::InvalidPowWitness {
+                    round: RoundLabel::Final
+                }
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -575,7 +602,10 @@ mod babybear_stir {
             .expect_err("tampered sibling hash must be rejected");
         assert!(matches!(
             err,
-            p3_stir::StirError::InvalidMmcsProof { round: 0, .. }
+            StirError::InvalidMmcsProof {
+                round: RoundLabel::Round(0),
+                ..
+            }
         ));
     }
 
@@ -605,7 +635,10 @@ mod babybear_stir {
             .expect_err("dropped sibling hash must be rejected");
         assert!(matches!(
             err,
-            p3_stir::StirError::InvalidMmcsProof { round: 0, .. }
+            StirError::InvalidMmcsProof {
+                round: RoundLabel::Round(0),
+                ..
+            }
         ));
     }
 
@@ -719,7 +752,7 @@ mod babybear_stir {
         let mut v_challenger = challenger;
         let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger)
             .expect_err("a missing initial commitment must be rejected");
-        assert!(matches!(err, p3_stir::StirError::InvalidProofShape));
+        assert_eq!(shape_of(err), ProofShapeError::MissingInitialCommitment);
     }
 
     #[test]
@@ -743,6 +776,332 @@ mod babybear_stir {
         assert!(
             verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err(),
             "tampered final_query_openings.row_evals must be rejected"
+        );
+    }
+
+    /// Prove with an uncommitted initial oracle, then verify against a caller-supplied source.
+    ///
+    /// `mutate` tampers with the proof.
+    /// `fibers` rewrites the honest fibers the source would have returned.
+    ///
+    /// Lane `l` of query `j` sits at natural-order position `j + l * fold_height`.
+    fn verify_external_initial(
+        mutate: impl FnOnce(&mut StirProof<EF, MyMmcs, F>),
+        fibers: impl FnOnce(Vec<Vec<EF>>) -> Vec<Vec<EF>>,
+    ) -> Result<(), StirError<<MyMmcs as Mmcs<EF>>::Error>> {
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let coeffs: Vec<EF> = (0..1usize << log_degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let log_domain = config.log_starting_domain_size();
+        let codeword = codeword_from_coeffs(&dft, coeffs, F::GENERATOR, log_domain);
+
+        // Binding the codeword before proving is the caller's job. Observing its values
+        // stands in for the PCS layer's input commitments.
+        let mut p_challenger = challenger.clone();
+        p_challenger.observe_algebra_slice(&codeword);
+        let (mut proof, _idx) =
+            prove_stir_from_external_codeword(&config, codeword.clone(), &dft, &mut p_challenger);
+        mutate(&mut proof);
+
+        let arity0 = 1usize << config.log_starting_folding_factor;
+        let fold_height = (1usize << log_domain) / arity0;
+
+        let mut v_challenger = challenger;
+        v_challenger.observe_algebra_slice(&codeword);
+        verify_stir_with_external_initial(&config, &proof, &mut v_challenger, |js| {
+            let honest = js
+                .iter()
+                .map(|&j| (0..arity0).map(|l| codeword[j + l * fold_height]).collect())
+                .collect();
+            Ok(fibers(honest))
+        })
+        .map(|_| ())
+    }
+
+    #[test]
+    fn test_external_initial_oracle_verifies() {
+        verify_external_initial(|_| {}, |honest| honest)
+            .unwrap_or_else(|e| panic!("an honest external oracle must verify: {e:?}"));
+    }
+
+    #[test]
+    fn test_external_source_returning_too_few_fibers_rejected() {
+        let err = verify_external_initial(
+            |_| {},
+            |mut honest| {
+                honest.pop();
+                honest
+            },
+        )
+        .expect_err("a short fiber list must be rejected");
+        let StirError::ExternalSource(source) = err else {
+            panic!("expected an external-source error, got {err:?}");
+        };
+        assert_eq!(
+            source,
+            ExternalSourceError::FiberCount {
+                round: RoundLabel::Round(0),
+                expected: 19,
+                got: 18,
+            }
+        );
+    }
+
+    #[test]
+    fn test_external_source_returning_short_fiber_rejected() {
+        let err = verify_external_initial(
+            |_| {},
+            |mut honest| {
+                honest[0].pop();
+                honest
+            },
+        )
+        .expect_err("a fiber below the round's arity must be rejected");
+        let StirError::ExternalSource(source) = err else {
+            panic!("expected an external-source error, got {err:?}");
+        };
+        assert_eq!(
+            source,
+            ExternalSourceError::FiberArity {
+                round: RoundLabel::Round(0),
+                fiber: 0,
+                expected: 4,
+                got: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn test_external_oracle_carrying_query_openings_rejected() {
+        let err = verify_external_initial(
+            |proof| {
+                // Nothing commits to an externally bound oracle, so rows shipped against it
+                // are unauthenticated.
+                proof.round_proofs[0].query_openings = proof.final_query_openings.clone();
+                assert!(proof.round_proofs[0].query_openings.is_some());
+            },
+            |honest| honest,
+        )
+        .expect_err("openings against an external oracle must be rejected");
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::UnexpectedQueryOpenings {
+                round: RoundLabel::Round(0),
+            }
+        );
+    }
+
+    /// Prove a fixed instance, apply `mutate`, and return the shape error the verifier reports.
+    ///
+    /// Every mutation below breaks a length the configuration pins.
+    fn shape_error_after(mutate: impl FnOnce(&mut StirProof<EF, MyMmcs, F>)) -> ProofShapeError {
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let poly_coeffs: Vec<EF> = (0..1usize << log_degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        assert_eq!(config.num_rounds(), 3);
+        let mut p_challenger = challenger.clone();
+        let (mut proof, _idx) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+
+        mutate(&mut proof);
+
+        let mut v_challenger = challenger;
+        let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger)
+            .expect_err("a shape-mutated proof must be rejected");
+        shape_of(err)
+    }
+
+    #[test]
+    fn test_dropped_round_proof_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.round_proofs.pop();
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::RoundCount {
+                instance: None,
+                expected: 3,
+                got: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn test_extra_ood_answer_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.round_proofs[0].ood_answers.push(EF::ONE);
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::OodAnswerCount {
+                round: RoundLabel::Round(0),
+                expected: 2,
+                got: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn test_dropped_ood_answer_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.round_proofs[0].ood_answers.pop();
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::OodAnswerCount {
+                round: RoundLabel::Round(0),
+                expected: 2,
+                got: 1,
+            }
+        );
+    }
+
+    /// Mutating round 1 rather than round 0 pins that the round index is threaded through.
+    #[test]
+    fn test_extra_ood_answer_in_a_later_round_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.round_proofs[1].ood_answers.push(EF::ONE);
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::OodAnswerCount {
+                round: RoundLabel::Round(1),
+                expected: 2,
+                got: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn test_overlong_ans_polynomial_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.round_proofs[0].ans_polynomial.resize(1024, EF::ONE);
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::AnsPolynomialTooLong {
+                round: RoundLabel::Round(0),
+                maximum: 20,
+                got: 1024,
+            }
+        );
+    }
+
+    /// Leaves `Ans` alone: the shake bound is one degree lower and checked separately.
+    #[test]
+    fn test_overlong_shake_polynomial_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.round_proofs[0].shake_polynomial.resize(1024, EF::ONE);
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::ShakePolynomialTooLong {
+                round: RoundLabel::Round(0),
+                maximum: 19,
+                got: 1024,
+            }
+        );
+    }
+
+    #[test]
+    fn test_missing_query_openings_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.round_proofs[0].query_openings = None;
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::MissingQueryOpenings {
+                round: RoundLabel::Round(0),
+            }
+        );
+    }
+
+    /// The final round reads its oracle through the same path, under its own label.
+    #[test]
+    fn test_missing_final_query_openings_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.final_query_openings = None;
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::MissingQueryOpenings {
+                round: RoundLabel::Final,
+            }
+        );
+    }
+
+    #[test]
+    fn test_dropped_opened_row_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.round_proofs[0]
+                .query_openings
+                .as_mut()
+                .expect("a committed oracle carries its openings")
+                .row_evals
+                .pop();
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::QueryOpeningCount {
+                round: RoundLabel::Round(0),
+                expected: 21,
+                got: 20,
+            }
+        );
+    }
+
+    #[test]
+    fn test_short_opened_row_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.round_proofs[0]
+                .query_openings
+                .as_mut()
+                .expect("a committed oracle carries its openings")
+                .row_evals[0]
+                .pop();
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::OpenedRowArity {
+                round: RoundLabel::Round(0),
+                query: 0,
+                expected: 4,
+                got: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn test_overlong_final_polynomial_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.final_polynomial.push(EF::ONE);
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::FinalPolynomialLength {
+                expected: 1,
+                got: 2,
+            }
+        );
+    }
+
+    /// A prover that truncates rather than pads is the other side of the same `!=`.
+    #[test]
+    fn test_truncated_final_polynomial_rejected() {
+        let err = shape_error_after(|proof| {
+            proof.final_polynomial.pop();
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::FinalPolynomialLength {
+                expected: 1,
+                got: 0,
+            }
         );
     }
 
@@ -1435,9 +1794,13 @@ mod babybear_pcs {
         // `[8, 6, 4]` is one tree at spread 8 and three at spread 0, so the root-count check
         // that runs before anything else rejects it.
         let err = verify_at_a_different_spread(&[8, 6, 4], 8, 0);
-        assert!(
-            matches!(err, p3_stir::StirError::InvalidProofShape),
-            "{err:?}"
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::CommitmentRootCount {
+                commitment: 0,
+                expected: 3,
+                got: 1,
+            }
         );
     }
 
@@ -1446,13 +1809,19 @@ mod babybear_pcs {
         // The case the root-count check cannot see, and the one the layout-agreement claim
         // actually rests on. `[8, 7, 4]` is `{8,7} | {4}` at spread 1 and `{8} | {7,4}` at
         // spread 3: two trees either way, so the root-count check and the bucket-count check
-        // both pass, and the disagreement only surfaces further in, on the dimensions the
-        // input MMCS opening is checked against. Keep both cases — collapsing this one back
-        // into a root-count mismatch stops exercising that path.
+        // both pass. Keep both cases — collapsing this one back into a root-count mismatch
+        // stops exercising that path.
+        //
+        // The two layouts put different native heights in each bucket, so the second bucket
+        // derives a different `StirConfig` and its round schedule no longer matches.
         let err = verify_at_a_different_spread(&[8, 7, 4], 1, 3);
-        assert!(
-            matches!(err, p3_stir::StirError::InvalidProofShape),
-            "{err:?}"
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::RoundCount {
+                instance: Some(1),
+                expected: 2,
+                got: 1,
+            }
         );
     }
 
@@ -2087,9 +2456,14 @@ mod babybear_pcs {
             (commit_b, vec![(domain, vec![(zeta, opening_b)])]),
         ];
         let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
-        assert!(
-            matches!(res, Err(p3_stir::StirError::InvalidProofShape)),
-            "truncated input_openings must be rejected as InvalidProofShape, got {res:?}"
+        let err = res.expect_err("truncated input_openings must be rejected");
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::InputOpeningCount {
+                log_height: log_d + 1,
+                expected: 2,
+                got: 1,
+            }
         );
     }
 
@@ -2142,9 +2516,13 @@ mod babybear_pcs {
             (commit_b, vec![(domain, vec![(zeta, opening_b)])]),
         ];
         let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
-        assert!(
-            matches!(res, Err(p3_stir::StirError::InvalidProofShape)),
-            "Some -> None input opening must be rejected as InvalidProofShape, got {res:?}"
+        let err = res.expect_err("a blanked input opening must be rejected");
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::MissingInputOpening {
+                log_height: log_d + 1,
+                commitment: 0,
+            }
         );
     }
 
@@ -2189,9 +2567,15 @@ mod babybear_pcs {
         let opening = opening_values[0][0][0].clone();
         let claims = vec![(commit, vec![(domain, vec![(zeta, opening)])])];
         let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
-        assert!(
-            matches!(res, Err(p3_stir::StirError::InvalidProofShape)),
-            "truncated opened_values must be rejected as InvalidProofShape, got {res:?}"
+        let err = res.expect_err("truncated opened_values must be rejected");
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::InputOpenedRowCount {
+                log_height: log_d + 1,
+                commitment: 0,
+                expected: 14,
+                got: 13,
+            }
         );
     }
 
@@ -2266,9 +2650,17 @@ mod babybear_pcs {
         // a degree-2^6 one.
         let err = verify_with_claimed_degrees(&[8, 8], &[8, 6])
             .expect_err("an understated native height must be rejected");
-        assert!(
-            matches!(err, p3_stir::StirError::InvalidProofShape),
-            "{err:?}"
+        // Two classes rather than one give a different `combine_key`, hence a different
+        // `StirConfig`, hence a different first-round query count. The disagreement is caught
+        // by the opened-row shape check before any algebraic check runs.
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::InputOpenedRowCount {
+                log_height: 9,
+                commitment: 0,
+                expected: 21,
+                got: 20,
+            }
         );
     }
 
@@ -2278,9 +2670,14 @@ mod babybear_pcs {
         // there is only one and skips it entirely.
         let err = verify_with_claimed_degrees(&[8, 6], &[8, 8])
             .expect_err("an overstated native height must be rejected");
-        assert!(
-            matches!(err, p3_stir::StirError::InvalidProofShape),
-            "{err:?}"
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::InputOpenedRowCount {
+                log_height: 9,
+                commitment: 0,
+                expected: 17,
+                got: 21,
+            }
         );
     }
 
@@ -2464,6 +2861,175 @@ mod babybear_pcs {
         );
     }
 
+    /// An opening point on the LDE coset makes a quotient denominator vanish.
+    ///
+    /// `batch_multiplicative_inverse` panics on a zero input, so the verifier must reject
+    /// first. Matches `FriError::OpeningPointMatchesQueryPoint`.
+    #[test]
+    fn test_pcs_rejects_opening_point_on_the_evaluation_domain() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        // A degree-4 matrix leaves a 2^3 LDE coset folded into two fibers of four lanes, so
+        // the first-round queries cover every coset position.
+        let log_d = 2;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 1);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        p_ch.observe(commit.clone());
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        // Claim the same value at the coset's first point instead. `open` cannot be asked
+        // for one: it would divide by zero building its own denominators.
+        let coset_point = Challenge::from(Val::GENERATOR);
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit.clone());
+        let _v_zeta: Challenge = v_ch.sample_algebra_element();
+        let claims = vec![(
+            commit,
+            vec![(domain, vec![(coset_point, opening_values[0][0][0].clone())])],
+        )];
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
+            .expect_err("an opening point on the evaluation domain must be rejected");
+        assert!(
+            matches!(
+                err,
+                StirError::OpeningPointMatchesQueryPoint {
+                    commitment: 0,
+                    matrix: 0,
+                    point: 0,
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn test_pcs_rejects_dropped_height_bucket() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+        let log_d = 6;
+
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 3);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        p_ch.observe(commit.clone());
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        // The claims pin one STIR instance per distinct shared LDE height, so a proof with
+        // fewer must be rejected before the transcript is touched.
+        assert_eq!(proof.len(), 1);
+        proof.pop();
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        let claims = vec![(
+            commit,
+            vec![(domain, vec![(v_zeta, opening_values[0][0][0].clone())])],
+        )];
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
+            .expect_err("a missing height bucket must be rejected");
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::BucketCount {
+                expected: 1,
+                got: 0,
+            }
+        );
+    }
+
+    /// An input opening at a bucket the commitment has no matrices at must be rejected.
+    ///
+    /// This is the mirror of [`test_pcs_input_opening_present_to_none_rejected`]: the slot
+    /// exists and is occupied, but by rows from a different LDE domain, so folding them into
+    /// this bucket's reduced opening would bind the wrong codeword.
+    #[test]
+    fn test_pcs_rejects_input_opening_at_wrong_bucket() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        // Two commitments two octaves apart, so each gets its own shared LDE height — hence
+        // its own bucket, with the taller one first.
+        let domain_tall =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << 8);
+        let domain_short =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << 6);
+        let mat_tall = RowMajorMatrix::<Val>::rand(&mut rng, 1 << 8, 3);
+        let mat_short = RowMajorMatrix::<Val>::rand(&mut rng, 1 << 6, 3);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit_tall, data_tall) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain_tall, mat_tall)]);
+        p_ch.observe(commit_tall.clone());
+        let (commit_short, data_short) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain_short, mat_short)]);
+        p_ch.observe(commit_short.clone());
+
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let data_and_points = vec![
+            (&data_tall, vec![vec![zeta]]),
+            (&data_short, vec![vec![zeta]]),
+        ];
+        let (opening_values, mut proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+        assert_eq!(proof.len(), 2, "two heights must give two buckets");
+
+        // Copy the short commitment's own opening into its (rightly empty) slot at the tall
+        // bucket.
+        let short_opening = proof[1].1[1].clone();
+        assert!(short_opening.is_some());
+        assert!(proof[0].1[1].is_none());
+        proof[0].1[1] = short_opening;
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit_tall.clone());
+        v_ch.observe(commit_short.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+
+        let claims = vec![
+            (
+                commit_tall,
+                vec![(domain_tall, vec![(v_zeta, opening_values[0][0][0].clone())])],
+            ),
+            (
+                commit_short,
+                vec![(
+                    domain_short,
+                    vec![(v_zeta, opening_values[1][0][0].clone())],
+                )],
+            ),
+        ];
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
+            .expect_err("an opening at the wrong bucket must be rejected");
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::UnexpectedInputOpening {
+                log_height: 9,
+                commitment: 1,
+            }
+        );
+    }
+
     #[test]
     fn test_pcs_rejects_stray_initial_commitment() {
         let (pcs, challenger_template) = get_pcs();
@@ -2499,7 +3065,7 @@ mod babybear_pcs {
         )];
         let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
             .expect_err("a stray initial commitment must be rejected");
-        assert!(matches!(err, p3_stir::StirError::InvalidProofShape));
+        assert_eq!(shape_of(err), ProofShapeError::UnexpectedInitialCommitment);
     }
 }
 
@@ -2680,16 +3246,24 @@ mod babybear_stir_multi {
         let proofs = [&proof];
         let err = verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proofs, &mut v_ch)
             .expect_err("a witness replayed from another grind site must be rejected");
-        assert!(matches!(err, p3_stir::StirError::InvalidPowWitness { .. }));
+        assert!(
+            matches!(
+                err,
+                StirError::InvalidPowWitness { round } if round == RoundLabel::Round(round_with_pow)
+            ),
+            "{err:?}"
+        );
     }
 
-    #[test]
-    fn test_multi_disagreeing_replicated_witness_rejected() {
+    /// Prove two identical-height instances, apply `mutate` to the second, and verify.
+    ///
+    /// Equal heights line the round indices up 1:1, so every grind site is shared exactly.
+    fn multi_shape_error_after(
+        mutate: impl FnOnce(&mut StirProof<EF, MyMmcs, F>),
+    ) -> ProofShapeError {
         let (params, dft, challenger) = make_params(1, 2, 32, 12);
         let log_degree = 8;
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
-        // Two identical-height instances so their round indices line up 1:1 and share every
-        // grind site exactly.
         let config_refs = [&config, &config];
 
         let mut rng = seeded_rng();
@@ -2702,15 +3276,94 @@ mod babybear_stir_multi {
         let mut results = prove_stir_multi(&config_refs, polys, &dft, &mut p_ch).into_iter();
         let proof_a = results.next().expect("bucket a").0;
         let mut proof_b = results.next().expect("bucket b").0;
-
-        // Disagree bucket B's round-0 folding-grind witness from bucket A's replicated copy.
-        proof_b.round_proofs[0].folding_pow_witness += F::ONE;
+        mutate(&mut proof_b);
 
         let mut v_ch = challenger;
         let proofs = [&proof_a, &proof_b];
         let err = verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proofs, &mut v_ch)
-            .expect_err("disagreeing replicated witnesses across buckets must be rejected");
-        assert!(matches!(err, p3_stir::StirError::InvalidProofShape));
+            .expect_err("a shape-mutated batch must be rejected");
+        shape_of(err)
+    }
+
+    #[test]
+    fn test_multi_disagreeing_folding_witness_rejected() {
+        let err = multi_shape_error_after(|proof| {
+            proof.round_proofs[0].folding_pow_witness += F::ONE;
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::ReplicatedWitnessMismatch {
+                round: RoundLabel::Round(0),
+                stage: GrindStage::Folding,
+            }
+        );
+    }
+
+    /// The query grind sits after the OOD absorb, so its witness is checked separately.
+    #[test]
+    fn test_multi_disagreeing_query_witness_rejected() {
+        let err = multi_shape_error_after(|proof| {
+            proof.round_proofs[0].pow_witness += F::ONE;
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::ReplicatedWitnessMismatch {
+                round: RoundLabel::Round(0),
+                stage: GrindStage::Query,
+            }
+        );
+    }
+
+    /// A batched round-count mismatch names the instance that carries it.
+    #[test]
+    fn test_multi_round_count_names_its_instance() {
+        let err = multi_shape_error_after(|proof| {
+            proof.round_proofs.pop();
+        });
+        assert_eq!(
+            err,
+            ProofShapeError::RoundCount {
+                instance: Some(1),
+                expected: 3,
+                got: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn test_multi_proof_count_mismatch_rejected() {
+        let (params, dft, challenger) = make_params(1, 2, 32, 12);
+        let log_degree = 8;
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let config_refs = [&config, &config];
+
+        let mut rng = seeded_rng();
+        let poly: Vec<EF> = (0..1usize << log_degree).map(|_| rng.random()).collect();
+
+        let mut p_ch = challenger.clone();
+        let results = prove_stir_multi(&[&config], vec![poly], &dft, &mut p_ch);
+        let proof = &results[0].0;
+
+        let mut v_ch = challenger;
+        let err = verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &[proof], &mut v_ch)
+            .expect_err("one proof for two configs must be rejected");
+        assert_eq!(
+            shape_of(err),
+            ProofShapeError::InstanceCount {
+                expected: 2,
+                got: 1,
+            }
+        );
+    }
+
+    /// An empty batch has no transcript operations, matching the prover, so it verifies.
+    #[test]
+    fn test_multi_empty_batch_verifies() {
+        let (_params, _dft, challenger) = make_params(1, 2, 32, 12);
+        let mut v_ch = challenger;
+        let outputs = verify_stir_multi::<F, EF, MyMmcs, Challenger>(&[], &[], &mut v_ch)
+            .expect("an empty batch must verify");
+        assert!(outputs.is_empty());
     }
 }
 
