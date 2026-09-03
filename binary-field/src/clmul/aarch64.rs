@@ -58,10 +58,19 @@ unsafe fn clmul_high(a: uint8x16_t, b: uint8x16_t) -> uint8x16_t {
 /// The fold is the identity `x^128 ≡ x^7 + x^2 + x + 1`. Writing the high half of the product as
 /// `h0 + h1·x^64` and the tail as `T`, the first round gives `h1·T = e0 + e1·x^64` with `e1` of
 /// degree at most 6, and the second folds `e1·x^128 ≡ e1·T` back down. Collecting the two terms
-/// that are multiplied by `T` leaves `(h0 + e1)·T + e0·x^64`, of degree at most 126, so a single
+/// that are multiplied by `T` leaves `(h0 + e1)·T + e0·x^64`, of degree at most 127, so a single
 /// further product finishes the reduction.
 #[inline]
 pub(super) fn poly_mul_128(a: u128, b: u128) -> u128 {
+    const {
+        // `target_arch = "aarch64"` covers the big-endian AArch64 targets too, where the halves
+        // of a `u128` and the lanes of a vector run in opposite orders.
+        assert!(
+            cfg!(target_endian = "little"),
+            "the halves of a `u128` are its vector lanes only on little-endian targets"
+        );
+    }
+
     // SAFETY: this module is compiled only when `target_feature = "aes"` is enabled for the
     // crate, and `aes` implies `neon`; together those are what every intrinsic below requires.
     unsafe {
