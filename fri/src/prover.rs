@@ -69,6 +69,10 @@ where
         "num_queries must be at least 1 for FRI soundness"
     );
     assert!(
+        params.log_blowup > 0,
+        "log_blowup must be at least 1 for FRI soundness"
+    );
+    assert!(
         params.max_log_arity > 0,
         "max_log_arity must be at least 1 to guarantee folding progress"
     );
