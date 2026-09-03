@@ -57,6 +57,6 @@ pub mod verifier;
 
 pub use config::{Stage, StirConfig, StirConfigError, StirParameters, StirRoundConfig};
 pub use p3_security::whir::SecurityAssumption;
-pub use pcs::TwoAdicStirPcs;
+pub use pcs::{DEFAULT_MAX_LOG_HEIGHT_SPREAD, StirCommitment, TwoAdicStirPcs};
 pub use proof::{StirProof, StirQueryOpenings, StirRoundProof};
 pub use verifier::{StirError, StirVerifyOutputs};

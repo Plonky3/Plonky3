@@ -112,7 +112,7 @@ fn bench_open(c: &mut Criterion) {
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, inputs.iter().cloned());
         let mut base = challenger.clone();
-        base.observe(commit.clone());
+        commit.iter().for_each(|root| base.observe(root.clone()));
         let zeta: Challenge = base.sample_algebra_element();
         let points: Vec<Vec<Challenge>> = inputs.iter().map(|_| vec![zeta]).collect();
 
@@ -148,7 +148,9 @@ fn bench_verify(c: &mut Criterion) {
         let (commit, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, inputs.iter().cloned());
         let mut p_challenger = challenger.clone();
-        p_challenger.observe(commit.clone());
+        commit
+            .iter()
+            .for_each(|root| p_challenger.observe(root.clone()));
         let zeta: Challenge = p_challenger.sample_algebra_element();
         let points: Vec<Vec<Challenge>> = inputs.iter().map(|_| vec![zeta]).collect();
         let (opened, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
@@ -167,7 +169,7 @@ fn bench_verify(c: &mut Criterion) {
 
         // Same transcript state `open` reached: commitment observed, opening point drawn.
         let mut v_base = challenger.clone();
-        v_base.observe(commit.clone());
+        commit.iter().for_each(|root| v_base.observe(root.clone()));
         let _: Challenge = v_base.sample_algebra_element();
 
         group.bench_with_input(BenchmarkId::from_parameter(name), &claims, |b, claims| {
