@@ -14,7 +14,11 @@
 //!
 //! Every bound is stated as `error ≤ coefficient · size / |E|`, which in bits is
 //! `log2|E| − log2(coefficient) − log2(size)`. Coefficients round up and the field size rounds
-//! down, so each round is understated rather than overstated.
+//! down, so each round is understated rather than overstated. The out-of-domain round is the one
+//! exception to that framing: part of its size is additive rather than a multiple of the trace
+//! height, so it takes the logarithm of the whole product at once. It states the same bound as
+//! [`crate::deep::deep_ali_error`], the `f64` mirror of the same equation, and the two are meant
+//! to be read together.
 //!
 //! # Folding accounting
 //!
@@ -101,16 +105,15 @@ pub const fn security_report(
 
     // The out-of-domain point is rejection-sampled outside the trace and LDE domains but is not
     // ground. A violated constraint leaves the DEEP-ALI identity a nonzero polynomial in that
-    // point of degree at most `(max_constraint_degree + 1) · height`. Lifting evaluates the
-    // shorter AIRs at powers of the same point, so all of them pay the maximum height.
-    let out_of_domain = round(
-        OUT_OF_DOMAIN_LABEL,
-        instance,
-        air.max_constraint_degree as u64 + 1,
-        instance.log_max_height,
-        0,
-        cap,
-    );
+    // point of degree at most the larger of `max_constraint_degree · (height + max_combo − 1) +
+    // (height − 1)` (clearing the shared denominator lifts each of a constraint's degree-many
+    // trace factors by one per out-of-domain point referenced, and the quotient side contributes
+    // the rest) and `(c + 1) · height + max_combo − 1` (the degree Plonky3's own power-of-two
+    // quotient chunking induces, binding whenever `c` exceeds `max_constraint_degree`). Lifting
+    // evaluates the shorter AIRs at powers of the same point, so all of them pay the maximum
+    // height.
+    let out_of_domain =
+        out_of_domain_round(instance, air.max_constraint_degree, air.max_combo, cap);
 
     // The DEEP quotient batches every committed column and out-of-domain point by powers of two
     // further challenges, giving a univariate whose degree is the number of batched terms.
@@ -182,6 +185,79 @@ const fn round(
     SecurityTerm::new(label, min(bits, cap))
 }
 
+/// Bounds the out-of-domain round: error `max(d · (H + combo − 1) + (H − 1), (c + 1) · H + combo
+/// − 1) / |E|`, with `H` the trace height, `d` the maximum constraint degree, `combo` the number
+/// of out-of-domain points referenced per column, and `c = 2^⌈log2(max(d, 2) − 1)⌉` the number of
+/// power-of-two quotient chunks Plonky3 commits (`uni_stark::symbolic::get_log_num_quotient_chunks`).
+///
+/// Checking the DEEP-ALI identity at the sampled point clears the common denominator
+/// `Π_i (x − z_i)`, which lifts each of a constraint's `d` trace factors from degree `≤ H − 1` to
+/// degree `≤ H + combo − 1`, and the quotient side adds a further `H − 1`:
+///
+/// ```text
+/// d · (H + combo − 1)     from the d lifted factors
+///           + (H − 1)     from the quotient side
+/// ```
+///
+/// That is ethSTARK's `X^i · h_i(X^d)` split. Plonky3 instead commits the quotient as `c`
+/// power-of-two chunks reconstructed with degree-`(c − 1) · H` coset selectors, giving identity
+/// degree `(c + 1) · H + combo − 1`; this exceeds the first term whenever `c > d`, which is why
+/// the two are combined by a maximum rather than the first alone. `c` assumes a non-`zk` quotient
+/// split.
+///
+/// [`crate::deep::deep_ali_error`] states the same bound in `f64`. Unlike [`round`], both terms
+/// are additive rather than a multiple of `H`, so the whole product is folded into the size
+/// directly instead of decomposed into a coefficient and a log-size. This round is always charged
+/// — there is no "no such round" case to special-case at zero.
+///
+/// A degenerate degree or point count clamps to one, which keeps `size ≥ 1` and so keeps
+/// [`fixed::ceil_log2`]'s zero-assert unreachable. A size too large to take the logarithm of is
+/// reported at zero bits rather than wrapped, since truncating it would understate the error.
+const fn out_of_domain_round(
+    instance: &InstanceShape,
+    max_constraint_degree: u32,
+    max_combo: u32,
+    cap: u64,
+) -> SecurityTerm {
+    if instance.log_max_height >= u64::BITS {
+        return SecurityTerm::new(OUT_OF_DOMAIN_LABEL, 0);
+    }
+
+    let d = if max_constraint_degree == 0 {
+        1
+    } else {
+        max_constraint_degree as u128
+    };
+    let combo = if max_combo == 0 { 1 } else { max_combo as u128 };
+    let height = 1u128 << instance.log_max_height;
+    let ethstark = d * (height + combo - 1) + (height - 1);
+
+    // `c = 2^⌈log2(chunk_arg)⌉`, mirroring `p3_util::log2_ceil_usize` in `u128`: the smallest
+    // power of two at least `chunk_arg`, found by counting the leading zeros of `chunk_arg − 1`.
+    let chunk_arg = (if max_constraint_degree < 2 {
+        2
+    } else {
+        max_constraint_degree as u128
+    }) - 1;
+    let log_chunks = u128::BITS - chunk_arg.saturating_sub(1).leading_zeros();
+    let chunks = 1u128 << log_chunks;
+    let chunked = (chunks + 1) * height + combo - 1;
+
+    let size = if ethstark > chunked {
+        ethstark
+    } else {
+        chunked
+    };
+    if size > u64::MAX as u128 {
+        return SecurityTerm::new(OUT_OF_DOMAIN_LABEL, 0);
+    }
+
+    let error = fixed::ceil_log2(size as u64);
+    let bits = instance.field_bits.saturating_sub(error);
+
+    SecurityTerm::new(OUT_OF_DOMAIN_LABEL, min(bits, cap))
+}
+
 const fn min(a: u64, b: u64) -> u64 {
     if a < b { a } else { b }
 }
@@ -217,6 +293,7 @@ mod tests {
         AirShape {
             num_composed_constraints: 531,
             max_constraint_degree: 9,
+            max_combo: 2,
             num_deep_terms: Some(130),
             lookup: LookupShape {
                 fractions_per_row: 27,
@@ -292,6 +369,42 @@ mod tests {
         }
     }
 
+    /// Stronger than the level above, which is a minimum over rounds and therefore hides a round
+    /// that gains bits with height behind whichever round binds. Each round on its own must be
+    /// non-increasing, across the whole range the shape's `u32` height admits.
+    #[test]
+    fn every_round_is_monotone_in_trace_height() {
+        let mut previous = [u64::MAX; report::NUM_TERMS];
+        for log_height in 0..=64u32 {
+            let report = security_report(&params(), &instance(log_height), &air());
+            for (term, prev) in report.terms().iter().zip(previous.iter_mut()) {
+                assert!(
+                    term.bits <= *prev,
+                    "{} rose at log height {log_height}",
+                    term.label
+                );
+                *prev = term.bits;
+            }
+        }
+    }
+
+    /// Opening more out-of-domain points raises the degree the DEEP-ALI identity is tested at, so
+    /// it can only cost the out-of-domain round bits.
+    #[test]
+    fn security_is_monotone_in_max_combo() {
+        let mut previous = u64::MAX;
+        for max_combo in 1..=16u32 {
+            let air = AirShape { max_combo, ..air() };
+            let term = security_report(&params(), &instance(6), &air).terms()[2];
+            assert_eq!(term.label, OUT_OF_DOMAIN_LABEL);
+            assert!(
+                term.bits <= previous,
+                "out-of-domain rose at max_combo {max_combo}"
+            );
+            previous = term.bits;
+        }
+    }
+
     /// A bigger or higher-degree AIR can never be more secure under the same parameters.
     #[test]
     fn security_is_monotone_in_air_size() {
@@ -299,6 +412,7 @@ mod tests {
         let large = AirShape {
             num_composed_constraints: 4096,
             max_constraint_degree: 9,
+            max_combo: 2,
             num_deep_terms: Some(1024),
             lookup: LookupShape {
                 fractions_per_row: 64,

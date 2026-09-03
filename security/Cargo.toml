@@ -16,5 +16,8 @@ p3-field.workspace = true
 p3-util.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
