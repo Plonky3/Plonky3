@@ -172,9 +172,8 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
             //   Step 1 (beta):   fold pairs → g(s^2), g(-s^2) where g = f_e + beta*f_o
             //   Step 2 (beta^2): fold pair  → g(beta^2) = f(beta)
 
-            let mut data = m.to_row_major_matrix().values;
-
-            let initial_height = data.len() / 2;
+            let pairs_per_row = m.width() / 2;
+            let initial_height = m.height() * pairs_per_row;
             let g_inv = F::two_adic_generator(log2_strict_usize(initial_height) + 1).inverse();
             let mut halve_inv_powers = g_inv
                 .shifted_powers(F::ONE.halve())
@@ -182,17 +181,28 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
             reverse_slice_index_bits(&mut halve_inv_powers);
 
             let two = F::ONE + F::ONE;
-            let mut current_beta = beta;
-            let mut next_data = EF::zero_vec(initial_height);
 
-            for step in 0..log_arity {
-                let current_len = data.len();
-                let height = current_len / 2;
-                // Since j << 1 is always >= j, we never overwrite data we haven't read yet.
-                if step > 0 {
-                    for j in 0..height {
-                        halve_inv_powers[j] = two * halve_inv_powers[j << 1].square();
+            // The first fold reads the borrowed matrix row by row, so `m` is never copied.
+            let mut data = EF::zero_vec(initial_height);
+            data.par_chunks_exact_mut(pairs_per_row)
+                .zip(m.par_rows())
+                .zip(halve_inv_powers.par_chunks_exact(pairs_per_row))
+                .for_each(|((out, row), inv_powers)| {
+                    for (o, (lo, hi), &halve_inv_power) in
+                        izip!(out.iter_mut(), row.tuples::<(EF, EF)>(), inv_powers)
+                    {
+                        *o = (lo + hi).halve() + (lo - hi) * beta * halve_inv_power;
                     }
+                });
+
+            let mut current_beta = beta.square();
+            let mut next_data = EF::zero_vec(initial_height / 2);
+
+            for _ in 1..log_arity {
+                let height = data.len() / 2;
+                // Since j << 1 is always >= j, we never overwrite data we haven't read yet.
+                for j in 0..height {
+                    halve_inv_powers[j] = two * halve_inv_powers[j << 1].square();
                 }
                 next_data[..height]
                     .par_iter_mut()
@@ -207,9 +217,9 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
                     });
                 current_beta = current_beta.square();
 
-                // Swap buffers conceptually (just truncate data and copy back, or ping-pong).
+                // Ping-pong the two buffers; the tail of the new `data` is stale and dropped.
+                core::mem::swap(&mut data, &mut next_data);
                 data.truncate(height);
-                data.copy_from_slice(&next_data[..height]);
             }
 
             data
@@ -822,6 +832,36 @@ mod tests {
                     evals.into_iter(),
                 );
                 assert_eq!(folded, expected);
+            }
+        }
+    }
+
+    /// `fold_matrix` folds row `i` of its input exactly as `fold_row` folds that row on its own.
+    #[test]
+    fn fold_matrix_matches_fold_row() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+
+        for log_arity in 1..4 {
+            for log_height in 0..5 {
+                let beta: EF = rng.random();
+                let m = RowMajorMatrix::<EF>::rand(&mut rng, 1 << log_height, 1 << log_arity);
+
+                let folded = FriFoldingStrategy::<F, EF>::fold_matrix(
+                    &folding,
+                    beta,
+                    log_arity,
+                    m.as_view(),
+                );
+                assert_eq!(folded.len(), m.height());
+
+                for (index, &expected) in folded.iter().enumerate() {
+                    let row = m.row(index).unwrap().into_iter();
+                    let folded_row = FriFoldingStrategy::<F, EF>::fold_row(
+                        &folding, index, log_height, log_arity, beta, row,
+                    );
+                    assert_eq!(folded_row, expected);
+                }
             }
         }
     }
