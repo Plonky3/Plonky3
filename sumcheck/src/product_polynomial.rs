@@ -419,14 +419,16 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     pub(crate) fn scale_weights(&mut self, scale: EF) {
         match &mut self.inner {
             MaybePacked::Packed { weights, .. } => {
-                for value in weights.as_mut_slice() {
-                    *value *= scale;
-                }
+                weights
+                    .as_mut_slice()
+                    .par_iter_mut()
+                    .for_each(|value| *value *= scale);
             }
             MaybePacked::Unpacked { weights, .. } => {
-                for value in weights.as_mut_slice() {
-                    *value *= scale;
-                }
+                weights
+                    .as_mut_slice()
+                    .par_iter_mut()
+                    .for_each(|value| *value *= scale);
             }
         }
     }
