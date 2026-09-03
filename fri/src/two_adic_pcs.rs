@@ -172,6 +172,8 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
             //   Step 1 (beta):   fold pairs → g(s^2), g(-s^2) where g = f_e + beta*f_o
             //   Step 2 (beta^2): fold pair  → g(beta^2) = f(beta)
 
+            // Every row splits into whole `(lo, hi)` pairs.
+            debug_assert!(m.width().is_multiple_of(2));
             let pairs_per_row = m.width() / 2;
             let initial_height = m.height() * pairs_per_row;
             let g_inv = F::two_adic_generator(log2_strict_usize(initial_height) + 1).inverse();
