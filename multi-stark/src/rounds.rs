@@ -6,7 +6,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder};
+use p3_air::{Air, BaseAir};
 use p3_field::{
     BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
     PrimeCharacteristicRing,
@@ -19,7 +19,6 @@ use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 use p3_sumcheck::layout::Table;
 
 use crate::folder::MultilinearFolder;
-use crate::metadata::ConstraintMetadata;
 use crate::packed_ext::PackedExt;
 use crate::selectors::{BoundaryEvals, periodic_num_variables};
 
@@ -40,6 +39,8 @@ pub(super) struct Stage<'air, 'data, A, F: Field> {
     pub(super) tables: Vec<&'data Table<F>>,
     /// Per-variable constraint degree of each AIR, with the eq factor stripped.
     pub(super) degrees: Vec<usize>,
+    /// Number of base constraints each AIR asserts, in the same order.
+    pub(super) num_constraints: Vec<usize>,
     /// Shared variable count, equal to the base-two logarithm of the common height.
     pub(super) num_vars: usize,
 }
@@ -58,6 +59,7 @@ impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
         preprocessed: &[Option<&'data Table<F>>],
         tables: &[&'data Table<F>],
         degrees: &[usize],
+        num_constraints: &[usize],
     ) -> Self {
         // Every table in a stage binds the same zerocheck variables, so heights must agree.
         let num_vars = tables
@@ -83,6 +85,7 @@ impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
             preprocessed: preprocessed.to_vec(),
             tables: tables.to_vec(),
             degrees: degrees.to_vec(),
+            num_constraints: num_constraints.to_vec(),
         }
     }
 }
@@ -247,6 +250,10 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
 ///
 /// Rows at or past `len` fall back to `tail`, the repeat-last successor value.
 ///
+/// `column` must hold exactly `len` rows, that is `len / F::Packing::WIDTH` groups with no
+/// padding lanes. The fast path below relies on it: it decides that a window cannot reach the
+/// tail from the group count alone, which is only sound when every stored lane is a real row.
+///
 /// The stored groups are aligned to multiples of the packing width, so an offset window
 /// straddles two adjacent groups.
 /// Whenever the window's successor group exists, each basis coefficient of the result is one
@@ -260,6 +267,11 @@ fn packed_window<F: Field, EF: ExtensionField<F>>(
     tail: EF,
 ) -> EF::ExtensionPacking {
     let packing_width = F::Packing::WIDTH;
+    debug_assert_eq!(
+        column.len() * packing_width,
+        len,
+        "packed_window assumes a fully populated column"
+    );
     let group = start / packing_width;
     let offset = start % packing_width;
 
@@ -411,10 +423,12 @@ where
 
     /// Merge another worker's per-node accumulators into this one, lane by lane.
     fn add_air_evals(&mut self, other: Self) {
+        debug_assert_eq!(self.air_evals.len(), other.air_evals.len());
         self.air_evals
             .iter_mut()
             .zip(other.air_evals)
             .for_each(|(lhs, rhs)| {
+                debug_assert_eq!(lhs.len(), rhs.len());
                 lhs.iter_mut()
                     .zip(rhs)
                     .for_each(|(acc, value)| *acc += value);
@@ -696,15 +710,13 @@ where
         alpha: EF,
         betas: Vec<EF>,
         tau: &Point<EF>,
-    ) -> Self
-    where
-        A: Air<SymbolicAirBuilder<F, EF>>,
-    {
+    ) -> Self {
         assert!(!stage.tables.is_empty(),);
         assert_eq!(stage.airs.len(), stage.tables.len(),);
         assert_eq!(stage.preprocessed.len(), stage.tables.len(),);
         assert_eq!(stage.public_values.len(), stage.tables.len(),);
         assert_eq!(stage.degrees.len(), stage.tables.len(),);
+        assert_eq!(stage.num_constraints.len(), stage.tables.len(),);
         assert!(stage.degrees.iter().all(|&degree| degree > 0),);
 
         let num_vars = stage
@@ -795,21 +807,24 @@ where
 
         // Constraint `i` of an AIR asserting `n` constraints is batched with weight `alpha^(n-1-i)`,
         // the same weight the folder's Horner fold assigns it.
-        let alpha_powers = stage
-            .airs
-            .iter()
-            .map(|air| {
-                let layout = AirLayout::from_air::<F>(*air);
-                let num_constraints =
-                    ConstraintMetadata::from_air::<F, EF, A>(*air, layout).num_constraints;
-                let mut powers = alpha.powers().collect_n(num_constraints);
-                powers.reverse();
-                powers
-                    .into_iter()
-                    .map(EF::ExtensionPacking::from)
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+        //
+        // Only the packed first round reads these, so the scalar path builds none.
+        let alpha_powers = if (1 << num_vars) / 2 >= F::Packing::WIDTH {
+            stage
+                .num_constraints
+                .iter()
+                .map(|&num_constraints| {
+                    let mut powers = alpha.powers().collect_n(num_constraints);
+                    powers.reverse();
+                    powers
+                        .into_iter()
+                        .map(EF::ExtensionPacking::from)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        } else {
+            alloc::vec![Vec::new(); num_airs]
+        };
 
         // Build the degree grouping once, then flatten it into the AIR-ordered fold view.
         let degree_groups = DegreeGroup::build(

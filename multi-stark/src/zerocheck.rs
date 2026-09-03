@@ -138,6 +138,42 @@ where
     air_degree(air) + 1
 }
 
+/// Scores read off one symbolic evaluation of an AIR.
+struct SymbolicScores {
+    /// Largest per-variable degree among the asserted constraints, scored at domain size two.
+    ///
+    /// A materialized periodic column is multilinear and scores one per variable.
+    ///
+    /// ```text
+    ///     periodic lengths passed empty → each periodic value capped at domain size two
+    ///                                   → degree one, exactly like a trace column
+    /// ```
+    degree: usize,
+    /// Number of asserted base-field constraints.
+    num_base_constraints: usize,
+}
+
+/// Evaluate an AIR symbolically once and score its constraints.
+fn symbolic_scores<F, EF, A>(air: &A) -> SymbolicScores
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<SymbolicAirBuilder<F, EF>>,
+{
+    let layout = AirLayout::from_air::<F>(air);
+    let (base, ext) = get_all_symbolic_constraints::<F, EF, A>(air, layout);
+    let base_degree = base
+        .iter()
+        .map(|c| c.poly_degree(2, &[]))
+        .max()
+        .unwrap_or(0);
+    let ext_degree = ext.iter().map(|c| c.poly_degree(2, &[])).max().unwrap_or(0);
+    SymbolicScores {
+        degree: base_degree.max(ext_degree),
+        num_base_constraints: base.len(),
+    }
+}
+
 /// Per-variable constraint degree of an AIR, with the eq weight not yet applied.
 ///
 /// The degree comes from one of two sources:
@@ -158,37 +194,61 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
-    let layout = AirLayout::from_air::<F>(air);
-
-    // Largest per-variable degree among the asserted constraints, scored at domain size two.
-    //
-    // A materialized periodic column is multilinear and scores one per variable.
-    //
-    //     periodic lengths passed empty → each periodic value capped at domain size two
-    //                                   → degree one, exactly like a trace column
-    let symbolic_constraint_degree = || {
-        let (base, ext) = get_all_symbolic_constraints::<F, EF, A>(air, layout);
-        let base_degree = base
-            .iter()
-            .map(|c| c.poly_degree(2, &[]))
-            .max()
-            .unwrap_or(0);
-        let ext_degree = ext.iter().map(|c| c.poly_degree(2, &[])).max().unwrap_or(0);
-        base_degree.max(ext_degree)
-    };
-
     if let Some(degree) = air.max_constraint_degree() {
         // A hint below the true constraint degree drops evaluations from each round polynomial.
         // Reject such a hint in debug builds.
         debug_assert!(
-            degree >= symbolic_constraint_degree(),
+            degree >= symbolic_scores::<F, EF, A>(air).degree,
             "max_constraint_degree hint is below the symbolic constraint degree"
         );
         return degree;
     }
 
     // No hint: fall back to the symbolic constraint degree.
-    symbolic_constraint_degree()
+    symbolic_scores::<F, EF, A>(air).degree
+}
+
+/// Per-variable constraint degree and asserted base-constraint count of an AIR.
+///
+/// Each value is read from the AIR's own hint when present. One symbolic pass covers whichever
+/// hints are missing, so an AIR that hints neither is still evaluated only once.
+///
+/// The count must match the AIR exactly, unlike the degree, which need only be an upper bound.
+/// The prover weights the AIR's `i`-th constraint by `alpha^(n - 1 - i)` while the verifier folds
+/// the constraints it sees by Horner, so a count that is off by `d` scales the prover's batched
+/// value by `alpha^d` and the two sides no longer agree.
+///
+/// Debug assertions pin both hints against the symbolic values.
+fn air_degree_and_constraints<F, EF, A>(air: &A) -> (usize, usize)
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<SymbolicAirBuilder<F, EF>>,
+{
+    let hinted_degree = air.max_constraint_degree();
+    let hinted_count = air.num_constraints();
+
+    match (hinted_degree, hinted_count) {
+        // Both hints present: outside debug builds nothing needs the symbolic pass.
+        (Some(degree), Some(count)) if !cfg!(debug_assertions) => (degree, count),
+        _ => {
+            let scores = symbolic_scores::<F, EF, A>(air);
+            debug_assert!(
+                hinted_degree.is_none_or(|degree| degree >= scores.degree),
+                "max_constraint_degree hint is below the symbolic constraint degree"
+            );
+            debug_assert!(
+                hinted_count.is_none_or(|count| count == scores.num_base_constraints),
+                "num_constraints() = {:?} but symbolic evaluation found {} base constraints",
+                hinted_count,
+                scores.num_base_constraints,
+            );
+            (
+                hinted_degree.unwrap_or(scores.degree),
+                hinted_count.unwrap_or(scores.num_base_constraints),
+            )
+        }
+    }
 }
 
 impl<'a, A> AirZerocheck<'a, A> {
@@ -249,7 +309,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         assert_eq!(self.airs.len(), preprocessed.len(),);
         assert_eq!(self.airs.len(), public_values.len(),);
 
-        let degrees = self
+        let (degrees, num_constraints): (Vec<_>, Vec<_>) = self
             .airs
             .iter()
             .zip(tables.iter())
@@ -272,9 +332,9 @@ impl<'a, A> AirZerocheck<'a, A> {
                     assert_eq!(preprocessed.num_variables(), table.num_variables());
                 }
                 assert_eq!(public_values.len(), air.num_public_values());
-                air_degree::<F, EF, A>(air)
+                air_degree_and_constraints::<F, EF, A>(air)
             })
-            .collect::<Vec<_>>();
+            .unzip();
         let max_degree = degrees.iter().copied().max().unwrap();
 
         // Bucket AIR indices by trace height.
@@ -303,6 +363,10 @@ impl<'a, A> AirZerocheck<'a, A> {
                     .map(|&i| public_values[i])
                     .collect::<Vec<_>>();
                 let degrees = indices.iter().map(|&i| degrees[i]).collect::<Vec<_>>();
+                let num_constraints = indices
+                    .iter()
+                    .map(|&i| num_constraints[i])
+                    .collect::<Vec<_>>();
                 Stage::new(
                     &airs,
                     &public_values,
@@ -310,6 +374,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                     &preprocessed,
                     &tables,
                     &degrees,
+                    &num_constraints,
                 )
             })
             .collect::<Vec<_>>();
