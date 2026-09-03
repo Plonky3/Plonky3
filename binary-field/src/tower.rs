@@ -139,7 +139,7 @@ macro_rules! binary_tower_level {
 
             /// The coefficients `(a0, a1)` of `self = a0 + a1·X`.
             #[inline]
-            fn split(self) -> ($lower, $lower) {
+            pub(crate) fn split(self) -> ($lower, $lower) {
                 let a0 = (self.0 & Self::HALF_MASK) as $lower_repr;
                 let a1 = (self.0 >> Self::HALF_BITS) as $lower_repr;
                 (<$lower>::from_repr(a0), <$lower>::from_repr(a1))
@@ -147,7 +147,7 @@ macro_rules! binary_tower_level {
 
             /// The element `a0 + a1·X`.
             #[inline]
-            fn join(a0: $lower, a1: $lower) -> Self {
+            pub(crate) fn join(a0: $lower, a1: $lower) -> Self {
                 Self((a0.to_repr() as $repr) | ((a1.to_repr() as $repr) << Self::HALF_BITS))
             }
 
