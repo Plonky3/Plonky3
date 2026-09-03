@@ -87,18 +87,45 @@ macro_rules! binary_tower_extension {
                 Self::from_repr(repr)
             }
 
-            /// The coefficients of an element are already contiguous, so one buffer sized up
-            /// front takes them all without a temporary per element.
+            /// A whole vector of elements is one contiguous run of coefficients, for the same
+            /// reason a single element is, so the flattening is a single copy of the buffer.
+            ///
+            /// The inverse direction is not symmetric, and `reconstitute_from_base` keeps the
+            /// default that builds a fresh buffer: a `Vec<$lower>` is allocated at `$lower`'s
+            /// alignment, which is weaker than `$upper`'s, and freeing an allocation under a
+            /// `Layout` whose alignment differs from the one it was made with is undefined
+            /// behaviour.
             #[inline]
             fn flatten_to_base(vec: Vec<Self>) -> Vec<$lower> {
-                let dimension = <$upper as BasedVectorSpace<$lower>>::DIMENSION;
-                let mut flat = Vec::with_capacity(vec.len() * dimension);
-                for x in &vec {
-                    flat.extend_from_slice(
-                        <Self as BasedVectorSpace<$lower>>::as_basis_coefficients_slice(x),
+                const {
+                    assert!(
+                        cfg!(target_endian = "little"),
+                        "the tower basis coincides with the memory layout only on little-endian targets"
                     );
+                    assert!(<$lower>::BITS == <$lower_repr>::BITS as usize);
+                    assert!(
+                        size_of::<$upper>()
+                            == <$upper as BasedVectorSpace<$lower>>::DIMENSION
+                                * size_of::<$lower>()
+                    );
+                    assert!(align_of::<$lower>() <= align_of::<$upper>());
                 }
-                flat
+
+                // SAFETY: the argument of `as_basis_coefficients_slice`, over the whole buffer
+                // rather than one element: both levels are `repr(transparent)` over unsigned
+                // integers and a `Vec`'s elements are contiguous and padding-free, so the
+                // allocation is `len * DIMENSION` canonical `$lower` values, aligned at least as
+                // strictly as `$lower` requires; the assertions above check the size, alignment
+                // and endianness that relies on. An empty `Vec` yields a dangling but aligned
+                // pointer, which is what a zero-length slice needs. The slice borrows `vec`, and
+                // is copied out below while `vec` is still live, so it never dangles.
+                let coefficients: &[$lower] = unsafe {
+                    slice::from_raw_parts(
+                        vec.as_ptr().cast::<$lower>(),
+                        vec.len() * <$upper as BasedVectorSpace<$lower>>::DIMENSION,
+                    )
+                };
+                coefficients.to_vec()
             }
 
             #[inline]
