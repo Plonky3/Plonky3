@@ -298,6 +298,7 @@ where
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use alloc::vec::Vec;
 
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -308,12 +309,14 @@ mod tests {
     use p3_symmetric::{
         CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
     };
+    use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
     use crate::{MerkleTreeError, MerkleTreeMmcs};
 
     type F = BabyBear;
+    type Packing = <F as Field>::Packing;
 
     type Perm = Poseidon2BabyBear<16>;
     type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
@@ -1026,5 +1029,277 @@ mod tests {
         mmcs2
             .verify_batch(&cap2, &dims, 0, BatchOpeningRef::new(&opening2, &proof2))
             .unwrap();
+    }
+
+    /// Cross-checks `restore_and_recompute_paths` against the trusted single-query
+    /// `verify_batch`: every path it hands back must, on its own, authenticate its query
+    /// against the real commitment — proving the restored siblings are correct, not just
+    /// self-consistent. Exercises the two cases that matter most:
+    /// - a mixed-height batch, so restoration must fold the injected matrix's digest
+    ///   correctly (injection never appears in the pruned proof itself, see `mmcs/mod.rs`'s
+    ///   module docs);
+    /// - two queries (0 and 2) that only merge one level *above* the injection point, so their
+    ///   later-level sibling is nowhere in `verify_batch_pruned`'s own bookkeeping — only this
+    ///   function computes it;
+    /// - a duplicate query index, exercising the original-order expansion.
+    #[test]
+    fn restore_and_recompute_paths_matches_single_query_verification() {
+        let mut rng = SmallRng::seed_from_u64(7);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        // Same shapes as `commit_mixed`: mat_1 height 5 (padded to 8) injects mat_2 (height 3)
+        // right after the first level of binary compression.
+        let mat_1 = RowMajorMatrix::<F>::rand(&mut rng, 5, 2);
+        let mat_2 = RowMajorMatrix::<F>::rand(&mut rng, 3, 3);
+        let dims = vec![
+            Dimensions {
+                width: 2,
+                height: 5,
+            },
+            Dimensions {
+                width: 3,
+                height: 3,
+            },
+        ];
+
+        let (commit, prover_data) = mmcs.commit(vec![mat_1, mat_2]);
+
+        let query_indices = vec![0usize, 2, 0];
+        let (opened_values, pruned_proof) = mmcs.open_multi_batch(&query_indices, &prover_data);
+
+        let restored = mmcs
+            .restore_and_recompute_paths(&dims, &query_indices, &opened_values, &pruned_proof)
+            .expect("restoration succeeds for a mixed-height batch with a post-injection merge");
+        assert_eq!(restored.len(), query_indices.len());
+
+        for (q, &index) in query_indices.iter().enumerate() {
+            assert_eq!(restored[q].leaf_index, index);
+            mmcs.verify_batch(
+                &commit,
+                &dims,
+                index,
+                BatchOpeningRef::new(&opened_values[q], &restored[q].siblings),
+            )
+            .expect("a restored path must independently authenticate its query");
+        }
+
+        // The two occurrences of query 0 must restore identically.
+        assert_eq!(restored[0], restored[2]);
+    }
+
+    /// The 4-ary counterpart of the test above.
+    ///
+    /// At arity 2 every level's chunk holds a single sibling, so `num_siblings_per_path == 1`
+    /// and the restoration offset `if pos < own_pos { pos } else { pos - 1 }` is identically
+    /// `0` — every way that arithmetic could be wrong (a mis-ordered chunk, an off-by-one
+    /// against `pruning::sibling_offset`, a wrong per-level chunk stride) is invisible. At
+    /// arity 4 the offsets range over `0..3` and the strides are 3 wide, so the same
+    /// `verify_batch` cross-check now actually constrains them.
+    #[test]
+    fn restore_and_recompute_paths_matches_single_query_verification_4ary() {
+        let mut rng = SmallRng::seed_from_u64(8);
+        let perm16 = Perm::new_from_rng_128(&mut rng);
+        let perm32 = PermWide::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm16);
+        let compress = MyCompress4::new(perm32);
+        let mmcs = MyMmcs4::new(hash, compress, 0);
+
+        // Height 20 (padded to 32) injects the height-5 matrix after the first 4-ary level.
+        let mat_1 = RowMajorMatrix::<F>::rand(&mut rng, 20, 2);
+        let mat_2 = RowMajorMatrix::<F>::rand(&mut rng, 5, 3);
+        let dims = vec![
+            Dimensions {
+                width: 2,
+                height: 20,
+            },
+            Dimensions {
+                width: 3,
+                height: 5,
+            },
+        ];
+
+        let (commit, prover_data) = mmcs.commit(vec![mat_1, mat_2]);
+
+        // 1 and 2 share a leaf group; 6 joins them only at the level above the injection
+        // point; 19 stays separate to the top; 1 repeats to exercise order expansion.
+        let query_indices = vec![1usize, 2, 6, 19, 1];
+        let (opened_values, pruned_proof) = mmcs.open_multi_batch(&query_indices, &prover_data);
+
+        let restored = mmcs
+            .restore_and_recompute_paths(&dims, &query_indices, &opened_values, &pruned_proof)
+            .expect("restoration succeeds for a 4-ary mixed-height batch");
+        assert_eq!(restored.len(), query_indices.len());
+
+        for (q, &index) in query_indices.iter().enumerate() {
+            assert_eq!(restored[q].leaf_index, index);
+            mmcs.verify_batch(
+                &commit,
+                &dims,
+                index,
+                BatchOpeningRef::new(&opened_values[q], &restored[q].siblings),
+            )
+            .expect("a restored 4-ary path must independently authenticate its query");
+        }
+
+        assert_eq!(restored[0], restored[4]);
+    }
+
+    /// Randomized cross-check behind both proptests below.
+    ///
+    /// `restore_and_recompute_paths` and `verify_batch_pruned` are two entry points onto one
+    /// shared frontier walk, so this pins both ends of it:
+    ///
+    /// - every restored path must authenticate its own query through the trusted single-query
+    ///   `verify_batch` — a failure means the restored siblings are self-consistent but
+    ///   *wrong*, i.e. the scatter wrote the wrong offset, stride, or group range;
+    /// - the two entry points must accept and reject the same proofs, which is the regression
+    ///   guard for the walk they share: it is checked on the honest proof and again on a
+    ///   tampered one.
+    ///
+    /// `heights` must stay on the `ceil(max_height / 2^k)` ladder or `commit` panics, so the
+    /// caller passes exponents rather than heights.
+    fn cross_check_restored_paths<C, const N: usize>(
+        mmcs: &MerkleTreeMmcs<Packing, Packing, MyHash, C, N, 8>,
+        max_height: usize,
+        extra_exponents: &[usize],
+        widths: &[usize],
+        raw_queries: &[usize],
+        seed: u64,
+    ) where
+        C: PseudoCompressionFunction<[F; 8], N> + PseudoCompressionFunction<[Packing; 8], N> + Sync,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+
+        // Commit-reachable heights: the tallest, then `ceil(max_height / 2^k)` for the
+        // requested exponents, deduplicated and kept tallest-first.
+        let mut heights = vec![max_height];
+        for &k in extra_exponents {
+            heights.push(max_height.div_ceil(1 << k));
+        }
+        heights.sort_unstable_by_key(|&h| core::cmp::Reverse(h));
+        heights.dedup();
+
+        let mats: Vec<RowMajorMatrix<F>> = heights
+            .iter()
+            .zip(widths.iter().cycle())
+            .map(|(&height, &width)| RowMajorMatrix::<F>::rand(&mut rng, height, width))
+            .collect();
+        let dims: Vec<Dimensions> = mats.iter().map(|m| m.dimensions()).collect();
+
+        let (commit, prover_data) = mmcs.commit(mats);
+
+        let queries: Vec<usize> = raw_queries.iter().map(|&q| q % max_height).collect();
+        let (opened_values, pruned_proof) = mmcs.open_multi_batch(&queries, &prover_data);
+
+        let restored = mmcs
+            .restore_and_recompute_paths(&dims, &queries, &opened_values, &pruned_proof)
+            .expect("restoration succeeds for an honestly generated multiproof");
+        assert_eq!(restored.len(), queries.len());
+
+        for (q, &index) in queries.iter().enumerate() {
+            assert_eq!(restored[q].leaf_index, index);
+            mmcs.verify_batch(
+                &commit,
+                &dims,
+                index,
+                BatchOpeningRef::new(&opened_values[q], &restored[q].siblings),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "restored path for query {index} failed single-query verification: {err} \
+                     (heights {heights:?}, queries {queries:?})"
+                )
+            });
+        }
+
+        // Both entry points accept the honest proof.
+        mmcs.verify_batch_pruned(&commit, &dims, &queries, &opened_values, &pruned_proof)
+            .expect("the pruned multiproof verifies");
+
+        // ...and both reject a tampered one. An all-leaves query set prunes every boundary
+        // digest away, leaving nothing to tamper with.
+        if let Some(first) = pruned_proof.sibling_hashes.first().copied() {
+            let mut tampered = pruned_proof.clone();
+            tampered.sibling_hashes[0] = [first[0] + F::ONE; 8];
+
+            assert!(
+                mmcs.verify_batch_pruned(&commit, &dims, &queries, &opened_values, &tampered)
+                    .is_err(),
+                "verification must reject a tampered multiproof"
+            );
+
+            // Restoration itself has no commitment to check against, so "reject" here means
+            // the tamper still surfaces: at least one restored path fails to authenticate.
+            // (Not every one does — a boundary digest sits on some paths and not others,
+            // which is exactly why `verify_batch_pruned` rejects the batch as a whole.)
+            let restored_from_tampered =
+                mmcs.restore_and_recompute_paths(&dims, &queries, &opened_values, &tampered);
+            let all_paths_verify = restored_from_tampered.is_ok_and(|paths| {
+                paths
+                    .iter()
+                    .zip(&queries)
+                    .enumerate()
+                    .all(|(q, (path, &index))| {
+                        mmcs.verify_batch(
+                            &commit,
+                            &dims,
+                            index,
+                            BatchOpeningRef::new(&opened_values[q], &path.siblings),
+                        )
+                        .is_ok()
+                    })
+            });
+            assert!(
+                !all_paths_verify,
+                "a tampered multiproof must break at least one restored path, \
+                 matching the rejection above (heights {heights:?}, queries {queries:?})"
+            );
+        }
+    }
+
+    proptest! {
+        /// Binary trees, including non-zero caps.
+        #[test]
+        fn proptest_restored_paths_verify_individually_binary(
+            max_height in 1usize..=70,
+            extra_exponents in prop::collection::vec(1usize..=3, 0..3),
+            widths in prop::collection::vec(1usize..=4, 1..4),
+            cap_height in 0usize..=2,
+            raw_queries in prop::collection::vec(0usize..70, 1..=6),
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let perm = Perm::new_from_rng_128(&mut rng);
+            let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), cap_height);
+            cross_check_restored_paths(
+                &mmcs, max_height, &extra_exponents, &widths, &raw_queries, seed,
+            );
+        }
+
+        /// 4-ary trees, where the per-level chunks are 3 wide and the restoration offsets are
+        /// no longer identically zero.
+        ///
+        /// `cap_height` is pinned to 0: a 4-ary commit with a non-zero cap and non-power-of-two
+        /// heights trips a pre-existing `assert!(cap.len().is_power_of_two())` in `p3_symmetric`,
+        /// which has nothing to do with restoration.
+        #[test]
+        fn proptest_restored_paths_verify_individually_4ary(
+            max_height in 1usize..=70,
+            extra_exponents in prop::collection::vec(1usize..=3, 0..3),
+            widths in prop::collection::vec(1usize..=4, 1..4),
+            raw_queries in prop::collection::vec(0usize..70, 1..=6),
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let perm16 = Perm::new_from_rng_128(&mut rng);
+            let perm32 = PermWide::new_from_rng_128(&mut rng);
+            let mmcs = MyMmcs4::new(MyHash::new(perm16), MyCompress4::new(perm32), 0);
+            cross_check_restored_paths(
+                &mmcs, max_height, &extra_exponents, &widths, &raw_queries, seed,
+            );
+        }
     }
 }

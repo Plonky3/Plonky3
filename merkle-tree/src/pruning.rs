@@ -57,7 +57,7 @@ use crate::PrunedProofError;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(serialize = "[D; DIGEST_ELEMS]: Serialize"))]
 #[serde(bound(deserialize = "[D; DIGEST_ELEMS]: serde::de::DeserializeOwned"))]
-pub(crate) struct MerkleAuthPath<D, const DIGEST_ELEMS: usize> {
+pub struct MerkleAuthPath<D, const DIGEST_ELEMS: usize> {
     /// Index of this leaf in the tree (0-based).
     pub leaf_index: usize,
 

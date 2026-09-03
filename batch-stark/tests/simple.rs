@@ -2799,3 +2799,86 @@ fn test_invalid_permutation_opening_len_rejected() {
         "Verifier should reject permutation opening with wrong length"
     );
 }
+
+// --- Lookup-packing budget override ---
+
+/// The `log_blowup` every `FriParameters::new_testing` config in this file uses, and so the
+/// quotient-chunk ceiling `from_airs_and_degrees_with_lookup_budgets` holds overrides to.
+const TESTING_LOG_BLOWUP: usize = 2;
+
+/// Build a single `MulAirLookups` instance whose global lookups all target the same bus,
+/// so `pack_same_bus` has multiple same-bus interactions available to fold.
+fn mul_air_with_n_same_bus_lookups(reps: usize) -> (DemoAirWithLookups, usize) {
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(mul_air, false, true, vec!["Bus".to_string(); reps]);
+    let log_height = 4; // 16 rows
+    (DemoAirWithLookups::MulLookups(mul_air_lookups), log_height)
+}
+
+#[test]
+fn from_airs_and_degrees_with_lookup_budgets_at_zero_matches_the_free_budget() {
+    let config = make_config(2028);
+    let (air, log_height) = mul_air_with_n_same_bus_lookups(4);
+    let airs = [air];
+
+    let default = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let overridden = ProverData::<MyConfig>::from_airs_and_degrees_with_lookup_budgets(
+        &config,
+        &airs,
+        &[log_height],
+        &[0],
+        TESTING_LOG_BLOWUP,
+    );
+
+    assert_eq!(
+        format!("{:?}", default.common.lookups),
+        format!("{:?}", overridden.common.lookups),
+        "a zero override must reproduce the free-budget packing exactly"
+    );
+}
+
+#[test]
+fn from_airs_and_degrees_with_lookup_budgets_packs_past_the_free_budget() {
+    let config = make_config(2029);
+    let (air, log_height) = mul_air_with_n_same_bus_lookups(4);
+    let airs = [air];
+
+    let free = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let free_num_lookups = free.common.lookups[0].len();
+
+    // An override past the free ceiling forces same-bus interactions into fewer columns,
+    // spending quotient chunks to do it. `4` keeps the resulting bucket inside the testing
+    // config's blowup; see the panic test below for what happens when it doesn't.
+    let forced = ProverData::<MyConfig>::from_airs_and_degrees_with_lookup_budgets(
+        &config,
+        &airs,
+        &[log_height],
+        &[4],
+        TESTING_LOG_BLOWUP,
+    );
+    let forced_num_lookups = forced.common.lookups[0].len();
+
+    assert!(
+        forced_num_lookups < free_num_lookups,
+        "override must pack past the free ceiling: free={free_num_lookups}, forced={forced_num_lookups}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "past the PCS blowup")]
+fn from_airs_and_degrees_with_lookup_budgets_rejects_overshooting_the_blowup() {
+    let config = make_config(2030);
+    let (air, log_height) = mul_air_with_n_same_bus_lookups(6);
+    let airs = [air];
+
+    // Folding six same-bus interactions into one column pushes the quotient bucket well past
+    // the rate budget of a `log_blowup = 1` low-degree test. Nothing downstream detects that,
+    // so it has to fail here, at setup.
+    let _ = ProverData::<MyConfig>::from_airs_and_degrees_with_lookup_budgets(
+        &config,
+        &airs,
+        &[log_height],
+        &[usize::MAX],
+        1,
+    );
+}
