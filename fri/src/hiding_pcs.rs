@@ -11,6 +11,7 @@ use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
+use p3_maybe_rayon::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{CryptoRng, RngExt, SeedableRng};
 use spin::Mutex;
@@ -220,18 +221,26 @@ where
                 let shift = Val::GENERATOR / domain.shift();
                 let random_values = &all_random_values[i * h * w..(i + 1) * h * w];
 
-                // Commit to the bit-reversed LDE.
-                let mut lde_evals = self
-                    .inner
-                    .dft
-                    .coset_lde_batch(evals, self.inner.fri.log_blowup + 1, shift)
-                    .to_row_major_matrix();
+                // The quotient chunk and its mask are both extended onto the same coset, and the
+                // DFT is linear, so they share a single forward transform. Recover the chunk's
+                // coefficients and scale coefficient `j` by `shift^j`, which places them on the
+                // coset exactly as `coset_lde_batch(evals, log_blowup + 1, shift)` would.
+                let mut lde_coeffs = self.inner.dft.idft_batch(evals).values;
+                let shift_powers = shift.powers().collect_n(h);
+                lde_coeffs
+                    .par_chunks_exact_mut(w)
+                    .zip(shift_powers)
+                    .for_each(|(row, shift_pow)| {
+                        for value in row {
+                            *value *= shift_pow;
+                        }
+                    });
+                lde_coeffs.resize((h * w) << (self.inner.fri.log_blowup + 1), Val::ZERO);
 
-                // Evaluate `v_H(X) * r(X)` over the LDE, where:
+                // Add in the coefficients of `v_H(X) * r(X)`, where:
                 // - `v_H` is the coset vanishing polynomial, here equal to (GENERATOR * X / domain.shift)^n - 1,
                 // - and `r` is a random polynomial.
-                let mut vanishing_poly_coeffs =
-                    Val::zero_vec((h * w) << (self.inner.fri.log_blowup + 1));
+                // These are already coset-adjusted, so they are not scaled by `shift^j`.
                 let p = shift.exp_u64(h as u64);
                 Val::GENERATOR
                     .powers()
@@ -240,22 +249,17 @@ where
                     .for_each(|(i, p_i)| {
                         for j in 0..w {
                             let mul_coeff = p_i * random_values[i * w + j];
-                            vanishing_poly_coeffs[i * w + j] -= mul_coeff;
-                            vanishing_poly_coeffs[(h + i) * w + j] = p * mul_coeff;
+                            lde_coeffs[i * w + j] -= mul_coeff;
+                            lde_coeffs[(h + i) * w + j] = p * mul_coeff;
                         }
                     });
-                let random_eval = self
-                    .inner
+
+                // Commit to the bit-reversed LDE.
+                self.inner
                     .dft
-                    .dft_batch(DenseMatrix::new(vanishing_poly_coeffs, w))
-                    .to_row_major_matrix();
-
-                // Add the quotient chunk evaluations over the LDE to the evaluations of `v_H(X) * r(X)`.
-                for i in 0..h * w * (1 << (self.inner.fri.log_blowup + 1)) {
-                    lde_evals.values[i] += random_eval.values[i];
-                }
-
-                lde_evals.bit_reverse_rows().to_row_major_matrix()
+                    .dft_batch(DenseMatrix::new(lde_coeffs, w))
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
             })
             .collect()
     }
