@@ -18,10 +18,13 @@ pub const FRACTIONAL_BITS: u32 = 16;
 /// The value `1.0` in fixed point.
 pub const ONE: u64 = 1 << FRACTIONAL_BITS;
 
-/// `log2(e)` in fixed point, rounded down.
+/// `log2(e)` in fixed point, rounded up.
 ///
-/// Appears in the random-words cutoff of [2025/2010](https://eprint.iacr.org/2025/2010) section 1.5.
-pub const LOG2_E: u64 = 94_548;
+/// Appears in the random-words cutoff of [2025/2010](https://eprint.iacr.org/2025/2010) section
+/// 1.5, in [`bits_per_query`]'s `numerator`, whose `ceil_log2` is then subtracted from the
+/// uncorrected rate. Rounding this constant down would shrink that correction and overstate the
+/// reported per-query rate, contradicting this module's conservative-lower-bound invariant.
+pub const LOG2_E: u64 = 94_549;
 
 /// Converts a whole number of bits into fixed point.
 pub const fn from_bits(bits: u32) -> u64 {
@@ -132,7 +135,7 @@ mod tests {
                 let ceil = ceil_log2(candidate) as f64;
 
                 assert!(
-                    floor <= truth + 1.0,
+                    floor <= truth + 1e-3,
                     "floor_log2({candidate}) overstates log2"
                 );
                 assert!(
@@ -140,7 +143,7 @@ mod tests {
                     "floor_log2({candidate}) is more than 1 ulp low"
                 );
                 assert!(
-                    ceil + 1.0 >= truth,
+                    ceil + 1e-3 >= truth,
                     "ceil_log2({candidate}) understates log2"
                 );
                 assert!(
@@ -150,6 +153,17 @@ mod tests {
             }
             x *= 2;
         }
+    }
+
+    /// `LOG2_E` enters `bits_per_query`'s subtracted correction, so rounding it down would
+    /// shrink the correction and overstate the reported per-query rate.
+    #[test]
+    fn log2_e_rounds_up_not_down() {
+        let truth = core::f64::consts::LOG2_E * ONE as f64;
+        assert!(
+            LOG2_E as f64 >= truth,
+            "LOG2_E must round up, not down: {LOG2_E} < {truth}"
+        );
     }
 
     #[test]
