@@ -14,6 +14,9 @@ mod basis;
 
 pub(crate) use basis::{poly_to_tower_128, tower_to_poly_128};
 
+use crate::BinaryField64;
+use crate::tower::TowerLevel;
+
 #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
 mod aarch64;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
@@ -173,12 +176,13 @@ pub(crate) fn mul_128(a: u128, b: u128) -> u128 {
 
 /// Squaring in `GF(2^64)`, taking and returning the tower representation.
 ///
-/// The change of basis is linear and applied once here, where a product of two operands pays
-/// for it twice.
+/// Squaring is `GF(2)`-linear in characteristic 2, so in the tower basis it is a fixed matrix,
+/// tabulated a byte of the input at a time exactly as the changes of basis are. That is eight
+/// lookups, against the two conversions and a carryless product a route through the polynomial
+/// basis would cost.
 #[inline]
 pub(crate) fn square_64(a: u64) -> u64 {
-    let poly = basis::tower_to_poly_64(a);
-    basis::poly_to_tower_64(reduce_64(clmul_64x64(poly, poly)))
+    basis::tower_square_64(a)
 }
 
 /// Squaring in `GF(2^128)`, taking and returning the polynomial representation.
@@ -193,9 +197,19 @@ pub(crate) fn poly_square_128(a: u128) -> u128 {
 }
 
 /// Squaring in `GF(2^128)`, taking and returning the tower representation.
+///
+/// The tower basis of this level is the tower basis of the level below, twice over, so the two
+/// halves square through [`square_64`]: with `a = a0 + a1·X` and `X² = αX + 1`, the cross term
+/// vanishes in characteristic 2 and `a² = (a0² + a1²) + α·a1²·X`.
+///
+/// Tabulating this level directly would take a table four times the size for the same sixteen
+/// lookups, so the level below's is used twice instead.
 #[inline]
 pub(crate) fn square_128(a: u128) -> u128 {
-    basis::poly_to_tower_128(poly_square_128(basis::tower_to_poly_128(a)))
+    let low = square_64(a as u64);
+    let high = square_64((a >> 64) as u64);
+    let scaled = BinaryField64::from_repr(high).mul_alpha().to_repr();
+    u128::from(low ^ high) | (u128::from(scaled) << 64)
 }
 
 #[cfg(test)]
@@ -205,6 +219,20 @@ mod tests {
     use super::basis::{TAIL_64, TAIL_128, poly_mul};
     use crate::tower::TowerLevel;
     use crate::{BinaryField64, BinaryField128};
+
+    /// Squaring in `GF(2^64)`, through the polynomial basis.
+    ///
+    /// The independent definition of the tower-basis square, leaning on the change of basis and
+    /// the carryless product rather than on a matrix of its own.
+    fn square_64_through_the_polynomial_basis(a: u64) -> u64 {
+        let poly = super::basis::tower_to_poly_64(a);
+        super::basis::poly_to_tower_64(super::reduce_64(super::clmul_64x64(poly, poly)))
+    }
+
+    /// Squaring in `GF(2^128)`, through the polynomial basis.
+    fn square_128_through_the_polynomial_basis(a: u128) -> u128 {
+        super::basis::poly_to_tower_128(super::poly_square_128(super::basis::tower_to_poly_128(a)))
+    }
 
     /// The carryless product of two 128-bit polynomials, one bit of `b` at a time.
     fn scalar_clmul_128x128(a: u128, b: u128) -> (u128, u128) {
@@ -247,6 +275,17 @@ mod tests {
         fn clmul_64_square_matches_reference(a: u64) {
             let x = BinaryField64::from_repr(a);
             prop_assert_eq!(super::square_64(a), x.reference_mul(x).to_repr());
+        }
+
+        /// The tower-basis squaring matrix must agree with squaring through the polynomial
+        /// basis, at both levels that take it.
+        #[test]
+        fn the_squaring_tables_agree_with_the_polynomial_basis_route(a: u64, b: u128) {
+            prop_assert_eq!(super::square_64(a), square_64_through_the_polynomial_basis(a));
+            prop_assert_eq!(
+                super::square_128(b),
+                square_128_through_the_polynomial_basis(b),
+            );
         }
 
         /// Whichever backend the target selected must agree with the bit-serial definition.
