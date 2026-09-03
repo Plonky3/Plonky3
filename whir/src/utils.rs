@@ -5,6 +5,7 @@
 //! - <https://eprint.iacr.org/2024/1586> (base WHIR).
 
 use p3_field::{ExtensionField, Field, HornerIter};
+use p3_maybe_rayon::prelude::*;
 
 /// Action of `ze*_n(ρ) := (1, ρ, …, ρ^{n-1})` on a coefficient vector,
 /// computed by Horner's method (Definition 6.1 of eprint 2026/391).
@@ -43,6 +44,75 @@ where
     // Mixed accumulator: extension coefficients fold against a base point,
     // so each step costs one cheap EF x F multiplication.
     coeffs.iter().copied().horner_acc(EF::ZERO, point)
+}
+
+/// Chunk-parallel form of [`eval_ze_star_n`].
+///
+/// # Math
+///
+/// The coefficients are cut into runs of `chunk_len`. Run `c` is folded by its
+/// own Horner pass and re-based by one `ρ^{c · chunk_len}` shift:
+///
+/// ```text
+///     Σ_i c_i · ρ^i = Σ_c ρ^{c · chunk_len} · Σ_j c_{c · chunk_len + j} · ρ^j
+/// ```
+///
+/// This is an exact-field reassociation, so the result equals
+/// [`eval_ze_star_n`] on the same inputs for every `chunk_len`.
+///
+/// # Cost
+///
+/// One serial dependency chain of length `chunk_len` per run instead of a
+/// single chain of length `coeffs.len()`, plus one `ρ^{c · chunk_len}` per run.
+///
+/// # Panics
+///
+/// Panics if `chunk_len` is zero.
+pub(crate) fn par_eval_ze_star_n<F, EF>(point: F, coeffs: &[EF], chunk_len: usize) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    assert_ne!(chunk_len, 0, "chunk length must be positive");
+    coeffs
+        .par_chunks(chunk_len)
+        .enumerate()
+        .map(|(chunk_idx, chunk)| {
+            eval_ze_star_n(point, chunk) * point.exp_u64((chunk_idx * chunk_len) as u64)
+        })
+        .sum()
+}
+
+/// Adds the scaled power run `coeff · ρ^b` into slot `b` of `out`.
+///
+/// # Math
+///
+/// ```text
+///     out[b] += coeff · ρ^b        for b ∈ [0, out.len())
+/// ```
+///
+/// Each run of `chunk_len` slots restarts the running power from
+/// `coeff · ρ^{c · chunk_len}`, so the runs carry independent chains.
+///
+/// # Panics
+///
+/// Panics if `chunk_len` is zero.
+pub(crate) fn par_add_scaled_powers<EF: Field>(
+    out: &mut [EF],
+    point: EF,
+    coeff: EF,
+    chunk_len: usize,
+) {
+    assert_ne!(chunk_len, 0, "chunk length must be positive");
+    out.par_chunks_mut(chunk_len)
+        .enumerate()
+        .for_each(|(chunk_idx, chunk)| {
+            let mut term = coeff * point.exp_u64((chunk_idx * chunk_len) as u64);
+            for dst in chunk {
+                *dst += term;
+                term *= point;
+            }
+        });
 }
 
 /// Evaluate the polynomial `(msg ‖ rand)` (coefficients) at point `ρ`:
@@ -229,6 +299,68 @@ mod tests {
             }
 
             prop_assert_eq!(horner, expected);
+        }
+
+        #[test]
+        fn prop_par_eval_ze_star_n_matches_serial_basefield(
+            coeffs in prop::collection::vec(any::<u32>(), 0..40),
+            sigma_raw in any::<u32>(),
+            chunk_len in 1usize..5,
+        ) {
+            // Lengths reach ~10x the chunk length, so the chunk index runs well
+            // past 1 and the per-chunk rho^{c · chunk_len} rebase is exercised.
+            let coeffs: Vec<F> = coeffs.into_iter().map(F::from_u32).collect();
+            let sigma = F::from_u32(sigma_raw);
+
+            prop_assert_eq!(
+                par_eval_ze_star_n(sigma, &coeffs, chunk_len),
+                eval_ze_star_n(sigma, &coeffs),
+            );
+        }
+
+        #[test]
+        fn prop_par_eval_ze_star_n_matches_serial_extension(
+            seed in any::<u64>(),
+            n in 0usize..40,
+            chunk_len in 1usize..5,
+        ) {
+            // Same identity over an extension, where the Horner accumulator is
+            // a full EF x EF chain rather than the mixed EF x F one.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let coeffs: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let sigma: EF = rng.random();
+
+            prop_assert_eq!(
+                par_eval_ze_star_n(sigma, &coeffs, chunk_len),
+                eval_ze_star_n(sigma, &coeffs),
+            );
+        }
+
+        #[test]
+        fn prop_par_add_scaled_powers_matches_serial_run(
+            seed in any::<u64>(),
+            n in 0usize..40,
+            chunk_len in 1usize..5,
+        ) {
+            // Accumulates onto pre-existing content, so a chunk that overwrote
+            // instead of adding would be caught alongside a bad rebase exponent.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let initial: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let sigma: EF = rng.random();
+            let coeff: EF = rng.random();
+
+            let mut actual = initial.clone();
+            par_add_scaled_powers(&mut actual, sigma, coeff, chunk_len);
+
+            // Reference: one serial running-power chain across the whole slice.
+            let mut expected = initial;
+            let mut term = coeff;
+            for dst in &mut expected {
+                *dst += term;
+                term *= sigma;
+            }
+
+            prop_assert_eq!(actual, expected);
         }
 
         #[test]

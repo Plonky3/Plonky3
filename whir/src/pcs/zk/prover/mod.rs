@@ -40,7 +40,7 @@ use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
 use crate::pcs::zk::committer::{FoldedRsCode, zk_padded_matrix};
 use crate::pcs::zk::config::ZkWhirConfig;
 use crate::pcs::zk::proof::{ZkRoundProof, ZkWhirProof};
-use crate::utils::eval_ze_star_n;
+use crate::utils::{eval_ze_star_n, par_add_scaled_powers, par_eval_ze_star_n};
 
 /// Chunk length for the parallel power runs over message-length vectors.
 ///
@@ -277,16 +277,7 @@ where
                 );
                 // ze*(rho) over (message || mask_message): the long message side
                 // runs as chunked parallel Horner, the short mask tail serially.
-                let message_eval = message
-                    .as_slice()
-                    .par_chunks(POW_CHUNK)
-                    .enumerate()
-                    .map(|(chunk_idx, chunk)| {
-                        chunk.iter().rev().fold(EF::ZERO, |acc, &m| acc * rho + m)
-                            * rho.exp_u64((chunk_idx * POW_CHUNK) as u64)
-                    })
-                    .sum::<EF>();
-                let answer = message_eval
+                let answer = par_eval_ze_star_n(rho, message.as_slice(), POW_CHUNK)
                     + eval_ze_star_n(rho, &mask_message) * rho.exp_u64(message_len as u64);
                 challenger.observe_algebra_element(answer);
                 rho_points.push(rho);
@@ -389,17 +380,9 @@ where
                 }
                 weight_delta
             };
-            // Chunked parallel power run: chunk `c` starts at coeff * rho^(c * CHUNK).
+            // OOD layers: delta[b] += c_j * rho_j^b.
             for (&rho, &coeff) in rho_points.iter().zip(ood_coeffs) {
-                weight_delta.par_chunks_mut(POW_CHUNK).enumerate().for_each(
-                    |(chunk_idx, chunk)| {
-                        let mut term = coeff * rho.exp_u64((chunk_idx * POW_CHUNK) as u64);
-                        for dst in chunk {
-                            *dst += term;
-                            term *= rho;
-                        }
-                    },
-                );
+                par_add_scaled_powers(&mut weight_delta, rho, coeff, POW_CHUNK);
             }
 
             // Mask side: the fresh mask enters the relation.
