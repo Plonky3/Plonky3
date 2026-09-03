@@ -8,7 +8,8 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder};
 use p3_field::{
-    ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
+    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing, dot_product,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -246,9 +247,11 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
 ///
 /// Rows at or past `len` fall back to `tail`, the repeat-last successor value.
 ///
-/// The stored groups are aligned to multiples of the packing width.
-/// An offset window generally straddles two adjacent groups.
-/// So each lane is reconstructed independently rather than assuming a contiguous layout.
+/// The stored groups are aligned to multiples of the packing width, so an offset window
+/// straddles two adjacent groups.
+/// Whenever the window's successor group exists, each basis coefficient of the result is one
+/// unaligned read across the two groups' coefficient lanes.
+/// The final block has no successor group, so its lanes are gathered one at a time instead.
 #[inline]
 fn packed_window<F: Field, EF: ExtensionField<F>>(
     column: &[EF::ExtensionPacking],
@@ -257,6 +260,23 @@ fn packed_window<F: Field, EF: ExtensionField<F>>(
     tail: EF,
 ) -> EF::ExtensionPacking {
     let packing_width = F::Packing::WIDTH;
+    let group = start / packing_width;
+    let offset = start % packing_width;
+
+    // With a successor group in range the window stays inside `group` and `group + 1`,
+    // so no lane can reach the tail.
+    if group + 1 < column.len() {
+        return EF::ExtensionPacking::from_basis_coefficients_fn(|d| {
+            // The two groups' lanes for this coefficient are contiguous once laid side by side.
+            let pair = [
+                column[group].as_basis_coefficients_slice()[d],
+                column[group + 1].as_basis_coefficients_slice()[d],
+            ];
+            let flat = F::Packing::unpack_slice(&pair);
+            *F::Packing::from_slice(&flat[offset..offset + packing_width])
+        });
+    }
+
     EF::ExtensionPacking::from_ext_fn(|lane| {
         // Scalar row this lane maps to inside the window.
         let row = start + lane;
@@ -1399,12 +1419,11 @@ where
     /// SIMD-packed twin of [`Self::round_poly_unpacked`].
     ///
     /// Every column is already extension-valued (folded by earlier rounds),
-    /// so packing groups `F::Packing::WIDTH` consecutive residual rows of
-    /// each `Poly<EF>` column into one `EF::ExtensionPacking`, via an
-    /// unaligned [`PackedFieldExtension::from_ext_slice`] read exactly like
-    /// [`RoundStateBase::round_poly_packed`] does for its base-field
-    /// columns. The AIR is driven through [`PackedExt`], which wraps the
-    /// packed extension value so it supports arithmetic against the base
+    /// so one stored `EF::ExtensionPacking` already groups `F::Packing::WIDTH`
+    /// consecutive residual rows. The current-row window is such a group read
+    /// directly; the successor window sits one row later and is assembled by
+    /// [`packed_window`]. The AIR is driven through [`PackedExt`], which wraps
+    /// the packed extension value so it supports arithmetic against the base
     /// field `F` directly (see that type's docs for why this is needed).
     #[tracing::instrument(skip_all, level = "debug")]
     fn round_poly_packed(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
@@ -1627,5 +1646,51 @@ where
 
         self.boundary.apply(r);
         self.round += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Packing = <EF as ExtensionField<F>>::ExtensionPacking;
+
+    #[test]
+    fn packed_window_matches_the_scalar_gather() {
+        // Invariant: lane `l` of the window starting at `start` carries scalar row
+        // `start + l`, or the repeat-last tail once that row runs past the column.
+        //
+        // Fixture state: a column of eight packed groups, exercised at every start offset,
+        // so both the two-group read and the final-block gather are covered.
+        let mut rng = SmallRng::seed_from_u64(0x5EED);
+        let packing_width = <F as Field>::Packing::WIDTH;
+        let len = 8 * packing_width;
+
+        let rows = (0..len).map(|_| rng.random::<EF>()).collect::<Vec<_>>();
+        let tail: EF = rng.random();
+        let column = rows
+            .chunks_exact(packing_width)
+            .map(<Packing as PackedFieldExtension<F, EF>>::from_ext_slice)
+            .collect::<Vec<_>>();
+
+        for start in 0..len {
+            let window = packed_window::<F, EF>(&column, start, len, tail);
+            for lane in 0..packing_width {
+                let row = start + lane;
+                let expected = if row < len { rows[row] } else { tail };
+                assert_eq!(
+                    <Packing as PackedFieldExtension<F, EF>>::extract(&window, lane),
+                    expected,
+                    "start={start} lane={lane}"
+                );
+            }
+        }
     }
 }
