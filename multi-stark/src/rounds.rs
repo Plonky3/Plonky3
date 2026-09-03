@@ -9,7 +9,7 @@ use itertools::Itertools;
 use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder};
 use p3_field::{
     BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing, dot_product,
+    PrimeCharacteristicRing,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -341,9 +341,11 @@ struct Scratch<F, EF> {
 ///
 /// Mirrors the scalar scratch with packed row buffers, so each element covers one SIMD lane group.
 /// One instance is allocated per worker and reused across that worker's packed blocks.
-struct PackedScratch<P, EF> {
-    /// Unweighted per-node evaluation accumulator for each AIR.
-    air_evals: Vec<Vec<EF>>,
+struct PackedScratch<P, Acc> {
+    /// Per-node evaluation accumulator for each AIR, one lane per row of the covered blocks.
+    ///
+    /// Each lane already carries its own eq weight, so the lanes are summed once at the end.
+    air_evals: Vec<Vec<Acc>>,
     /// Current-row lanes of each column at the active interpolation node.
     local_point: Vec<P>,
     /// Step added to advance each current-row lane to the next node.
@@ -377,14 +379,14 @@ impl<F: Field, EF> Scratch<F, EF> {
     }
 }
 
-impl<P, EF> PackedScratch<P, EF>
+impl<P, Acc> PackedScratch<P, Acc>
 where
     P: PrimeCharacteristicRing,
-    EF: PrimeCharacteristicRing,
+    Acc: PrimeCharacteristicRing,
 {
     fn new(air_degrees: &[usize], width: usize) -> Self {
         Self {
-            air_evals: air_degrees.iter().copied().map(EF::zero_vec).collect(),
+            air_evals: air_degrees.iter().copied().map(Acc::zero_vec).collect(),
             local_point: P::zero_vec(width),
             local_diff: P::zero_vec(width),
             next_point: P::zero_vec(width),
@@ -406,6 +408,36 @@ where
                 *next += *next_diff;
             });
     }
+
+    /// Merge another worker's per-node accumulators into this one, lane by lane.
+    fn add_air_evals(&mut self, other: Self) {
+        self.air_evals
+            .iter_mut()
+            .zip(other.air_evals)
+            .for_each(|(lhs, rhs)| {
+                lhs.iter_mut()
+                    .zip(rhs)
+                    .for_each(|(acc, value)| *acc += value);
+            });
+    }
+}
+
+/// Collapse each packed accumulator to the scalar sum of its lanes.
+///
+/// Every lane already carries the eq weight of the row it stands for, so one horizontal sum
+/// per AIR per interpolation node finishes the fold.
+fn reduce_air_evals<F: Field, EF: ExtensionField<F>>(
+    air_evals: Vec<Vec<EF::ExtensionPacking>>,
+) -> Vec<Vec<EF>> {
+    air_evals
+        .into_iter()
+        .map(|evals| {
+            evals
+                .into_iter()
+                .map(|acc| EF::ExtensionPacking::to_ext_iter([acc]).sum())
+                .collect()
+        })
+        .collect()
 }
 
 /// Per-AIR fold metadata, in stage-local order.
@@ -879,47 +911,50 @@ where
                 || PackedScratch::new(&air_degrees, width),
                 |mut scratch, (packed_s, eq_suffix)| {
                     let s = packed_s * packing_width;
+                    let eq_suffix = EF::ExtensionPacking::from_ext_slice(eq_suffix);
 
-                    let fill_columns = |scratch: &mut PackedScratch<F::Packing, EF>,
-                                        offset: usize,
-                                        table: &Table<F>| {
-                        let end = offset + table.num_polys();
-                        for ((((local, local_delta), next), next_delta), column) in scratch
-                            .local_point[offset..end]
-                            .iter_mut()
-                            .zip(scratch.local_diff[offset..end].iter_mut())
-                            .zip(scratch.next_point[offset..end].iter_mut())
-                            .zip(scratch.next_diff[offset..end].iter_mut())
-                            .zip(table.iter_polys())
-                        {
-                            let local_lo = *F::Packing::from_slice(&column[s..s + packing_width]);
-                            let local_hi = *F::Packing::from_slice(
-                                &column[s + scalar_half..s + scalar_half + packing_width],
-                            );
-                            *local = local_lo;
-                            *local_delta = local_hi - local_lo;
+                    let fill_columns =
+                        |scratch: &mut PackedScratch<F::Packing, EF::ExtensionPacking>,
+                         offset: usize,
+                         table: &Table<F>| {
+                            let end = offset + table.num_polys();
+                            for ((((local, local_delta), next), next_delta), column) in scratch
+                                .local_point[offset..end]
+                                .iter_mut()
+                                .zip(scratch.local_diff[offset..end].iter_mut())
+                                .zip(scratch.next_point[offset..end].iter_mut())
+                                .zip(scratch.next_diff[offset..end].iter_mut())
+                                .zip(table.iter_polys())
+                            {
+                                let local_lo =
+                                    *F::Packing::from_slice(&column[s..s + packing_width]);
+                                let local_hi = *F::Packing::from_slice(
+                                    &column[s + scalar_half..s + scalar_half + packing_width],
+                                );
+                                *local = local_lo;
+                                *local_delta = local_hi - local_lo;
 
-                            let next_lo =
-                                *F::Packing::from_slice(&column[s + 1..s + 1 + packing_width]);
-                            let next_hi_start = s + scalar_half + 1;
-                            let next_hi = if next_hi_start + packing_width <= height {
-                                *F::Packing::from_slice(
-                                    &column[next_hi_start..next_hi_start + packing_width],
-                                )
-                            } else {
-                                F::Packing::from_fn(|lane| {
-                                    let row = next_hi_start + lane;
-                                    if row < height {
-                                        column[row]
-                                    } else {
-                                        column[height - 1]
-                                    }
-                                })
-                            };
-                            *next = next_lo;
-                            *next_delta = next_hi - next_lo;
-                        }
-                    };
+                                let next_lo =
+                                    *F::Packing::from_slice(&column[s + 1..s + 1 + packing_width]);
+                                let next_hi_start = s + scalar_half + 1;
+                                let next_hi = if next_hi_start + packing_width <= height {
+                                    *F::Packing::from_slice(
+                                        &column[next_hi_start..next_hi_start + packing_width],
+                                    )
+                                } else {
+                                    F::Packing::from_fn(|lane| {
+                                        let row = next_hi_start + lane;
+                                        if row < height {
+                                            column[row]
+                                        } else {
+                                            column[height - 1]
+                                        }
+                                    })
+                                };
+                                *next = next_lo;
+                                *next_delta = next_hi - next_lo;
+                            }
+                        };
                     for slot in &self.slots {
                         fill_columns(&mut scratch, slot.main_offset, self.tables[slot.air_index]);
                         if let Some(preprocessed) = self.preprocessed[slot.air_index] {
@@ -973,10 +1008,7 @@ where
                                     )
                                     .with_alpha_powers(&self.alpha_powers[slot.air_index])
                                     .eval_air(self.airs[slot.air_index]);
-                                    evals[node - 1] += dot_product::<EF, _, _>(
-                                        eq_suffix.iter().copied(),
-                                        EF::ExtensionPacking::to_ext_iter([g]),
-                                    );
+                                    evals[node - 1] += eq_suffix * g;
                                 }
                             });
                     }
@@ -984,14 +1016,12 @@ where
                     scratch
                 },
                 |mut lhs, rhs| {
-                    lhs.air_evals
-                        .iter_mut()
-                        .zip(rhs.air_evals)
-                        .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
+                    lhs.add_air_evals(rhs);
                     lhs
                 },
             )
             .air_evals;
+        let air_evals = reduce_air_evals::<F, EF>(air_evals);
         let mut out = EF::zero_vec(degree);
         let tau = self.tau.as_slice()[0];
         for group in &mut self.degree_groups {
@@ -1483,13 +1513,14 @@ where
             .enumerate()
             .par_fold_reduce(
                 || {
-                    PackedScratch::<PackedExt<F, EF::ExtensionPacking>, EF>::new(
+                    PackedScratch::<PackedExt<F, EF::ExtensionPacking>, EF::ExtensionPacking>::new(
                         &air_degrees,
                         width,
                     )
                 },
                 |mut scratch, (packed_s, eq_suffix)| {
                     let s = packed_s * packing_width;
+                    let eq_suffix = EF::ExtensionPacking::from_ext_slice(eq_suffix);
 
                     for (((((local, local_delta), next), next_delta), column), next_tail) in scratch
                         .local_point
@@ -1564,10 +1595,7 @@ where
                                     ..slot.periodic_offset + slot.periodic_width],
                             )
                             .eval_air(self.airs[slot.air_index]);
-                            evals[0] += dot_product::<EF, _, _>(
-                                eq_suffix.iter().copied(),
-                                EF::ExtensionPacking::to_ext_iter([g.0]),
-                            );
+                            evals[0] += eq_suffix * g.0;
                             debug_assert!(slot.degree > 0);
                         });
 
@@ -1603,10 +1631,7 @@ where
                                             ..slot.periodic_offset + slot.periodic_width],
                                     )
                                     .eval_air(self.airs[slot.air_index]);
-                                    evals[node - 1] += dot_product::<EF, _, _>(
-                                        eq_suffix.iter().copied(),
-                                        EF::ExtensionPacking::to_ext_iter([g.0]),
-                                    );
+                                    evals[node - 1] += eq_suffix * g.0;
                                 }
                             });
                     }
@@ -1614,14 +1639,12 @@ where
                     scratch
                 },
                 |mut lhs, rhs| {
-                    lhs.air_evals
-                        .iter_mut()
-                        .zip(rhs.air_evals)
-                        .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
+                    lhs.add_air_evals(rhs);
                     lhs
                 },
             )
             .air_evals;
+        let air_evals = reduce_air_evals::<F, EF>(air_evals);
         let mut out = EF::zero_vec(degree);
         let tau = self.tau.as_slice()[self.round];
         for group in &mut self.degree_groups {
