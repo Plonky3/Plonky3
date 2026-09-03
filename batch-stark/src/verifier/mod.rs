@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 pub use data::VerifierData;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_air::{Air, BaseAir};
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
@@ -28,6 +28,15 @@ use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof};
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::transcript::BatchTranscript;
 
+/// What [`commitments_with_opening_points`] builds: the PCS opening argument itself — one
+/// [`CommitmentWithOpeningPoints`] per commitment round — paired with each instance's
+/// quotient-chunk domains, a byproduct of the same construction that the caller needs for its
+/// own post-opening constraint check.
+pub type OpeningArgumentWithQuotientDomains<SC> = (
+    Vec<CommitmentWithOpeningPoints<Challenge<SC>, Commitment<SC>, Domain<SC>>>,
+    Vec<Vec<Domain<SC>>>,
+);
+
 /// Builds the `commitments_with_opening_points` a batch-STARK proof's PCS opening argument is
 /// checked against: one round per commitment (an optional ZK-randomization round, the trace
 /// round, the quotient-chunks round, an optional preprocessed round, an optional permutation
@@ -45,14 +54,40 @@ use crate::transcript::BatchTranscript;
 /// # Arguments
 ///
 /// - `zeta` — the out-of-domain point, already sampled from the transcript.
-/// - `ext_domain_sizes`, `preprocessed_widths`, `log_num_quotient_chunks`,
-///   `num_quotient_chunks` — per-instance, derived exactly as `verify_batch`'s own precompute
-///   loop computes them.
+/// - `degree_bits` — per-instance extended trace degree bits, straight from the proof. Both
+///   the trace and quotient domain sizes are derived from these through the same
+///   [`validate_degree_bits`] gate `verify_batch` applies.
+/// - `preprocessed_widths`, `log_num_quotient_chunks` — per-instance, derived exactly as
+///   `verify_batch`'s own precompute loop computes them. The committed chunk count follows
+///   from `log_num_quotient_chunks` and the ZK setting, so it is derived here rather than
+///   passed in.
 ///
-/// Performs no transcript interaction and no shape validation beyond what the construction
-/// itself requires (e.g. matching quotient-chunk counts): a caller needing `verify_batch`'s
-/// full set of proof-shape checks should either call `verify_batch` directly or replicate the
-/// checks it needs itself.
+/// Performs no transcript interaction.
+///
+/// # Omitted checks
+///
+/// Only the shape checks this construction itself needs are performed (degree-bit bounds,
+/// quotient-domain sizes, matching quotient-chunk counts, preprocessed metadata agreement).
+/// A caller assembling the opening argument itself inherits the rest of `verify_batch`'s
+/// proof-shape validation, none of which happens here:
+///
+/// - per-instance counts agreeing across `airs`, opened values, public values, degree bits,
+///   lookup terminals and lookups ([`InvalidProofShapeError::InstanceCountMismatch`]);
+/// - presence of the ZK randomization commitment and its per-instance opened values matching
+///   [`Pcs::ZK`], and each random opening's dimension;
+/// - public-value counts, trace-width agreement (local and next) and the
+///   `main_next_row_columns` presence rule;
+/// - quotient-chunk counts and per-chunk dimensions;
+/// - preprocessed presence/width agreement against `CommonData` and the
+///   `preprocessed_next_row_columns` presence rule;
+/// - one lookup terminal per AIR with lookups and none otherwise, plus the lookup-commitment
+///   consistency check (`commitments.permutation.is_some()` iff some AIR has lookups);
+/// - [`check_multiplicity_height_bound`], the LogUp bound that stops multiplicities wrapping
+///   modulo `p`;
+/// - [`check_periodic_column_lengths`].
+///
+/// A caller needing all of them should either call `verify_batch` directly or replicate the
+/// ones it needs.
 ///
 /// # Returns
 ///
@@ -60,7 +95,6 @@ use crate::transcript::BatchTranscript;
 /// instance's quotient-chunk domains, a byproduct of this construction that `verify_batch`
 /// also needs for its own post-opening constraint check.
 #[expect(clippy::too_many_arguments)]
-#[expect(clippy::type_complexity)]
 pub fn commitments_with_opening_points<SC, A>(
     config: &SC,
     airs: &[A],
@@ -69,37 +103,36 @@ pub fn commitments_with_opening_points<SC, A>(
     opened_values: &BatchOpenedValues<Challenge<SC>>,
     common: &CommonData<SC>,
     degree_bits: &[usize],
-    ext_domain_sizes: &[usize],
     preprocessed_widths: &[usize],
     log_num_quotient_chunks: &[usize],
-    num_quotient_chunks: &[usize],
-) -> Result<
-    (
-        Vec<(
-            Commitment<SC>,
-            Vec<(Domain<SC>, Vec<(Challenge<SC>, Vec<Challenge<SC>>)>)>,
-        )>,
-        Vec<Vec<Domain<SC>>>,
-    ),
-    BatchVerificationError<PcsError<SC>>,
->
+) -> Result<OpeningArgumentWithQuotientDomains<SC>, BatchVerificationError<PcsError<SC>>>
 where
     SC: SGC,
     A: BaseAir<Val<SC>>,
 {
     let pcs = config.pcs();
+    let is_zk = config.is_zk();
     let mut coms_to_verify = vec![];
 
-    // Trace round: per instance, open at zeta and zeta_next
-    let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = ext_domain_sizes
+    // Trace round: per instance, open at zeta and zeta_next.
+    //
+    // The extended domain size is `1 << degree_bits[i]`, gated by `validate_degree_bits` so
+    // that an out-of-range degree is an error rather than an overflow, and so that a caller
+    // cannot pass a domain size disagreeing with the degree bits it also passed.
+    let trace_domain_pairs = degree_bits
         .iter()
-        .map(|&ext_size| {
-            (
-                pcs.natural_domain_for_degree(ext_size >> config.is_zk()),
-                pcs.natural_domain_for_degree(ext_size),
-            )
+        .enumerate()
+        .map(|(i, &ext_db)| {
+            let (_, ext_domain_size) =
+                validate_degree_bits(Some(i), ext_db, is_zk, pcs.log_max_lde_height())?;
+            Ok((
+                pcs.natural_domain_for_degree(ext_domain_size >> is_zk),
+                pcs.natural_domain_for_degree(ext_domain_size),
+            ))
         })
-        .unzip();
+        .collect::<Result<Vec<_>, InvalidProofShapeError>>()?;
+    let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) =
+        trace_domain_pairs.into_iter().unzip();
 
     if let Some(random_commit) = &commitments.random {
         coms_to_verify.push((
@@ -149,7 +182,14 @@ where
         .map(|i| {
             let ext_db = degree_bits[i];
             let log_num_chunks = log_num_quotient_chunks[i];
-            let n_chunks = num_quotient_chunks[i];
+            // The committed chunk count, ZK randomization included.
+            let (_, n_chunks) = checked_log_size_sum(log_num_chunks, is_zk).ok_or_else(|| {
+                InvalidProofShapeError::QuotientDomainTooLarge {
+                    air: Some(i),
+                    maximum: usize::BITS as usize - 1,
+                    got: log_num_chunks.saturating_add(is_zk),
+                }
+            })?;
             let ext_dom = ext_trace_domains[i];
             let (quotient_domain_log_size, quotient_domain_size) =
                 checked_log_size_sum(ext_db, log_num_chunks).ok_or_else(|| {
@@ -175,7 +215,7 @@ where
         .iter()
         .map(|doms| {
             doms.iter()
-                .map(|dom| pcs.natural_domain_for_degree(dom.size() << (config.is_zk())))
+                .map(|dom| pcs.natural_domain_for_degree(dom.size() << is_zk))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -558,10 +598,8 @@ where
         opened_values,
         common,
         degree_bits,
-        &ext_domain_sizes,
         &preprocessed_widths,
         &log_num_quotient_chunks,
-        &num_quotient_chunks,
     )?;
 
     // Verify all openings via PCS.

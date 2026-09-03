@@ -76,19 +76,10 @@ pub type ProverDataWithOpeningPoints<'a, EF, ProverData> = (
     >,
 );
 
-/// A joint commitment to a collection of matrices and their opening at
-/// a collection of points.
-pub type CommitmentWithOpeningPoints<Challenge, Commitment, Domain> = (
-    Commitment,
-    // For each matrix in the commitment:
-    Vec<(
-        // The domain of the matrix
-        Domain,
-        // A vector of (point, claimed_evaluation) pairs.
-        // The claimed evaluation count per point is also the matrix width used by verification.
-        Vec<(Challenge, Vec<Challenge>)>,
-    )>,
-);
+// Re-exported so `p3_fri::CommitmentWithOpeningPoints` keeps naming the shape this PCS
+// verifies against; it is defined in `p3-commit` alongside `Pcs` so crates that build an
+// opening argument without depending on FRI can name it too.
+pub use p3_commit::CommitmentWithOpeningPoints;
 
 pub struct TwoAdicFriFolding<InputProof, InputError>(pub PhantomData<(InputProof, InputError)>);
 

@@ -74,6 +74,18 @@ where
     },
     #[error("final folded height mismatch: expected {expected}, got {got}")]
     FinalFoldHeightMismatch { expected: usize, got: usize },
+    /// The arity schedule folds past the final domain size.
+    ///
+    /// Reducing `log_global_max_height` by `total_log_reduction` bits would drop below
+    /// `log_final_height`, so the schedule cannot describe a valid fold chain.
+    #[error(
+        "fold schedule reduces 2^{log_global_max_height} by {total_log_reduction} bits, past the final height 2^{log_final_height}"
+    )]
+    FoldScheduleTooLong {
+        total_log_reduction: usize,
+        log_global_max_height: usize,
+        log_final_height: usize,
+    },
     #[error(
         "unconsumed reduced openings remain after folding: next log height {next_log_height}, remaining {remaining}"
     )]
@@ -219,27 +231,16 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Every round must open every query, and each opening must carry
-    // exactly arity - 1 sibling values.
-    for (round, (opening, &log_arity)) in
-        izip!(&proof.commit_phase_openings, &log_arities).enumerate()
-    {
+    // Every round must open exactly the sampled queries: no fewer, and no unopened extras
+    // riding along in the transcript. The per-query sibling counts are checked by
+    // `fold_query` itself, which is the code that indexes them.
+    for (round, opening) in proof.commit_phase_openings.iter().enumerate() {
         if opening.sibling_values.len() != params.num_queries {
             return Err(FriError::CommitPhaseQueryCountMismatch {
                 round,
                 expected: params.num_queries,
                 got: opening.sibling_values.len(),
             });
-        }
-        let arity = 1 << log_arity;
-        for siblings in &opening.sibling_values {
-            if siblings.len() != arity - 1 {
-                return Err(FriError::SiblingValuesLengthMismatch {
-                    round,
-                    expected: arity - 1,
-                    got: siblings.len(),
-                });
-            }
         }
     }
 
@@ -452,6 +453,26 @@ where
 /// With variable arity, each round may fold by a different factor determined by the
 /// `log_arity` field in the opening.
 ///
+/// # Security
+///
+/// The returned value is **not authenticated**. It is the folded evaluation implied by
+/// the rows this pass reconstructed from proof data, and it only becomes meaningful once
+/// the caller authenticates those rows against `commit_phase_commits` — the
+/// [`Mmcs::verify_multi_batch`] loop at the end of [`verify_fri`]. On its own it carries no
+/// guarantee that the prover ever committed to the codeword it was folded from.
+///
+/// All shape obligations on proof-controlled input are checked here, so the function is
+/// total on well-typed input: every round must open this `query` with exactly `arity - 1`
+/// siblings, and the arity schedule must not fold past `log_final_height`. Two obligations
+/// remain the caller's:
+///
+/// - `log_arities` must be derived through [`CommitPhaseMultiStep::checked_log_arity`], which
+///   is what bounds each proof-supplied arity to `1..=max_log_arity`. Nothing here can
+///   recover `max_log_arity`, so an unbounded schedule is accepted as long as its lengths
+///   line up.
+/// - `group_indices_by_round` and `rows_by_round` must each be pre-sized to
+///   `commit_phase_commits.len()` entries; this pass indexes them by round.
+///
 /// Arguments:
 /// - `folding`: The FRI folding scheme used by the prover.
 /// - `query`: The position of this query within the sampled batch.
@@ -487,6 +508,43 @@ where
     M: Mmcs<EF>,
     Folding: FriFoldingStrategy<F, EF>,
 {
+    // Shape checks on the proof-controlled openings, before any indexing into them.
+    // `verify_fri` establishes these for every query up front; a caller replaying a single
+    // query cannot be assumed to have, and the row reconstruction below indexes
+    // `sibling_values[query]` and `siblings[..arity - 1]` directly.
+    //
+    // The cost is `O(rounds)` integer comparisons guarding `O(rounds * arity)` field
+    // operations, so it is noise on the verify path too.
+    for (round, (opening, &log_arity)) in izip!(commit_phase_openings, log_arities).enumerate() {
+        let Some(siblings) = opening.sibling_values.get(query) else {
+            return Err(FriError::CommitPhaseQueryCountMismatch {
+                round,
+                expected: query + 1,
+                got: opening.sibling_values.len(),
+            });
+        };
+        let arity = 1 << log_arity;
+        if siblings.len() != arity - 1 {
+            return Err(FriError::SiblingValuesLengthMismatch {
+                round,
+                expected: arity - 1,
+                got: siblings.len(),
+            });
+        }
+    }
+
+    // The arity schedule is proof-controlled, so it may fold past the final height, which
+    // would underflow `log_current_height - log_arity` below. Under-folding is caught by the
+    // terminal height check instead, which reports the height actually reached.
+    let total_log_reduction: usize = log_arities.iter().sum();
+    if total_log_reduction > log_global_max_height.saturating_sub(log_final_height) {
+        return Err(FriError::FoldScheduleTooLong {
+            total_log_reduction,
+            log_global_max_height,
+            log_final_height,
+        });
+    }
+
     let mut ro_iter = reduced_openings.into_iter().peekable();
 
     // These checks are not essential to security,

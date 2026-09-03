@@ -195,6 +195,10 @@ where
             airs,
             trace_ext_degree_bits,
             &vec![0; airs.len()],
+            // Every override is zero, so packing cannot move the quotient bucket (the
+            // `debug_assert_eq!` below still pins that) and the blowup ceiling is
+            // unreachable from here.
+            usize::MAX,
         )
     }
 
@@ -203,13 +207,28 @@ where
     /// instead of only the free (quotient-chunk-preserving) budget. A `0` override reproduces
     /// [`Self::from_airs_and_degrees`] exactly. A caller raising an override past the free
     /// ceiling deliberately spends more quotient chunks on that instance to commit fewer aux
-    /// columns — the resulting chunk count must still fit the PCS's blowup
-    /// (`num_quotient_chunks <= 1 << log_blowup`), which this function does not itself enforce.
+    /// columns.
+    ///
+    /// # Arguments
+    ///
+    /// * `lookup_budget_overrides` - Per-AIR fraction-pin degree floors; one entry per AIR.
+    /// * `log_blowup` - The PCS's `log_blowup`. A rate-`2^-log_blowup` low-degree test only
+    ///   certifies degree `< |domain| * 2^-log_blowup`, so a quotient split into more than
+    ///   `2^log_blowup` chunks asks FRI to certify a degree it has no rate budget for. Any
+    ///   instance whose override raises the chunk count past that ceiling panics here.
+    ///
+    /// # Panics
+    ///
+    /// If an override raises an instance's quotient chunk count past `1 << log_blowup`. This
+    /// is a hard [`assert!`] rather than a `debug_assert!`: overrides are a rare, explicit,
+    /// caller-side choice, so the recomputation costs nothing on the default path, and a
+    /// release build must not silently emit a rate-violating proof.
     pub fn from_airs_and_degrees_with_lookup_budgets<A>(
         config: &SC,
         airs: &[A],
         trace_ext_degree_bits: &[usize],
         lookup_budget_overrides: &[usize],
+        log_blowup: usize,
     ) -> Self
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
@@ -297,7 +316,8 @@ where
             .iter()
             .zip(trace_ext_degree_bits.iter())
             .zip(lookup_budget_overrides.iter())
-            .map(|((air, &ext_db), &override_budget)| {
+            .enumerate()
+            .map(|(i, ((air, &ext_db), &override_budget))| {
                 // Base trace length `N` (before any ZK extension), matching what the
                 // prover and verifier feed the degree model for this instance.
                 let trace_len = 1usize << (ext_db - is_zk);
@@ -337,10 +357,31 @@ where
                         log_chunks,
                         "same-bus packing must preserve the quotient chunk count when no override is set"
                     );
+                } else {
+                    // A deliberate override is allowed to raise the bucket, but only within the
+                    // PCS's rate budget: the low-degree test certifies degree
+                    // `< |domain| * 2^-log_blowup`, so a quotient split into more than
+                    // `2^log_blowup` chunks has no soundness margin left. This is the bound
+                    // `StarkSecurityParams::new` states as a buildability condition; without
+                    // this check nothing else on the prove or verify path detects a violation.
+                    let packed_log_chunks =
+                        get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                            air,
+                            AirLayout::from_air(air),
+                            trace_len,
+                            &packed,
+                            is_zk,
+                            &lookup_gadget,
+                        );
+                    // The committed chunk count is `2^(log_chunks + is_zk)`.
+                    let log_num_chunks = packed_log_chunks + is_zk;
+                    assert!(
+                        log_num_chunks <= log_blowup,
+                        "instance {i}: lookup-budget override raised the quotient bucket to \
+                         2^{log_num_chunks} chunks, past the PCS blowup 2^{log_blowup}; \
+                         the prover cannot commit a quotient"
+                    );
                 }
-                // A deliberate override is allowed to raise the bucket; the caller is
-                // responsible for keeping the resulting chunk count within the PCS's blowup
-                // and for re-deriving the AIR layout from `packed`, not `unpacked`.
 
                 packed
             })
