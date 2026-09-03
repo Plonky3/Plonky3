@@ -190,6 +190,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::PolyBasisNtt;
+    use crate::lch::LchNtt;
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
 
@@ -266,6 +267,36 @@ mod tests {
                 .shifted_lde_batch(coeffs.clone(), added, shift);
             prop_assert_eq!(&lde, &naive);
             prop_assert_eq!(&lde.values[..coeffs.values.len()], &coeffs.values[..]);
+        }
+    }
+
+    /// A height whose stages take more than one butterfly task, so a task seeds its twiddle at
+    /// a block index of its own rather than at zero. The oracle tests all sit below that
+    /// height, so `LchNtt` stands in for the oracle here, itself held to an independent
+    /// twiddle walk at this same height by `lch_matches_a_twiddle_walk_across_several_tasks`.
+    #[test]
+    fn poly_basis_matches_the_tower_across_several_tasks() {
+        const LOG_N: usize = 12;
+        let poly = PolyBasisNtt::default();
+        let tower = LchNtt::<BinaryField128>::default();
+        for width in [1usize, 3] {
+            for shift_bits in [0u64, 0x1234_5678_9abc_def0] {
+                let coeffs = matrix(LOG_N, width, 5);
+                let shift =
+                    BinaryField128::from_le_byte_iter(shift_bits.to_le_bytes().into_iter().cycle());
+
+                let evals = tower.shifted_ntt_batch(coeffs.clone(), shift);
+                assert_eq!(
+                    poly.shifted_ntt_batch(coeffs.clone(), shift),
+                    evals,
+                    "ntt width={width} shift={shift_bits:#x}"
+                );
+                assert_eq!(
+                    poly.shifted_intt_batch(evals, shift),
+                    coeffs,
+                    "intt width={width} shift={shift_bits:#x}"
+                );
+            }
         }
     }
 

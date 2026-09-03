@@ -152,10 +152,13 @@ mod tests {
     use p3_binary_field::{
         BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, TowerLevel,
     };
+    use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
     use super::LchNtt;
+    use crate::domain::{domain_point, subspace_polynomial};
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
 
@@ -177,6 +180,26 @@ mod tests {
                 .collect(),
             width,
         )
+    }
+
+    /// The forward transform with every twiddle walked out from its own block index, in one
+    /// serial pass and with no zero shortcut.
+    fn twiddle_walk_ntt<F: TowerLevel>(mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+        let width = mat.width();
+        let log_n = log2_strict_usize(mat.height());
+        for j in (0..log_n).rev() {
+            let half = (1 << j) * width;
+            let base = subspace_polynomial::<F>(j, shift);
+            for (blk, block) in mat.values.chunks_mut(half << 1).enumerate() {
+                let t = base + domain_point::<F>(blk << 1);
+                let (lo, hi) = block.split_at_mut(half);
+                for (u, v) in lo.iter_mut().zip(hi) {
+                    *u += t * *v;
+                    *v += *u;
+                }
+            }
+        }
+        mat
     }
 
     /// `LchNtt` agrees with the oracle on a random matrix and a random coset.
@@ -275,6 +298,38 @@ mod tests {
                 .shifted_lde_batch(coeffs.clone(), added, shift);
             prop_assert_eq!(&lde, &naive);
             prop_assert_eq!(&lde.values[..coeffs.values.len()], &coeffs.values[..]);
+        }
+    }
+
+    /// A height whose stages take more than one butterfly task, so a task seeds its twiddle at
+    /// a block index of its own rather than at zero.
+    ///
+    /// The oracle tests all sit below that height, and `lch_round_trips` is blind to the
+    /// schedule: both directions read the same twiddles, so they invert each other whatever
+    /// those twiddles are. Only a comparison against an independent walk pins them.
+    #[test]
+    fn lch_matches_a_twiddle_walk_across_several_tasks() {
+        const LOG_N: usize = 12;
+        let ntt = LchNtt::<BinaryField128>::default();
+        for width in [1usize, 3] {
+            for shift_bits in [0u64, 0x1234_5678_9abc_def0] {
+                let coeffs = matrix::<BinaryField128>(LOG_N, width, 5);
+                let shift = sample::<BinaryField128>(shift_bits);
+
+                let walked = twiddle_walk_ntt::<BinaryField128>(coeffs.clone(), shift);
+                assert_eq!(
+                    ntt.shifted_ntt_batch(coeffs.clone(), shift),
+                    walked,
+                    "ntt width={width} shift={shift_bits:#x}"
+                );
+                // The inverse has its own copy of the schedule, and undoing a codeword the walk
+                // produced is what holds that copy to the same twiddles.
+                assert_eq!(
+                    ntt.shifted_intt_batch(walked, shift),
+                    coeffs,
+                    "intt width={width} shift={shift_bits:#x}"
+                );
+            }
         }
     }
 
