@@ -2,8 +2,8 @@
 //!
 //! Provides the core operations over coefficient-form polynomials needed by the
 //! STIR prover and verifier: Horner evaluation, synthetic division, polynomial
-//! addition, Newton interpolation, shake polynomial construction, and the
-//! verifier-side shake consistency check.
+//! addition, Newton interpolation, and the verifier-side check that the prover's
+//! answer polynomial interpolates the round's claimed values.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -348,27 +348,6 @@ where
     ood_points
 }
 
-/// Compute the shake polynomial for a set of evaluation points.
-///
-/// Given an answer polynomial `ans(X)` and the set `P = {y_1, ..., y_m}` of evaluation
-/// points where `ans(y_i)` is known, the **shake polynomial** is defined as:
-///
-/// ```text
-/// S(X) = sum_{y in P} (ans(X) - ans(y)) / (X - y)
-/// ```
-///
-/// Each term `(ans(X) - ans(y)) / (X - y)` is the result of synthetic division of
-/// `ans(X) - ans(y)` (a polynomial with a known root at `y`) by `(X - y)`.
-///
-/// The shake polynomial enables the verifier to check that `ans` correctly interpolates
-/// all `(y_i, ans(y_i))` pairs without recomputing a full Lagrange interpolation.
-pub fn compute_shake_polynomial<F: Field>(ans: &[F], points: &[F]) -> Vec<F> {
-    points
-        .iter()
-        .map(|&y| divide_by_linear(ans, y).0)
-        .fold(vec![], |acc, q| add_polys(&acc, &q))
-}
-
 /// Interpolate a polynomial through the given `(points, values)` pairs.
 ///
 /// Uses Newton's divided-difference method.
@@ -451,44 +430,68 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
     coeffs
 }
 
-/// Verify shake polynomial consistency at a random point `rho`.
+/// Verify at a random point `rho` that `ans` interpolates `(points, values)`.
 ///
-/// Checks that `S(rho) == sum_{y in P} (ans(rho) - val_y) / (rho - y)` using batch inversion.
+/// `ans` is compared against the barycentric form of the unique polynomial `I` of degree
+/// `< n` through the `n` pairs `(y_i, v_i)`:
 ///
-/// Returns `true` if the check passes.
-pub fn check_shake_consistency<F: Field>(
-    ans: &[F],
-    shake: &[F],
-    points: &[F],
-    values: &[F],
-    rho: F,
-) -> bool {
+/// ```text
+/// I(rho) = (sum_i w_i v_i / (rho - y_i)) / (sum_i w_i / (rho - y_i)),
+/// w_i = 1 / prod_{j != i} (y_i - y_j)
+/// ```
+///
+/// The identity `ans(rho) == I(rho)` is checked cross-multiplied, so the barycentric
+/// denominator is never inverted. That denominator equals `1 / prod_i (rho - y_i)` — the
+/// Lagrange basis sums to one — and so is non-zero for every `rho` outside the node set,
+/// which is exactly what the rejection below enforces.
+///
+/// Returns `true` if the check passes. Both `ans` (by the caller's length bound) and `I` have
+/// degree `< n`, so a caller that binds `ans` and the node set into the transcript before
+/// drawing `rho` gets soundness error at most `(n - 1) / |F|`.
+pub fn check_ans_interpolates<F: Field>(ans: &[F], points: &[F], values: &[F], rho: F) -> bool {
     if points.len() != values.len() {
         return false;
     }
 
-    // If rho coincides with one of the evaluation points the denominator (rho - y_i) would be
-    // zero.  This is negligible for a random rho but we handle it defensively: the shake identity
-    // does not apply at such a degenerate rho, so we report failure.
+    // At an interpolation node the barycentric denominators vanish and the identity says
+    // nothing, so report failure. A `rho` drawn after `ans` is bound lands there only with
+    // negligible probability.
     if points.contains(&rho) {
         return false;
     }
 
-    let ans_rho = eval_poly(ans, rho);
-    let shake_rho = eval_poly(shake, rho);
-
-    // Compute (rho - y_i) for all i and batch-invert.
-    let diffs: Vec<F> = points.iter().map(|&y| rho - y).collect();
-    let diff_invs = batch_multiplicative_inverse(&diffs);
-
-    // sum_i (ans(rho) - val_i) / (rho - y_i)
-    let expected: F = values
+    let n = points.len();
+    // The barycentric weight denominators `prod_{j != i} (y_i - y_j)` followed by the node
+    // distances `rho - y_i`, inverted in a single batch.
+    let mut denominators: Vec<F> = points
         .iter()
-        .zip(diff_invs.iter())
-        .map(|(&val, &inv)| (ans_rho - val) * inv)
-        .sum();
+        .enumerate()
+        .map(|(i, &y)| {
+            points
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, &z)| y - z)
+                .product()
+        })
+        .collect();
+    denominators.extend(points.iter().map(|&y| rho - y));
+    // A vanishing weight denominator means two nodes coincide, so no interpolant exists.
+    if denominators[..n].contains(&F::ZERO) {
+        return false;
+    }
+    let inverses = batch_multiplicative_inverse(&denominators);
+    let (weights, diff_invs) = inverses.split_at(n);
 
-    shake_rho == expected
+    let mut numerator = F::ZERO;
+    let mut denominator = F::ZERO;
+    for ((&w, &diff_inv), &v) in weights.iter().zip(diff_invs).zip(values) {
+        let term = w * diff_inv;
+        numerator += term * v;
+        denominator += term;
+    }
+
+    eval_poly(ans, rho) * denominator == numerator
 }
 
 /// Fold an entire natural-order codeword of size `N` by arity `k = 2^log_arity`.
@@ -1042,39 +1045,77 @@ mod tests {
     }
 
     #[test]
-    fn test_shake_polynomial_consistency() {
-        // Build ans poly through some points, compute shake, verify consistency.
+    fn test_check_ans_interpolates_accepts_the_interpolant() {
         let pts = vec![F::from_u64(1), F::from_u64(2), F::from_u64(3)];
         let vals = vec![F::from_u64(4), F::from_u64(9), F::from_u64(16)];
 
         let ans = interpolate_poly(&pts, &vals);
-        let shake = compute_shake_polynomial(&ans, &pts);
 
-        // Check at a random point (use a field element not in pts).
+        // Check at a field element outside `pts`.
         let rho = F::from_u64(7);
         assert!(
-            check_shake_consistency(&ans, &shake, &pts, &vals, rho),
-            "shake consistency should pass"
+            check_ans_interpolates(&ans, &pts, &vals, rho),
+            "the interpolant must satisfy the barycentric identity"
         );
     }
 
     #[test]
-    fn test_shake_consistency_fails_on_wrong_ans() {
+    fn test_check_ans_interpolates_rejects_a_corrupted_answer() {
         let pts = vec![F::from_u64(1), F::from_u64(2)];
         let vals = vec![F::from_u64(4), F::from_u64(9)];
 
-        let ans = interpolate_poly(&pts, &vals);
-        let shake = compute_shake_polynomial(&ans, &pts);
-
-        // Corrupt ans.
-        let mut bad_ans = ans;
+        let mut bad_ans = interpolate_poly(&pts, &vals);
         bad_ans[0] += F::ONE;
 
         let rho = F::from_u64(5);
         assert!(
-            !check_shake_consistency(&bad_ans, &shake, &pts, &vals, rho),
-            "shake consistency should fail on bad ans"
+            !check_ans_interpolates(&bad_ans, &pts, &vals, rho),
+            "a shifted answer polynomial must fail the identity"
         );
+    }
+
+    #[test]
+    fn test_check_ans_interpolates_rejects_a_perturbed_value_set() {
+        // The prover's `ans` interpolates the honest values; the verifier reconstructs the
+        // interpolant from the values it derived itself, so any disagreement must be caught.
+        let pts = vec![F::from_u64(1), F::from_u64(2), F::from_u64(3)];
+        let vals = vec![F::from_u64(4), F::from_u64(9), F::from_u64(16)];
+        let ans = interpolate_poly(&pts, &vals);
+
+        let rho = F::from_u64(7);
+        for i in 0..vals.len() {
+            let mut perturbed = vals.clone();
+            perturbed[i] += F::ONE;
+            assert!(
+                !check_ans_interpolates(&ans, &pts, &perturbed, rho),
+                "perturbing value {i} must fail the identity"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_ans_interpolates_rejects_degenerate_inputs() {
+        let pts = vec![F::from_u64(1), F::from_u64(2)];
+        let vals = vec![F::from_u64(4), F::from_u64(9)];
+        let ans = interpolate_poly(&pts, &vals);
+
+        // `rho` on a node leaves the barycentric denominators undefined.
+        assert!(!check_ans_interpolates(&ans, &pts, &vals, pts[0]));
+        // Mismatched lengths pin no interpolation problem at all.
+        assert!(!check_ans_interpolates(
+            &ans,
+            &pts,
+            &vals[..1],
+            F::from_u64(5)
+        ));
+        // Repeated nodes leave the barycentric weights undefined.
+        let dup_pts = vec![F::from_u64(1), F::from_u64(1)];
+        assert!(!check_ans_interpolates(
+            &ans,
+            &dup_pts,
+            &vals,
+            F::from_u64(5)
+        ));
     }
 
     #[test]

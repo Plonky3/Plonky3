@@ -4,8 +4,7 @@ use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_stir::utils::{
-    add_polys, check_shake_consistency, compute_shake_polynomial, divide_by_linear, eval_poly,
-    interpolate_poly,
+    add_polys, check_ans_interpolates, divide_by_linear, eval_poly, interpolate_poly,
 };
 
 type F = BabyBear;
@@ -166,45 +165,29 @@ fn test_interpolate_poly_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// compute_shake_polynomial + check_shake_consistency
+// check_ans_interpolates
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_shake_polynomial_degree_bound() {
-    // shake = sum_y (ans(X) - ans(y)) / (X - y); ans has degree d,
-    // each term has degree d-1, sum has degree d-1.
-    // Use extension field points for more variety.
-    let ans = vec![ef(1), ef(2), ef(3), ef(4)]; // degree-3 polynomial
-    let points = vec![ef(10), ef(20), ef(30)];
-    let shake = compute_shake_polynomial(&ans, &points);
-    // shake should be of degree <= 2 (ans degree - 1)
-    assert!(shake.len() <= 3);
-}
-
-#[test]
-fn test_shake_consistency_check() {
-    // Build ans by interpolation, compute shake, and check at a random rho.
+fn test_ans_interpolates_accepts_the_interpolant() {
     let points = vec![ef(1), ef(2), ef(3)];
     let values = vec![ef(5), ef(11), ef(23)];
     let ans = interpolate_poly(&points, &values);
-    let shake = compute_shake_polynomial(&ans, &points);
 
     // Any rho outside the points should pass.
     let rho = ef(100);
-    assert!(check_shake_consistency(&ans, &shake, &points, &values, rho));
+    assert!(check_ans_interpolates(&ans, &points, &values, rho));
 }
 
 #[test]
-fn test_shake_consistency_mismatched_lengths_returns_false() {
+fn test_ans_interpolates_mismatched_lengths_returns_false() {
     let points = vec![ef(1), ef(2), ef(3)];
     let values = vec![ef(5), ef(11), ef(23)];
     let ans = interpolate_poly(&points, &values);
-    let shake = compute_shake_polynomial(&ans, &points);
 
     let truncated_values = vec![ef(5), ef(11)];
-    assert!(!check_shake_consistency(
+    assert!(!check_ans_interpolates(
         &ans,
-        &shake,
         &points,
         &truncated_values,
         ef(100)
@@ -212,42 +195,43 @@ fn test_shake_consistency_mismatched_lengths_returns_false() {
 }
 
 #[test]
-fn test_shake_consistency_tampered_answer_fails() {
+fn test_ans_interpolates_tampered_answer_fails() {
     let points = vec![ef(1), ef(2), ef(3)];
     let values = vec![ef(5), ef(11), ef(23)];
-    let ans = interpolate_poly(&points, &values);
-    let shake = compute_shake_polynomial(&ans, &points);
+    let mut bad_ans = interpolate_poly(&points, &values);
 
-    // Tamper with the shake polynomial.
-    let mut bad_shake = shake;
-    bad_shake[0] += ef(1);
+    bad_ans[0] += ef(1);
     let rho = ef(42);
-    assert!(!check_shake_consistency(
-        &ans, &bad_shake, &points, &values, rho
-    ));
+    assert!(!check_ans_interpolates(&bad_ans, &points, &values, rho));
 }
 
 #[test]
-fn test_shake_consistency_tampered_value_fails() {
+fn test_ans_interpolates_perturbed_value_fails() {
+    // `ans` is built from the honest values, but the verifier reconstructs the interpolant
+    // from the values it derived itself, so a single perturbed value must be caught.
     let points = vec![ef(1), ef(2), ef(3)];
     let values = vec![ef(5), ef(11), ef(23)];
     let ans = interpolate_poly(&points, &values);
-    let shake = compute_shake_polynomial(&ans, &points);
 
-    // Tamper with a claimed value (so ans no longer matches).
-    let mut bad_values = values;
-    bad_values[0] = ef(999);
     let rho = ef(42);
-    // The ans was built from the original values, so the reconstructed ans from
-    // bad_values will differ → consistency check must fail.
-    let bad_ans = interpolate_poly(&points, &bad_values);
-    assert!(!check_shake_consistency(
-        &bad_ans,
-        &shake,
-        &points,
-        &bad_values,
-        rho
-    ));
+    for i in 0..values.len() {
+        let mut bad_values = values.clone();
+        bad_values[i] = ef(999);
+        assert!(
+            !check_ans_interpolates(&ans, &points, &bad_values, rho),
+            "perturbing value {i} must fail the identity"
+        );
+    }
+}
+
+#[test]
+fn test_ans_interpolates_rejects_rho_on_a_node() {
+    let points = vec![ef(1), ef(2), ef(3)];
+    let values = vec![ef(5), ef(11), ef(23)];
+    let ans = interpolate_poly(&points, &values);
+
+    // The barycentric denominators are undefined on a node, so the identity says nothing.
+    assert!(!check_ans_interpolates(&ans, &points, &values, points[1]));
 }
 
 // ---------------------------------------------------------------------------

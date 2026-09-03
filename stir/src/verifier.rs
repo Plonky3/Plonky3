@@ -14,7 +14,7 @@ use crate::config::{StirConfig, StirRoundConfig};
 use crate::error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, StirError};
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    check_shake_consistency, eval_poly, eval_poly_at_base, fold_domain_params,
+    check_ans_interpolates, eval_poly, eval_poly_at_base, fold_domain_params,
     lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points,
     vanishing_poly_from_roots,
 };
@@ -129,15 +129,13 @@ fn single_matrix_opened_values<EF>(row_evals: &[Vec<EF>]) -> Vec<Vec<&[EF]>> {
         .collect()
 }
 
-/// Reject an `Ans`/shake pair longer than the round's degree bounds allow.
+/// Reject an `Ans` polynomial longer than the round's degree bound allows.
 ///
-/// - `Ans` interpolates `max_ans_len` points, so its degree is below that.
-/// - The shake polynomial is one degree lower.
-/// - A shorter pair is legitimate: the prover may strip trailing zeros.
-fn check_ans_and_shake_lengths<EF, MmcsError, InputError>(
+/// `Ans` interpolates `max_ans_len` points, so its degree is below that. A shorter polynomial
+/// is legitimate: the prover may strip trailing zeros.
+fn check_ans_length<EF, MmcsError, InputError>(
     round: RoundLabel,
     ans_polynomial: &[EF],
-    shake_polynomial: &[EF],
     max_ans_len: usize,
 ) -> Result<(), StirError<MmcsError, InputError>> {
     if ans_polynomial.len() > max_ans_len {
@@ -145,15 +143,6 @@ fn check_ans_and_shake_lengths<EF, MmcsError, InputError>(
             round,
             maximum: max_ans_len,
             got: ans_polynomial.len(),
-        }
-        .into());
-    }
-    let max_shake_len = max_ans_len.saturating_sub(1);
-    if shake_polynomial.len() > max_shake_len {
-        return Err(ProofShapeError::ShakePolynomialTooLong {
-            round,
-            maximum: max_shake_len,
-            got: shake_polynomial.len(),
         }
         .into());
     }
@@ -574,7 +563,7 @@ where
 
     // Step 3: query-phase PoW. It protects only the immediately following combination
     // challenge and query indices; configuration soundness gives no PoW credit to the
-    // earlier OOD samples or the later shake challenge.
+    // earlier OOD samples or the later Ans challenge.
     if !challenger.check_witness(rc.pow_bits, rp.pow_witness) {
         return Err(StirError::InvalidPowWitness {
             round: RoundLabel::Round(round),
@@ -611,33 +600,22 @@ where
         &query_indices,
     )?;
 
-    // Step 4: ans + shake polynomial observation and consistency check.
+    // Step 4: ans polynomial observation and consistency check.
     let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
 
-    // Ans interpolates |all_points| values, bounding both polynomials' lengths.
+    // Ans interpolates |all_points| values, bounding its length. That bound is what makes the
+    // one-point check below bind.
     let max_ans_len = all_points.len();
-    check_ans_and_shake_lengths(
-        RoundLabel::Round(round),
-        &rp.ans_polynomial,
-        &rp.shake_polynomial,
-        max_ans_len,
-    )?;
+    check_ans_length(RoundLabel::Round(round), &rp.ans_polynomial, max_ans_len)?;
 
-    // Bind ans_poly into the transcript BEFORE rho. The shake identity is a one-point check;
-    // observing both polys first means the prover commits to Ans before learning rho.
+    // Bind ans_poly into the transcript BEFORE rho. The interpolation identity is a one-point
+    // check; observing Ans first means the prover commits to it before learning rho.
     challenger.observe_algebra_slice(&rp.ans_polynomial);
-    challenger.observe_algebra_slice(&rp.shake_polynomial);
 
     let rho: EF = challenger.sample_algebra_element();
 
-    if !check_shake_consistency(
-        &rp.ans_polynomial,
-        &rp.shake_polynomial,
-        &all_points,
-        &all_values,
-        rho,
-    ) {
-        return Err(StirError::InvalidShakeConsistency {
+    if !check_ans_interpolates(&rp.ans_polynomial, &all_points, &all_values, rho) {
+        return Err(StirError::InvalidAnsConsistency {
             round: RoundLabel::Round(round),
         });
     }
@@ -1297,7 +1275,7 @@ where
             )?;
         }
 
-        // Phase 4: per-instance ans/shake absorb, shake-check challenge, and consistency.
+        // Phase 4: per-instance ans absorb, consistency challenge, and check.
         let mut finishes: Vec<(usize, RoundVerifyOutput<F, EF>)> = Vec::with_capacity(active.len());
         for (&i, rv) in active.iter().zip(rvs) {
             let local_r = r - offset(i);
@@ -1305,25 +1283,13 @@ where
             let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
 
             let max_ans_len = all_points.len();
-            check_ans_and_shake_lengths(
-                RoundLabel::Round(local_r),
-                &rp.ans_polynomial,
-                &rp.shake_polynomial,
-                max_ans_len,
-            )?;
+            check_ans_length(RoundLabel::Round(local_r), &rp.ans_polynomial, max_ans_len)?;
 
             challenger.observe_algebra_slice(&rp.ans_polynomial);
-            challenger.observe_algebra_slice(&rp.shake_polynomial);
             let rho: EF = challenger.sample_algebra_element();
 
-            if !check_shake_consistency(
-                &rp.ans_polynomial,
-                &rp.shake_polynomial,
-                &all_points,
-                &all_values,
-                rho,
-            ) {
-                return Err(StirError::InvalidShakeConsistency {
+            if !check_ans_interpolates(&rp.ans_polynomial, &all_points, &all_values, rho) {
+                return Err(StirError::InvalidAnsConsistency {
                     round: RoundLabel::Round(local_r),
                 });
             }

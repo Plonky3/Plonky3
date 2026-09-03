@@ -503,7 +503,6 @@ mod babybear_stir {
         for (rp_a, rp_b) in proof_a.round_proofs.iter().zip(proof_b.round_proofs.iter()) {
             assert_eq!(rp_a.ood_answers, rp_b.ood_answers);
             assert_eq!(rp_a.ans_polynomial, rp_b.ans_polynomial);
-            assert_eq!(rp_a.shake_polynomial, rp_b.shake_polynomial);
             assert_eq!(
                 rp_a.query_openings.as_ref().unwrap().row_evals.len(),
                 rp_b.query_openings.as_ref().unwrap().row_evals.len()
@@ -675,36 +674,21 @@ mod babybear_stir {
         let mut p_challenger = challenger.clone();
         let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
-        // Tamper the prover-supplied answer polynomial. The shake identity at the
-        // verifier-sampled rho should catch it with overwhelming probability.
+        // Tamper the prover-supplied answer polynomial. The tampered Ans no longer
+        // interpolates the values the verifier derives for itself, so the identity at the
+        // verifier-sampled rho catches it before any later check runs.
         assert!(!proof.round_proofs[0].ans_polynomial.is_empty());
         proof.round_proofs[0].ans_polynomial[0] += EF::from(F::ONE);
 
         let mut v_challenger = challenger;
-        assert!(
-            verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err()
-        );
-    }
-
-    #[test]
-    fn test_tampered_shake_polynomial_fails() {
-        let (params, dft, challenger) = make_params(1, 2);
-        let mut rng = seeded_rng();
-        let log_degree = 8;
-        let degree = 1usize << log_degree;
-        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
-
-        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
-        let mut p_challenger = challenger.clone();
-        let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
-
-        assert!(!proof.round_proofs[0].shake_polynomial.is_empty());
-        proof.round_proofs[0].shake_polynomial[0] += EF::from(F::ONE);
-
-        let mut v_challenger = challenger;
-        assert!(
-            verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err()
-        );
+        let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger)
+            .expect_err("a tampered answer polynomial must be rejected");
+        assert!(matches!(
+            err,
+            p3_stir::StirError::InvalidAnsConsistency {
+                round: RoundLabel::Round(0)
+            }
+        ));
     }
 
     #[test]
@@ -987,22 +971,6 @@ mod babybear_stir {
             ProofShapeError::AnsPolynomialTooLong {
                 round: RoundLabel::Round(0),
                 maximum: 20,
-                got: 1024,
-            }
-        );
-    }
-
-    /// Leaves `Ans` alone: the shake bound is one degree lower and checked separately.
-    #[test]
-    fn test_overlong_shake_polynomial_rejected() {
-        let err = shape_error_after(|proof| {
-            proof.round_proofs[0].shake_polynomial.resize(1024, EF::ONE);
-        });
-        assert_eq!(
-            err,
-            ProofShapeError::ShakePolynomialTooLong {
-                round: RoundLabel::Round(0),
-                maximum: 19,
                 got: 1024,
             }
         );

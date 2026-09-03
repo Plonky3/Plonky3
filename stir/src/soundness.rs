@@ -181,7 +181,13 @@ fn combine_error_at_log_eta(
     )
 }
 
-fn shake_check_error(field_size_bits: usize, num_queries: usize, num_ood_samples: usize) -> f64 {
+/// Bits of security in the verifier's one-point check that `Ans` interpolates the round's
+/// `num_queries + num_ood_samples` claimed values.
+///
+/// `Ans` and the interpolant both have degree `< num_points`, so Schwartz–Zippel bounds the
+/// check's failure probability by `(num_points - 1) / |F|`. The `2 * num_points / |F|` charged
+/// here is a strict over-estimate of that, and so a conservative bound on the bits delivered.
+fn ans_check_error(field_size_bits: usize, num_queries: usize, num_ood_samples: usize) -> f64 {
     let num_points = (num_queries + num_ood_samples) as f64;
     field_size_bits as f64 - libm::log2(2. * num_points).max(0.)
 }
@@ -381,7 +387,7 @@ impl StirSoundness for SecurityAssumption {
     /// that automatic rather than a second value to keep in sync.
     ///
     /// Combine runs once, before the query phase's grind, so it is not PoW-eligible and
-    /// `target_bits` must be the full buffered target, as for OOD and the shake check.
+    /// `target_bits` must be the full buffered target, as for OOD and the Ans check.
     ///
     /// `CapacityBound` additionally carries Lemma 7.3's `delta < 1 - rho - 1/|L_0|` side
     /// condition, which under `delta = 1 - rho - eta` is the floor `eta >= 2/|L_0|` — the same
@@ -504,8 +510,8 @@ impl StirSoundness for SecurityAssumption {
             num_ood_samples,
             libm::log2(eta),
         );
-        let shake = shake_check_error(field_size_bits, num_queries, num_ood_samples);
-        ood.min(shake)
+        let ans_check = ans_check_error(field_size_bits, num_queries, num_ood_samples);
+        ood.min(ans_check)
     }
 
     fn stir_final_query_algebraic_bits(
@@ -676,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn query_pow_does_not_credit_ood_or_shake_checks() {
+    fn query_pow_does_not_credit_ood_or_ans_checks() {
         let cb = SecurityAssumption::CapacityBound;
         let eligible = cb.stir_query_pow_eligible_bits(124, 20, 2, 0.01, 40, 2);
         let unprotected = cb.stir_query_unprotected_bits(124, 20, 2, 0.01, 40, 2);
@@ -686,7 +692,7 @@ mod tests {
         assert_eq!(
             unprotected,
             cb.ood_error_at_log_eta(20, 2, 124, 2, libm::log2(0.01))
-                .min(shake_check_error(124, 40, 2))
+                .min(ans_check_error(124, 40, 2))
         );
     }
 

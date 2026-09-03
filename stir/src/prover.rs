@@ -22,9 +22,8 @@ use tracing::instrument;
 use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    compute_shake_polynomial, eval_poly_at_base, eval_poly_parallel, fold_codeword,
-    fold_domain_params, fold_poly_coeffs, interpolate_poly, next_domain_shift, sample_ood_points,
-    vanishing_poly_from_roots,
+    eval_poly_at_base, eval_poly_parallel, fold_codeword, fold_domain_params, fold_poly_coeffs,
+    interpolate_poly, next_domain_shift, sample_ood_points, vanishing_poly_from_roots,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -162,7 +161,7 @@ struct RoundOutput<F, EF: Field, M: Mmcs<EF>, Witness> {
 ///
 /// The phases, in order: \[grind\] `fold_and_commit` -> absorb commitment -> squeeze OOD points
 /// -> `ood_answers` -> absorb answers -> \[grind\] -> squeeze `r_comb` and query indices ->
-/// `record_queries` -> `ans_shake` -> absorb Ans/shake -> squeeze rho -> `finish`.
+/// `record_queries` -> `answer_poly` -> absorb Ans -> squeeze rho -> `finish`.
 struct RoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
     config: &'a StirConfig<F, EF, M, Challenger>,
     round: usize,
@@ -190,7 +189,6 @@ struct RoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
     seen_query_indices: Vec<usize>,
 
     ans_poly: Vec<EF>,
-    shake_poly: Vec<EF>,
     all_points: Vec<EF>,
 }
 
@@ -232,7 +230,6 @@ where
             query_answers: Vec::new(),
             seen_query_indices: Vec::new(),
             ans_poly: Vec::new(),
-            shake_poly: Vec::new(),
             all_points: Vec::new(),
         }
     }
@@ -356,10 +353,10 @@ where
         self.seen_query_indices = seen.into_iter().collect();
     }
 
-    /// Interpolate the answer polynomial and derive the shake polynomial. Both are prover
-    /// messages and must be absorbed by the caller before rho is squeezed — otherwise a
-    /// malicious prover could fit Ans to satisfy the shake identity at a known rho.
-    fn ans_shake(&mut self) -> (&[EF], &[EF]) {
+    /// Interpolate the answer polynomial. It is a prover message and must be absorbed by the
+    /// caller before rho is squeezed — otherwise a malicious prover could fit Ans to satisfy
+    /// the interpolation identity at a known rho.
+    fn answer_poly(&mut self) -> &[EF] {
         self.all_points = self
             .ood_points
             .iter()
@@ -374,8 +371,7 @@ where
             .collect();
 
         self.ans_poly = interpolate_poly(&self.all_points, &all_values);
-        self.shake_poly = compute_shake_polynomial(&self.ans_poly, &self.all_points);
-        (&self.ans_poly, &self.shake_poly)
+        &self.ans_poly
     }
 
     /// Derive the next virtual witness in coefficient form. Touches no transcript state, so it
@@ -486,7 +482,6 @@ where
             next_log_domain,
             seen_query_indices: core::mem::take(&mut self.seen_query_indices),
             ans_poly: core::mem::take(&mut self.ans_poly),
-            shake_poly: core::mem::take(&mut self.shake_poly),
         }
     }
 }
@@ -499,7 +494,6 @@ struct RoundFinish<F, EF: Field, M: Mmcs<EF>> {
     next_log_domain: usize,
     seen_query_indices: Vec<usize>,
     ans_poly: Vec<EF>,
-    shake_poly: Vec<EF>,
 }
 
 /// Prove one intermediate STIR round (Construction 5.2): fold the current oracle, sample OOD
@@ -550,7 +544,7 @@ where
     challenger.observe_algebra_slice(&ood_answers);
 
     // Step 3: query-phase PoW. It protects the immediately following combination challenge
-    // and query indices. It does not strengthen the earlier OOD samples or the later shake
+    // and query indices. It does not strengthen the earlier OOD samples or the later Ans
     // challenge, which is separated from this grind by prover-controlled messages.
     let pow_witness = challenger.grind(rc.pow_bits);
 
@@ -581,14 +575,12 @@ where
             .all(|o| o.row_evals.iter().all(|row| row.len() == arity))
     );
 
-    // Step 4: Answer polynomial, shake polynomial, and shake-check challenge.
-    let (ans_poly, shake_poly) = state.ans_shake();
+    // Step 4: Answer polynomial and its consistency challenge.
     // Bind ans_poly into the transcript BEFORE rho is sampled — otherwise a malicious prover
-    // could fit Ans to satisfy the shake identity at a known rho.
-    challenger.observe_algebra_slice(ans_poly);
-    challenger.observe_algebra_slice(shake_poly);
+    // could fit Ans to satisfy the interpolation identity at a known rho.
+    challenger.observe_algebra_slice(state.answer_poly());
 
-    // Sample and discard the shake-check challenge so the transcript state
+    // Sample and discard the Ans-consistency challenge so the transcript state
     // stays consistent with the verifier.
     let _rho: EF = challenger.sample_algebra_element();
 
@@ -603,7 +595,6 @@ where
             ood_answers,
             pow_witness,
             ans_polynomial: finish.ans_poly,
-            shake_polynomial: finish.shake_poly,
             query_openings,
         },
         next_oracle: finish.next_oracle,
@@ -1114,7 +1105,7 @@ where
             })
             .collect();
 
-        // Phase 4: per-instance answer/shake polynomial absorb and shake-check challenge.
+        // Phase 4: per-instance answer-polynomial absorb and consistency challenge.
         struct Phase4<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
             rp: RoundProver<'a, F, EF, Dft, M, Challenger>,
             commit: M::Commitment,
@@ -1126,11 +1117,7 @@ where
             .into_iter()
             .map(|p| {
                 let mut rp = p.rp;
-                let (ans, shake) = rp.ans_shake();
-                let ans = ans.to_vec();
-                let shake = shake.to_vec();
-                challenger.observe_algebra_slice(&ans);
-                challenger.observe_algebra_slice(&shake);
+                challenger.observe_algebra_slice(rp.answer_poly());
                 let _rho: EF = challenger.sample_algebra_element();
                 Phase4 {
                     rp,
@@ -1151,7 +1138,6 @@ where
                 ood_answers: p.ood_answers,
                 pow_witness,
                 ans_polynomial: finish.ans_poly,
-                shake_polynomial: finish.shake_poly,
                 query_openings: p.query_openings,
             });
             if r == offset(i) {
@@ -1429,9 +1415,9 @@ where
 /// Recover polynomial coefficients from a natural-order codeword on coset `shift * <g>`.
 ///
 /// The returned vector has length `codeword.len()`. Trailing zero coefficients are not
-/// stripped: callers downstream (`add_polys`, `codeword_from_coeffs`) either handle
-/// variable-length inputs or explicitly resize, and a content-dependent length here
-/// would make the contract brittle against future refactors.
+/// stripped: downstream callers either handle variable-length inputs or explicitly resize,
+/// and a content-dependent length here would make the contract brittle against future
+/// refactors.
 pub fn coeffs_from_codeword<F, EF, Dft>(dft: &Dft, codeword: &[EF], shift: F) -> Vec<EF>
 where
     F: TwoAdicField,

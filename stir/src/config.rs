@@ -91,7 +91,7 @@ pub struct StirParameters<M> {
     /// Fixed proof-of-work difficulty in bits applied to each Fiat-Shamir grinding step.
     ///
     /// This can reduce the algebraic target only for challenges sampled immediately after
-    /// the corresponding grind. OOD and shake-check errors receive no PoW credit.
+    /// the corresponding grind. OOD and Ans-check errors receive no PoW credit.
     pub max_pow_bits: usize,
 
     /// Merkle tree commitment scheme for codeword commitments.
@@ -154,7 +154,7 @@ pub struct StirRoundConfig<F> {
     ///
     /// Derived as `max(0, security_level − query_algebraic_bits)` and capped at
     /// `max_pow_bits`. Only the query-failure and random-combination terms are eligible:
-    /// the OOD points are sampled before this grind, while the shake challenge follows a
+    /// the OOD points are sampled before this grind, while the Ans challenge follows a
     /// later prover message, so both must meet the target without PoW credit.
     pub pow_bits: usize,
 
@@ -351,10 +351,10 @@ pub enum StirConfigError {
         max_pow_bits: usize,
     },
 
-    /// A stage's OOD/shake checks fell below the buffered target; these terms receive no
+    /// A stage's OOD/Ans checks fell below the buffered target; these terms receive no
     /// PoW credit.
     #[error(
-        "{stage} OOD/shake checks reach only {unprotected_alg:.4} bits, below the buffered \
+        "{stage} OOD/Ans checks reach only {unprotected_alg:.4} bits, below the buffered \
          target {buffered_security_level}; these challenges are not protected by the \
          query-phase PoW"
     )]
@@ -619,10 +619,10 @@ where
         // summing every algebraic failure mode across the protocol is bounded by
         // `2^{-security_level}`. Exact term count: each of the `total_folds - 1`
         // intermediate rounds has six independent terms (query tier: query
-        // failure, OOD, random-combination, shake-check; folding tier: proximity-gaps,
+        // failure, OOD, random-combination, Ans-check; folding tier: proximity-gaps,
         // sumcheck); the final stage has three (folding tier + final query failure); a
         // `Combine` bucket adds one more (Theorem 7.1's `ε_com` term, §4.5).
-        // The buffer applies to every per-event term. OOD, shake-check, and Combine must
+        // The buffer applies to every per-event term. OOD, Ans-check, and Combine must
         // reach the buffered target algebraically because the query-phase grind does not
         // protect them.
         const TERMS_PER_INTERMEDIATE_ROUND: usize = 6;
@@ -723,7 +723,7 @@ where
         };
 
         // Size eta against both classes of error: PoW-eligible folding/query terms target
-        // `pow_target_bits`, while OOD and shake terms must reach the full buffered target.
+        // `pow_target_bits`, while OOD and Ans terms must reach the full buffered target.
         // Round 0 folds by `log_starting_folding_factor` (k0), not the steady-state
         // `log_folding_factor` used from round 1 on.
         let mut final_eta = params.soundness_type.stir_initial_eta(
@@ -735,7 +735,7 @@ where
             field_size_bits,
         )?;
         // Combine (§4.5) is not PoW-eligible (it runs once, before the query phase's
-        // grind), so — like OOD and shake-check — it must reach the full buffered target
+        // grind), so — like OOD and Ans-check — it must reach the full buffered target
         // on its own. Evaluated at `log_degree`/`log_inv_rate` as they stand here: round
         // 0's own starting degree and rate, matching what Combine merges at (immediately
         // before the round-0 fold).
@@ -1544,7 +1544,7 @@ mod tests {
                     );
                     assert!(
                         unprotected_alg >= buffered - eps,
-                        "{}: OOD/shake={unprotected_alg:.4} < {buffered:.4} without PoW",
+                        "{}: OOD/Ans={unprotected_alg:.4} < {buffered:.4} without PoW",
                         label("intermediate-unprotected"),
                     );
 

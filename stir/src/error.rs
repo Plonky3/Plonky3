@@ -99,14 +99,6 @@ pub enum ProofShapeError {
         got: usize,
     },
 
-    /// The shake polynomial is `Ans`'s quotient sum, one degree below `Ans` itself.
-    #[error("{round}: shake polynomial has {got} coefficients, expected at most {maximum}")]
-    ShakePolynomialTooLong {
-        round: RoundLabel,
-        maximum: usize,
-        got: usize,
-    },
-
     /// A committed oracle is read through a Merkle multi-opening the proof must supply.
     #[error("{round}: missing query openings")]
     MissingQueryOpenings { round: RoundLabel },
@@ -251,9 +243,9 @@ pub enum StirError<MmcsError, InputError = ()> {
         source: MmcsError,
     },
 
-    /// The shake polynomial identity failed at the random evaluation point.
-    #[error("{round}: shake polynomial consistency check failed")]
-    InvalidShakeConsistency { round: RoundLabel },
+    /// `Ans` did not interpolate the round's claimed values at the random evaluation point.
+    #[error("{round}: ans polynomial consistency check failed")]
+    InvalidAnsConsistency { round: RoundLabel },
 
     /// A virtual-oracle evaluation landed in the prior round's challenge set.
     #[error("{round}, query {query}: invalid virtual-oracle query")]
@@ -305,7 +297,7 @@ impl<E, IE> StirError<E, IE> {
             Self::InvalidMmcsProof { round, source } => {
                 StirError::InvalidMmcsProof { round, source }
             }
-            Self::InvalidShakeConsistency { round } => StirError::InvalidShakeConsistency { round },
+            Self::InvalidAnsConsistency { round } => StirError::InvalidAnsConsistency { round },
             Self::InvalidRoundConsistency { round, query } => {
                 StirError::InvalidRoundConsistency { round, query }
             }
