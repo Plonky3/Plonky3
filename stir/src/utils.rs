@@ -536,40 +536,55 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
     let new_height = codeword.len() / arity;
     assert!(new_height > 0);
 
-    let mut data = codeword.to_vec();
+    if log_arity == 0 {
+        return codeword.to_vec();
+    }
+
     let mut current_beta = beta;
     let mut cur_log_domain = log_domain_size;
-
-    for _ in 0..log_arity {
-        let height = data.len() / 2;
-
-        // fold(j) = (lo + hi)/2 + beta * (lo - hi) / (2 * g^j)
-        //         = (lo + hi)/2 + (beta/2) * g_inv^j * (lo - hi)
-        //
-        // g_orig has order `2^cur_log_domain`, so g_inv = g_orig.inverse() has the same
-        // order. halve_inv_powers[j] = (1/2) * g_orig^{-j}.
-        let g_orig_inv = F::two_adic_generator(cur_log_domain).inverse();
-        let halve_inv_powers: Vec<F> = g_orig_inv
-            .shifted_powers(F::ONE.halve())
-            .take(height)
-            .collect();
-
-        data = (0..height)
-            .into_par_iter()
-            .map(|j| {
-                let lo = data[j];
-                let hi = data[j + height];
-                let hip = EF::from(halve_inv_powers[j]);
-                (lo + hi).halve() + (lo - hi) * current_beta * hip
-            })
-            .collect();
-
+    // The first pass reads the caller's slice and every later pass reads its predecessor's
+    // output, so the input is never copied.
+    let mut data = fold_pass::<F, EF>(codeword, current_beta, cur_log_domain);
+    for _ in 1..log_arity {
         current_beta = current_beta.square();
         cur_log_domain -= 1;
+        data = fold_pass::<F, EF>(&data, current_beta, cur_log_domain);
     }
 
     debug_assert_eq!(data.len(), new_height);
     data
+}
+
+/// One arity-2 pass of [`fold_codeword`] over a natural-order codeword on a domain of size
+/// `2^log_domain_size`, pairing index `j` with `j + height`.
+fn fold_pass<F: TwoAdicField, EF: ExtensionField<F>>(
+    src: &[EF],
+    beta: EF,
+    log_domain_size: usize,
+) -> Vec<EF> {
+    let height = src.len() / 2;
+
+    // fold(j) = (lo + hi)/2 + beta * (lo - hi) / (2 * g^j)
+    //         = (lo + hi)/2 + (beta/2) * g_inv^j * (lo - hi)
+    //
+    // g_orig has order `2^log_domain_size`, so g_inv = g_orig.inverse() has the same
+    // order. halve_inv_powers[j] = (1/2) * g_orig^{-j}.
+    let g_orig_inv = F::two_adic_generator(log_domain_size).inverse();
+    let halve_inv_powers: Vec<F> = g_orig_inv
+        .shifted_powers(F::ONE.halve())
+        .take(height)
+        .collect();
+
+    (0..height)
+        .into_par_iter()
+        .map(|j| {
+            let lo = src[j];
+            let hi = src[j + height];
+            // The base-field twiddle multiplies first so that it dispatches through the cheap
+            // extension-by-base product, leaving `beta` as the pass's only extension product.
+            (lo + hi).halve() + (lo - hi) * halve_inv_powers[j] * beta
+        })
+        .collect()
 }
 
 /// Fold a coefficient-form polynomial at challenge `gamma` with arity `k = 2^log_arity`.
