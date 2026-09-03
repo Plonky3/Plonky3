@@ -528,7 +528,7 @@ binary_tower_level!(
     u32,
     4294967300,
     dispatched_mul,
-    dispatched_square,
+    table_square,
     reference_try_inverse
 );
 binary_tower_level!(
@@ -539,7 +539,7 @@ binary_tower_level!(
     u64,
     18446744073709551621,
     dispatched_mul,
-    dispatched_square,
+    table_square,
     reference_try_inverse
 );
 
@@ -610,15 +610,10 @@ impl BinaryField64 {
         }
     }
 
-    /// The carryless-multiply fast path for squaring, under the same dispatch as
-    /// [`Self::dispatched_mul`].
+    /// Squaring through the tower-basis matrix, which is a lookup table on every target.
     #[inline]
-    fn dispatched_square(self) -> Self {
-        if HAS_HARDWARE_CLMUL {
-            Self(square_64(self.0))
-        } else {
-            self.reference_square()
-        }
+    fn table_square(self) -> Self {
+        Self(square_64(self.0))
     }
 }
 
@@ -636,15 +631,10 @@ impl BinaryField128 {
         }
     }
 
-    /// The carryless-multiply fast path for squaring, under the same dispatch as
-    /// [`Self::dispatched_mul`].
+    /// Squaring through the tower-basis matrix, which is a lookup table on every target.
     #[inline]
-    fn dispatched_square(self) -> Self {
-        if HAS_HARDWARE_CLMUL {
-            Self(square_128(self.0))
-        } else {
-            self.reference_square()
-        }
+    fn table_square(self) -> Self {
+        Self(square_128(self.0))
     }
 }
 
