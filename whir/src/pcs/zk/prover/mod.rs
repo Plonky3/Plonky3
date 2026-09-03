@@ -401,13 +401,6 @@ where
                     },
                 );
             }
-            let claim_delta = message
-                .as_slice()
-                .par_chunks(POW_CHUNK)
-                .zip(weight_delta.par_chunks(POW_CHUNK))
-                .map(|(m, w)| dot_product::<EF, _, _>(m.iter().copied(), w.iter().copied()))
-                .sum::<EF>();
-            sumcheck_prover.accumulate_claim(&weight_delta, claim_delta);
 
             // Mask side: the fresh mask enters the relation.
             let mask_covector = switch_mask_covector(
@@ -419,20 +412,21 @@ where
                 &query_points,
                 query_coeffs,
             );
+            // The batched-claim identity pins the source-side increment:
+            //
+            //     carried + claim_delta + <mask covector, mask message> = mu'
+            //
+            // `accumulate_claim` re-derives it from <evals, weights> in debug builds.
+            let claim_delta = joint
+                - carried
+                - dot_product::<EF, _, _>(
+                    mask_covector.iter().copied(),
+                    mask_message.iter().copied(),
+                );
+            sumcheck_prover.accumulate_claim(&weight_delta, claim_delta);
+
             // The running total must match a full re-evaluation.
             debug_assert_eq!(masks.aux, masks.claims.evaluate(&masks.messages));
-            // Cross-check the batched-claim identity:
-            //
-            //     residual + aux + <mask covector, mask message> = mu'
-            debug_assert_eq!(
-                sumcheck_prover.claimed_sum()
-                    + masks.aux
-                    + dot_product::<EF, _, _>(
-                        mask_covector.iter().copied(),
-                        mask_message.iter().copied(),
-                    ),
-                joint,
-            );
             masks.push_switch_mask(
                 mask_covector,
                 mask_message,
