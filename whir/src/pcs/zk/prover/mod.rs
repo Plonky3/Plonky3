@@ -40,7 +40,13 @@ use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
 use crate::pcs::zk::committer::{FoldedRsCode, zk_padded_matrix};
 use crate::pcs::zk::config::ZkWhirConfig;
 use crate::pcs::zk::proof::{ZkRoundProof, ZkWhirProof};
-use crate::utils::padded_ood_t1;
+use crate::utils::eval_ze_star_n;
+
+/// Chunk length for the parallel power runs over message-length vectors.
+///
+/// Each chunk is evaluated independently and re-based by one `rho^{c · POW_CHUNK}`
+/// shift, trading a serial dependency chain for a parallel one per chunk.
+const POW_CHUNK: usize = 1 << 12;
 
 /// HVZK-WHIR prover.
 #[derive(Debug)]
@@ -269,7 +275,19 @@ where
                     !rho_points.contains(&rho),
                     "OOD points must be pairwise distinct",
                 );
-                let answer = padded_ood_t1(rho, message.as_slice(), &mask_message);
+                // ze*(rho) over (message || mask_message): the long message side
+                // runs as chunked parallel Horner, the short mask tail serially.
+                let message_eval = message
+                    .as_slice()
+                    .par_chunks(POW_CHUNK)
+                    .enumerate()
+                    .map(|(chunk_idx, chunk)| {
+                        chunk.iter().rev().fold(EF::ZERO, |acc, &m| acc * rho + m)
+                            * rho.exp_u64((chunk_idx * POW_CHUNK) as u64)
+                    })
+                    .sum::<EF>();
+                let answer = message_eval
+                    + eval_ze_star_n(rho, &mask_message) * rho.exp_u64(message_len as u64);
                 challenger.observe_algebra_element(answer);
                 rho_points.push(rho);
                 ood_answers.push(answer);
@@ -372,7 +390,6 @@ where
                 weight_delta
             };
             // Chunked parallel power run: chunk `c` starts at coeff * rho^(c * CHUNK).
-            const POW_CHUNK: usize = 1 << 12;
             for (&rho, &coeff) in rho_points.iter().zip(ood_coeffs) {
                 weight_delta.par_chunks_mut(POW_CHUNK).enumerate().for_each(
                     |(chunk_idx, chunk)| {
