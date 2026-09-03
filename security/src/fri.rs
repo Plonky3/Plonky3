@@ -277,7 +277,7 @@ pub fn best_ldr_m(
     shape: &InstanceShape,
 ) -> Option<(usize, ErrorBits)> {
     let trace_length = 1usize << shape.log_trace_length;
-    let m_max = core::cmp::min(compute_upper_m(trace_length), LDR_M_CAP);
+    let m_max = core::cmp::min(compute_upper_m(trace_length, air.max_combo), LDR_M_CAP);
     let m_min = 3usize;
     if m_max < m_min {
         return None;
