@@ -11,7 +11,8 @@
 //! - [`proof`]: Proof types ([`StirProof`], [`StirRoundProof`], [`StirQueryOpenings`]).
 //! - [`utils`]: Polynomial arithmetic primitives (shake, ans, Horner eval, synthetic division).
 //! - [`prover`]: The STIR prover ([`prover::prove_stir`]).
-//! - [`verifier`]: The STIR verifier ([`verifier::verify_stir`], [`verifier::StirError`]).
+//! - [`verifier`]: The STIR verifier ([`verifier::verify_stir`]).
+//! - [`error`]: Verification failures ([`StirError`], [`ProofShapeError`]).
 //! - [`pcs`]: [`TwoAdicStirPcs`] implementing the [`p3_commit::Pcs`] trait.
 //!
 //! # Deviations from the STIR paper (eprint 2024/390)
@@ -48,6 +49,7 @@
 extern crate alloc;
 
 pub mod config;
+pub mod error;
 pub mod pcs;
 pub mod proof;
 pub mod prover;
@@ -56,7 +58,8 @@ pub mod utils;
 pub mod verifier;
 
 pub use config::{Stage, StirConfig, StirConfigError, StirParameters, StirRoundConfig};
+pub use error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, StirError};
 pub use p3_security::whir::SecurityAssumption;
 pub use pcs::{DEFAULT_MAX_LOG_HEIGHT_SPREAD, StirCommitment, TwoAdicStirPcs};
 pub use proof::{StirProof, StirQueryOpenings, StirRoundProof};
-pub use verifier::{StirError, StirVerifyOutputs};
+pub use verifier::StirVerifyOutputs;

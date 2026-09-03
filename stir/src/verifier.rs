@@ -9,9 +9,9 @@ use p3_field::{
     BasedVectorSpace, ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_matrix::Dimensions;
-use thiserror::Error;
 
 use crate::config::{StirConfig, StirRoundConfig};
+use crate::error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, StirError};
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
     check_shake_consistency, eval_poly, eval_poly_at_base, fold_domain_params,
@@ -129,13 +129,47 @@ fn single_matrix_opened_values<EF>(row_evals: &[Vec<EF>]) -> Vec<Vec<&[EF]>> {
         .collect()
 }
 
+/// Reject an `Ans`/shake pair longer than the round's degree bounds allow.
+///
+/// - `Ans` interpolates `max_ans_len` points, so its degree is below that.
+/// - The shake polynomial is one degree lower.
+/// - A shorter pair is legitimate: the prover may strip trailing zeros.
+fn check_ans_and_shake_lengths<EF, MmcsError, InputError>(
+    round: RoundLabel,
+    ans_polynomial: &[EF],
+    shake_polynomial: &[EF],
+    max_ans_len: usize,
+) -> Result<(), StirError<MmcsError, InputError>> {
+    if ans_polynomial.len() > max_ans_len {
+        return Err(ProofShapeError::AnsPolynomialTooLong {
+            round,
+            maximum: max_ans_len,
+            got: ans_polynomial.len(),
+        }
+        .into());
+    }
+    let max_shake_len = max_ans_len.saturating_sub(1);
+    if shake_polynomial.len() > max_shake_len {
+        return Err(ProofShapeError::ShakePolynomialTooLong {
+            round,
+            maximum: max_shake_len,
+            got: shake_polynomial.len(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 /// Fetch an external initial oracle's queried fibers and lay them out in draw order.
 ///
 /// Queries are sampled with replacement, so `indices` may repeat; the source is asked once for
 /// the sorted unique indices and must answer in that same order.
+///
+/// `round` labels the reported errors: whichever round reads the initial oracle.
 fn external_fibers_in_draw_order<EF: Clone, MmcsError, InputError>(
     indices: &[usize],
     arity: usize,
+    round: RoundLabel,
     source: impl FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<MmcsError, InputError>>,
 ) -> Result<Vec<Vec<EF>>, StirError<MmcsError, InputError>> {
     let mut unique = indices.to_vec();
@@ -143,8 +177,22 @@ fn external_fibers_in_draw_order<EF: Clone, MmcsError, InputError>(
     unique.dedup();
 
     let fibers = source(&unique)?;
-    if fibers.len() != unique.len() || fibers.iter().any(|fiber| fiber.len() != arity) {
-        return Err(StirError::InvalidProofShape);
+    if fibers.len() != unique.len() {
+        return Err(ExternalSourceError::FiberCount {
+            round,
+            expected: unique.len(),
+            got: fibers.len(),
+        }
+        .into());
+    }
+    if let Some((fiber, evals)) = fibers.iter().enumerate().find(|(_, f)| f.len() != arity) {
+        return Err(ExternalSourceError::FiberArity {
+            round,
+            fiber,
+            expected: arity,
+            got: evals.len(),
+        }
+        .into());
     }
 
     Ok(indices
@@ -166,7 +214,7 @@ struct RoundRowsRequest<'a, EF: Field, M: Mmcs<EF>> {
     expected_num_queries: usize,
     commitment: Option<&'a M::Commitment>,
     dimensions: &'a [Dimensions],
-    error_round: usize,
+    round: RoundLabel,
 }
 
 /// Fetch a round's queried oracle rows: an external initial oracle answered by the caller's
@@ -187,21 +235,42 @@ where
 {
     if is_external {
         if req.query_openings.is_some() {
-            return Err(StirError::InvalidProofShape);
+            return Err(ProofShapeError::UnexpectedQueryOpenings { round: req.round }.into());
         }
         let source = external_fibers
             .take()
             .expect("the external source is consumed exactly once");
-        return external_fibers_in_draw_order(req.query_indices, req.arity, source);
+        return external_fibers_in_draw_order(req.query_indices, req.arity, req.round, source);
     }
 
-    let openings = req.query_openings.ok_or(StirError::InvalidProofShape)?;
-    if openings.row_evals.len() != req.expected_num_queries
-        || openings.row_evals.iter().any(|row| row.len() != req.arity)
-    {
-        return Err(StirError::InvalidProofShape);
+    let openings = req
+        .query_openings
+        .ok_or(ProofShapeError::MissingQueryOpenings { round: req.round })?;
+    if openings.row_evals.len() != req.expected_num_queries {
+        return Err(ProofShapeError::QueryOpeningCount {
+            round: req.round,
+            expected: req.expected_num_queries,
+            got: openings.row_evals.len(),
+        }
+        .into());
     }
-    let commit = req.commitment.ok_or(StirError::InvalidProofShape)?;
+    if let Some((query, row)) = openings
+        .row_evals
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.len() != req.arity)
+    {
+        return Err(ProofShapeError::OpenedRowArity {
+            round: req.round,
+            query,
+            expected: req.arity,
+            got: row.len(),
+        }
+        .into());
+    }
+    let commit = req
+        .commitment
+        .ok_or(ProofShapeError::MissingCommitment { round: req.round })?;
     let opened_values = single_matrix_opened_values(&openings.row_evals);
     mmcs.verify_multi_batch(
         commit,
@@ -211,7 +280,7 @@ where
         &openings.opening_proof,
     )
     .map_err(|source| StirError::InvalidMmcsProof {
-        round: req.error_round,
+        round: req.round,
         source,
     })?;
     Ok(openings.row_evals.clone())
@@ -233,7 +302,7 @@ fn query_fold_value<F, EF, MmcsErr, InputErr>(
     current_shift: F,
     fold_beta: EF,
     prev_ctx: Option<&VirtualRoundContext<EF>>,
-    round: usize,
+    round: RoundLabel,
     query: usize,
 ) -> Result<EF, StirError<MmcsErr, InputErr>>
 where
@@ -366,7 +435,7 @@ where
                 expected_num_queries: query_indices.len(),
                 commitment,
                 dimensions: &cur_dimensions,
-                error_round: round,
+                round: RoundLabel::Round(round),
             },
         )?;
 
@@ -392,7 +461,7 @@ where
                 current_shift,
                 self.fold_beta,
                 prev_ctx,
-                round,
+                RoundLabel::Round(round),
                 q,
             )?;
 
@@ -474,7 +543,9 @@ where
 
     // Step 1: folding PoW, folding challenge gamma, and folded-oracle commitment.
     if !challenger.check_witness(rc.folding_pow_bits, rp.folding_pow_witness) {
-        return Err(StirError::InvalidPowWitness { round });
+        return Err(StirError::InvalidPowWitness {
+            round: RoundLabel::Round(round),
+        });
     }
 
     let gamma: EF = challenger.sample_algebra_element();
@@ -485,7 +556,12 @@ where
 
     // Step 2: OOD sampling and answer observation.
     if rp.ood_answers.len() != rc.num_ood_samples {
-        return Err(StirError::InvalidProofShape);
+        return Err(ProofShapeError::OodAnswerCount {
+            round: RoundLabel::Round(round),
+            expected: rc.num_ood_samples,
+            got: rp.ood_answers.len(),
+        }
+        .into());
     }
 
     rv.ood_points = sample_ood_points(
@@ -500,7 +576,9 @@ where
     // challenge and query indices; configuration soundness gives no PoW credit to the
     // earlier OOD samples or the later shake challenge.
     if !challenger.check_witness(rc.pow_bits, rp.pow_witness) {
-        return Err(StirError::InvalidPowWitness { round });
+        return Err(StirError::InvalidPowWitness {
+            round: RoundLabel::Round(round),
+        });
     }
 
     // Step 4: combination challenge, query sampling, and fiber verification.
@@ -536,15 +614,14 @@ where
     // Step 4: ans + shake polynomial observation and consistency check.
     let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
 
-    // Ans interpolates |all_points| values, so its degree is `< all_points.len()`. The
-    // prover may have stripped trailing zeros, so accept any length up to that bound; reject
-    // anything larger as malformed. Shake has degree `< all_points.len() - 1`.
+    // Ans interpolates |all_points| values, bounding both polynomials' lengths.
     let max_ans_len = all_points.len();
-    if rp.ans_polynomial.len() > max_ans_len
-        || rp.shake_polynomial.len() > max_ans_len.saturating_sub(1)
-    {
-        return Err(StirError::InvalidProofShape);
-    }
+    check_ans_and_shake_lengths(
+        RoundLabel::Round(round),
+        &rp.ans_polynomial,
+        &rp.shake_polynomial,
+        max_ans_len,
+    )?;
 
     // Bind ans_poly into the transcript BEFORE rho. The shake identity is a one-point check;
     // observing both polys first means the prover commits to Ans before learning rho.
@@ -560,7 +637,9 @@ where
         &all_values,
         rho,
     ) {
-        return Err(StirError::InvalidShakeConsistency { round });
+        return Err(StirError::InvalidShakeConsistency {
+            round: RoundLabel::Round(round),
+        });
     }
 
     Ok(rv.finish(rp.ans_polynomial.clone(), &all_points))
@@ -639,7 +718,7 @@ where
                 expected_num_queries: final_indices.len(),
                 commitment,
                 dimensions: &final_dimensions,
-                error_round: num_rounds,
+                round: RoundLabel::Final,
             },
         )?;
 
@@ -663,7 +742,7 @@ where
                 current_shift,
                 self.fold_beta,
                 prev_ctx,
-                num_rounds,
+                RoundLabel::Final,
                 q,
             )?;
 
@@ -718,7 +797,9 @@ where
         config.final_folding_pow_bits,
         proof.final_folding_pow_witness,
     ) {
-        return Err(StirError::InvalidPowWitness { round: num_rounds });
+        return Err(StirError::InvalidPowWitness {
+            round: RoundLabel::Final,
+        });
     }
 
     let final_gamma: EF = challenger.sample_algebra_element();
@@ -726,13 +807,19 @@ where
 
     let expected_final_len = config.final_poly_len();
     if proof.final_polynomial.len() != expected_final_len {
-        return Err(StirError::InvalidProofShape);
+        return Err(ProofShapeError::FinalPolynomialLength {
+            expected: expected_final_len,
+            got: proof.final_polynomial.len(),
+        }
+        .into());
     }
 
     challenger.observe_algebra_slice(&proof.final_polynomial);
 
     if !challenger.check_witness(config.final_pow_bits, proof.final_pow_witness) {
-        return Err(StirError::InvalidPowWitness { round: num_rounds });
+        return Err(StirError::InvalidPowWitness {
+            round: RoundLabel::Final,
+        });
     }
 
     // Sample every final-round query index first, deferring Merkle verification to a single
@@ -757,74 +844,6 @@ where
         commitment,
         &final_indices,
     )
-}
-
-/// Errors returned by [`verify_stir`].
-#[derive(Debug, Error, PartialEq)]
-pub enum StirError<MmcsError, InputError = ()> {
-    /// A proof-of-work witness failed verification.
-    #[error("Invalid proof-of-work witness in round {round}")]
-    InvalidPowWitness { round: usize },
-
-    /// A Merkle multi-opening proof failed for a round's queries.
-    #[error("Invalid MMCS opening proof in round {round}")]
-    InvalidMmcsProof {
-        round: usize,
-        #[source]
-        source: MmcsError,
-    },
-
-    /// The shake polynomial identity failed at the random evaluation point.
-    #[error("Shake polynomial consistency check failed in round {round}")]
-    InvalidShakeConsistency { round: usize },
-
-    /// A virtual-oracle evaluation landed in the prior round's challenge set.
-    #[error("Invalid virtual-oracle query in round {round}, query {query}")]
-    InvalidRoundConsistency { round: usize, query: usize },
-
-    /// The final polynomial does not evaluate consistently with the last committed codeword.
-    #[error("Final polynomial evaluation mismatch")]
-    FinalPolyMismatch,
-
-    /// The proof has the wrong number of rounds, queries, or OOD answers.
-    #[error("Invalid proof shape")]
-    InvalidProofShape,
-
-    /// A matrix in `commitment`'s batch was opened at zero points, so its width cannot be
-    /// pinned from the claimed evaluations. Every input matrix must be opened at >= 1 point.
-    #[error("Matrix {matrix} in commitment {commitment} was opened at zero points")]
-    MatrixWithoutOpeningPoints { commitment: usize, matrix: usize },
-
-    /// The requested STIR parameters cannot reach `security_level` at some LDE-height bucket.
-    #[error("STIR config error: {0}")]
-    Config(#[source] crate::config::StirConfigError),
-
-    /// An error propagated from the input polynomial commitment scheme.
-    #[error("Input error")]
-    InputError(InputError),
-}
-
-impl<E1, IE1> StirError<E1, IE1> {
-    /// Map the `InputError` variant to a different type.
-    pub fn map_input_err<IE2>(self, f: impl FnOnce(IE1) -> IE2) -> StirError<E1, IE2> {
-        match self {
-            Self::InvalidPowWitness { round } => StirError::InvalidPowWitness { round },
-            Self::InvalidMmcsProof { round, source } => {
-                StirError::InvalidMmcsProof { round, source }
-            }
-            Self::InvalidShakeConsistency { round } => StirError::InvalidShakeConsistency { round },
-            Self::InvalidRoundConsistency { round, query } => {
-                StirError::InvalidRoundConsistency { round, query }
-            }
-            Self::FinalPolyMismatch => StirError::FinalPolyMismatch,
-            Self::InvalidProofShape => StirError::InvalidProofShape,
-            Self::MatrixWithoutOpeningPoints { commitment, matrix } => {
-                StirError::MatrixWithoutOpeningPoints { commitment, matrix }
-            }
-            Self::Config(e) => StirError::Config(e),
-            Self::InputError(e) => StirError::InputError(f(e)),
-        }
-    }
 }
 
 /// Side outputs of a successful STIR verification.
@@ -924,7 +943,12 @@ where
     let num_rounds = config.num_rounds();
 
     if proof.round_proofs.len() != num_rounds {
-        return Err(StirError::InvalidProofShape);
+        return Err(ProofShapeError::RoundCount {
+            instance: None,
+            expected: num_rounds,
+            got: proof.round_proofs.len(),
+        }
+        .into());
     }
 
     // The initial oracle is either committed by STIR — in which case its commitment enters the
@@ -935,7 +959,8 @@ where
     match (&proof.initial_commitment, initial_is_external) {
         (Some(commitment), false) => challenger.observe(commitment.clone()),
         (None, true) => {}
-        _ => return Err(StirError::InvalidProofShape),
+        (Some(_), true) => return Err(ProofShapeError::UnexpectedInitialCommitment.into()),
+        (None, false) => return Err(ProofShapeError::MissingInitialCommitment.into()),
     }
 
     // Initial domain shift is always F::GENERATOR; round_configs[0].domain_shift mirrors it
@@ -1061,10 +1086,12 @@ where
 
 /// Shared body of [`verify_stir_multi`] and [`verify_stir_multi_with_external_initial`].
 ///
-/// Mirrors `prover::prove_stir_multi_inner`'s right-aligned lockstep schedule: at
-/// each global round, every active instance's grind witness must agree (checked via
-/// `PartialEq`, else [`StirError::InvalidProofShape`]), then the shared grind is checked once
-/// at the max of the active instances' bits.
+/// Mirrors `prover::prove_stir_multi_inner`'s right-aligned lockstep schedule.
+///
+/// At each global round:
+/// - every active instance's replicated grind witness must agree,
+/// - else [`ProofShapeError::ReplicatedWitnessMismatch`],
+/// - then the shared grind is checked once, at the max of the active instances' bits.
 fn verify_stir_multi_inner<F, EF, M, Challenger, IE, Src>(
     configs: &[&StirConfig<F, EF, M, Challenger>],
     proofs: &[&StirProof<EF, M, Challenger::Witness>],
@@ -1082,22 +1109,46 @@ where
     Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
 {
     let b = configs.len();
-    assert_eq!(proofs.len(), b, "one proof per instance");
+    if proofs.len() != b {
+        return Err(ProofShapeError::InstanceCount {
+            expected: b,
+            got: proofs.len(),
+        }
+        .into());
+    }
+
+    // Why: an empty batch is a transcript no-op on both sides.
+    //   prover:   shared grinds fall back to zero bits
+    //   verifier: check_witness(0, _) observes nothing
+    if b == 0 {
+        return Ok(Vec::new());
+    }
 
     for i in 0..b {
         if proofs[i].round_proofs.len() != configs[i].num_rounds() {
-            return Err(StirError::InvalidProofShape);
+            return Err(ProofShapeError::RoundCount {
+                instance: Some(i),
+                expected: configs[i].num_rounds(),
+                got: proofs[i].round_proofs.len(),
+            }
+            .into());
         }
     }
 
     let initial_is_external = external_fibers.is_some();
-    let mut external_fibers: Vec<Option<Src>> = external_fibers.map_or_else(
-        || (0..b).map(|_| None).collect(),
-        |v| {
-            assert_eq!(v.len(), b, "one external-fiber source per instance");
-            v.into_iter().map(Some).collect()
-        },
-    );
+    let mut external_fibers: Vec<Option<Src>> = match external_fibers {
+        None => (0..b).map(|_| None).collect(),
+        Some(sources) => {
+            if sources.len() != b {
+                return Err(ExternalSourceError::SourceCount {
+                    expected: b,
+                    got: sources.len(),
+                }
+                .into());
+            }
+            sources.into_iter().map(Some).collect()
+        }
+    };
 
     // The initial oracle is either committed by STIR — in which case its commitment enters the
     // transcript here — or external, in which case the caller has already bound it and every
@@ -1108,7 +1159,8 @@ where
         match (&proofs[i].initial_commitment, initial_is_external) {
             (Some(commitment), false) => challenger.observe(commitment.clone()),
             (None, true) => {}
-            _ => return Err(StirError::InvalidProofShape),
+            (Some(_), true) => return Err(ProofShapeError::UnexpectedInitialCommitment.into()),
+            (None, false) => return Err(ProofShapeError::MissingInitialCommitment.into()),
         }
         shifts.push(F::GENERATOR);
         log_domains.push(configs[i].log_starting_domain_size());
@@ -1140,7 +1192,11 @@ where
             .map(|&i| proofs[i].round_proofs[r - offset(i)].folding_pow_witness)
             .collect();
         if folding_witnesses.windows(2).any(|w| w[0] != w[1]) {
-            return Err(StirError::InvalidProofShape);
+            return Err(ProofShapeError::ReplicatedWitnessMismatch {
+                round: RoundLabel::Round(r),
+                stage: GrindStage::Folding,
+            }
+            .into());
         }
         let shared_folding_bits = active
             .iter()
@@ -1148,7 +1204,9 @@ where
             .max()
             .expect("`active` is non-empty for r < max_m");
         if !challenger.check_witness(shared_folding_bits, folding_witnesses[0]) {
-            return Err(StirError::InvalidPowWitness { round: r });
+            return Err(StirError::InvalidPowWitness {
+                round: RoundLabel::Round(r),
+            });
         }
 
         // Phase 1: per-instance folding challenge and commitment absorb.
@@ -1164,7 +1222,12 @@ where
             let rc = &configs[i].round_configs[local_r];
             let rp = &proofs[i].round_proofs[local_r];
             if rp.ood_answers.len() != rc.num_ood_samples {
-                return Err(StirError::InvalidProofShape);
+                return Err(ProofShapeError::OodAnswerCount {
+                    round: RoundLabel::Round(local_r),
+                    expected: rc.num_ood_samples,
+                    got: rp.ood_answers.len(),
+                }
+                .into());
             }
             rv.ood_points = sample_ood_points(
                 challenger,
@@ -1180,7 +1243,11 @@ where
             .map(|&i| proofs[i].round_proofs[r - offset(i)].pow_witness)
             .collect();
         if query_witnesses.windows(2).any(|w| w[0] != w[1]) {
-            return Err(StirError::InvalidProofShape);
+            return Err(ProofShapeError::ReplicatedWitnessMismatch {
+                round: RoundLabel::Round(r),
+                stage: GrindStage::Query,
+            }
+            .into());
         }
         let shared_pow_bits = active
             .iter()
@@ -1188,7 +1255,9 @@ where
             .max()
             .expect("`active` is non-empty for r < max_m");
         if !challenger.check_witness(shared_pow_bits, query_witnesses[0]) {
-            return Err(StirError::InvalidPowWitness { round: r });
+            return Err(StirError::InvalidPowWitness {
+                round: RoundLabel::Round(r),
+            });
         }
 
         // Phase 3: per-instance combination challenge, query sampling, and fiber
@@ -1236,11 +1305,12 @@ where
             let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
 
             let max_ans_len = all_points.len();
-            if rp.ans_polynomial.len() > max_ans_len
-                || rp.shake_polynomial.len() > max_ans_len.saturating_sub(1)
-            {
-                return Err(StirError::InvalidProofShape);
-            }
+            check_ans_and_shake_lengths(
+                RoundLabel::Round(local_r),
+                &rp.ans_polynomial,
+                &rp.shake_polynomial,
+                max_ans_len,
+            )?;
 
             challenger.observe_algebra_slice(&rp.ans_polynomial);
             challenger.observe_algebra_slice(&rp.shake_polynomial);
@@ -1253,7 +1323,9 @@ where
                 &all_values,
                 rho,
             ) {
-                return Err(StirError::InvalidShakeConsistency { round: local_r });
+                return Err(StirError::InvalidShakeConsistency {
+                    round: RoundLabel::Round(local_r),
+                });
             }
 
             finishes.push((i, rv.finish(rp.ans_polynomial.clone(), &all_points)));
@@ -1272,7 +1344,11 @@ where
     let final_folding_witnesses: Vec<F> =
         proofs.iter().map(|p| p.final_folding_pow_witness).collect();
     if final_folding_witnesses.windows(2).any(|w| w[0] != w[1]) {
-        return Err(StirError::InvalidProofShape);
+        return Err(ProofShapeError::ReplicatedWitnessMismatch {
+            round: RoundLabel::Final,
+            stage: GrindStage::Folding,
+        }
+        .into());
     }
     let shared_final_folding_bits = configs
         .iter()
@@ -1280,7 +1356,9 @@ where
         .max()
         .unwrap_or(0);
     if !challenger.check_witness(shared_final_folding_bits, final_folding_witnesses[0]) {
-        return Err(StirError::InvalidPowWitness { round: max_m });
+        return Err(StirError::InvalidPowWitness {
+            round: RoundLabel::Final,
+        });
     }
 
     let mut fvs: Vec<FinalRoundVerifier<F, EF>> = (0..b)
@@ -1299,18 +1377,28 @@ where
 
         let expected_final_len = configs[i].final_poly_len();
         if proofs[i].final_polynomial.len() != expected_final_len {
-            return Err(StirError::InvalidProofShape);
+            return Err(ProofShapeError::FinalPolynomialLength {
+                expected: expected_final_len,
+                got: proofs[i].final_polynomial.len(),
+            }
+            .into());
         }
         challenger.observe_algebra_slice(&proofs[i].final_polynomial);
     }
 
     let final_query_witnesses: Vec<F> = proofs.iter().map(|p| p.final_pow_witness).collect();
     if final_query_witnesses.windows(2).any(|w| w[0] != w[1]) {
-        return Err(StirError::InvalidProofShape);
+        return Err(ProofShapeError::ReplicatedWitnessMismatch {
+            round: RoundLabel::Final,
+            stage: GrindStage::Query,
+        }
+        .into());
     }
     let shared_final_pow_bits = configs.iter().map(|c| c.final_pow_bits).max().unwrap_or(0);
     if !challenger.check_witness(shared_final_pow_bits, final_query_witnesses[0]) {
-        return Err(StirError::InvalidPowWitness { round: max_m });
+        return Err(StirError::InvalidPowWitness {
+            round: RoundLabel::Final,
+        });
     }
 
     for i in 0..b {

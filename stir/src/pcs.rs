@@ -79,10 +79,11 @@ use spin::RwLock;
 use tracing::instrument;
 
 use crate::config::{StirConfig, StirConfigError, StirParameters};
+use crate::error::{ProofShapeError, StirError};
 use crate::proof::StirProof;
 use crate::prover::prove_stir_multi_from_external_codewords;
 use crate::utils::combine_on_coset;
-use crate::verifier::{StirError, verify_stir_multi_with_external_initial};
+use crate::verifier::verify_stir_multi_with_external_initial;
 
 /// Batched openings of one input commitment's LDE matrices at the STIR-derived query
 /// positions for one LDE-height bucket.
@@ -1168,9 +1169,18 @@ where
             .collect();
 
         // SHAPE CHECK: one Merkle root per group of the layout the claims imply.
-        for ((commitment, _), plan) in commitments_with_opening_points.iter().zip(&plans) {
+        for (commit_idx, ((commitment, _), plan)) in commitments_with_opening_points
+            .iter()
+            .zip(&plans)
+            .enumerate()
+        {
             if commitment.len() != plan.log_lde_heights.len() {
-                return Err(StirError::InvalidProofShape);
+                return Err(ProofShapeError::CommitmentRootCount {
+                    commitment: commit_idx,
+                    expected: plan.log_lde_heights.len(),
+                    got: commitment.len(),
+                }
+                .into());
             }
         }
 
@@ -1199,7 +1209,11 @@ where
         };
 
         if proof.len() != bucket_log_heights.len() {
-            return Err(StirError::InvalidProofShape);
+            return Err(ProofShapeError::BucketCount {
+                expected: bucket_log_heights.len(),
+                got: proof.len(),
+            }
+            .into());
         }
 
         // Which of a commitment's groups (hence which of its Merkle roots) feeds each
@@ -1278,9 +1292,14 @@ where
         // transcript (above), but they'd never be MMCS-opened or included in the
         // reduced-opening accumulation, so the proof would verify against a subset of the
         // public input.
-        for (_, input_openings) in proof {
+        for (&log_height, (_, input_openings)) in bucket_log_heights.iter().zip(proof) {
             if input_openings.len() != commitments_with_opening_points.len() {
-                return Err(StirError::InvalidProofShape);
+                return Err(ProofShapeError::InputOpeningCount {
+                    log_height,
+                    expected: commitments_with_opening_points.len(),
+                    got: input_openings.len(),
+                }
+                .into());
             }
         }
 
@@ -1429,6 +1448,23 @@ where
                             fiber_point *= fiber_step;
                         }
                     }
+
+                    // Invariant: no opening point sits on a queried fiber lane.
+                    //   z == x  =>  z - x == 0
+                    //           =>  the quotient (f(z) - f(x)) / (z - x) is undefined
+                    //           =>  batch_multiplicative_inverse panics
+                    // Scanning once here keeps the branch out of the build loop above.
+                    if let Some(slot) = denom_diffs.iter().position(|d| d.is_zero()) {
+                        let (commitment, matrix, point) = locate_opening_point(
+                            commitments_with_opening_points,
+                            &bucket_points[slot % n_bp],
+                        );
+                        return Err(StirError::OpeningPointMatchesQueryPoint {
+                            commitment,
+                            matrix,
+                            point,
+                        });
+                    }
                     let inv_denoms = batch_multiplicative_inverse(&denom_diffs);
 
                     // A commitment feeds this bucket through at most one of its groups: the
@@ -1444,12 +1480,20 @@ where
 
                         let Some(opening) = per_commit_opening else {
                             if group_idx.is_some() {
-                                return Err(StirError::InvalidProofShape);
+                                return Err(ProofShapeError::MissingInputOpening {
+                                    log_height: log_h,
+                                    commitment: commit_idx,
+                                }
+                                .into());
                             }
                             continue;
                         };
                         let Some(group_idx) = group_idx else {
-                            return Err(StirError::InvalidProofShape);
+                            return Err(ProofShapeError::UnexpectedInputOpening {
+                                log_height: log_h,
+                                commitment: commit_idx,
+                            }
+                            .into());
                         };
 
                         // The commitment's matrices on this domain, in the order they were
@@ -1522,7 +1566,13 @@ where
 
                         // SHAPE CHECK: opened-row count is determined entirely by public input.
                         if opening.opened_values.len() != q_globals.len() {
-                            return Err(StirError::InvalidProofShape);
+                            return Err(ProofShapeError::InputOpenedRowCount {
+                                log_height: log_h,
+                                commitment: commit_idx,
+                                expected: q_globals.len(),
+                                got: opening.opened_values.len(),
+                            }
+                            .into());
                         }
 
                         self.input_mmcs
@@ -1580,18 +1630,26 @@ where
                     // Merge the per-class accumulators into the bucket's expected codeword
                     // fibers, mirroring the prover's `combine_on_coset`/`eval_degree_correction`
                     // pointwise, only at the queried fiber lanes.
+                    //
+                    // Both class counts come from `native_heights`, never from the proof.
+                    // Still reported rather than asserted: a verifier must not panic.
                     match combine_info {
                         None => {
-                            // SHAPE CHECK: exactly one class expected when no Combine ran.
-                            if expected_ro_by_class.len() != 1 {
-                                return Err(StirError::InvalidProofShape);
+                            // No Combine ran, so STIR folds a single class directly.
+                            let got = expected_ro_by_class.len();
+                            let mut classes = expected_ro_by_class.into_iter();
+                            match (classes.next(), classes.next()) {
+                                (Some(only), None) => Ok(only),
+                                _ => Err(ProofShapeError::HeightClassCount {
+                                    log_height: log_h,
+                                    expected: 1,
+                                    got,
+                                }
+                                .into()),
                             }
-                            Ok(expected_ro_by_class.into_iter().next().unwrap())
                         }
                         Some((r_comb, coeffs_by_height)) => {
-                            // Both sides are sized by the same deduplicated class list, so
-                            // this is an invariant rather than a check on anything the proof
-                            // controls.
+                            // Both sides are sized by the same deduplicated class list.
                             debug_assert_eq!(expected_ro_by_class.len(), coeffs_by_height.len());
 
                             // Pointwise mirror of the prover's `combine_on_coset`, evaluated
@@ -1628,9 +1686,12 @@ where
                             for (&log_native_h, ro_class) in
                                 native_heights.iter().zip(&expected_ro_by_class)
                             {
-                                let &(r_i, gap) = coeffs_by_height
-                                    .get(&log_native_h)
-                                    .ok_or(StirError::InvalidProofShape)?;
+                                let &(r_i, gap) = coeffs_by_height.get(&log_native_h).ok_or(
+                                    ProofShapeError::MissingCombineCoefficient {
+                                        log_height: log_h,
+                                        log_native_height: log_native_h,
+                                    },
+                                )?;
 
                                 // Within a query the lanes advance by the fixed base-field
                                 // ratio `fiber_step^(gap+1)`, so the numerator sweep costs one
@@ -1675,6 +1736,36 @@ where
 
         Ok(())
     }
+}
+
+/// One commitment's claims: per matrix, its domain and its `(point, values)` pairs.
+type CommitmentClaims<C, D, EF> = (C, Vec<(D, Vec<(EF, Vec<EF>)>)>);
+
+/// Locate the claim that contributed `point`, as `(commitment, matrix, point)` indices.
+///
+/// Only reached on the error path, where a linear scan costs nothing.
+fn locate_opening_point<C, D, EF: PartialEq>(
+    commitments_with_opening_points: &[CommitmentClaims<C, D, EF>],
+    point: &EF,
+) -> (usize, usize, usize) {
+    commitments_with_opening_points
+        .iter()
+        .enumerate()
+        .flat_map(|(commitment, (_, domain_claims))| {
+            domain_claims
+                .iter()
+                .enumerate()
+                .flat_map(move |(matrix, (_, point_claims))| {
+                    point_claims
+                        .iter()
+                        .enumerate()
+                        .map(move |(slot, (claimed, _))| (commitment, matrix, slot, claimed))
+                })
+        })
+        .find_map(|(commitment, matrix, slot, claimed)| {
+            (claimed == point).then_some((commitment, matrix, slot))
+        })
+        .expect("every bucket point comes from a claim")
 }
 
 /// Definition 4.11's per-class `Combine` coefficients, for classes already sorted in
