@@ -586,8 +586,9 @@ fn main() {
     // their native-height classes via `Combine` (§7, Construction 7.2) before STIR runs.
     // Reconstruct that same bucket (`ell` per Lemma 4.13, matching what `p3_stir`'s PCS impl
     // computes internally) so the printed schedule reflects what actually proves, not a plain
-    // single-height instance. A wider height spread would be split across several groups, and
-    // this reconstruction would then describe only the tallest.
+    // single-height instance. Where `Combine` does not fit the challenge field, the PCS splits
+    // the heights across several groups instead of failing, and so does the reconstruction:
+    // the schedule then printed is the tallest group's, without `Combine`.
     {
         let stir_params = StirParameters {
             log_blowup: args.rate,
@@ -600,12 +601,14 @@ fn main() {
         };
         let ell: u64 = heights.len() as u64 * ((1u64 << args.log_message_size) + 1)
             - heights.iter().map(|&h| 1u64 << h).sum::<u64>();
-        let config = StirConfig::<F, EF, ChallengeMmcs, Challenger>::new_with_combine(
+        let config = StirConfig::<F, EF, ChallengeMmcs, Challenger>::try_new_with_combine(
             args.log_message_size,
             stir_params.clone(),
             heights.len(),
             ell,
-        );
+        )
+        .or_else(|_| StirConfig::try_new(args.log_message_size, stir_params.clone()))
+        .expect("STIR parameters are infeasible even without Combine");
         let queries = config
             .round_configs
             .iter()

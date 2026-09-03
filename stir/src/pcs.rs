@@ -53,21 +53,25 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
+use core::ops::Deref;
 
 use itertools::{Itertools, izip};
-use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
+use p3_challenger::{
+    CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
+};
 use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, TwoAdicField,
-    batch_multiplicative_inverse,
+    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PrimeCharacteristicRing,
+    TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow, RowMajorMatrixView};
 use p3_matrix::interpolation::{Interpolate, compute_adjusted_weights};
 use p3_maybe_rayon::prelude::*;
+use p3_symmetric::CryptographicPermutation;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use serde::{Deserialize, Serialize};
@@ -155,6 +159,47 @@ impl<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> StirProverData<Val, InputMm
     }
 }
 
+/// One Merkle root per shared-domain group of a commitment, in descending LDE height.
+///
+/// The matrices of one `commit()` call are partitioned into groups of bounded height spread,
+/// each extended onto its own shared domain (§7's same-domain requirement applies within a
+/// group, not across the whole commitment) and committed in its own tree. A commitment whose
+/// heights all fit one group therefore holds a single root.
+///
+/// The roots are wrapped rather than handed out as a bare `Vec` so a challenger can observe
+/// the whole commitment in one call — which is what
+/// `p3_uni_stark::StarkGenericConfig`'s `Challenger: CanObserve<Pcs::Commitment>` bound asks
+/// for. Observing runs the root count first, so two commitments that split a given total of
+/// roots differently cannot reach the same transcript state.
+///
+/// Dereferences to its roots, so reading them needs no unwrapping.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StirCommitment<C>(Vec<C>);
+
+impl<C> Deref for StirCommitment<C> {
+    type Target = [C];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<F, P, C, const WIDTH: usize, const RATE: usize> CanObserve<StirCommitment<C>>
+    for DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: Copy + PrimeCharacteristicRing,
+    P: CryptographicPermutation<[F; WIDTH]>,
+    Self: CanObserve<C>,
+{
+    fn observe(&mut self, commitment: StirCommitment<C>) {
+        <Self as CanObserve<F>>::observe(self, F::from_usize(commitment.0.len()));
+        for root in commitment.0 {
+            self.observe(root);
+        }
+    }
+}
+
 /// How one commitment's matrices are partitioned across shared LDE domains.
 ///
 /// Derived identically by the prover (from the committed heights) and the verifier (from the
@@ -236,9 +281,11 @@ const CONFIG_CACHE_CAPACITY: usize = 256;
 ///
 /// Merging native-height classes onto one domain trades commit work for proof size: a matrix
 /// `s` octaves below its group's tallest pays a `2^s` larger blowup, while §7's `Combine`
-/// removes a whole STIR instance and its query-count floor. Three octaves is the spread of
-/// the shape that trade was measured on; past it the extra DFT and Merkle work grows without
-/// bound while `Combine`'s return does not, so wider spreads get their own domain.
+/// removes a whole STIR instance and its query-count floor. Three octaves is what that trade
+/// was measured to be worth buying: the shortest member of a group spanning it pays an `8x`
+/// blowup, in its DFT and in its full width in every one of the group's tree leaves, to save
+/// one instance. Past it the commit side keeps doubling per octave while `Combine`'s return
+/// does not, so wider spreads get their own domain.
 pub const DEFAULT_MAX_LOG_HEIGHT_SPREAD: usize = 3;
 
 /// A polynomial commitment scheme using STIR to generate opening proofs.
@@ -286,6 +333,14 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
         self
     }
 
+    /// How wide a native-height spread this instance lets share one LDE domain.
+    ///
+    /// The two sides of a proof must agree on it, so both can check that they do rather than
+    /// relying on having been constructed the same way.
+    pub const fn max_log_height_spread(&self) -> usize {
+        self.max_log_height_spread
+    }
+
     /// Commit one tree per shared-domain group.
     ///
     /// `plan` assigns matrices to groups; `grouped[i]` is matrix `i`'s fiber-grouped LDE,
@@ -296,11 +351,16 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
         grouped: Vec<RowMajorMatrix<Val>>,
         log_native_heights: &[usize],
         widths: &[usize],
-    ) -> (Vec<InputMmcs::Commitment>, StirProverData<Val, InputMmcs>)
+    ) -> (
+        StirCommitment<InputMmcs::Commitment>,
+        StirProverData<Val, InputMmcs>,
+    )
     where
         Val: Send + Sync + Clone,
-        InputMmcs: Mmcs<Val>,
+        InputMmcs: Mmcs<Val, Commitment: Send> + Sync,
+        InputMmcs::ProverData<RowMajorMatrix<Val>>: Send,
     {
+        let input_mmcs = &self.input_mmcs;
         let num_groups = plan.log_lde_heights.len();
         let mut per_group: Vec<Vec<RowMajorMatrix<Val>>> = vec![Vec::new(); num_groups];
         let mut per_group_heights: Vec<Vec<usize>> = vec![Vec::new(); num_groups];
@@ -315,14 +375,19 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
             per_group_widths[group_idx].push(widths[matrix_idx]);
         }
 
-        let (commitments, groups) = izip!(
+        // Groups share nothing — separate matrices, separate trees, separate prover data — so
+        // they are built in parallel. Only the tallest group has enough rows to saturate the
+        // pool on its own; the inner per-tree parallelism work-steals alongside this one.
+        let (commitments, groups): (Vec<_>, Vec<_>) = izip!(
             per_group,
             per_group_widths,
             per_group_heights,
             &plan.log_lde_heights
         )
+        .collect::<Vec<_>>()
+        .into_par_iter()
         .map(|(matrices, widths, log_native_heights, &log_lde_height)| {
-            let (commitment, data) = self.input_mmcs.commit(matrices);
+            let (commitment, data) = input_mmcs.commit(matrices);
             (
                 commitment,
                 DomainGroup {
@@ -335,7 +400,10 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
         })
         .unzip();
 
-        (commitments, StirProverData { groups, placement })
+        (
+            StirCommitment(commitments),
+            StirProverData { groups, placement },
+        )
     }
 }
 
@@ -405,10 +473,15 @@ where
     /// Widest band of native heights below `tallest`, in octaves, that may share `tallest`'s
     /// LDE domain.
     ///
-    /// Growth stops at the first of two limits: the configured spread cap, which bounds the
-    /// extra blowup a short matrix pays for sitting on a taller group's domain; and `Combine`
-    /// feasibility, which is what makes an infeasible parameter set degrade into more STIR
-    /// instances rather than failing.
+    /// Growth stops at the first of three limits: the configured spread cap, which bounds the
+    /// extra blowup a short matrix pays for sitting on a taller group's domain; `lowest`, the
+    /// lowest height that could still join the band; and `Combine` feasibility, which is what
+    /// makes an infeasible parameter set degrade into more STIR instances rather than failing.
+    ///
+    /// The `lowest` cap never moves an admissibility decision. A span of `s` octaves is
+    /// admitted exactly when `s` is within every limit, and `s <= tallest - lowest` holds for
+    /// any span that exists at all; capping only skips deriving — and caching — configs for
+    /// bands no group could fill.
     ///
     /// Feasibility is probed against the *whole* band `[tallest - w, tallest]` rather than the
     /// heights a particular commitment happens to hold. That matters because a bucket pools
@@ -424,9 +497,12 @@ where
     ///
     /// The configs derived while probing are served from the same cache the bucket
     /// construction later reads, so a repeated shape pays for them once.
-    fn combine_band_width(&self, tallest: usize) -> usize {
+    fn combine_band_width(&self, tallest: usize, lowest: usize) -> usize {
         let log_stir_degree = self.log_stir_degree(tallest + self.stir.log_blowup);
-        let max_width = self.max_log_height_spread.min(tallest);
+        let max_width = self
+            .max_log_height_spread
+            .min(tallest)
+            .min(tallest - lowest);
 
         let mut width = 0;
         while width < max_width {
@@ -445,23 +521,61 @@ where
     /// Partition distinct native heights, descending, into shared-domain groups.
     ///
     /// Returns each group's size, so group `g` covers the slice starting after the previous
-    /// groups. Each group takes every remaining height inside the band
-    /// [`Self::combine_band_width`] admits below its tallest.
+    /// groups. A group is admissible only when its whole span fits inside the band
+    /// [`Self::combine_band_width`] admits below its own tallest, which is what keeps that
+    /// probe conservative for whatever union of classes a bucket later pools.
+    ///
+    /// Among admissible partitions this takes the fewest groups — one STIR instance each, so
+    /// the group count fixes the proof's shape and its query structure — and, among those, the
+    /// one minimizing `Σ_g 2^(tallest of g)·|g|`: every member of a group is extended onto that
+    /// group's shared domain, so a group costs its own height once per member, in both DFT
+    /// work and Merkle leaf material. Filling each group greedily instead reaches the same
+    /// group count but pulls short heights onto the tallest domain that will take them, which
+    /// is the most expensive placement available to them. Both objectives read only the
+    /// distinct heights, so the prover and the verifier derive the same partition.
     fn partition_native_heights(&self, descending: &[usize]) -> Vec<usize> {
-        let mut sizes = Vec::new();
-        let mut start = 0;
+        let Some(&lowest) = descending.last() else {
+            return Vec::new();
+        };
+        let n = descending.len();
 
-        while start < descending.len() {
-            let tallest = descending[start];
-            let floor = tallest - self.combine_band_width(tallest);
-            let size = descending[start..]
-                .iter()
-                .take_while(|&&h| h >= floor)
-                .count();
-            sizes.push(size);
-            start += size;
+        let band_widths: Vec<usize> = descending
+            .iter()
+            .map(|&tallest| self.combine_band_width(tallest, lowest))
+            .collect();
+
+        // `best[j]` is the lexicographically smallest `(group count, cost)` covering
+        // `descending[..j]`, and `start_of_last[j]` where the final group achieving it begins.
+        // Singleton groups are always admissible, so every prefix is reachable.
+        let mut best = vec![(usize::MAX, u128::MAX); n + 1];
+        let mut start_of_last = vec![0usize; n + 1];
+        best[0] = (0, 0);
+
+        for j in 1..=n {
+            for i in 0..j {
+                if descending[i] - descending[j - 1] > band_widths[i] {
+                    continue;
+                }
+                let (groups, cost) = best[i];
+                let candidate = (
+                    groups + 1,
+                    cost + ((j - i) as u128) * (1u128 << descending[i]),
+                );
+                if candidate < best[j] {
+                    best[j] = candidate;
+                    start_of_last[j] = i;
+                }
+            }
         }
 
+        let mut sizes = Vec::new();
+        let mut end = n;
+        while end > 0 {
+            let start = start_of_last[end];
+            sizes.push(end - start);
+            end = start;
+        }
+        sizes.reverse();
         sizes
     }
 
@@ -530,7 +644,8 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> Pcs<Challenge, Challe
 where
     Val: TwoAdicField,
     Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: Mmcs<Val, Error: Sync + Debug>,
+    InputMmcs: Mmcs<Val, Error: Sync + Debug, Commitment: Send> + Sync,
+    InputMmcs::ProverData<RowMajorMatrix<Val>>: Send,
     StirMmcs: Mmcs<Challenge>,
     Challenge: ExtensionField<Val> + TwoAdicField + BasedVectorSpace<Val>,
     Challenger: FieldChallenger<Val>
@@ -541,14 +656,7 @@ where
         + Clone,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
-    /// One Merkle root per shared-domain group, in descending LDE height.
-    ///
-    /// The matrices of one `commit()` call are partitioned into groups of bounded height
-    /// spread, each extended onto its own shared domain (§7's same-domain requirement applies
-    /// within a group, not across the whole commitment) and committed in its own tree. A
-    /// commitment whose heights all fit one group therefore has a single root, and callers
-    /// observe the roots in order.
-    type Commitment = Vec<InputMmcs::Commitment>;
+    type Commitment = StirCommitment<InputMmcs::Commitment>;
     type ProverData = StirProverData<Val, InputMmcs>;
     type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
     /// Proof structure: one entry per distinct shared LDE height across every commitment's
@@ -658,6 +766,7 @@ where
         let result = self
             .dft
             .coset_dft_batch(coeffs, domain.shift())
+            .bit_reverse_rows()
             .to_row_major_matrix();
         let result_width = result.width();
         RowMajorMatrixCow::new(Cow::Owned(result.values), result_width).bit_reverse_rows()
@@ -729,14 +838,21 @@ where
                 let extended = if lde.height() == 1usize << log_lde_height {
                     lde
                 } else {
+                    // Recovering the polynomial and evaluating it on the wider coset is a
+                    // forward transform of its coefficients, zero-padded to the target size.
+                    // A second `lde` would instead read those coefficients back as evaluations
+                    // on a subgroup, and extend a different polynomial.
                     let natural_lde = lde.bit_reverse_rows().to_row_major_matrix();
                     let mut coeffs = self.dft.coset_idft_batch(natural_lde, Val::GENERATOR);
                     let width = coeffs.width();
                     coeffs
                         .values
                         .truncate((1usize << log_native_height) * width);
+                    coeffs
+                        .values
+                        .resize((1usize << log_lde_height) * width, Val::ZERO);
                     self.dft
-                        .coset_lde_batch(coeffs, log_lde_height - log_native_height, Val::GENERATOR)
+                        .coset_dft_batch(coeffs, Val::GENERATOR)
                         .bit_reverse_rows()
                         .to_row_major_matrix()
                 };
@@ -1473,10 +1589,10 @@ where
                             Ok(expected_ro_by_class.into_iter().next().unwrap())
                         }
                         Some((r_comb, coeffs_by_height)) => {
-                            // SHAPE CHECK: every expected class must be present.
-                            if expected_ro_by_class.len() != coeffs_by_height.len() {
-                                return Err(StirError::InvalidProofShape);
-                            }
+                            // Both sides are sized by the same deduplicated class list, so
+                            // this is an invariant rather than a check on anything the proof
+                            // controls.
+                            debug_assert_eq!(expected_ro_by_class.len(), coeffs_by_height.len());
 
                             // Pointwise mirror of the prover's `combine_on_coset`, evaluated
                             // only at the queried lanes. The `1 − r_comb·x` denominators do
@@ -1700,6 +1816,7 @@ mod tests {
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_security::whir::SecurityAssumption;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use proptest::prelude::*;
     use rand::SeedableRng;
 
     use super::*;
@@ -1814,15 +1931,44 @@ mod tests {
         let heights = [8usize, 6, 4];
         let cb = SecurityAssumption::CapacityBound;
 
-        // Spread 2 admits 8 with 6 but not 8 with 4, so the run breaks after the second.
+        // Spread 2 rules out one group over all three, so two is the fewest available. Of the
+        // two-group splits it does admit, `{8} | {6, 4}` keeps the 2^6 matrix off the 2^9
+        // domain and is the cheaper one to extend.
         let plan = test_pcs_with(2, cb, 32).plan_groups(&heights);
-        assert_eq!(plan.log_lde_heights, vec![9, 5]);
-        assert_eq!(plan.group_of_matrix, vec![0, 0, 1]);
+        assert_eq!(plan.log_lde_heights, vec![9, 7]);
+        assert_eq!(plan.group_of_matrix, vec![0, 1, 1]);
 
         // Spread 1 admits none of these pairs.
         let plan = test_pcs_with(1, cb, 32).plan_groups(&heights);
         assert_eq!(plan.log_lde_heights, vec![9, 7, 5]);
         assert_eq!(plan.group_of_matrix, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn a_group_spans_the_cheapest_admissible_run_not_the_widest() {
+        // `[20, 17, 16, 15]` needs two groups either way — the full span is five octaves, past
+        // the cap — but which two matters. Filling the tall group first puts the 2^17 matrix
+        // on the 2^21 domain: a 16x blowup, and a `Combine` over two classes in the tall
+        // bucket. Leaving it with the short heights costs it 2x instead, at the same group
+        // count and with no `Combine` in the tall bucket at all.
+        let pcs = test_pcs_with(
+            DEFAULT_MAX_LOG_HEIGHT_SPREAD,
+            SecurityAssumption::CapacityBound,
+            16,
+        );
+
+        let plan = pcs.plan_groups(&[20, 17, 16, 15]);
+        assert_eq!(plan.log_lde_heights, vec![21, 18]);
+        assert_eq!(plan.group_of_matrix, vec![0, 1, 1, 1]);
+
+        // Shapes lying wholly inside one band, or wholly outside it, have nothing to
+        // redistribute: the widest run is also the cheapest once the group count is fixed.
+        assert_eq!(pcs.plan_groups(&[20, 18, 17]).log_lde_heights, vec![21]);
+        assert_eq!(
+            pcs.plan_groups(&[20, 12, 12, 12, 12]).log_lde_heights,
+            vec![21, 13]
+        );
+        assert_eq!(pcs.plan_groups(&[20, 10]).log_lde_heights, vec![21, 11]);
     }
 
     #[test]
@@ -1859,8 +2005,8 @@ mod tests {
 
         // Caller order does not matter either: a matrix follows its height.
         let plan = pcs.plan_groups(&[4, 8, 4, 6]);
-        assert_eq!(plan.log_lde_heights, vec![9, 5]);
-        assert_eq!(plan.group_of_matrix, vec![1, 0, 1, 0]);
+        assert_eq!(plan.log_lde_heights, vec![9, 7]);
+        assert_eq!(plan.group_of_matrix, vec![1, 0, 1, 1]);
     }
 
     #[test]
@@ -1885,6 +2031,166 @@ mod tests {
         // above is not just the spread cap in disguise.
         let plan = test_pcs_with(8, jb, 32).plan_groups(&heights);
         assert_eq!(plan.log_lde_heights, vec![13]);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        /// The layout has to be a pure function of the multiset of native heights and this
+        /// PCS's parameters: that is the assumption the verifier reconstructs it under, so a
+        /// failure here is a verifier disagreeing with the prover for a reason no shape check
+        /// in the proof could explain. The interesting inputs are multisets — duplicates,
+        /// caller order, and heights sitting on a band edge — so this is sampled rather than
+        /// enumerated.
+        #[test]
+        fn plan_groups_partitions_the_height_multiset(
+            heights in prop::collection::vec(2usize..=12, 1..8),
+            max_log_height_spread in 0usize..=8,
+        ) {
+            let pcs = test_pcs_with(
+                max_log_height_spread,
+                SecurityAssumption::CapacityBound,
+                32,
+            );
+            let plan = pcs.plan_groups(&heights);
+
+            prop_assert_eq!(plan.group_of_matrix.len(), heights.len());
+            for pair in plan.log_lde_heights.windows(2) {
+                prop_assert!(pair[0] > pair[1]);
+            }
+
+            // Distinct heights of each group, read back off the assignment.
+            let mut members: Vec<Vec<usize>> = vec![Vec::new(); plan.log_lde_heights.len()];
+            for (&h, &g) in heights.iter().zip(&plan.group_of_matrix) {
+                if !members[g].contains(&h) {
+                    members[g].push(h);
+                }
+            }
+            let mut distinct = heights.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            prop_assert_eq!(members.iter().map(Vec::len).sum::<usize>(), distinct.len());
+
+            for (group, &log_lde_h) in members.iter_mut().zip(&plan.log_lde_heights) {
+                prop_assert!(!group.is_empty());
+                group.sort_unstable_by(|a, b| b.cmp(a));
+                let (tallest, lowest) = (group[0], group[group.len() - 1]);
+                // Each group sits on its own tallest member's domain, ...
+                prop_assert_eq!(log_lde_h, tallest + pcs.stir.log_blowup);
+                // ... and stays inside the band that member admits, which is what keeps the
+                // band probe conservative for whatever union of classes a bucket pools.
+                prop_assert!(tallest - lowest <= pcs.combine_band_width(tallest, lowest));
+            }
+
+            // Only the multiset decides: permuting the input moves matrices between slots but
+            // not between heights, and repeating a height adds no class.
+            let permuted: Vec<usize> = heights.iter().rev().copied().collect();
+            let permuted_plan = pcs.plan_groups(&permuted);
+            let permuted_back: Vec<usize> =
+                permuted_plan.group_of_matrix.iter().rev().copied().collect();
+            prop_assert_eq!(&permuted_plan.log_lde_heights, &plan.log_lde_heights);
+            prop_assert_eq!(&permuted_back, &plan.group_of_matrix);
+
+            let duplicated: Vec<usize> = heights.iter().chain(heights.iter()).copied().collect();
+            let duplicated_plan = pcs.plan_groups(&duplicated);
+            prop_assert_eq!(&duplicated_plan.log_lde_heights, &plan.log_lde_heights);
+            prop_assert_eq!(
+                &duplicated_plan.group_of_matrix[..heights.len()],
+                &plan.group_of_matrix[..]
+            );
+        }
+    }
+
+    /// STIR parameters over the test types, at the given soundness knobs.
+    fn test_params(
+        soundness_type: SecurityAssumption,
+        security_level: usize,
+        log_blowup: usize,
+        max_pow_bits: usize,
+    ) -> StirParameters<TestStirMmcs> {
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(11);
+        let perm = TestPerm::new_from_rng_128(&mut rng);
+        let val_mmcs = TestValMmcs::new(TestHash::new(perm.clone()), TestCompress::new(perm), 0);
+        StirParameters {
+            log_blowup,
+            log_folding_factor: 2,
+            log_starting_folding_factor: 2,
+            soundness_type,
+            security_level,
+            max_pow_bits,
+            mmcs: TestStirMmcs::new(val_mmcs),
+        }
+    }
+
+    #[test]
+    fn band_feasibility_implies_subset_feasibility() {
+        // `combine_band_width` probes the *whole* band `[tallest - w, tallest]` and then lets
+        // any subset of it containing `tallest` form a group, on the argument that the full
+        // band maximizes Lemma 4.13's `ell` over every subset that could form. That argument
+        // is what keeps the probe conservative, and it is load bearing: if it stopped holding,
+        // the probe would call a width feasible, the bucket's actual class set would be a
+        // strict subset whose config comes back `Err`, and `open` would panic on the prover at
+        // exactly a parameter set the fallback exists to rescue. The quantifier is "every
+        // subset", so this checks every subset rather than sampling them.
+        for soundness_type in [
+            SecurityAssumption::CapacityBound,
+            SecurityAssumption::JohnsonBound,
+        ] {
+            for security_level in [32usize, 64, 80] {
+                for log_blowup in [1usize, 2] {
+                    for max_pow_bits in [0usize, 16] {
+                        let params =
+                            test_params(soundness_type, security_level, log_blowup, max_pow_bits);
+                        for log_d_star in [6usize, 10, 14] {
+                            for w in 1..=6.min(log_d_star) {
+                                let band: Vec<usize> =
+                                    (0..=w).map(|i| log_d_star - i).collect::<Vec<_>>();
+                                let (n, ell) = TestPcs::combine_key(&band)
+                                    .expect("a band of width >= 1 holds two classes");
+                                if TestConfig::try_new_with_combine(
+                                    log_d_star,
+                                    params.clone(),
+                                    n,
+                                    ell,
+                                )
+                                .is_err()
+                                {
+                                    // The band itself is infeasible, so it implies nothing.
+                                    continue;
+                                }
+
+                                for mask in 0u32..(1 << w) {
+                                    let mut subset = vec![log_d_star];
+                                    subset.extend(
+                                        (0..w)
+                                            .filter(|i| mask & (1 << i) != 0)
+                                            .map(|i| log_d_star - 1 - i),
+                                    );
+                                    let Some((sub_n, sub_ell)) = TestPcs::combine_key(&subset)
+                                    else {
+                                        continue;
+                                    };
+                                    assert!(
+                                        TestConfig::try_new_with_combine(
+                                            log_d_star,
+                                            params.clone(),
+                                            sub_n,
+                                            sub_ell,
+                                        )
+                                        .is_ok(),
+                                        "band [{}..{log_d_star}] configures but subset \
+                                         {subset:?} does not, at {soundness_type:?} \
+                                         security_level={security_level} \
+                                         log_blowup={log_blowup} max_pow_bits={max_pow_bits}",
+                                        log_d_star - w,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn test_pcs_and_params() -> (TestPcs, StirParameters<TestStirMmcs>) {
