@@ -6,7 +6,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_air::{Air, BaseAir};
+use p3_air::{Air, AirLayout, BaseAir, SymbolicAirBuilder};
 use p3_field::{
     ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
 };
@@ -18,6 +18,7 @@ use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 use p3_sumcheck::layout::Table;
 
 use crate::folder::MultilinearFolder;
+use crate::metadata::ConstraintMetadata;
 use crate::packed_ext::PackedExt;
 use crate::selectors::{BoundaryEvals, periodic_num_variables};
 
@@ -101,13 +102,17 @@ impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
 /// It therefore folds exactly like a committed column.
 ///
 /// The verifier recomputes each periodic column in closed form instead of opening it.
-pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
+pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF: ExtensionField<F>> {
     /// AIR whose alpha-batched constraint is being evaluated.
     airs: Vec<&'air A>,
     /// Public inputs forwarded to the AIR.
     public_values: Vec<&'data [F]>,
     /// Random scalar batching the AIR constraints.
     alpha: EF,
+    /// Descending alpha powers for each AIR, one entry per constraint that AIR asserts.
+    ///
+    /// Broadcast across the SIMD lanes so the packed folder can weight a constraint directly.
+    alpha_powers: Vec<Vec<EF::ExtensionPacking>>,
     /// Optional preprocessed tables, one per AIR.
     preprocessed: Vec<Option<&'data Table<F>>>,
     /// Periodic tables, one per AIR, each materialized to the full trace height.
@@ -639,7 +644,10 @@ where
         alpha: EF,
         betas: Vec<EF>,
         tau: &Point<EF>,
-    ) -> Self {
+    ) -> Self
+    where
+        A: Air<SymbolicAirBuilder<F, EF>>,
+    {
         assert!(!stage.tables.is_empty(),);
         assert_eq!(stage.airs.len(), stage.tables.len(),);
         assert_eq!(stage.preprocessed.len(), stage.tables.len(),);
@@ -733,6 +741,24 @@ where
             assert_eq!(public_values.len(), air.num_public_values());
         }
 
+        // Constraint `i` of an AIR asserting `n` constraints is batched with weight `alpha^(n-1-i)`,
+        // the same weight the folder's Horner fold assigns it.
+        let alpha_powers = stage
+            .airs
+            .iter()
+            .map(|air| {
+                let layout = AirLayout::from_air::<F>(*air);
+                let num_constraints =
+                    ConstraintMetadata::from_air::<F, EF, A>(*air, layout).num_constraints;
+                let mut powers = alpha.powers().collect_n(num_constraints);
+                powers.reverse();
+                powers
+                    .into_iter()
+                    .map(EF::ExtensionPacking::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
         // Build the degree grouping once, then flatten it into the AIR-ordered fold view.
         let degree_groups = DegreeGroup::build(
             &stage.degrees,
@@ -746,6 +772,7 @@ where
             airs: stage.airs.clone(),
             public_values: stage.public_values.clone(),
             alpha,
+            alpha_powers,
             preprocessed: stage.preprocessed.clone(),
             periodic,
             tables: stage.tables.clone(),
@@ -924,6 +951,7 @@ where
                                         &scratch.local_point[slot.periodic_offset
                                             ..slot.periodic_offset + slot.periodic_width],
                                     )
+                                    .with_alpha_powers(&self.alpha_powers[slot.air_index])
                                     .eval_air(self.airs[slot.air_index]);
                                     evals[node - 1] += dot_product::<EF, _, _>(
                                         eq_suffix.iter().copied(),
