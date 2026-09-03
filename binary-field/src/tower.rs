@@ -593,6 +593,8 @@ macro_rules! karatsuba_over_the_level_below {
 
 karatsuba_over_the_level_below!(BinaryField16);
 karatsuba_over_the_level_below!(BinaryField32);
+karatsuba_over_the_level_below!(BinaryField64);
+karatsuba_over_the_level_below!(BinaryField128);
 
 impl BinaryField64 {
     /// The carryless-multiply fast path where the target has the instruction for it, and the
@@ -604,7 +606,7 @@ impl BinaryField64 {
         if HAS_HARDWARE_CLMUL {
             Self(mul_64(self.0, rhs.0))
         } else {
-            self.reference_mul(rhs)
+            self.karatsuba_mul(rhs)
         }
     }
 
@@ -630,7 +632,7 @@ impl BinaryField128 {
         if HAS_HARDWARE_CLMUL {
             Self(mul_128(self.0, rhs.0))
         } else {
-            self.reference_mul(rhs)
+            self.karatsuba_mul(rhs)
         }
     }
 
@@ -1161,11 +1163,24 @@ mod tests {
         }
 
         /// The levels whose `Mul` recurses through the level below's operator must agree with
-        /// the recursion that runs to the bottom of the tower.
+        /// the recursion that runs to the bottom of the tower. At 64 and 128 bits that operator
+        /// is only reached where there is no carryless-multiply instruction, so it is checked
+        /// here on every target rather than only on the ones that dispatch to it.
         #[test]
-        fn karatsuba_agrees_with_the_recursive_product(a in bf32(), b in bf32(), c in bf16(), d in bf16()) {
+        fn karatsuba_agrees_with_the_recursive_product(
+            a in bf32(),
+            b in bf32(),
+            c in bf16(),
+            d in bf16(),
+            e in bf64(),
+            f in bf64(),
+            g in bf128(),
+            h in bf128(),
+        ) {
             prop_assert_eq!(a.karatsuba_mul(b), a.reference_mul(b));
             prop_assert_eq!(c.karatsuba_mul(d), c.reference_mul(d));
+            prop_assert_eq!(e.karatsuba_mul(f), e.reference_mul(f));
+            prop_assert_eq!(g.karatsuba_mul(h), g.reference_mul(h));
         }
     }
 }
