@@ -573,6 +573,7 @@ mod tests {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 2,
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 0,
             mmcs: challenge_mmcs,

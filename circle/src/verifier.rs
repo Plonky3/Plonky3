@@ -7,7 +7,7 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::ExtensionField;
 use p3_field::extension::ComplexExtendable;
-use p3_fri::verifier::FriError;
+use p3_fri::verifier::{FriError, PowPhase};
 use p3_fri::{FriFoldingStrategy, FriParameters};
 use p3_matrix::Dimensions;
 
@@ -64,7 +64,7 @@ where
             challenger.observe(comm.clone());
             // Check the per-round grinding witness before sampling the challenge.
             if !challenger.check_witness(params.commit_proof_of_work_bits, *witness) {
-                return Err(FriError::InvalidPowWitness);
+                return Err(FriError::InvalidPowWitness(PowPhase::CommitPhase));
             }
             // Squeeze a field-extension element to use as the folding challenge.
             Ok(challenger.sample_algebra_element())
@@ -140,7 +140,7 @@ where
     // Verify proof-of-work: a grinding witness that the prover must compute
     // to raise the cost of brute-forcing query positions.
     if !challenger.check_witness(params.query_proof_of_work_bits, proof.pow_witness) {
-        return Err(FriError::InvalidPowWitness);
+        return Err(FriError::InvalidPowWitness(PowPhase::Query));
     }
 
     // Phase 3: Query verification

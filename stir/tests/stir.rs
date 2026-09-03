@@ -2001,6 +2001,7 @@ mod babybear_pcs {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: SECURITY_BITS,
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 0,
             mmcs: fri_challenge_mmcs,

@@ -4,6 +4,7 @@ use core::fmt::Debug;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_security::fri::FriRegime;
+use p3_security::grinding::GrindingSites;
 
 /// A set of parameters defining a specific instance of the FRI protocol.
 #[derive(Clone, Debug)]
@@ -15,7 +16,20 @@ pub struct FriParameters<M> {
     /// The actual arity per round may be smaller to ensure commitments exist at each input height.
     pub max_log_arity: usize,
     pub num_queries: usize,
-    /// Number of bits for the PoW phase before sampling _each_ batching challenge.
+    /// Number of bits for the PoW phase before sampling the challenge that
+    /// batches the openings into a single FRI instance.
+    ///
+    /// This is the `alpha` sampled by [`crate::TwoAdicFriPcs`]'s `Pcs::open`,
+    /// which random-linear-combines every `(f(zeta) - f(x))/(zeta - x)` quotient
+    /// into the one function FRI is run on. Its round's error grows with the
+    /// number of batched `(function, opening point)` pairs, so on a wide
+    /// instance over a small field it — not the query phase — is what limits
+    /// *proven* soundness; grinding here is what lets a query count be traded
+    /// down against a proven target. Credited to
+    /// [`p3_security::GrindingSites::batch_combination`].
+    pub batch_proof_of_work_bits: usize,
+    /// Number of bits for the PoW phase before sampling _each_ commit-phase
+    /// folding challenge.
     pub commit_proof_of_work_bits: usize,
     /// Number of bits for the PoW phase before sampling the queries.
     pub query_proof_of_work_bits: usize,
@@ -57,6 +71,11 @@ impl<M> FriParameters<M> {
             log_final_poly_len,
             max_log_arity,
             num_queries,
+            // The opening-batching round belongs to the PCS wrapped around
+            // FRI, not to the low-degree test, so it is reported through
+            // `grinding_sites` instead of this regime. `FriRegime` models only
+            // rounds the LDT itself owns.
+            batch_proof_of_work_bits: _,
             commit_proof_of_work_bits,
             query_proof_of_work_bits,
             mmcs: _,
@@ -71,6 +90,21 @@ impl<M> FriParameters<M> {
         }
     }
 
+    /// The grinding sites these parameters own that [`FriRegime`] does not
+    /// model, in the form `p3-security`'s composite consumes.
+    ///
+    /// Companion to [`Self::security_regime`]: together the two cover every
+    /// proof-of-work phase in this config. Sites belonging to the surrounding
+    /// STARK rather than to the PCS — the DEEP out-of-domain point, the lookup
+    /// challenges — are not visible here and are merged in by the caller (see
+    /// `p3_uni_stark::StarkSecurityParams`).
+    pub const fn grinding_sites(&self) -> GrindingSites {
+        GrindingSites {
+            batch_combination: self.batch_proof_of_work_bits,
+            ..GrindingSites::NONE
+        }
+    }
+
     /// Creates a minimal set of `FriParameters` for testing purposes.
     /// These parameters are designed to reduce computational cost during tests.
     pub const fn new_testing(mmcs: M, log_final_poly_len: usize) -> Self {
@@ -79,6 +113,11 @@ impl<M> FriParameters<M> {
             log_final_poly_len,
             max_log_arity: 1,
             num_queries: 2,
+            // Zero, unlike the two below: these testing parameters are shared with
+            // `CirclePcs`, which rejects a nonzero value because it does not implement
+            // this grinding site. Coverage for the site lives in `p3-fri`'s own verifier
+            // tests and in `p3-uni-stark`'s `tests/grinding.rs`.
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 1,
             query_proof_of_work_bits: 1,
             mmcs,
@@ -93,6 +132,11 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 2,
+            // Zero, unlike the two below: these testing parameters are shared with
+            // `CirclePcs`, which rejects a nonzero value because it does not implement
+            // this grinding site. Coverage for the site lives in `p3-fri`'s own verifier
+            // tests and in `p3-uni-stark`'s `tests/grinding.rs`.
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 1,
             query_proof_of_work_bits: 1,
             mmcs,
@@ -107,6 +151,7 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 100,
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 16,
             mmcs,
@@ -121,6 +166,7 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 3,
             num_queries: 100,
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 16,
             mmcs,
@@ -135,6 +181,7 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 100,
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 16,
             mmcs,
@@ -214,6 +261,9 @@ mod tests {
     /// Distinct values per field catch a mis-wired mapping (e.g. swapping the
     /// commit and query PoW bits); the method's exhaustive destructuring is
     /// what catches a newly-added `FriParameters` field.
+    ///
+    /// The batch PoW bits are deliberately absent from the regime and are
+    /// pinned by [`grinding_sites_carries_the_batch_pow_bits`] instead.
     #[test]
     fn security_regime_mirrors_parameters() {
         let params = FriParameters {
@@ -221,6 +271,7 @@ mod tests {
             log_final_poly_len: 2,
             max_log_arity: 3,
             num_queries: 4,
+            batch_proof_of_work_bits: 7,
             commit_proof_of_work_bits: 5,
             query_proof_of_work_bits: 6,
             mmcs: (),
@@ -234,5 +285,40 @@ mod tests {
         assert_eq!(regime.num_queries, 4);
         assert_eq!(regime.commit_pow_bits, 5);
         assert_eq!(regime.query_pow_bits, 6);
+    }
+
+    /// The batch PoW bits reach `p3-security` through `grinding_sites`, and
+    /// through nothing else: the two mappings must together account for every
+    /// PoW field, without either one double-counting a site the other already
+    /// carries.
+    #[test]
+    fn grinding_sites_carries_the_batch_pow_bits() {
+        let params = FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 2,
+            max_log_arity: 3,
+            num_queries: 4,
+            batch_proof_of_work_bits: 7,
+            commit_proof_of_work_bits: 5,
+            query_proof_of_work_bits: 6,
+            mmcs: (),
+        };
+
+        assert_eq!(
+            params.grinding_sites(),
+            GrindingSites {
+                batch_combination: 7,
+                ..GrindingSites::NONE
+            },
+            "only the batch site belongs to these parameters"
+        );
+
+        // A config that grinds nowhere maps to the neutral element, so the
+        // sites can be merged into a protocol's own without altering it.
+        let ungrounded = FriParameters {
+            batch_proof_of_work_bits: 0,
+            ..params
+        };
+        assert_eq!(ungrounded.grinding_sites(), GrindingSites::NONE);
     }
 }

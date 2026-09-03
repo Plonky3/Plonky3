@@ -43,7 +43,22 @@ pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
 }
 
 impl<Val: Field, InputMmcs, FriMmcs> CirclePcs<Val, InputMmcs, FriMmcs> {
+    /// # Panics
+    ///
+    /// If `fri_params.batch_proof_of_work_bits` is nonzero. This PCS samples its
+    /// own batch-combination challenge (see [`Pcs::open`]) and does not grind
+    /// before it, so honouring that setting is not yet implemented here.
+    /// Rejecting it is deliberate: silently ignoring the field would let a
+    /// caller claim grinding bits in a soundness analysis that no prover ever
+    /// paid and no verifier ever checks.
+    // TODO: grind the batch-combination challenge here as `TwoAdicFriPcs` does,
+    // then drop this assertion.
     pub const fn new(mmcs: InputMmcs, fri_params: FriParameters<FriMmcs>) -> Self {
+        assert!(
+            fri_params.batch_proof_of_work_bits == 0,
+            "CirclePcs does not implement batch-combination grinding; \
+             batch_proof_of_work_bits must be 0"
+        );
         Self {
             mmcs,
             fri_params,

@@ -113,11 +113,16 @@ pub fn proven_security(
 /// same radius the rest of the regime's terms (ALI/DEEP/LDT) are evaluated
 /// at, so the Johnson-bound branch is computed at `ldr_m` rather than the
 /// fixed `m = 10` WHIR safety choice.
+///
+/// `pow_bits` is [`GrindingSites::batch_combination`]: the grinding sited
+/// immediately before the batching challenge, which boosts this round and no
+/// other.
 fn batching_term(
     assumption: SecurityAssumption,
     shape: &InstanceShape,
     log_blowup: usize,
     ldr_m: Option<usize>,
+    pow_bits: usize,
 ) -> Option<SecurityTerm> {
     let num_functions = shape.num_batched_functions;
     if num_functions < 2 {
@@ -140,7 +145,7 @@ fn batching_term(
     };
     Some(SecurityTerm::new(
         BATCH_LABEL,
-        ErrorBits::from_log2(bits.max(0.0)),
+        boost(ErrorBits::from_log2(bits.max(0.0)), pow_bits),
     ))
 }
 
@@ -150,8 +155,10 @@ fn batching_term(
 /// [`RegimeReport::security_bits`]), matching [`proven_security_regime`] plus
 /// the batching term.
 ///
-/// `grinding.out_of_domain` boosts the DEEP term; the low-degree test's own
-/// sites are already folded into `ldt_error` by the [`LowDegreeTest`] impl.
+/// `grinding.out_of_domain` boosts the DEEP term and
+/// `grinding.batch_combination` the batch term (applied by the caller, which
+/// builds `batch`); the low-degree test's own sites are already folded into
+/// `ldt_error` by the [`LowDegreeTest`] impl.
 fn regime_report(
     regime: Regime,
     air: &StarkAirParams,
@@ -209,7 +216,13 @@ pub fn proven_security_report<L: LowDegreeTest>(
         shape,
         list_size_udr(),
         udr_ldt,
-        batching_term(SecurityAssumption::UniqueDecoding, shape, log_blowup, None),
+        batching_term(
+            SecurityAssumption::UniqueDecoding,
+            shape,
+            log_blowup,
+            None,
+            grinding.batch_combination,
+        ),
         extras,
         grinding,
     );
@@ -222,7 +235,13 @@ pub fn proven_security_report<L: LowDegreeTest>(
             shape,
             list_size,
             ldr_ldt,
-            batching_term(SecurityAssumption::JohnsonBound, shape, log_blowup, Some(m)),
+            batching_term(
+                SecurityAssumption::JohnsonBound,
+                shape,
+                log_blowup,
+                Some(m),
+                grinding.batch_combination,
+            ),
             extras,
             grinding,
         )
@@ -594,6 +613,79 @@ mod tests {
             )
             .max(0.0);
         assert!(batch_term.bits.bits() < fixed_m_bits);
+    }
+
+    /// Grinding before the batching challenge is credited to the batch term,
+    /// bit for bit, in both proven regimes — and to no other term. The
+    /// "no other term" half is the point: the boost is applied where the
+    /// batching term is built, so wiring it to the wrong round would show up
+    /// as a neighbouring term moving instead.
+    #[test]
+    fn batch_grinding_lifts_only_the_batch_term() {
+        let regime = benchmark_regime();
+        let air = air();
+        // A small field keeps every term in range of the others, so a
+        // misdirected boost would be visible rather than clamped away.
+        let shape = InstanceShape {
+            modulus_bits: 100,
+            num_batched_functions: 1 << 10,
+            ..shape()
+        };
+        let ground = GrindingSites {
+            batch_combination: 12,
+            ..GrindingSites::NONE
+        };
+
+        let b0 = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+        let b12 = proven_security_report(&regime, &air, &shape, &[], &ground);
+
+        for (before, after) in
+            core::iter::once((&b0.udr, &b12.udr)).chain(b0.ldr.iter().zip(b12.ldr.iter()))
+        {
+            for (t0, t12) in before.terms().iter().zip(after.terms()) {
+                assert_eq!(t0.label, t12.label, "term order changed");
+                let expected = if t0.label == BATCH_LABEL {
+                    t0.bits.bits() + 12.0
+                } else {
+                    t0.bits.bits()
+                };
+                assert!(
+                    (t12.bits.bits() - expected).abs() < 1e-12,
+                    "{} moved to {} (expected {expected})",
+                    t0.label,
+                    t12.bits.bits()
+                );
+            }
+        }
+    }
+
+    /// With fewer than two functions there is no batching round to protect, so
+    /// grinding before a challenge the protocol never samples must buy nothing
+    /// rather than being credited to whatever term happens to bind.
+    #[test]
+    fn batch_grinding_buys_nothing_when_nothing_is_batched() {
+        let regime = benchmark_regime();
+        let air = air();
+        let shape = InstanceShape {
+            modulus_bits: 100,
+            num_batched_functions: 1,
+            ..shape()
+        };
+
+        let b0 = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+        let b32 = proven_security_report(
+            &regime,
+            &air,
+            &shape,
+            &[],
+            &GrindingSites {
+                batch_combination: 32,
+                ..GrindingSites::NONE
+            },
+        );
+
+        assert!((b32.security_bits() - b0.security_bits()).abs() < 1e-12);
+        assert!(b32.udr.terms().iter().all(|t| t.label != BATCH_LABEL));
     }
 
     /// The conjectured report's attained bits equal the scalar

@@ -154,4 +154,10 @@ where
     /// Selector inversion is undefined there.
     #[error("out-of-domain point lies inside the trace domain")]
     OodPointInDomain,
+    /// The proof of work guarding the out-of-domain point is invalid.
+    ///
+    /// Either the witness was forged, or the prover and verifier disagree on
+    /// [`crate::StarkGenericConfig::deep_proof_of_work_bits`].
+    #[error("invalid proof-of-work witness for the out-of-domain point")]
+    InvalidDeepPowWitness,
 }

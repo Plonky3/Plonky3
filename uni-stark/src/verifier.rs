@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
-use p3_challenger::{CanObserve, FieldChallenger};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
@@ -19,7 +19,7 @@ use crate::error::{InvalidProofShapeError, PeriodicColumnError, VerificationErro
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::{
     AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
-    VerifierConstraintFolder,
+    VerifierConstraintFolder, observe_commitment,
 };
 
 /// Reject periodic columns the verifier cannot evaluate over the trace domain.
@@ -278,6 +278,7 @@ pub fn verify<SC, A>(
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: StarkGenericConfig,
+    SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
 {
     verify_with_preprocessed(config, air, proof, public_values, None)
@@ -293,6 +294,7 @@ pub fn verify_with_preprocessed<SC, A>(
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: StarkGenericConfig,
+    SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
 {
     let Proof {
@@ -300,6 +302,7 @@ where
         opened_values,
         opening_proof,
         degree_bits,
+        deep_pow_witness,
     } = proof;
     let degree_bits = *degree_bits;
 
@@ -417,9 +420,12 @@ where
     // Practically speaking though, the only related known attack is from failing to include public
     // values. It's not clear if failing to include other instance data could enable a transcript
     // collision, since most such changes would completely change the set of satisfying witnesses.
-    challenger.observe(commitments.trace.clone());
+    observe_commitment::<SC>(&mut challenger, commitments.trace.clone());
     if preprocessed_width > 0 {
-        challenger.observe(preprocessed_commit.as_ref().unwrap().clone());
+        observe_commitment::<SC>(
+            &mut challenger,
+            preprocessed_commit.as_ref().unwrap().clone(),
+        );
     }
     challenger.observe_slice(public_values);
 
@@ -428,17 +434,21 @@ where
     //
     // Soundness Error: n/|EF| where n is the number of constraints.
     let alpha = challenger.sample_algebra_element();
-    challenger.observe(commitments.quotient_chunks.clone());
+    observe_commitment::<SC>(&mut challenger, commitments.quotient_chunks.clone());
 
     // We've already checked that commitments.random is present if and only if ZK is enabled.
     // Observe the random commitment if it is present.
     if let Some(r_commit) = commitments.random.clone() {
-        challenger.observe(r_commit);
+        observe_commitment::<SC>(&mut challenger, r_commit);
     }
 
-    // Get an out-of-domain point to open our values at.
+    // Check the proof of work guarding the out-of-domain point, then sample it.
     //
-    // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
+    // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has
+    // degree `d`, plus `deep_proof_of_work_bits` from the grind checked here.
+    if !challenger.check_witness(config.deep_proof_of_work_bits(), *deep_pow_witness) {
+        return Err(VerificationError::InvalidDeepPowWitness);
+    }
     let zeta: SC::Challenge = challenger.sample_algebra_element();
 
     // The opening at zeta divides by the vanishing polynomial of the trace domain.

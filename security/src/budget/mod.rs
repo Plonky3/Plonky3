@@ -103,17 +103,21 @@ pub const fn security_report(
         cap,
     );
 
-    // The out-of-domain point is rejection-sampled outside the trace and LDE domains but is not
-    // ground. A violated constraint leaves the DEEP-ALI identity a nonzero polynomial in that
-    // point of degree at most the larger of `max_constraint_degree · (height + max_combo − 1) +
-    // (height − 1)` (clearing the shared denominator lifts each of a constraint's degree-many
-    // trace factors by one per out-of-domain point referenced, and the quotient side contributes
-    // the rest) and `(c + 1) · height + max_combo − 1` (the degree Plonky3's own power-of-two
-    // quotient chunking induces, binding whenever `c` exceeds `max_constraint_degree`). Lifting
-    // evaluates the shorter AIRs at powers of the same point, so all of them pay the maximum
-    // height.
-    let out_of_domain =
-        out_of_domain_round(instance, air.max_constraint_degree, air.max_combo, cap);
+    // The out-of-domain point is rejection-sampled outside the trace and LDE domains. A violated
+    // constraint leaves the DEEP-ALI identity a nonzero polynomial in that point of degree at most
+    // the larger of `max_constraint_degree · (height + max_combo − 1) + (height − 1)` (clearing the
+    // shared denominator lifts each of a constraint's degree-many trace factors by one per
+    // out-of-domain point referenced, and the quotient side contributes the rest) and
+    // `(c + 1) · height + max_combo − 1` (the degree Plonky3's own power-of-two quotient chunking
+    // induces, binding whenever `c` exceeds `max_constraint_degree`). Lifting evaluates the
+    // shorter AIRs at powers of the same point, so all of them pay the maximum height.
+    let out_of_domain = out_of_domain_round(
+        instance,
+        air.max_constraint_degree,
+        air.max_combo,
+        params.ood_pow_bits,
+        cap,
+    );
 
     // The DEEP quotient batches every committed column and out-of-domain point by powers of two
     // further challenges, giving a univariate whose degree is the number of batched terms.
@@ -210,13 +214,20 @@ const fn round(
 /// directly instead of decomposed into a coefficient and a log-size. This round is always charged
 /// — there is no "no such round" case to special-case at zero.
 ///
+/// `pow_bits` is the grinding sited immediately before the point is sampled, credited exactly as
+/// [`round`] credits its own: a prover hunting for a favourable point pays `2^pow_bits` per
+/// candidate. It is the only lever this round has, since both the degree and the height are fixed
+/// by the statement being proved.
+///
 /// A degenerate degree or point count clamps to one, which keeps `size ≥ 1` and so keeps
 /// [`fixed::ceil_log2`]'s zero-assert unreachable. A size too large to take the logarithm of is
-/// reported at zero bits rather than wrapped, since truncating it would understate the error.
+/// reported at zero bits rather than wrapped, since truncating it would understate the error; the
+/// grind is dropped with it rather than credited against an error this round could not bound.
 const fn out_of_domain_round(
     instance: &InstanceShape,
     max_constraint_degree: u32,
     max_combo: u32,
+    pow_bits: u32,
     cap: u64,
 ) -> SecurityTerm {
     if instance.log_max_height >= u64::BITS {
@@ -253,7 +264,7 @@ const fn out_of_domain_round(
     }
 
     let error = fixed::ceil_log2(size as u64);
-    let bits = instance.field_bits.saturating_sub(error);
+    let bits = instance.field_bits.saturating_sub(error) + fixed::from_bits(pow_bits);
 
     SecurityTerm::new(OUT_OF_DOMAIN_LABEL, min(bits, cap))
 }
@@ -275,6 +286,7 @@ mod tests {
             log_folding_arity: 2,
             num_queries: 27,
             query_pow_bits: 17,
+            ood_pow_bits: 0,
             deep_pow_bits: 12,
             folding_pow_bits: 4,
             lookup_pow_bits: 0,
@@ -338,6 +350,30 @@ mod tests {
         let after = ground.terms()[0];
         assert_eq!(before.label, LOOKUP_LABEL);
         assert_eq!(after.bits, before.bits + fixed::from_bits(8));
+    }
+
+    /// Grinding before the out-of-domain point is credited to that round bit for bit, and to no
+    /// other. The "no other" half is the point: the round shares its `max_constraint_degree` and
+    /// `max_combo` inputs with nothing else, so a boost wired to the wrong term would surface as
+    /// a neighbouring round moving instead.
+    #[test]
+    fn ood_grinding_lifts_only_the_out_of_domain_round() {
+        let ungrounded = security_report(&params(), &instance(29), &air());
+        let grinding = ProtocolParams {
+            ood_pow_bits: 8,
+            ..params()
+        };
+        let ground = security_report(&grinding, &instance(29), &air());
+
+        for (before, after) in ungrounded.terms().iter().zip(ground.terms()) {
+            assert_eq!(before.label, after.label, "term order changed");
+            let expected = if before.label == OUT_OF_DOMAIN_LABEL {
+                before.bits + fixed::from_bits(8)
+            } else {
+                before.bits
+            };
+            assert_eq!(after.bits, expected, "{} moved", before.label);
+        }
     }
 
     /// No round may be reported above the transcript's own ceiling.

@@ -16,6 +16,26 @@ pub type Domain<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
 
 pub type Val<SC> = <Domain<SC> as PolynomialSpace>::Val;
 
+pub type Com<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
+    <SC as StarkGenericConfig>::Challenge,
+    <SC as StarkGenericConfig>::Challenger,
+>>::Commitment;
+
+/// Absorb a commitment into the transcript.
+///
+/// The prover and verifier pin `GrindingChallenger<Witness = Val<SC>>` so they
+/// can grind before the out-of-domain point. That puts a second source of
+/// `CanObserve<Val<SC>>` in scope, and `challenger.observe(commitment)` then
+/// fails to resolve — method-call syntax has no way to name which `CanObserve`
+/// impl is meant. This helper carries no grinding bound, so inside it the
+/// choice is unambiguous.
+pub fn observe_commitment<SC: StarkGenericConfig>(
+    challenger: &mut SC::Challenger,
+    commitment: Com<SC>,
+) {
+    challenger.observe(commitment);
+}
+
 pub type PackedVal<SC> = <Val<SC> as Field>::Packing;
 
 pub type PackedChallenge<SC> =
@@ -43,6 +63,24 @@ pub trait StarkGenericConfig: Clone {
     fn is_zk(&self) -> usize {
         Self::Pcs::ZK as usize
     }
+
+    /// Bits of proof of work the prover must grind before the DEEP
+    /// out-of-domain point `zeta` is sampled.
+    ///
+    /// The DEEP-ALI round tests the constraint identity at a single point, so
+    /// its error is the identity's degree over the field size — a quantity that
+    /// grows with the trace height and is fixed by the AIR, not by any
+    /// parameter the prover can turn up. Grinding here is therefore the only
+    /// way to buy that round bits, and on a small extension field it is the
+    /// round that stops a proven-soundness target from being reached at any
+    /// query count. Credited to
+    /// [`p3_security::GrindingSites::out_of_domain`].
+    ///
+    /// Defaults to `0`, which costs the prover nothing and leaves the
+    /// transcript byte-for-byte as it was before this site existed.
+    fn deep_proof_of_work_bits(&self) -> usize {
+        0
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -51,16 +89,36 @@ pub struct StarkConfig<Pcs, Challenge, Challenger> {
     pcs: Pcs,
     /// An initialised instance of the [`FieldChallenger`].
     challenger: Challenger,
+    /// See [`StarkGenericConfig::deep_proof_of_work_bits`].
+    deep_proof_of_work_bits: usize,
     _phantom: PhantomData<Challenge>,
 }
 
 impl<Pcs: Clone, Challenge: Clone, Challenger: Clone> StarkConfig<Pcs, Challenge, Challenger> {
+    /// A configuration that does not grind before the out-of-domain point.
+    ///
+    /// Use [`Self::with_deep_proof_of_work_bits`] to add that grind.
     pub const fn new(pcs: Pcs, challenger: Challenger) -> Self {
         Self {
             pcs,
             challenger,
+            deep_proof_of_work_bits: 0,
             _phantom: PhantomData,
         }
+    }
+
+    /// Grind `bits` before sampling the DEEP out-of-domain point.
+    ///
+    /// Both the prover and the verifier read this from the config, so the two
+    /// must be configured identically — a mismatch is a rejected proof, not a
+    /// silently weaker one.
+    ///
+    /// See [`StarkGenericConfig::deep_proof_of_work_bits`] for what the bits
+    /// buy.
+    #[must_use]
+    pub const fn with_deep_proof_of_work_bits(mut self, bits: usize) -> Self {
+        self.deep_proof_of_work_bits = bits;
+        self
     }
 }
 
@@ -83,5 +141,9 @@ where
 
     fn initialise_challenger(&self) -> Self::Challenger {
         self.challenger.clone()
+    }
+
+    fn deep_proof_of_work_bits(&self) -> usize {
+        self.deep_proof_of_work_bits
     }
 }

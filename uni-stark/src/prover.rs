@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_symbolic_constraints};
 use p3_air::{Air, RowWindow};
-use p3_challenger::{CanObserve, FieldChallenger};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use p3_field::Field;
@@ -18,7 +18,7 @@ use tracing::{debug_span, info_span, instrument};
 use crate::{
     Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData, Proof,
     ProverConstraintFolder, StarkGenericConfig, Val, get_constraint_layout,
-    get_log_num_quotient_chunks,
+    get_log_num_quotient_chunks, observe_commitment,
 };
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use crate::{VectorizedChallenge, VectorizedConstraintFolder, VectorizedVal};
@@ -97,6 +97,7 @@ pub fn prove_with_preprocessed<
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
+    SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
     A: QuotientAir<SC>,
 {
     #[cfg(debug_assertions)]
@@ -227,9 +228,12 @@ where
     // TODO: Might be best practice to include other instance data here; see verifier comment.
 
     // Observe the Merkle root of the trace commitment.
-    challenger.observe(trace_commit.clone());
+    observe_commitment::<SC>(&mut challenger, trace_commit.clone());
     if preprocessed_width > 0 {
-        challenger.observe(preprocessed_commit.as_ref().unwrap().clone());
+        observe_commitment::<SC>(
+            &mut challenger,
+            preprocessed_commit.as_ref().unwrap().clone(),
+        );
     }
 
     // Observe the public input values.
@@ -317,7 +321,7 @@ where
     //          - quotient_data.leaves is a pair of matrices containing the `q_i0(x)` and `q_i1(x)`.
     let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
         .in_scope(|| pcs.commit_quotient(quotient_domain, quotient_flat, num_quotient_chunks));
-    challenger.observe(quotient_commit.clone());
+    observe_commitment::<SC>(&mut challenger, quotient_commit.clone());
 
     // If zk is enabled, we generate random extension field values of the size of the randomized trace. If `n` is the degree of the initial trace,
     // then the randomized trace has degree `2n`. To randomize the FRI batch polynomial, we then need an extension field random polynomial of degree `2n -1`.
@@ -345,7 +349,7 @@ where
     };
 
     if let Some(r_commit) = opt_r_commit {
-        challenger.observe(r_commit);
+        observe_commitment::<SC>(&mut challenger, r_commit);
     }
 
     // Get an out-of-domain point to open our values at.
@@ -359,6 +363,11 @@ where
     // If zeta happens to lie in the domain `gK`, then when opening at zeta we will run into division
     // by zero errors. This doesn't lead to a soundness issue as the verifier will just reject in those
     // cases but it is a completeness issue and contributes a completeness error of |gK| = 2N/|EF|.
+    //
+    // Grinding before the sample makes each attempt at a favourable `zeta` cost
+    // `2^deep_proof_of_work_bits` work, adding that many bits to the round's error above. `dN/|EF|`
+    // is fixed by the AIR and the trace height, so this grind is the only parameter that moves it.
+    let deep_pow_witness = challenger.grind(config.deep_proof_of_work_bits());
     let zeta: SC::Challenge = challenger.sample_algebra_element();
     let zeta_next = trace_domain
         .next_point(zeta)
@@ -434,6 +443,7 @@ where
         opened_values,
         opening_proof,
         degree_bits: log_ext_degree,
+        deep_pow_witness,
     }
 }
 
@@ -451,6 +461,7 @@ pub fn prove<
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
+    SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
     A: QuotientAir<SC>,
 {
     prove_with_preprocessed::<SC, A>(config, air, trace, public_values, None)

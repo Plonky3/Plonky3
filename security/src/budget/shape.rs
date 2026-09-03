@@ -18,6 +18,13 @@ pub struct ProtocolParams {
     pub num_queries: u32,
     /// Grinding bits before query index sampling.
     pub query_pow_bits: u32,
+    /// Grinding bits before the out-of-domain evaluation point is sampled.
+    ///
+    /// This round's error is the DEEP-ALI identity's degree over the field size, fixed by the AIR
+    /// and the trace height. Every other round here has a second lever — the query count, the
+    /// folding arity, the width of what is batched — so this is the only one whose bits nothing
+    /// but grinding can buy back.
+    pub ood_pow_bits: u32,
     /// Grinding bits before the DEEP-composition challenge is sampled. Read only when
     /// [`AirShape::num_deep_terms`] is `Some`.
     pub deep_pow_bits: u32,
