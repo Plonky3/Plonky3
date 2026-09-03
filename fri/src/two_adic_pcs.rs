@@ -102,15 +102,28 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
         log_height: usize,
         log_arity: usize,
         beta: EF,
-        evals: impl Iterator<Item = EF>,
+        mut evals: impl Iterator<Item = EF>,
     ) -> EF {
         let arity = 1 << log_arity;
-        let evals: Vec<_> = evals.collect();
-        assert_eq!(evals.len(), arity, "Expected {} evaluations", arity);
 
         // Compute the evaluation points in the subgroup
         let subgroup_start = F::two_adic_generator(log_height + log_arity)
             .exp_u64(reverse_bits_len(index, log_height) as u64);
+
+        if log_arity == 1 {
+            // The two interpolation points are `{s, -s}` for `s = subgroup_start`, so
+            //     f(beta) = (y_0 + y_1) / 2 + (y_0 - y_1) * beta / (2 s).
+            // This is the closed form used by the arity-2 kernel of `fold_matrix`.
+            let (lo, hi) = evals.next_tuple().expect("Expected 2 evaluations");
+            assert!(evals.next().is_none(), "Expected 2 evaluations");
+
+            let halve_inv_power = subgroup_start.double().inverse();
+            return (lo + hi).halve() + (lo - hi) * beta * halve_inv_power;
+        }
+
+        let evals: Vec<_> = evals.collect();
+        assert_eq!(evals.len(), arity, "Expected {} evaluations", arity);
+
         let mut xs: Vec<F> = F::two_adic_generator(log_arity)
             .shifted_powers(subgroup_start)
             .take(arity)
@@ -768,4 +781,48 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<BabyBear, 4>;
+
+    /// `fold_row`'s arity-2 closed form must agree with the generic barycentric path.
+    #[test]
+    fn fold_row_arity_two_matches_lagrange_interpolation() {
+        let mut rng = SmallRng::seed_from_u64(0);
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+
+        for log_height in 0..6 {
+            for index in 0..(1 << log_height) {
+                let beta: EF = rng.random();
+                let evals: [EF; 2] = [rng.random(), rng.random()];
+
+                // The interpolation points the generic path would build for this row.
+                let subgroup_start = F::two_adic_generator(log_height + 1)
+                    .exp_u64(reverse_bits_len(index, log_height) as u64);
+                let xs = [subgroup_start, -subgroup_start];
+                let expected = lagrange_interpolate_at(&xs, &evals, beta);
+
+                let folded = FriFoldingStrategy::<F, EF>::fold_row(
+                    &folding,
+                    index,
+                    log_height,
+                    1,
+                    beta,
+                    evals.into_iter(),
+                );
+                assert_eq!(folded, expected);
+            }
+        }
+    }
 }
