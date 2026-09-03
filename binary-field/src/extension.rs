@@ -87,6 +87,20 @@ macro_rules! binary_tower_extension {
                 Self::from_repr(repr)
             }
 
+            /// The coefficients of an element are already contiguous, so one buffer sized up
+            /// front takes them all without a temporary per element.
+            #[inline]
+            fn flatten_to_base(vec: Vec<Self>) -> Vec<$lower> {
+                let dimension = <$upper as BasedVectorSpace<$lower>>::DIMENSION;
+                let mut flat = Vec::with_capacity(vec.len() * dimension);
+                for x in &vec {
+                    flat.extend_from_slice(
+                        <Self as BasedVectorSpace<$lower>>::as_basis_coefficients_slice(x),
+                    );
+                }
+                flat
+            }
+
             #[inline]
             fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = $lower>>(
                 iter: I,
@@ -100,28 +114,6 @@ macro_rules! binary_tower_extension {
                     }
                     Self::from_repr(repr)
                 })
-            }
-
-            /// The tower basis coincides with the byte layout, so the whole buffer already *is*
-            /// its coefficients: flattening is one copy, not one per element.
-            ///
-            /// The inverse direction is not symmetric, and `reconstitute_from_base` keeps the
-            /// default that builds a fresh buffer: a `Vec<$lower>` is allocated at `$lower`'s
-            /// alignment, which is weaker than `$upper`'s, and freeing an allocation under a
-            /// `Layout` whose alignment differs from the one it was made with is undefined
-            /// behaviour.
-            #[inline]
-            fn flatten_to_base(vec: Vec<Self>) -> Vec<$lower> {
-                let d = <$upper as BasedVectorSpace<$lower>>::DIMENSION;
-
-                // SAFETY: exactly the argument in `as_basis_coefficients_slice` above, extended
-                // to the whole buffer: a `Vec<$upper>` is `vec.len()` contiguous, padding-free
-                // `$upper` values, each of which is `d` contiguous `$lower` values in tower-basis
-                // order. The const assertions there cover the endianness, size, alignment and
-                // canonicity this relies on. The slice borrows `vec`, so it cannot outlive it.
-                let flat: &[$lower] =
-                    unsafe { slice::from_raw_parts(vec.as_ptr().cast::<$lower>(), vec.len() * d) };
-                flat.to_vec()
             }
         }
 
@@ -616,6 +608,54 @@ mod tests {
             assert_unspecialised!(BinaryField128, BinaryField16, a);
             assert_unspecialised!(BinaryField128, BinaryField32, a);
         }
+    }
+
+    /// Check `flatten_to_base` against concatenating each element's coefficients in turn, which
+    /// is what [`BasedVectorSpace`] defines it to be, and against reassembly.
+    macro_rules! assert_flatten_matches_concatenation {
+        ($upper:ty, $lower:ty, $vals:expr) => {{
+            let elements: Vec<$upper> = $vals.iter().map(|&v| <$upper>::from_repr(v)).collect();
+
+            let expected: Vec<$lower> = elements
+                .iter()
+                .flat_map(|x| {
+                    <$upper as BasedVectorSpace<$lower>>::as_basis_coefficients_slice(x).to_vec()
+                })
+                .collect();
+
+            let flat = <$upper as BasedVectorSpace<$lower>>::flatten_to_base(elements.clone());
+            assert_eq!(flat, expected);
+            assert_eq!(
+                flat.len(),
+                elements.len() * <$upper as BasedVectorSpace<$lower>>::DIMENSION
+            );
+            assert_eq!(
+                <$upper as BasedVectorSpace<$lower>>::reconstitute_from_base(flat),
+                elements
+            );
+        }};
+    }
+
+    #[test]
+    fn flatten_to_base_concatenates_the_coefficients_on_every_pair() {
+        // The empty case has to reach the same answer as the non-empty one.
+        assert_flatten_matches_concatenation!(BinaryField128, BinaryField8, [0u128; 0]);
+
+        let vals16 = [0u16, 1, 0xfedc, 0xffff];
+        let vals32 = [0u32, 1, 0xfedc_ba98, 0xffff_ffff];
+        let vals64 = [0u64, 1, 0xfedc_ba98_7654_3210, u64::MAX];
+        let vals128 = [0u128, 1, A128, u128::MAX];
+
+        assert_flatten_matches_concatenation!(BinaryField16, BinaryField8, vals16);
+        assert_flatten_matches_concatenation!(BinaryField32, BinaryField8, vals32);
+        assert_flatten_matches_concatenation!(BinaryField64, BinaryField8, vals64);
+        assert_flatten_matches_concatenation!(BinaryField128, BinaryField8, vals128);
+        assert_flatten_matches_concatenation!(BinaryField32, BinaryField16, vals32);
+        assert_flatten_matches_concatenation!(BinaryField64, BinaryField16, vals64);
+        assert_flatten_matches_concatenation!(BinaryField128, BinaryField16, vals128);
+        assert_flatten_matches_concatenation!(BinaryField64, BinaryField32, vals64);
+        assert_flatten_matches_concatenation!(BinaryField128, BinaryField32, vals128);
+        assert_flatten_matches_concatenation!(BinaryField128, BinaryField64, vals128);
     }
 
     /// The embedding is multiplicative and additive, i.e. a ring homomorphism.
