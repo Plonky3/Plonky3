@@ -98,6 +98,18 @@ pub fn conjectured_error(regime: &FriRegime, shape: &InstanceShape) -> ErrorBits
     ErrorBits::from_log2(bits)
 }
 
+/// Legacy conjectured low-degree-test soundness (ethSTARK
+/// [2021/582](https://eprint.iacr.org/2021/582), pre-random-words).
+///
+/// `b = num_queries · log_blowup + query_pow`. Predates the random-words
+/// correction in [`conjectured_error`] ([2025/2010] §1.5) and does not
+/// account for the commit-phase folding round covered by
+/// [`conjectured_commit_phase_error`]; kept for callers that specifically
+/// want the older, simpler heuristic bound.
+pub const fn legacy_conjectured_error(regime: &FriRegime) -> ErrorBits {
+    ErrorBits::from_log2((regime.log_blowup * regime.num_queries + regime.query_pow_bits) as f64)
+}
+
 /// FRI commit-phase per-round error in the conjectured regime.
 ///
 /// Identical to [`commit_phase_error_udr`], and deliberately so: the bound
@@ -452,6 +464,19 @@ mod tests {
             )
             .bits()
         );
+    }
+
+    /// `legacy_conjectured_error` reproduces the pre-random-words ethSTARK
+    /// formula exactly: `num_queries * log_blowup + query_pow`.
+    #[test]
+    fn legacy_conjectured_error_matches_ethstark_formula() {
+        let regime = benchmark_regime();
+        let bits = legacy_conjectured_error(&regime).bits();
+        assert_eq!(
+            bits,
+            (regime.num_queries * regime.log_blowup + regime.query_pow_bits) as f64
+        );
+        assert_eq!(bits, 116.0);
     }
 
     #[test]
