@@ -529,6 +529,7 @@ where
         log_final_poly_len: FRI_LOG_FINAL_POLY_LEN,
         max_log_arity: FRI_MAX_LOG_ARITY,
         num_queries: FRI_NUM_QUERIES,
+        batch_proof_of_work_bits: 0,
         commit_proof_of_work_bits: FRI_COMMIT_POW_BITS,
         query_proof_of_work_bits: FRI_QUERY_POW_BITS,
         mmcs: challenge_mmcs,

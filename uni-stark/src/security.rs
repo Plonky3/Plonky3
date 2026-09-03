@@ -10,7 +10,10 @@ use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
 use p3_field::{ExtensionField, Field};
 use p3_security::fri::FriRegime;
-use p3_security::grinding::GrindingSites;
+// Re-exported (rather than merely imported) so that declaring
+// [`StarkSecurityParams::grinding`] does not oblige a caller to add a direct
+// dependency on `p3-security`.
+pub use p3_security::grinding::GrindingSites;
 use p3_security::shape::{InstanceShape, StarkAirParams as P3AirShape};
 use p3_security::stark::{conjectured_security_report, proven_security_report};
 use p3_util::{log2_ceil_usize, log2_floor_usize};
@@ -127,6 +130,33 @@ pub struct StarkSecurityParams {
     /// several bits. [`StarkSecurityParams::from_air`] derives the true count;
     /// [`num_batched_openings`] is the formula it uses.
     pub num_batched_functions: usize,
+    /// Grinding sited outside the low-degree test, in bits per site.
+    ///
+    /// The FRI query- and commit-phase grinds live in the fields above,
+    /// because the low-degree test folds them into its own terms; everything
+    /// else the protocol grinds before goes here. Defaults to
+    /// [`GrindingSites::NONE`].
+    ///
+    /// Only declare a site the prover actually grinds and the verifier
+    /// actually checks — these bits are added to the reported level verbatim,
+    /// so a site claimed here but not enforced in the protocol overstates
+    /// security. For a uni-STARK over `p3-fri` the two enforced sites are
+    /// `p3_fri::FriParameters::grinding_sites` (the batch-combination
+    /// challenge) and [`crate::StarkGenericConfig::deep_proof_of_work_bits`]
+    /// (the out-of-domain point), so a faithful value is:
+    ///
+    /// ```ignore
+    /// GrindingSites {
+    ///     out_of_domain: config.deep_proof_of_work_bits(),
+    ///     ..fri_params.grinding_sites()
+    /// }
+    /// ```
+    ///
+    /// A `p3-batch-stark` proof enforces a third,
+    /// [`crate::StarkGenericConfig::lookup_proof_of_work_bits`], and so adds
+    /// `lookup_challenge: config.lookup_proof_of_work_bits()`. A uni-STARK has
+    /// no lookups and must leave that site at `0`.
+    pub grinding: GrindingSites,
 }
 
 impl StarkSecurityParams {
@@ -174,7 +204,18 @@ impl StarkSecurityParams {
             air_max_constraint_degree,
             max_combo,
             num_batched_functions,
+            grinding: GrindingSites::NONE,
         }
+    }
+
+    /// Declare the grinding sited outside the low-degree test.
+    ///
+    /// See [`Self::grinding`] for how to derive a faithful value from the
+    /// runtime config, and why an unfaithful one overstates security.
+    #[must_use]
+    pub const fn with_grinding(mut self, grinding: GrindingSites) -> Self {
+        self.grinding = grinding;
+        self
     }
 
     /// Build security parameters by inspecting the AIR's symbolic constraints to derive
@@ -231,15 +272,6 @@ impl StarkSecurityParams {
             max_combo,
             num_batched_functions,
         )
-    }
-
-    /// Where this configuration grinds, by error source, excluding the FRI
-    /// query- and commit-phase sites — [`Self::fri_regime`] carries those
-    /// directly, since [`GrindingSites`] does not model the low-degree
-    /// test's own sites. A uni-STARK grinds only inside FRI, so the DEEP and
-    /// lookup-challenge sites stay at the neutral `0`.
-    const fn grinding(&self) -> GrindingSites {
-        GrindingSites::NONE
     }
 
     /// The low-degree test owns the query- and commit-phase grinding sites,
@@ -373,7 +405,7 @@ impl ConjecturedSecurity {
             &params.air_shape(),
             &params.instance_shape(degree_bits),
             &[],
-            &params.grinding(),
+            &params.grinding,
         );
         Self {
             security_bits: report.security_bits() as usize,
@@ -439,7 +471,7 @@ impl ProvenSecurity {
         let air = params.air_shape();
         let shape = params.instance_shape(degree_bits);
 
-        let report = proven_security_report(&regime, &air, &shape, &[], &params.grinding());
+        let report = proven_security_report(&regime, &air, &shape, &[], &params.grinding);
 
         Self {
             unique_decoding_bits: report.udr.security_bits() as usize,
@@ -535,6 +567,7 @@ mod tests {
             air_max_constraint_degree: TEST_AIR_MAX_DEG,
             max_combo: TEST_MAX_COMBO,
             num_batched_functions: 1,
+            grinding: GrindingSites::NONE,
         }
     }
 

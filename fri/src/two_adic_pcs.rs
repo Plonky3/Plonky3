@@ -581,6 +581,14 @@ where
 
         // Batch combination challenge
 
+        // Grind before sampling `alpha`. Every claimed evaluation has been observed by now, so the
+        // witness commits the prover to those openings; a prover hunting for an `alpha` that makes
+        // a false batched claim look low degree must redo `2^batch_proof_of_work_bits` work per
+        // candidate. This is the site whose round-by-round error grows with the number of batched
+        // openings, so it is the one that binds a proven-soundness target on a wide instance over a
+        // small field — see `FriParameters::batch_proof_of_work_bits`.
+        let batch_pow_witness = challenger.grind(self.fri.batch_proof_of_work_bits);
+
         // Soundness Error:
         // See the discussion in the doc comment of [`prove_fri`]. Essentially, the soundness error
         // for this sample is tightly tied to the soundness error of the FRI protocol.
@@ -588,6 +596,7 @@ where
         // points it needs to be opened at. This comes from the fact that we are taking a large linear combination
         // of `(f(zeta) - f(x))/(zeta - x)` for each function `f` and all of `f`'s opening points.
         // In our setup, k is two times the trace width plus the number of quotient polynomials.
+        // The grind above adds `batch_proof_of_work_bits` to that error.
         let alpha: Challenge = challenger.sample_algebra_element();
 
         // We precompute the packed powers of alpha as we need the same powers for each matrix.
@@ -692,6 +701,7 @@ where
             log_global_max_height,
             &commitment_data_with_opening_points,
             &self.mmcs,
+            batch_pow_witness,
         );
 
         (all_opened_values, fri_proof)

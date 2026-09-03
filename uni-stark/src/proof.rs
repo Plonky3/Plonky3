@@ -3,13 +3,9 @@ use alloc::vec::Vec;
 use p3_commit::Pcs;
 use serde::{Deserialize, Serialize};
 
-use crate::StarkGenericConfig;
 use crate::security::{ConjecturedSecurity, ProvenSecurity, StarkSecurityParams};
+use crate::{Com, StarkGenericConfig, Val};
 
-type Com<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
-    <SC as StarkGenericConfig>::Challenge,
-    <SC as StarkGenericConfig>::Challenger,
->>::Commitment;
 type PcsProof<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenge,
     <SC as StarkGenericConfig>::Challenger,
@@ -22,6 +18,11 @@ pub struct Proof<SC: StarkGenericConfig> {
     pub opened_values: OpenedValues<SC::Challenge>,
     pub opening_proof: PcsProof<SC>,
     pub degree_bits: usize,
+    /// Proof of work for the phase before the out-of-domain point is sampled.
+    ///
+    /// Trivially valid (and unread) when
+    /// [`StarkGenericConfig::deep_proof_of_work_bits`] is `0`.
+    pub deep_pow_witness: Val<SC>,
 }
 
 impl<SC: StarkGenericConfig> Proof<SC> {

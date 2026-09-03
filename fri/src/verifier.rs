@@ -149,8 +149,8 @@ where
     InputError(InputError),
     #[error("final polynomial mismatch: evaluation does not match expected value")]
     FinalPolyMismatch,
-    #[error("invalid proof-of-work witness")]
-    InvalidPowWitness,
+    #[error("invalid proof-of-work witness for the {0} phase")]
+    InvalidPowWitness(PowPhase),
     /// A query point coincides with an opening point, so the quotient denominator is zero.
     #[error(
         "batch {batch}, matrix {matrix}, point {point}: query point coincides with the opening point"
@@ -160,6 +160,34 @@ where
         matrix: usize,
         point: usize,
     },
+}
+
+/// Which grinding phase a rejected proof-of-work witness belongs to.
+///
+/// A proof carries an independent witness per phase, each guarding a different
+/// challenge, so a bare "invalid witness" cannot say which parameter is
+/// mismatched. Naming the phase distinguishes a prover built against different
+/// `*_proof_of_work_bits` from a genuinely forged witness.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PowPhase {
+    /// Guards the challenge batching the openings into one FRI instance
+    /// (`FriParameters::batch_proof_of_work_bits`).
+    Batch,
+    /// Guards one commit-phase folding challenge
+    /// (`FriParameters::commit_proof_of_work_bits`).
+    CommitPhase,
+    /// Guards the query indices (`FriParameters::query_proof_of_work_bits`).
+    Query,
+}
+
+impl core::fmt::Display for PowPhase {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::Batch => "opening-batching",
+            Self::CommitPhase => "commit",
+            Self::Query => "query",
+        })
+    }
 }
 
 /// A chain of FRI input openings allowing a verifier to check a sequence of
@@ -213,11 +241,22 @@ where
         return Err(FriError::ZeroBlowup);
     }
 
+    // Check the proof of work guarding the batch combination challenge. The prover ground this
+    // after committing to every claimed evaluation and before learning `alpha`, so a prover
+    // searching for a favourable `alpha` pays `2^batch_proof_of_work_bits` per attempt.
+    if !challenger.check_witness(params.batch_proof_of_work_bits, proof.batch_pow_witness) {
+        return Err(FriError::InvalidPowWitness(PowPhase::Batch));
+    }
+
     // Generate the Batch combination challenge
     // Soundness Error: `|f|/|EF|` where `|f|` is the number of different functions of the form
     // `(f(zeta) - fi(x))/(zeta - x)` which need to be checked.
     // Explicitly, `|f|` is `commitments_with_opening_points.flatten().flatten().len()`
     // (i.e counting the number (point, claimed_evaluation) pairs).
+    //
+    // Grinding sited immediately above adds `batch_proof_of_work_bits` to this round's
+    // round-by-round error; `p3_security::GrindingSites::batch_combination` is where the
+    // soundness model credits it.
     let alpha: Challenge = challenger.sample_algebra_element();
 
     // One commit-phase opening set per commitment.
@@ -313,7 +352,7 @@ where
             // folding challenge.
             challenger.observe(comm.clone());
             if !challenger.check_witness(params.commit_proof_of_work_bits, *witness) {
-                return Err(FriError::InvalidPowWitness);
+                return Err(FriError::InvalidPowWitness(PowPhase::CommitPhase));
             }
             Ok(challenger.sample_algebra_element())
         })
@@ -337,7 +376,7 @@ where
 
     // Check PoW.
     if !challenger.check_witness(params.query_proof_of_work_bits, proof.query_pow_witness) {
-        return Err(FriError::InvalidPowWitness);
+        return Err(FriError::InvalidPowWitness(PowPhase::Query));
     }
 
     // The log of the final domain size.
@@ -1081,12 +1120,17 @@ mod tests {
         // - final poly length 1: fold down to f^(r) with degree 0
         // - binary folding: each round halves the domain (arity 2)
         // - queries: chosen by the caller
-        // - 0 PoW bits: every witness is trivially valid
+        // - 1 batch PoW bit: cheap to grind, but enough that the witness is
+        //   actually observed and so genuinely bound to the transcript (a
+        //   0-bit check short-circuits without reading the witness at all)
+        // - 0 commit/query PoW bits: those witnesses are trivially valid, so
+        //   tests that tamper with proof shape reach the check they target
         let fri_params = FriParameters {
             log_blowup: 1,
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries,
+            batch_proof_of_work_bits: 1,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 0,
             mmcs: challenge_mmcs,
@@ -2100,7 +2144,58 @@ mod tests {
         .expect_err("should reject proof with invalid PoW witness");
 
         match err {
-            FriError::InvalidPowWitness => {}
+            FriError::InvalidPowWitness(PowPhase::CommitPhase) => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    /// The batch witness is checked before the batching challenge is sampled,
+    /// so raising the required difficulty past what the prover ground must be
+    /// rejected — and must be attributed to the batch phase, not to one of the
+    /// other two witnesses the proof also carries.
+    #[test]
+    fn reject_insufficient_batch_pow() {
+        let f = make_test_fixture();
+        let mut params = f.fri_params.clone();
+        params.batch_proof_of_work_bits = 20;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject a proof whose batch PoW is too weak");
+
+        match err {
+            FriError::InvalidPowWitness(PowPhase::Batch) => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    /// A tampered batch witness is rejected even at the difficulty the proof
+    /// was produced with, which is what makes the grind binding rather than
+    /// decorative: the witness must actually satisfy the PoW predicate.
+    #[test]
+    fn reject_tampered_batch_pow_witness() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+        proof.batch_pow_witness += Val::ONE;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject a tampered batch PoW witness");
+
+        match err {
+            FriError::InvalidPowWitness(PowPhase::Batch) => {}
             other => panic!("wrong error variant: {other:?}"),
         }
     }
@@ -2267,6 +2362,7 @@ mod tests {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 0,
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 0,
             mmcs: challenge_mmcs,

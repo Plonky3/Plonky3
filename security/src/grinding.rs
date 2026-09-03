@@ -38,6 +38,8 @@ pub const fn boost(error: ErrorBits, pow_bits: usize) -> ErrorBits {
 /// - [`Self::out_of_domain`] is applied to the DEEP-ALI term by
 ///   [`crate::stark::proven_security_report`] and
 ///   [`crate::stark::conjectured_security_report`].
+/// - [`Self::batch_combination`] is applied to the batched-openings term by
+///   [`crate::stark::proven_security_report`].
 /// - [`Self::lookup_challenge`] is applied to the LogUp fingerprint term by
 ///   [`crate::logup::security_term`].
 ///
@@ -56,6 +58,22 @@ pub const fn boost(error: ErrorBits, pow_bits: usize) -> ErrorBits {
 pub struct GrindingSites {
     /// Bits ground before the DEEP out-of-domain point is sampled.
     pub out_of_domain: usize,
+    /// Bits ground before the challenge that random-linear-combines the
+    /// committed codewords into the single low-degree-test instance.
+    ///
+    /// This is the opening-batching challenge of the polynomial commitment
+    /// scheme (`alpha` in `p3_fri::TwoAdicFriPcs::open`), **not** a FRI
+    /// folding challenge — those are `FriRegime::commit_pow_bits`, carried by
+    /// the low-degree test itself. It is credited only to the term
+    /// [`crate::report::BATCH_LABEL`] names, which exists only when more than
+    /// one codeword is batched (`InstanceShape::num_batched_functions >= 2`);
+    /// with nothing to batch there is no such round and these bits buy
+    /// nothing.
+    ///
+    /// Only the proven path models the batched-openings round, so grinding
+    /// here does not move the conjectured report — see
+    /// [`crate::stark::conjectured_security_report`]'s "Not modeled".
+    pub batch_combination: usize,
     /// Bits ground before the lookup / permutation argument's challenges are
     /// sampled.
     pub lookup_challenge: usize,
@@ -66,6 +84,7 @@ impl GrindingSites {
     /// contexts where [`Default::default`] is not available.
     pub const NONE: Self = Self {
         out_of_domain: 0,
+        batch_combination: 0,
         lookup_challenge: 0,
     };
 }
