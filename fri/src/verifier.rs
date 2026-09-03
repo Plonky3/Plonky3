@@ -47,6 +47,13 @@ where
     /// - At least one query is required for the protocol to prove anything.
     #[error("FRI instance has zero queries; at least one is required for soundness")]
     ZeroQueries,
+    /// The instance is configured with `log_blowup == 0`.
+    ///
+    /// At rate 1 every length-N word is itself a degree-<N codeword, so the
+    /// folding chain and final-polynomial check are satisfied by an
+    /// arbitrary reduced-opening word: false claimed evaluations verify.
+    #[error("FRI instance has log_blowup = 0; a positive blowup is required for soundness")]
+    ZeroBlowup,
     #[error("missing initial reduced opening at log height {expected}")]
     MissingInitialReducedOpening { expected: usize },
     #[error("initial reduced opening height mismatch: expected {expected}, got {got}")]
@@ -185,6 +192,11 @@ where
     // Any final polynomial would then pass.
     if params.num_queries == 0 {
         return Err(FriError::ZeroQueries);
+    }
+    // Reject rate-1 FRI: every length-N word is a degree-<N codeword, so an
+    // arbitrary reduced-opening word would pass the folding chain unchecked.
+    if params.log_blowup == 0 {
+        return Err(FriError::ZeroBlowup);
     }
 
     // Generate the Batch combination challenge
@@ -2090,6 +2102,34 @@ mod tests {
         assert!(
             matches!(err, FriError::ZeroQueries),
             "expected ZeroQueries, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_with_zero_blowup() {
+        // Invariant: at log_blowup = 0 every length-N word is a degree-<N
+        // codeword, so the folding chain accepts an arbitrary word.
+        //
+        // Fixture state: an honest proof built with log_blowup >= 1.
+        //
+        // Mutation: verify it under params with log_blowup = 0.
+        let f = make_test_fixture();
+        let mut params = f.fri_params.clone();
+        params.log_blowup = 0;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("zero-blowup instance must be rejected");
+
+        assert!(
+            matches!(err, FriError::ZeroBlowup),
+            "expected ZeroBlowup, got {err:?}"
         );
     }
 
