@@ -354,3 +354,35 @@ fn test_fold_codeword_higher_arity_agrees_with_fold_fiber() {
         }
     }
 }
+
+#[test]
+fn test_fold_poly_coeffs_agrees_with_the_evaluation_form_fold() {
+    use p3_dft::Radix2DitParallel;
+    use p3_stir::prover::{codeword_from_coeffs, coeffs_from_codeword};
+    use p3_stir::utils::{fold_codeword, fold_poly_coeffs};
+
+    let log_domain = 6;
+    let domain_size = 1usize << log_domain;
+    let dft = Radix2DitParallel::<F>::default();
+    let shift = F::GENERATOR;
+    let gamma = ef(31);
+
+    // Degree `domain_size - 1`, so each fold lands at degree `domain_size / k - 1` and the
+    // inverse DFT over the fold domain recovers the folded polynomial exactly.
+    let coeffs: Vec<EF> = (1..=domain_size).map(|i| ef(i as u64)).collect();
+    let codeword = codeword_from_coeffs(&dft, coeffs.clone(), shift, log_domain);
+
+    for log_arity in [1usize, 2, 3] {
+        // `fold_codeword` interpolates at subgroup coordinates, so the coset fold at `gamma`
+        // is reached through `gamma / shift`; `fold_poly_coeffs` takes `gamma` directly.
+        let beta = gamma * EF::from(shift.inverse());
+        let folded = fold_codeword::<F, EF>(&codeword, beta, log_arity, log_domain);
+        let fold_shift = shift.exp_power_of_2(log_arity);
+
+        assert_eq!(
+            fold_poly_coeffs(&coeffs, gamma, log_arity),
+            coeffs_from_codeword(&dft, &folded, fold_shift),
+            "coefficient and evaluation folds disagree at log_arity={log_arity}"
+        );
+    }
+}

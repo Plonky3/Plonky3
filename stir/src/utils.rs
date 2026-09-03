@@ -564,6 +564,22 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
     data
 }
 
+/// Fold a coefficient-form polynomial at challenge `gamma` with arity `k = 2^log_arity`.
+///
+/// Writing `f(X) = Σ_{l<k} X^l · q_l(X^k)`, Construction 4.5's fold is `Σ_{l<k} gamma^l · q_l`,
+/// whose degree-`m` coefficient is `Σ_{l<k} gamma^l · f[l + k·m]` — the Horner evaluation at
+/// `gamma` of the `m`-th length-`k` block of `f`.
+///
+/// Unlike [`fold_codeword`], which interpolates at subgroup coordinates and therefore takes the
+/// rescaled challenge `gamma / shift`, this form carries no domain shift and takes `gamma`
+/// itself.
+pub fn fold_poly_coeffs<F: Field>(coeffs: &[F], gamma: F, log_arity: usize) -> Vec<F> {
+    coeffs
+        .par_chunks(1 << log_arity)
+        .map(|block| eval_poly(block, gamma))
+        .collect()
+}
+
 /// Compute the expected folded value for a single fiber (used by the verifier).
 ///
 /// Given:
