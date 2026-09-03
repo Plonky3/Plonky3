@@ -26,6 +26,25 @@ use crate::{BatchMultiOpening, FriParameters, FriProof, TwoAdicFriPcs};
 /// bounded by [`CryptoRng`]. That rules out generators known to be unsuitable for cryptographic
 /// use, but it does not replace proper seeding: a caller who seeds from a predictable source lets
 /// an observer reproduce the stream and strip the masks.
+///
+/// # Hiding requires a large enough trace relative to the query budget
+///
+/// [`Self::commit`] masks each committed column with exactly `N` uniform base-field values, where
+/// `N` is the trace height, independent of `num_queries` or `FriParameters::num_queries`. Every
+/// query opens each matrix in the base field, and every out-of-domain evaluation opens it in the
+/// extension field (`Challenge::DIMENSION` base-field functionals each). Hiding a matrix
+/// perfectly therefore requires
+///
+/// ```text
+/// N >= num_queries + 2 * Challenge::DIMENSION * (number of opening points)
+/// ```
+///
+/// where the query term is an upper bound on the number of distinct query indices landing on that
+/// matrix. Below that bound the mask is under-determined: the committed column is only partially
+/// hidden, and once `num_queries + 2 * Challenge::DIMENSION * (number of opening points) >= 2N`
+/// it is recoverable exactly. This is not checked or enforced anywhere in this type or in
+/// [`FriParameters`]; a small trace under a production-sized query count silently loses zero
+/// knowledge.
 #[derive(Debug)]
 pub struct HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> {
     inner: TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>,
