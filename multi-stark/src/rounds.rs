@@ -1452,6 +1452,31 @@ where
             .collect::<Vec<_>>();
         assert_ne!(packed_half, 0);
 
+        // A block's selector pair depends on the block only through the residual rows `0` and
+        // `height - 1`. Row `0` sits in the low half of block `0`; row `height - 1` sits in the
+        // high half of block `packed_half - 1`. Every other block reads the same constant pair,
+        // so only these two need the per-row construction.
+        let first_block =
+            BoundaryEvals::row_pair_with_prefix_packed::<F>(0, scalar_half, height, self.boundary);
+        let last_block = BoundaryEvals::row_pair_with_prefix_packed::<F>(
+            (packed_half - 1) * packing_width,
+            scalar_half,
+            height,
+            self.boundary,
+        );
+        let interior_block = (
+            BoundaryEvals::new(
+                EF::ExtensionPacking::ZERO,
+                EF::ExtensionPacking::ZERO,
+                EF::ExtensionPacking::ONE,
+            ),
+            BoundaryEvals::new(
+                EF::ExtensionPacking::ZERO,
+                EF::ExtensionPacking::ZERO,
+                EF::ExtensionPacking::ZERO,
+            ),
+        );
+
         let air_evals = eq_suffix
             .as_slice()
             .par_chunks_exact(packing_width)
@@ -1497,13 +1522,13 @@ where
                         *next_delta = next_hi - next_lo;
                     }
 
-                    let (raw_boundary, raw_boundary_diff) =
-                        BoundaryEvals::row_pair_with_prefix_packed::<F>(
-                            s,
-                            scalar_half,
-                            height,
-                            self.boundary,
-                        );
+                    let (raw_boundary, raw_boundary_diff) = if packed_s == 0 {
+                        first_block
+                    } else if packed_s == packed_half - 1 {
+                        last_block
+                    } else {
+                        interior_block
+                    };
                     let mut boundary = BoundaryEvals::new(
                         PackedExt::new(raw_boundary.first),
                         PackedExt::new(raw_boundary.last),
