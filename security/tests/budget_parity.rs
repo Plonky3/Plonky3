@@ -17,6 +17,7 @@ use p3_security::grinding::{GrindingSites, boost};
 use p3_security::logup::{LogUpAir, security_term as logup_security_term};
 use p3_security::shape::{InstanceShape as F64InstanceShape, StarkAirParams};
 use p3_security::{air, deep, fixed};
+use proptest::prelude::*;
 
 const TIGHT_TOL: f64 = 1e-4;
 const LOG_BLOWUP: u32 = 3;
@@ -52,6 +53,13 @@ const PARAM_ROWS: &[(u32, u32, u32, u32)] = &[(27, 17, 12, 4), (100, 0, 0, 0), (
 
 /// Out-of-domain points referenced per column: `local` and `next` rotations.
 const OOD_MAX_COMBO: u32 = 2;
+
+/// Widest rotation set the grid drives `max_combo` to.
+const OOD_MAX_COMBO_SWEEP: u32 = 8;
+
+/// Tolerance for the property below, which asserts exact agreement rather than a bounded gap and
+/// so only needs to absorb `f64` evaluation noise.
+const PROP_TOL: f64 = 1e-9;
 
 fn to_f64(fixed_bits: u64) -> f64 {
     fixed_bits as f64 / fixed::ONE as f64
@@ -100,31 +108,37 @@ fn every_round_direction_and_tightness() {
                 folding_pow_bits,
                 lookup_pow_bits: 0,
             };
-            let air_shape = AirShape {
-                num_composed_constraints: air_vector.num_composed_constraints,
-                max_constraint_degree: air_vector.max_constraint_degree,
-                max_combo: OOD_MAX_COMBO,
-                num_deep_terms: Some(air_vector.num_deep_terms),
-                lookup: LookupShape {
-                    fractions_per_row: air_vector.fractions_per_row,
-                    max_message_width: air_vector.max_message_width,
-                },
-            };
-
-            for log_max_height in 6..=29u32 {
-                let instance = InstanceShape {
-                    log_max_height,
-                    field_bits: FIELD_BITS,
-                    collision_resistance: CAP_BITS as u32,
+            // `max_combo` enters the out-of-domain bound additively rather than as a multiple of
+            // the trace height, so the two sides only separate by more than `TIGHT_TOL` at the
+            // bottom of the height sweep below, and most sharply on the lower-degree `SMALL`
+            // vector — both of which the grid keeps reaching for this sweep to say anything.
+            for max_combo in 1..=OOD_MAX_COMBO_SWEEP {
+                let air_shape = AirShape {
+                    num_composed_constraints: air_vector.num_composed_constraints,
+                    max_constraint_degree: air_vector.max_constraint_degree,
+                    max_combo,
+                    num_deep_terms: Some(air_vector.num_deep_terms),
+                    lookup: LookupShape {
+                        fractions_per_row: air_vector.fractions_per_row,
+                        max_message_width: air_vector.max_message_width,
+                    },
                 };
-                let report = security_report(&params, &instance, &air_shape);
 
-                check_query(&report, num_queries, query_pow_bits);
-                check_lookup(&report, air_vector, log_max_height);
-                check_composition(&report, air_vector);
-                check_ood(&report, air_vector, log_max_height);
-                check_folding(&report, log_max_height, folding_pow_bits);
-                check_deep_composition(&report, air_vector, deep_pow_bits);
+                for log_max_height in 6..=29u32 {
+                    let instance = InstanceShape {
+                        log_max_height,
+                        field_bits: FIELD_BITS,
+                        collision_resistance: CAP_BITS as u32,
+                    };
+                    let report = security_report(&params, &instance, &air_shape);
+
+                    check_query(&report, num_queries, query_pow_bits);
+                    check_lookup(&report, air_vector, log_max_height);
+                    check_composition(&report, air_vector);
+                    check_ood(&report, air_vector, max_combo, log_max_height);
+                    check_folding(&report, log_max_height, folding_pow_bits);
+                    check_deep_composition(&report, air_vector, deep_pow_bits);
+                }
             }
         }
     }
@@ -202,22 +216,23 @@ fn check_composition(report: &SecurityReport, air_vector: &AirVector) {
     );
 }
 
-fn check_ood(report: &SecurityReport, air_vector: &AirVector, log_max_height: u32) {
+fn check_ood(report: &SecurityReport, air_vector: &AirVector, max_combo: u32, log_max_height: u32) {
     let fixed_bits = term_bits(report, OUT_OF_DOMAIN_LABEL);
     let stark_air = StarkAirParams {
         num_constraints: air_vector.num_composed_constraints as usize,
         max_constraint_degree: air_vector.max_constraint_degree as usize,
-        max_combo: OOD_MAX_COMBO as usize,
+        max_combo: max_combo as usize,
     };
     let p3_bits = cap(deep::deep_ali_error(&stark_air, &f64_instance(log_max_height), 1.0).bits());
 
     assert!(
         fixed_bits <= p3_bits + TIGHT_TOL,
-        "ood: {fixed_bits} > {p3_bits} at h={log_max_height}"
+        "ood: {fixed_bits} > {p3_bits} at h={log_max_height} combo={max_combo}"
     );
     assert!(
         p3_bits - fixed_bits < TIGHT_TOL,
-        "ood: gap {} >= tolerance at h={log_max_height}, fixed drifted conservative",
+        "ood: gap {} >= tolerance at h={log_max_height} combo={max_combo}, \
+         fixed drifted conservative",
         p3_bits - fixed_bits
     );
 }
@@ -298,4 +313,62 @@ fn collision_term_is_the_cap() {
     };
     let report = security_report(&params, &instance, &air_shape);
     assert_eq!(term_bits(&report, COLLISION_LABEL), 96.0);
+}
+
+proptest! {
+    /// The grid above pins the parameter shape to a handful of vectors; this covers the whole
+    /// three-dimensional space the out-of-domain round is a function of.
+    ///
+    /// A counterexample is by construction a shape whose fixed-point budget reports more bits than
+    /// the scalar reference — a recursive verifier accepting a configuration the `f64` path
+    /// rejects.
+    #[test]
+    fn out_of_domain_never_exceeds_the_f64_reference(
+        max_constraint_degree in 1..=32u32,
+        log_max_height in 0..=48u32,
+        max_combo in 1..=16u32,
+    ) {
+        let params = ProtocolParams {
+            log_blowup: LOG_BLOWUP,
+            log_folding_arity: LOG_FOLDING_ARITY,
+            num_queries: 27,
+            query_pow_bits: 17,
+            deep_pow_bits: 12,
+            folding_pow_bits: 4,
+            lookup_pow_bits: 0,
+        };
+        let instance = InstanceShape {
+            log_max_height,
+            field_bits: FIELD_BITS,
+            collision_resistance: CAP_BITS as u32,
+        };
+        let air_shape = AirShape {
+            num_composed_constraints: SMALL.num_composed_constraints,
+            max_constraint_degree,
+            max_combo,
+            num_deep_terms: Some(SMALL.num_deep_terms),
+            lookup: LookupShape {
+                fractions_per_row: SMALL.fractions_per_row,
+                max_message_width: SMALL.max_message_width,
+            },
+        };
+        let fixed_bits = term_bits(
+            &security_report(&params, &instance, &air_shape),
+            OUT_OF_DOMAIN_LABEL,
+        );
+
+        let stark_air = StarkAirParams {
+            num_constraints: SMALL.num_composed_constraints as usize,
+            max_constraint_degree: max_constraint_degree as usize,
+            max_combo: max_combo as usize,
+        };
+        let reference = deep::deep_ali_error(&stark_air, &f64_instance(log_max_height), 1.0);
+        let p3_bits = cap(reference.bits());
+
+        prop_assert!(
+            fixed_bits <= p3_bits + PROP_TOL,
+            "ood: {fixed_bits} > {p3_bits} at d={max_constraint_degree} \
+             h={log_max_height} combo={max_combo}"
+        );
+    }
 }
