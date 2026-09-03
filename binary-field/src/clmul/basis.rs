@@ -165,7 +165,7 @@ const fn invert(cols: &[u128; 128], bits: usize) -> [u128; 128] {
 /// Only the first `bits / 8` tables are meaningful. Each entry drops the lowest set bit of the
 /// index and reuses the entry for the rest, so every entry costs a single `XOR`.
 ///
-/// A byte is the widest chunk worth tabulating: the whole set of tables comes to 160 KiB, and
+/// A byte is the widest chunk worth tabulating: the whole set of tables comes to 176 KiB, and
 /// the conversions are limited by how many loads the core can retire, so halving the lookups
 /// pays for the extra footprint. Narrower nibble tables fit a first-level cache several times
 /// over but measure substantially slower at both widths.
