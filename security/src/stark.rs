@@ -144,6 +144,19 @@ fn batching_term(
     ))
 }
 
+/// Proximity-gap error of the opening-batching random linear combination in
+/// the conjectured regime, or `None` when fewer than two codewords are
+/// batched and the protocol samples no such challenge.
+///
+/// Uses [`SecurityAssumption::UniqueDecoding`]'s `(k − 1)·n / |F|` branch,
+/// which is the [BCI+20] Theorem 1.2 bound at list size 1 — the list size the
+/// conjectured regime assumes ([`list_size_conjectured`]). See
+/// [`conjectured_security_report`] for why this round is charged rather than
+/// omitted.
+fn conjectured_batching_term(shape: &InstanceShape, log_blowup: usize) -> Option<SecurityTerm> {
+    batching_term(SecurityAssumption::UniqueDecoding, shape, log_blowup, None)
+}
+
 /// Labeled term list for one proximity regime: ALI, DEEP, LDT, the optional
 /// batch-combination term, `extras`, and the commitment-collision cap.
 /// Attained security is the min over these (see
@@ -267,10 +280,12 @@ pub fn conjectured_security<L: LowDegreeTest>(
         grinding.out_of_domain,
     );
     let ldt_terms = ldt.conjectured_terms(shape);
-    let mut all: Vec<ErrorBits> = Vec::with_capacity(2 + ldt_terms.len() + extras.len());
+    let batch = conjectured_batching_term(shape, ldt.log_blowup());
+    let mut all: Vec<ErrorBits> = Vec::with_capacity(3 + ldt_terms.len() + extras.len());
     all.push(ali);
     all.push(deep);
     all.extend(ldt_terms.iter().map(|t| t.bits));
+    all.extend(batch.map(|t| t.bits));
     all.extend_from_slice(extras);
     let algebraic = ErrorBits::min(&all);
     ErrorBits::from_log2(algebraic.bits().min(shape.collision_resistance as f64))
@@ -305,13 +320,29 @@ pub fn conjectured_security<L: LowDegreeTest>(
 /// of [`air::composition_error`] and [`deep::deep_ali_error`] at `list_size =
 /// 1`, since `log2(1) = 0`.
 ///
-/// # Not modeled
+/// # The batched-openings round
 ///
-/// The batched-openings random-linear-combination term
-/// ([`proven_security_report`]'s `batch-combination`) has no accepted
-/// conjectured analogue — the random-words heuristic bounds the distance
-/// distribution, not the proximity gap of the batching RLC — so it is omitted
-/// rather than guessed. A caller with a bound for it passes it via `extras`.
+/// The random-linear-combination that batches `shape.num_batched_functions`
+/// committed codewords into the single LDT instance is charged here, under the
+/// same conjecture the rest of this regime rests on: the [BCI+20] Theorem 1.2
+/// proximity-gap error `(k − 1)·n / |F|` assumed to hold up to list-decoding
+/// capacity at list size 1. That is [`SecurityAssumption::UniqueDecoding`]'s
+/// branch of [`SecurityAssumption::prox_gaps_error`], evaluated at the
+/// conjectured list size rather than a Johnson-bound one.
+///
+/// Charging it is what keeps this regime consistent with itself. The folding
+/// random-linear-combination of the low-degree test is the same kind of round,
+/// and [`crate::fri::conjectured_commit_phase_error`] already charges it at the
+/// same bound it uses in the proven regime, for the reason spelled out there:
+/// the conjecture removes the list-size multiplier, it does not assert that a
+/// bad combination challenge cannot exist. Dropping the opening RLC while
+/// keeping the folding RLC would overstate security for an instance that
+/// batches many codewords, which is every real STARK — a width-`w` AIR batches
+/// on the order of `2w` functions, not one.
+///
+/// A caller who prefers the more conservative capacity-bound form of the same
+/// round ([`SecurityAssumption::CapacityBound`], as WHIR and STIR grade it)
+/// passes it via `extras`; the minimum makes the tighter of the two bind.
 pub fn conjectured_security_report<L: LowDegreeTest>(
     ldt: &L,
     air: &StarkAirParams,
@@ -327,10 +358,12 @@ pub fn conjectured_security_report<L: LowDegreeTest>(
     );
 
     let ldt_terms = ldt.conjectured_terms(shape);
-    let mut terms = Vec::with_capacity(3 + ldt_terms.len() + extras.len());
+    let batch = conjectured_batching_term(shape, ldt.log_blowup());
+    let mut terms = Vec::with_capacity(4 + ldt_terms.len() + extras.len());
     terms.push(SecurityTerm::new(ALI_LABEL, ali));
     terms.push(SecurityTerm::new(DEEP_LABEL, deep));
     terms.extend(ldt_terms);
+    terms.extend(batch);
     terms.extend_from_slice(extras);
     terms.push(SecurityTerm::new(
         COLLISION_LABEL,
@@ -358,6 +391,17 @@ mod tests {
             num_constraints: 1,
             max_constraint_degree: 2,
             max_combo: 2,
+        }
+    }
+
+    /// An instance that batches many codewords, over a field small enough to
+    /// keep the batching term in range of the other rounds rather than clamped
+    /// at the collision cap.
+    fn batched_shape() -> InstanceShape {
+        InstanceShape {
+            modulus_bits: 100,
+            num_batched_functions: 1 << 10,
+            ..shape()
         }
     }
 
@@ -641,6 +685,74 @@ mod tests {
         let ground_report = conjectured_security_report(&regime, &air, &shape, &[], &ground);
         let ground_scalar = conjectured_security(&regime, &air, &shape, &[], &ground);
         assert!((ground_report.security_bits() - ground_scalar.bits()).abs() < 1e-12);
+
+        // And with more than one batched codeword — the axis the two paths
+        // would diverge on if only one of them composed the batching round.
+        let batched = batched_shape();
+        let batched_report =
+            conjectured_security_report(&regime, &air, &batched, &[], &GrindingSites::NONE);
+        let batched_scalar =
+            conjectured_security(&regime, &air, &batched, &[], &GrindingSites::NONE);
+        assert!((batched_report.security_bits() - batched_scalar.bits()).abs() < 1e-12);
+    }
+
+    /// The opening-batching round is charged in the conjectured regime, and
+    /// only when the protocol samples such a challenge at all.
+    ///
+    /// Charging it is what keeps the regime consistent with its own low-degree
+    /// test: `fri::conjectured_commit_phase_error` already charges the folding
+    /// random linear combination, which is the same kind of round under the
+    /// same conjecture.
+    #[test]
+    fn conjectured_report_charges_the_batching_round() {
+        let regime = benchmark_regime();
+        let air = air();
+        let batched = batched_shape();
+        let unbatched = InstanceShape {
+            num_batched_functions: 1,
+            ..batched
+        };
+
+        let with_batch =
+            conjectured_security_report(&regime, &air, &batched, &[], &GrindingSites::NONE);
+        let without =
+            conjectured_security_report(&regime, &air, &unbatched, &[], &GrindingSites::NONE);
+
+        assert!(
+            with_batch.terms().iter().any(|t| t.label == BATCH_LABEL),
+            "batched openings must be charged"
+        );
+        assert!(
+            !without.terms().iter().any(|t| t.label == BATCH_LABEL),
+            "a protocol that batches nothing samples no such challenge"
+        );
+        assert!(
+            with_batch.security_bits() < without.security_bits(),
+            "the batching round must constrain the conjectured level: {} vs {}",
+            with_batch.security_bits(),
+            without.security_bits()
+        );
+    }
+
+    /// The conjectured level stays at or above the proven one for the same
+    /// instance, batching included: the conjecture drops the list-size
+    /// multiplier the proven regime pays, it does not add error.
+    #[test]
+    fn conjectured_stays_above_proven_when_openings_are_batched() {
+        let regime = benchmark_regime();
+        let air = air();
+        let shape = batched_shape();
+
+        let conjectured =
+            conjectured_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+        let proven = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+
+        assert!(
+            conjectured.security_bits() >= proven.security_bits(),
+            "conjectured {} fell below proven {}",
+            conjectured.security_bits(),
+            proven.security_bits()
+        );
     }
 
     /// Conjectured mode decodes at list size 1, so ALI and DEEP carry no

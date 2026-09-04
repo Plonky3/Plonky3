@@ -177,10 +177,9 @@ impl StarkSecurityParams {
 /// The cited paper recommends proven bounds for deployment; users staying with
 /// conjectured bounds should remain above the cutoff.
 ///
-/// Unlike [`ProvenSecurity`], this does not model the batched-openings term
-/// (`num_batched_functions`): the conjectured path is optimistic relative to
-/// the proven one for instances that random-linear-combine more than one
-/// committed codeword.
+/// Like [`ProvenSecurity`], this models the batched-openings term
+/// (`num_batched_functions`), charged at the conjectured regime's own list
+/// size — see [`conjectured_security_report`]'s "The batched-openings round".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConjecturedSecurity {
     pub security_bits: usize,
@@ -250,17 +249,16 @@ impl ConjecturedSecurity {
     /// padding, when applicable), so the trace domain is `2^degree_bits` —
     /// the same convention as [`ProvenSecurity::compute_from_proof`].
     ///
-    /// # Two fields this does not consume
+    /// # How this differs from the proven composite
     ///
-    /// `params` is threaded whole, but the conjectured composite reads less of
-    /// it than the proven one does:
+    /// `params` is threaded whole and every field is consumed, but two are
+    /// worth spelling out:
     ///
-    /// - `num_batched_functions` is ignored. The batched-openings term has no
-    ///   accepted conjectured analogue — the random-words heuristic bounds the
-    ///   distance distribution, not the proximity gap of the batching RLC — so
-    ///   [`conjectured_security_report`] omits it rather than guessing. An
-    ///   instance that random-linear-combines several committed codewords is
-    ///   graded optimistically here relative to [`ProvenSecurity`].
+    /// - `num_batched_functions` is charged, at the conjectured regime's list
+    ///   size rather than the proven regime's Johnson-bound one. The result is
+    ///   therefore looser than [`ProvenSecurity`]'s batching term, not absent:
+    ///   an instance that random-linear-combines several committed codewords
+    ///   pays for that round in both regimes.
     /// - `fri_commit_proof_of_work_bits` is credited, but only to the
     ///   commit-phase term ([`p3_security::fri::conjectured_commit_phase_error`]),
     ///   which is one of several the composite takes a minimum over. Grinding
