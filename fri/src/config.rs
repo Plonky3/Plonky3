@@ -113,10 +113,10 @@ impl<M> FriParameters<M> {
             log_final_poly_len,
             max_log_arity: 1,
             num_queries: 2,
-            // Zero, unlike the two below: these testing parameters are shared with
-            // `CirclePcs`, which rejects a nonzero value because it does not implement
-            // this grinding site. Coverage for the site lives in `p3-fri`'s own verifier
-            // tests and in `p3-uni-stark`'s `tests/grinding.rs`.
+            // One bit, so the site is exercised without slowing tests down. `CirclePcs`
+            // shares these parameters but neither grinds nor checks this site, and the
+            // circle tests build the PCS by struct literal rather than through
+            // `CirclePcs::new`, so its guard against a nonzero value does not see this.
             batch_proof_of_work_bits: 1,
             commit_proof_of_work_bits: 1,
             query_proof_of_work_bits: 1,
@@ -132,10 +132,10 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 2,
-            // Zero, unlike the two below: these testing parameters are shared with
-            // `CirclePcs`, which rejects a nonzero value because it does not implement
-            // this grinding site. Coverage for the site lives in `p3-fri`'s own verifier
-            // tests and in `p3-uni-stark`'s `tests/grinding.rs`.
+            // One bit, so the site is exercised without slowing tests down. `CirclePcs`
+            // shares these parameters but neither grinds nor checks this site, and the
+            // circle tests build the PCS by struct literal rather than through
+            // `CirclePcs::new`, so its guard against a nonzero value does not see this.
             batch_proof_of_work_bits: 1,
             commit_proof_of_work_bits: 1,
             query_proof_of_work_bits: 1,
@@ -151,7 +151,11 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 100,
-            batch_proof_of_work_bits: 10,
+            // Zero because `CirclePcs::new` rejects a nonzero value: it samples its own
+            // batch-combination challenge and does not grind before it, and this constructor
+            // feeds circle instances (`examples/src/proofs.rs`, `monolith-air`'s bench).
+            // The two-adic-only constructors below carry the grind instead.
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 16,
             mmcs,

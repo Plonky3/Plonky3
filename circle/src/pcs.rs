@@ -945,6 +945,25 @@ mod tests {
         InputError<<ValMmcs as Mmcs<Val>>::Error, <ChallengeMmcs as Mmcs<Challenge>>::Error>,
     >;
 
+    /// `FriParameters::new_benchmark` must satisfy [`CirclePcs::new`]'s guard.
+    ///
+    /// It reaches that constructor from `p3-examples` and from `monolith-air`'s
+    /// benchmark, so a nonzero `batch_proof_of_work_bits` there turns both into
+    /// a runtime panic. Nothing else catches it: every other site in the tree
+    /// builds this PCS by struct literal, which bypasses the guard entirely,
+    /// and examples and benchmarks are compiled but never run by `cargo test`.
+    #[test]
+    fn benchmark_fri_parameters_are_accepted_by_new() {
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // Panics if the guard rejects these parameters.
+        let _ = TestPcs::new(val_mmcs, FriParameters::new_benchmark(challenge_mmcs));
+    }
+
     /// Build a valid Circle PCS proof for a random single-column trace.
     ///
     /// Returns all the pieces needed to verify (or re-verify after mutation):
