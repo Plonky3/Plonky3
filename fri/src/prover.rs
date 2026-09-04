@@ -8,6 +8,7 @@ use p3_commit::Mmcs;
 use p3_dft::{Radix2DFTSmallBatch, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, info_span, instrument};
 
@@ -261,7 +262,10 @@ where
             // to the current folded polynomial, we need to multiply by a random factor.
             // We use beta^arity as the random factor to maintain independence.
             let beta_pow = beta.exp_power_of_2(log_arity);
-            izip!(&mut folded, v).for_each(|(c, x)| *c += beta_pow * x);
+            folded
+                .par_iter_mut()
+                .zip(v.par_iter())
+                .for_each(|(c, &x)| *c += beta_pow * x);
         }
     }
 

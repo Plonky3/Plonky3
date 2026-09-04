@@ -102,15 +102,28 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
         log_height: usize,
         log_arity: usize,
         beta: EF,
-        evals: impl Iterator<Item = EF>,
+        mut evals: impl Iterator<Item = EF>,
     ) -> EF {
         let arity = 1 << log_arity;
-        let evals: Vec<_> = evals.collect();
-        assert_eq!(evals.len(), arity, "Expected {} evaluations", arity);
 
         // Compute the evaluation points in the subgroup
         let subgroup_start = F::two_adic_generator(log_height + log_arity)
             .exp_u64(reverse_bits_len(index, log_height) as u64);
+
+        if log_arity == 1 {
+            // The two interpolation points are `{s, -s}` for `s = subgroup_start`, so
+            //     f(beta) = (y_0 + y_1) / 2 + (y_0 - y_1) * beta / (2 s).
+            // This is the closed form used by the arity-2 kernel of `fold_matrix`.
+            let (lo, hi) = evals.next_tuple().expect("Expected 2 evaluations");
+            assert!(evals.next().is_none(), "Expected 2 evaluations");
+
+            let halve_inv_power = subgroup_start.double().inverse();
+            return (lo + hi).halve() + (lo - hi) * beta * halve_inv_power;
+        }
+
+        let evals: Vec<_> = evals.collect();
+        assert_eq!(evals.len(), arity, "Expected {} evaluations", arity);
+
         let mut xs: Vec<F> = F::two_adic_generator(log_arity)
             .shifted_powers(subgroup_start)
             .take(arity)
@@ -159,9 +172,10 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
             //   Step 1 (beta):   fold pairs → g(s^2), g(-s^2) where g = f_e + beta*f_o
             //   Step 2 (beta^2): fold pair  → g(beta^2) = f(beta)
 
-            let mut data = m.to_row_major_matrix().values;
-
-            let initial_height = data.len() / 2;
+            // Every row splits into whole `(lo, hi)` pairs.
+            debug_assert!(m.width().is_multiple_of(2));
+            let pairs_per_row = m.width() / 2;
+            let initial_height = m.height() * pairs_per_row;
             let g_inv = F::two_adic_generator(log2_strict_usize(initial_height) + 1).inverse();
             let mut halve_inv_powers = g_inv
                 .shifted_powers(F::ONE.halve())
@@ -169,17 +183,28 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
             reverse_slice_index_bits(&mut halve_inv_powers);
 
             let two = F::ONE + F::ONE;
-            let mut current_beta = beta;
-            let mut next_data = EF::zero_vec(initial_height);
 
-            for step in 0..log_arity {
-                let current_len = data.len();
-                let height = current_len / 2;
-                // Since j << 1 is always >= j, we never overwrite data we haven't read yet.
-                if step > 0 {
-                    for j in 0..height {
-                        halve_inv_powers[j] = two * halve_inv_powers[j << 1].square();
+            // The first fold reads the borrowed matrix row by row, so `m` is never copied.
+            let mut data = EF::zero_vec(initial_height);
+            data.par_chunks_exact_mut(pairs_per_row)
+                .zip(m.par_rows())
+                .zip(halve_inv_powers.par_chunks_exact(pairs_per_row))
+                .for_each(|((out, row), inv_powers)| {
+                    for (o, (lo, hi), &halve_inv_power) in
+                        izip!(out.iter_mut(), row.tuples::<(EF, EF)>(), inv_powers)
+                    {
+                        *o = (lo + hi).halve() + (lo - hi) * beta * halve_inv_power;
                     }
+                });
+
+            let mut current_beta = beta.square();
+            let mut next_data = EF::zero_vec(initial_height / 2);
+
+            for _ in 1..log_arity {
+                let height = data.len() / 2;
+                // Since j << 1 is always >= j, we never overwrite data we haven't read yet.
+                for j in 0..height {
+                    halve_inv_powers[j] = two * halve_inv_powers[j << 1].square();
                 }
                 next_data[..height]
                     .par_iter_mut()
@@ -194,9 +219,9 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
                     });
                 current_beta = current_beta.square();
 
-                // Swap buffers conceptually (just truncate data and copy back, or ping-pong).
+                // Ping-pong the two buffers; the tail of the new `data` is stale and dropped.
+                core::mem::swap(&mut data, &mut next_data);
                 data.truncate(height);
-                data.copy_from_slice(&next_data[..height]);
             }
 
             data
@@ -768,4 +793,78 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<BabyBear, 4>;
+
+    /// `fold_row`'s arity-2 closed form must agree with the generic barycentric path.
+    #[test]
+    fn fold_row_arity_two_matches_lagrange_interpolation() {
+        let mut rng = SmallRng::seed_from_u64(0);
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+
+        for log_height in 0..6 {
+            for index in 0..(1 << log_height) {
+                let beta: EF = rng.random();
+                let evals: [EF; 2] = [rng.random(), rng.random()];
+
+                // The interpolation points the generic path would build for this row.
+                let subgroup_start = F::two_adic_generator(log_height + 1)
+                    .exp_u64(reverse_bits_len(index, log_height) as u64);
+                let xs = [subgroup_start, -subgroup_start];
+                let expected = lagrange_interpolate_at(&xs, &evals, beta);
+
+                let folded = FriFoldingStrategy::<F, EF>::fold_row(
+                    &folding,
+                    index,
+                    log_height,
+                    1,
+                    beta,
+                    evals.into_iter(),
+                );
+                assert_eq!(folded, expected);
+            }
+        }
+    }
+
+    /// `fold_matrix` folds row `i` of its input exactly as `fold_row` folds that row on its own.
+    #[test]
+    fn fold_matrix_matches_fold_row() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+
+        for log_arity in 1..4 {
+            for log_height in 0..5 {
+                let beta: EF = rng.random();
+                let m = RowMajorMatrix::<EF>::rand(&mut rng, 1 << log_height, 1 << log_arity);
+
+                let folded = FriFoldingStrategy::<F, EF>::fold_matrix(
+                    &folding,
+                    beta,
+                    log_arity,
+                    m.as_view(),
+                );
+                assert_eq!(folded.len(), m.height());
+
+                for (index, &expected) in folded.iter().enumerate() {
+                    let row = m.row(index).unwrap().into_iter();
+                    let folded_row = FriFoldingStrategy::<F, EF>::fold_row(
+                        &folding, index, log_height, log_arity, beta, row,
+                    );
+                    assert_eq!(folded_row, expected);
+                }
+            }
+        }
+    }
 }

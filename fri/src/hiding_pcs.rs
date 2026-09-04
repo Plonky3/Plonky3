@@ -220,18 +220,21 @@ where
                 let shift = Val::GENERATOR / domain.shift();
                 let random_values = &all_random_values[i * h * w..(i + 1) * h * w];
 
-                // Commit to the bit-reversed LDE.
-                let mut lde_evals = self
+                // The quotient chunk and its mask are both extended onto the same coset, and the
+                // DFT is linear, so they share a single forward transform. Recovering the chunk's
+                // coefficients with `shift.inverse()` scales coefficient `j` by `shift^j`, placing
+                // them on the coset exactly as `coset_lde_batch(evals, log_blowup + 1, shift)` would.
+                let mut lde_coeffs = self
                     .inner
                     .dft
-                    .coset_lde_batch(evals, self.inner.fri.log_blowup + 1, shift)
-                    .to_row_major_matrix();
+                    .coset_idft_batch(evals, shift.inverse())
+                    .values;
+                lde_coeffs.resize((h * w) << (self.inner.fri.log_blowup + 1), Val::ZERO);
 
-                // Evaluate `v_H(X) * r(X)` over the LDE, where:
+                // Add in the coefficients of `v_H(X) * r(X)`, where:
                 // - `v_H` is the coset vanishing polynomial, here equal to (GENERATOR * X / domain.shift)^n - 1,
                 // - and `r` is a random polynomial.
-                let mut vanishing_poly_coeffs =
-                    Val::zero_vec((h * w) << (self.inner.fri.log_blowup + 1));
+                // These are already coset-adjusted, so they are not scaled by `shift^j`.
                 let p = shift.exp_u64(h as u64);
                 Val::GENERATOR
                     .powers()
@@ -240,22 +243,17 @@ where
                     .for_each(|(i, p_i)| {
                         for j in 0..w {
                             let mul_coeff = p_i * random_values[i * w + j];
-                            vanishing_poly_coeffs[i * w + j] -= mul_coeff;
-                            vanishing_poly_coeffs[(h + i) * w + j] = p * mul_coeff;
+                            lde_coeffs[i * w + j] -= mul_coeff;
+                            lde_coeffs[(h + i) * w + j] += p * mul_coeff;
                         }
                     });
-                let random_eval = self
-                    .inner
+
+                // Commit to the bit-reversed LDE.
+                self.inner
                     .dft
-                    .dft_batch(DenseMatrix::new(vanishing_poly_coeffs, w))
-                    .to_row_major_matrix();
-
-                // Add the quotient chunk evaluations over the LDE to the evaluations of `v_H(X) * r(X)`.
-                for i in 0..h * w * (1 << (self.inner.fri.log_blowup + 1)) {
-                    lde_evals.values[i] += random_eval.values[i];
-                }
-
-                lde_evals.bit_reverse_rows().to_row_major_matrix()
+                    .dft_batch(DenseMatrix::new(lde_coeffs, w))
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
             })
             .collect()
     }
@@ -505,9 +503,9 @@ mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
     use p3_commit::ExtensionMmcs;
-    use p3_dft::Radix2Dit;
-    use p3_field::Field;
+    use p3_dft::{Radix2Bowers, Radix2DFTSmallBatch, Radix2Dit};
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::SeedableRng;
@@ -526,6 +524,8 @@ mod tests {
     type Dft = Radix2Dit<Val>;
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
     type MyPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
+    /// Same wrapper, left generic over the DFT backend.
+    type HidingPcs<D> = HidingFriPcs<Val, D, ValMmcs, ChallengeMmcs, StdRng>;
 
     type Commitment = <ValMmcs as Mmcs<Val>>::Commitment;
     type Domain = TwoAdicMultiplicativeCoset<Val>;
@@ -717,5 +717,168 @@ mod tests {
             }
             other => panic!("wrong error variant: {other:?}"),
         }
+    }
+
+    /// Seed for the wrapper's mask RNG, replayed by [`expected_quotient_ldes`].
+    const QUOTIENT_RNG_SEED: u64 = 5;
+
+    /// Blowup used by the quotient-LDE tests below.
+    const QUOTIENT_LOG_BLOWUP: usize = 1;
+
+    /// One quotient chunk's LDE written as two independent forward transforms: a coset LDE of the
+    /// chunk plus a full-size DFT of the `v_H * r` mask, summed pointwise.
+    fn quotient_lde_two_transforms<D: TwoAdicSubgroupDft<Val>>(
+        dft: &D,
+        evals: RowMajorMatrix<Val>,
+        random_values: &[Val],
+        shift: Val,
+    ) -> RowMajorMatrix<Val> {
+        let h = evals.height();
+        let w = evals.width();
+
+        let mut lde_evals = dft
+            .coset_lde_batch(evals, QUOTIENT_LOG_BLOWUP + 1, shift)
+            .to_row_major_matrix();
+
+        let mut vanishing_poly_coeffs = Val::zero_vec((h * w) << (QUOTIENT_LOG_BLOWUP + 1));
+        let p = shift.exp_u64(h as u64);
+        Val::GENERATOR
+            .powers()
+            .take(h)
+            .enumerate()
+            .for_each(|(i, p_i)| {
+                for j in 0..w {
+                    let mul_coeff = p_i * random_values[i * w + j];
+                    vanishing_poly_coeffs[i * w + j] -= mul_coeff;
+                    vanishing_poly_coeffs[(h + i) * w + j] = p * mul_coeff;
+                }
+            });
+        let random_eval = dft
+            .dft_batch(DenseMatrix::new(vanishing_poly_coeffs, w))
+            .to_row_major_matrix();
+
+        for i in 0..h * w * (1 << (QUOTIENT_LOG_BLOWUP + 1)) {
+            lde_evals.values[i] += random_eval.values[i];
+        }
+
+        lde_evals.bit_reverse_rows().to_row_major_matrix()
+    }
+
+    /// Replay the mask draws `get_quotient_ldes` makes from `QUOTIENT_RNG_SEED`, then extend every
+    /// chunk with [`quotient_lde_two_transforms`].
+    fn expected_quotient_ldes<D: TwoAdicSubgroupDft<Val>>(
+        dft: &D,
+        domains: &[Domain],
+        mats: &[RowMajorMatrix<Val>],
+    ) -> Vec<RowMajorMatrix<Val>> {
+        let mut rng = StdRng::seed_from_u64(QUOTIENT_RNG_SEED);
+
+        let cis = get_zp_cis(domains);
+        let last_chunk = domains.len() - 1;
+        let last_chunk_ci_inv = cis[last_chunk].inverse();
+        let mul_coeffs = (0..last_chunk)
+            .map(|i| cis[i] * last_chunk_ci_inv)
+            .collect_vec();
+
+        let randomized = mats
+            .iter()
+            .map(|mat| mat.with_random_cols(NUM_RANDOM_CODEWORDS, &mut rng))
+            .collect_vec();
+        let h = randomized[0].height();
+        let w = randomized[0].width();
+        let mut all_random_values = (0..last_chunk * h * w)
+            .map(|_| rng.random())
+            .chain(core::iter::repeat_n(Val::ZERO, h * w))
+            .collect::<Vec<_>>();
+        for j in 0..last_chunk {
+            let mul_coeff = mul_coeffs[j];
+            for k in 0..h * w {
+                let t = all_random_values[j * h * w + k] * mul_coeff;
+                all_random_values[last_chunk * h * w + k] -= t;
+            }
+        }
+
+        domains
+            .iter()
+            .zip(randomized)
+            .enumerate()
+            .map(|(i, (domain, evals))| {
+                let shift = Val::GENERATOR / domain.shift();
+                quotient_lde_two_transforms(
+                    dft,
+                    evals,
+                    &all_random_values[i * h * w..(i + 1) * h * w],
+                    shift,
+                )
+            })
+            .collect()
+    }
+
+    /// `get_quotient_ldes` shares one forward transform between a chunk and its mask. That relies
+    /// on backend conventions (natural-order coefficients through `coset_idft_batch`/`dft_batch`,
+    /// and `bit_reverse_rows` inverting the committed order), so pin it per backend.
+    fn check_fused_quotient_ldes<D: TwoAdicSubgroupDft<Val> + Clone>(dft: &D) {
+        for (log_h, width, num_chunks) in [(3, 4, 2), (4, 3, 4)] {
+            let mut rng = SmallRng::seed_from_u64(11);
+            let perm = Perm::new_from_rng_128(&mut rng);
+            let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+            let fri_params = FriParameters {
+                log_blowup: QUOTIENT_LOG_BLOWUP,
+                log_final_poly_len: 0,
+                max_log_arity: 1,
+                num_queries: 2,
+                commit_proof_of_work_bits: 0,
+                query_proof_of_work_bits: 0,
+                mmcs: ChallengeMmcs::new(val_mmcs.clone()),
+            };
+            let pcs = HidingPcs::new(
+                dft.clone(),
+                val_mmcs,
+                fri_params,
+                NUM_RANDOM_CODEWORDS,
+                StdRng::seed_from_u64(QUOTIENT_RNG_SEED),
+            );
+
+            // Chunk domains as the quotient prover builds them: a disjoint domain, split evenly.
+            let trace_domain =
+                Pcs::<Challenge, Challenger>::natural_domain_for_degree(&pcs, 1 << log_h);
+            let domains = trace_domain
+                .create_disjoint_domain(num_chunks << log_h)
+                .split_domains(num_chunks);
+            let mats = domains
+                .iter()
+                .map(|domain| RowMajorMatrix::<Val>::rand(&mut rng, domain.size(), width))
+                .collect_vec();
+
+            let expected = expected_quotient_ldes(dft, &domains, &mats);
+            let fused = Pcs::<Challenge, Challenger>::get_quotient_ldes(
+                &pcs,
+                domains.iter().copied().zip(mats).collect_vec(),
+                num_chunks,
+            );
+
+            assert_eq!(fused.len(), expected.len());
+            for (got, want) in fused.iter().zip(&expected) {
+                assert_eq!(
+                    got.values, want.values,
+                    "log_h={log_h} width={width} num_chunks={num_chunks}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fused_quotient_lde_matches_two_transforms_radix2_dit() {
+        check_fused_quotient_ldes(&Radix2Dit::<Val>::default());
+    }
+
+    #[test]
+    fn fused_quotient_lde_matches_two_transforms_radix2_bowers() {
+        check_fused_quotient_ldes(&Radix2Bowers);
+    }
+
+    #[test]
+    fn fused_quotient_lde_matches_two_transforms_small_batch() {
+        check_fused_quotient_ldes(&Radix2DFTSmallBatch::<Val>::default());
     }
 }
