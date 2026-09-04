@@ -2,8 +2,8 @@
 //!
 //! Provides the core operations over coefficient-form polynomials needed by the
 //! STIR prover and verifier: Horner evaluation, synthetic division, polynomial
-//! addition, Newton interpolation, shake polynomial construction, and the
-//! verifier-side shake consistency check.
+//! addition, Newton interpolation, and the verifier-side check that the prover's
+//! answer polynomial interpolates the round's claimed values.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -120,9 +120,10 @@ pub fn eval_degree_correction<F: Field>(value: F, point: F, r_comb: F, gap: usiz
 ///
 /// The geometric sum's numerator and denominator both advance by a fixed ratio (a power of
 /// `g`) across the coset, so each is seeded once per `POWER_CHUNK`-sized chunk (one
-/// exponentiation) instead of once per point — mirroring the degree-correction sweep in
-/// `RoundProver::finish`. The `(1 − r_comb·x)` denominators do not depend on the group, so
-/// they are swept and inverted once for all of `groups` rather than once per group.
+/// exponentiation) and then advanced by a base-field multiply — mirroring the
+/// degree-correction sweep in `RoundProver::finish`. The `(1 − r_comb·x)` denominators do not
+/// depend on the group, so they are swept, inverted, and applied once for all of `groups`
+/// rather than once per group.
 pub fn combine_on_coset<F, EF>(
     groups: &[(EF, usize, &[EF])],
     r_comb: EF,
@@ -135,7 +136,7 @@ where
 {
     let n = 1usize << log_domain;
     let g = F::two_adic_generator(log_domain);
-    let step_start = r_comb * EF::from(shift);
+    let step_start = r_comb * shift;
 
     const POWER_CHUNK: usize = 1 << 12;
     let mut result = EF::zero_vec(n);
@@ -145,10 +146,10 @@ where
         .par_chunks_mut(POWER_CHUNK)
         .enumerate()
         .for_each(|(chunk_idx, chunk)| {
-            let mut step = step_start * EF::from(g.exp_u64((chunk_idx * POWER_CHUNK) as u64));
+            let mut step = step_start * g.exp_u64((chunk_idx * POWER_CHUNK) as u64);
             for d in chunk.iter_mut() {
                 *d = EF::ONE - step;
-                step *= EF::from(g);
+                step *= g;
             }
         });
 
@@ -167,25 +168,32 @@ where
     for &(r_i, gap, values) in groups {
         assert_eq!(values.len(), n, "group values must span the full coset");
 
+        // `r_i · (1 − step^(gap+1))` is swept directly, folding the group's shifting
+        // coefficient into the geometric numerator so that each point costs one product with
+        // its value rather than a separate multiplication by `r_i` and by the denominator.
         let g_hi = g.exp_u64((gap + 1) as u64);
-        let step_start_hi = step_start.exp_u64((gap + 1) as u64);
+        let r_step_start_hi = r_i * step_start.exp_u64((gap + 1) as u64);
         result
             .par_chunks_mut(POWER_CHUNK)
             .zip(values.par_chunks(POWER_CHUNK))
-            .zip(inv_denoms.par_chunks(POWER_CHUNK))
             .enumerate()
-            .for_each(|(chunk_idx, ((res_chunk, val_chunk), inv_chunk))| {
-                let mut step_hi =
-                    step_start_hi * EF::from(g_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64));
-                for ((res, &val), &inv_denom) in res_chunk.iter_mut().zip(val_chunk).zip(inv_chunk)
-                {
-                    let numer = EF::ONE - step_hi;
-                    *res += r_i * val * numer * inv_denom;
-                    step_hi *= EF::from(g_hi);
+            .for_each(|(chunk_idx, (res_chunk, val_chunk))| {
+                let mut r_step_hi =
+                    r_step_start_hi * g_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
+                for (res, &val) in res_chunk.iter_mut().zip(val_chunk) {
+                    *res += val * (r_i - r_step_hi);
+                    r_step_hi *= g_hi;
                 }
             });
+    }
 
-        if let Some(p) = degenerate {
+    result
+        .par_iter_mut()
+        .zip(inv_denoms.par_iter())
+        .for_each(|(res, &inv_denom)| *res *= inv_denom);
+
+    if let Some(p) = degenerate {
+        for &(r_i, gap, values) in groups {
             result[p] += r_i * values[p] * EF::from_usize(gap + 1);
         }
     }
@@ -340,27 +348,6 @@ where
     ood_points
 }
 
-/// Compute the shake polynomial for a set of evaluation points.
-///
-/// Given an answer polynomial `ans(X)` and the set `P = {y_1, ..., y_m}` of evaluation
-/// points where `ans(y_i)` is known, the **shake polynomial** is defined as:
-///
-/// ```text
-/// S(X) = sum_{y in P} (ans(X) - ans(y)) / (X - y)
-/// ```
-///
-/// Each term `(ans(X) - ans(y)) / (X - y)` is the result of synthetic division of
-/// `ans(X) - ans(y)` (a polynomial with a known root at `y`) by `(X - y)`.
-///
-/// The shake polynomial enables the verifier to check that `ans` correctly interpolates
-/// all `(y_i, ans(y_i))` pairs without recomputing a full Lagrange interpolation.
-pub fn compute_shake_polynomial<F: Field>(ans: &[F], points: &[F]) -> Vec<F> {
-    points
-        .iter()
-        .map(|&y| divide_by_linear(ans, y).0)
-        .fold(vec![], |acc, q| add_polys(&acc, &q))
-}
-
 /// Interpolate a polynomial through the given `(points, values)` pairs.
 ///
 /// Uses Newton's divided-difference method.
@@ -443,44 +430,77 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
     coeffs
 }
 
-/// Verify shake polynomial consistency at a random point `rho`.
+/// Verify at a random point `rho` that `ans` interpolates `(points, values)`.
 ///
-/// Checks that `S(rho) == sum_{y in P} (ans(rho) - val_y) / (rho - y)` using batch inversion.
+/// `ans` is compared against the barycentric form of the unique polynomial `I` of degree
+/// `< n` through the `n` pairs `(y_i, v_i)`:
 ///
-/// Returns `true` if the check passes.
-pub fn check_shake_consistency<F: Field>(
-    ans: &[F],
-    shake: &[F],
-    points: &[F],
-    values: &[F],
-    rho: F,
-) -> bool {
+/// ```text
+/// I(rho) = (sum_i w_i v_i / (rho - y_i)) / (sum_i w_i / (rho - y_i)),
+/// w_i = 1 / prod_{j != i} (y_i - y_j)
+/// ```
+///
+/// The identity `ans(rho) == I(rho)` is checked cross-multiplied, so the barycentric
+/// denominator is never inverted. That denominator equals `1 / prod_i (rho - y_i)` — the
+/// Lagrange basis sums to one — and so is non-zero for every `rho` outside the node set,
+/// which is exactly what the rejection below enforces.
+///
+/// Returns `true` if the check passes. For `n >= 1`, both `ans` (by the caller's length bound)
+/// and `I` have degree `< n`, so a caller that binds `ans` and the node set into the transcript
+/// before drawing `rho` gets soundness error at most `(n - 1) / |F|`. With no nodes the identity
+/// is vacuous, so that case is decided exactly (`ans` must be the zero polynomial) rather than
+/// at `rho`.
+#[must_use]
+pub fn check_ans_interpolates<F: Field>(ans: &[F], points: &[F], values: &[F], rho: F) -> bool {
     if points.len() != values.len() {
         return false;
     }
 
-    // If rho coincides with one of the evaluation points the denominator (rho - y_i) would be
-    // zero.  This is negligible for a random rho but we handle it defensively: the shake identity
-    // does not apply at such a degenerate rho, so we report failure.
+    // With no nodes the identity is vacuous and the sums below would accept anything, so
+    // reject everything but the zero polynomial.
+    if points.is_empty() {
+        return ans.iter().all(|c| c.is_zero());
+    }
+
+    // At an interpolation node the barycentric denominators vanish and the identity says
+    // nothing, so report failure. A `rho` drawn after `ans` is bound lands there only with
+    // negligible probability.
     if points.contains(&rho) {
         return false;
     }
 
-    let ans_rho = eval_poly(ans, rho);
-    let shake_rho = eval_poly(shake, rho);
-
-    // Compute (rho - y_i) for all i and batch-invert.
-    let diffs: Vec<F> = points.iter().map(|&y| rho - y).collect();
-    let diff_invs = batch_multiplicative_inverse(&diffs);
-
-    // sum_i (ans(rho) - val_i) / (rho - y_i)
-    let expected: F = values
+    let n = points.len();
+    // The barycentric weight denominators `prod_{j != i} (y_i - y_j)` followed by the node
+    // distances `rho - y_i`, inverted in a single batch.
+    let mut denominators: Vec<F> = points
         .iter()
-        .zip(diff_invs.iter())
-        .map(|(&val, &inv)| (ans_rho - val) * inv)
-        .sum();
+        .enumerate()
+        .map(|(i, &y)| {
+            points
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, &z)| y - z)
+                .product()
+        })
+        .collect();
+    denominators.extend(points.iter().map(|&y| rho - y));
+    // A vanishing weight denominator means two nodes coincide, so no interpolant exists.
+    if denominators[..n].contains(&F::ZERO) {
+        return false;
+    }
+    let inverses = batch_multiplicative_inverse(&denominators);
+    let (weights, diff_invs) = inverses.split_at(n);
 
-    shake_rho == expected
+    let mut numerator = F::ZERO;
+    let mut denominator = F::ZERO;
+    for ((&w, &diff_inv), &v) in weights.iter().zip(diff_invs).zip(values) {
+        let term = w * diff_inv;
+        numerator += term * v;
+        denominator += term;
+    }
+
+    eval_poly(ans, rho) * denominator == numerator
 }
 
 /// Fold an entire natural-order codeword of size `N` by arity `k = 2^log_arity`.
@@ -528,40 +548,75 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
     let new_height = codeword.len() / arity;
     assert!(new_height > 0);
 
-    let mut data = codeword.to_vec();
+    if log_arity == 0 {
+        return codeword.to_vec();
+    }
+
     let mut current_beta = beta;
     let mut cur_log_domain = log_domain_size;
-
-    for _ in 0..log_arity {
-        let height = data.len() / 2;
-
-        // fold(j) = (lo + hi)/2 + beta * (lo - hi) / (2 * g^j)
-        //         = (lo + hi)/2 + (beta/2) * g_inv^j * (lo - hi)
-        //
-        // g_orig has order `2^cur_log_domain`, so g_inv = g_orig.inverse() has the same
-        // order. halve_inv_powers[j] = (1/2) * g_orig^{-j}.
-        let g_orig_inv = F::two_adic_generator(cur_log_domain).inverse();
-        let halve_inv_powers: Vec<F> = g_orig_inv
-            .shifted_powers(F::ONE.halve())
-            .take(height)
-            .collect();
-
-        data = (0..height)
-            .into_par_iter()
-            .map(|j| {
-                let lo = data[j];
-                let hi = data[j + height];
-                let hip = EF::from(halve_inv_powers[j]);
-                (lo + hi).halve() + (lo - hi) * current_beta * hip
-            })
-            .collect();
-
+    // The first pass reads the caller's slice and every later pass reads its predecessor's
+    // output, so the input is never copied.
+    let mut data = fold_pass::<F, EF>(codeword, current_beta, cur_log_domain);
+    for _ in 1..log_arity {
         current_beta = current_beta.square();
         cur_log_domain -= 1;
+        data = fold_pass::<F, EF>(&data, current_beta, cur_log_domain);
     }
 
     debug_assert_eq!(data.len(), new_height);
     data
+}
+
+/// One arity-2 pass of [`fold_codeword`] over a natural-order codeword on a domain of size
+/// `2^log_domain_size`, pairing index `j` with `j + height`.
+fn fold_pass<F: TwoAdicField, EF: ExtensionField<F>>(
+    src: &[EF],
+    beta: EF,
+    log_domain_size: usize,
+) -> Vec<EF> {
+    let height = src.len() / 2;
+
+    // fold(j) = (lo + hi)/2 + beta * (lo - hi) / (2 * g^j)
+    //         = (lo + hi)/2 + (beta/2) * g_inv^j * (lo - hi)
+    //
+    // g_orig has order `2^log_domain_size`, so g_inv = g_orig.inverse() has the same
+    // order. halve_inv_powers[j] = (1/2) * g_orig^{-j}.
+    let g_orig_inv = F::two_adic_generator(log_domain_size).inverse();
+    let halve_inv_powers: Vec<F> = g_orig_inv
+        .shifted_powers(F::ONE.halve())
+        .take(height)
+        .collect();
+
+    (0..height)
+        .into_par_iter()
+        .map(|j| {
+            let lo = src[j];
+            let hi = src[j + height];
+            // The base-field twiddle multiplies first so that it dispatches through the cheap
+            // extension-by-base product, leaving `beta` as the pass's only extension product.
+            (lo + hi).halve() + (lo - hi) * halve_inv_powers[j] * beta
+        })
+        .collect()
+}
+
+/// Fold a coefficient-form polynomial at challenge `gamma` with arity `k = 2^log_arity`.
+///
+/// Writing `f(X) = Σ_{l<k} X^l · q_l(X^k)`, Construction 4.5's fold is `Σ_{l<k} gamma^l · q_l`,
+/// whose degree-`m` coefficient is `Σ_{l<k} gamma^l · f[l + k·m]` — the Horner evaluation at
+/// `gamma` of the `m`-th length-`k` block of `f`.
+///
+/// Unlike [`fold_codeword`], which interpolates at subgroup coordinates and therefore takes the
+/// rescaled challenge `gamma / shift`, this form carries no domain shift and takes `gamma`
+/// itself.
+///
+/// `par_chunks` leaves a ragged final block when `coeffs.len()` isn't a multiple of `k`; that
+/// block is still folded correctly, since the missing high coefficients of `f` are zero.
+#[must_use]
+pub fn fold_poly_coeffs<F: Field>(coeffs: &[F], gamma: F, log_arity: usize) -> Vec<F> {
+    coeffs
+        .par_chunks(1 << log_arity)
+        .map(|block| eval_poly(block, gamma))
+        .collect()
 }
 
 /// Compute the expected folded value for a single fiber (used by the verifier).
@@ -1003,39 +1058,80 @@ mod tests {
     }
 
     #[test]
-    fn test_shake_polynomial_consistency() {
-        // Build ans poly through some points, compute shake, verify consistency.
+    fn test_check_ans_interpolates_accepts_the_interpolant() {
         let pts = vec![F::from_u64(1), F::from_u64(2), F::from_u64(3)];
         let vals = vec![F::from_u64(4), F::from_u64(9), F::from_u64(16)];
 
         let ans = interpolate_poly(&pts, &vals);
-        let shake = compute_shake_polynomial(&ans, &pts);
 
-        // Check at a random point (use a field element not in pts).
+        // Check at a field element outside `pts`.
         let rho = F::from_u64(7);
         assert!(
-            check_shake_consistency(&ans, &shake, &pts, &vals, rho),
-            "shake consistency should pass"
+            check_ans_interpolates(&ans, &pts, &vals, rho),
+            "the interpolant must satisfy the barycentric identity"
         );
     }
 
     #[test]
-    fn test_shake_consistency_fails_on_wrong_ans() {
+    fn test_check_ans_interpolates_rejects_a_corrupted_answer() {
         let pts = vec![F::from_u64(1), F::from_u64(2)];
         let vals = vec![F::from_u64(4), F::from_u64(9)];
 
-        let ans = interpolate_poly(&pts, &vals);
-        let shake = compute_shake_polynomial(&ans, &pts);
-
-        // Corrupt ans.
-        let mut bad_ans = ans;
+        let mut bad_ans = interpolate_poly(&pts, &vals);
         bad_ans[0] += F::ONE;
 
         let rho = F::from_u64(5);
         assert!(
-            !check_shake_consistency(&bad_ans, &shake, &pts, &vals, rho),
-            "shake consistency should fail on bad ans"
+            !check_ans_interpolates(&bad_ans, &pts, &vals, rho),
+            "a shifted answer polynomial must fail the identity"
         );
+    }
+
+    #[test]
+    fn test_check_ans_interpolates_rejects_a_perturbed_value_set() {
+        // The prover's `ans` interpolates the honest values; the verifier reconstructs the
+        // interpolant from the values it derived itself, so any disagreement must be caught.
+        let pts = vec![F::from_u64(1), F::from_u64(2), F::from_u64(3)];
+        let vals = vec![F::from_u64(4), F::from_u64(9), F::from_u64(16)];
+        let ans = interpolate_poly(&pts, &vals);
+
+        let rho = F::from_u64(7);
+        for i in 0..vals.len() {
+            let mut perturbed = vals.clone();
+            perturbed[i] += F::ONE;
+            assert!(
+                !check_ans_interpolates(&ans, &pts, &perturbed, rho),
+                "perturbing value {i} must fail the identity"
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_ans_interpolates_rejects_degenerate_inputs() {
+        let pts = vec![F::from_u64(1), F::from_u64(2)];
+        let vals = vec![F::from_u64(4), F::from_u64(9)];
+        let ans = interpolate_poly(&pts, &vals);
+
+        // `rho` on a node leaves the barycentric denominators undefined.
+        assert!(!check_ans_interpolates(&ans, &pts, &vals, pts[0]));
+        // Mismatched lengths pin no interpolation problem at all.
+        assert!(!check_ans_interpolates(
+            &ans,
+            &pts,
+            &vals[..1],
+            F::from_u64(5)
+        ));
+        // Repeated nodes leave the barycentric weights undefined.
+        let dup_pts = vec![F::from_u64(1), F::from_u64(1)];
+        assert!(!check_ans_interpolates(
+            &ans,
+            &dup_pts,
+            &vals,
+            F::from_u64(5)
+        ));
+        // An empty node set constrains nothing, so only the zero polynomial passes.
+        assert!(check_ans_interpolates(&[], &[], &[], F::from_u64(5)));
+        assert!(!check_ans_interpolates(&ans, &[], &[], F::from_u64(5)));
     }
 
     #[test]

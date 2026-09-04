@@ -1,12 +1,17 @@
 //! Unit tests for STIR polynomial arithmetic utilities.
 
 use p3_baby_bear::BabyBear;
+use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
+use p3_stir::prover::{codeword_from_coeffs, coeffs_from_codeword};
 use p3_stir::utils::{
-    add_polys, check_shake_consistency, compute_shake_polynomial, divide_by_linear, eval_poly,
-    interpolate_poly,
+    add_polys, check_ans_interpolates, divide_by_linear, eval_poly, fold_codeword,
+    fold_poly_coeffs, interpolate_poly,
 };
+use proptest::prelude::*;
+use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -166,45 +171,29 @@ fn test_interpolate_poly_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
-// compute_shake_polynomial + check_shake_consistency
+// check_ans_interpolates
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_shake_polynomial_degree_bound() {
-    // shake = sum_y (ans(X) - ans(y)) / (X - y); ans has degree d,
-    // each term has degree d-1, sum has degree d-1.
-    // Use extension field points for more variety.
-    let ans = vec![ef(1), ef(2), ef(3), ef(4)]; // degree-3 polynomial
-    let points = vec![ef(10), ef(20), ef(30)];
-    let shake = compute_shake_polynomial(&ans, &points);
-    // shake should be of degree <= 2 (ans degree - 1)
-    assert!(shake.len() <= 3);
-}
-
-#[test]
-fn test_shake_consistency_check() {
-    // Build ans by interpolation, compute shake, and check at a random rho.
+fn test_ans_interpolates_accepts_the_interpolant() {
     let points = vec![ef(1), ef(2), ef(3)];
     let values = vec![ef(5), ef(11), ef(23)];
     let ans = interpolate_poly(&points, &values);
-    let shake = compute_shake_polynomial(&ans, &points);
 
     // Any rho outside the points should pass.
     let rho = ef(100);
-    assert!(check_shake_consistency(&ans, &shake, &points, &values, rho));
+    assert!(check_ans_interpolates(&ans, &points, &values, rho));
 }
 
 #[test]
-fn test_shake_consistency_mismatched_lengths_returns_false() {
+fn test_ans_interpolates_mismatched_lengths_returns_false() {
     let points = vec![ef(1), ef(2), ef(3)];
     let values = vec![ef(5), ef(11), ef(23)];
     let ans = interpolate_poly(&points, &values);
-    let shake = compute_shake_polynomial(&ans, &points);
 
     let truncated_values = vec![ef(5), ef(11)];
-    assert!(!check_shake_consistency(
+    assert!(!check_ans_interpolates(
         &ans,
-        &shake,
         &points,
         &truncated_values,
         ef(100)
@@ -212,42 +201,50 @@ fn test_shake_consistency_mismatched_lengths_returns_false() {
 }
 
 #[test]
-fn test_shake_consistency_tampered_answer_fails() {
+fn test_ans_interpolates_tampered_answer_fails() {
     let points = vec![ef(1), ef(2), ef(3)];
     let values = vec![ef(5), ef(11), ef(23)];
-    let ans = interpolate_poly(&points, &values);
-    let shake = compute_shake_polynomial(&ans, &points);
+    let mut bad_ans = interpolate_poly(&points, &values);
 
-    // Tamper with the shake polynomial.
-    let mut bad_shake = shake;
-    bad_shake[0] += ef(1);
+    bad_ans[0] += ef(1);
     let rho = ef(42);
-    assert!(!check_shake_consistency(
-        &ans, &bad_shake, &points, &values, rho
-    ));
+    assert!(!check_ans_interpolates(&bad_ans, &points, &values, rho));
 }
 
 #[test]
-fn test_shake_consistency_tampered_value_fails() {
+fn test_ans_interpolates_perturbed_value_fails() {
+    // `ans` is built from the honest values, but the verifier reconstructs the interpolant
+    // from the values it derived itself, so a single perturbed value must be caught.
     let points = vec![ef(1), ef(2), ef(3)];
     let values = vec![ef(5), ef(11), ef(23)];
     let ans = interpolate_poly(&points, &values);
-    let shake = compute_shake_polynomial(&ans, &points);
 
-    // Tamper with a claimed value (so ans no longer matches).
-    let mut bad_values = values;
-    bad_values[0] = ef(999);
     let rho = ef(42);
-    // The ans was built from the original values, so the reconstructed ans from
-    // bad_values will differ → consistency check must fail.
-    let bad_ans = interpolate_poly(&points, &bad_values);
-    assert!(!check_shake_consistency(
-        &bad_ans,
-        &shake,
-        &points,
-        &bad_values,
-        rho
-    ));
+    for i in 0..values.len() {
+        let mut bad_values = values.clone();
+        bad_values[i] = ef(999);
+        assert!(
+            !check_ans_interpolates(&ans, &points, &bad_values, rho),
+            "perturbing value {i} must fail the identity"
+        );
+    }
+}
+
+#[test]
+fn test_ans_interpolates_rejects_rho_on_a_node() {
+    let points = vec![ef(1), ef(2), ef(3)];
+    let values = vec![ef(5), ef(11), ef(23)];
+    let ans = interpolate_poly(&points, &values);
+
+    // The barycentric denominators are undefined on a node, so the identity says nothing.
+    assert!(!check_ans_interpolates(&ans, &points, &values, points[1]));
+}
+
+#[test]
+fn test_ans_interpolates_single_node() {
+    // n == 1 is the only input that exercises the empty-`product()` weight path.
+    assert!(check_ans_interpolates(&[ef(7)], &[ef(3)], &[ef(7)], ef(9)));
+    assert!(!check_ans_interpolates(&[ef(8)], &[ef(3)], &[ef(7)], ef(9)));
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +279,19 @@ fn test_fold_codeword_arity2_constant_polynomial() {
     for &v in &folded {
         assert_eq!(v, ef(5), "folded constant polynomial must stay constant");
     }
+}
+
+#[test]
+fn test_fold_codeword_zero_arity_is_identity() {
+    use p3_stir::utils::fold_codeword;
+
+    let codeword: Vec<EF> = (1..=16u64).map(ef).collect();
+    let beta = ef(11);
+    assert_eq!(
+        fold_codeword::<F, EF>(&codeword, beta, 0, 4),
+        codeword,
+        "arity-1 fold (log_arity = 0) must return the codeword unchanged"
+    );
 }
 
 #[test]
@@ -352,5 +362,81 @@ fn test_fold_codeword_higher_arity_agrees_with_fold_fiber() {
                 "fold_codeword and fold_fiber disagree at log_arity={log_arity}, j={j}"
             );
         }
+    }
+}
+
+#[test]
+fn test_fold_poly_coeffs_agrees_with_the_evaluation_form_fold() {
+    use p3_dft::Radix2DitParallel;
+    use p3_stir::prover::{codeword_from_coeffs, coeffs_from_codeword};
+    use p3_stir::utils::{fold_codeword, fold_poly_coeffs};
+
+    let log_domain = 6;
+    let domain_size = 1usize << log_domain;
+    let dft = Radix2DitParallel::<F>::default();
+    let shift = F::GENERATOR;
+    let gamma = ef(31);
+
+    // Degree `domain_size - 1`, so each fold lands at degree `domain_size / k - 1` and the
+    // inverse DFT over the fold domain recovers the folded polynomial exactly.
+    let coeffs: Vec<EF> = (1..=domain_size).map(|i| ef(i as u64)).collect();
+    let codeword = codeword_from_coeffs(&dft, coeffs.clone(), shift, log_domain);
+
+    for log_arity in [1usize, 2, 3] {
+        // `fold_codeword` interpolates at subgroup coordinates, so the coset fold at `gamma`
+        // is reached through `gamma / shift`; `fold_poly_coeffs` takes `gamma` directly.
+        let beta = gamma * EF::from(shift.inverse());
+        let folded = fold_codeword::<F, EF>(&codeword, beta, log_arity, log_domain);
+        let fold_shift = shift.exp_power_of_2(log_arity);
+
+        assert_eq!(
+            fold_poly_coeffs(&coeffs, gamma, log_arity),
+            coeffs_from_codeword(&dft, &folded, fold_shift),
+            "coefficient and evaluation folds disagree at log_arity={log_arity}"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// The lemma the whole `Oracle::Coeffs` prover path rests on: `fold_poly_coeffs` and
+    /// `fold_codeword` (composed with `coeffs_from_codeword`) must agree, not just at the one
+    /// dense-degree, `GENERATOR`-shift shape above. `true_deg` is drawn independently of
+    /// `log_domain` so the coefficient tail past the true degree — and, once folded, past
+    /// `log_sub_coset`'s width — is genuinely zero rather than incidentally full, and `shift`
+    /// varies since it is never `GENERATOR` past round 0 in the real prover.
+    #[test]
+    fn test_fold_poly_coeffs_agrees_with_fold_codeword_over_shapes(
+        log_domain in 3usize..=8,
+        log_arity in 1usize..=3,
+        true_deg_seed in 0usize..(1 << 8),
+        shift_seed in 1u64..(1 << 20),
+        seed: u64,
+    ) {
+        prop_assume!(log_arity <= log_domain);
+
+        let domain_size = 1usize << log_domain;
+        let true_deg = 1 + (true_deg_seed % domain_size);
+        let shift = F::from_u64(shift_seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut coeffs: Vec<EF> = (0..true_deg).map(|_| rng.random()).collect();
+        coeffs.resize(domain_size, EF::ZERO);
+        let gamma: EF = rng.random();
+
+        let dft = Radix2DitParallel::<F>::default();
+        let codeword = codeword_from_coeffs(&dft, coeffs.clone(), shift, log_domain);
+
+        // `fold_codeword` interpolates at subgroup coordinates, so the coset fold at `gamma`
+        // is reached through `gamma / shift`; `fold_poly_coeffs` takes `gamma` directly.
+        let beta = gamma * EF::from(shift.inverse());
+        let folded = fold_codeword::<F, EF>(&codeword, beta, log_arity, log_domain);
+        let fold_shift = shift.exp_power_of_2(log_arity);
+
+        prop_assert_eq!(
+            fold_poly_coeffs(&coeffs, gamma, log_arity),
+            coeffs_from_codeword(&dft, &folded, fold_shift),
+        );
     }
 }

@@ -3,13 +3,13 @@
 //! This crate implements the STIR polynomial commitment scheme, a univariate PCS
 //! that achieves shorter proofs than FRI by replacing many direct proximity queries
 //! with a small number of out-of-domain (OOD) samples combined with an answer
-//! polynomial / shake polynomial argument.
+//! polynomial argument.
 //!
 //! # Structure
 //!
 //! - [`config`]: Protocol parameters ([`StirParameters`], [`StirConfig`], [`StirRoundConfig`]).
 //! - [`proof`]: Proof types ([`StirProof`], [`StirRoundProof`], [`StirQueryOpenings`]).
-//! - [`utils`]: Polynomial arithmetic primitives (shake, ans, Horner eval, synthetic division).
+//! - [`utils`]: Polynomial arithmetic primitives (ans, Horner eval, synthetic division).
 //! - [`prover`]: The STIR prover ([`prover::prove_stir`]).
 //! - [`verifier`]: The STIR verifier ([`verifier::verify_stir`]).
 //! - [`error`]: Verification failures ([`StirError`], [`ProofShapeError`]).
@@ -20,10 +20,10 @@
 //! Several deliberate implementation choices differ from the construction stated in
 //! the paper:
 //!
-//! - **Prover-assisted Ans/shake check.** The paper's verifier interpolates `Ans` itself.
-//!   Here the prover sends `Ans` and a shake polynomial, and the verifier checks the
-//!   identity at a transcript-derived random point. Its Schwartz–Zippel error is included
-//!   explicitly in STIR's parameter validation.
+//! - **Prover-assisted Ans check.** The paper's verifier interpolates `Ans` itself. Here the
+//!   prover sends `Ans`, and the verifier checks it against the barycentric interpolant
+//!   through the round's points at a transcript-derived random point. Its Schwartz–Zippel
+//!   error is included explicitly in STIR's parameter validation.
 //! - **Fixed `s` schedule.** OOD sample count is fixed per the paper's recommended schedule
 //!   (`s = 1` for Johnson, `s = 2` for capacity); [`config::StirConfig::new`] does not search
 //!   for the smallest valid `s`.
@@ -39,7 +39,7 @@
 //!   `ceil(log2(6 · total_folds))` buffer to every per-round error term. Each round
 //!   contributes up to six independent algebraic failure modes (query tier: query failure,
 //!   OOD, random-combination,
-//!   shake-check; folding tier: proximity-gaps, sumcheck), so the union bound over the full
+//!   Ans-check; folding tier: proximity-gaps, sumcheck), so the union bound over the full
 //!   protocol is `≤ 6 · total_folds · 2^{-buffered_security_level}`. The paper's "+1 / +0"
 //!   rule only delivers the claimed bits when `total_folds ≤ 2` and per-round terms are
 //!   collapsed; the explicit log keeps deeper protocols tight across every term.
