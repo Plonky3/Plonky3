@@ -60,13 +60,17 @@ pub fn encode_len_be(len: usize, width: usize) -> [u8; 8] {
     // Defensive upper bound: `usize` is at most 8 bytes on every supported platform.
     assert!(width <= 8, "length-prefix width {width} exceeds 8 bytes");
     // Range check the value against the declared width.
+    //
+    // The bound is evaluated in `u64`, not `usize`.
+    // On a 32-bit target `1usize << 32` is a shift overflow, so a `Bounded(max)`
+    // with `max >= 2^24` would panic in debug and mask to `1 << 0` in release.
     if width < 8 {
         // Smallest value that does not fit: 1 << (width * 8).
         //
         // For width 0 this is 1, so only `len == 0` is legal.
-        let limit = 1usize << (width * 8);
+        let limit = 1u64 << (width * 8);
         assert!(
-            len < limit,
+            (len as u64) < limit,
             "length {len} does not fit in {width} bytes (max {})",
             limit - 1,
         );
@@ -181,6 +185,16 @@ mod tests {
         //
         // Encoding 256 with width 1 must panic.
         let _ = encode_len_be(256, 1);
+    }
+
+    #[test]
+    fn width_four_accepts_the_whole_range_on_every_target() {
+        // Invariant: the range check is evaluated in `u64`.
+        //
+        // A `usize` bound would overflow the shift on a 32-bit target and
+        // reject every non-zero length at width 4.
+        let bytes = encode_len_be(u32::MAX as usize, 4);
+        assert_eq!(decode_len_be(&bytes[..4], 4), u32::MAX as usize);
     }
 
     #[test]

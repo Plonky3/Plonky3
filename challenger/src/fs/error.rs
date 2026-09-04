@@ -1,20 +1,25 @@
 //! Errors returned by the transcript machinery.
 
 use alloc::boxed::Box;
-use alloc::string::String;
 
 use thiserror::Error;
 
 use crate::fs::pattern::Interaction;
 
-/// Failures that can arise while building or replaying a transcript.
+/// Failures that can arise while validating a pattern or reading a proof.
+///
+/// Every variant is reachable.
+///
+/// Divergence between the recorded pattern and the code replaying it is a
+/// programming bug, not malformed input, so it panics with a diff instead of
+/// landing here.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum TranscriptError {
     /// An end marker was found with no matching opener in the sequence.
     #[error(transparent)]
     MissingBegin(Box<MissingBeginInfo>),
 
-    /// An atomic step uses a kind incompatible with the surrounding sub-protocol.
+    /// A nested step uses a kind incompatible with the surrounding sub-protocol.
     #[error(transparent)]
     InvalidKind(Box<InvalidKindInfo>),
 
@@ -26,33 +31,12 @@ pub enum TranscriptError {
     #[error(transparent)]
     MissingEnd(Box<MissingEndInfo>),
 
-    /// Playback ran past the end of the recorded sequence.
-    #[error("transcript pattern exhausted")]
-    PatternExhausted,
-
-    /// Playback received a step that does not match the next recorded one.
-    #[error(transparent)]
-    PatternMismatch(Box<PatternMismatchInfo>),
-
     /// Verifier-side parsing of the prover's serialized output failed.
     #[error("bad proof shape: {reason}")]
     BadProofShape {
         /// Short reason describing the parse failure.
         reason: &'static str,
     },
-
-    /// The salt supplied by the caller does not match the length declared by the recorded pattern.
-    #[error("bad salt length: pattern declares {expected} bytes, caller supplied {got}")]
-    BadSaltLen {
-        /// Length recorded in the pattern, in bytes.
-        expected: usize,
-        /// Length supplied by the caller, in bytes.
-        got: usize,
-    },
-
-    /// Free-form variant for failures best described in prose.
-    #[error("{0}")]
-    Other(String),
 }
 
 /// Payload describing an end marker that has no matching opener.
@@ -65,7 +49,9 @@ pub struct MissingBeginInfo {
     pub end: Interaction,
 }
 
-/// Payload describing an atomic step whose kind is incompatible with the surrounding sub-protocol.
+/// Payload describing a nested step whose kind is incompatible with its container.
+///
+/// Raised for a leaf and for a nested opener alike.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[error(
     "invalid kind {interaction} at {interaction_position} for sub-protocol {begin} \
@@ -78,7 +64,7 @@ pub struct InvalidKindInfo {
     pub begin: Interaction,
     /// Index of the offending nested interaction.
     pub interaction_position: usize,
-    /// The offending nested interaction.
+    /// The offending nested interaction: an atomic step or a nested opener.
     pub interaction: Interaction,
 }
 
@@ -104,14 +90,4 @@ pub struct MissingEndInfo {
     pub position: usize,
     /// The opener that was left unclosed.
     pub begin: Interaction,
-}
-
-/// Payload describing a step that does not match the next recorded one.
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
-#[error("pattern mismatch: expected {expected}, got {got}")]
-pub struct PatternMismatchInfo {
-    /// The interaction that was expected, taken from the recorded sequence.
-    pub expected: Interaction,
-    /// The interaction that was actually requested by the caller.
-    pub got: Interaction,
 }

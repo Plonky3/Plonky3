@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 
 use super::Pattern;
 use super::sequence::InteractionPattern;
-use super::step::{Hierarchy, Interaction, Kind, Label, Length};
+use super::step::{Hierarchy, Interaction, Kind};
 use crate::fs::unit::Unit;
 
 /// Records a transcript pattern step by step, validating as it goes.
@@ -68,11 +68,14 @@ impl<U: Unit> PatternState<U> {
     }
 
     /// Append a single recorded step, enforcing the structural rules.
-    pub fn interact(&mut self, interaction: Interaction) {
+    fn record(&mut self, interaction: Interaction) {
         assert!(!self.finalized, "Pattern is already finalized.");
         if let Some(open) = self.last_open_begin() {
             // Nested-kind compatibility: Protocol accepts any kind, others must match.
-            if interaction.hierarchy() == Hierarchy::Atomic
+            //
+            // Openers are checked alongside leaves.
+            // Otherwise a nested container of a foreign kind would slip through.
+            if interaction.hierarchy() != Hierarchy::End
                 && !(open.kind() == Kind::Protocol || open.kind() == interaction.kind())
             {
                 let surrounding = open.kind();
@@ -135,19 +138,25 @@ impl<U: Unit> Pattern for PatternState<U> {
         self.interactions.clear();
     }
 
-    fn begin<T: ?Sized>(&mut self, label: Label, kind: Kind, length: Length) {
-        self.interact(Interaction::new::<T>(Hierarchy::Begin, kind, label, length));
-    }
-
-    fn end<T: ?Sized>(&mut self, label: Label, kind: Kind, length: Length) {
-        self.interact(Interaction::new::<T>(Hierarchy::End, kind, label, length));
+    fn interact(&mut self, interaction: Interaction) {
+        self.record(interaction);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use p3_baby_bear::BabyBear;
+
     use super::*;
-    use crate::fs::pattern::step::{Hierarchy, Kind};
+    use crate::fs::pattern::step::Length;
+
+    /// Concrete field exercised in this module's tests.
+    type F = BabyBear;
+
+    /// One atomic step over `F`.
+    fn atomic(kind: Kind, label: &'static str) -> Interaction {
+        Interaction::algebra::<F, F>(Hierarchy::Atomic, kind, label, Length::Scalar)
+    }
 
     #[test]
     fn empty_recorder_finalizes_to_empty_pattern() {
@@ -161,12 +170,7 @@ mod tests {
         // Three steps record cleanly into a validated pattern of length 3.
         let mut s = PatternState::<u8>::new();
         s.begin_protocol::<()>("outer");
-        s.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "alpha",
-            Length::Scalar,
-        ));
+        s.interact(atomic(Kind::Challenge, "alpha"));
         s.end_protocol::<()>("outer");
         let p = s.finalize();
         assert_eq!(p.len(), 3);
@@ -177,24 +181,14 @@ mod tests {
     fn drop_without_finalize_panics() {
         // Forgot-to-finalize must surface, not silently lose data.
         let mut s = PatternState::<u8>::new();
-        s.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "alpha",
-            Length::Scalar,
-        ));
+        s.interact(atomic(Kind::Challenge, "alpha"));
     }
 
     #[test]
     fn abort_disables_drop_check() {
         // Abort is the explicit discard path; drop must stay quiet.
         let mut s = PatternState::<u8>::new();
-        s.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "alpha",
-            Length::Scalar,
-        ));
+        s.interact(atomic(Kind::Challenge, "alpha"));
         s.abort();
     }
 
@@ -220,13 +214,17 @@ mod tests {
     fn nested_kind_mismatch_panics_on_record() {
         // Challenge atomic inside a Message-kind sub-protocol.
         let mut s = PatternState::<u8>::new();
-        s.begin_message::<()>("msg-block", Length::None);
-        s.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "alpha",
-            Length::Scalar,
-        ));
+        s.begin::<()>("msg-block", Kind::Message);
+        s.interact(atomic(Kind::Challenge, "alpha"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid interaction kind")]
+    fn nested_container_of_a_foreign_kind_panics_on_record() {
+        // Wrapping the challenge in its own container must not bypass the rule.
+        let mut s = PatternState::<u8>::new();
+        s.begin::<()>("msg-block", Kind::Message);
+        s.begin::<()>("sneaky", Kind::Challenge);
     }
 
     #[test]
@@ -234,18 +232,8 @@ mod tests {
         // Protocol container takes a Message and a Challenge side by side.
         let mut s = PatternState::<u8>::new();
         s.begin_protocol::<()>("outer");
-        s.interact(Interaction::new::<u32>(
-            Hierarchy::Atomic,
-            Kind::Message,
-            "commit",
-            Length::Scalar,
-        ));
-        s.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "alpha",
-            Length::Scalar,
-        ));
+        s.interact(atomic(Kind::Message, "commit"));
+        s.interact(atomic(Kind::Challenge, "alpha"));
         s.end_protocol::<()>("outer");
         let p = s.finalize();
         assert_eq!(p.len(), 4);

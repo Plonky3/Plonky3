@@ -2,7 +2,7 @@
 
 /// Marker proving that `T` has been mixed into the transcript.
 ///
-/// Fiat-Shamir is sound only when every value the verifier sees was
+/// Fiat-Shamir is sound only when every value the verifier acts on was
 /// absorbed by the sponge first.
 ///
 /// Forgetting to absorb a value before using it is a soundness bug.
@@ -13,6 +13,15 @@
 /// - Absorbing or squeezing is the only way to obtain one.
 /// - Functions that need a bound input declare it in their signature.
 /// - The compiler refuses any caller that forgot to bind.
+///
+/// The guarantee is deliberately narrow.
+/// It says a `TranscriptBound<T>` was minted by a transcript method, nothing more.
+///
+/// There is no combinator that carries a binding across a closure.
+/// A closure that ignores its argument would launder the witness in silence.
+///
+/// A derived value has to be rebound, or unwrapped with [`Self::into_inner`].
+/// Unwrapping makes the loss of the guarantee visible at the call site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TranscriptBound<T>(T);
 
@@ -35,24 +44,6 @@ impl<T> TranscriptBound<T> {
     pub fn into_inner(self) -> T {
         self.0
     }
-
-    /// Lift a deterministic derivation to bound outputs.
-    ///
-    /// `f` must be a pure function of `T`;
-    ///
-    /// Non-determinism inside `f` silently launders the binding.
-    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> TranscriptBound<U> {
-        TranscriptBound(f(self.0))
-    }
-
-    /// Combine two bound values through a pure function. Same purity caveat as `map`.
-    pub fn combine_with<U, V>(
-        self,
-        other: TranscriptBound<U>,
-        f: impl FnOnce(T, U) -> V,
-    ) -> TranscriptBound<V> {
-        TranscriptBound(f(self.0, other.0))
-    }
 }
 
 #[cfg(test)]
@@ -65,23 +56,6 @@ mod tests {
         let b = TranscriptBound::wrap(42u32);
         assert_eq!(*b.as_inner(), 42);
         assert_eq!(b.into_inner(), 42);
-    }
-
-    #[test]
-    fn map_propagates_binding_through_pure_function() {
-        // `map` lifts a pure function on bare values to bound values.
-        let a = TranscriptBound::wrap(7u32);
-        let b: TranscriptBound<u64> = a.map(|x| (x as u64) * 2);
-        assert_eq!(b.into_inner(), 14);
-    }
-
-    #[test]
-    fn combine_with_lifts_two_argument_derivations() {
-        // Bound A + bound B -> bound C through a pure function.
-        let a = TranscriptBound::wrap(3u32);
-        let b = TranscriptBound::wrap(4u32);
-        let c = a.combine_with(b, |x, y| x + y);
-        assert_eq!(c.into_inner(), 7);
     }
 
     #[test]

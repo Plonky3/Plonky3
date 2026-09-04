@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 
 use super::Pattern;
 use super::sequence::InteractionPattern;
-use super::step::{Hierarchy, Interaction, Kind, Label, Length};
+use super::step::Interaction;
 
 /// Walks a recorded sequence and matches each request against the next expected step.
 ///
@@ -81,11 +81,14 @@ impl PatternPlayer {
 
     /// Confirm that every recorded step has been replayed.
     ///
+    /// Takes `&mut self` so an owner can finalise in place.
+    /// Its own `Drop` then runs normally, with no `ManuallyDrop` dance at the call site.
+    ///
     /// # Panics
     ///
     /// - Already finalised or aborted.
     /// - At least one recorded step is still un-played.
-    pub fn finalize(mut self) {
+    pub fn finalize(&mut self) {
         assert!(!self.finalized, "Player is already finalized.");
         // Mark finalised first to avoid a double-panic via drop.
         self.finalized = true;
@@ -103,7 +106,7 @@ impl PatternPlayer {
     /// - Already finalised or aborted.
     /// - Cursor has run past the end of the recorded sequence.
     /// - Supplied step does not match the next recorded step.
-    pub fn interact(&mut self, interaction: Interaction) {
+    fn replay(&mut self, interaction: Interaction) {
         assert!(!self.finalized, "Player is already finalized.");
         let Some(expected) = self.pattern.interactions().get(self.position) else {
             // Mark finalised first so drop does not also panic.
@@ -132,31 +135,32 @@ impl Pattern for PatternPlayer {
         self.finalized = true;
     }
 
-    fn begin<T: ?Sized>(&mut self, label: Label, kind: Kind, length: Length) {
-        self.interact(Interaction::new::<T>(Hierarchy::Begin, kind, label, length));
-    }
-
-    fn end<T: ?Sized>(&mut self, label: Label, kind: Kind, length: Length) {
-        self.interact(Interaction::new::<T>(Hierarchy::End, kind, label, length));
+    fn interact(&mut self, interaction: Interaction) {
+        self.replay(interaction);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use p3_baby_bear::BabyBear;
+
     use super::*;
     use crate::fs::pattern::state::PatternState;
-    use crate::fs::pattern::step::{Hierarchy, Kind};
+    use crate::fs::pattern::step::{Hierarchy, Kind, Length};
+
+    /// Concrete field exercised in this module's tests.
+    type F = BabyBear;
+
+    /// One atomic challenge step over `F` with the given label and length.
+    fn challenge(label: &'static str, length: Length) -> Interaction {
+        Interaction::algebra::<F, F>(Hierarchy::Atomic, Kind::Challenge, label, length)
+    }
 
     /// Outer Protocol container with one nested Challenge atomic.
     fn build_simple_pattern() -> InteractionPattern {
         let mut s = PatternState::<u8>::new();
         s.begin_protocol::<()>("Example protocol");
-        s.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "nonce",
-            Length::Scalar,
-        ));
+        s.interact(challenge("nonce", Length::Scalar));
         s.end_protocol::<()>("Example protocol");
         s.finalize()
     }
@@ -167,12 +171,7 @@ mod tests {
         let pattern = Arc::new(build_simple_pattern());
         let mut p = PatternPlayer::new(pattern);
         p.begin_protocol::<()>("Example protocol");
-        p.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "nonce",
-            Length::Scalar,
-        ));
+        p.interact(challenge("nonce", Length::Scalar));
         p.end_protocol::<()>("Example protocol");
         p.finalize();
     }
@@ -189,11 +188,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "Received interaction")]
     fn type_mismatch_panics() {
-        // f64 instead of the recorded u64.
+        // A Goldilocks scalar instead of the recorded BabyBear one.
         let pattern = Arc::new(build_simple_pattern());
         let mut p = PatternPlayer::new(pattern);
         p.begin_protocol::<()>("Example protocol");
-        p.interact(Interaction::new::<f64>(
+        p.interact(Interaction::algebra::<
+            p3_goldilocks::Goldilocks,
+            p3_goldilocks::Goldilocks,
+        >(
             Hierarchy::Atomic,
             Kind::Challenge,
             "nonce",
@@ -208,12 +210,7 @@ mod tests {
         let pattern = Arc::new(build_simple_pattern());
         let mut p = PatternPlayer::new(pattern);
         p.begin_protocol::<()>("Example protocol");
-        p.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "different-label",
-            Length::Scalar,
-        ));
+        p.interact(challenge("different-label", Length::Scalar));
     }
 
     #[test]
@@ -223,7 +220,7 @@ mod tests {
         let pattern = Arc::new(build_simple_pattern());
         let mut p = PatternPlayer::new(pattern);
         p.begin_protocol::<()>("Example protocol");
-        p.interact(Interaction::new::<u64>(
+        p.interact(Interaction::algebra::<F, F>(
             Hierarchy::Atomic,
             Kind::Message,
             "nonce",
@@ -238,12 +235,7 @@ mod tests {
         let pattern = Arc::new(build_simple_pattern());
         let mut p = PatternPlayer::new(pattern);
         p.begin_protocol::<()>("Example protocol");
-        p.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "nonce",
-            Length::Fixed(1),
-        ));
+        p.interact(challenge("nonce", Length::Fixed(1)));
     }
 
     #[test]
@@ -253,12 +245,7 @@ mod tests {
         let pattern = Arc::new(build_simple_pattern());
         let mut p = PatternPlayer::new(pattern);
         p.begin_protocol::<()>("Example protocol");
-        p.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "nonce",
-            Length::Scalar,
-        ));
+        p.interact(challenge("nonce", Length::Scalar));
         p.finalize();
     }
 
@@ -269,19 +256,9 @@ mod tests {
         let pattern = Arc::new(build_simple_pattern());
         let mut p = PatternPlayer::new(pattern);
         p.begin_protocol::<()>("Example protocol");
-        p.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "nonce",
-            Length::Scalar,
-        ));
+        p.interact(challenge("nonce", Length::Scalar));
         p.end_protocol::<()>("Example protocol");
-        p.interact(Interaction::new::<u64>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            "extra",
-            Length::Scalar,
-        ));
+        p.interact(challenge("extra", Length::Scalar));
     }
 
     #[test]

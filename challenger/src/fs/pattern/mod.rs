@@ -29,12 +29,12 @@ mod step;
 pub use player::PatternPlayer;
 pub use sequence::InteractionPattern;
 pub use state::PatternState;
-pub use step::{Hierarchy, Interaction, Kind, Label, Length};
+pub use step::{Hierarchy, Interaction, Kind, Label, Length, TypeTag};
 
 /// Operations shared by every party that records or replays a transcript.
 ///
-/// Two atomic primitives — an opener and a closer — cover all nesting.
-/// Helpers are provided per semantic role.
+/// One primitive — appending a step — covers everything.
+/// Openers and closers are helpers on top of it.
 ///
 /// Implementors enforce that every opener is matched by a closer with
 /// the same kind, label, type, and length.
@@ -44,59 +44,26 @@ pub trait Pattern {
     /// Idempotent: a second call is a no-op.
     fn abort(&mut self);
 
-    /// Mark the start of a sub-protocol of arbitrary kind and length.
-    fn begin<T: ?Sized>(&mut self, label: Label, kind: Kind, length: Length);
+    /// Append one step, enforcing the structural rules of the side in play.
+    fn interact(&mut self, interaction: Interaction);
 
-    /// Mark the end of a sub-protocol of arbitrary kind and length.
-    fn end<T: ?Sized>(&mut self, label: Label, kind: Kind, length: Length);
+    /// Mark the start of a sub-protocol of the given kind.
+    fn begin<T: ?Sized>(&mut self, label: Label, kind: Kind) {
+        self.interact(Interaction::marker::<T>(Hierarchy::Begin, kind, label));
+    }
 
-    /// Open a protocol-kind sub-protocol with no carried length.
+    /// Mark the end of a sub-protocol of the given kind.
+    fn end<T: ?Sized>(&mut self, label: Label, kind: Kind) {
+        self.interact(Interaction::marker::<T>(Hierarchy::End, kind, label));
+    }
+
+    /// Open a mixed container that accepts nested steps of any kind.
     fn begin_protocol<T: ?Sized>(&mut self, label: Label) {
-        self.begin::<T>(label, Kind::Protocol, Length::None);
+        self.begin::<T>(label, Kind::Protocol);
     }
 
-    /// Close a protocol-kind sub-protocol.
+    /// Close a mixed container.
     fn end_protocol<T: ?Sized>(&mut self, label: Label) {
-        self.end::<T>(label, Kind::Protocol, Length::None);
-    }
-
-    /// Open a public-kind sub-protocol of the supplied length.
-    fn begin_public<T: ?Sized>(&mut self, label: Label, length: Length) {
-        self.begin::<T>(label, Kind::Public, length);
-    }
-
-    /// Close a public-kind sub-protocol.
-    fn end_public<T: ?Sized>(&mut self, label: Label, length: Length) {
-        self.end::<T>(label, Kind::Public, length);
-    }
-
-    /// Open a message-kind sub-protocol of the supplied length.
-    fn begin_message<T: ?Sized>(&mut self, label: Label, length: Length) {
-        self.begin::<T>(label, Kind::Message, length);
-    }
-
-    /// Close a message-kind sub-protocol.
-    fn end_message<T: ?Sized>(&mut self, label: Label, length: Length) {
-        self.end::<T>(label, Kind::Message, length);
-    }
-
-    /// Open a hint-kind sub-protocol of the supplied length.
-    fn begin_hint<T: ?Sized>(&mut self, label: Label, length: Length) {
-        self.begin::<T>(label, Kind::Hint, length);
-    }
-
-    /// Close a hint-kind sub-protocol.
-    fn end_hint<T: ?Sized>(&mut self, label: Label, length: Length) {
-        self.end::<T>(label, Kind::Hint, length);
-    }
-
-    /// Open a challenge-kind sub-protocol of the supplied length.
-    fn begin_challenge<T: ?Sized>(&mut self, label: Label, length: Length) {
-        self.begin::<T>(label, Kind::Challenge, length);
-    }
-
-    /// Close a challenge-kind sub-protocol.
-    fn end_challenge<T: ?Sized>(&mut self, label: Label, length: Length) {
-        self.end::<T>(label, Kind::Challenge, length);
+        self.end::<T>(label, Kind::Protocol);
     }
 }

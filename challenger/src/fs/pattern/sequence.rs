@@ -12,11 +12,17 @@
 //!
 //! Walk the steps left to right, maintaining a stack of openers:
 //!
-//! - On a Begin: push `(position, opener)` onto the stack.
+//! - On a Begin: check its kind against the enclosing container, then push
+//!   `(position, opener)` onto the stack.
 //! - On an End: pop the top of the stack and require it to match.
-//! - On an Atomic: if the stack is non-empty, require the inner kind
-//!   to be compatible with the surrounding kind (Protocol-kind openers
-//!   accept any inner kind).
+//! - On an Atomic: check its kind against the enclosing container.
+//!
+//! The kind check is the same in both cases: a `Protocol` container accepts
+//! any nested kind, every other container requires an exact match.
+//!
+//! Checking openers as well as leaves is what stops
+//! `Begin Message { Begin Challenge { .. } }` from smuggling a challenge into
+//! a message block.
 //!
 //! At the end of the walk the stack must be empty.
 //!
@@ -130,9 +136,11 @@ impl InteractionPattern {
             match interaction.hierarchy() {
                 // Phase: open a sub-protocol.
                 //
-                // Push regardless of kind.
-                // The kind compatibility check belongs to the next nested step, not the opener.
-                Hierarchy::Begin => stack.push((position, interaction)),
+                // A nested container is itself subject to the enclosing container's rule.
+                Hierarchy::Begin => {
+                    Self::check_nested_kind(&stack, position, interaction)?;
+                    stack.push((position, interaction));
+                }
 
                 // Phase: close a sub-protocol.
                 //
@@ -160,25 +168,8 @@ impl InteractionPattern {
 
                 // Phase: atomic step.
                 //
-                // If a sub-protocol is open, its kind must accept the inner kind.
-                // - Protocol-kind openers act as mixed containers and accept everything;
-                // - Every other kind requires an exact match.
-                Hierarchy::Atomic => {
-                    let Some(&(begin_position, begin)) = stack.last() else {
-                        // No surrounding sub-protocol:
-                        // Any kind is allowed at the top level.
-                        continue;
-                    };
-                    let surrounding = begin.kind();
-                    if surrounding != Kind::Protocol && surrounding != interaction.kind() {
-                        return Err(TranscriptError::InvalidKind(Box::new(InvalidKindInfo {
-                            begin_position,
-                            begin: *begin,
-                            interaction_position: position,
-                            interaction: *interaction,
-                        })));
-                    }
-                }
+                // A leaf is subject to the same rule as a nested container.
+                Hierarchy::Atomic => Self::check_nested_kind(&stack, position, interaction)?,
             }
         }
 
@@ -189,6 +180,31 @@ impl InteractionPattern {
             return Err(TranscriptError::MissingEnd(Box::new(MissingEndInfo {
                 position,
                 begin: *begin,
+            })));
+        }
+        Ok(())
+    }
+
+    /// Require `interaction` to be legal inside the innermost open container.
+    ///
+    /// - No open container: any kind is allowed at the top level.
+    /// - `Protocol` container: acts as a mixed bag and accepts any kind.
+    /// - Any other container: the nested kind must match it exactly.
+    fn check_nested_kind(
+        stack: &[(usize, &Interaction)],
+        position: usize,
+        interaction: &Interaction,
+    ) -> Result<(), TranscriptError> {
+        let Some(&(begin_position, begin)) = stack.last() else {
+            return Ok(());
+        };
+        let surrounding = begin.kind();
+        if surrounding != Kind::Protocol && surrounding != interaction.kind() {
+            return Err(TranscriptError::InvalidKind(Box::new(InvalidKindInfo {
+                begin_position,
+                begin: *begin,
+                interaction_position: position,
+                interaction: *interaction,
             })));
         }
         Ok(())
@@ -240,19 +256,24 @@ impl Display for InteractionPattern {
 mod tests {
     use alloc::{format, vec};
 
+    use p3_baby_bear::BabyBear;
+
     use super::*;
     use crate::fs::pattern::step::{Hierarchy, Kind, Length};
 
-    fn atomic<T: ?Sized>(kind: Kind, label: &'static str, length: Length) -> Interaction {
-        Interaction::new::<T>(Hierarchy::Atomic, kind, label, length)
+    /// Concrete field exercised in this module's tests.
+    type F = BabyBear;
+
+    fn atomic(kind: Kind, label: &'static str, length: Length) -> Interaction {
+        Interaction::algebra::<F, F>(Hierarchy::Atomic, kind, label, length)
     }
 
     fn open<T: ?Sized>(kind: Kind, label: &'static str) -> Interaction {
-        Interaction::new::<T>(Hierarchy::Begin, kind, label, Length::None)
+        Interaction::marker::<T>(Hierarchy::Begin, kind, label)
     }
 
     fn close<T: ?Sized>(kind: Kind, label: &'static str) -> Interaction {
-        Interaction::new::<T>(Hierarchy::End, kind, label, Length::None)
+        Interaction::marker::<T>(Hierarchy::End, kind, label)
     }
 
     #[test]
@@ -269,7 +290,7 @@ mod tests {
         // Mutation: build, validate. Expectation: no error.
         let p = InteractionPattern::new(vec![
             open::<()>(Kind::Protocol, "outer"),
-            atomic::<u64>(Kind::Challenge, "alpha", Length::Scalar),
+            atomic(Kind::Challenge, "alpha", Length::Scalar),
             close::<()>(Kind::Protocol, "outer"),
         ])
         .expect("well-nested protocol is legal");
@@ -339,8 +360,8 @@ mod tests {
         // Fixture state: a Protocol container with Message + Challenge inside.
         let p = InteractionPattern::new(vec![
             open::<()>(Kind::Protocol, "outer"),
-            atomic::<u32>(Kind::Message, "commitment", Length::Scalar),
-            atomic::<u64>(Kind::Challenge, "alpha", Length::Scalar),
+            atomic(Kind::Message, "commitment", Length::Scalar),
+            atomic(Kind::Challenge, "alpha", Length::Scalar),
             close::<()>(Kind::Protocol, "outer"),
         ])
         .expect("Protocol container accepts mixed kinds");
@@ -352,7 +373,7 @@ mod tests {
         // Message-kind container rejects a Challenge-kind atomic.
         let err = InteractionPattern::new(vec![
             open::<()>(Kind::Message, "msg-block"),
-            atomic::<u64>(Kind::Challenge, "alpha", Length::Scalar),
+            atomic(Kind::Challenge, "alpha", Length::Scalar),
             close::<()>(Kind::Message, "msg-block"),
         ])
         .expect_err("non-Protocol container must enforce kind match");
@@ -364,11 +385,54 @@ mod tests {
                     begin_position: 0,
                     begin: open::<()>(Kind::Message, "msg-block"),
                     interaction_position: 1,
-                    interaction: atomic::<u64>(Kind::Challenge, "alpha", Length::Scalar),
+                    interaction: atomic(Kind::Challenge, "alpha", Length::Scalar),
                 }
             ),
             other => panic!("wrong variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn nested_container_of_a_foreign_kind_is_rejected() {
+        // Invariant: an opener is checked against its enclosing container too.
+        //
+        // Without that check, wrapping the challenge in its own Begin block
+        // would smuggle it into a Message-only container.
+        let err = InteractionPattern::new(vec![
+            open::<()>(Kind::Message, "msg-block"),
+            open::<()>(Kind::Challenge, "sneaky"),
+            atomic(Kind::Challenge, "alpha", Length::Scalar),
+            close::<()>(Kind::Challenge, "sneaky"),
+            close::<()>(Kind::Message, "msg-block"),
+        ])
+        .expect_err("a Challenge container inside a Message container must be rejected");
+
+        match err {
+            TranscriptError::InvalidKind(info) => assert_eq!(
+                *info,
+                InvalidKindInfo {
+                    begin_position: 0,
+                    begin: open::<()>(Kind::Message, "msg-block"),
+                    interaction_position: 1,
+                    interaction: open::<()>(Kind::Challenge, "sneaky"),
+                }
+            ),
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_container_of_the_same_kind_is_accepted() {
+        // Boundary: the rule is "match or Protocol", so a Message block nests in a Message block.
+        let p = InteractionPattern::new(vec![
+            open::<()>(Kind::Message, "outer"),
+            open::<()>(Kind::Message, "inner"),
+            atomic(Kind::Message, "commitment", Length::Scalar),
+            close::<()>(Kind::Message, "inner"),
+            close::<()>(Kind::Message, "outer"),
+        ])
+        .expect("same-kind nesting is legal");
+        assert_eq!(p.len(), 5);
     }
 
     #[test]
@@ -378,7 +442,7 @@ mod tests {
         // Fixture state: a small protocol with one nested challenge.
         let p = InteractionPattern::new(vec![
             open::<()>(Kind::Protocol, "test"),
-            atomic::<u64>(Kind::Challenge, "nonce", Length::Scalar),
+            atomic(Kind::Challenge, "nonce", Length::Scalar),
             close::<()>(Kind::Protocol, "test"),
         ])
         .unwrap();
@@ -386,9 +450,9 @@ mod tests {
         // Rendered string matches a known layout.
         let rendered = format!("{p:#}");
         let expected = "Plonky3 Fiat-Shamir Transcript (3 interactions)\n\
-                        0 Begin Protocol 4 test None\n\
-                        1   Atomic Challenge 5 nonce Scalar\n\
-                        2 End Protocol 4 test None\n";
+                        0 Begin Protocol 4 test None Marker\n\
+                        1   Atomic Challenge 5 nonce Scalar Algebra(2013265921^1)\n\
+                        2 End Protocol 4 test None Marker\n";
         assert_eq!(rendered, expected);
 
         // The hash is deterministic, so two calls must agree.
@@ -402,10 +466,35 @@ mod tests {
         // Invariant:
         //
         // Two patterns differing in even one byte of their rendering produce different hashes.
-        let p1 = InteractionPattern::new(vec![atomic::<u64>(Kind::Challenge, "a", Length::Scalar)])
-            .unwrap();
-        let p2 = InteractionPattern::new(vec![atomic::<u64>(Kind::Challenge, "b", Length::Scalar)])
-            .unwrap();
+        let p1 =
+            InteractionPattern::new(vec![atomic(Kind::Challenge, "a", Length::Scalar)]).unwrap();
+        let p2 =
+            InteractionPattern::new(vec![atomic(Kind::Challenge, "b", Length::Scalar)]).unwrap();
         assert_ne!(p1.pattern_hash(), p2.pattern_hash());
+    }
+
+    #[test]
+    fn pattern_hash_distinguishes_two_fields_of_the_same_width() {
+        // Invariant: the fingerprint binds the modulus, not just the shape.
+        //
+        // BabyBear and KoalaBear share a bit width, so only the tag separates them.
+        let bb = InteractionPattern::new(vec![Interaction::algebra::<BabyBear, BabyBear>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            "alpha",
+            Length::Scalar,
+        )])
+        .unwrap();
+        let kb = InteractionPattern::new(vec![Interaction::algebra::<
+            p3_koala_bear::KoalaBear,
+            p3_koala_bear::KoalaBear,
+        >(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            "alpha",
+            Length::Scalar,
+        )])
+        .unwrap();
+        assert_ne!(bb.pattern_hash(), kb.pattern_hash());
     }
 }

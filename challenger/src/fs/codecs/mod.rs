@@ -8,7 +8,7 @@ mod field_to_field;
 mod length_prefix;
 
 pub use bytes_to_field::BytesToFieldCodec;
-pub use codec::Codec;
+pub use codec::{Codec, MIN_CHALLENGE_SECURITY_BITS};
 pub(crate) use decode_field::{
     decode_field_be_canonical, decode_field_via_extra_bytes, encode_field_be, field_byte_size,
     required_bytes,
