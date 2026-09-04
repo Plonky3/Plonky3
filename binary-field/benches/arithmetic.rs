@@ -9,8 +9,11 @@
 use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use p3_binary_field::{BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128};
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
+use p3_binary_field::{
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
+};
+use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
+use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -238,12 +241,278 @@ fn bench_flatten_to_base(c: &mut Criterion) {
     group.finish();
 }
 
+/// Random operands in both representations of `GF(2^128)`, lane for lane.
+fn representation_operands() -> (Vec<BinaryField128>, Vec<Ghash128>) {
+    let mut rng = SmallRng::seed_from_u64(1);
+    let tower: Vec<BinaryField128> = (0..REPS).map(|_| rng.random()).collect();
+    let ghash = tower.iter().map(|&x| Ghash128::from(x)).collect();
+    (tower, ghash)
+}
+
+/// Multiplication in the two representations, on a dependent chain.
+///
+/// Both are the same field.
+///
+/// A tower product converts both operands and the result, sixteen lookups apiece.
+/// A polynomial-basis product is already in the basis the instruction wants.
+fn bench_representation_mul_latency(c: &mut Criterion) {
+    let (tower, ghash) = representation_operands();
+
+    let mut group = c.benchmark_group("representations/mul/latency");
+    group.bench_function("tower", |b| {
+        b.iter(|| {
+            black_box(&tower)
+                .iter()
+                .fold(BinaryField128::ONE, |acc, &y| acc * y)
+        });
+    });
+    group.bench_function("ghash", |b| {
+        b.iter(|| {
+            black_box(&ghash)
+                .iter()
+                .fold(Ghash128::ONE, |acc, &y| acc * y)
+        });
+    });
+    group.finish();
+}
+
+/// Multiplication in the two representations, on independent chains the core can overlap.
+fn bench_representation_mul_throughput(c: &mut Criterion) {
+    let (tower, ghash) = representation_operands();
+
+    let mut group = c.benchmark_group("representations/mul/throughput");
+    group.bench_function("tower", |b| {
+        b.iter(|| {
+            let mut acc = [BinaryField128::ONE; LANES];
+            let (chunks, _) = black_box(&tower).as_chunks::<LANES>();
+            for chunk in chunks {
+                for (lane, &y) in acc.iter_mut().zip(chunk) {
+                    *lane *= y;
+                }
+            }
+            acc
+        });
+    });
+    group.bench_function("ghash", |b| {
+        b.iter(|| {
+            let mut acc = [Ghash128::ONE; LANES];
+            let (chunks, _) = black_box(&ghash).as_chunks::<LANES>();
+            for chunk in chunks {
+                for (lane, &y) in acc.iter_mut().zip(chunk) {
+                    *lane *= y;
+                }
+            }
+            acc
+        });
+    });
+    group.finish();
+}
+
+/// Squaring in the two representations.
+///
+/// Each step mixes in the next operand, so the chain cannot fold away at compile time.
+fn bench_representation_square(c: &mut Criterion) {
+    let (tower, ghash) = representation_operands();
+
+    let mut group = c.benchmark_group("representations/square");
+    group.bench_function("tower", |b| {
+        b.iter(|| {
+            black_box(&tower)
+                .iter()
+                .fold(BinaryField128::ONE, |acc, &y| (acc + y).square())
+        });
+    });
+    group.bench_function("ghash", |b| {
+        b.iter(|| {
+            black_box(&ghash)
+                .iter()
+                .fold(Ghash128::ONE, |acc, &y| (acc + y).square())
+        });
+    });
+    // The dedicated squaring drops the two cross products a general multiply pays for.
+    group.bench_function("ghash, through multiplication", |b| {
+        b.iter(|| {
+            black_box(&ghash).iter().fold(Ghash128::ONE, |acc, &y| {
+                let x = acc + y;
+                x * x
+            })
+        });
+    });
+    group.finish();
+}
+
+/// Inversion in the polynomial basis, which routes through the tower and pays two conversions.
+fn bench_representation_inverse(c: &mut Criterion) {
+    let (_, ghash) = representation_operands();
+    let nonzero: Vec<Ghash128> = ghash
+        .iter()
+        .map(|&x| if x.is_zero() { Ghash128::ONE } else { x })
+        .collect();
+
+    let mut group = c.benchmark_group("representations/inverse");
+    group.bench_function("through tower", |b| {
+        // Include both basis conversions in the comparison.
+        b.iter(|| {
+            black_box(&ghash).iter().fold(Ghash128::ZERO, |acc, &y| {
+                acc + Ghash128::from(BinaryField128::from(y).inverse())
+            })
+        });
+    });
+
+    group.bench_function("ghash", |b| {
+        b.iter(|| {
+            black_box(&nonzero)
+                .iter()
+                .fold(Ghash128::ZERO, |acc, &y| acc + y.inverse())
+        });
+    });
+    group.finish();
+}
+
+/// What the change of basis costs on its own, in both directions.
+fn bench_representation_convert(c: &mut Criterion) {
+    let (tower, ghash) = representation_operands();
+
+    let mut group = c.benchmark_group("representations/convert");
+    group.bench_function("tower to ghash", |b| {
+        b.iter(|| {
+            black_box(&tower)
+                .iter()
+                .fold(Ghash128::ZERO, |acc, &y| acc + Ghash128::from(y))
+        });
+    });
+    group.bench_function("ghash to tower", |b| {
+        b.iter(|| {
+            black_box(&ghash)
+                .iter()
+                .fold(BinaryField128::ZERO, |acc, &y| {
+                    acc + BinaryField128::from(y)
+                })
+        });
+    });
+    group.finish();
+}
+
+/// The packing of the polynomial-basis field against its scalar.
+///
+/// One element fills one 128-bit lane.
+/// A packed product is the scalar kernel applied to every lane at once.
+/// Both arms multiply the same number of field elements.
+fn bench_packing(c: &mut Criterion) {
+    type Packing = <Ghash128 as Field>::Packing;
+
+    let width = Packing::WIDTH;
+    let mut rng = SmallRng::seed_from_u64(1);
+
+    // A whole number of packed vectors, so neither arm has a remainder to handle.
+    let scalars: Vec<Ghash128> = (0..REPS.next_multiple_of(width))
+        .map(|_| rng.random())
+        .collect();
+    let packed: Vec<Packing> = Packing::pack_slice(&scalars).to_vec();
+
+    let mut group = c.benchmark_group("packing/mul/throughput");
+    group.throughput(criterion::Throughput::Elements(scalars.len() as u64));
+
+    group.bench_function("scalar", |b| {
+        b.iter(|| {
+            let mut acc = [Ghash128::ONE; LANES];
+            let (chunks, _) = black_box(&scalars).as_chunks::<LANES>();
+            for chunk in chunks {
+                for (lane, &y) in acc.iter_mut().zip(chunk) {
+                    *lane *= y;
+                }
+            }
+            acc
+        });
+    });
+    group.bench_function("packed", |b| {
+        b.iter(|| {
+            let mut acc = [Packing::ONE; LANES];
+            let (chunks, _) = black_box(&packed).as_chunks::<LANES>();
+            for chunk in chunks {
+                for (lane, &y) in acc.iter_mut().zip(chunk) {
+                    *lane *= y;
+                }
+            }
+            acc
+        });
+    });
+    group.finish();
+}
+
+/// Compare direct square roots with the repeated-squaring definition.
+fn bench_ghash_sqrt(c: &mut Criterion) {
+    let (_, operands) = representation_operands();
+    let mut group = c.benchmark_group("ghash/sqrt");
+    for direct in [false, true] {
+        group.bench_function(if direct { "direct" } else { "127 squares" }, |b| {
+            // Mix fresh data into the chain to keep every square root observable.
+            b.iter(|| {
+                black_box(&operands).iter().fold(Ghash128::ONE, |acc, &x| {
+                    let value = acc + x;
+                    if direct {
+                        value.try_sqrt().unwrap()
+                    } else {
+                        value.exp_power_of_2(127)
+                    }
+                })
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Compare deferred reduction with a sum of separately reduced products.
+fn bench_dot_width<P: PackedValue + PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    label: &str,
+) where
+    StandardUniform: Distribution<P>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    // Both algorithms consume identical full-width random inputs.
+    let a: [P; N] = core::array::from_fn(|_| rng.random());
+    let b: [P; N] = core::array::from_fn(|_| rng.random());
+    let mut group = c.benchmark_group(format!("ghash/dot/{label}/{N}"));
+    group.bench_function("separate", |bencher| {
+        bencher.iter(|| {
+            black_box(&a)
+                .iter()
+                .zip(black_box(&b))
+                .map(|(&x, &y)| x * y)
+                .sum::<P>()
+        });
+    });
+    group.bench_function("deferred", |bencher| {
+        bencher.iter(|| P::dot_product(black_box(&a), black_box(&b)));
+    });
+    group.finish();
+}
+
+/// Exercise small and long dot products at scalar and native packed widths.
+fn bench_ghash_dot(c: &mut Criterion) {
+    bench_dot_width::<Ghash128, 4>(c, "scalar");
+    bench_dot_width::<Ghash128, 16>(c, "scalar");
+    bench_dot_width::<Ghash128, 64>(c, "scalar");
+    bench_dot_width::<<Ghash128 as Field>::Packing, 4>(c, "packed");
+    bench_dot_width::<<Ghash128 as Field>::Packing, 16>(c, "packed");
+    bench_dot_width::<<Ghash128 as Field>::Packing, 64>(c, "packed");
+}
+
 criterion_group!(
     benches,
     bench_mul,
     bench_square,
     bench_inverse,
     bench_mul_alpha,
-    bench_flatten_to_base
+    bench_flatten_to_base,
+    bench_representation_mul_latency,
+    bench_representation_mul_throughput,
+    bench_representation_square,
+    bench_representation_inverse,
+    bench_representation_convert,
+    bench_packing,
+    bench_ghash_sqrt,
+    bench_ghash_dot
 );
 criterion_main!(benches);

@@ -23,7 +23,7 @@
 pub(super) const TAIL_64: u128 = 0b1_1011;
 
 /// `GF(2^128)` as `GF(2)[x] / (x^128 + x^7 + x^2 + x + 1)`.
-pub(super) const TAIL_128: u128 = 0b1000_0111;
+pub(crate) const TAIL_128: u128 = 0b1000_0111;
 
 /// The images of the tower generators `X_0, …, X_5` in `GF(2)[x]/(x^64 + x^4 + x^3 + x + 1)`.
 const XI_64: [u128; 6] = [
@@ -237,6 +237,25 @@ static SQUARE_64: [[u64; 256]; 8] =
     narrow(&byte_tables(&square_columns(64, TAIL_64, &COLUMNS_64), 64));
 static TOWER_TO_POLY_128: [[u128; 256]; 16] = byte_tables(&COLUMNS_128, 128);
 static POLY_TO_TOWER_128: [[u128; 256]; 16] = byte_tables(&invert(&COLUMNS_128, 128), 128);
+
+/// The polynomial-basis coordinates of a tower-basis bit pattern, at compile time.
+///
+/// The change of basis is `GF(2)`-linear.
+/// An element's image is therefore the sum of the columns its set bits select.
+///
+/// The table-driven route sums a byte at a time, which constant evaluation cannot index into.
+/// This walks the bits instead.
+pub(crate) const fn tower_image_128(v: u128) -> u128 {
+    let mut acc = 0;
+    let mut i = 0;
+    while i < 128 {
+        if (v >> i) & 1 == 1 {
+            acc ^= COLUMNS_128[i];
+        }
+        i += 1;
+    }
+    acc
+}
 
 /// Applies the eight-table form of a `64 × 64` matrix over `GF(2)`.
 #[inline]

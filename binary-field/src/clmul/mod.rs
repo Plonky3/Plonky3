@@ -1,18 +1,55 @@
-//! Carryless multiplication for the 64- and 128-bit levels of the tower.
+//! Carryless multiplication, and the polynomial-basis arithmetic built on it.
 //!
-//! Hardware carryless multiply computes products in `GF(2)[x]`, which is not the tower's own
-//! representation. [`basis`] supplies the change of basis between the two, leaving three steps:
-//! map both operands into the polynomial basis, multiply and reduce there, and map back.
+//! The instruction works in `GF(2)[x]`, which is not the tower's representation.
+//! A tower product therefore costs three steps that a polynomial-basis product does not:
 //!
-//! Architecture-specific code is confined to the backends: the `64 × 64 → 128` carryless
-//! product, and on some targets a whole `GF(2^128)` product that never leaves the vector unit.
-//! Composing the wider product from the half products and folding the modulus are plain shifts
-//! and `XOR`s, so the definition of every routine here is portable code that the tests exercise
-//! on every target, and each backend is checked against it.
+//! ```text
+//!     map both operands into the polynomial basis
+//!     multiply and reduce there
+//!     map the result back
+//! ```
+//!
+//! Each backend supplies the same routines, and each has a portable definition to test against.
 
 mod basis;
+mod sqrt;
 
-pub(crate) use basis::{poly_to_tower_128, tower_to_poly_128};
+pub(crate) use sqrt::poly_sqrt_128;
+
+// The addition chain pays for its 320 KiB of Frobenius maps only where a product is a single
+// instruction.
+// Without one the tower norm wins, so the maps are not compiled at all.
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    all(target_arch = "aarch64", target_feature = "aes"),
+))]
+mod inverse;
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    all(target_arch = "aarch64", target_feature = "aes"),
+))]
+pub(crate) use inverse::poly_inverse_128;
+
+// Compiled on every target, even where a backend supersedes it.
+// Its tests then run everywhere.
+// No instruction guarantees the carry argument the software multiply rests on.
+#[cfg_attr(
+    any(
+        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+        all(target_arch = "aarch64", target_feature = "aes"),
+    ),
+    allow(dead_code)
+)]
+mod portable;
+
+// The modulus tail, which only a packed backend folds with directly.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+))]
+pub(crate) use basis::TAIL_128;
+pub(crate) use basis::{poly_to_tower_128, tower_image_128, tower_to_poly_128};
 
 use crate::BinaryField64;
 use crate::tower::TowerLevel;
@@ -24,13 +61,9 @@ mod x86_64;
 
 /// Whether the target has a carryless-multiply instruction.
 ///
-/// The bit-serial fallback below keeps every routine in this module correct everywhere, but it
-/// is far slower than the recursive tower arithmetic, so `Mul` and `square` only route through
-/// this module when the instruction is really there.
-///
-/// This is a compile-time decision, and neither feature is in the baseline of most targets:
-/// `aarch64-apple-darwin` has `aes`, but generic AArch64 Linux and every `x86_64` target need
-/// `-C target-feature=+aes` / `+pclmulqdq` (or `-C target-cpu=native`) for the fast path.
+/// - The tower routes here only when it does, since its own recursion beats the software path.
+/// - The polynomial-basis field has no such alternative and always routes here.
+/// - Most targets need `+pclmulqdq` / `+aes` asked for, or `-C target-cpu=native`.
 pub(crate) const HAS_HARDWARE_CLMUL: bool = cfg!(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
     all(target_arch = "aarch64", target_feature = "aes"),
@@ -38,17 +71,11 @@ pub(crate) const HAS_HARDWARE_CLMUL: bool = cfg!(any(
 
 /// The carryless product of two 64-bit polynomials over `GF(2)`, one bit of `b` at a time.
 ///
-/// The portable definition of the operation the hardware instruction performs. It is compiled
-/// on every target: where there is no instruction it is the fallback, and where there is one it
-/// is what the tests check that instruction against.
-#[cfg_attr(
-    any(
-        all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-        all(target_arch = "aarch64", target_feature = "aes"),
-    ),
-    // Superseded by a backend, but still the reference the tests compare against.
-    allow(dead_code)
-)]
+/// The plainest possible statement of what every backend computes.
+///
+/// Far too slow to dispatch to.
+/// It exists as the reference the tests check each backend against.
+#[cfg(test)]
 #[inline]
 const fn scalar_clmul_64x64(a: u64, b: u64) -> u128 {
     let a = a as u128;
@@ -65,30 +92,22 @@ const fn scalar_clmul_64x64(a: u64, b: u64) -> u128 {
 
 #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
 use aarch64::clmul_64x64;
-#[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
-use x86_64::clmul_64x64;
-
 #[cfg(not(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
     all(target_arch = "aarch64", target_feature = "aes"),
 )))]
-// The backends this stands in for wrap an intrinsic and so cannot be `const`; keeping the
-// signatures uniform stops constness from leaking into everything built on top.
-#[allow(clippy::missing_const_for_fn)]
-#[inline]
-fn clmul_64x64(a: u64, b: u64) -> u128 {
-    scalar_clmul_64x64(a, b)
-}
+use portable::clmul_64x64;
+#[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+use x86_64::clmul_64x64;
 
 /// The `256`-bit carryless product of two 128-bit polynomials, as `(low, high)`.
 ///
-/// Schoolbook over the 64-bit halves: with `a = a0 + a1·x^64` and `b = b0 + b1·x^64`, the four
-/// half products give the low, middle and high coefficients directly.
-///
-/// Karatsuba writes the middle coefficient as `(a0 + a1)·(b0 + b1) + a0·b0 + a1·b1` and so
-/// needs only three products, but it pays four extra `XOR`s for them and puts two of those on
-/// the critical path ahead of the product they feed. A hardware carryless multiply is cheap
-/// enough that the trade goes the other way.
+/// Schoolbook over the 64-bit halves: four independent products, no dependency between them.
+/// Karatsuba saves one product, at the price of two exclusive ors ahead of it.
+/// A hardware multiply is too cheap for that trade to pay.
+// The software backend is `const` and the hardware ones wrap intrinsics, so they cannot be.
+// Keeping this uniform stops constness from leaking into callers on some targets only.
+#[allow(clippy::missing_const_for_fn)]
 #[inline]
 fn clmul_128x128(a: u128, b: u128) -> (u128, u128) {
     let (a0, a1) = (a as u64, (a >> 64) as u64);
@@ -101,9 +120,9 @@ fn clmul_128x128(a: u128, b: u128) -> (u128, u128) {
 
 /// Reduces a 128-bit carryless product modulo `x^64 + x^4 + x^3 + x + 1`.
 ///
-/// `x^64 ≡ x^4 + x^3 + x + 1`, so the high half is folded down by multiplying it by that tail.
-/// The tail has degree 4, so the fold spills 4 bits back above `x^64`; folding those in turn
-/// reaches degree at most `3 + 4`, well inside the low half, and two rounds are enough.
+/// The modulus rewrites `x^64` as the tail `x^4 + x^3 + x + 1`.
+/// The high half therefore folds down by that tail.
+/// Degree 4 spills 4 bits back over the top; a second fold lands at degree `3 + 4`.
 #[inline]
 const fn reduce_64(product: u128) -> u64 {
     let low = product as u64;
@@ -117,8 +136,8 @@ const fn reduce_64(product: u128) -> u64 {
 
 /// Reduces a 256-bit carryless product modulo `x^128 + x^7 + x^2 + x + 1`.
 ///
-/// The same two-round fold as [`reduce_64`], with a tail of degree 7: the first round spills
-/// 7 bits above `x^128` and the second lands at degree at most `6 + 7`.
+/// The same two-round fold as at 64 bits, with a tail of degree 7.
+/// The first round spills 7 bits over the top; the second lands at degree `6 + 7`.
 #[inline]
 const fn reduce_128(low: u128, high: u128) -> u128 {
     let folded = (high << 7) ^ (high << 2) ^ (high << 1) ^ high;
@@ -134,40 +153,33 @@ pub(crate) fn mul_64(a: u64, b: u64) -> u64 {
     basis::poly_to_tower_64(reduce_64(product))
 }
 
-/// Multiplication in `GF(2^128)`, taking and returning the polynomial representation.
+/// Multiplication in `GF(2^128)`, in the polynomial representation.
 ///
-/// The 256-bit product is assembled and folded in general-purpose registers, so the whole
-/// operation is a short dependency chain and nothing waits on a wider one.
+/// Assembled and folded in general-purpose registers, so the dependency chain stays short.
 #[inline]
 fn composed_poly_mul_128(a: u128, b: u128) -> u128 {
     let (low, high) = clmul_128x128(a, b);
     reduce_128(low, high)
 }
 
-/// Multiplication in `GF(2^128)`, taking and returning the polynomial representation.
-///
-/// Where the target has one, this is a kernel that keeps both operands in vector registers from
-/// end to end. It issues more instructions than [`composed_poly_mul_128`] but none that leave
-/// the vector unit, which is the better trade only for a caller with several products in
-/// flight at once; [`composed_poly_mul_128`] is the one to reach for on a dependency chain.
+// The polynomial-basis arithmetic, chosen at compile time.
+//
+// A backend keeps every intermediate in a vector register and folds the modulus with a
+// carryless product, where the integer file would need several instructions per shift.
 #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
-#[inline]
-pub(crate) fn poly_mul_128(a: u128, b: u128) -> u128 {
-    aarch64::poly_mul_128(a, b)
-}
-
-/// Multiplication in `GF(2^128)`, taking and returning the polynomial representation.
-#[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
-#[inline]
-pub(crate) fn poly_mul_128(a: u128, b: u128) -> u128 {
-    composed_poly_mul_128(a, b)
-}
+pub(crate) use aarch64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    all(target_arch = "aarch64", target_feature = "aes"),
+)))]
+pub(crate) use portable::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
+#[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+pub(crate) use x86_64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
 
 /// Multiplication in `GF(2^128)`, taking and returning the tower representation.
 ///
-/// The three changes of basis around the product are sixteen dependent lookups each, so this
-/// takes the composition rather than the vector kernel: there is no throughput to win behind a
-/// chain of loads that long.
+/// The three changes of basis are sixteen dependent lookups each.
+/// Behind a chain of loads that long there is no throughput for a vector kernel to win.
 #[inline]
 pub(crate) fn mul_128(a: u128, b: u128) -> u128 {
     let product = composed_poly_mul_128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
@@ -176,36 +188,23 @@ pub(crate) fn mul_128(a: u128, b: u128) -> u128 {
 
 /// Squaring in `GF(2^64)`, taking and returning the tower representation.
 ///
-/// Squaring is `GF(2)`-linear in characteristic 2, so in the tower basis it is a fixed matrix,
-/// tabulated a byte of the input at a time exactly as the changes of basis are. That is eight
-/// lookups, against the two conversions and a carryless product a route through the polynomial
-/// basis would cost.
+/// Squaring is `GF(2)`-linear, so in the tower basis it is a fixed matrix.
+/// Tabulated a byte at a time: eight lookups, against two conversions and a product.
 #[inline]
 pub(crate) fn square_64(a: u64) -> u64 {
     basis::tower_square_64(a)
 }
 
-/// Squaring in `GF(2^128)`, taking and returning the polynomial representation.
-///
-/// With `p = p0 + p1·x^64`, the middle coefficient of `p²` is `2·p0·p1`, which vanishes in
-/// characteristic 2. So `p² = p0² + p1²·x^128` exactly: two carryless products with nothing to
-/// fold between them, where [`clmul_128x128`] needs four and a middle term.
-#[inline]
-pub(crate) fn poly_square_128(a: u128) -> u128 {
-    let (p0, p1) = (a as u64, (a >> 64) as u64);
-    reduce_128(clmul_64x64(p0, p0), clmul_64x64(p1, p1))
-}
-
 /// Squaring in `GF(2^128)`, taking and returning the tower representation.
 ///
-/// The tower basis of this level is the tower basis of the level below, twice over, so the two
-/// halves square through [`square_64`]: with `a = a0 + a1·X` and `X² = αX + 1`, the cross term
-/// vanishes in characteristic 2 and `a² = (a0² + a1²) + α·a1²·X`.
-///
-/// Tabulating this level directly would take a table four times the size for the same sixteen
-/// lookups, so the level below's is used twice instead.
+/// This level's basis is the level below's twice over.
+/// Both halves therefore square through the narrower table.
+/// Tabulating this level directly would cost four times the space for the same lookups.
 #[inline]
 pub(crate) fn square_128(a: u128) -> u128 {
+    // Invariant: with a = a0 + a1*X and X^2 = alpha*X + 1, the cross term doubles to zero.
+    //
+    //     a^2 = (a0^2 + a1^2) + alpha*a1^2*X
     let low = square_64(a as u64);
     let high = square_64((a >> 64) as u64);
     let scaled = BinaryField64::from_repr(high).mul_alpha().to_repr();
@@ -314,28 +313,29 @@ mod tests {
         }
     }
 
-    #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
     proptest! {
-        // The kernel below is the one routine here with no portable definition standing behind
-        // it, so it is checked over many more pairs than the rest of the module.
+        // The selected backend is the one routine here written per target rather than once, so
+        // it is checked over many more pairs than the rest of the module.
         #![proptest_config(ProptestConfig::with_cases(20_000))]
 
-        /// The vector-native kernel must agree bit for bit with the composition it stands in for.
         #[test]
-        fn the_vector_kernel_matches_the_composition(a: u128, b: u128) {
-            prop_assert_eq!(
-                super::aarch64::poly_mul_128(a, b),
-                super::composed_poly_mul_128(a, b),
-            );
+        fn the_selected_backend_matches_multiplication_from_the_modulus(a: u128, b: u128) {
+            // Bit-serial reduction straight from the modulus, independent of every backend.
+            prop_assert_eq!(super::poly_mul_128(a, b), poly_mul(a, b, 128, TAIL_128));
+            prop_assert_eq!(super::poly_square_128(a), poly_mul(a, a, 128, TAIL_128));
+            prop_assert_eq!(super::poly_mul_128_by_64(a, b as u64), poly_mul(a, b as u64 as u128, 128, TAIL_128));
         }
     }
 
-    /// The edge cases a random search is unlikely to reach: the identities, and the operands
-    /// whose half products and reduction spill are maximal.
-    #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
     #[test]
-    fn the_vector_kernel_matches_the_composition_on_extremes() {
-        let corners = [
+    fn the_selected_backend_is_exact_on_the_extremes() {
+        // Invariant: the fold of the modulus is exact however far the product overflows.
+        //
+        // The corners a random search is unlikely to reach:
+        //   - the additive and multiplicative identities,
+        //   - the operands whose half products are maximal,
+        //   - the operands whose reduction spill is maximal.
+        const CORNERS: [u128; 8] = [
             0,
             1,
             u128::MAX,
@@ -345,19 +345,25 @@ mod tests {
             u128::MAX << 64,
             0x8000_0000_0000_0001_8000_0000_0000_0001,
         ];
-        for a in corners {
-            for b in corners {
+
+        for a in CORNERS {
+            assert_eq!(
+                super::poly_square_128(a),
+                poly_mul(a, a, 128, TAIL_128),
+                "{a:#x} squared"
+            );
+            for b in CORNERS {
                 assert_eq!(
-                    super::aarch64::poly_mul_128(a, b),
-                    super::composed_poly_mul_128(a, b),
+                    super::poly_mul_128(a, b),
+                    poly_mul(a, b, 128, TAIL_128),
                     "{a:#x} * {b:#x}"
                 );
             }
         }
     }
 
-    /// A worked example small enough to check by hand: in the tower `X_0² = X_0 + 1`, so bit
-    /// pattern `0b10` squares to `0b11` at both levels, and `ONE` is a two-sided identity.
+    /// A worked example small enough to check by hand.
+    /// In the tower `X_0^2 = X_0 + 1`, so `0b10` squares to `0b11` at both levels.
     #[test]
     fn hand_checkable_products() {
         assert_eq!(super::mul_128(0b10, 0b10), 0b11);

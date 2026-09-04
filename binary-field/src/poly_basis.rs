@@ -1,25 +1,17 @@
-//! `GF(2^128)` in the polynomial basis of `x^128 + x^7 + x^2 + x + 1`.
+//! Raw polynomial coordinates for `GF(2^128)` modulo `x^128 + x^7 + x^2 + x + 1`.
 //!
-//! [`BinaryField128`] stores its elements in the tower basis, and a product there is a change of
-//! basis on each operand, a carryless multiply, and a change of basis back — three table-driven
-//! conversions of sixteen dependent lookups each, which dominate the multiply. Code that
-//! performs many products on the same data can pay the conversion once at each end instead, and
-//! multiply through [`mul`] in between.
+//! Prefer the typed field for ordinary arithmetic.
+//! These helpers are for buffers whose representation the caller manages.
 //!
-//! Addition is `XOR` in either basis, so a sum needs no conversion at all: only products and
-//! squares do, which is what this module supplies. An element is carried as the `u128` of its
-//! coordinates, deliberately not as a field type — the two bases are indistinguishable once
-//! wrapped, and a value that reaches ordinary [`BinaryField128`] arithmetic in the wrong one is
-//! silently wrong rather than ill-typed.
+//! The coordinates stay a bare integer on purpose.
+//! Wrapped, the two bases look alike, and a value in the wrong one is silently wrong.
 
 use crate::tower::TowerLevel;
 use crate::{BinaryField128, clmul};
 
-/// Whether [`mul`] and [`square`] compile down to a hardware carryless multiply.
+/// Whether multiplication and squaring use hardware carryless multiplication.
 ///
-/// Where they do not, the carryless product is the bit-serial fallback, which is far slower than
-/// the recursive tower arithmetic `BinaryField128` uses on such a target. Working in this basis
-/// is a loss there, so a caller choosing between the two representations should branch on this.
+/// Otherwise multiplication uses masked integer products and squaring uses bit spreading.
 pub const HAS_HARDWARE_CLMUL: bool = clmul::HAS_HARDWARE_CLMUL;
 
 /// The polynomial-basis coordinates of a tower element.
@@ -35,14 +27,10 @@ pub fn to_tower(v: u128) -> BinaryField128 {
     BinaryField128::from_repr(clmul::poly_to_tower_128(v))
 }
 
-/// The product of two elements, both given and returned in the polynomial basis.
-///
-/// This is tuned for throughput. Where the target has a vector kernel it takes it, which keeps
-/// the operands off the general-purpose registers and lets independent products overlap, at the
-/// cost of a longer critical path through each one. A caller that instead threads its products
-/// through a single dependent chain — Horner evaluation, successive powers of one element —
-/// should expect this to be slower per product than the chain-friendly route the tower-basis
-/// [`BinaryField128`] operator takes.
+/// Multiply two elements expressed in polynomial coordinates.
+// Only the software backend is `const`, so leaving this one out keeps the signature the same
+// on every target.
+#[allow(clippy::missing_const_for_fn)]
 #[must_use]
 #[inline]
 pub fn mul(a: u128, b: u128) -> u128 {
@@ -50,6 +38,7 @@ pub fn mul(a: u128, b: u128) -> u128 {
 }
 
 /// The square of an element, given and returned in the polynomial basis.
+#[allow(clippy::missing_const_for_fn)]
 #[must_use]
 #[inline]
 pub fn square(a: u128) -> u128 {

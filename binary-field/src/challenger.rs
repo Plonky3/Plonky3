@@ -33,9 +33,10 @@ const GRIND_MARGIN_BITS: usize = 8;
 
 /// A challenger for a binary tower field, driven by a challenger over bytes.
 ///
-/// A level of the Wiedemann tower is an exact number of bytes wide and every bit pattern of
-/// that width is a field element, so a transcript over the field is a transcript over its
-/// bytes: no encoding, decoding or rejection sampling is needed in either direction.
+/// A tower level is a whole number of bytes wide, and every bit pattern is an element.
+///
+/// A transcript over the field is therefore a transcript over its bytes.
+/// Nothing is encoded, decoded or rejection-sampled in either direction.
 ///
 /// **Observing**: absorbs the little-endian bytes of the element into the inner challenger.
 ///
@@ -260,7 +261,7 @@ mod tests {
     use p3_symmetric::{Hash, MerkleCap};
 
     use crate::challenger::{BITS_SAMPLE_BYTES, BinaryChallenger};
-    use crate::{BinaryField8, BinaryField32, BinaryField128, Gf2};
+    use crate::{BinaryField8, BinaryField32, BinaryField128, Gf2, Ghash128};
 
     type Inner = HashChallenger<u8, Keccak256Hash, 32>;
 
@@ -280,6 +281,34 @@ mod tests {
             0x21, 0x43, 0x65, 0x87, 0xa9, 0xcb, 0xed, 0x0f, 0xf0, 0xde, 0xbc, 0x9a, 0x78, 0x56,
             0x34, 0x12,
         ])
+    }
+
+    #[test]
+    fn the_polynomial_basis_field_shares_the_transcript_with_the_tower() {
+        // Both representations are 16 bytes wide with every pattern a valid element, so a
+        // transcript over one is byte-for-byte the transcript over the other.
+        //
+        //     observe tower element -> same bytes absorbed -> same bytes drawn
+        //
+        // What differs is only how those bytes are read as a field element.
+        let element = a128();
+
+        let mut tower = mk::<BinaryField128>();
+        tower.observe(element);
+        let drawn: BinaryField128 = tower.sample();
+
+        let mut ghash = mk::<Ghash128>();
+        ghash.observe(Ghash128::from_le_bytes(
+            element.into_bytes().into_iter().collect::<Vec<_>>()[..]
+                .try_into()
+                .unwrap(),
+        ));
+        let mirrored: Ghash128 = ghash.sample();
+
+        assert_eq!(
+            drawn.into_bytes().into_iter().collect::<Vec<_>>(),
+            mirrored.into_bytes().into_iter().collect::<Vec<_>>()
+        );
     }
 
     #[test]
