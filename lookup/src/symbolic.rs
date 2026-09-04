@@ -7,7 +7,7 @@ use p3_air::symbolic::{
     AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
     SymbolicVariable, SymbolicVariableExt,
 };
-use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder};
+use p3_air::{Air, AirBuilder, ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
@@ -41,6 +41,30 @@ impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
         }
     }
 
+    /// Run one symbolic pass over an AIR and keep everything it emitted.
+    ///
+    /// Constraints and interactions come out of the same pass.
+    /// A caller that needs both therefore evaluates the AIR only once.
+    ///
+    /// # Arguments
+    ///
+    /// - `air`: the AIR to evaluate symbolically.
+    /// - `layout`: column widths and challenge counts sizing the symbolic trace.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a layout width that the AIR itself determines disagrees with the AIR.
+    pub fn from_air<A>(air: &A, layout: AirLayout) -> Self
+    where
+        A: Air<Self>,
+    {
+        // A mismatched width would silently point the AIR at the wrong variables.
+        layout.validate_against_air(air);
+        let mut builder = Self::new(layout);
+        air.eval(&mut builder);
+        builder
+    }
+
     /// Cross-AIR interactions recorded so far, in the order they were pushed.
     pub fn global_interactions(&self) -> &[SymbolicInteraction<F>] {
         &self.global_interactions
@@ -62,10 +86,7 @@ impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
     }
 
     /// Symbolic extension-field constraints captured by the inner builder.
-    pub fn extension_constraints(&self) -> Vec<SymbolicExpressionExt<F, EF>>
-    where
-        SymbolicExpressionExt<F, EF>: Algebra<EF>,
-    {
+    pub fn extension_constraints(&self) -> Vec<SymbolicExpressionExt<F, EF>> {
         self.inner.extension_constraints()
     }
 

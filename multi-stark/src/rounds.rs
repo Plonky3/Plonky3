@@ -8,7 +8,8 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_air::{Air, BaseAir};
 use p3_field::{
-    ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
+    Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    dot_product,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -17,15 +18,39 @@ use p3_multilinear_util::poly::{Poly, PolyView};
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 use p3_sumcheck::layout::Table;
 
-use crate::folder::MultilinearFolder;
+use crate::folder::{FolderEvaluations, InteractionMultilinearFolder, MultilinearFolder};
+use crate::lookup::AirLinkInstance;
 use crate::packed_ext::PackedExt;
 use crate::selectors::{BoundaryEvals, periodic_num_variables};
+
+/// Native per-variable degrees of one AIR's two zerocheck expression families.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub(super) struct AirDegrees {
+    /// Alpha-batched ordinary constraint degree, or zero when the AIR asserts none.
+    pub(super) constraints: usize,
+    /// Lookup-link degree, or zero when the AIR declares no interactions.
+    pub(super) interactions: usize,
+}
+
+impl AirDegrees {
+    /// Highest per-variable degree this AIR reaches in either family.
+    ///
+    /// The round state evaluates the AIR up to this node, and stops accumulating the
+    /// lower-degree family once its own final node is past.
+    pub(super) const fn max(self) -> usize {
+        if self.constraints > self.interactions {
+            self.constraints
+        } else {
+            self.interactions
+        }
+    }
+}
 
 /// One batch of AIRs that share a single trace height.
 ///
 /// A stage activates when the global sumcheck cube shrinks to its height.
 /// Every table inside a stage has the same number of variables.
-pub(super) struct Stage<'air, 'data, A, F: Field> {
+pub(super) struct Stage<'air, 'data, A, F: Field, EF> {
     /// Original caller indices of these AIRs, used to return openings in caller order.
     pub(super) indices: Vec<usize>,
     /// The AIRs in this stage.
@@ -36,33 +61,49 @@ pub(super) struct Stage<'air, 'data, A, F: Field> {
     pub(super) preprocessed: Vec<Option<&'data Table<F>>>,
     /// Transposed main trace table for each AIR.
     pub(super) tables: Vec<&'data Table<F>>,
-    /// Per-variable constraint degree of each AIR, with the eq factor stripped.
-    pub(super) degrees: Vec<usize>,
+    /// Native ordinary-constraint and lookup-link degrees for each AIR.
+    pub(super) degrees: Vec<AirDegrees>,
     /// Shared variable count, equal to the base-two logarithm of the common height.
     pub(super) num_vars: usize,
+    /// One-time lookup initialization consumed when this stage activates.
+    coupling: StageCoupling<EF>,
 }
 
-impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
+impl<'air, 'data, A, F: Field, EF: Field> Stage<'air, 'data, A, F, EF> {
     /// Build a stage from AIRs that all share one trace height.
     ///
     /// # Panics
     ///
+    /// Panics if the stage is empty or its per-AIR input lengths disagree.
+    /// Panics if an AIR has no positive-degree expression family.
     /// Panics if the tables do not all have the same height.
     /// Panics if a preprocessed table's height differs from the stage height.
+    /// Panics if a trace width or public-value count differs from its AIR declaration.
     pub(super) fn new(
-        airs: &[&'air A],
-        public_values: &[&'data [F]],
-        indices: &[usize],
-        preprocessed: &[Option<&'data Table<F>>],
-        tables: &[&'data Table<F>],
-        degrees: &[usize],
-    ) -> Self {
+        airs: Vec<&'air A>,
+        public_values: Vec<&'data [F]>,
+        indices: Vec<usize>,
+        preprocessed: Vec<Option<&'data Table<F>>>,
+        tables: Vec<&'data Table<F>>,
+        degrees: Vec<AirDegrees>,
+        coupling: StageCoupling<EF>,
+    ) -> Self
+    where
+        A: BaseAir<F>,
+    {
+        assert!(!tables.is_empty());
+        assert_eq!(airs.len(), tables.len());
+        assert_eq!(preprocessed.len(), tables.len());
+        assert_eq!(public_values.len(), tables.len());
+        assert_eq!(degrees.len(), tables.len());
+        assert!(degrees.iter().all(|degrees| degrees.max() > 0));
+
         // Every table in a stage binds the same zerocheck variables, so heights must agree.
         let num_vars = tables
             .iter()
             .map(|table| table.num_variables())
             .all_equal_value()
-            .expect("all tables must have the same height");
+            .unwrap();
 
         // Preprocessed columns fold alongside the main columns, so they share the height.
         assert!(
@@ -70,18 +111,40 @@ impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
                 .iter()
                 .flatten()
                 .all(|table| table.num_variables() == num_vars),
-            "preprocessed tables must match the stage height"
+            "preprocessed tables must match the main trace height"
         );
+
+        for (((air, public_values), preprocessed), table) in airs
+            .iter()
+            .zip(&public_values)
+            .zip(&preprocessed)
+            .zip(&tables)
+        {
+            assert_eq!(table.num_polys(), air.width());
+            assert_eq!(
+                preprocessed.map_or(0, Table::num_polys),
+                air.preprocessed_width(),
+            );
+            assert_eq!(public_values.len(), air.num_public_values());
+        }
 
         Self {
             num_vars,
-            indices: indices.to_vec(),
-            airs: airs.to_vec(),
-            public_values: public_values.to_vec(),
-            preprocessed: preprocessed.to_vec(),
-            tables: tables.to_vec(),
-            degrees: degrees.to_vec(),
+            indices,
+            airs,
+            public_values,
+            preprocessed,
+            tables,
+            degrees,
+            coupling,
         }
+    }
+
+    /// The part of the folded lookup claim that becomes live when this stage activates.
+    ///
+    /// The global sumcheck holds the remainder as a dormant constant until then.
+    pub(super) fn lookup_claim(&self, eta: EF) -> EF {
+        eta * self.coupling.claims.values().copied().sum::<EF>()
     }
 }
 
@@ -102,8 +165,6 @@ impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
 ///
 /// The verifier recomputes each periodic column in closed form instead of opening it.
 pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
-    /// AIR whose alpha-batched constraint is being evaluated.
-    airs: Vec<&'air A>,
     /// Public inputs forwarded to the AIR.
     public_values: Vec<&'data [F]>,
     /// Random scalar batching the AIR constraints.
@@ -119,14 +180,20 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     tables: Vec<&'data Table<F>>,
     /// Beta power for each AIR in canonical input order.
     betas: Vec<EF>,
-    /// AIRs grouped by their internal round-polynomial degree.
-    degree_groups: Vec<DegreeGroup<EF>>,
-    /// Per-AIR column spans and degrees, in stage-local order, driving the per-round column fold.
-    ///
-    /// Derived once from the degree groups, since the layout is fixed for the state's lifetime.
-    slots: Vec<AirSlot>,
+    /// Ordinary AIR constraints grouped by their native round-polynomial degree.
+    constraint_groups: Vec<DegreeGroup<EF>>,
+    /// Lookup links grouped independently by their native round-polynomial degree.
+    interaction_groups: Vec<DegreeGroup<EF>>,
+    /// Per-AIR column spans and native family degrees driving the per-round column fold.
+    slots: Vec<AirSlot<'air, A>>,
     /// Zerocheck point coordinates, used to recover the omitted node one for each AIR.
     tau: Point<EF>,
+    /// Lookup coefficients for this stage.
+    ///
+    /// Empty when no AIR of this stage declares a lookup.
+    coupling: InteractionCoupling<EF>,
+    /// Common scalar applied to lookup claims and evaluations after grouping.
+    eta: EF,
 }
 
 /// Extension-round column storage.
@@ -270,8 +337,6 @@ fn packed_window<F: Field, EF: ExtensionField<F>>(
 /// Owns the folded trace columns, boundary selectors, and repeat-last next-row tail values needed
 /// by the remaining rounds.
 pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>> {
-    /// AIR whose alpha-batched constraint is being evaluated.
-    airs: Vec<&'air A>,
     /// Public inputs forwarded to the AIR.
     public_values: Vec<&'data [F]>,
     /// Random scalar batching the AIR constraints.
@@ -282,26 +347,132 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>>
     columns: ExtColumns<F, EF>,
     /// Beta power for each AIR in canonical input order.
     betas: Vec<EF>,
-    /// AIRs grouped by their internal round-polynomial degree.
-    degree_groups: Vec<DegreeGroup<EF>>,
-    /// Per-AIR column spans and degrees, in stage-local order, driving the per-round column fold.
-    ///
-    /// Derived once from the degree groups, since the layout is fixed for the state's lifetime.
-    slots: Vec<AirSlot>,
+    /// Ordinary AIR constraints grouped by their native round-polynomial degree.
+    constraint_groups: Vec<DegreeGroup<EF>>,
+    /// Lookup links grouped independently by their native round-polynomial degree.
+    interaction_groups: Vec<DegreeGroup<EF>>,
+    /// Per-AIR column spans and native family degrees driving the per-round column fold.
+    slots: Vec<AirSlot<'air, A>>,
     /// Zerocheck point coordinates, used to recover the omitted node one for each AIR.
     tau: Point<EF>,
     /// Number of already-bound prefix coordinates.
     round: usize,
     /// Repeat-last successor values for each main column at the folded tail row.
     next_tail: Vec<EF>,
+    /// Lookup/AIR-link coefficients retained from this stage's base-field round.
+    coupling: InteractionCoupling<EF>,
+    /// Common scalar applied to lookup claims and evaluations after grouping.
+    lookup_scale: EF,
+}
+
+/// One AIR's column values at the fully bound sumcheck point.
+///
+/// Stages activate by trace height, not in caller order, so each set of openings travels
+/// alongside the caller position it has to be scattered back to.
+pub(super) struct AirOpenings<EF> {
+    /// Current-row value of each main column.
+    pub(super) local: Vec<EF>,
+    /// Successor value of each main column the AIR reads on the next row.
+    pub(super) next: Vec<EF>,
+    /// Current-row value of each preprocessed column.
+    pub(super) preprocessed_local: Vec<EF>,
+    /// Successor value of each preprocessed column the AIR reads on the next row.
+    pub(super) preprocessed_next: Vec<EF>,
+}
+
+/// Lookup coefficients held in whatever representation the current round kernel uses.
+///
+/// A packed kernel rebuilds this once per round with every scalar lifted into a lane group.
+/// The row loop then never broadcasts a scalar again.
+struct InteractionCoupling<A> {
+    /// One entry per lookup-declaring AIR of this stage, in stage order.
+    ///
+    /// Each slot records its own position here, so no map lookup happens in the row loop.
+    links: Vec<AirLinkInstance<A>>,
+    /// Coefficient `theta * beta^k` applied to payload coordinate `k`.
+    theta_beta_powers: Vec<A>,
+}
+
+/// Everything a stage needs from the lookup reduction, consumed once when it activates.
+///
+/// Both maps are keyed by caller order and are sparse: only lookup-declaring AIRs appear.
+/// Activation turns them into the compact stage-ordered form the round kernels use.
+pub(crate) struct StageCoupling<A> {
+    /// Each AIR's private share of the folded lookup claim.
+    claims: BTreeMap<usize, A>,
+    /// Each AIR's block weights and bus offsets.
+    links: BTreeMap<usize, AirLinkInstance<A>>,
+    /// Coefficient `theta * beta^k` applied to payload coordinate `k`.
+    theta_beta_powers: Vec<A>,
+}
+
+impl<A> StageCoupling<A> {
+    /// Pair the private claims with the link data they belong to.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two maps do not cover exactly the same AIRs.
+    pub(crate) fn new(
+        claims: BTreeMap<usize, A>,
+        links: BTreeMap<usize, AirLinkInstance<A>>,
+        theta_beta_powers: Vec<A>,
+    ) -> Self {
+        // A claim without link data, or the reverse, would leave one half of the fold undefined.
+        assert!(claims.keys().eq(links.keys()));
+        Self {
+            claims,
+            links,
+            theta_beta_powers,
+        }
+    }
+}
+
+/// Run one AIR at one interpolation node and return the families this node needs.
+///
+/// The ordinary folder is used whenever no lookup value is wanted.
+/// That keeps the constraint-only path free of every lookup-related branch and read.
+#[inline]
+fn evaluate_air_families<'a, F, Var, Acc, A>(
+    folder: MultilinearFolder<'a, F, Var, Acc>,
+    coupling: &'a InteractionCoupling<Acc>,
+    enabled: EnabledFamilies,
+    air: &A,
+) -> FolderEvaluations<Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+    A: Air<MultilinearFolder<'a, F, Var, Acc>> + Air<InteractionMultilinearFolder<'a, F, Var, Acc>>,
+{
+    match enabled.interaction {
+        Some(interaction) => {
+            let link = &coupling.links[interaction.link_index];
+            InteractionMultilinearFolder::new(
+                folder,
+                link,
+                &coupling.theta_beta_powers,
+                enabled.constraints,
+            )
+            .eval_air(air)
+        }
+        None => {
+            debug_assert!(enabled.constraints);
+            FolderEvaluations {
+                constraints: folder.eval_air(air),
+                interactions: Acc::ZERO,
+            }
+        }
+    }
 }
 
 /// Scratch for scalar round-polynomial folds.
 ///
 /// The base path uses one instance; the extension path allocates one per worker.
 struct Scratch<F, EF> {
-    /// Unweighted per-node evaluation accumulator for each AIR.
-    air_evals: Vec<Vec<EF>>,
+    /// Unweighted ordinary-constraint evaluations for each AIR at its native nodes.
+    constraint_evals: Vec<Vec<EF>>,
+    /// Unweighted lookup-link evaluations, already summed within each interaction group.
+    interaction_evals: Vec<Vec<EF>>,
     /// Current-row value of each column at the active interpolation node.
     local_point: Vec<F>,
     /// Step added to advance each current-row value to the next node.
@@ -317,8 +488,10 @@ struct Scratch<F, EF> {
 /// Mirrors the scalar scratch with packed row buffers, so each element covers one SIMD lane group.
 /// One instance is allocated per worker and reused across that worker's packed blocks.
 struct PackedScratch<P, EF> {
-    /// Unweighted per-node evaluation accumulator for each AIR.
-    air_evals: Vec<Vec<EF>>,
+    /// Unweighted ordinary-constraint evaluations for each AIR at its native nodes.
+    constraint_evals: Vec<Vec<EF>>,
+    /// Unweighted lookup-link evaluations, already summed within each interaction group.
+    interaction_evals: Vec<Vec<EF>>,
     /// Current-row lanes of each column at the active interpolation node.
     local_point: Vec<P>,
     /// Step added to advance each current-row lane to the next node.
@@ -334,9 +507,18 @@ where
     F: PrimeCharacteristicRing,
     EF: PrimeCharacteristicRing,
 {
-    fn new(air_degrees: &[usize], width: usize) -> Self {
+    fn new(constraint_degrees: &[usize], interaction_degrees: &[usize], width: usize) -> Self {
         Self {
-            air_evals: air_degrees.iter().copied().map(EF::zero_vec).collect(),
+            constraint_evals: constraint_degrees
+                .iter()
+                .copied()
+                .map(EF::zero_vec)
+                .collect(),
+            interaction_evals: interaction_degrees
+                .iter()
+                .copied()
+                .map(EF::zero_vec)
+                .collect(),
             local_point: F::zero_vec(width),
             local_diff: F::zero_vec(width),
             next_point: F::zero_vec(width),
@@ -357,9 +539,18 @@ where
     P: PrimeCharacteristicRing,
     EF: PrimeCharacteristicRing,
 {
-    fn new(air_degrees: &[usize], width: usize) -> Self {
+    fn new(constraint_degrees: &[usize], interaction_degrees: &[usize], width: usize) -> Self {
         Self {
-            air_evals: air_degrees.iter().copied().map(EF::zero_vec).collect(),
+            constraint_evals: constraint_degrees
+                .iter()
+                .copied()
+                .map(EF::zero_vec)
+                .collect(),
+            interaction_evals: interaction_degrees
+                .iter()
+                .copied()
+                .map(EF::zero_vec)
+                .collect(),
             local_point: P::zero_vec(width),
             local_diff: P::zero_vec(width),
             next_point: P::zero_vec(width),
@@ -383,14 +574,55 @@ where
     }
 }
 
-/// Per-AIR fold metadata, in stage-local order.
-///
-/// Flattens the degree groups so the hot loop drives one AIR at a time.
-/// Interpolation nodes above an AIR's own degree are still skipped.
+/// Where one AIR's lookup link lands, for an AIR that declares one.
 #[derive(Clone, Copy, Default)]
-struct AirSlot {
+struct AirInteractionSlot {
+    /// Native per-variable degree of this AIR's lookup-link expression.
+    degree: usize,
+    /// Degree group collecting this AIR's lookup evaluations.
+    group_index: usize,
+    /// Position of this AIR's coefficients in the stage's compact link vector.
+    link_index: usize,
+}
+
+/// Which expression families one AIR contributes at one interpolation node.
+#[derive(Clone, Copy)]
+struct EnabledFamilies {
+    /// Whether the ordinary constraints are wanted here.
+    constraints: bool,
+    /// Where to send the lookup link, absent when it is not wanted here.
+    interaction: Option<AirInteractionSlot>,
+}
+
+/// How many columns of each group one AIR owns.
+#[derive(Clone, Copy)]
+struct AirColumnWidths {
+    /// Committed main trace columns.
+    main: usize,
+    /// Committed preprocessed columns, zero when the AIR declares none.
+    preprocessed: usize,
+    /// Materialized periodic columns, zero when the AIR declares none.
+    periodic: usize,
+}
+
+/// One AIR's slice of the stage's merged column buffer, plus its fold metadata.
+///
+/// Every AIR of a stage keeps its columns in one shared buffer laid out group by group:
+///
+/// ```text
+///     | air 0: main | prep | periodic | air 1: main | prep | periodic | ...
+///       ^ main_offset      ^ periodic_offset
+/// ```
+///
+/// The offsets stay valid for the whole sumcheck.
+/// Folding shrinks every column by the same factor and never reorders them.
+struct AirSlot<'air, A> {
+    /// AIR evaluated by this slot.
+    air: &'air A,
     /// Position of this AIR within its stage, in caller order.
-    air_index: usize,
+    stage_index: usize,
+    /// Original caller index used to return this AIR's openings.
+    caller_index: usize,
     /// First main column of this AIR inside the merged column buffer.
     main_offset: usize,
     /// Number of main columns this AIR owns.
@@ -403,136 +635,164 @@ struct AirSlot {
     periodic_offset: usize,
     /// Number of periodic columns this AIR owns.
     periodic_width: usize,
-    /// Per-variable degree of this AIR's eq-stripped round polynomial.
-    degree: usize,
+    /// Native degree of the ordinary constraint family.
+    constraint_degree: usize,
+    /// Lookup metadata, absent when this AIR declares no interactions.
+    interaction: Option<AirInteractionSlot>,
 }
 
-impl AirSlot {
-    /// Flatten the degree groups into one slot per AIR, indexed by stage-local position.
+impl<'air, A> AirSlot<'air, A> {
+    /// Lay out every AIR's columns once and attach its fold metadata.
     ///
-    /// The groups iterate in degree order, but the hot loop wants AIR order.
-    /// Each AIR belongs to exactly one group, so every output slot is written exactly once.
-    fn flatten<EF>(degree_groups: &[DegreeGroup<EF>]) -> Vec<Self> {
-        // The stage-local indices run `0..num_airs`, so the total AIR count sizes the output.
-        let num_airs = degree_groups.iter().map(|group| group.airs.len()).sum();
-        let mut slots = alloc::vec![Self::default(); num_airs];
-        // A group fixes the degree; each AIR in it fixes its own column span.
-        for group in degree_groups {
-            for air in &group.airs {
-                // Scatter to the stage-local position so callers index by AIR, not group.
-                slots[air.air_index] = Self {
-                    air_index: air.air_index,
-                    main_offset: air.main_offset,
-                    main_width: air.main_width,
-                    preprocessed_offset: air.preprocessed_offset,
-                    preprocessed_width: air.preprocessed_width,
-                    periodic_offset: air.periodic_offset,
-                    periodic_width: air.periodic_width,
-                    degree: group.degree,
+    /// The sparse caller-keyed link map is flattened into a dense stage-ordered vector.
+    /// The row loop then indexes a slice instead of searching a map.
+    ///
+    /// ```text
+    ///     stage caller indices : [ 7,  2,  9,  4 ]
+    ///     input links          : {     2 -> L2,      4 -> L4 }
+    ///     returned links       : [ L2, L4 ]
+    ///     recorded link index  :       0            1
+    /// ```
+    ///
+    /// Every later representation of the coefficients keeps this order.
+    /// A recorded index therefore stays valid for the whole sumcheck.
+    ///
+    /// # Returns
+    ///
+    /// - one slot per AIR of the stage, in stage order;
+    /// - the dense link vector the slots point into.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a lookup-declaring AIR has no link, or a link names an AIR outside the stage.
+    fn build<EF>(
+        airs: &[&'air A],
+        caller_indices: &[usize],
+        degrees: &[AirDegrees],
+        column_widths: &[AirColumnWidths],
+        mut links: BTreeMap<usize, AirLinkInstance<EF>>,
+        interaction_group_by_degree: &BTreeMap<usize, usize>,
+    ) -> (Vec<Self>, Vec<AirLinkInstance<EF>>) {
+        assert_eq!(airs.len(), caller_indices.len());
+        assert_eq!(airs.len(), degrees.len());
+        assert_eq!(airs.len(), column_widths.len());
+
+        let mut column_offset = 0;
+        let mut active_links = Vec::with_capacity(links.len());
+        let slots = (0..airs.len())
+            .map(|stage_index| {
+                let degrees = degrees[stage_index];
+                let caller_index = caller_indices[stage_index];
+                let AirColumnWidths {
+                    main: main_width,
+                    preprocessed: preprocessed_width,
+                    periodic: periodic_width,
+                } = column_widths[stage_index];
+                let main_offset = column_offset;
+                column_offset += main_width;
+                let preprocessed_offset = column_offset;
+                column_offset += preprocessed_width;
+                let periodic_offset = column_offset;
+                column_offset += periodic_width;
+                let interaction = match interaction_group_by_degree.get(&degrees.interactions) {
+                    Some(&group_index) => {
+                        let link = links
+                            .remove(&caller_index)
+                            .expect("lookup-active AIR requires link metadata");
+                        let interaction = AirInteractionSlot {
+                            degree: degrees.interactions,
+                            group_index,
+                            link_index: active_links.len(),
+                        };
+                        active_links.push(link);
+                        Some(interaction)
+                    }
+                    None => {
+                        debug_assert!(!links.contains_key(&caller_index));
+                        None
+                    }
                 };
-            }
+                debug_assert_eq!(interaction.is_some(), degrees.interactions > 0);
+                Self {
+                    air: airs[stage_index],
+                    stage_index,
+                    caller_index,
+                    main_offset,
+                    main_width,
+                    preprocessed_offset,
+                    preprocessed_width,
+                    periodic_offset,
+                    periodic_width,
+                    constraint_degree: degrees.constraints,
+                    interaction,
+                }
+            })
+            .collect();
+        assert!(
+            links.is_empty(),
+            "stage coupling contains links for AIRs outside this stage"
+        );
+        (slots, active_links)
+    }
+
+    /// Select which expression families this AIR contributes at one interpolation node.
+    ///
+    /// A family is skipped past its own degree, since it is already pinned down there.
+    ///
+    /// The first base-field round also skips the ordinary node-zero evaluation:
+    /// the rows are still boolean there, so satisfied constraints are known to vanish.
+    const fn enabled_families(
+        &self,
+        node: usize,
+        include_constraint_node_zero: bool,
+    ) -> EnabledFamilies {
+        let constraints = self.constraint_degree > 0
+            && node <= self.constraint_degree
+            && (node != 0 || include_constraint_node_zero);
+        let interaction = match self.interaction {
+            Some(interaction) if node <= interaction.degree => Some(interaction),
+            _ => None,
+        };
+        EnabledFamilies {
+            constraints,
+            interaction,
         }
-        slots
     }
 }
 
-/// One AIR's column placement inside its degree group.
+/// Expression families sharing one per-variable degree and one reduced claim.
 ///
-/// The group fixes the degree; this records where the AIR's columns live in the merged buffer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DegreeGroupAir {
-    /// Position of this AIR within its stage, in caller order.
-    air_index: usize,
-    /// First main column of this AIR inside the merged column buffer.
-    main_offset: usize,
-    /// Number of main columns this AIR owns.
-    main_width: usize,
-    /// First preprocessed column of this AIR inside the merged column buffer.
-    preprocessed_offset: usize,
-    /// Number of preprocessed columns this AIR owns.
-    preprocessed_width: usize,
-    /// First periodic column of this AIR inside the merged column buffer.
-    periodic_offset: usize,
-    /// Number of periodic columns this AIR owns.
-    periodic_width: usize,
-}
-
-/// AIRs sharing one per-variable degree, folded into a single beta-weighted round polynomial.
-///
-/// Grouping by degree lets a lower-degree AIR skip the interpolation nodes that only a
-/// higher-degree AIR needs.
+/// Grouping by degree lets a lower-degree family skip the nodes only a higher one needs.
 struct DegreeGroup<EF> {
     /// Common per-variable degree of every AIR in this group, with the eq factor stripped.
     degree: usize,
-    /// The AIRs in this group, each carrying its own column span.
-    airs: Vec<DegreeGroupAir>,
+    /// Stage-local indices of the AIRs contributing to this group.
+    air_indices: Vec<usize>,
     /// Current reduced sumcheck claim for this group's round polynomial.
     claim: EF,
-    /// This round's beta-weighted evaluations at nodes `0, 2, 3, ..., degree`.
+    /// This round's scaled evaluations at nodes `0, 2, 3, ..., degree`.
     last_evals: Vec<EF>,
     /// Barycentric helper for this group's degree, reused across rounds.
     interpolator: RoundPolyInterpolator<EF>,
 }
 
 impl<EF: Field> DegreeGroup<EF> {
-    /// Bucket AIRs by degree and assign each AIR its column span in the merged buffer.
-    ///
-    /// Columns are laid out per AIR as main, then preprocessed, then periodic columns, in caller order:
-    ///
-    /// ```text
-    ///     [ air0 main | air0 preproc | air0 periodic | air1 main | air1 preproc | air1 periodic | ... ]
-    /// ```
-    ///
-    /// # Arguments
-    ///
-    /// - `degrees`: per-variable constraint degree of each AIR, in stage-local order.
-    /// - `main_widths`: main column count of each AIR, in stage-local order.
-    /// - `preprocessed_widths`: preprocessed column count of each AIR, in stage-local order.
-    /// - `periodic_widths`: periodic column count of each AIR, in stage-local order.
-    fn build(
-        degrees: &[usize],
-        main_widths: &[usize],
-        preprocessed_widths: &[usize],
-        periodic_widths: &[usize],
-    ) -> Vec<Self> {
+    /// Bucket nonempty expression families by their native degree.
+    fn build(degrees: impl IntoIterator<Item = usize>) -> Vec<Self> {
         // A btree keyed by degree gives deterministic group order across prover and verifier.
-        let mut groups = BTreeMap::<usize, Vec<DegreeGroupAir>>::new();
-        // Running column cursor into the merged buffer, advanced AIR by AIR.
-        let mut column_offset = 0;
-        for (air_index, (((&degree, &main_width), &preprocessed_width), &periodic_width)) in degrees
-            .iter()
-            .zip(main_widths)
-            .zip(preprocessed_widths)
-            .zip(periodic_widths)
-            .enumerate()
-        {
-            // Main columns come first for this AIR.
-            let main_offset = column_offset;
-            column_offset += main_width;
-            // Preprocessed columns follow immediately after.
-            let preprocessed_offset = column_offset;
-            column_offset += preprocessed_width;
-            // Periodic columns come last for this AIR.
-            let periodic_offset = column_offset;
-            column_offset += periodic_width;
-            // File the AIR under its degree, keeping its column span.
-            groups.entry(degree).or_default().push(DegreeGroupAir {
-                air_index,
-                main_offset,
-                main_width,
-                preprocessed_offset,
-                preprocessed_width,
-                periodic_offset,
-                periodic_width,
-            });
+        let mut groups = BTreeMap::<usize, Vec<usize>>::new();
+        for (air_index, degree) in degrees.into_iter().enumerate() {
+            if degree > 0 {
+                groups.entry(degree).or_default().push(air_index);
+            }
         }
 
         // Each degree becomes one group with a zero starting claim and a prebuilt interpolator.
         groups
             .into_iter()
-            .map(|(degree, airs)| Self {
+            .map(|(degree, air_indices)| Self {
                 degree,
-                airs,
+                air_indices,
                 claim: EF::ZERO,
                 last_evals: EF::zero_vec(degree),
                 interpolator: RoundPolyInterpolator::new(degree),
@@ -540,9 +800,48 @@ impl<EF: Field> DegreeGroup<EF> {
             .collect()
     }
 
+    /// Build the groups and seed each one with the claims of the AIRs it holds.
+    ///
+    /// Ordinary constraints start from zero, so only the lookup groups need this.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the degrees and the caller indices disagree on length.
+    /// Panics if an AIR in a nonempty group has no claim.
+    fn build_with_claims<I>(
+        degrees: I,
+        caller_indices: &[usize],
+        claims: &BTreeMap<usize, EF>,
+        claim_scale: EF,
+    ) -> Vec<Self>
+    where
+        I: IntoIterator<Item = usize>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let degrees = degrees.into_iter();
+        assert_eq!(degrees.len(), caller_indices.len());
+
+        let mut groups = Self::build(degrees);
+        for group in &mut groups {
+            group.claim = claim_scale
+                * group
+                    .air_indices
+                    .iter()
+                    .map(|&stage_index| {
+                        let caller_index = caller_indices[stage_index];
+                        *claims
+                            .get(&caller_index)
+                            .expect("lookup-active AIR requires an initial claim")
+                    })
+                    .sum::<EF>();
+        }
+        groups
+    }
+
     /// Evaluate this group's eq-stripped round polynomial `q` at an interpolation node.
     ///
-    /// The prover never stores `q(1)`; it is recovered from the sumcheck claim relation:
+    /// The prover never stores `q(1)`.
+    /// It is recovered from the sumcheck claim relation instead:
     ///
     /// ```text
     ///     claim = (1 - tau) * q(0) + tau * q(1)
@@ -552,6 +851,7 @@ impl<EF: Field> DegreeGroup<EF> {
     /// # Panics
     ///
     /// Panics if the group degree is zero, since a constant has no round polynomial.
+    /// Panics if `tau` is zero, since recovering the dropped node divides by it.
     fn eval(&self, tau: EF, point: EF) -> EF {
         debug_assert_eq!(self.last_evals.len(), self.degree);
         assert!(self.degree > 0, "round polynomial degree must be positive");
@@ -609,18 +909,70 @@ impl<EF: Field> DegreeGroup<EF> {
     /// It saves one extension multiply per node per row.
     /// That multiply dominates the fold for cheap AIRs.
     fn write_last_evals(&mut self, betas: &[EF], air_evals: &[Vec<EF>]) {
-        // One accumulator per interpolation node this group carries.
-        let mut last = EF::zero_vec(self.degree);
-        for air in &self.airs {
+        // Reuse the group's node accumulators across rounds.
+        self.last_evals.fill(EF::ZERO);
+        for &air_index in &self.air_indices {
             // beta^i for this AIR, applied once here rather than per row.
-            let beta = betas[air.air_index];
+            let beta = betas[air_index];
             // Fold the AIR's unweighted per-node sums in, scaled by beta.
-            last.iter_mut()
-                .zip(air_evals[air.air_index].iter())
+            self.last_evals
+                .iter_mut()
+                .zip(air_evals[air_index].iter())
                 .for_each(|(acc, &value)| *acc += beta * value);
         }
-        self.last_evals = last;
     }
+
+    /// Store one lookup group's per-node sums, scaled by the lookup separation scalar.
+    ///
+    /// The row scan already summed the group's AIRs together, so no beta weighting is left.
+    fn write_interaction_last_evals(&mut self, scale: EF, evals: &[EF]) {
+        debug_assert_eq!(evals.len(), self.degree);
+        self.last_evals
+            .iter_mut()
+            .zip(evals)
+            .for_each(|(out, &value)| *out = scale * value);
+    }
+}
+
+/// Turn one round's raw per-node sums into the stage's transmitted round polynomial.
+///
+/// Beta weighting and the lookup scalar are applied here rather than inside the row loop.
+/// That saves one extension multiply per node per row.
+///
+/// Groups below the stage's top degree are extrapolated up to it before being summed.
+///
+/// # Panics
+///
+/// Panics if the stage has no degree group at all.
+fn finish_round<EF: Field>(
+    constraint_groups: &mut [DegreeGroup<EF>],
+    interaction_groups: &mut [DegreeGroup<EF>],
+    betas: &[EF],
+    interaction_scale: EF,
+    constraint_evals: &[Vec<EF>],
+    interaction_evals: &[Vec<EF>],
+    tau: EF,
+) -> Vec<EF> {
+    constraint_groups
+        .iter_mut()
+        .for_each(|group| group.write_last_evals(betas, constraint_evals));
+    interaction_groups
+        .iter_mut()
+        .zip(interaction_evals)
+        .for_each(|(group, evals)| group.write_interaction_last_evals(interaction_scale, evals));
+
+    let degree = constraint_groups
+        .iter()
+        .chain(interaction_groups.iter())
+        .map(|group| group.degree)
+        .max()
+        .expect("round state requires at least one degree group");
+    let mut out = EF::zero_vec(degree);
+    constraint_groups
+        .iter()
+        .chain(interaction_groups.iter())
+        .for_each(|group| group.combine_evals(&mut out, tau));
+    out
 }
 
 impl<'air, 'data, A, F, EF> RoundStateBase<'air, 'data, A, F, EF>
@@ -629,50 +981,48 @@ where
     EF: ExtensionField<F>,
     A: BaseAir<F>,
 {
-    /// Build the prover state when different AIRs have different internal degrees.
+    /// Activate a stage: materialize its periodic columns and lay out its degree groups.
     ///
-    /// `degrees[i]` is the degree of AIR `i` after stripping the active eq factor.
-    /// Every entry must be positive. The round degree is the maximum AIR degree.
+    /// Ordinary constraints and lookup links are bucketed separately.
+    /// One AIR can carry two different native degrees, and the lower must not pay for the higher.
+    ///
+    /// # Arguments
+    ///
+    /// - `stage`: the AIRs sharing this trace height, with their traces and lookup state.
+    /// - `alpha`: batches the constraints of one AIR.
+    /// - `eta`: separates lookup links from ordinary constraints.
+    /// - `betas`: one power per AIR, batching the AIRs against each other.
+    /// - `tau`: the zerocheck point coordinates this stage still has to bind.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the zerocheck point does not match the stage height.
+    /// Panics if a periodic column's period is not a power of two dividing the trace height.
+    /// Panics if the beta powers do not number one per AIR.
     #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn new(
-        stage: &Stage<'air, 'data, A, F>,
+        stage: Stage<'air, 'data, A, F, EF>,
         alpha: EF,
+        eta: EF,
         betas: Vec<EF>,
-        tau: &Point<EF>,
+        tau: Point<EF>,
     ) -> Self {
-        assert!(!stage.tables.is_empty(),);
-        assert_eq!(stage.airs.len(), stage.tables.len(),);
-        assert_eq!(stage.preprocessed.len(), stage.tables.len(),);
-        assert_eq!(stage.public_values.len(), stage.tables.len(),);
-        assert_eq!(stage.degrees.len(), stage.tables.len(),);
-        assert!(stage.degrees.iter().all(|&degree| degree > 0),);
-
-        let num_vars = stage
-            .tables
-            .iter()
-            .map(|table| table.num_variables())
-            .all_equal_value()
-            .expect("all tables in a RoundStateBase must have the same height");
-        assert!(
-            stage
-                .preprocessed
-                .iter()
-                .flatten()
-                .all(|table| table.num_variables() == num_vars),
-            "preprocessed tables must match the main trace height"
+        assert_eq!(
+            tau.num_variables(),
+            stage.num_vars,
+            "zerocheck point must match the stage height"
         );
 
-        let main_widths = stage
-            .tables
-            .iter()
-            .map(|table| table.num_polys())
-            .collect::<Vec<_>>();
-        let preprocessed_widths = stage
-            .preprocessed
-            .iter()
-            .map(|table| table.map_or(0, Table::num_polys))
-            .collect::<Vec<_>>();
-
+        let Stage {
+            indices,
+            airs,
+            public_values,
+            preprocessed,
+            tables,
+            degrees,
+            num_vars,
+            coupling,
+        } = stage;
         // Materialize each AIR's periodic columns to the full trace height.
         //
         //     period vector  : [v_0, v_1]
@@ -681,8 +1031,7 @@ where
         // The full-height column is a genuine multilinear polynomial.
         // It therefore folds through the sumcheck exactly like a committed column.
         let trace_height = 1 << num_vars;
-        let periodic = stage
-            .airs
+        let periodic = airs
             .iter()
             .map(|air| {
                 let cols = air.periodic_columns();
@@ -705,54 +1054,76 @@ where
                 Some(Table::new(RowMajorMatrix::new(values, trace_height)))
             })
             .collect::<Vec<_>>();
-        let periodic_widths = periodic
+        let column_widths = tables
             .iter()
-            .map(|table| table.as_ref().map_or(0, Table::num_polys))
+            .zip(&preprocessed)
+            .zip(&periodic)
+            .map(|((main, preprocessed), periodic)| AirColumnWidths {
+                main: main.num_polys(),
+                preprocessed: preprocessed.map_or(0, Table::num_polys),
+                periodic: periodic.as_ref().map_or(0, Table::num_polys),
+            })
             .collect::<Vec<_>>();
 
-        let num_airs = stage.airs.len();
+        let num_airs = airs.len();
         assert_eq!(
             betas.len(),
             num_airs,
             "one beta power is required for each AIR"
         );
 
-        for (((air, public_values), &main_width), &preprocessed_width) in stage
-            .airs
-            .iter()
-            .zip(stage.public_values.iter())
-            .zip(main_widths.iter())
-            .zip(preprocessed_widths.iter())
-        {
-            assert_eq!(main_width, air.width(), "trace width must match AIR width");
-            assert_eq!(
-                preprocessed_width,
-                air.preprocessed_width(),
-                "preprocessed width must match AIR preprocessed width"
-            );
-            assert_eq!(public_values.len(), air.num_public_values());
-        }
+        // Ordinary constraints keep their native degrees and their post-scan beta weighting.
+        let constraint_groups =
+            DegreeGroup::build(degrees.iter().map(|degrees| degrees.constraints));
 
-        // Build the degree grouping once, then flatten it into the AIR-ordered fold view.
-        let degree_groups = DegreeGroup::build(
-            &stage.degrees,
-            &main_widths,
-            &preprocessed_widths,
-            &periodic_widths,
+        // Lookup links form their own native-degree groups.
+        // Only the groups holding a lookup-declaring AIR start from a nonzero claim.
+        let StageCoupling {
+            claims,
+            links,
+            theta_beta_powers,
+        } = coupling;
+
+        let interaction_groups = DegreeGroup::build_with_claims(
+            degrees.iter().map(|degrees| degrees.interactions),
+            &indices,
+            &claims,
+            eta,
         );
-        let slots = AirSlot::flatten(&degree_groups);
+
+        let interaction_group_by_degree = interaction_groups
+            .iter()
+            .enumerate()
+            .map(|(group_index, group)| (group.degree, group_index))
+            .collect::<BTreeMap<_, _>>();
+
+        let (slots, links) = AirSlot::build(
+            &airs,
+            &indices,
+            &degrees,
+            &column_widths,
+            links,
+            &interaction_group_by_degree,
+        );
+
+        let coupling = InteractionCoupling {
+            links,
+            theta_beta_powers,
+        };
 
         Self {
-            airs: stage.airs.clone(),
-            public_values: stage.public_values.clone(),
+            public_values,
             alpha,
-            preprocessed: stage.preprocessed.clone(),
             periodic,
-            tables: stage.tables.clone(),
+            preprocessed,
+            tables,
             betas,
-            degree_groups,
+            constraint_groups,
+            interaction_groups,
             slots,
-            tau: tau.clone(),
+            tau,
+            coupling,
+            eta,
         }
     }
 
@@ -782,8 +1153,9 @@ where
     }
 
     fn degree(&self) -> usize {
-        self.degree_groups
+        self.constraint_groups
             .iter()
+            .chain(&self.interaction_groups)
             .map(|group| group.degree)
             .max()
             .unwrap()
@@ -793,7 +1165,9 @@ where
     pub(crate) fn round_poly(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
-            + for<'b> Air<MultilinearFolder<'b, F, F::Packing, EF::ExtensionPacking>>,
+            + for<'b> Air<MultilinearFolder<'b, F, F::Packing, EF::ExtensionPacking>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, F, EF>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, F::Packing, EF::ExtensionPacking>>,
         EF::ExtensionPacking: From<EF> + From<F::Packing>,
     {
         if self.num_evals() / 2 < F::Packing::WIDTH {
@@ -807,7 +1181,9 @@ where
     fn round_poly_packed(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
-            + for<'b> Air<MultilinearFolder<'b, F, F::Packing, EF::ExtensionPacking>>,
+            + for<'b> Air<MultilinearFolder<'b, F, F::Packing, EF::ExtensionPacking>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, F, EF>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, F::Packing, EF::ExtensionPacking>>,
         EF::ExtensionPacking: From<EF> + From<F::Packing>,
     {
         let width = self.total_width();
@@ -817,19 +1193,42 @@ where
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
         let alpha = EF::ExtensionPacking::from(self.alpha);
-        let air_degrees = self
+
+        let coupling = InteractionCoupling {
+            links: self
+                .coupling
+                .links
+                .iter()
+                .map(|link| link.map(EF::ExtensionPacking::from))
+                .collect(),
+            theta_beta_powers: self
+                .coupling
+                .theta_beta_powers
+                .iter()
+                .copied()
+                .map(EF::ExtensionPacking::from)
+                .collect(),
+        };
+        let constraint_degrees = self
             .slots
             .iter()
-            .map(|slot| slot.degree)
+            .map(|slot| slot.constraint_degree)
             .collect::<Vec<_>>();
+
+        let interaction_degrees = self
+            .interaction_groups
+            .iter()
+            .map(|group| group.degree)
+            .collect::<Vec<_>>();
+
         assert_ne!(packed_half, 0);
 
-        let air_evals = eq_suffix
+        let scratch = eq_suffix
             .as_slice()
             .par_chunks_exact(packing_width)
             .enumerate()
             .par_fold_reduce(
-                || PackedScratch::new(&air_degrees, width),
+                || PackedScratch::new(&constraint_degrees, &interaction_degrees, width),
                 |mut scratch, (packed_s, eq_suffix)| {
                     let s = packed_s * packing_width;
 
@@ -874,11 +1273,15 @@ where
                         }
                     };
                     for slot in &self.slots {
-                        fill_columns(&mut scratch, slot.main_offset, self.tables[slot.air_index]);
-                        if let Some(preprocessed) = self.preprocessed[slot.air_index] {
+                        fill_columns(
+                            &mut scratch,
+                            slot.main_offset,
+                            self.tables[slot.stage_index],
+                        );
+                        if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
                             fill_columns(&mut scratch, slot.preprocessed_offset, preprocessed);
                         }
-                        if let Some(periodic) = self.periodic[slot.air_index].as_ref() {
+                        if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
                             fill_columns(&mut scratch, slot.periodic_offset, periodic);
                         }
                     }
@@ -886,91 +1289,110 @@ where
                     let (mut boundary, boundary_diff) =
                         BoundaryEvals::<F::Packing>::row_pair_packed(s, scalar_half, height);
 
-                    // Node 0 is skipped.
-                    // Invariant: a stage's first round runs on an unfolded trace.
-                    //     X = 0 and X = 1 are then real boolean rows.
-                    //     A satisfying trace makes g vanish on every row.
-                    //     So q(0) = q(1) = 0.
-                    // The node-0 accumulator stays zero.
-                    // The sweep below starts at node 2.
-                    scratch.add_diffs();
-                    boundary += boundary_diff;
-
-                    for node in 2..=degree {
-                        scratch.add_diffs();
-                        boundary += boundary_diff;
-
-                        self.slots
-                            .iter()
-                            .zip(scratch.air_evals.iter_mut())
-                            .for_each(|(slot, evals)| {
-                                if node <= slot.degree {
-                                    let g = MultilinearFolder::new(
-                                        &scratch.local_point
-                                            [slot.main_offset..slot.main_offset + slot.main_width],
-                                        &scratch.next_point
-                                            [slot.main_offset..slot.main_offset + slot.main_width],
-                                        boundary,
-                                        self.public_values[slot.air_index],
-                                        alpha,
-                                    )
-                                    .with_preprocessed(
-                                        &scratch.local_point[slot.preprocessed_offset
-                                            ..slot.preprocessed_offset + slot.preprocessed_width],
-                                        &scratch.next_point[slot.preprocessed_offset
-                                            ..slot.preprocessed_offset + slot.preprocessed_width],
-                                    )
-                                    .with_periodic(
-                                        &scratch.local_point[slot.periodic_offset
-                                            ..slot.periodic_offset + slot.periodic_width],
-                                    )
-                                    .eval_air(self.airs[slot.air_index]);
-                                    evals[node - 1] += dot_product::<EF, _, _>(
+                    for node in 0..=degree {
+                        if node != 1 {
+                            for slot in &self.slots {
+                                let enabled = slot.enabled_families(node, false);
+                                if !enabled.constraints && enabled.interaction.is_none() {
+                                    continue;
+                                }
+                                let folder = MultilinearFolder::new(
+                                    &scratch.local_point
+                                        [slot.main_offset..slot.main_offset + slot.main_width],
+                                    &scratch.next_point
+                                        [slot.main_offset..slot.main_offset + slot.main_width],
+                                    boundary,
+                                    self.public_values[slot.stage_index],
+                                    alpha,
+                                )
+                                .with_preprocessed(
+                                    &scratch.local_point[slot.preprocessed_offset
+                                        ..slot.preprocessed_offset + slot.preprocessed_width],
+                                    &scratch.next_point[slot.preprocessed_offset
+                                        ..slot.preprocessed_offset + slot.preprocessed_width],
+                                )
+                                .with_periodic(
+                                    &scratch.local_point[slot.periodic_offset
+                                        ..slot.periodic_offset + slot.periodic_width],
+                                );
+                                let evaluations =
+                                    evaluate_air_families(folder, &coupling, enabled, slot.air);
+                                let eval_index = if node == 0 { 0 } else { node - 1 };
+                                if enabled.constraints {
+                                    scratch.constraint_evals[slot.stage_index][eval_index] +=
+                                        dot_product::<EF, _, _>(
+                                            eq_suffix.iter().copied(),
+                                            EF::ExtensionPacking::to_ext_iter([
+                                                evaluations.constraints
+                                            ]),
+                                        );
+                                }
+                                if let Some(interaction) = enabled.interaction {
+                                    scratch.interaction_evals[interaction.group_index]
+                                        [eval_index] += dot_product::<EF, _, _>(
                                         eq_suffix.iter().copied(),
-                                        EF::ExtensionPacking::to_ext_iter([g]),
+                                        EF::ExtensionPacking::to_ext_iter([
+                                            evaluations.interactions
+                                        ]),
                                     );
                                 }
-                            });
+                            }
+                        }
+                        if node != degree {
+                            scratch.add_diffs();
+                            boundary += boundary_diff;
+                        }
                     }
 
                     scratch
                 },
                 |mut lhs, rhs| {
-                    lhs.air_evals
+                    lhs.constraint_evals
                         .iter_mut()
-                        .zip(rhs.air_evals)
+                        .zip(rhs.constraint_evals)
+                        .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
+                    lhs.interaction_evals
+                        .iter_mut()
+                        .zip(rhs.interaction_evals)
                         .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
                     lhs
                 },
-            )
-            .air_evals;
-        let mut out = EF::zero_vec(degree);
-        let tau = self.tau.as_slice()[0];
-        for group in &mut self.degree_groups {
-            group.write_last_evals(&self.betas, &air_evals);
-        }
-        self.degree_groups
-            .iter()
-            .for_each(|group| group.combine_evals(&mut out, tau));
-        out
+            );
+        finish_round(
+            &mut self.constraint_groups,
+            &mut self.interaction_groups,
+            &self.betas,
+            self.eta,
+            &scratch.constraint_evals,
+            &scratch.interaction_evals,
+            self.tau.as_slice()[0],
+        )
     }
 
     #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn round_poly_unpacked(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
-        A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
+        A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, F, EF>>,
     {
         let width = self.total_width();
         let height = self.num_evals();
         let half = height / 2;
         let degree = self.degree();
 
-        let air_degrees = self
+        let constraint_degrees = self
             .slots
             .iter()
-            .map(|slot| slot.degree)
+            .map(|slot| slot.constraint_degree)
             .collect::<Vec<_>>();
-        let mut scratch = Scratch::<F, EF>::new(&air_degrees, width);
+
+        let interaction_degrees = self
+            .interaction_groups
+            .iter()
+            .map(|group| group.degree)
+            .collect::<Vec<_>>();
+
+        let mut scratch = Scratch::<F, EF>::new(&constraint_degrees, &interaction_degrees, width);
 
         for (s, &eq_suffix) in eq_suffix.as_slice().iter().enumerate() {
             let fill_columns = |scratch: &mut Scratch<F, EF>, offset: usize, table: &Table<F>| {
@@ -998,71 +1420,78 @@ where
                     });
             };
             for slot in &self.slots {
-                fill_columns(&mut scratch, slot.main_offset, self.tables[slot.air_index]);
-                if let Some(preprocessed) = self.preprocessed[slot.air_index] {
+                fill_columns(
+                    &mut scratch,
+                    slot.main_offset,
+                    self.tables[slot.stage_index],
+                );
+                if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
                     fill_columns(&mut scratch, slot.preprocessed_offset, preprocessed);
                 }
-                if let Some(periodic) = self.periodic[slot.air_index].as_ref() {
+                if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
                     fill_columns(&mut scratch, slot.periodic_offset, periodic);
                 }
             }
 
             let (mut boundary, boundary_diff) = BoundaryEvals::<F>::row_pair(s, half, height);
 
-            // Node 0 is skipped.
-            // Invariant: a stage's first round runs on an unfolded trace.
-            //     X = 0 and X = 1 are then real boolean rows.
-            //     A satisfying trace makes g vanish on every row.
-            //     So q(0) = q(1) = 0.
-            // The node-0 accumulator stays zero.
-            // The sweep below starts at node 2.
-            scratch.add_diffs();
-            boundary += boundary_diff;
-
-            for node in 2..=degree {
-                scratch.add_diffs();
-                boundary += boundary_diff;
-
-                self.slots
-                    .iter()
-                    .zip(scratch.air_evals.iter_mut())
-                    .for_each(|(slot, evals)| {
-                        if node <= slot.degree {
-                            let g = MultilinearFolder::new(
-                                &scratch.local_point
-                                    [slot.main_offset..slot.main_offset + slot.main_width],
-                                &scratch.next_point
-                                    [slot.main_offset..slot.main_offset + slot.main_width],
-                                boundary,
-                                self.public_values[slot.air_index],
-                                self.alpha,
-                            )
-                            .with_preprocessed(
-                                &scratch.local_point[slot.preprocessed_offset
-                                    ..slot.preprocessed_offset + slot.preprocessed_width],
-                                &scratch.next_point[slot.preprocessed_offset
-                                    ..slot.preprocessed_offset + slot.preprocessed_width],
-                            )
-                            .with_periodic(
-                                &scratch.local_point[slot.periodic_offset
-                                    ..slot.periodic_offset + slot.periodic_width],
-                            )
-                            .eval_air(self.airs[slot.air_index]);
-                            evals[node - 1] += eq_suffix * g;
+            for node in 0..=degree {
+                if node != 1 {
+                    for slot in &self.slots {
+                        let enabled = slot.enabled_families(node, false);
+                        if !enabled.constraints && enabled.interaction.is_none() {
+                            continue;
                         }
-                    });
+                        let folder = MultilinearFolder::new(
+                            &scratch.local_point
+                                [slot.main_offset..slot.main_offset + slot.main_width],
+                            &scratch.next_point
+                                [slot.main_offset..slot.main_offset + slot.main_width],
+                            boundary,
+                            self.public_values[slot.stage_index],
+                            self.alpha,
+                        )
+                        .with_preprocessed(
+                            &scratch.local_point[slot.preprocessed_offset
+                                ..slot.preprocessed_offset + slot.preprocessed_width],
+                            &scratch.next_point[slot.preprocessed_offset
+                                ..slot.preprocessed_offset + slot.preprocessed_width],
+                        )
+                        .with_periodic(
+                            &scratch.local_point
+                                [slot.periodic_offset..slot.periodic_offset + slot.periodic_width],
+                        );
+
+                        let evaluations =
+                            evaluate_air_families(folder, &self.coupling, enabled, slot.air);
+
+                        let eval_index = if node == 0 { 0 } else { node - 1 };
+                        if enabled.constraints {
+                            scratch.constraint_evals[slot.stage_index][eval_index] +=
+                                eq_suffix * evaluations.constraints;
+                        }
+                        if let Some(interaction) = enabled.interaction {
+                            scratch.interaction_evals[interaction.group_index][eval_index] +=
+                                eq_suffix * evaluations.interactions;
+                        }
+                    }
+                }
+                if node != degree {
+                    scratch.add_diffs();
+                    boundary += boundary_diff;
+                }
             }
         }
 
-        let mut out = EF::zero_vec(degree);
-        let tau = self.tau.as_slice()[0];
-        for group in &mut self.degree_groups {
-            group.write_last_evals(&self.betas, &scratch.air_evals);
-        }
-        self.degree_groups
-            .iter()
-            .for_each(|group| group.combine_evals(&mut out, tau));
-        out
+        finish_round(
+            &mut self.constraint_groups,
+            &mut self.interaction_groups,
+            &self.betas,
+            self.eta,
+            &scratch.constraint_evals,
+            &scratch.interaction_evals,
+            self.tau.as_slice()[0],
+        )
     }
 
     #[tracing::instrument(skip_all, level = "debug")]
@@ -1071,8 +1500,9 @@ where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
     {
         let tau = self.tau.as_slice()[0];
-        self.degree_groups
+        self.constraint_groups
             .iter_mut()
+            .chain(self.interaction_groups.iter_mut())
             .for_each(|group| group.claim = group.eval(tau, r));
 
         let num_evals = self.num_evals();
@@ -1081,18 +1511,18 @@ where
         let mut next_tail = Vec::with_capacity(width);
         for slot in &self.slots {
             next_tail.extend(
-                self.tables[slot.air_index]
+                self.tables[slot.stage_index]
                     .iter_polys()
                     .map(|col| r * (col[num_evals - 1] - col[half]) + col[half]),
             );
-            if let Some(preprocessed) = self.preprocessed[slot.air_index] {
+            if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
                 next_tail.extend(
                     preprocessed
                         .iter_polys()
                         .map(|col| r * (col[num_evals - 1] - col[half]) + col[half]),
                 );
             }
-            if let Some(periodic) = self.periodic[slot.air_index].as_ref() {
+            if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
                 next_tail.extend(
                     periodic
                         .iter_polys()
@@ -1106,12 +1536,12 @@ where
             let mut columns = Vec::with_capacity(width);
             for slot in &self.slots {
                 columns.extend(
-                    self.tables[slot.air_index]
+                    self.tables[slot.stage_index]
                         .par_iter_polys()
                         .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
                         .collect::<Vec<_>>(),
                 );
-                if let Some(preprocessed) = self.preprocessed[slot.air_index] {
+                if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
                     columns.extend(
                         preprocessed
                             .par_iter_polys()
@@ -1119,7 +1549,7 @@ where
                             .collect::<Vec<_>>(),
                     );
                 }
-                if let Some(periodic) = self.periodic[slot.air_index].as_ref() {
+                if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
                     columns.extend(
                         periodic
                             .par_iter_polys()
@@ -1133,12 +1563,12 @@ where
             let mut columns = Vec::with_capacity(width);
             for slot in &self.slots {
                 columns.extend(
-                    self.tables[slot.air_index]
+                    self.tables[slot.stage_index]
                         .par_iter_polys()
                         .map(|col| PolyView::new(col).fix_prefix_var(r))
                         .collect::<Vec<_>>(),
                 );
-                if let Some(preprocessed) = self.preprocessed[slot.air_index] {
+                if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
                     columns.extend(
                         preprocessed
                             .par_iter_polys()
@@ -1146,7 +1576,7 @@ where
                             .collect::<Vec<_>>(),
                     );
                 }
-                if let Some(periodic) = self.periodic[slot.air_index].as_ref() {
+                if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
                     columns.extend(
                         periodic
                             .par_iter_polys()
@@ -1159,16 +1589,18 @@ where
         };
 
         RoundStateExt {
-            airs: self.airs,
             public_values: self.public_values,
             alpha: self.alpha,
             betas: self.betas,
-            degree_groups: self.degree_groups,
+            constraint_groups: self.constraint_groups,
+            interaction_groups: self.interaction_groups,
             slots: self.slots,
             tau: self.tau,
             round: 1,
             columns,
             next_tail,
+            coupling: self.coupling,
+            lookup_scale: self.eta,
             boundary: BoundaryEvals::new(EF::ONE - r, r, EF::ONE - r),
         }
     }
@@ -1188,32 +1620,76 @@ where
     }
 
     fn degree(&self) -> usize {
-        self.degree_groups
+        self.constraint_groups
             .iter()
+            .chain(&self.interaction_groups)
             .map(|group| group.degree)
             .max()
             .unwrap()
     }
 
-    pub(crate) fn evals(self) -> (Vec<EF>, Vec<EF>, BoundaryEvals<EF>) {
-        let columns = self
+    /// Split the final folded columns back into per-AIR openings in original caller order.
+    pub(crate) fn into_openings(self) -> Vec<(usize, AirOpenings<EF>)>
+    where
+        A: BaseAir<F>,
+    {
+        let local = self
             .columns
             .as_scalar()
             .iter()
             .map(|poly| poly.as_constant().unwrap())
-            .collect();
-        (columns, self.next_tail, self.boundary)
+            .collect::<Vec<_>>();
+        let all_next = self.next_tail;
+
+        self.slots
+            .into_iter()
+            .map(|slot| {
+                let main_end = slot.main_offset + slot.main_width;
+                let preprocessed_end = slot.preprocessed_offset + slot.preprocessed_width;
+                let next = slot
+                    .air
+                    .main_next_row_columns()
+                    .into_iter()
+                    .map(|column| all_next[slot.main_offset + column])
+                    .collect();
+                let preprocessed_next = slot
+                    .air
+                    .preprocessed_next_row_columns()
+                    .into_iter()
+                    .map(|column| all_next[slot.preprocessed_offset + column])
+                    .collect();
+
+                (
+                    slot.caller_index,
+                    AirOpenings {
+                        local: local[slot.main_offset..main_end].to_vec(),
+                        next,
+                        preprocessed_local: local[slot.preprocessed_offset..preprocessed_end]
+                            .to_vec(),
+                        preprocessed_next,
+                    },
+                )
+            })
+            .collect()
     }
 
-    /// Computes the round polynomial evaluations, dispatching to the
-    /// SIMD-packed kernel once there are enough residual rows to fill a
-    /// packed lane, mirroring [`RoundStateBase::round_poly`].
+    /// Evaluate this round's polynomial at every interpolation node.
+    ///
+    /// The packed kernel runs while a fold still leaves enough residual rows to fill a lane.
     #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn round_poly(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
             + for<'b> Air<
                 MultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, EF::ExtensionPacking>,
+                    PackedExt<F, EF::ExtensionPacking>,
+                >,
+            > + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<
+                InteractionMultilinearFolder<
                     'b,
                     F,
                     PackedExt<F, EF::ExtensionPacking>,
@@ -1232,65 +1708,70 @@ where
     #[tracing::instrument(skip_all, level = "debug")]
     fn round_poly_unpacked(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>,
     {
         let width = self.width();
         let num_evals = self.num_evals();
         let half = num_evals / 2;
         let degree = self.degree();
-        let air_degrees = self
+        let constraint_degrees = self
             .slots
             .iter()
-            .map(|slot| slot.degree)
+            .map(|slot| slot.constraint_degree)
+            .collect::<Vec<_>>();
+        let interaction_degrees = self
+            .interaction_groups
+            .iter()
+            .map(|group| group.degree)
             .collect::<Vec<_>>();
 
-        let air_evals = eq_suffix
-            .as_slice()
-            .par_iter()
-            .enumerate()
-            .par_fold_reduce(
-                || Scratch::<EF, EF>::new(&air_degrees, width),
-                |mut scratch, (s, &eq_suffix)| {
-                    for (((((local, local_delta), next), next_delta), column), next_tail) in scratch
-                        .local_point
-                        .iter_mut()
-                        .zip(scratch.local_diff.iter_mut())
-                        .zip(scratch.next_point.iter_mut())
-                        .zip(scratch.next_diff.iter_mut())
-                        .zip(self.columns.as_scalar().iter())
-                        .zip(self.next_tail.iter())
-                    {
-                        let column = column.as_slice();
-                        let local_lo = column[s];
-                        let local_hi = column[s + half];
-                        *local = local_lo;
-                        *local_delta = local_hi - local_lo;
+        let scratch = eq_suffix.as_slice().par_iter().enumerate().par_fold_reduce(
+            || Scratch::<EF, EF>::new(&constraint_degrees, &interaction_degrees, width),
+            |mut scratch, (s, &eq_suffix)| {
+                for (((((local, local_delta), next), next_delta), column), next_tail) in scratch
+                    .local_point
+                    .iter_mut()
+                    .zip(scratch.local_diff.iter_mut())
+                    .zip(scratch.next_point.iter_mut())
+                    .zip(scratch.next_diff.iter_mut())
+                    .zip(self.columns.as_scalar().iter())
+                    .zip(self.next_tail.iter())
+                {
+                    let column = column.as_slice();
+                    let local_lo = column[s];
+                    let local_hi = column[s + half];
+                    *local = local_lo;
+                    *local_delta = local_hi - local_lo;
 
-                        let next_lo = column[s + 1];
-                        let next_hi_row = s + half;
-                        let next_hi = if next_hi_row + 1 < num_evals {
-                            column[next_hi_row + 1]
-                        } else {
-                            *next_tail
-                        };
-                        *next = next_lo;
-                        *next_delta = next_hi - next_lo;
-                    }
+                    let next_lo = column[s + 1];
+                    let next_hi_row = s + half;
+                    let next_hi = if next_hi_row + 1 < num_evals {
+                        column[next_hi_row + 1]
+                    } else {
+                        *next_tail
+                    };
+                    *next = next_lo;
+                    *next_delta = next_hi - next_lo;
+                }
 
-                    let (mut boundary, boundary_diff) =
-                        BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
+                let (mut boundary, boundary_diff) =
+                    BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
 
-                    self.slots
-                        .iter()
-                        .zip(scratch.air_evals.iter_mut())
-                        .for_each(|(slot, evals)| {
-                            let g = MultilinearFolder::new(
+                for node in 0..=degree {
+                    if node != 1 {
+                        for slot in &self.slots {
+                            let enabled = slot.enabled_families(node, true);
+                            if !enabled.constraints && enabled.interaction.is_none() {
+                                continue;
+                            }
+                            let folder = MultilinearFolder::new(
                                 &scratch.local_point
                                     [slot.main_offset..slot.main_offset + slot.main_width],
                                 &scratch.next_point
                                     [slot.main_offset..slot.main_offset + slot.main_width],
                                 boundary,
-                                self.public_values[slot.air_index],
+                                self.public_values[slot.stage_index],
                                 self.alpha,
                             )
                             .with_preprocessed(
@@ -1302,93 +1783,80 @@ where
                             .with_periodic(
                                 &scratch.local_point[slot.periodic_offset
                                     ..slot.periodic_offset + slot.periodic_width],
-                            )
-                            .eval_air(self.airs[slot.air_index]);
-                            evals[0] += eq_suffix * g;
-                            debug_assert!(slot.degree > 0);
-                        });
-
-                    scratch.add_diffs();
-                    boundary += boundary_diff;
-
-                    for node in 2..=degree {
+                            );
+                            let evaluations =
+                                evaluate_air_families(folder, &self.coupling, enabled, slot.air);
+                            let eval_index = if node == 0 { 0 } else { node - 1 };
+                            if enabled.constraints {
+                                scratch.constraint_evals[slot.stage_index][eval_index] +=
+                                    eq_suffix * evaluations.constraints;
+                            }
+                            if let Some(interaction) = enabled.interaction {
+                                scratch.interaction_evals[interaction.group_index][eval_index] +=
+                                    eq_suffix * evaluations.interactions;
+                            }
+                        }
+                    }
+                    if node != degree {
                         scratch.add_diffs();
                         boundary += boundary_diff;
-
-                        self.slots
-                            .iter()
-                            .zip(scratch.air_evals.iter_mut())
-                            .for_each(|(slot, evals)| {
-                                if node <= slot.degree {
-                                    let g = MultilinearFolder::new(
-                                        &scratch.local_point
-                                            [slot.main_offset..slot.main_offset + slot.main_width],
-                                        &scratch.next_point
-                                            [slot.main_offset..slot.main_offset + slot.main_width],
-                                        boundary,
-                                        self.public_values[slot.air_index],
-                                        self.alpha,
-                                    )
-                                    .with_preprocessed(
-                                        &scratch.local_point[slot.preprocessed_offset
-                                            ..slot.preprocessed_offset + slot.preprocessed_width],
-                                        &scratch.next_point[slot.preprocessed_offset
-                                            ..slot.preprocessed_offset + slot.preprocessed_width],
-                                    )
-                                    .with_periodic(
-                                        &scratch.local_point[slot.periodic_offset
-                                            ..slot.periodic_offset + slot.periodic_width],
-                                    )
-                                    .eval_air(self.airs[slot.air_index]);
-                                    evals[node - 1] += eq_suffix * g;
-                                }
-                            });
                     }
+                }
 
-                    scratch
-                },
-                |mut lhs, rhs| {
-                    lhs.air_evals
-                        .iter_mut()
-                        .zip(rhs.air_evals)
-                        .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
-                    lhs
-                },
-            )
-            .air_evals;
-        let mut out = EF::zero_vec(degree);
-        let tau = self.tau.as_slice()[self.round];
-        for group in &mut self.degree_groups {
-            group.write_last_evals(&self.betas, &air_evals);
-        }
-        self.degree_groups
-            .iter()
-            .for_each(|group| group.combine_evals(&mut out, tau));
-
-        out
+                scratch
+            },
+            |mut lhs, rhs| {
+                lhs.constraint_evals
+                    .iter_mut()
+                    .zip(rhs.constraint_evals)
+                    .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
+                lhs.interaction_evals
+                    .iter_mut()
+                    .zip(rhs.interaction_evals)
+                    .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
+                lhs
+            },
+        );
+        finish_round(
+            &mut self.constraint_groups,
+            &mut self.interaction_groups,
+            &self.betas,
+            self.lookup_scale,
+            &scratch.constraint_evals,
+            &scratch.interaction_evals,
+            self.tau.as_slice()[self.round],
+        )
     }
 
-    /// SIMD-packed twin of [`Self::round_poly_unpacked`].
+    /// SIMD-packed twin of the scalar kernel above.
     ///
-    /// Every column is already extension-valued (folded by earlier rounds),
-    /// so packing groups `F::Packing::WIDTH` consecutive residual rows of
-    /// each `Poly<EF>` column into one `EF::ExtensionPacking`, via an
-    /// unaligned [`PackedFieldExtension::from_ext_slice`] read exactly like
-    /// [`RoundStateBase::round_poly_packed`] does for its base-field
-    /// columns. The AIR is driven through [`PackedExt`], which wraps the
-    /// packed extension value so it supports arithmetic against the base
-    /// field `F` directly (see that type's docs for why this is needed).
+    /// Earlier rounds already lifted every column into the extension field.
+    /// One lane group therefore holds as many consecutive residual rows as the base field packs:
+    ///
+    /// ```text
+    ///     rows   : x_0  x_1  x_2  x_3 ...
+    ///     lanes  : |------- one packed element -------|
+    /// ```
+    ///
+    /// A wrapper supplies the mixed base-times-extension multiply the AIR interface needs.
     #[tracing::instrument(skip_all, level = "debug")]
     fn round_poly_packed(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         A: for<'b> Air<
-            MultilinearFolder<
-                'b,
-                F,
-                PackedExt<F, EF::ExtensionPacking>,
-                PackedExt<F, EF::ExtensionPacking>,
+                MultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, EF::ExtensionPacking>,
+                    PackedExt<F, EF::ExtensionPacking>,
+                >,
+            > + for<'b> Air<
+                InteractionMultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, EF::ExtensionPacking>,
+                    PackedExt<F, EF::ExtensionPacking>,
+                >,
             >,
-        >,
         EF::ExtensionPacking: From<EF> + From<F::Packing>,
     {
         let width = self.width();
@@ -1398,21 +1866,42 @@ where
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
         let alpha = PackedExt::new(EF::ExtensionPacking::from(self.alpha));
-        let air_degrees = self
+        let coupling = InteractionCoupling {
+            links: self
+                .coupling
+                .links
+                .iter()
+                .map(|link| link.map(|value| PackedExt::new(EF::ExtensionPacking::from(value))))
+                .collect(),
+            theta_beta_powers: self
+                .coupling
+                .theta_beta_powers
+                .iter()
+                .copied()
+                .map(|value| PackedExt::new(EF::ExtensionPacking::from(value)))
+                .collect(),
+        };
+        let constraint_degrees = self
             .slots
             .iter()
-            .map(|slot| slot.degree)
+            .map(|slot| slot.constraint_degree)
+            .collect::<Vec<_>>();
+        let interaction_degrees = self
+            .interaction_groups
+            .iter()
+            .map(|group| group.degree)
             .collect::<Vec<_>>();
         assert_ne!(packed_half, 0);
 
-        let air_evals = eq_suffix
+        let scratch = eq_suffix
             .as_slice()
             .par_chunks_exact(packing_width)
             .enumerate()
             .par_fold_reduce(
                 || {
                     PackedScratch::<PackedExt<F, EF::ExtensionPacking>, EF>::new(
-                        &air_degrees,
+                        &constraint_degrees,
+                        &interaction_degrees,
                         width,
                     )
                 },
@@ -1468,97 +1957,84 @@ where
                         PackedExt::new(raw_boundary_diff.transition),
                     );
 
-                    self.slots
-                        .iter()
-                        .zip(scratch.air_evals.iter_mut())
-                        .for_each(|(slot, evals)| {
-                            let g = MultilinearFolder::new(
-                                &scratch.local_point
-                                    [slot.main_offset..slot.main_offset + slot.main_width],
-                                &scratch.next_point
-                                    [slot.main_offset..slot.main_offset + slot.main_width],
-                                boundary,
-                                self.public_values[slot.air_index],
-                                alpha,
-                            )
-                            .with_preprocessed(
-                                &scratch.local_point[slot.preprocessed_offset
-                                    ..slot.preprocessed_offset + slot.preprocessed_width],
-                                &scratch.next_point[slot.preprocessed_offset
-                                    ..slot.preprocessed_offset + slot.preprocessed_width],
-                            )
-                            .with_periodic(
-                                &scratch.local_point[slot.periodic_offset
-                                    ..slot.periodic_offset + slot.periodic_width],
-                            )
-                            .eval_air(self.airs[slot.air_index]);
-                            evals[0] += dot_product::<EF, _, _>(
-                                eq_suffix.iter().copied(),
-                                EF::ExtensionPacking::to_ext_iter([g.0]),
-                            );
-                            debug_assert!(slot.degree > 0);
-                        });
-
-                    scratch.add_diffs();
-                    boundary += boundary_diff;
-
-                    for node in 2..=degree {
-                        scratch.add_diffs();
-                        boundary += boundary_diff;
-
-                        self.slots
-                            .iter()
-                            .zip(scratch.air_evals.iter_mut())
-                            .for_each(|(slot, evals)| {
-                                if node <= slot.degree {
-                                    let g = MultilinearFolder::new(
-                                        &scratch.local_point
-                                            [slot.main_offset..slot.main_offset + slot.main_width],
-                                        &scratch.next_point
-                                            [slot.main_offset..slot.main_offset + slot.main_width],
-                                        boundary,
-                                        self.public_values[slot.air_index],
-                                        alpha,
-                                    )
-                                    .with_preprocessed(
-                                        &scratch.local_point[slot.preprocessed_offset
-                                            ..slot.preprocessed_offset + slot.preprocessed_width],
-                                        &scratch.next_point[slot.preprocessed_offset
-                                            ..slot.preprocessed_offset + slot.preprocessed_width],
-                                    )
-                                    .with_periodic(
-                                        &scratch.local_point[slot.periodic_offset
-                                            ..slot.periodic_offset + slot.periodic_width],
-                                    )
-                                    .eval_air(self.airs[slot.air_index]);
-                                    evals[node - 1] += dot_product::<EF, _, _>(
+                    for node in 0..=degree {
+                        if node != 1 {
+                            for slot in &self.slots {
+                                let enabled = slot.enabled_families(node, true);
+                                if !enabled.constraints && enabled.interaction.is_none() {
+                                    continue;
+                                }
+                                let folder = MultilinearFolder::new(
+                                    &scratch.local_point
+                                        [slot.main_offset..slot.main_offset + slot.main_width],
+                                    &scratch.next_point
+                                        [slot.main_offset..slot.main_offset + slot.main_width],
+                                    boundary,
+                                    self.public_values[slot.stage_index],
+                                    alpha,
+                                )
+                                .with_preprocessed(
+                                    &scratch.local_point[slot.preprocessed_offset
+                                        ..slot.preprocessed_offset + slot.preprocessed_width],
+                                    &scratch.next_point[slot.preprocessed_offset
+                                        ..slot.preprocessed_offset + slot.preprocessed_width],
+                                )
+                                .with_periodic(
+                                    &scratch.local_point[slot.periodic_offset
+                                        ..slot.periodic_offset + slot.periodic_width],
+                                );
+                                let evaluations =
+                                    evaluate_air_families(folder, &coupling, enabled, slot.air);
+                                let eval_index = if node == 0 { 0 } else { node - 1 };
+                                if enabled.constraints {
+                                    scratch.constraint_evals[slot.stage_index][eval_index] +=
+                                        dot_product::<EF, _, _>(
+                                            eq_suffix.iter().copied(),
+                                            EF::ExtensionPacking::to_ext_iter([evaluations
+                                                .constraints
+                                                .0]),
+                                        );
+                                }
+                                if let Some(interaction) = enabled.interaction {
+                                    scratch.interaction_evals[interaction.group_index]
+                                        [eval_index] += dot_product::<EF, _, _>(
                                         eq_suffix.iter().copied(),
-                                        EF::ExtensionPacking::to_ext_iter([g.0]),
+                                        EF::ExtensionPacking::to_ext_iter([evaluations
+                                            .interactions
+                                            .0]),
                                     );
                                 }
-                            });
+                            }
+                        }
+                        if node != degree {
+                            scratch.add_diffs();
+                            boundary += boundary_diff;
+                        }
                     }
 
                     scratch
                 },
                 |mut lhs, rhs| {
-                    lhs.air_evals
+                    lhs.constraint_evals
                         .iter_mut()
-                        .zip(rhs.air_evals)
+                        .zip(rhs.constraint_evals)
+                        .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
+                    lhs.interaction_evals
+                        .iter_mut()
+                        .zip(rhs.interaction_evals)
                         .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
                     lhs
                 },
-            )
-            .air_evals;
-        let mut out = EF::zero_vec(degree);
-        let tau = self.tau.as_slice()[self.round];
-        for group in &mut self.degree_groups {
-            group.write_last_evals(&self.betas, &air_evals);
-        }
-        self.degree_groups
-            .iter()
-            .for_each(|group| group.combine_evals(&mut out, tau));
-        out
+            );
+        finish_round(
+            &mut self.constraint_groups,
+            &mut self.interaction_groups,
+            &self.betas,
+            self.lookup_scale,
+            &scratch.constraint_evals,
+            &scratch.interaction_evals,
+            self.tau.as_slice()[self.round],
+        )
     }
 
     #[tracing::instrument(skip_all, level = "debug")]
@@ -1567,8 +2043,9 @@ where
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
     {
         let tau = self.tau.as_slice()[self.round];
-        self.degree_groups
+        self.constraint_groups
             .iter_mut()
+            .chain(self.interaction_groups.iter_mut())
             .for_each(|group| group.claim = group.eval(tau, r));
 
         let num_evals = self.num_evals();

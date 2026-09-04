@@ -101,11 +101,20 @@ impl<F: Field> LookupPlan<F> {
     /// `alpha` and `beta` are the lookup challenges used to separate buses and
     /// compress each contribution's payload.
     ///
+    /// Denominator blocks are stored one SIMD lane group at a time.
+    /// Every lookup-active trace must therefore be at least one lane group tall.
+    ///
+    /// That floor is a property of this prover's build target alone.
+    /// It changes neither the proof bytes nor the transcript.
+    /// The verifier never applies it.
+    ///
     /// # Panics
     ///
     /// Panics if a planned AIR has no corresponding entry in one of the input
     /// slices or a retained lookup expression refers to unavailable trace,
     /// preprocessed, or public-value data.
+    ///
+    /// Panics if a lookup-active trace is shorter than the target's packing width.
     pub fn materialize_fraction<EF>(
         &self,
         main: &[&Table<F>],
@@ -117,6 +126,15 @@ impl<F: Field> LookupPlan<F> {
     where
         EF: ExtensionField<F>,
     {
+        // A shorter trace leaves its blocks with zero packed entries.
+        // Nothing would then be materialized for that AIR, silently.
+        assert!(
+            self.instances
+                .iter()
+                .all(|planned| 1usize << planned.num_variables >= F::Packing::WIDTH),
+            "lookup-active trace height must be at least the prover's SIMD packing width"
+        );
+
         let packed_beta_powers = beta
             .powers()
             .take(self.max_width)
