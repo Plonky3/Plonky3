@@ -22,14 +22,17 @@ pub struct MultilinearFolder<'a, F, Var, Acc> {
     /// Public inputs forwarded to the AIR, always in the base field.
     pub public_values: &'a [F],
     /// Random scalar driving alpha-batching of constraints.
-    pub alpha: Acc,
+    alpha: Acc,
     /// Running alpha-batched accumulator capturing every asserted-zero constraint.
-    pub accumulator: Acc,
+    accumulator: Acc,
     /// Descending alpha powers `alpha^(n-1), ..., alpha^0`, one per asserted constraint.
     ///
-    /// Empty when the caller supplies no powers, in which case the accumulator folds by Horner.
-    /// When non-empty the length must equal the number of constraints the AIR asserts.
-    alpha_powers: &'a [Acc],
+    /// `None` when the caller supplies no powers, in which case the accumulator folds by
+    /// Horner. `Some(powers)` means the AIR asserts exactly `powers.len()` constraints,
+    /// including the case where that is zero: unlike an empty slice, `Some(&[])` cannot be
+    /// confused with "no powers attached" and still asserts the count via
+    /// [`Self::into_accumulator`]'s debug check.
+    alpha_powers: Option<&'a [Acc]>,
     /// Position of the next asserted constraint inside `alpha_powers`.
     constraint_index: usize,
     /// Two-row preprocessed window; zero-width when the AIR has no preprocessed columns.
@@ -79,7 +82,7 @@ where
             // No periodic columns until attached.
             periodic_values: &[],
             // No precomputed powers until attached; batching folds by Horner.
-            alpha_powers: &[],
+            alpha_powers: None,
             constraint_index: 0,
         }
     }
@@ -96,7 +99,7 @@ where
     #[inline]
     #[must_use]
     pub const fn with_alpha_powers(mut self, alpha_powers: &'a [Acc]) -> Self {
-        self.alpha_powers = alpha_powers;
+        self.alpha_powers = Some(alpha_powers);
         self
     }
 
@@ -137,7 +140,8 @@ where
     #[must_use]
     pub fn into_accumulator(self) -> Acc {
         debug_assert!(
-            self.alpha_powers.is_empty() || self.constraint_index == self.alpha_powers.len(),
+            self.alpha_powers
+                .is_none_or(|powers| self.constraint_index == powers.len()),
             "attached alpha powers must match the number of asserted constraints"
         );
         self.accumulator
@@ -212,23 +216,27 @@ where
 
     #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        if self.alpha_powers.is_empty() {
-            // Horner alpha-batching: each push updates
-            //
-            //     accumulator := alpha * accumulator + C_i
-            //
-            // After `n` pushes the accumulator collapses to
-            //
-            //     C_0 * alpha^(n-1) + C_1 * alpha^(n-2) + ... + C_{n-1}.
-            self.accumulator = self.accumulator * self.alpha + x.into();
-        } else {
-            // Same sum reached term by term, weighting `C_i` by the precomputed `alpha^(n-1-i)`.
-            //
-            // The product is `Acc * Var` rather than `Acc * Acc`, which is the cheaper
-            // multiplication whenever the constraint value lives in a smaller ring than
-            // the accumulator.
-            self.accumulator += self.alpha_powers[self.constraint_index] * x.into();
-            self.constraint_index += 1;
+        match self.alpha_powers {
+            None => {
+                // Horner alpha-batching: each push updates
+                //
+                //     accumulator := alpha * accumulator + C_i
+                //
+                // After `n` pushes the accumulator collapses to
+                //
+                //     C_0 * alpha^(n-1) + C_1 * alpha^(n-2) + ... + C_{n-1}.
+                self.accumulator = self.accumulator * self.alpha + x.into();
+            }
+            Some(powers) => {
+                // Same sum reached term by term, weighting `C_i` by the precomputed
+                // `alpha^(n-1-i)`.
+                //
+                // The product is `Acc * Var` rather than `Acc * Acc`, which is the cheaper
+                // multiplication whenever the constraint value lives in a smaller ring than
+                // the accumulator.
+                self.accumulator += powers[self.constraint_index] * x.into();
+                self.constraint_index += 1;
+            }
         }
     }
 

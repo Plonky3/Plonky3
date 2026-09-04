@@ -25,7 +25,7 @@ use thiserror::Error;
 use crate::folder::MultilinearFolder;
 use crate::opening::{OpeningClaims, TableOpening};
 use crate::packed_ext::PackedExt;
-use crate::rounds::{RoundStateBase, RoundStateExt, Stage};
+use crate::rounds::{AirShape, RoundStateBase, RoundStateExt, Stage};
 use crate::selectors::{BoundaryEvals, PeriodicError, periodic_evals_at};
 
 /// Reasons the zerocheck verifier rejects a proof.
@@ -210,16 +210,20 @@ where
 
 /// Per-variable constraint degree and asserted base-constraint count of an AIR.
 ///
-/// Each value is read from the AIR's own hint when present. One symbolic pass covers whichever
-/// hints are missing, so an AIR that hints neither is still evaluated only once.
+/// Runs one symbolic evaluation of the AIR, which both fills in whichever hint is absent and
+/// checks whichever hint is present.
 ///
 /// The count must match the AIR exactly, unlike the degree, which need only be an upper bound.
 /// The prover weights the AIR's `i`-th constraint by `alpha^(n - 1 - i)` while the verifier folds
 /// the constraints it sees by Horner, so a count that is off by `d` scales the prover's batched
-/// value by `alpha^d` and the two sides no longer agree.
+/// value by `alpha^d` and the two sides no longer agree. Checking it here, once per AIR per
+/// proof, turns that mismatch into a named panic instead of an unverifiable proof.
 ///
-/// Debug assertions pin both hints against the symbolic values.
-fn air_degree_and_constraints<F, EF, A>(air: &A) -> (usize, usize)
+/// # Panics
+///
+/// Panics if `max_constraint_degree()` is below the symbolic degree, or if `num_constraints()`
+/// disagrees with the symbolic constraint count.
+fn air_degree_and_constraints<F, EF, A>(air: &A) -> AirShape
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -228,26 +232,21 @@ where
     let hinted_degree = air.max_constraint_degree();
     let hinted_count = air.num_constraints();
 
-    match (hinted_degree, hinted_count) {
-        // Both hints present: outside debug builds nothing needs the symbolic pass.
-        (Some(degree), Some(count)) if !cfg!(debug_assertions) => (degree, count),
-        _ => {
-            let scores = symbolic_scores::<F, EF, A>(air);
-            debug_assert!(
-                hinted_degree.is_none_or(|degree| degree >= scores.degree),
-                "max_constraint_degree hint is below the symbolic constraint degree"
-            );
-            debug_assert!(
-                hinted_count.is_none_or(|count| count == scores.num_base_constraints),
-                "num_constraints() = {:?} but symbolic evaluation found {} base constraints",
-                hinted_count,
-                scores.num_base_constraints,
-            );
-            (
-                hinted_degree.unwrap_or(scores.degree),
-                hinted_count.unwrap_or(scores.num_base_constraints),
-            )
-        }
+    let scores = symbolic_scores::<F, EF, A>(air);
+    assert!(
+        hinted_degree.is_none_or(|degree| degree >= scores.degree),
+        "max_constraint_degree hint is below the symbolic constraint degree"
+    );
+    assert!(
+        hinted_count.is_none_or(|count| count == scores.num_base_constraints),
+        "num_constraints() = {:?} but symbolic evaluation found {} base constraints",
+        hinted_count,
+        scores.num_base_constraints,
+    );
+
+    AirShape {
+        degree: hinted_degree.unwrap_or(scores.degree),
+        num_constraints: scores.num_base_constraints,
     }
 }
 
@@ -309,7 +308,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         assert_eq!(self.airs.len(), preprocessed.len(),);
         assert_eq!(self.airs.len(), public_values.len(),);
 
-        let (degrees, num_constraints): (Vec<_>, Vec<_>) = self
+        let shapes = self
             .airs
             .iter()
             .zip(tables.iter())
@@ -334,8 +333,8 @@ impl<'a, A> AirZerocheck<'a, A> {
                 assert_eq!(public_values.len(), air.num_public_values());
                 air_degree_and_constraints::<F, EF, A>(air)
             })
-            .unzip();
-        let max_degree = degrees.iter().copied().max().unwrap();
+            .collect::<Vec<_>>();
+        let max_degree = shapes.iter().map(|shape| shape.degree).max().unwrap();
 
         // Bucket AIR indices by trace height.
         // The map gives deterministic height order; stages are built largest-first below.
@@ -362,19 +361,14 @@ impl<'a, A> AirZerocheck<'a, A> {
                     .iter()
                     .map(|&i| public_values[i])
                     .collect::<Vec<_>>();
-                let degrees = indices.iter().map(|&i| degrees[i]).collect::<Vec<_>>();
-                let num_constraints = indices
-                    .iter()
-                    .map(|&i| num_constraints[i])
-                    .collect::<Vec<_>>();
+                let shapes = indices.iter().map(|&i| shapes[i]).collect::<Vec<_>>();
                 Stage::new(
                     &airs,
                     &public_values,
                     &indices,
                     &preprocessed,
                     &tables,
-                    &degrees,
-                    &num_constraints,
+                    &shapes,
                 )
             })
             .collect::<Vec<_>>();
@@ -1194,6 +1188,33 @@ mod tests {
 
             builder.when_last_row().assert_eq(local.right, x);
         }
+    }
+
+    /// [`FibAir`] with a `num_constraints()` hint that undercounts its real five constraints.
+    struct BadHintFibAir;
+
+    impl<X> BaseAir<X> for BadHintFibAir {
+        fn width(&self) -> usize {
+            NUM_COLS
+        }
+        fn num_public_values(&self) -> usize {
+            3
+        }
+        fn num_constraints(&self) -> Option<usize> {
+            Some(4)
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for BadHintFibAir {
+        fn eval(&self, builder: &mut AB) {
+            FibAir.eval(builder);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "num_constraints()")]
+    fn air_degree_and_constraints_rejects_a_wrong_hint() {
+        air_degree_and_constraints::<F, EF, _>(&BadHintFibAir);
     }
 
     /// Build a length-`n` Fibonacci trace seeded with `(0, 1)`.

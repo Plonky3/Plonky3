@@ -15,7 +15,6 @@ pub mod fractional_gkr;
 pub mod instance;
 pub mod keys;
 pub mod lookup;
-pub mod metadata;
 pub mod opening;
 pub mod packed_ext;
 pub mod proof;

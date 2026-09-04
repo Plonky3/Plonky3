@@ -22,6 +22,18 @@ use crate::folder::MultilinearFolder;
 use crate::packed_ext::PackedExt;
 use crate::selectors::{BoundaryEvals, periodic_num_variables};
 
+/// Per-variable constraint degree and asserted base-constraint count of one AIR.
+///
+/// Both values come from the same symbolic pass and are threaded everywhere together,
+/// one instance per AIR in a stage.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AirShape {
+    /// Per-variable constraint degree, with the eq factor stripped.
+    pub(super) degree: usize,
+    /// Number of base constraints the AIR asserts.
+    pub(super) num_constraints: usize,
+}
+
 /// One batch of AIRs that share a single trace height.
 ///
 /// A stage activates when the global sumcheck cube shrinks to its height.
@@ -37,10 +49,8 @@ pub(super) struct Stage<'air, 'data, A, F: Field> {
     pub(super) preprocessed: Vec<Option<&'data Table<F>>>,
     /// Transposed main trace table for each AIR.
     pub(super) tables: Vec<&'data Table<F>>,
-    /// Per-variable constraint degree of each AIR, with the eq factor stripped.
-    pub(super) degrees: Vec<usize>,
-    /// Number of base constraints each AIR asserts, in the same order.
-    pub(super) num_constraints: Vec<usize>,
+    /// Degree and constraint count of each AIR, in the same order as `airs`.
+    pub(super) shapes: Vec<AirShape>,
     /// Shared variable count, equal to the base-two logarithm of the common height.
     pub(super) num_vars: usize,
 }
@@ -58,8 +68,7 @@ impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
         indices: &[usize],
         preprocessed: &[Option<&'data Table<F>>],
         tables: &[&'data Table<F>],
-        degrees: &[usize],
-        num_constraints: &[usize],
+        shapes: &[AirShape],
     ) -> Self {
         // Every table in a stage binds the same zerocheck variables, so heights must agree.
         let num_vars = tables
@@ -84,8 +93,7 @@ impl<'air, 'data, A, F: Field> Stage<'air, 'data, A, F> {
             public_values: public_values.to_vec(),
             preprocessed: preprocessed.to_vec(),
             tables: tables.to_vec(),
-            degrees: degrees.to_vec(),
-            num_constraints: num_constraints.to_vec(),
+            shapes: shapes.to_vec(),
         }
     }
 }
@@ -116,7 +124,10 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF: ExtensionField<F>
     /// Descending alpha powers for each AIR, one entry per constraint that AIR asserts.
     ///
     /// Broadcast across the SIMD lanes so the packed folder can weight a constraint directly.
-    alpha_powers: Vec<Vec<EF::ExtensionPacking>>,
+    /// `None` when this round does not batch: only the packed first round reads these, so the
+    /// scalar path leaves it unset rather than building an empty vector per AIR, which would be
+    /// indistinguishable from an AIR that genuinely asserts zero constraints.
+    alpha_powers: Option<Vec<Vec<EF::ExtensionPacking>>>,
     /// Optional preprocessed tables, one per AIR.
     preprocessed: Vec<Option<&'data Table<F>>>,
     /// Periodic tables, one per AIR, each materialized to the full trace height.
@@ -715,9 +726,8 @@ where
         assert_eq!(stage.airs.len(), stage.tables.len(),);
         assert_eq!(stage.preprocessed.len(), stage.tables.len(),);
         assert_eq!(stage.public_values.len(), stage.tables.len(),);
-        assert_eq!(stage.degrees.len(), stage.tables.len(),);
-        assert_eq!(stage.num_constraints.len(), stage.tables.len(),);
-        assert!(stage.degrees.iter().all(|&degree| degree > 0),);
+        assert_eq!(stage.shapes.len(), stage.tables.len(),);
+        assert!(stage.shapes.iter().all(|shape| shape.degree > 0),);
 
         let num_vars = stage
             .tables
@@ -808,13 +818,13 @@ where
         // Constraint `i` of an AIR asserting `n` constraints is batched with weight `alpha^(n-1-i)`,
         // the same weight the folder's Horner fold assigns it.
         //
-        // Only the packed first round reads these, so the scalar path builds none.
-        let alpha_powers = if (1 << num_vars) / 2 >= F::Packing::WIDTH {
+        // Only the packed first round reads these, so the scalar path leaves this `None`.
+        let alpha_powers = ((1 << num_vars) / 2 >= F::Packing::WIDTH).then(|| {
             stage
-                .num_constraints
+                .shapes
                 .iter()
-                .map(|&num_constraints| {
-                    let mut powers = alpha.powers().collect_n(num_constraints);
+                .map(|shape| {
+                    let mut powers = alpha.powers().collect_n(shape.num_constraints);
                     powers.reverse();
                     powers
                         .into_iter()
@@ -822,13 +832,16 @@ where
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>()
-        } else {
-            alloc::vec![Vec::new(); num_airs]
-        };
+        });
 
         // Build the degree grouping once, then flatten it into the AIR-ordered fold view.
+        let degrees = stage
+            .shapes
+            .iter()
+            .map(|shape| shape.degree)
+            .collect::<Vec<_>>();
         let degree_groups = DegreeGroup::build(
-            &stage.degrees,
+            &degrees,
             &main_widths,
             &preprocessed_widths,
             &periodic_widths,
@@ -918,6 +931,21 @@ where
             .collect::<Vec<_>>();
         assert_ne!(packed_half, 0);
 
+        // A block's selector pair depends on the block only through the residual rows `0` and
+        // `height - 1`. Row `0` sits in the low half of block `0`; row `height - 1` sits in the
+        // high half of block `packed_half - 1`. Every other block reads the same constant pair,
+        // so only these two need the per-row construction.
+        let first_block = BoundaryEvals::<F::Packing>::row_pair_packed(0, scalar_half, height);
+        let last_block = BoundaryEvals::<F::Packing>::row_pair_packed(
+            (packed_half - 1) * packing_width,
+            scalar_half,
+            height,
+        );
+        let interior_block = (
+            BoundaryEvals::new(F::Packing::ZERO, F::Packing::ZERO, F::Packing::ONE),
+            BoundaryEvals::new(F::Packing::ZERO, F::Packing::ZERO, F::Packing::ZERO),
+        );
+
         let air_evals = eq_suffix
             .as_slice()
             .par_chunks_exact(packing_width)
@@ -980,8 +1008,13 @@ where
                         }
                     }
 
-                    let (mut boundary, boundary_diff) =
-                        BoundaryEvals::<F::Packing>::row_pair_packed(s, scalar_half, height);
+                    let (mut boundary, boundary_diff) = if packed_s == 0 {
+                        first_block
+                    } else if packed_s == packed_half - 1 {
+                        last_block
+                    } else {
+                        interior_block
+                    };
 
                     // Node 0 is skipped.
                     // Invariant: a stage's first round runs on an unfolded trace.
@@ -1020,9 +1053,14 @@ where
                                     .with_periodic(
                                         &scratch.local_point[slot.periodic_offset
                                             ..slot.periodic_offset + slot.periodic_width],
-                                    )
-                                    .with_alpha_powers(&self.alpha_powers[slot.air_index])
-                                    .eval_air(self.airs[slot.air_index]);
+                                    );
+                                    let g = match &self.alpha_powers {
+                                        Some(alpha_powers) => {
+                                            g.with_alpha_powers(&alpha_powers[slot.air_index])
+                                        }
+                                        None => g,
+                                    };
+                                    let g = g.eval_air(self.airs[slot.air_index]);
                                     evals[node - 1] += eq_suffix * g;
                                 }
                             });
@@ -1497,6 +1535,17 @@ where
             .collect::<Vec<_>>();
         assert_ne!(packed_half, 0);
 
+        // `packed_window` assumes every stored column holds exactly `height` rows with no
+        // padding lane. Checking that once per round here, instead of once per `(block, column)`
+        // read inside the fold, keeps the cost independent of the block count.
+        assert!(
+            self.columns
+                .as_packed()
+                .iter()
+                .all(|column| column.as_slice().len() * packing_width == height),
+            "packed_window assumes a fully populated column"
+        );
+
         // A block's selector pair depends on the block only through the residual rows `0` and
         // `height - 1`. Row `0` sits in the low half of block `0`; row `height - 1` sits in the
         // high half of block `packed_half - 1`. Every other block reads the same constant pair,
@@ -1714,6 +1763,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::borrow::Cow;
+
+    use p3_air::{AirBuilder, WindowAccess};
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use rand::rngs::SmallRng;
@@ -1730,30 +1782,229 @@ mod tests {
         // Invariant: lane `l` of the window starting at `start` carries scalar row
         // `start + l`, or the repeat-last tail once that row runs past the column.
         //
-        // Fixture state: a column of eight packed groups, exercised at every start offset,
-        // so both the two-group read and the final-block gather are covered.
+        // Fixture state: columns of 1 through 8 packed groups, each exercised at every
+        // start offset. `num_groups == 1` and `== 2` pin the case where every window falls
+        // in the final-block gather branch (no successor group ever exists); `num_groups >= 3`
+        // reaches the two-group unaligned-read branch as well.
         let mut rng = SmallRng::seed_from_u64(0x5EED);
         let packing_width = <F as Field>::Packing::WIDTH;
-        let len = 8 * packing_width;
 
-        let rows = (0..len).map(|_| rng.random::<EF>()).collect::<Vec<_>>();
-        let tail: EF = rng.random();
-        let column = rows
-            .chunks_exact(packing_width)
-            .map(<Packing as PackedFieldExtension<F, EF>>::from_ext_slice)
-            .collect::<Vec<_>>();
+        for num_groups in 1..=8 {
+            let len = num_groups * packing_width;
 
-        for start in 0..len {
-            let window = packed_window::<F, EF>(&column, start, len, tail);
-            for lane in 0..packing_width {
-                let row = start + lane;
-                let expected = if row < len { rows[row] } else { tail };
-                assert_eq!(
-                    <Packing as PackedFieldExtension<F, EF>>::extract(&window, lane),
-                    expected,
-                    "start={start} lane={lane}"
-                );
+            let rows = (0..len).map(|_| rng.random::<EF>()).collect::<Vec<_>>();
+            let tail: EF = rng.random();
+            let column = rows
+                .chunks_exact(packing_width)
+                .map(<Packing as PackedFieldExtension<F, EF>>::from_ext_slice)
+                .collect::<Vec<_>>();
+
+            for start in 0..len {
+                let window = packed_window::<F, EF>(&column, start, len, tail);
+                for lane in 0..packing_width {
+                    let row = start + lane;
+                    let expected = if row < len { rows[row] } else { tail };
+                    assert_eq!(
+                        <Packing as PackedFieldExtension<F, EF>>::extract(&window, lane),
+                        expected,
+                        "num_groups={num_groups} start={start} lane={lane}"
+                    );
+                }
             }
+        }
+    }
+
+    /// Width-3 AIR with a degree-1 first-row constraint and a degree-2 transition product.
+    ///
+    /// No preprocessed or periodic columns.
+    struct QuadAir;
+
+    impl BaseAir<F> for QuadAir {
+        fn width(&self) -> usize {
+            3
+        }
+        fn num_public_values(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for QuadAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            let next = main.next_slice();
+            let (local0, local1, next2) = (local[0], local[1], next[2]);
+            let pi0 = builder.public_values()[0];
+
+            builder.when_first_row().assert_eq(local0, pi0);
+            builder.when_transition().assert_eq(local0 * local1, next2);
+        }
+    }
+
+    /// Single period-2 periodic column shared by [`CubicMixedAir`].
+    fn cubic_mixed_periodic_columns() -> Vec<Vec<F>> {
+        [[F::ONE, F::TWO].to_vec()].to_vec()
+    }
+
+    /// Width-2 AIR with one preprocessed column, one period-2 periodic column, and a
+    /// degree-3 transition product.
+    struct CubicMixedAir;
+
+    impl BaseAir<F> for CubicMixedAir {
+        fn width(&self) -> usize {
+            2
+        }
+        fn preprocessed_width(&self) -> usize {
+            1
+        }
+        fn num_periodic_columns(&self) -> usize {
+            cubic_mixed_periodic_columns().len()
+        }
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            Cow::Owned(cubic_mixed_periodic_columns())
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for CubicMixedAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            let next = main.next_slice();
+            let (local0, local1, next0) = (local[0], local[1], next[0]);
+            let preprocessed0 = builder.preprocessed().current_slice()[0];
+            let periodic0 = builder.periodic_values()[0];
+
+            builder
+                .when_transition()
+                .assert_eq(local0 * local1 * preprocessed0, next0);
+            builder.assert_eq(local1, periodic0);
+        }
+    }
+
+    /// Unifies [`QuadAir`] and [`CubicMixedAir`] into one type, since a [`Stage`] batches AIRs
+    /// of a single concrete type.
+    enum EquivalenceAir {
+        Quad(QuadAir),
+        CubicMixed(CubicMixedAir),
+    }
+
+    impl BaseAir<F> for EquivalenceAir {
+        fn width(&self) -> usize {
+            match self {
+                Self::Quad(air) => air.width(),
+                Self::CubicMixed(air) => air.width(),
+            }
+        }
+        fn preprocessed_width(&self) -> usize {
+            match self {
+                Self::Quad(air) => air.preprocessed_width(),
+                Self::CubicMixed(air) => air.preprocessed_width(),
+            }
+        }
+        fn num_public_values(&self) -> usize {
+            match self {
+                Self::Quad(air) => air.num_public_values(),
+                Self::CubicMixed(air) => air.num_public_values(),
+            }
+        }
+        fn num_periodic_columns(&self) -> usize {
+            match self {
+                Self::Quad(air) => air.num_periodic_columns(),
+                Self::CubicMixed(air) => air.num_periodic_columns(),
+            }
+        }
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            match self {
+                Self::Quad(air) => air.periodic_columns(),
+                Self::CubicMixed(air) => air.periodic_columns(),
+            }
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for EquivalenceAir {
+        fn eval(&self, builder: &mut AB) {
+            match self {
+                Self::Quad(air) => air.eval(builder),
+                Self::CubicMixed(air) => air.eval(builder),
+            }
+        }
+    }
+
+    /// A `height x width` table of independent random field elements.
+    fn random_table(rng: &mut SmallRng, height: usize, width: usize) -> Table<F> {
+        let values = (0..height * width)
+            .map(|_| rng.random())
+            .collect::<Vec<_>>();
+        Table::new(RowMajorMatrix::new(values, width).transpose())
+    }
+
+    #[test]
+    fn round_poly_packed_matches_unpacked_base_round() {
+        // Property: for the same base-round state, `round_poly_packed` and
+        // `round_poly_unpacked` compute the same eq-weighted per-node evaluations.
+        //
+        // The state batches two AIRs of differing degree and width, one with a
+        // preprocessed column and a periodic column and one with neither.
+        //
+        // `num_vars` sweeps `log2(2W) ..= log2(2W) + 3`, so `packed_half` covers every block
+        // shape the packed path can see: a single combined first/last block, two blocks with
+        // no interior, and four or eight blocks with at least one interior block.
+        let mut rng = SmallRng::seed_from_u64(0xEA915E);
+        let packing_width = <F as Field>::Packing::WIDTH;
+        let base_num_vars = packing_width.trailing_zeros() as usize + 1;
+
+        for extra in 0..4 {
+            let num_vars = base_num_vars + extra;
+            let height = 1usize << num_vars;
+
+            let quad = EquivalenceAir::Quad(QuadAir);
+            let cubic = EquivalenceAir::CubicMixed(CubicMixedAir);
+            let airs = [&quad, &cubic];
+
+            let main_quad = random_table(&mut rng, height, 3);
+            let main_cubic = random_table(&mut rng, height, 2);
+            let preprocessed_cubic = random_table(&mut rng, height, 1);
+            let tables = [&main_quad, &main_cubic];
+            let preprocessed = [None, Some(&preprocessed_cubic)];
+
+            let public_values_quad = [rng.random::<F>()];
+            let public_values_cubic: [F; 0] = [];
+            let public_values: [&[F]; 2] = [&public_values_quad, &public_values_cubic];
+
+            let shapes = [
+                AirShape {
+                    degree: 2,
+                    num_constraints: 2,
+                },
+                AirShape {
+                    degree: 3,
+                    num_constraints: 2,
+                },
+            ];
+            let indices = [0, 1];
+
+            let stage = Stage::new(
+                &airs,
+                &public_values,
+                &indices,
+                &preprocessed,
+                &tables,
+                &shapes,
+            );
+
+            let alpha: EF = rng.random();
+            let betas = [EF::ONE, rng.random()].to_vec();
+            let tau = Point::new((0..num_vars).map(|_| rng.random()).collect::<Vec<EF>>());
+            let eq_point = (0..num_vars - 1).map(|_| rng.random()).collect::<Vec<EF>>();
+            let eq_suffix = Poly::new_from_point(&eq_point, EF::ONE);
+
+            let mut packed_state = RoundStateBase::new(&stage, alpha, betas.clone(), &tau);
+            let mut unpacked_state = RoundStateBase::new(&stage, alpha, betas, &tau);
+
+            let packed = packed_state.round_poly_packed(&eq_suffix);
+            let unpacked = unpacked_state.round_poly_unpacked(&eq_suffix);
+
+            assert_eq!(packed, unpacked, "num_vars={num_vars}");
         }
     }
 }
