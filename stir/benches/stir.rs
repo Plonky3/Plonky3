@@ -6,7 +6,7 @@
 //! # Benchmark parameters
 //!
 //! `max_pow_bits = 0` is used throughout so benchmarks measure the cryptographic core
-//! (DFTs, Merkle trees, Lagrange folds, shake polynomial arithmetic) without PoW
+//! (DFTs, Merkle trees, Lagrange folds, answer polynomial arithmetic) without PoW
 //! grinding noise.  Real deployments add PoW overhead on top of these numbers.
 //!
 //! Two theorem-compatible configurations are benchmarked:

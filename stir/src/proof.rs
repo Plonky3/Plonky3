@@ -62,19 +62,14 @@ pub struct StirRoundProof<EF: Field, M: Mmcs<EF>, Witness> {
     /// Answer polynomial coefficients.
     ///
     /// The unique polynomial `Ans(X)` of degree `< |P|` interpolating `(y_i, v_i)` for every
-    /// `y_i ∈ P` (OOD + queried points) and its claimed value `v_i`. Sent by the prover so the
-    /// verifier avoids the O(|P|²) Newton interpolation; correctness against the queried/OOD
-    /// values is enforced together with `shake_polynomial` at a random `rho`.
+    /// `y_i ∈ P` (OOD + queried points) and its claimed value `v_i`. The verifier needs `Ans`
+    /// in coefficient form — every later round evaluates it on each queried fiber — so the
+    /// prover sends the coefficients and the verifier only confirms them, checking `Ans(rho)`
+    /// against the barycentric interpolant through `(y_i, v_i)` at a random `rho` at a lower
+    /// constant than rebuilding them by Newton's divided differences. `ans_polynomial` is
+    /// observed in the transcript before `rho` is sampled, so a malicious prover cannot fit
+    /// `Ans` to a known `rho`.
     pub ans_polynomial: Vec<EF>,
-
-    /// Shake polynomial coefficients.
-    ///
-    /// `S(X) = sum_{y in P} (Ans(X) - Ans(y)) / (X - y)` where `P` is the set of all OOD +
-    /// queried points. Sent by the prover and checked by the verifier at a random evaluation
-    /// point: `S(rho) == sum_i (Ans(rho) - v_i) / (rho - y_i)`. Both `ans_polynomial` and
-    /// `shake_polynomial` are observed in the transcript before `rho` is sampled, so a
-    /// malicious prover cannot fit `Ans` to a known `rho`.
-    pub shake_polynomial: Vec<EF>,
 
     /// Merkle openings for the STIR queries, sharing one pruned multi-opening proof.
     ///
