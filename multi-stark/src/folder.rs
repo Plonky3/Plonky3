@@ -22,9 +22,19 @@ pub struct MultilinearFolder<'a, F, Var, Acc> {
     /// Public inputs forwarded to the AIR, always in the base field.
     pub public_values: &'a [F],
     /// Random scalar driving alpha-batching of constraints.
-    pub alpha: Acc,
+    alpha: Acc,
     /// Running alpha-batched accumulator capturing every asserted-zero constraint.
-    pub accumulator: Acc,
+    accumulator: Acc,
+    /// Descending alpha powers `alpha^(n-1), ..., alpha^0`, one per asserted constraint.
+    ///
+    /// `None` when the caller supplies no powers, in which case the accumulator folds by
+    /// Horner. `Some(powers)` means the AIR asserts exactly `powers.len()` constraints,
+    /// including the case where that is zero: unlike an empty slice, `Some(&[])` cannot be
+    /// confused with "no powers attached" and still asserts the count via
+    /// [`Self::into_accumulator`]'s debug check.
+    alpha_powers: Option<&'a [Acc]>,
+    /// Position of the next asserted constraint inside `alpha_powers`.
+    constraint_index: usize,
     /// Two-row preprocessed window; zero-width when the AIR has no preprocessed columns.
     pub preprocessed_window: RowWindow<'a, Var>,
     /// Periodic column values at the current evaluation point, one per declared periodic column.
@@ -71,7 +81,26 @@ where
             preprocessed_window: RowWindow::from_two_rows(&[], &[]),
             // No periodic columns until attached.
             periodic_values: &[],
+            // No precomputed powers until attached; batching folds by Horner.
+            alpha_powers: None,
+            constraint_index: 0,
         }
+    }
+
+    /// Attach the descending alpha powers used to batch the asserted constraints.
+    ///
+    /// `alpha_powers[i]` must be `alpha^(n - 1 - i)`, where `n` is the number of constraints
+    /// the AIR asserts. The batched value is then identical to the Horner fold, while each
+    /// constraint costs one `Acc * Var` product instead of one `Acc * Acc` product.
+    ///
+    /// # Arguments
+    ///
+    /// - `alpha_powers`: one power per asserted constraint, in declaration order.
+    #[inline]
+    #[must_use]
+    pub const fn with_alpha_powers(mut self, alpha_powers: &'a [Acc]) -> Self {
+        self.alpha_powers = Some(alpha_powers);
+        self
     }
 
     /// Attach the two-row preprocessed window read by the AIR.
@@ -103,13 +132,18 @@ where
     ///
     /// # Returns
     ///
-    /// The Horner fold `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
+    /// The alpha-batched sum `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
     ///
     /// - `C_0, ..., C_{n-1}` are the constraints asserted by the AIR in declaration order.
     /// - `n` is the total number of asserted constraints.
     #[inline]
     #[must_use]
     pub fn into_accumulator(self) -> Acc {
+        debug_assert!(
+            self.alpha_powers
+                .is_none_or(|powers| self.constraint_index == powers.len()),
+            "attached alpha powers must match the number of asserted constraints"
+        );
         self.accumulator
     }
 
@@ -124,7 +158,7 @@ where
     ///
     /// # Returns
     ///
-    /// The Horner fold `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
+    /// The alpha-batched sum `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
     ///
     /// - `C_0, ..., C_{n-1}` are the constraints asserted by the AIR in declaration order.
     /// - `n` is the total number of asserted constraints.
@@ -182,14 +216,28 @@ where
 
     #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        // Horner alpha-batching: each push updates
-        //
-        //     accumulator := alpha * accumulator + C_i
-        //
-        // After `n` pushes the accumulator collapses to
-        //
-        //     C_0 * alpha^(n-1) + C_1 * alpha^(n-2) + ... + C_{n-1}.
-        self.accumulator = self.accumulator * self.alpha + x.into();
+        match self.alpha_powers {
+            None => {
+                // Horner alpha-batching: each push updates
+                //
+                //     accumulator := alpha * accumulator + C_i
+                //
+                // After `n` pushes the accumulator collapses to
+                //
+                //     C_0 * alpha^(n-1) + C_1 * alpha^(n-2) + ... + C_{n-1}.
+                self.accumulator = self.accumulator * self.alpha + x.into();
+            }
+            Some(powers) => {
+                // Same sum reached term by term, weighting `C_i` by the precomputed
+                // `alpha^(n-1-i)`.
+                //
+                // The product is `Acc * Var` rather than `Acc * Acc`, which is the cheaper
+                // multiplication whenever the constraint value lives in a smaller ring than
+                // the accumulator.
+                self.accumulator += powers[self.constraint_index] * x.into();
+                self.constraint_index += 1;
+            }
+        }
     }
 
     #[inline]
@@ -417,6 +465,17 @@ mod tests {
             expected = expected * alpha + g;
         }
         assert_eq!(value, expected);
+
+        // Attaching the descending powers `alpha^(n-1), ..., alpha^0` must reproduce the
+        // Horner value exactly, constraint for constraint.
+        let n = gated.len();
+        let alpha_powers = (0..n)
+            .map(|i| alpha.exp_u64((n - 1 - i) as u64))
+            .collect::<Vec<_>>();
+        let batched = TestFolder::new(&local, &next, boundary, &pis, alpha)
+            .with_alpha_powers(&alpha_powers)
+            .eval_air(&FibAir);
+        assert_eq!(batched, expected);
     }
 
     /// Single-column AIR that ties the main column to a preprocessed and a periodic column.
