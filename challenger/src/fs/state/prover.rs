@@ -546,8 +546,9 @@ mod tests {
 
     use crate::fs::codecs::{BytesToFieldCodec, FieldToFieldCodec};
     use crate::fs::domain_separator::DomainSeparator;
-    use crate::fs::pattern::{Hierarchy, Interaction, InteractionPattern, Kind, Length};
-    use crate::fs::pattern::{Pattern, PatternState};
+    use crate::fs::pattern::{
+        Hierarchy, Interaction, InteractionPattern, Kind, Length, Pattern, PatternState,
+    };
     use crate::fs::state::{ProverState, VerifierState};
     use crate::fs::unit::FieldUnit;
     use crate::fs::{TranscriptBound, TranscriptError};
