@@ -170,6 +170,110 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         Ok(bytes)
     }
 
+    /// Replay an extension-field message the caller carries itself.
+    ///
+    /// # Overview
+    ///
+    /// A reading method takes the next value off the wire this driver consumes.
+    /// An observing method takes it from the caller instead.
+    /// Both bind the value into the sponge the same way.
+    ///
+    /// # When to use this
+    ///
+    /// A protocol whose proof is its own type has already deserialised the value.
+    /// The prover must have used the matching observing method.
+    ///
+    /// # Trust
+    ///
+    /// The value is prover-chosen, so it is untrusted.
+    /// Binding it stops the prover choosing it after seeing the next challenge.
+    pub fn observe_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
+    where
+        F: PrimeField64,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        // Validate: the next pattern step is a scalar message of extension type.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Scalar,
+        ));
+        // Sponge only: the value came from the caller's own proof type.
+        ExtensionFieldCodec::<F, EF, Cdc>::observe(&mut self.challenger, value);
+        TranscriptBound::wrap(*value)
+    }
+
+    /// Replay a fixed-length list of extension-field messages the caller carries itself.
+    ///
+    /// # Panics
+    ///
+    /// When the supplied length differs from the recorded one.
+    ///
+    /// That length is attacker-controlled.
+    /// A verifier must check it and reject a mismatch with an error first.
+    pub fn observe_extensions<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        values: &[EF],
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: PrimeField64,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        // Validate: the next pattern step is a fixed-length list of extension messages.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Fixed(values.len()),
+        ));
+        // Absorb in order and hand back one binding witness per value.
+        values
+            .iter()
+            .map(|v| {
+                ExtensionFieldCodec::<F, EF, Cdc>::observe(&mut self.challenger, v);
+                TranscriptBound::wrap(*v)
+            })
+            .collect()
+    }
+
+    /// Replay a proof-of-work step whose witness the caller carries itself.
+    ///
+    /// # Errors
+    ///
+    /// When the witness does not produce the required number of zero bits.
+    pub fn observe_pow(
+        &mut self,
+        label: Label,
+        bits: usize,
+        witness: C::Witness,
+    ) -> Result<(), TranscriptError>
+    where
+        C: GrindingChallenger,
+        <C as GrindingChallenger>::Witness: PrimeField64,
+    {
+        // Validate: the next pattern step is a proof-of-work step of this difficulty.
+        self.player
+            .interact(Interaction::algebra::<C::Witness, C::Witness>(
+                Hierarchy::Atomic,
+                Kind::Pow,
+                label,
+                Length::Fixed(bits),
+            ));
+        // Checking absorbs the witness, which is what keeps both sponges aligned.
+        if !self.challenger.check_witness(bits, witness) {
+            // Release the drop-time check so the rejection reaches the caller.
+            self.player.abort();
+            return Err(TranscriptError::BadProofShape {
+                reason: "pow witness does not produce enough zero bits",
+            });
+        }
+        Ok(())
+    }
+
     /// Replay a public-scalar step by absorbing the caller-supplied value.
     ///
     /// Public values never travel on the wire.

@@ -3,10 +3,11 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, PrimeField64};
 use p3_multilinear_util::point::Point;
 
 use super::proof::GenericDegreeProof;
+use super::transcript::ProverTranscript;
 
 /// Per-round callback used to drive the prover loop.
 ///
@@ -47,16 +48,14 @@ pub trait RoundProver<EF> {
     ///
     /// # Transcript
     ///
-    /// The caller must observe `claimed_sum` into the challenger before calling,
-    /// so that the round challenges depend on it. This method observes only the
-    /// round polynomials and any proof-of-work witnesses. The verifier observes
-    /// the claimed sum at the matching point in [`GenericDegreeProof::verify`],
-    /// so prover and verifier transcripts agree only when the caller mirrors that
-    /// observe here.
+    /// The claimed sum is bound here, not by the caller.
+    /// The verifier binds it at the same point.
+    /// Both sides therefore stay in step with nothing for the caller to mirror.
     ///
     /// # Panics
     ///
-    /// Panics if `degree` is zero.
+    /// - When the per-variable degree is zero.
+    /// - When a round polynomial carries a different number of evaluations.
     fn prove<F, Challenger>(
         &mut self,
         challenger: &mut Challenger,
@@ -66,7 +65,7 @@ pub trait RoundProver<EF> {
         claimed_sum: EF,
     ) -> (GenericDegreeProof<F, EF>, Point<EF>)
     where
-        F: Field,
+        F: PrimeField64,
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -80,28 +79,42 @@ pub trait RoundProver<EF> {
         };
         let mut challenges = Vec::with_capacity(num_rounds);
 
-        for _r in 0..num_rounds {
+        // Seeding binds the shape and the claimed sum before the first round.
+        let mut transcript = ProverTranscript::<Challenger, F, EF>::new(
+            challenger,
+            num_rounds,
+            degree,
+            pow_bits,
+            claimed_sum,
+        );
+
+        for _ in 0..num_rounds {
             let evals = self.round_poly();
-            debug_assert_eq!(
+
+            // The described step carries exactly `degree` evaluations.
+            //
+            // A different count would diverge from the agreed shape.
+            // That is a bug in this state, not untrusted input, so it panics.
+            assert_eq!(
                 evals.len(),
                 degree,
-                "round_poly returned {} evals, expected degree = {degree}",
+                "round polynomial carries {} evaluations, expected {degree}",
                 evals.len(),
             );
 
-            challenger.observe_algebra_slice(&evals);
+            // Bind the polynomial, grind, and draw this round's challenge.
+            let (challenge, witness) = transcript.round(&evals);
 
-            // Optional proof-of-work; raises the cost of grinding a favorable challenge.
-            if pow_bits > 0 {
-                proof.pow_witnesses.push(challenger.grind(pow_bits));
-            }
-
-            let challenge: EF = challenger.sample_algebra_element();
-            self.fold(challenge);
-
+            // Store what the round produced alongside what it bound.
             proof.round_polys.push(evals);
+            proof.pow_witnesses.extend(witness);
+
+            self.fold(challenge);
             challenges.push(challenge);
         }
+
+        // Require that every described step was played.
+        transcript.finish();
 
         (proof, Point::new(challenges))
     }
@@ -231,7 +244,6 @@ mod tests {
         // Prover side.
         let mut prover_state = prover_from(&columns);
         let mut p_ch = fresh_challenger();
-        p_ch.observe_algebra_element(claimed_sum);
         let (proof, prover_challenges) =
             prover_state.prove::<F, _>(&mut p_ch, log_m, 3, 0, claimed_sum);
 
@@ -266,7 +278,6 @@ mod tests {
 
         let mut prover_state = prover_from(&columns);
         let mut p_ch = fresh_challenger();
-        p_ch.observe_algebra_element(claimed_sum);
         let (proof, prover_challenges) =
             prover_state.prove::<F, _>(&mut p_ch, log_m, 3, pow_bits, claimed_sum);
 
@@ -302,7 +313,6 @@ mod tests {
 
         let mut prover_state = prover_from(&columns);
         let mut p_ch = fresh_challenger();
-        p_ch.observe_algebra_element(claimed_sum);
         let (mut proof, _) = prover_state.prove::<F, _>(&mut p_ch, log_m, 3, pow_bits, claimed_sum);
 
         let last_round = log_m - 1;
