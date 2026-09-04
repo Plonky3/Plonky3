@@ -139,7 +139,7 @@ macro_rules! binary_tower_level {
 
             /// The coefficients `(a0, a1)` of `self = a0 + a1·X`.
             #[inline]
-            fn split(self) -> ($lower, $lower) {
+            pub(crate) fn split(self) -> ($lower, $lower) {
                 let a0 = (self.0 & Self::HALF_MASK) as $lower_repr;
                 let a1 = (self.0 >> Self::HALF_BITS) as $lower_repr;
                 (<$lower>::from_repr(a0), <$lower>::from_repr(a1))
@@ -147,7 +147,7 @@ macro_rules! binary_tower_level {
 
             /// The element `a0 + a1·X`.
             #[inline]
-            fn join(a0: $lower, a1: $lower) -> Self {
+            pub(crate) fn join(a0: $lower, a1: $lower) -> Self {
                 Self((a0.to_repr() as $repr) | ((a1.to_repr() as $repr) << Self::HALF_BITS))
             }
 
@@ -528,7 +528,7 @@ binary_tower_level!(
     u32,
     4294967300,
     dispatched_mul,
-    dispatched_square,
+    table_square,
     reference_try_inverse
 );
 binary_tower_level!(
@@ -539,7 +539,7 @@ binary_tower_level!(
     u64,
     18446744073709551621,
     dispatched_mul,
-    dispatched_square,
+    table_square,
     reference_try_inverse
 );
 
@@ -593,6 +593,8 @@ macro_rules! karatsuba_over_the_level_below {
 
 karatsuba_over_the_level_below!(BinaryField16);
 karatsuba_over_the_level_below!(BinaryField32);
+karatsuba_over_the_level_below!(BinaryField64);
+karatsuba_over_the_level_below!(BinaryField128);
 
 impl BinaryField64 {
     /// The carryless-multiply fast path where the target has the instruction for it, and the
@@ -604,19 +606,14 @@ impl BinaryField64 {
         if HAS_HARDWARE_CLMUL {
             Self(mul_64(self.0, rhs.0))
         } else {
-            self.reference_mul(rhs)
+            self.karatsuba_mul(rhs)
         }
     }
 
-    /// The carryless-multiply fast path for squaring, under the same dispatch as
-    /// [`Self::dispatched_mul`].
+    /// Squaring through the tower-basis matrix, which is a lookup table on every target.
     #[inline]
-    fn dispatched_square(self) -> Self {
-        if HAS_HARDWARE_CLMUL {
-            Self(square_64(self.0))
-        } else {
-            self.reference_square()
-        }
+    fn table_square(self) -> Self {
+        Self(square_64(self.0))
     }
 }
 
@@ -630,19 +627,14 @@ impl BinaryField128 {
         if HAS_HARDWARE_CLMUL {
             Self(mul_128(self.0, rhs.0))
         } else {
-            self.reference_mul(rhs)
+            self.karatsuba_mul(rhs)
         }
     }
 
-    /// The carryless-multiply fast path for squaring, under the same dispatch as
-    /// [`Self::dispatched_mul`].
+    /// Squaring through the tower-basis matrix, which is a lookup table on every target.
     #[inline]
-    fn dispatched_square(self) -> Self {
-        if HAS_HARDWARE_CLMUL {
-            Self(square_128(self.0))
-        } else {
-            self.reference_square()
-        }
+    fn table_square(self) -> Self {
+        Self(square_128(self.0))
     }
 }
 
@@ -1161,11 +1153,24 @@ mod tests {
         }
 
         /// The levels whose `Mul` recurses through the level below's operator must agree with
-        /// the recursion that runs to the bottom of the tower.
+        /// the recursion that runs to the bottom of the tower. At 64 and 128 bits that operator
+        /// is only reached where there is no carryless-multiply instruction, so it is checked
+        /// here on every target rather than only on the ones that dispatch to it.
         #[test]
-        fn karatsuba_agrees_with_the_recursive_product(a in bf32(), b in bf32(), c in bf16(), d in bf16()) {
+        fn karatsuba_agrees_with_the_recursive_product(
+            a in bf32(),
+            b in bf32(),
+            c in bf16(),
+            d in bf16(),
+            e in bf64(),
+            f in bf64(),
+            g in bf128(),
+            h in bf128(),
+        ) {
             prop_assert_eq!(a.karatsuba_mul(b), a.reference_mul(b));
             prop_assert_eq!(c.karatsuba_mul(d), c.reference_mul(d));
+            prop_assert_eq!(e.karatsuba_mul(f), e.reference_mul(f));
+            prop_assert_eq!(g.karatsuba_mul(h), g.reference_mul(h));
         }
     }
 }

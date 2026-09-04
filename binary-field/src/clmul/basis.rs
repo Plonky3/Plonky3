@@ -165,7 +165,7 @@ const fn invert(cols: &[u128; 128], bits: usize) -> [u128; 128] {
 /// Only the first `bits / 8` tables are meaningful. Each entry drops the lowest set bit of the
 /// index and reuses the entry for the rest, so every entry costs a single `XOR`.
 ///
-/// A byte is the widest chunk worth tabulating: the whole set of tables comes to 160 KiB, and
+/// A byte is the widest chunk worth tabulating: the whole set of tables comes to 176 KiB, and
 /// the conversions are limited by how many loads the core can retire, so halving the lookups
 /// pays for the extra footprint. Narrower nibble tables fit a first-level cache several times
 /// over but measure substantially slower at both widths.
@@ -182,6 +182,35 @@ const fn byte_tables(cols: &[u128; 128], bits: usize) -> [[u128; 256]; 16] {
         byte += 1;
     }
     tables
+}
+
+/// The columns of the tower-basis matrix of squaring.
+///
+/// Squaring is `GF(2)`-linear in characteristic 2 — the cross term of `(a + b)²` is `2ab` — so
+/// in any basis it is a matrix, and the tower basis is no exception. Conjugating the
+/// polynomial-basis square by the change of basis gives that matrix: column `j` is
+/// `M(N(e_j)²)`, for `e_j` the `j`-th tower basis element and `M = N⁻¹`.
+///
+/// Applying `M` to a vector is the sum of the columns of `M` selected by its set bits, which is
+/// what the inner loop does. Only the first `bits` entries are meaningful.
+const fn square_columns(bits: usize, tail: u128, cols: &[u128; 128]) -> [u128; 128] {
+    let inverse = invert(cols, bits);
+    let mut squared = [0u128; 128];
+    let mut j = 0;
+    while j < bits {
+        let image = poly_mul(cols[j], cols[j], bits, tail);
+        let mut column = 0u128;
+        let mut i = 0;
+        while i < bits {
+            if (image >> i) & 1 == 1 {
+                column ^= inverse[i];
+            }
+            i += 1;
+        }
+        squared[j] = column;
+        j += 1;
+    }
+    squared
 }
 
 /// The low 64 bits of each entry of the first eight tables.
@@ -204,6 +233,8 @@ const COLUMNS_128: [u128; 128] = columns(128, TAIL_128, &XI_128);
 
 static TOWER_TO_POLY_64: [[u64; 256]; 8] = narrow(&byte_tables(&COLUMNS_64, 64));
 static POLY_TO_TOWER_64: [[u64; 256]; 8] = narrow(&byte_tables(&invert(&COLUMNS_64, 64), 64));
+static SQUARE_64: [[u64; 256]; 8] =
+    narrow(&byte_tables(&square_columns(64, TAIL_64, &COLUMNS_64), 64));
 static TOWER_TO_POLY_128: [[u128; 256]; 16] = byte_tables(&COLUMNS_128, 128);
 static POLY_TO_TOWER_128: [[u128; 256]; 16] = byte_tables(&invert(&COLUMNS_128, 128), 128);
 
@@ -237,6 +268,12 @@ pub(super) fn tower_to_poly_64(v: u64) -> u64 {
 #[inline]
 pub(super) fn poly_to_tower_64(v: u64) -> u64 {
     apply_64(&POLY_TO_TOWER_64, v)
+}
+
+/// Squaring in `GF(2^64)`, taking and returning the tower representation.
+#[inline]
+pub(super) fn tower_square_64(v: u64) -> u64 {
+    apply_64(&SQUARE_64, v)
 }
 
 /// `GF(2^128)` from the tower basis to the polynomial basis.

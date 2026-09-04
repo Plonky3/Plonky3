@@ -36,6 +36,13 @@ pub fn to_tower(v: u128) -> BinaryField128 {
 }
 
 /// The product of two elements, both given and returned in the polynomial basis.
+///
+/// This is tuned for throughput. Where the target has a vector kernel it takes it, which keeps
+/// the operands off the general-purpose registers and lets independent products overlap, at the
+/// cost of a longer critical path through each one. A caller that instead threads its products
+/// through a single dependent chain — Horner evaluation, successive powers of one element —
+/// should expect this to be slower per product than the chain-friendly route the tower-basis
+/// [`BinaryField128`] operator takes.
 #[must_use]
 #[inline]
 pub fn mul(a: u128, b: u128) -> u128 {
