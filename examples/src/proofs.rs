@@ -5,14 +5,14 @@ use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::{Mersenne31, QM31};
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{
-    AirLayout, PcsError, Proof, StarkGenericConfig, StarkSecurityParams, VerificationError, prove,
-    verify,
+    AirLayout, OpeningShape, PcsError, Proof, StarkGenericConfig, StarkSecurityParams,
+    VerificationError, prove, verify,
 };
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
@@ -104,6 +104,7 @@ where
         EF::bits(),
         128,
         2,
+        OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
@@ -158,6 +159,7 @@ where
         EF::bits(),
         128,
         2,
+        OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
@@ -204,6 +206,7 @@ pub fn prove_m31_keccak<
         EF::bits(),
         128,
         2,
+        OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
@@ -257,6 +260,7 @@ where
         EF::bits(),
         128,
         2,
+        OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);

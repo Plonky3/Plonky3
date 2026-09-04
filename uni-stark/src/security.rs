@@ -13,7 +13,73 @@ use p3_security::fri::FriRegime;
 use p3_security::grinding::GrindingSites;
 use p3_security::shape::{InstanceShape, StarkAirParams as P3AirShape};
 use p3_security::stark::{conjectured_security_report, proven_security_report};
-use p3_util::log2_floor_usize;
+use p3_util::{log2_ceil_usize, log2_floor_usize};
+
+/// What the polynomial commitment scheme commits beyond what the AIR itself
+/// determines.
+///
+/// Both facts are properties of the proof configuration rather than of the
+/// AIR, so [`StarkSecurityParams::from_air`] cannot read them off the AIR and
+/// takes them here instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpeningShape {
+    /// Degree of the challenge field over the base field, which is the width
+    /// in base-field columns of one committed quotient chunk (and of the zk
+    /// randomizing codeword).
+    pub challenge_dimension: usize,
+    /// Whether zero-knowledge is enabled, which adds one randomizing codeword
+    /// to the batch and one to the quotient's degree.
+    pub is_zk: bool,
+}
+
+impl OpeningShape {
+    /// Non-zk configuration over a challenge field of the given degree.
+    pub const fn new(challenge_dimension: usize) -> Self {
+        Self {
+            challenge_dimension,
+            is_zk: false,
+        }
+    }
+
+    /// The same, with zero-knowledge enabled.
+    #[must_use]
+    pub const fn with_zk(mut self) -> Self {
+        self.is_zk = true;
+        self
+    }
+}
+
+/// Number of `(column, opening point)` pairs the polynomial commitment scheme
+/// random-linear-combines into its single low-degree-test instance.
+///
+/// `p3_fri::TwoAdicFriPcs::open` charges one power of the batching challenge
+/// per column per opening point, so the count is a sum over committed
+/// matrices of `width × (points opened at)`:
+///
+/// - the main trace, at `zeta`, and at `zeta·g` as well unless the AIR
+///   declares no next-row access;
+/// - the preprocessed trace, on the same rule;
+/// - every quotient chunk, at `zeta`, each `challenge_dimension` columns wide;
+/// - under zk, the randomizing codeword, likewise `challenge_dimension` wide.
+///
+/// This is the `k` of the batched-openings proximity term, whose error grows
+/// with `log2(k − 1)`. Under [`p3_fri::HidingFriPcs`] each committed matrix
+/// carries additional random columns, so this is then a lower bound.
+pub const fn num_batched_openings(
+    main_width: usize,
+    main_next: bool,
+    preprocessed_width: usize,
+    preprocessed_next: bool,
+    num_quotient_chunks: usize,
+    challenge_dimension: usize,
+    is_zk: bool,
+) -> usize {
+    let main = if main_next { 2 } else { 1 } * main_width;
+    let preprocessed = if preprocessed_next { 2 } else { 1 } * preprocessed_width;
+    let quotient = num_quotient_chunks * challenge_dimension;
+    let random = if is_zk { challenge_dimension } else { 0 };
+    main + preprocessed + quotient + random
+}
 
 /// Parameters required to compute STARK proof security level.
 ///
@@ -50,10 +116,16 @@ pub struct StarkSecurityParams {
     /// (DEEP-ALI's `max_combo`). For a uni-STARK using `local`/`next` rotations this
     /// is `2`; `1` if no transition constraint is present.
     pub max_combo: usize,
-    /// Number of committed codewords random-linear-combined into the single
-    /// FRI instance (trace columns, quotient chunks, …). Defaults to `1` (no
-    /// batching term); set it to the actual count to account for the
-    /// batched-openings proximity error. Leaving it at `1` is optimistic.
+    /// Number of `(column, opening point)` pairs the polynomial commitment
+    /// scheme random-linear-combines into the single low-degree-test instance:
+    /// trace columns, preprocessed columns, quotient chunks, and the zk
+    /// randomizing codeword.
+    ///
+    /// `1` means "nothing is batched", which switches the batched-openings
+    /// proximity term off entirely — a real uni-STARK batches on the order of
+    /// twice its trace width, so passing `1` for one overstates security by
+    /// several bits. [`StarkSecurityParams::from_air`] derives the true count;
+    /// [`num_batched_openings`] is the formula it uses.
     pub num_batched_functions: usize,
 }
 
@@ -61,7 +133,13 @@ impl StarkSecurityParams {
     /// Build security parameters explicitly from the FRI shape and the AIR shape.
     ///
     /// Use [`from_air`](Self::from_air) when an AIR is available — it derives
-    /// `num_constraints` and `air_max_constraint_degree` from symbolic evaluation.
+    /// `num_constraints`, `air_max_constraint_degree` and
+    /// `num_batched_functions` from the AIR and its commitment layout.
+    ///
+    /// `num_batched_functions` is required rather than defaulted because there
+    /// is no safe default: `1` silently removes the batched-openings term from
+    /// the report, and every real instance batches more than that. Callers
+    /// without an AIR to inspect compute it with [`num_batched_openings`].
     ///
     /// # Panics (debug only)
     ///
@@ -77,6 +155,7 @@ impl StarkSecurityParams {
         num_constraints: usize,
         air_max_constraint_degree: usize,
         max_combo: usize,
+        num_batched_functions: usize,
     ) -> Self {
         debug_assert!(
             air_max_constraint_degree <= (1usize << fri.log_blowup) + 1,
@@ -94,7 +173,7 @@ impl StarkSecurityParams {
             num_constraints,
             air_max_constraint_degree,
             max_combo,
-            num_batched_functions: 1,
+            num_batched_functions,
         }
     }
 
@@ -106,6 +185,12 @@ impl StarkSecurityParams {
     /// `AirLayout::from_air`, which fills only the `BaseAir` widths) leaves the
     /// permutation fields at `0`, so permutation-argument constraints are not counted
     /// and security is overstated.
+    ///
+    /// `openings` supplies the two facts the AIR does not carry: how wide a
+    /// committed quotient chunk is (the challenge field's degree over the base
+    /// field) and whether the prover commits zk's randomizing codeword. Together
+    /// with the AIR they determine `num_batched_functions` — see
+    /// [`num_batched_openings`].
     pub fn from_air<F, EF, A>(
         fri: FriRegime,
         air: &A,
@@ -113,6 +198,7 @@ impl StarkSecurityParams {
         num_modulus_bits: usize,
         collision_resistance: usize,
         max_combo: usize,
+        openings: OpeningShape,
     ) -> Self
     where
         F: Field,
@@ -120,6 +206,22 @@ impl StarkSecurityParams {
         A: Air<SymbolicAirBuilder<F, EF>>,
     {
         let shape = P3AirShape::from_air::<F, EF, A>(air, layout, max_combo);
+
+        // `get_log_num_quotient_chunks`'s formula, which is what the prover
+        // commits and therefore what the PCS batches.
+        let constraint_degree = (shape.max_constraint_degree + openings.is_zk as usize).max(2);
+        let num_quotient_chunks = 1usize << log2_ceil_usize(constraint_degree - 1);
+
+        let num_batched_functions = num_batched_openings(
+            layout.main_width,
+            !air.main_next_row_columns().is_empty(),
+            layout.preprocessed_width,
+            !air.preprocessed_next_row_columns().is_empty(),
+            num_quotient_chunks,
+            openings.challenge_dimension,
+            openings.is_zk,
+        );
+
         Self::new(
             fri,
             num_modulus_bits,
@@ -127,6 +229,7 @@ impl StarkSecurityParams {
             shape.num_constraints,
             shape.max_constraint_degree,
             max_combo,
+            num_batched_functions,
         )
     }
 
@@ -350,7 +453,46 @@ impl ProvenSecurity {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
+    use p3_air::symbolic::SymbolicVariable;
+    use p3_air::{AirBuilder, BaseAir, WindowAccess};
+    use p3_baby_bear::BabyBear;
+
     use super::*;
+
+    /// A trace-only AIR of a chosen width, with `num_constraints` degree-1
+    /// constraints. `reads_next_row` drives [`BaseAir::main_next_row_columns`],
+    /// which is what decides whether the trace is opened at one point or two.
+    struct MockAir {
+        width: usize,
+        num_constraints: usize,
+        reads_next_row: bool,
+    }
+
+    impl BaseAir<BabyBear> for MockAir {
+        fn width(&self) -> usize {
+            self.width
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            if self.reads_next_row {
+                (0..self.width).collect()
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    impl Air<SymbolicAirBuilder<BabyBear>> for MockAir {
+        fn eval(&self, builder: &mut SymbolicAirBuilder<BabyBear>) {
+            for i in 0..self.num_constraints {
+                let var: SymbolicVariable<BabyBear> =
+                    builder.main().current(i % self.width).unwrap();
+                builder.assert_zero(var);
+            }
+        }
+    }
 
     const TEST_NUM_CONSTRAINTS: usize = 1;
     const TEST_AIR_MAX_DEG: usize = 2;
@@ -394,6 +536,116 @@ mod tests {
             max_combo: TEST_MAX_COMBO,
             num_batched_functions: 1,
         }
+    }
+
+    /// The counting formula sums `width × (points opened at)` over every
+    /// committed matrix, which is what `TwoAdicFriPcs::open` charges powers of
+    /// the batching challenge for.
+    #[test]
+    fn num_batched_openings_counts_every_committed_column_and_point() {
+        // Width 100 read at both rows, two quotient chunks over a degree-4
+        // extension, no preprocessed columns: 2·100 + 2·4.
+        assert_eq!(num_batched_openings(100, true, 0, false, 2, 4, false), 208);
+        // Without next-row access the trace is opened at `zeta` alone.
+        assert_eq!(num_batched_openings(100, false, 0, false, 2, 4, false), 108);
+        // Preprocessed columns follow the same rule.
+        assert_eq!(num_batched_openings(100, true, 6, true, 2, 4, false), 220);
+        // Zero-knowledge adds one randomizing codeword.
+        assert_eq!(num_batched_openings(100, true, 0, false, 2, 4, true), 212);
+    }
+
+    /// `from_air` derives the count instead of leaving it at the `1` that
+    /// switches the batched-openings term off.
+    #[test]
+    fn from_air_derives_the_batched_openings_count() {
+        let regime = benchmark_high_arity_params(124).fri_regime();
+        let air = MockAir {
+            width: 8,
+            num_constraints: 3,
+            reads_next_row: true,
+        };
+        let layout = AirLayout::from_air(&air);
+
+        let params = StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
+            regime,
+            &air,
+            layout,
+            124,
+            128,
+            2,
+            OpeningShape::new(4),
+        );
+
+        // Degree-1 constraints give a single quotient chunk of 4 columns, and
+        // the trace is opened at two points: 2·8 + 1·4.
+        assert_eq!(params.num_batched_functions, 20);
+        assert!(
+            params.num_batched_functions > 1,
+            "a derived count must switch the batching term on"
+        );
+    }
+
+    /// An AIR that never reads the next row is opened at one point, so it
+    /// batches half as many trace functions.
+    #[test]
+    fn from_air_counts_one_opening_point_without_next_row_access() {
+        let regime = benchmark_high_arity_params(124).fri_regime();
+        let layout_of = |air: &MockAir| AirLayout::from_air(air);
+
+        let with_next = MockAir {
+            width: 8,
+            num_constraints: 3,
+            reads_next_row: true,
+        };
+        let without_next = MockAir {
+            width: 8,
+            num_constraints: 3,
+            reads_next_row: false,
+        };
+
+        let a = StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
+            regime,
+            &with_next,
+            layout_of(&with_next),
+            124,
+            128,
+            2,
+            OpeningShape::new(4),
+        );
+        let b = StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
+            regime,
+            &without_next,
+            layout_of(&without_next),
+            124,
+            128,
+            1,
+            OpeningShape::new(4),
+        );
+
+        assert_eq!(a.num_batched_functions, 20);
+        assert_eq!(b.num_batched_functions, 12);
+    }
+
+    /// The derived count lowers the reported proven level relative to the `1`
+    /// that used to be assumed: the batching round is real and now charged.
+    #[test]
+    fn deriving_the_count_lowers_the_reported_level() {
+        let optimistic = StarkSecurityParams {
+            num_batched_functions: 1,
+            ..benchmark_high_arity_params(124)
+        };
+        let honest = StarkSecurityParams {
+            num_batched_functions: 208,
+            ..benchmark_high_arity_params(124)
+        };
+
+        let a = ProvenSecurity::compute_from_proof(20, &optimistic).security_bits();
+        let b = ProvenSecurity::compute_from_proof(20, &honest).security_bits();
+
+        assert!(
+            b < a,
+            "charging the batching round must not raise the level: {a} -> {b}"
+        );
     }
 
     #[test]
