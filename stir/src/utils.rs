@@ -447,15 +447,17 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
 ///
 /// Returns `true` if the check passes. For `n >= 1`, both `ans` (by the caller's length bound)
 /// and `I` have degree `< n`, so a caller that binds `ans` and the node set into the transcript
-/// before drawing `rho` gets soundness error at most `(n - 1) / |F|`. An empty node set is
-/// interpolated only by the zero polynomial, and is decided exactly rather than at `rho`.
+/// before drawing `rho` gets soundness error at most `(n - 1) / |F|`. With no nodes the identity
+/// is vacuous, so that case is decided exactly (`ans` must be the zero polynomial) rather than
+/// at `rho`.
+#[must_use]
 pub fn check_ans_interpolates<F: Field>(ans: &[F], points: &[F], values: &[F], rho: F) -> bool {
     if points.len() != values.len() {
         return false;
     }
 
-    // No node constrains `ans`, so the barycentric sums below would both be empty and accept
-    // anything. The empty node set is interpolated only by the zero polynomial.
+    // With no nodes the identity is vacuous and the sums below would accept anything, so
+    // reject everything but the zero polynomial.
     if points.is_empty() {
         return ans.iter().all(|c| c.is_zero());
     }
@@ -606,6 +608,10 @@ fn fold_pass<F: TwoAdicField, EF: ExtensionField<F>>(
 /// Unlike [`fold_codeword`], which interpolates at subgroup coordinates and therefore takes the
 /// rescaled challenge `gamma / shift`, this form carries no domain shift and takes `gamma`
 /// itself.
+///
+/// `par_chunks` leaves a ragged final block when `coeffs.len()` isn't a multiple of `k`; that
+/// block is still folded correctly, since the missing high coefficients of `f` are zero.
+#[must_use]
 pub fn fold_poly_coeffs<F: Field>(coeffs: &[F], gamma: F, log_arity: usize) -> Vec<F> {
     coeffs
         .par_chunks(1 << log_arity)
