@@ -131,20 +131,26 @@ pub const fn security_report(
 
     // Per folding round the error is at most `(arity − 1) · (n + 1) / |E|`, worst at the first
     // round where the domain is largest. Doubling the coefficient absorbs the `+ 1`.
-    let folding = round(
-        FOLDING_LABEL,
-        instance,
-        2 * ((1u64 << params.log_folding_arity) - 1),
-        instance.log_max_height + params.log_blowup,
-        params.folding_pow_bits,
-        cap,
-    );
+    let folding = match folding_coefficient(params.log_folding_arity) {
+        Some(coefficient) => round(
+            FOLDING_LABEL,
+            instance,
+            coefficient,
+            instance.log_max_height.saturating_add(params.log_blowup),
+            params.folding_pow_bits,
+            cap,
+        ),
+        None => SecurityTerm::new(FOLDING_LABEL, 0),
+    };
 
     // Query sampling is the only round whose error is not a Schwartz-Zippel bound: it is the
     // random-words rate compounded over independent queries.
-    let query_bits = params.num_queries as u64
-        * fixed::bits_per_query(params.log_blowup, instance.field_bits)
-        + fixed::from_bits(params.query_pow_bits);
+    let query_bits = (params.num_queries as u64)
+        .saturating_mul(fixed::bits_per_query(
+            params.log_blowup,
+            instance.field_bits,
+        ))
+        .saturating_add(fixed::from_bits(params.query_pow_bits));
     let query = SecurityTerm::new(QUERY_LABEL, min(query_bits, cap));
 
     SecurityReport::new([
@@ -156,6 +162,22 @@ pub const fn security_report(
         query,
         SecurityTerm::new(COLLISION_LABEL, cap),
     ])
+}
+
+/// Coefficient `2 · (2^log_folding_arity − 1)` of the folding round, or `None` when the arity is
+/// too large to compute it without wrapping.
+///
+/// The bound needs `2^arity` and then doubles it, so anything from 63 upwards overflows `u64`.
+/// A wrapped shift is the dangerous case rather than a merely wrong one: `1u64 << 64` masks to
+/// `1u64 << 0`, leaving the coefficient at zero, and [`round`] reads a zero coefficient as "the
+/// protocol has no such round" and reports it at the cap. The round would then vanish from the
+/// budget of a verifier compiled in release, where the shift does not panic. Reporting zero bits
+/// instead refuses the configuration loudly.
+const fn folding_coefficient(log_folding_arity: u32) -> Option<u64> {
+    if log_folding_arity >= u64::BITS - 1 {
+        return None;
+    }
+    Some(2 * ((1u64 << log_folding_arity) - 1))
 }
 
 /// Bounds one round whose error is `coefficient · 2^log_size / |E|`, crediting the grinding sited
@@ -338,6 +360,32 @@ mod tests {
         let after = ground.terms()[0];
         assert_eq!(before.label, LOOKUP_LABEL);
         assert_eq!(after.bits, before.bits + fixed::from_bits(8));
+    }
+
+    /// A folding arity too large to compute the round's coefficient must be reported at zero
+    /// bits, not silently dropped. The wrapped shift would leave the coefficient at zero, which
+    /// [`round`] reads as "no such round" and reports at the cap — and unlike debug, a release
+    /// build does not panic on the way there, so the round would simply disappear.
+    #[test]
+    fn absurd_folding_arity_reports_no_security_rather_than_the_cap() {
+        assert_eq!(folding_coefficient(2), Some(6));
+        assert_eq!(folding_coefficient(62), Some(u64::MAX - (1 << 63) - 1));
+        assert_eq!(folding_coefficient(63), None);
+        assert_eq!(folding_coefficient(u32::MAX), None);
+
+        let absurd = ProtocolParams {
+            log_folding_arity: 64,
+            ..params()
+        };
+        let report = security_report(&absurd, &instance(20), &air());
+        let folding = report
+            .terms()
+            .iter()
+            .find(|t| t.label == FOLDING_LABEL)
+            .expect("folding term is always present");
+
+        assert_eq!(folding.bits, 0, "folding round vanished into the cap");
+        assert_eq!(report.security_level(), 0);
     }
 
     /// No round may be reported above the transcript's own ceiling.
