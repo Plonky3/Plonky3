@@ -8,7 +8,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
-use crate::domain::{domain_point, subspace_polynomial};
+use crate::domain::{domain_point, domain_point_steps, subspace_polynomial};
 use crate::lch::{BUTTERFLY_GRAIN, LchNtt};
 use crate::traits::AdditiveNtt;
 
@@ -32,6 +32,17 @@ pub struct PolyBasisNtt {
 #[inline]
 fn twiddle(base: BinaryField128, blk: usize) -> u128 {
     poly_basis::from_tower(base + domain_point::<BinaryField128>(blk << 1))
+}
+
+/// [`domain_point_steps`] carried into the polynomial basis.
+///
+/// The change of basis is additive, so an increment converted here applies to a twiddle
+/// already in this basis by `XOR`.
+fn twiddle_steps(count: usize) -> Vec<u128> {
+    domain_point_steps::<BinaryField128>(count)
+        .into_iter()
+        .map(poly_basis::from_tower)
+        .collect()
 }
 
 impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
@@ -60,31 +71,39 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         for j in (0..log_n).rev() {
             let half = (1 << j) * width;
             let base = subspace_polynomial::<BinaryField128>(j, shift);
+            let steps = twiddle_steps(log_n - 1 - j);
+            let per_task = (BUTTERFLY_GRAIN / half).max(1);
             values
-                .par_chunks_mut(half << 1)
+                .par_chunks_mut(per_task * (half << 1))
                 .enumerate()
-                .for_each(|(blk, block)| {
-                    let t = twiddle(base, blk);
-                    let zero = t == 0;
-                    let (lo, hi) = block.split_at_mut(half);
-                    let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
-                        if zero {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v ^= *u;
-                            }
-                        } else {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *u ^= poly_basis::mul(t, *v);
-                                *v ^= *u;
-                            }
+                .for_each(|(task, group)| {
+                    let first = task * per_task;
+                    let mut t = twiddle(base, first);
+                    for (i, block) in group.chunks_mut(half << 1).enumerate() {
+                        if i != 0 {
+                            t ^= steps[(first + i).trailing_zeros() as usize];
                         }
-                    };
-                    if half <= BUTTERFLY_GRAIN {
-                        butterfly(lo, hi);
-                    } else {
-                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                        let zero = t == 0;
+                        let (lo, hi) = block.split_at_mut(half);
+                        let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
+                            if zero {
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    *v ^= *u;
+                                }
+                            } else {
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    *u ^= poly_basis::mul(t, *v);
+                                    *v ^= *u;
+                                }
+                            }
+                        };
+                        if half <= BUTTERFLY_GRAIN {
+                            butterfly(lo, hi);
+                        } else {
+                            lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                                .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                                .for_each(|(lo, hi)| butterfly(lo, hi));
+                        }
                     }
                 });
         }
@@ -119,31 +138,39 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         for j in 0..log_n {
             let half = (1 << j) * width;
             let base = subspace_polynomial::<BinaryField128>(j, shift);
+            let steps = twiddle_steps(log_n - 1 - j);
+            let per_task = (BUTTERFLY_GRAIN / half).max(1);
             values
-                .par_chunks_mut(half << 1)
+                .par_chunks_mut(per_task * (half << 1))
                 .enumerate()
-                .for_each(|(blk, block)| {
-                    let t = twiddle(base, blk);
-                    let zero = t == 0;
-                    let (lo, hi) = block.split_at_mut(half);
-                    let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
-                        if zero {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v ^= *u;
-                            }
-                        } else {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v ^= *u;
-                                *u ^= poly_basis::mul(t, *v);
-                            }
+                .for_each(|(task, group)| {
+                    let first = task * per_task;
+                    let mut t = twiddle(base, first);
+                    for (i, block) in group.chunks_mut(half << 1).enumerate() {
+                        if i != 0 {
+                            t ^= steps[(first + i).trailing_zeros() as usize];
                         }
-                    };
-                    if half <= BUTTERFLY_GRAIN {
-                        butterfly(lo, hi);
-                    } else {
-                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                        let zero = t == 0;
+                        let (lo, hi) = block.split_at_mut(half);
+                        let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
+                            if zero {
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    *v ^= *u;
+                                }
+                            } else {
+                                for (u, v) in lo.iter_mut().zip(hi) {
+                                    *v ^= *u;
+                                    *u ^= poly_basis::mul(t, *v);
+                                }
+                            }
+                        };
+                        if half <= BUTTERFLY_GRAIN {
+                            butterfly(lo, hi);
+                        } else {
+                            lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                                .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                                .for_each(|(lo, hi)| butterfly(lo, hi));
+                        }
                     }
                 });
         }
@@ -163,6 +190,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::PolyBasisNtt;
+    use crate::lch::LchNtt;
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
 
@@ -239,6 +267,36 @@ mod tests {
                 .shifted_lde_batch(coeffs.clone(), added, shift);
             prop_assert_eq!(&lde, &naive);
             prop_assert_eq!(&lde.values[..coeffs.values.len()], &coeffs.values[..]);
+        }
+    }
+
+    /// A height whose stages take more than one butterfly task, so a task seeds its twiddle at
+    /// a block index of its own rather than at zero. The oracle tests all sit below that
+    /// height, so `LchNtt` stands in for the oracle here, itself held to an independent
+    /// twiddle walk at this same height by `lch_matches_a_twiddle_walk_across_several_tasks`.
+    #[test]
+    fn poly_basis_matches_the_tower_across_several_tasks() {
+        const LOG_N: usize = 12;
+        let poly = PolyBasisNtt::default();
+        let tower = LchNtt::<BinaryField128>::default();
+        for width in [1usize, 3] {
+            for shift_bits in [0u64, 0x1234_5678_9abc_def0] {
+                let coeffs = matrix(LOG_N, width, 5);
+                let shift =
+                    BinaryField128::from_le_byte_iter(shift_bits.to_le_bytes().into_iter().cycle());
+
+                let evals = tower.shifted_ntt_batch(coeffs.clone(), shift);
+                assert_eq!(
+                    poly.shifted_ntt_batch(coeffs.clone(), shift),
+                    evals,
+                    "ntt width={width} shift={shift_bits:#x}"
+                );
+                assert_eq!(
+                    poly.shifted_intt_batch(evals, shift),
+                    coeffs,
+                    "intt width={width} shift={shift_bits:#x}"
+                );
+            }
         }
     }
 
