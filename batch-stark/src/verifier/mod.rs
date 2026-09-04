@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 pub use data::VerifierData;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_air::{Air, BaseAir};
+use p3_challenger::GrindingChallenger;
 use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
@@ -349,6 +350,7 @@ where
     A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
+    SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
 {
     // TODO: Extend if additional lookup gadgets are added.
     let lookup_gadget = LogUpGadget::new();
@@ -359,6 +361,7 @@ where
         opening_proof,
         lookup_terminals,
         degree_bits,
+        lookup_pow_witness,
     } = proof;
 
     let all_lookups = &common.lookups;
@@ -576,8 +579,15 @@ where
         return Err(LookupError::CommitmentMismatch.into());
     }
 
-    // Sample permutation challenges and alpha.
-    let challenges_per_instance = transcript.sample_perm_challenges(all_lookups, &lookup_gadget);
+    // Check the proof of work guarding the lookup challenges, then resample
+    // them. The check runs before the first squeeze, so a bad witness is
+    // rejected without the challenges ever being drawn.
+    let challenges_per_instance = transcript.check_and_sample_perm_challenges(
+        all_lookups,
+        &lookup_gadget,
+        config.lookup_proof_of_work_bits(),
+        *lookup_pow_witness,
+    )?;
     let alpha: Challenge<SC> = transcript
         .observe_perm_and_sample_alpha(commitments.permutation.as_ref(), lookup_terminals);
 

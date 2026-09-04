@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use p3_air::DebugConstraintBuilder;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_air::{Air, RowWindow};
+use p3_challenger::GrindingChallenger;
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{
     Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
@@ -120,6 +121,7 @@ where
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     Domain<SC>: Send + Sync,
     SC::Pcs: Sync,
+    SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::ProverData: Sync,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Commitment: Sync,
 {
@@ -235,8 +237,16 @@ where
 
     // Transcript: Lookup challenges and permutation traces
 
-    // Draw per-instance challenges for the lookup argument.
-    let challenges_per_instance = transcript.sample_perm_challenges(&all_lookups, &lookup_gadget);
+    // Grind before the lookup challenges, then draw them. The main-trace
+    // commitment and every public value are already in the transcript, so the
+    // witness binds the trace: a prover searching for a favourable
+    // `(alpha, beta)` pays `2^lookup_proof_of_work_bits` per candidate.
+    let (challenges_per_instance, lookup_pow_witness) = transcript
+        .grind_and_sample_perm_challenges(
+            &all_lookups,
+            &lookup_gadget,
+            config.lookup_proof_of_work_bits(),
+        );
 
     // Generate permutation traces for instances that have lookups.
     let mut permutation_commit_inputs = Vec::with_capacity(n_instances);
@@ -706,6 +716,7 @@ where
         opening_proof,
         lookup_terminals,
         degree_bits: log_ext_degrees,
+        lookup_pow_witness,
     }
 }
 

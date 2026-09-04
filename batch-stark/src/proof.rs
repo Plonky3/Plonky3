@@ -4,7 +4,7 @@ use p3_lookup::LookupTerminal;
 use p3_uni_stark::OpenedValues;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Challenge, Commitment, PcsProof, StarkGenericConfig};
+use crate::config::{Challenge, Commitment, PcsProof, StarkGenericConfig, Val};
 
 /// A proof of batched STARK instances.
 #[derive(Serialize, Deserialize)]
@@ -23,6 +23,14 @@ pub struct BatchProof<SC: StarkGenericConfig> {
     /// Per-instance log2 of the extended trace domain size.
     /// For instance i, this stores `log2(|extended trace domain|) = log2(N_i) + is_zk()`.
     pub degree_bits: Vec<usize>,
+    /// Proof of work for the phase before the lookup argument's challenges are
+    /// sampled.
+    ///
+    /// `None` exactly when no instance declares a lookup, since the batch then
+    /// samples no such challenge. Trivially valid (but still present) when
+    /// [`p3_uni_stark::StarkGenericConfig::lookup_proof_of_work_bits`] is `0`
+    /// and the batch has lookups.
+    pub lookup_pow_witness: Option<Val<SC>>,
 }
 
 /// Commitments for a batch-STARK proof.

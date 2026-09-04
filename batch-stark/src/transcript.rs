@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use hashbrown::HashMap;
-use p3_challenger::{CanObserve, FieldChallenger};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_field::PrimeCharacteristicRing;
 use p3_lookup::{
     Challenges, Kind, Lookup, LookupProtocol, LookupTerminal, assert_uniform_tuple_width,
@@ -11,6 +11,23 @@ use p3_lookup::{
 
 use crate::common::GlobalPreprocessed;
 use crate::config::{Challenge, Commitment, StarkGenericConfig as SGC, Val};
+
+/// Why a proof's lookup-challenge proof of work was rejected.
+///
+/// The three cases are distinguished because they mean different things: a bad
+/// witness is a forgery or a difficulty mismatch, while a missing or unexpected
+/// one means the proof disagrees with the batch about whether lookups exist at
+/// all.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum InvalidLookupPow {
+    /// The witness does not satisfy the proof-of-work predicate.
+    BadWitness,
+    /// The batch has lookups but the proof carries no witness.
+    MissingWitness,
+    /// The batch has no lookups, so no challenge is sampled and no witness
+    /// should be present.
+    UnexpectedWitness,
+}
 
 /// Wrapper around a Fiat-Shamir challenger.
 pub struct BatchTranscript<SC: SGC> {
@@ -69,7 +86,84 @@ impl<SC: SGC> BatchTranscript<SC> {
         }
     }
 
-    /// Sample the batch's lookup challenges and lay them out per instance.
+    /// Whether any instance in the batch declares a lookup.
+    ///
+    /// A batch with none samples no lookup challenge, so it also grinds
+    /// nothing and carries no witness.
+    pub fn any_lookup<L>(all_lookups: &[L]) -> bool
+    where
+        L: AsRef<[Lookup<Val<SC>>]>,
+    {
+        all_lookups.iter().any(|c| !c.as_ref().is_empty())
+    }
+
+    /// Prover side: grind `pow_bits` before the lookup challenges, then sample
+    /// them.
+    ///
+    /// The grind is sited after the main-trace commitment and every public
+    /// value has been observed, so the witness commits the prover to the trace;
+    /// a prover hunting for a favourable `(alpha, beta)` pays `2^pow_bits` per
+    /// candidate. Returns the witness alongside the challenges, or `None` when
+    /// the batch has no lookups and therefore no challenge to guard.
+    pub fn grind_and_sample_perm_challenges<LG, L>(
+        &mut self,
+        all_lookups: &[L],
+        lookup_gadget: &LG,
+        pow_bits: usize,
+    ) -> (Vec<Vec<SC::Challenge>>, Option<Val<SC>>)
+    where
+        LG: LookupProtocol,
+        L: AsRef<[Lookup<Val<SC>>]>,
+        SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
+    {
+        if !Self::any_lookup(all_lookups) {
+            return (all_lookups.iter().map(|_| Vec::new()).collect(), None);
+        }
+        let witness = self.challenger.grind(pow_bits);
+        (
+            self.sample_perm_challenges_inner(all_lookups, lookup_gadget),
+            Some(witness),
+        )
+    }
+
+    /// Verifier side: check the witness guarding the lookup challenges, then
+    /// resample them.
+    ///
+    /// A batch without lookups must carry no witness, and one with lookups must
+    /// carry a valid one; both mismatches are rejections rather than a silently
+    /// unguarded sample.
+    pub fn check_and_sample_perm_challenges<LG, L>(
+        &mut self,
+        all_lookups: &[L],
+        lookup_gadget: &LG,
+        pow_bits: usize,
+        witness: Option<Val<SC>>,
+    ) -> Result<Vec<Vec<SC::Challenge>>, InvalidLookupPow>
+    where
+        LG: LookupProtocol,
+        L: AsRef<[Lookup<Val<SC>>]>,
+        SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
+    {
+        if !Self::any_lookup(all_lookups) {
+            return match witness {
+                None => Ok(all_lookups.iter().map(|_| Vec::new()).collect()),
+                Some(_) => Err(InvalidLookupPow::UnexpectedWitness),
+            };
+        }
+        let witness = witness.ok_or(InvalidLookupPow::MissingWitness)?;
+        if !self.challenger.check_witness(pow_bits, witness) {
+            return Err(InvalidLookupPow::BadWitness);
+        }
+        Ok(self.sample_perm_challenges_inner(all_lookups, lookup_gadget))
+    }
+
+    /// Sample the batch's lookup challenges and lay them out per instance,
+    /// once the proof of work guarding them has been produced or checked.
+    ///
+    /// Split out from the two public entry points so the grind sits between
+    /// "this batch has lookups" and the first squeeze, with prover and verifier
+    /// sharing one body. The caller must have established that at least one
+    /// instance has lookups; with none there is no squeeze at all.
     ///
     /// # Overview
     ///
@@ -88,7 +182,7 @@ impl<SC: SGC> BatchTranscript<SC> {
     /// - One challenge vector per instance.
     /// - Each lookup contributes a pair: its bus offset, then the shared combiner.
     /// - The gadget reads that pair exactly as it read its former per-lookup pair.
-    pub fn sample_perm_challenges<LG, L>(
+    fn sample_perm_challenges_inner<LG, L>(
         &mut self,
         all_lookups: &[L],
         lookup_gadget: &LG,
@@ -105,11 +199,10 @@ impl<SC: SGC> BatchTranscript<SC> {
             "single-pair domain separation expects a two-challenge gadget"
         );
 
-        // No lookups means no squeeze, matching a batch that never had lookups.
-        let any_lookup = all_lookups.iter().any(|c| !c.as_ref().is_empty());
-        if !any_lookup {
-            return all_lookups.iter().map(|_| Vec::new()).collect();
-        }
+        debug_assert!(
+            Self::any_lookup(all_lookups),
+            "caller must check for lookups before sampling"
+        );
 
         // Draw the single (alpha, beta) pair for the whole batch.
         // This is the only lookup squeeze: two draws, not two per bus.
