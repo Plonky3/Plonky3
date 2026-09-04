@@ -15,10 +15,12 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, AirLayout, SymbolicAirBuilder, get_all_symbolic_constraints};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PrimeField64};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundPolyInterpolator};
+use p3_sumcheck::generic_degree::{
+    GenericDegreeError, GenericDegreeProof, ProverTranscript, RoundPolyInterpolator,
+};
 use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
@@ -131,7 +133,7 @@ pub struct AirZerocheck<'a, A> {
 /// Its per-variable degree is the constraint degree plus one for the multilinear eq weight.
 fn sumcheck_degree<F, EF, A>(air: &A) -> usize
 where
-    F: Field,
+    F: PrimeField64,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
@@ -154,7 +156,7 @@ where
 /// A debug assertion pins the hint against the symbolic value.
 fn air_degree<F, EF, A>(air: &A) -> usize
 where
-    F: Field,
+    F: PrimeField64,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
@@ -222,7 +224,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         challenger: &mut Challenger,
     ) -> (ZerocheckProof<F, EF>, Point<EF>)
     where
-        F: Field,
+        F: PrimeField64,
         EF: ExtensionField<F>,
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
             + for<'b> Air<
@@ -327,14 +329,30 @@ impl<'a, A> AirZerocheck<'a, A> {
         // When a stage activates, it selects the beta powers for its original AIR indices.
         let beta_powers = beta.powers().collect_n(self.airs.len());
 
-        // Bind the transcript to the claimed sum so the challenges depend on the statement.
-        challenger.observe_algebra_element(EF::ZERO);
-
         let mut proof = GenericDegreeProof {
             claimed_sum: EF::ZERO,
             round_polys: Vec::with_capacity(log_height),
             pow_witnesses: Vec::with_capacity(if self.pow_bits > 0 { log_height } else { 0 }),
         };
+
+        // A transmitted round polynomial is one degree wider than the internal one.
+        // The zerocheck's equality weight contributes that extra degree.
+        // This is the width the verifier expects, so it is the width recorded.
+        let transmitted_degree = max_degree + 1;
+
+        // The rounds below drive the shared sumcheck transcript.
+        // They never touch the challenger directly.
+        // This loop therefore cannot drift from the verifier.
+        //
+        // Seeding binds the shape and the claimed sum.
+        // A zerocheck always fixes that sum to zero.
+        let mut transcript = ProverTranscript::<Challenger, F, EF>::new(
+            challenger,
+            log_height,
+            transmitted_degree,
+            self.pow_bits,
+            EF::ZERO,
+        );
 
         let mut challenges = Vec::with_capacity(log_height);
         // Active stages live as folded extension states.
@@ -417,14 +435,13 @@ impl<'a, A> AirZerocheck<'a, A> {
                 tau.as_slice()[round],
             );
 
-            challenger.observe_algebra_slice(&standard_evals);
+            // Bind the polynomial, grind, and draw this round's challenge.
+            let (r, witness) = transcript.round(&standard_evals);
+
+            // Store what the round produced alongside what it bound.
             proof.round_polys.push(standard_evals);
+            proof.pow_witnesses.extend(witness);
 
-            if self.pow_bits > 0 {
-                proof.pow_witnesses.push(challenger.grind(self.pow_bits));
-            }
-
-            let r: EF = challenger.sample_algebra_element();
             challenges.push(r);
 
             // Fold every already-active state at the sampled challenge.
@@ -456,6 +473,9 @@ impl<'a, A> AirZerocheck<'a, A> {
                 eq_suffix.sum_prefix_var_mut();
             }
         }
+
+        // Require that every described step was played.
+        transcript.finish();
 
         // States are ordered by activation height, not caller AIR order.
         // Scatter each AIR's openings back to its original index, then read them out in order.
@@ -562,7 +582,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         challenger: &mut Challenger,
     ) -> Result<Point<EF>, ZerocheckError>
     where
-        F: Field,
+        F: PrimeField64,
         EF: ExtensionField<F>,
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>> + Air<SymbolicAirBuilder<F, EF>>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
@@ -678,7 +698,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         challenger: &mut Challenger,
     ) -> Result<ZerocheckReduction<EF>, ZerocheckError>
     where
-        F: Field,
+        F: PrimeField64,
         EF: ExtensionField<F>,
         A: Air<SymbolicAirBuilder<F, EF>>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,

@@ -19,9 +19,15 @@ use crate::{
 ///
 /// This trait is typically used in protocols requiring computational effort
 /// from the prover.
-pub trait GrindingChallenger:
-    CanObserve<Self::Witness> + CanSampleBits<usize> + Sync + Clone
-{
+///
+/// # Why cloning is not required here
+///
+/// A parallel witness search needs a cloneable, shareable transcript.
+/// Checking a witness needs neither.
+///
+/// Those bounds therefore sit on the implementations that search.
+/// A mutable reference to a challenger can then grind too.
+pub trait GrindingChallenger: CanObserve<Self::Witness> + CanSampleBits<usize> {
     /// The underlying field element type used as the witness.
     type Witness: Field;
 
@@ -45,6 +51,20 @@ pub trait GrindingChallenger:
         }
         self.observe(witness);
         self.sample_bits(bits) == 0
+    }
+}
+
+impl<C: GrindingChallenger> GrindingChallenger for &mut C {
+    type Witness = C::Witness;
+
+    fn grind(&mut self, bits: usize) -> Self::Witness {
+        // Reborrow through both layers so the search advances the original transcript.
+        (**self).grind(bits)
+    }
+
+    fn check_witness(&mut self, bits: usize, witness: Self::Witness) -> bool {
+        // Absorbing the witness must advance the original transcript, not a copy of it.
+        (**self).check_witness(bits, witness)
     }
 }
 
