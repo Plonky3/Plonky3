@@ -23,7 +23,6 @@ p3-symmetric.workspace = true
 p3-util.workspace = true
 
 num-bigint.workspace = true
-paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 spin.workspace = true

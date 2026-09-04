@@ -22,7 +22,7 @@
 #[macro_export]
 macro_rules! impl_add_assign {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl<$($param_name: $type_param,)? T: Into<Self>> AddAssign<T> for $type$(<$param_name>)? {
                 #[inline]
                 fn add_assign(&mut self, rhs: T) {
@@ -39,7 +39,7 @@ macro_rules! impl_add_assign {
 #[macro_export]
 macro_rules! ring_sum {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl$(<$param_name: $type_param>)? Sum for $type$(<$param_name>)? {
                 #[inline]
                 fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -58,7 +58,7 @@ macro_rules! ring_sum {
 #[macro_export]
 macro_rules! impl_sub_assign {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl<$($param_name: $type_param,)? T: Into<Self>> SubAssign<T> for $type$(<$param_name>)? {
                 #[inline]
                 fn sub_assign(&mut self, rhs: T) {
@@ -78,7 +78,7 @@ macro_rules! impl_sub_assign {
 #[macro_export]
 macro_rules! impl_mul_methods {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl<$($param_name: $type_param,)? T: Into<Self>> MulAssign<T> for $type$(<$param_name>)? {
                 #[inline]
                 fn mul_assign(&mut self, rhs: T) {
@@ -104,7 +104,7 @@ macro_rules! impl_mul_methods {
 #[macro_export]
 macro_rules! impl_add_base_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl$(<$param_name: $type_param>)? Add<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 type Output = Self;
 
@@ -134,7 +134,7 @@ macro_rules! impl_add_base_field {
 #[macro_export]
 macro_rules! impl_sub_base_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl$(<$param_name: $type_param>)? Sub<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 type Output = Self;
 
@@ -164,7 +164,7 @@ macro_rules! impl_sub_base_field {
 #[macro_export]
 macro_rules! impl_mul_base_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl$(<$param_name: $type_param>)? Mul<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 type Output = Self;
 
@@ -197,7 +197,7 @@ macro_rules! impl_mul_base_field {
 #[macro_export]
 macro_rules! impl_div_methods {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl$(<$param_name: $type_param>)? Div<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 type Output = Self;
 
@@ -228,7 +228,7 @@ macro_rules! impl_div_methods {
 #[macro_export]
 macro_rules! impl_packed_field_div {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl$(<$param_name: $type_param>)? Div for $type$(<$param_name>)? {
                 type Output = Self;
 
@@ -265,7 +265,7 @@ macro_rules! impl_packed_field_div {
 #[macro_export]
 macro_rules! impl_sum_prod_base_field {
     ($alg_type:ty, $field_type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl$(<$param_name: $type_param>)? Sum<$field_type$(<$param_name>)?> for $alg_type$(<$param_name>)? {
                 #[inline]
                 fn sum<I>(iter: I) -> Self
@@ -298,7 +298,7 @@ macro_rules! impl_sum_prod_base_field {
 #[macro_export]
 macro_rules! impl_rng {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             impl$(<$param_name: $type_param>)? Distribution<$type$(<$param_name>)?> for StandardUniform {
                 #[inline]
             fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> $type$(<$param_name>)? {
@@ -318,7 +318,7 @@ macro_rules! impl_rng {
 #[macro_export]
 macro_rules! impl_packed_value {
     ($alg_type:ty, $field_type:ty, $width:expr $(, ($type_param:ty, $param_name:ty))?) => {
-        paste::paste! {
+        $crate::paste::paste! {
             unsafe impl$(<$param_name: $type_param>)? PackedValue for $alg_type$(<$param_name>)? {
                 type Value = $field_type$(<$param_name>)?;
 

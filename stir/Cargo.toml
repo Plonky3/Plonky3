@@ -36,7 +36,6 @@ p3-baby-bear = { path = "../baby-bear" }
 p3-dft = { path = "../dft" }
 p3-fri = { path = "../fri" }
 p3-goldilocks = { path = "../goldilocks" }
-p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-uni-stark = { path = "../uni-stark" }

@@ -20,7 +20,6 @@ p3-maybe-rayon.workspace = true
 p3-symmetric.workspace = true
 
 num-bigint.workspace = true
-paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 tracing.workspace = true
