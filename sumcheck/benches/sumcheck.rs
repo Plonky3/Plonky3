@@ -178,7 +178,12 @@ where
     rand_ext::<B>(rng, k).pack::<B::F, B::EF>()
 }
 
-/// Packed product polynomial with independent random evals and weights.
+/// Product polynomial with independent random evals and weights.
+///
+/// The pair is handed to `new_packed`, but only prefix binding actually keeps
+/// packed storage: `ProductPolynomial` unpacks a suffix-bound pair up front,
+/// because the suffix variable lives inside the SIMD lanes. The suffix rows of
+/// the prover benches therefore measure the scalar kernel.
 fn rand_product_poly<B: BenchField>(
     order: VariableOrder,
     rng: &mut SmallRng,
@@ -223,6 +228,10 @@ where
 /// - Round zero multiplies base-field evaluations against extension weights.
 /// - Later rounds multiply two packed extension operands.
 /// - Final rounds multiply two scalar extension operands.
+///
+/// The two packed flavours time prefix binding only. `ProductPolynomial` serves
+/// suffix binding from scalar storage, so a suffix round never meets a packed
+/// operand; the scalar flavour is the one that carries both orders.
 fn bench_round_coefficients<B: BenchField>(c: &mut Criterion)
 where
     StandardUniform: Distribution<B::F> + Distribution<B::EF>,
@@ -239,18 +248,20 @@ where
         let base = rand_base::<B>(&mut rng, k);
         let base_packed = Packed::<B>::pack_slice(base.as_slice()).to_vec();
         let round_zero_weights = rand_ext_packed::<B>(&mut rng, k);
-        for (order, name) in ORDERS {
-            group.bench_with_input(
-                BenchmarkId::new(format!("base_ext_{name}"), &label),
-                &order,
-                |b, &order| {
-                    // Time the kernel alone; operands are prebuilt outside the loop.
-                    b.iter(|| {
-                        black_box(coeffs(order, &base_packed, round_zero_weights.as_slice()))
-                    });
-                },
-            );
-        }
+        group.bench_with_input(
+            BenchmarkId::new("base_ext_prefix", &label),
+            &label,
+            |b, _| {
+                // Time the kernel alone; operands are prebuilt outside the loop.
+                b.iter(|| {
+                    black_box(coeffs(
+                        VariableOrder::Prefix,
+                        &base_packed,
+                        round_zero_weights.as_slice(),
+                    ))
+                });
+            },
+        );
 
         group.bench_with_input(
             BenchmarkId::new("base_ext_prefix_projective", &label),
@@ -268,21 +279,19 @@ where
         // Later-round operands: both sides are packed extension elements.
         let packed_evals = rand_ext_packed::<B>(&mut rng, k);
         let packed_weights = rand_ext_packed::<B>(&mut rng, k);
-        for (order, name) in ORDERS {
-            group.bench_with_input(
-                BenchmarkId::new(format!("ext_ext_packed_{name}"), &label),
-                &order,
-                |b, &order| {
-                    b.iter(|| {
-                        black_box(coeffs(
-                            order,
-                            packed_evals.as_slice(),
-                            packed_weights.as_slice(),
-                        ))
-                    });
-                },
-            );
-        }
+        group.bench_with_input(
+            BenchmarkId::new("ext_ext_packed_prefix", &label),
+            &label,
+            |b, _| {
+                b.iter(|| {
+                    black_box(coeffs(
+                        VariableOrder::Prefix,
+                        packed_evals.as_slice(),
+                        packed_weights.as_slice(),
+                    ))
+                });
+            },
+        );
 
         group.bench_with_input(
             BenchmarkId::new("ext_ext_packed_prefix_projective", &label),
@@ -337,6 +346,10 @@ where
 ///
 /// The buffer is overwritten each call, so a clone is restored before every
 /// timed iteration.
+///
+/// The buffer is packed, so prefix is the only order timed here: a suffix round
+/// binds a variable that lives inside the SIMD lanes, which `ProductPolynomial`
+/// serves from scalar storage instead.
 fn bench_fix_var<B: BenchField>(c: &mut Criterion)
 where
     StandardUniform: Distribution<B::F> + Distribution<B::EF>,
@@ -352,20 +365,18 @@ where
         let template = rand_ext_packed::<B>(&mut rng, k);
         let r: B::EF = rng.random();
 
-        for (order, name) in ORDERS {
-            group.bench_with_input(BenchmarkId::new(name, &label), &order, |b, &order| {
-                b.iter_batched_ref(
-                    // Setup (untimed): restore the buffer mutated by the previous run.
-                    || template.clone(),
-                    // Routine (timed): fold the active variable into the buffer.
-                    |poly| {
-                        order.fix_var(poly, black_box(r));
-                        black_box(&*poly);
-                    },
-                    BatchSize::LargeInput,
-                );
-            });
-        }
+        group.bench_with_input(BenchmarkId::new("prefix", &label), &label, |b, _| {
+            b.iter_batched_ref(
+                // Setup (untimed): restore the buffer mutated by the previous run.
+                || template.clone(),
+                // Routine (timed): fold the active variable into the buffer.
+                |poly| {
+                    VariableOrder::Prefix.fix_var(poly, black_box(r));
+                    black_box(&*poly);
+                },
+                BatchSize::LargeInput,
+            );
+        });
 
         // Projective (monomial-basis) binding: the subtraction-free
         // `a0 + a1 * r` of eprint 2026/762, prefix only.

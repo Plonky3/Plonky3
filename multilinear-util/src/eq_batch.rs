@@ -153,6 +153,10 @@ where
     F: Field,
     A: Algebra<F> + Send + Sync,
 {
+    // One column per evaluation point on both sides. Without this the `take`
+    // below would silently drop the trailing points instead of failing.
+    debug_assert_eq!(evals.width(), buffer.width());
+
     // Process variables in reverse order to maintain correct bit ordering in output buffer.
     //
     // We apply it simultaneously across all columns (evaluation points).
