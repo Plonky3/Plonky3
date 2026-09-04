@@ -319,16 +319,26 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///
     /// Scalar mode eliminates this overhead for the final rounds.
     ///
-    /// ## Binding order is not re-checked
+    /// ## Binding order
     ///
     /// A suffix-ordered pair never reaches this function still packed:
     /// [`Self::new_packed`] unpacks it before storing, and `order` cannot change
     /// afterwards. `Packed` therefore implies [`VariableOrder::Prefix`], which
-    /// packed storage folds correctly, so only the size condition remains.
+    /// packed storage folds correctly, so the release path tests only the size
+    /// condition. Nothing but that single construction site enforces the
+    /// invariant, so a debug assertion pins it here.
     fn transition(&mut self) {
         // Read the order before borrowing `inner`.
         let order = self.order;
         if let MaybePacked::Packed { evals, weights } = &mut self.inner {
+            // The lanes hold the last `log2(WIDTH)` variables, so a suffix round
+            // cannot reach the variable it names.
+            debug_assert_eq!(
+                order,
+                VariableOrder::Prefix,
+                "packed storage cannot bind a suffix variable"
+            );
+
             // Check if we've folded down to a single packed element.
             let k = evals.num_variables();
             assert_eq!(k, weights.num_variables());
