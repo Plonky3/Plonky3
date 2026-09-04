@@ -350,6 +350,23 @@ where
     }
 }
 
+/// A joint commitment to a collection of matrices and their opening at
+/// a collection of points.
+///
+/// This is the shape [`Pcs::verify`] checks an opening argument against, so it is also what
+/// any code building that argument produces.
+pub type CommitmentWithOpeningPoints<Challenge, Commitment, Domain> = (
+    Commitment,
+    // For each matrix in the commitment:
+    Vec<(
+        // The domain of the matrix
+        Domain,
+        // A vector of (point, claimed_evaluation) pairs.
+        // The claimed evaluation count per point is also the matrix width used by verification.
+        Vec<(Challenge, Vec<Challenge>)>,
+    )>,
+);
+
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
 pub type OpenedValuesForRound<F> = Vec<OpenedValuesForMatrix<F>>;
 pub type OpenedValuesForMatrix<F> = Vec<OpenedValuesForPoint<F>>;

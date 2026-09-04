@@ -17,6 +17,10 @@ name = "p3-batch-stark"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-binary-dft"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-binary-field"
 version_group = "plonky3"
 
@@ -150,6 +154,10 @@ version_group = "plonky3"
 
 [[package]]
 name = "p3-sha256-air"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-stir"
 version_group = "plonky3"
 
 [[package]]

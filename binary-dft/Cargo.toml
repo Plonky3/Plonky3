@@ -1,0 +1,45 @@
+[package]
+name = "p3-binary-dft"
+description = "Additive NTT over F_2-linear subspaces of the Plonky3 binary tower fields"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+# criterion pulls rayon transitively and rayon does not build on wasi.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[dependencies]
+p3-binary-field.workspace = true
+p3-commit.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+p3-util.workspace = true
+
+[dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
+p3-challenger = { path = "../challenger" }
+p3-dft = { path = "../dft" }
+p3-keccak = { path = "../keccak" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-multilinear-util = { path = "../multilinear-util" }
+p3-sumcheck = { path = "../sumcheck" }
+p3-symmetric = { path = "../symmetric" }
+
+proptest.workspace = true
+rand.workspace = true
+
+[[bench]]
+name = "ntt"
+harness = false
+
+[lints]
+workspace = true

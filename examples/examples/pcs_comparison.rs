@@ -483,8 +483,9 @@ fn main() {
             vec![(domain, message)],
             &base_challenger,
             queries,
-            // STIR commits one Merkle tree per distinct LDE height.
-            |ch, commit| ch.observe(commit.clone()),
+            // STIR commits one Merkle tree per shared-domain group; a single table is one
+            // group, hence one root.
+            |ch, commit| commit.iter().for_each(|root| ch.observe(root.clone())),
         ));
     }
 
@@ -579,12 +580,15 @@ fn main() {
         ));
     }
 
-    // STIR: every table here shares one `commit()` call, so the real prover extends
-    // all three onto one shared LDE domain (sized to the tallest) and merges their
-    // native-height classes via `Combine` (§7, Construction 7.2) before STIR runs.
-    // Reconstruct that same bucket (`ell` per Lemma 4.13, matching what `p3_stir`'s
-    // PCS impl computes internally) so the printed schedule reflects what actually
-    // proves, not a plain single-height instance.
+    // STIR: every table here shares one `commit()` call, and the three heights span exactly
+    // `DEFAULT_MAX_LOG_HEIGHT_SPREAD` octaves, so they land in one shared-domain group: the
+    // real prover extends all three onto one LDE domain (sized to the tallest) and merges
+    // their native-height classes via `Combine` (§7, Construction 7.2) before STIR runs.
+    // Reconstruct that same bucket (`ell` per Lemma 4.13, matching what `p3_stir`'s PCS impl
+    // computes internally) so the printed schedule reflects what actually proves, not a plain
+    // single-height instance. Where `Combine` does not fit the challenge field, the PCS splits
+    // the heights across several groups instead of failing, and so does the reconstruction:
+    // the schedule then printed is the tallest group's, without `Combine`.
     {
         let stir_params = StirParameters {
             log_blowup: args.rate,
@@ -597,12 +601,14 @@ fn main() {
         };
         let ell: u64 = heights.len() as u64 * ((1u64 << args.log_message_size) + 1)
             - heights.iter().map(|&h| 1u64 << h).sum::<u64>();
-        let config = StirConfig::<F, EF, ChallengeMmcs, Challenger>::new_with_combine(
+        let config = StirConfig::<F, EF, ChallengeMmcs, Challenger>::try_new_with_combine(
             args.log_message_size,
             stir_params.clone(),
             heights.len(),
             ell,
-        );
+        )
+        .or_else(|_| StirConfig::try_new(args.log_message_size, stir_params.clone()))
+        .expect("STIR parameters are infeasible even without Combine");
         let queries = config
             .round_configs
             .iter()
@@ -629,8 +635,9 @@ fn main() {
             tables,
             &base_challenger,
             queries,
-            // STIR commits one shared Merkle tree for every table in this call.
-            |ch, commit| ch.observe(commit.clone()),
+            // STIR commits one Merkle tree per shared-domain group: the tables here are
+            // partitioned by bounded height spread, so this is one root per group.
+            |ch, commit| commit.iter().for_each(|root| ch.observe(root.clone())),
         ));
     }
 

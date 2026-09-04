@@ -10,6 +10,8 @@
 
 mod basis;
 
+pub(crate) use basis::{poly_to_tower_128, tower_to_poly_128};
+
 #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
 mod aarch64;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
@@ -127,11 +129,18 @@ pub(crate) fn mul_64(a: u64, b: u64) -> u64 {
     basis::poly_to_tower_64(reduce_64(product))
 }
 
+/// Multiplication in `GF(2^128)`, taking and returning the polynomial representation.
+#[inline]
+pub(crate) fn poly_mul_128(a: u128, b: u128) -> u128 {
+    let (low, high) = clmul_128x128(a, b);
+    reduce_128(low, high)
+}
+
 /// Multiplication in `GF(2^128)`, taking and returning the tower representation.
 #[inline]
 pub(crate) fn mul_128(a: u128, b: u128) -> u128 {
-    let (low, high) = clmul_128x128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
-    basis::poly_to_tower_128(reduce_128(low, high))
+    let product = poly_mul_128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
+    basis::poly_to_tower_128(product)
 }
 
 /// Squaring in `GF(2^64)`, taking and returning the tower representation.
@@ -144,16 +153,21 @@ pub(crate) fn square_64(a: u64) -> u64 {
     basis::poly_to_tower_64(reduce_64(clmul_64x64(poly, poly)))
 }
 
-/// Squaring in `GF(2^128)`, taking and returning the tower representation.
+/// Squaring in `GF(2^128)`, taking and returning the polynomial representation.
 ///
 /// With `p = p0 + p1·x^64`, the middle coefficient of `p²` is `2·p0·p1`, which vanishes in
 /// characteristic 2. So `p² = p0² + p1²·x^128` exactly: two carryless products with nothing to
 /// fold between them, where [`clmul_128x128`] needs four and a middle term.
 #[inline]
+pub(crate) fn poly_square_128(a: u128) -> u128 {
+    let (p0, p1) = (a as u64, (a >> 64) as u64);
+    reduce_128(clmul_64x64(p0, p0), clmul_64x64(p1, p1))
+}
+
+/// Squaring in `GF(2^128)`, taking and returning the tower representation.
+#[inline]
 pub(crate) fn square_128(a: u128) -> u128 {
-    let poly = basis::tower_to_poly_128(a);
-    let (p0, p1) = (poly as u64, (poly >> 64) as u64);
-    basis::poly_to_tower_128(reduce_128(clmul_64x64(p0, p0), clmul_64x64(p1, p1)))
+    basis::poly_to_tower_128(poly_square_128(basis::tower_to_poly_128(a)))
 }
 
 #[cfg(test)]

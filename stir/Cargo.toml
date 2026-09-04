@@ -20,6 +20,7 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-security.workspace = true
+p3-symmetric.workspace = true
 p3-util.workspace = true
 
 itertools.workspace = true
@@ -30,6 +31,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+p3-air = { path = "../air" }
 p3-baby-bear = { path = "../baby-bear" }
 p3-dft = { path = "../dft" }
 p3-fri = { path = "../fri" }
@@ -37,7 +39,7 @@ p3-goldilocks = { path = "../goldilocks" }
 p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-merkle-tree = { path = "../merkle-tree" }
-p3-symmetric = { path = "../symmetric" }
+p3-uni-stark = { path = "../uni-stark" }
 
 criterion.workspace = true
 postcard = { workspace = true, features = ["alloc"] }

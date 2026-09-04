@@ -47,8 +47,14 @@ impl<F: Field, M: Mmcs<F>> CommitPhaseMultiStep<F, M> {
     /// Convert `log_arity` to `usize` and enforce the protocol bounds.
     ///
     /// Returns `None` when `log_arity` is zero or exceeds `max_log_arity`.
+    ///
+    /// Every field of this struct deserializes straight from an untrusted proof, so this is
+    /// the guard that turns a proof-controlled `log_arity` into a schedule entry usable by
+    /// [`crate::verifier::fold_query`]. It is public for that reason: a caller replaying the
+    /// fold chain outside [`crate::verifier::verify_fri`] must derive its `log_arities`
+    /// through this method.
     #[inline]
-    pub(crate) fn checked_log_arity(&self, max_log_arity: usize) -> Option<usize> {
+    pub fn checked_log_arity(&self, max_log_arity: usize) -> Option<usize> {
         let log_arity = self.log_arity as usize;
         (1..=max_log_arity)
             .contains(&log_arity)

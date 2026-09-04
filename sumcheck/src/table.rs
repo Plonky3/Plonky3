@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(batches[0].current(), &[0, 2]);
         assert_eq!(batches[0].next(), &[1]);
         assert_eq!(batches[0].len(), 3);
-        assert_eq!(batches[1].current(), &[]);
+        assert_eq!(batches[1].current(), &[] as &[usize]);
         assert_eq!(batches[1].next(), &[2]);
         assert_eq!(batches[1].len(), 1);
     }

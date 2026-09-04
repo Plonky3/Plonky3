@@ -35,6 +35,7 @@ pub mod lagrange;
 pub mod layout;
 pub mod prescribed_pcs;
 pub mod product_polynomial;
+pub mod ring_switch;
 pub mod strategy;
 pub mod svo;
 pub mod table;

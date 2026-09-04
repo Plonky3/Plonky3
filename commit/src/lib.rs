@@ -5,6 +5,7 @@ extern crate alloc;
 
 mod adapters;
 mod domain;
+mod encoder;
 mod mmcs;
 mod pcs;
 mod periodic;
@@ -14,6 +15,7 @@ pub mod testing;
 
 pub use adapters::*;
 pub use domain::*;
+pub use encoder::*;
 pub use mmcs::*;
 pub use pcs::*;
 pub use periodic::*;
