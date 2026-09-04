@@ -10,12 +10,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Merged PRs
 - Feat(binary-dft): additive NTT and the Encoder abstraction (#2003)
 
-## [0.6.0] - 2026-06-11
-### Merged PRs
-- Feat: extract ZK encoding traits to p3-zk-codes (#1601)
-- Chore: use T::zero_vec(n) instead of vec![T::ZERO; n] (#1633)
-- Fix: local refs for dev-deps (#1663)
-- Fix awkward specialization (#1675)
-- Feat(whir): HVZK sumcheck suffix-binding prover (#1665)
-- Whir: add HVZK-WHIR hiding polynomial commitment scheme (#1767)
-

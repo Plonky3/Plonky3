@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.7.0] - 2026-09-04
+### Merged PRs
+- Feat(binary-dft): additive NTT and the Encoder abstraction (#2003)
+- Feat: expose pruned-multiproof restoration and FRI/STARK opening internals (#2010)
+
 ## [0.6.0] - 2026-06-11
 ### Merged PRs
 - Feat: add support for Periodic Columns at runtime (#1462)
