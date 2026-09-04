@@ -224,6 +224,12 @@ where
                 // DFT is linear, so they share a single forward transform. Recovering the chunk's
                 // coefficients with `shift.inverse()` scales coefficient `j` by `shift^j`, placing
                 // them on the coset exactly as `coset_lde_batch(evals, log_blowup + 1, shift)` would.
+                //
+                // Why the coset LDE's own coefficient hook cannot host this:
+                //
+                // - That hook runs before the buffer is zero-extended, so the mask's upper half
+                //   has no room.
+                // - The coset scaling applied afterwards would scale the mask by `shift^j` too.
                 let mut lde_coeffs = self
                     .inner
                     .dft
@@ -503,7 +509,7 @@ mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
     use p3_commit::ExtensionMmcs;
-    use p3_dft::{Radix2Bowers, Radix2DFTSmallBatch, Radix2Dit};
+    use p3_dft::{Radix2Bowers, Radix2DFTSmallBatch, Radix2Dit, Radix2DitParallel};
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_merkle_tree::MerkleTreeMmcs;
@@ -814,9 +820,13 @@ mod tests {
             .collect()
     }
 
-    /// `get_quotient_ldes` shares one forward transform between a chunk and its mask. That relies
-    /// on backend conventions (natural-order coefficients through `coset_idft_batch`/`dft_batch`,
-    /// and `bit_reverse_rows` inverting the committed order), so pin it per backend.
+    /// Check one backend's quotient LDE against the same result built from two transforms.
+    ///
+    /// Sharing a single forward transform between a chunk and its mask relies on two backend
+    /// conventions, so every backend is pinned separately:
+    ///
+    /// - The inverse transform returns coefficients in natural order.
+    /// - Undoing the row permutation recovers the order the commitment expects.
     fn check_fused_quotient_ldes<D: TwoAdicSubgroupDft<Val> + Clone>(dft: &D) {
         for (log_h, width, num_chunks) in [(3, 4, 2), (4, 3, 4)] {
             let mut rng = SmallRng::seed_from_u64(11);
@@ -880,5 +890,18 @@ mod tests {
     #[test]
     fn fused_quotient_lde_matches_two_transforms_small_batch() {
         check_fused_quotient_ldes(&Radix2DFTSmallBatch::<Val>::default());
+    }
+
+    #[test]
+    fn fused_quotient_lde_matches_two_transforms_dit_parallel() {
+        // Why this backend earns its own case: it is the only one whose forward transform
+        // hands back a permuted view rather than natural order.
+        //
+        //     other backends : forward transform -> rows already in natural order
+        //     this backend   : forward transform -> rows in bit-reversed order, behind a view
+        //
+        // So it is the one place where the shared-transform rewrite could pick up the wrong
+        // row order without any other test noticing.
+        check_fused_quotient_ldes(&Radix2DitParallel::<Val>::default());
     }
 }
