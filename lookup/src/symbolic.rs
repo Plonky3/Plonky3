@@ -17,25 +17,6 @@ use crate::builder::{
 };
 use crate::count::Count;
 
-/// Evaluate an AIR with interaction support and return all asserted constraints.
-pub fn get_all_interaction_symbolic_constraints<F, EF, A>(
-    air: &A,
-    layout: AirLayout,
-) -> (
-    Vec<SymbolicExpression<F>>,
-    Vec<SymbolicExpressionExt<F, EF>>,
-)
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    A: Air<InteractionSymbolicBuilder<F, EF>>,
-{
-    layout.validate_against_air(air);
-    let mut builder = InteractionSymbolicBuilder::new(layout);
-    air.eval(&mut builder);
-    (builder.base_constraints(), builder.extension_constraints())
-}
-
 /// Symbolic builder that captures constraints and bus interactions side by side.
 #[derive(Debug)]
 pub struct InteractionSymbolicBuilder<F: Field, EF: ExtensionField<F> = F> {
@@ -58,6 +39,30 @@ impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
             local_interactions: Vec::new(),
             exclusive_interactions: Vec::new(),
         }
+    }
+
+    /// Run one symbolic pass over an AIR and keep everything it emitted.
+    ///
+    /// Constraints and interactions come out of the same pass.
+    /// A caller that needs both therefore evaluates the AIR only once.
+    ///
+    /// # Arguments
+    ///
+    /// - `air`: the AIR to evaluate symbolically.
+    /// - `layout`: column widths and challenge counts sizing the symbolic trace.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a layout width that the AIR itself determines disagrees with the AIR.
+    pub fn from_air<A>(air: &A, layout: AirLayout) -> Self
+    where
+        A: Air<Self>,
+    {
+        // A mismatched width would silently point the AIR at the wrong variables.
+        layout.validate_against_air(air);
+        let mut builder = Self::new(layout);
+        air.eval(&mut builder);
+        builder
     }
 
     /// Cross-AIR interactions recorded so far, in the order they were pushed.

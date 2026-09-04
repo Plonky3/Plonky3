@@ -5,7 +5,6 @@ use alloc::vec::Vec;
 use p3_air::{Air, AirLayout};
 use p3_field::{ExtensionField, Field};
 use p3_lookup::InteractionSymbolicBuilder as SymbolicAirBuilder;
-use p3_lookup::symbolic::get_all_interaction_symbolic_constraints;
 
 /// Structural facts about an AIR needed before any proving begins.
 ///
@@ -73,7 +72,9 @@ impl ConstraintMetadata {
                 //
                 //     base[i] : i-th base-field constraint
                 //     ext[j]  : j-th extension-field constraint (lookups / permutation args)
-                let (base, ext) = get_all_interaction_symbolic_constraints::<F, EF, A>(air, layout);
+                let builder = SymbolicAirBuilder::<F, EF>::from_air(air, layout);
+                let base = builder.base_constraints();
+                let ext = builder.extension_constraints();
 
                 // Count covers base constraints only, matching the scope of the AIR's count hint.
                 let count = hinted_count.unwrap_or(base.len());
@@ -279,6 +280,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "main_width does not match")]
     fn metadata_validates_symbolic_layout() {
+        // Invariant: the symbolic pass allocates its trace from the layout, so a width the
+        // AIR does not agree with would silently point every column read one slot off.
+        //
+        // Mutation: widen the layout by one column.
+        //
+        //     AIR width    : 2
+        //     layout width : 3
+        //     -----> rejected before the AIR is evaluated
         let mut layout = AirLayout::from_air::<F>(&FibAir);
         layout.main_width += 1;
         let _ = ConstraintMetadata::from_air::<F, EF, _>(&FibAir, layout);

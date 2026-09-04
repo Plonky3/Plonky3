@@ -11,7 +11,9 @@
 //! A zerocheck always claims zero, so the verifier rejects any proof that claims a different sum.
 
 use alloc::collections::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
+use core::iter;
 
 use p3_air::{Air, AirLayout, BaseAir};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
@@ -23,10 +25,9 @@ use p3_sumcheck::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundP
 use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
-use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
+use crate::folder::{InteractionMultilinearFolder, MultilinearFolder, ProverAir, VerifierAir};
 use crate::lookup::{ActiveLookupRuntime, AirLinkClaim, LookupRuntime};
 use crate::opening::{OpeningClaims, TableOpening};
-use crate::packed_ext::PackedExt;
 use crate::rounds::{AirDegrees, AirOpenings, RoundStateBase, RoundStateExt, Stage, StageCoupling};
 use crate::selectors::{BoundaryEvals, PeriodicError, periodic_evals_at, periodic_num_variables};
 
@@ -81,6 +82,14 @@ pub enum ZerocheckError {
     /// An AIR's periodic column declaration does not fit its trace.
     #[error("zerocheck periodic column: {0}")]
     Periodic(#[from] PeriodicError),
+    /// An AIR declares lookups but the reduction supplies no link for it, or the reverse.
+    ///
+    /// Folding either half without the other would drop the lookup argument silently.
+    #[error("zerocheck AIR {air} lookup declarations and lookup link disagree")]
+    LookupLinkMismatch {
+        /// Position of the offending AIR in caller order.
+        air: usize,
+    },
     /// The reduced sum did not match the constraint evaluated at the random point.
     #[error("zerocheck final sum does not match the constraint at the challenge point")]
     FinalSumMismatch,
@@ -93,11 +102,11 @@ pub struct ZerocheckProof<F, EF> {
     pub sumcheck: GenericDegreeProof<F, EF>,
     /// Current-row values at the sumcheck point, grouped by input AIR order.
     ///
-    /// `local[i]` contains one value per main column of `airs[i]`.
+    /// Each group holds one value per main column of its AIR.
     pub local: Vec<Vec<EF>>,
     /// Repeat-last successor values at the sumcheck point, grouped by input AIR order.
     ///
-    /// `next[i]` contains one value per column declared by `airs[i].main_next_row_columns()`.
+    /// Each group holds one value per main column its AIR reads on the next row.
     pub next: Vec<Vec<EF>>,
     /// Current-row preprocessed values at the sumcheck point, grouped by input AIR order.
     pub preprocessed_local: Vec<Vec<EF>>,
@@ -117,31 +126,39 @@ pub struct AirZerocheck<'a, A> {
     pow_bits: usize,
 }
 
-/// Per-round degree of an AIR's zerocheck sumcheck.
+/// Native per-variable degrees of one AIR's ordinary constraints and lookup links.
 ///
-/// The integrand is `eq(tau, x) * g(x)`.
-/// Its per-variable degree is the larger native expression degree plus one
-/// for the multilinear eq weight.
-fn sumcheck_degree<F, EF, A>(air: &A) -> usize
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
-{
-    get_air_degrees::<F, EF, A>(air).max() + 1
-}
-
+/// Both families come from one symbolic pass and are measured with the eq weight stripped.
+/// A degree of zero means the AIR declares nothing in that family.
+///
+/// Every expression is scored at domain size two, where a column and a boundary selector
+/// each count as degree one.
+/// A materialized periodic column is multilinear, so it scores the same as a trace column.
+/// The symbolic value is therefore exact rather than an upper bound.
+///
+/// An AIR may instead hint its own constraint degree, which must be at least the true one:
+///
+/// ```text
+///     hint too small -> round polynomials lose evaluations -> soundness broken
+///     hint too large -> larger proof and more per-row work, nothing else
+/// ```
+///
+/// A debug assertion pins the hint against the symbolic value.
+///
+/// # Panics
+///
+/// Panics if the AIR declares mutually-exclusive interactions.
+/// Panics if a declared family is constant, since a constant has no round polynomial.
+/// Panics if the AIR declares neither constraints nor interactions.
 fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
 where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
+    // One pass yields the constraints and the interactions together.
     let layout = AirLayout::from_air::<F>(air);
-    layout.validate_against_air(air);
-
-    let mut builder = SymbolicAirBuilder::<F, EF>::new(layout);
-    air.eval(&mut builder);
+    let builder = SymbolicAirBuilder::<F, EF>::from_air(air, layout);
     assert!(
         builder.exclusive_interactions().is_empty(),
         "multi-STARK zerocheck does not support exclusive lookup interactions"
@@ -182,7 +199,7 @@ where
             interaction
                 .fields
                 .iter()
-                .chain(core::iter::once(&interaction.count))
+                .chain(iter::once(&interaction.count))
         })
         .map(|expression| expression.poly_degree(2, &[]))
         .max()
@@ -221,6 +238,39 @@ where
         constraints: constraint_degree,
         interactions: interaction_degree,
     }
+}
+
+/// Pair each AIR's lookup declarations with the link the reduction supplies for it.
+///
+/// An AIR that declares lookups must have a link, and one that declares none must have no link:
+///
+/// ```text
+///     declares lookups | link present | outcome
+///     -----------------+--------------+---------
+///     no               | no           | ordinary constraints only
+///     yes              | yes          | constraints and lookup link
+///     yes              | no           | rejected: the lookup argument would be dropped
+///     no               | yes          | rejected: the link belongs to no AIR
+/// ```
+///
+/// Without this, a lookup AIR would run through the folder that drops its declarations.
+///
+/// # Errors
+///
+/// Returns the position of the first AIR whose declarations and link disagree.
+fn validate_lookup_links<EF: Field>(
+    degrees: &[AirDegrees],
+    lookup: Option<&AirLinkClaim<EF>>,
+) -> Result<(), ZerocheckError> {
+    for (air, degrees) in degrees.iter().enumerate() {
+        // A positive lookup-link degree is exactly the "this AIR declares lookups" test.
+        let declares = degrees.interactions > 0;
+        let linked = lookup.is_some_and(|lookup| lookup.links_by_air.contains_key(&air));
+        if declares != linked {
+            return Err(ZerocheckError::LookupLinkMismatch { air });
+        }
+    }
+    Ok(())
 }
 
 impl<'a, A> AirZerocheck<'a, A> {
@@ -281,8 +331,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     ///
     /// `tables[i]`, `preprocessed[i]`, and `public_values[i]` correspond to `airs[i]`.
     ///
-    /// The caller must observe every trace commitment and the public values into
-    /// the challenger before this call.
+    /// Every trace commitment and every public value must already be in the transcript.
     ///
     /// Periodic columns, if any, are folded into the sumcheck but produce no opening claim.
     ///
@@ -301,39 +350,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
-            + for<'b> Air<
-                MultilinearFolder<
-                    'b,
-                    F,
-                    <F as Field>::Packing,
-                    <EF as ExtensionField<F>>::ExtensionPacking,
-                >,
-            > + for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<
-                MultilinearFolder<
-                    'b,
-                    F,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                >,
-            > + for<'b> Air<InteractionMultilinearFolder<'b, F, F, EF>>
-            + for<'b> Air<
-                InteractionMultilinearFolder<
-                    'b,
-                    F,
-                    <F as Field>::Packing,
-                    <EF as ExtensionField<F>>::ExtensionPacking,
-                >,
-            > + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<
-                InteractionMultilinearFolder<
-                    'b,
-                    F,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                >,
-            > + Air<SymbolicAirBuilder<F, EF>>,
+        A: ProverAir<F, EF>,
         <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -346,7 +363,18 @@ impl<'a, A> AirZerocheck<'a, A> {
         )
     }
 
-    /// Lookup-aware prover entry point used by the complete multi-STARK protocol.
+    /// Prove the batch with the lookup argument coupled in.
+    ///
+    /// The reduction has already opened the lookup fractions at a random point.
+    /// This sumcheck therefore starts from that claim instead of from zero, and each AIR
+    /// stage takes over its own share when the cube reaches that AIR's trace height.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the input lengths disagree with the number of AIRs.
+    /// Panics if an AIR declares lookups but the batch carries no link for it.
+    /// Panics if a periodic column's period is not a power of two dividing the trace height.
+    /// Panics if any trace height is less than two.
     #[tracing::instrument(skip_all)]
     pub(crate) fn prove_with_lookup<F, EF, Challenger>(
         &self,
@@ -359,47 +387,15 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
-            + for<'b> Air<
-                MultilinearFolder<
-                    'b,
-                    F,
-                    <F as Field>::Packing,
-                    <EF as ExtensionField<F>>::ExtensionPacking,
-                >,
-            > + for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<
-                MultilinearFolder<
-                    'b,
-                    F,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                >,
-            > + for<'b> Air<InteractionMultilinearFolder<'b, F, F, EF>>
-            + for<'b> Air<
-                InteractionMultilinearFolder<
-                    'b,
-                    F,
-                    <F as Field>::Packing,
-                    <EF as ExtensionField<F>>::ExtensionPacking,
-                >,
-            > + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<
-                InteractionMultilinearFolder<
-                    'b,
-                    F,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                >,
-            > + Air<SymbolicAirBuilder<F, EF>>,
+        A: ProverAir<F, EF>,
         <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         self.validate_inputs(tables, preprocessed, public_values);
         lookup.validate(self.airs.len());
-        // Lower the protocol-boundary enum once. From here on, inactive lookup
-        // state is represented by empty setup collections, so the round hot
-        // loop does not branch on lookup activity.
+        // Lower the protocol-boundary enum once.
+        // Inactive lookup state becomes empty collections from here on.
+        // The round loop then never branches on whether a lookup exists.
         let (
             lookup_point,
             lookup_claimed_sum,
@@ -433,13 +429,23 @@ impl<'a, A> AirZerocheck<'a, A> {
         };
 
         // Ordinary constraints and lookup links keep their native symbolic degrees.
-        // The round state evaluates an AIR up to the larger degree but stops
-        // accumulating the lower-degree family at its own final node.
+        // The round state evaluates an AIR up to the larger of the two degrees.
+        // It stops accumulating the lower-degree family at that family's own final node.
         let degrees = self
             .airs
             .iter()
             .map(|&air| get_air_degrees::<F, EF, A>(air))
             .collect::<Vec<_>>();
+
+        // Mirror the verifier's rule: every AIR that declares lookups must carry a link.
+        // Proving without one would fold the ordinary constraints and drop the lookups.
+        for (air, degrees) in degrees.iter().enumerate() {
+            assert_eq!(
+                degrees.interactions > 0,
+                links_by_air.contains_key(&air),
+                "AIR {air} declares lookups but the batch carries no lookup reduction for it"
+            );
+        }
 
         // Bucket AIR indices by trace height.
         // The map gives deterministic height order; stages are built largest-first below.
@@ -451,14 +457,16 @@ impl<'a, A> AirZerocheck<'a, A> {
                 .push(index);
         });
 
-        // All stages contribute to one transmitted round polynomial. Its internal
-        // evaluation buffer therefore uses the largest AIR degree; lower-degree
-        // groups are extrapolated only when they join the shared accumulator.
+        // All stages contribute to one transmitted round polynomial.
+        // Its evaluation buffer therefore carries the largest AIR degree in the batch.
+        // A lower-degree group is extrapolated only when it joins the shared accumulator.
         let max_degree = degrees.iter().copied().map(AirDegrees::max).max().unwrap();
 
-        // The global sumcheck cube must contain both the tallest AIR trace and the
-        // full fractional-GKR output point. Lookup block selectors can make that
-        // point longer than any trace, adding leading rounds before AIR stages activate.
+        // The global cube must contain the tallest AIR trace and the whole reduction point.
+        // Block selectors can make that point longer than any trace.
+        //
+        //     rounds : | block selectors | tallest trace | ... | shortest trace |
+        //                | no AIR stage is active yet
         let air_log_height = indices_by_height.keys().copied().max().unwrap();
         let log_height = air_log_height.max(lookup_point.num_variables());
 
@@ -565,7 +573,7 @@ impl<'a, A> AirZerocheck<'a, A> {
             pending_claim -= activating_claim;
 
             // Not-yet-active lookup stages remain represented by one dormant constant.
-            let mut round_poly_acc = alloc::vec![pending_claim; max_degree];
+            let mut round_poly_acc = vec![pending_claim; max_degree];
             let mut round_polys = Vec::with_capacity(states.len());
 
             // Existing stages already live over the extension field.
@@ -642,8 +650,8 @@ impl<'a, A> AirZerocheck<'a, A> {
             }
 
             // The newly activated stage joins the active list only after this round.
-            // Its first reduced claim is folded from the private interaction claim
-            // supplied at activation (ordinary constraints contribute zero).
+            // Its first reduced claim comes from the private lookup claim supplied at activation.
+            // Ordinary constraints contribute nothing there.
             if let Some((state, round_poly)) = new_state {
                 let q1 = (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                 let unweighted_claim = round_poly[0] + q1;
@@ -671,7 +679,7 @@ impl<'a, A> AirZerocheck<'a, A> {
 
         // States are ordered by activation height, not caller AIR order.
         // Each state retains its original AIR indices and scatters its openings back here.
-        let mut openings = core::iter::repeat_with(|| None)
+        let mut openings = iter::repeat_with(|| None)
             .take(self.airs.len())
             .collect::<Vec<Option<AirOpenings<EF>>>>();
         for state in states {
@@ -710,8 +718,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// The opened column values are trusted at this layer.
     /// Binding them to a commitment is the job of the polynomial commitment scheme in a later step.
     ///
-    /// The caller must observe every trace commitment and the public values into
-    /// the challenger before this call.
+    /// Every trace commitment and every public value must already be in the transcript.
     ///
     /// # Arguments
     ///
@@ -727,6 +734,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// - an AIR's current-row openings do not carry one value per main column,
     /// - an AIR's next-row openings do not carry one value per next-row column,
     /// - an AIR's periodic column declaration does not fit its trace height,
+    /// - an AIR declares lookups, which this entry point cannot check,
     /// - the claimed sum is nonzero,
     /// - the inner sumcheck transcript fails to verify,
     /// - the reduced sum does not match the constraints at the random point.
@@ -740,14 +748,19 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
-            + Air<SymbolicAirBuilder<F, EF>>,
+        A: VerifierAir<F, EF>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         self.verify_with_lookup(proof, log_heights, public_values, None, challenger)
     }
 
+    /// Verify the batch with the lookup argument coupled in.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for every reason the lookup-free entry point does.
+    /// Returns an error when an AIR's lookup declarations and its link disagree.
+    /// Returns an error when the claimed sum does not match the lookup reduction.
     pub(crate) fn verify_with_lookup<F, EF, Challenger>(
         &self,
         proof: &ZerocheckProof<F, EF>,
@@ -759,15 +772,24 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
-            + Air<SymbolicAirBuilder<F, EF>>,
+        A: VerifierAir<F, EF>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         assert!(!self.airs.is_empty(), "zerocheck requires at least one AIR");
-        assert_eq!(self.airs.len(), public_values.len(),);
-        assert_eq!(self.airs.len(), log_heights.len(),);
-        assert!(log_heights.iter().all(|&log_height| log_height > 0),);
+        assert_eq!(
+            self.airs.len(),
+            public_values.len(),
+            "one public-value group is required for each AIR"
+        );
+        assert_eq!(
+            self.airs.len(),
+            log_heights.len(),
+            "one trace height is required for each AIR"
+        );
+        assert!(
+            log_heights.iter().all(|&log_height| log_height > 0),
+            "zerocheck requires each trace height to be at least two"
+        );
 
         for (&air, public_values) in self.airs.iter().zip(public_values.iter()) {
             let layout = AirLayout::from_air::<F>(air);
@@ -854,8 +876,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// The opened column values are not yet known.
     /// The committed verifier opens them through a commitment scheme.
     ///
-    /// The caller must observe every trace commitment and the public values into
-    /// the challenger before this call.
+    /// Every trace commitment and every public value must already be in the transcript.
     ///
     /// # Arguments
     ///
@@ -867,6 +888,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// # Errors
     ///
     /// Returns an error when the claimed sum is nonzero.
+    /// Returns an error when an AIR declares lookups, which this entry point cannot check.
     /// Returns an error when the sumcheck transcript fails to verify.
     pub fn verify_reduction<F, EF, Challenger>(
         &self,
@@ -884,6 +906,17 @@ impl<'a, A> AirZerocheck<'a, A> {
         self.verify_reduction_with_lookup(sumcheck, log_heights, public_values, None, challenger)
     }
 
+    /// Verify the sumcheck reduction with the lookup argument coupled in.
+    ///
+    /// This is where the two arguments are tied together: the zerocheck point takes the
+    /// reduction's own output point as its tail, and the claimed sum must match the
+    /// reduction's folded opening.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an AIR's lookup declarations and its link disagree.
+    /// Returns an error when the claimed sum does not match the lookup reduction.
+    /// Returns an error when the sumcheck transcript fails to verify.
     pub(crate) fn verify_reduction_with_lookup<F, EF, Challenger>(
         &self,
         sumcheck: &GenericDegreeProof<F, EF>,
@@ -899,20 +932,36 @@ impl<'a, A> AirZerocheck<'a, A> {
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         assert!(!self.airs.is_empty(), "zerocheck requires at least one AIR");
-        assert_eq!(self.airs.len(), public_values.len(),);
-        assert_eq!(self.airs.len(), log_heights.len(),);
-        assert!(log_heights.iter().all(|&log_height| log_height > 0),);
+        assert_eq!(
+            self.airs.len(),
+            public_values.len(),
+            "one public-value group is required for each AIR"
+        );
+        assert_eq!(
+            self.airs.len(),
+            log_heights.len(),
+            "one trace height is required for each AIR"
+        );
+        assert!(
+            log_heights.iter().all(|&log_height| log_height > 0),
+            "zerocheck requires each trace height to be at least two"
+        );
 
         let air_log_height = log_heights.iter().copied().max().unwrap();
         let max_log_height = lookup.map_or(air_log_height, |lookup| {
             air_log_height.max(lookup.point.num_variables())
         });
-        let degree = self
+
+        // The same symbolic pass fixes the round degree and says which AIRs declare lookups.
+        let degrees = self
             .airs
             .iter()
-            .map(|&air| sumcheck_degree::<F, EF, A>(air))
-            .max()
-            .unwrap();
+            .map(|&air| get_air_degrees::<F, EF, A>(air))
+            .collect::<Vec<_>>();
+        validate_lookup_links(&degrees, lookup)?;
+
+        // One extra degree for the eq weight the sumcheck carries.
+        let degree = degrees.iter().copied().map(AirDegrees::max).max().unwrap() + 1;
 
         if lookup.is_none() && sumcheck.claimed_sum != EF::ZERO {
             return Err(ZerocheckError::NonZeroClaimedSum);
@@ -965,9 +1014,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
-            + Air<SymbolicAirBuilder<F, EF>>,
+        A: VerifierAir<F, EF>,
     {
         self.check_constraint_with_lookup(
             reduction,
@@ -979,6 +1026,16 @@ impl<'a, A> AirZerocheck<'a, A> {
         )
     }
 
+    /// Close the zerocheck with the lookup argument coupled in.
+    ///
+    /// A linked AIR is run through the lookup-aware folder, which rebuilds both the
+    /// ordinary constraints and the lookup link from the same opened column values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an opening group does not carry one value per declared column.
+    /// Returns an error when an AIR's periodic declaration does not fit its trace height.
+    /// Returns an error when the reduced sum does not match the recomputed value.
     pub(crate) fn check_constraint_with_lookup<F, EF>(
         &self,
         reduction: &ZerocheckReduction<EF>,
@@ -991,14 +1048,23 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
-            + Air<SymbolicAirBuilder<F, EF>>,
+        A: VerifierAir<F, EF>,
     {
         assert!(!self.airs.is_empty(), "zerocheck requires at least one AIR");
-        assert_eq!(self.airs.len(), public_values.len(),);
-        assert_eq!(self.airs.len(), log_heights.len(),);
-        assert!(log_heights.iter().all(|&log_height| log_height > 0),);
+        assert_eq!(
+            self.airs.len(),
+            public_values.len(),
+            "one public-value group is required for each AIR"
+        );
+        assert_eq!(
+            self.airs.len(),
+            log_heights.len(),
+            "one trace height is required for each AIR"
+        );
+        assert!(
+            log_heights.iter().all(|&log_height| log_height > 0),
+            "zerocheck requires each trace height to be at least two"
+        );
 
         if main.len() != self.airs.len() {
             return Err(ZerocheckError::OpeningCountMismatch {
@@ -1093,8 +1159,11 @@ impl<'a, A> AirZerocheck<'a, A> {
             )
             .with_preprocessed(&preprocessed_claims.local, &preprocessed_next_row)
             .with_periodic(&periodic);
-            if let Some(lookup) = lookup {
-                if let Some(link) = lookup.links_by_air.get(&air_index) {
+
+            // A linked AIR contributes both families from one evaluation, batched apart:
+            // beta separates the AIRs, eta separates the lookup link from the constraints.
+            match lookup.and_then(|lookup| Some((lookup, lookup.links_by_air.get(&air_index)?))) {
+                Some((lookup, link)) => {
                     let evaluations = InteractionMultilinearFolder::new(
                         folder,
                         link,
@@ -1103,11 +1172,9 @@ impl<'a, A> AirZerocheck<'a, A> {
                     )
                     .eval_air(air);
                     g += beta * evaluations.constraints + reduction.eta * evaluations.interactions;
-                } else {
-                    g += beta * folder.eval_air(air);
                 }
-            } else {
-                g += beta * folder.eval_air(air);
+                // Declaring no lookup was already checked against having no link.
+                None => g += beta * folder.eval_air(air),
             }
         }
 
@@ -1156,12 +1223,10 @@ pub struct ZerocheckReduction<EF> {
 ///
 /// This restores `s` from the transmitted internal evaluations.
 ///
-/// # Why this lives here
+/// Node one never travels: the verifier rebuilds it from the previous round's claim.
 ///
-/// The weighting and the inter-round claim relation are specific to this zerocheck.
-/// The generic interpolator stays unaware of equality factors, so this glue stays out of it.
-///
-/// Node one is dropped from the message because the verifier recovers it from the claim.
+/// The equality weighting and the inter-round claim relation are specific to this
+/// zerocheck, which is why the generic interpolator knows nothing about them.
 ///
 /// # Arguments
 ///
@@ -1169,7 +1234,7 @@ pub struct ZerocheckReduction<EF> {
 /// - `evals`: internal evaluations at nodes `0, 2, 3, ..., deg - 1`.
 /// - `claim`: previous round's reduced value, tying `q(0)` and `q(1)` together.
 /// - `eq_prefix`: product of equality factors at the already-bound challenges.
-/// - `tau`: this round's zerocheck point coordinate; must be nonzero.
+/// - `tau`: this round's zerocheck point coordinate.
 ///
 /// # Returns
 ///
@@ -1179,7 +1244,9 @@ pub struct ZerocheckReduction<EF> {
 /// # Panics
 ///
 /// Panics if `tau` is zero, since recovering `q(1)` divides by it.
-/// The caller samples `tau` from the nonzero elements, so this does not occur.
+/// Freshly drawn coordinates are redrawn until nonzero.
+/// A coordinate inherited from the lookup reduction is not, so this can fire with
+/// probability about one over the field size.
 fn standard_round_from_q_evals<EF>(
     interpolator: &RoundPolyInterpolator<EF>,
     evals: &[EF],
@@ -1217,16 +1284,33 @@ where
     (standard_evals, unweighted_sum)
 }
 
-/// Draw the constraint, AIR, optional lookup scalar, and zerocheck point, in that order.
+/// Draw the two batching scalars, the lookup scalar, and the zerocheck point, in that order.
 ///
-/// Prover and verifier call this identically so their transcripts stay in lockstep.
+/// Prover and verifier call this identically, so their transcripts stay in lockstep.
 ///
-/// When lookup is active, its GKR point is fixed as the zerocheck point's suffix;
-/// only the missing leading coordinates are sampled.
+/// The lookup reduction already opened its tables at a random point.
+/// The zerocheck must evaluate the lookup link at that same point to link the two arguments,
+/// so the reduction point is pinned as the tail of the zerocheck point:
 ///
-/// Each sampled zerocheck point coordinate is nonzero.
-/// The prover divides by a coordinate when rebuilding a round message, so a zero would divide by zero.
-/// Resampling on both sides keeps the transcripts aligned, and a zero draw has negligible probability.
+/// ```text
+///     tau = [ freshly sampled | reduction output point ]
+/// ```
+///
+/// Only the coordinates the reduction did not already fix are sampled here.
+/// In practice the reduction point already covers the tallest trace, so with lookups
+/// active there is usually nothing left to sample.
+///
+/// # Soundness
+///
+/// The reduction point is drawn from the transcript after the traces are committed,
+/// so it is as good a random point as a freshly sampled one.
+///
+/// A violated constraint has a nonzero multilinear extension, which vanishes at the
+/// zerocheck point only with probability about the trace arity over the field size.
+///
+/// # Panics
+///
+/// Panics if the reduction point is longer than the zerocheck height.
 fn sample_zerocheck_challenges<F, EF, Challenger>(
     challenger: &mut Challenger,
     log_height: usize,
@@ -1237,9 +1321,12 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F>,
 {
-    // The batching scalar may take any value.
+    // Alpha batches one AIR's constraints, beta batches the AIRs against each other.
     let alpha = challenger.sample_algebra_element();
     let beta = challenger.sample_algebra_element();
+
+    // Eta separates lookup links from ordinary constraints, and is drawn only when
+    // there are links to separate. Zero then means "no lookup contribution".
     let eta = if lookup_point.is_empty() {
         EF::ZERO
     } else {
@@ -1251,6 +1338,10 @@ where
         fixed_suffix.len() <= log_height,
         "lookup point cannot exceed the zerocheck height"
     );
+
+    // The prover divides by a coordinate when it rebuilds a round message from its
+    // internal evaluations, so a freshly drawn zero is discarded and redrawn.
+    // Both sides redraw identically, which keeps the transcripts aligned.
     let mut tau = Vec::with_capacity(log_height);
     tau.extend((fixed_suffix.len()..log_height).map(|_| {
         let mut coord: EF = challenger.sample_algebra_element();
@@ -1329,39 +1420,7 @@ mod tests {
         challenger: &mut Ch,
     ) -> (ZerocheckProof<F, EF>, Point<EF>)
     where
-        A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>
-            + for<'b> Air<
-                MultilinearFolder<
-                    'b,
-                    F,
-                    <F as Field>::Packing,
-                    <EF as ExtensionField<F>>::ExtensionPacking,
-                >,
-            > + for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<
-                MultilinearFolder<
-                    'b,
-                    F,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                >,
-            > + for<'b> Air<InteractionMultilinearFolder<'b, F, F, EF>>
-            + for<'b> Air<
-                InteractionMultilinearFolder<
-                    'b,
-                    F,
-                    <F as Field>::Packing,
-                    <EF as ExtensionField<F>>::ExtensionPacking,
-                >,
-            > + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<
-                InteractionMultilinearFolder<
-                    'b,
-                    F,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                    PackedExt<F, <EF as ExtensionField<F>>::ExtensionPacking>,
-                >,
-            > + Air<SymbolicAirBuilder<F, EF>>,
+        A: ProverAir<F, EF>,
         <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
     {
         let tables = traces
@@ -1465,15 +1524,22 @@ mod tests {
                 [x0.clone() * x1.clone() * x2.clone()],
                 Count::bounded(x3.clone(), 1),
             );
-            builder.push_local_interaction([(
-                alloc::vec![x0.clone()],
-                Count::bounded(x0 * x1 * x2 * x3, 1),
-            )]);
+            builder
+                .push_local_interaction([(vec![x0.clone()], Count::bounded(x0 * x1 * x2 * x3, 1))]);
         }
     }
 
     #[test]
     fn interaction_aware_degree_includes_payloads_and_multiplicities() {
+        // Invariant: a lookup's degree is the largest degree over its payloads and its counts,
+        // measured independently of the ordinary constraints.
+        //
+        // Fixture state:
+        //
+        //     constraint          : x0 * x1                -> degree 2
+        //     global payload      : x0 * x1 * x2           -> degree 3
+        //     local multiplicity  : x0 * x1 * x2 * x3      -> degree 4
+        //     -----> the count, not the payload, sets the lookup degree
         assert_eq!(
             get_air_degrees::<F, EF, _>(&InteractionDegreeAir),
             AirDegrees {
@@ -1488,6 +1554,12 @@ mod tests {
         expected = "zerocheck requires every nonempty interaction family to have positive symbolic degree"
     )]
     fn interaction_aware_degree_rejects_constant_airs() {
+        // A constant family has no round polynomial to send, so its degree group would be
+        // empty while its claim still had to be reduced.
+        //
+        //     payload : ONE  -> degree 0
+        //     count   : ONE  -> degree 0
+        //     -----> rejected rather than silently given a zero-degree group
         get_air_degrees::<F, EF, _>(&ConstantInteractionAir);
     }
 
@@ -1560,7 +1632,7 @@ mod tests {
 
         // Each Fibonacci constraint is per-variable degree 2 (a degree-1 selector
         // times a degree-1 column), so the eq-weighted integrand is degree 3.
-        let degree = sumcheck_degree::<F, EF, FibAir>(&air);
+        let degree = get_air_degrees::<F, EF, FibAir>(&air).max() + 1;
         assert_eq!(degree, 3);
         assert_eq!(proof.sumcheck.num_rounds(), log2_strict_usize(n));
         assert_eq!(point.num_variables(), log2_strict_usize(n));
@@ -2096,7 +2168,7 @@ mod tests {
             assert_eq!(proof.sumcheck.num_rounds(), num_vars);
             let max_degree = airs
                 .iter()
-                .map(sumcheck_degree::<F, EF, MixedAir>)
+                .map(|air| get_air_degrees::<F, EF, MixedAir>(air).max() + 1)
                 .max()
                 .unwrap();
             for round in &proof.sumcheck.round_polys {
@@ -2668,7 +2740,7 @@ mod tests {
         // Scoring it at one per variable is therefore exact.
         let air = AllGroupsAir;
         assert_eq!(get_air_degrees::<F, EF, AllGroupsAir>(&air).constraints, 2);
-        assert_eq!(sumcheck_degree::<F, EF, AllGroupsAir>(&air), 3);
+        assert_eq!(get_air_degrees::<F, EF, AllGroupsAir>(&air).max() + 1, 3);
 
         // Fixture state: 8 rows carrying all three column groups.
         let num_vars = 3;

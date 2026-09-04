@@ -197,8 +197,10 @@ impl<AB: AirBuilder> Air<AB> for FibAir {
     }
 }
 
-/// A local multiset equality whose two contribution blocks make the lookup
-/// GKR point one coordinate longer than the underlying trace point.
+/// A local multiset equality declaring two tuples per row.
+///
+/// Its two blocks make the lookup reduction point one coordinate longer than the trace point.
+/// That exercises the leading sumcheck rounds that run before any AIR stage activates.
 struct LocalPermutationLookupAir;
 
 impl BaseAir<F> for LocalPermutationLookupAir {
@@ -218,6 +220,9 @@ where
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let local = main.current_slice();
+
+        // Column 0 requests a value, column 1 provides one, both with multiplicity one.
+        // The bus balances exactly when the two columns are permutations of each other.
         builder.push_local_interaction([
             (vec![local[0].into()], Count::bounded(AB::Expr::ONE, 1)),
             (vec![local[1].into()], Count::provided(-AB::Expr::ONE)),
@@ -225,7 +230,15 @@ where
     }
 }
 
+/// Build a trace whose second column is the reverse of its first.
+///
+/// ```text
+///     row   : 0      1      ...  n-1
+///     col 0 : 0      1      ...  n-1
+///     col 1 : n-1    n-2    ...  0
+/// ```
 fn permutation_trace(n: usize) -> RowMajorMatrix<F> {
+    // Reversal is a permutation, so every requested value is provided exactly once.
     let values = (0..n)
         .flat_map(|row| [F::from_usize(row), F::from_usize(n - 1 - row)])
         .collect();
@@ -301,6 +314,11 @@ fn prove_verify_fibonacci_roundtrips() {
 
 #[test]
 fn prove_verify_lookup_roundtrips_through_pcs() {
+    // Fixture state: one 64-row AIR declaring two tuples per row.
+    //
+    //     lookup leaves : 2 * 64 = 128 -> a 7-variable reduction point
+    //     trace point   :                 6 variables
+    //     -----> one leading block-selector round before the AIR stage activates
     let n = 64;
     let log_height = log2_strict_usize(n);
     let air = LocalPermutationLookupAir;
@@ -319,6 +337,7 @@ fn prove_verify_lookup_roundtrips_through_pcs() {
         0,
         &mut challenger(&config),
     );
+    // A lookup-declaring AIR must produce a reduction section in the proof.
     assert!(proof.lookup.is_some());
 
     verify(
@@ -333,6 +352,11 @@ fn prove_verify_lookup_roundtrips_through_pcs() {
 
 #[test]
 fn prove_verify_mixed_height_lookups_roundtrip_through_pcs() {
+    // Invariant: each trace is opened at its own suffix of the one shared bound point,
+    // even though the reduction point is longer than either trace.
+    //
+    //     bound point : | block selectors | 64-row suffix |
+    //                                     | 32-row suffix |
     let air = LocalPermutationLookupAir;
     let height_a = 64;
     let height_b = 32;
