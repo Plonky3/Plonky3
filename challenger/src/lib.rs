@@ -4,6 +4,7 @@
 extern crate alloc;
 
 mod duplex_challenger;
+pub mod fs;
 mod grinding_challenger;
 mod hash_challenger;
 mod multi_field_challenger;
