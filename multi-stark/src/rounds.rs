@@ -33,6 +33,10 @@ pub(super) struct AirDegrees {
 }
 
 impl AirDegrees {
+    /// Highest per-variable degree this AIR reaches in either family.
+    ///
+    /// The round state evaluates the AIR up to this node, and stops accumulating the
+    /// lower-degree family once its own final node is past.
     pub(super) const fn max(self) -> usize {
         if self.constraints > self.interactions {
             self.constraints
@@ -136,7 +140,9 @@ impl<'air, 'data, A, F: Field, EF: Field> Stage<'air, 'data, A, F, EF> {
         }
     }
 
-    /// Eta-scaled lookup claim that becomes active with this trace-height stage.
+    /// The part of the folded lookup claim that becomes live when this stage activates.
+    ///
+    /// The global sumcheck holds the remainder as a dormant constant until then.
     pub(super) fn lookup_claim(&self, eta: EF) -> EF {
         eta * self.coupling.claims.values().copied().sum::<EF>()
     }
@@ -182,7 +188,9 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     slots: Vec<AirSlot<'air, A>>,
     /// Zerocheck point coordinates, used to recover the omitted node one for each AIR.
     tau: Point<EF>,
-    /// Lookup/AIR-link coefficients for this height stage; links are empty for a plain stage.
+    /// Lookup coefficients for this stage.
+    ///
+    /// Empty when no AIR of this stage declares a lookup.
     coupling: InteractionCoupling<EF>,
     /// Common scalar applied to lookup claims and evaluations after grouping.
     eta: EF,
@@ -357,8 +365,10 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>>
     lookup_scale: EF,
 }
 
-/// One AIR's final opening values, paired with its original caller index by
-/// [`RoundStateExt::into_openings`].
+/// One AIR's column values at the fully bound sumcheck point.
+///
+/// Stages activate by trace height, not in caller order, so each set of openings travels
+/// alongside the caller position it has to be scattered back to.
 pub(super) struct AirOpenings<EF> {
     /// Current-row value of each main column.
     pub(super) local: Vec<EF>,
@@ -370,33 +380,44 @@ pub(super) struct AirOpenings<EF> {
     pub(super) preprocessed_next: Vec<EF>,
 }
 
-/// Static lookup metadata retained while interaction identities are evaluated.
+/// Lookup coefficients held in whatever representation the current round kernel uses.
+///
+/// A packed kernel rebuilds this once per round with every scalar lifted into a lane group.
+/// The row loop then never broadcasts a scalar again.
 struct InteractionCoupling<A> {
-    /// Lookup metadata for active AIRs, indexed by [`AirInteractionSlot::link_index`].
+    /// One entry per lookup-declaring AIR of this stage, in stage order.
+    ///
+    /// Each slot records its own position here, so no map lookup happens in the row loop.
     links: Vec<AirLinkInstance<A>>,
-    /// Shared theta-scaled beta powers used to fingerprint interaction payloads.
+    /// Coefficient `theta * beta^k` applied to payload coordinate `k`.
     theta_beta_powers: Vec<A>,
 }
 
-/// One-time initialization bundle for a coupled stage.
+/// Everything a stage needs from the lookup reduction, consumed once when it activates.
 ///
-/// [`RoundStateBase::new`] consumes the private per-AIR claims and metadata when
-/// the stage activates; subsequent rounds retain only compact active-link state.
+/// Both maps are keyed by caller order and are sparse: only lookup-declaring AIRs appear.
+/// Activation turns them into the compact stage-ordered form the round kernels use.
 pub(crate) struct StageCoupling<A> {
-    /// Private lookup-link claims keyed by original caller AIR index.
+    /// Each AIR's private share of the folded lookup claim.
     claims: BTreeMap<usize, A>,
-    /// Lookup metadata keyed by original caller AIR index.
+    /// Each AIR's block weights and bus offsets.
     links: BTreeMap<usize, AirLinkInstance<A>>,
-    /// Shared theta-scaled beta powers used to fingerprint interaction payloads.
+    /// Coefficient `theta * beta^k` applied to payload coordinate `k`.
     theta_beta_powers: Vec<A>,
 }
 
 impl<A> StageCoupling<A> {
+    /// Pair the private claims with the link data they belong to.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two maps do not cover exactly the same AIRs.
     pub(crate) fn new(
         claims: BTreeMap<usize, A>,
         links: BTreeMap<usize, AirLinkInstance<A>>,
         theta_beta_powers: Vec<A>,
     ) -> Self {
+        // A claim without link data, or the reverse, would leave one half of the fold undefined.
         assert!(claims.keys().eq(links.keys()));
         Self {
             claims,
@@ -406,6 +427,10 @@ impl<A> StageCoupling<A> {
     }
 }
 
+/// Run one AIR at one interpolation node and return the families this node needs.
+///
+/// The ordinary folder is used whenever no lookup value is wanted.
+/// That keeps the constraint-only path free of every lookup-related branch and read.
 #[inline]
 fn evaluate_air_families<'a, F, Var, Acc, A>(
     folder: MultilinearFolder<'a, F, Var, Acc>,
@@ -549,34 +574,48 @@ where
     }
 }
 
-/// Per-AIR fold metadata, in stage-local order.
-///
-/// Physical columns remain single-owned even when the AIR contributes to two logical degree groups.
+/// Where one AIR's lookup link lands, for an AIR that declares one.
 #[derive(Clone, Copy, Default)]
 struct AirInteractionSlot {
-    /// Native degree of this AIR's lookup-link expression family.
+    /// Native per-variable degree of this AIR's lookup-link expression.
     degree: usize,
-    /// Interaction-group index receiving this AIR's lookup evaluations.
+    /// Degree group collecting this AIR's lookup evaluations.
     group_index: usize,
-    /// Position of this AIR's metadata in the compact active-link vector.
+    /// Position of this AIR's coefficients in the stage's compact link vector.
     link_index: usize,
 }
 
+/// Which expression families one AIR contributes at one interpolation node.
 #[derive(Clone, Copy)]
 struct EnabledFamilies {
-    /// Whether this node requires the ordinary constraint family.
+    /// Whether the ordinary constraints are wanted here.
     constraints: bool,
-    /// Active lookup metadata, absent when this node requires no interaction evaluation.
+    /// Where to send the lookup link, absent when it is not wanted here.
     interaction: Option<AirInteractionSlot>,
 }
 
+/// How many columns of each group one AIR owns.
 #[derive(Clone, Copy)]
 struct AirColumnWidths {
+    /// Committed main trace columns.
     main: usize,
+    /// Committed preprocessed columns, zero when the AIR declares none.
     preprocessed: usize,
+    /// Materialized periodic columns, zero when the AIR declares none.
     periodic: usize,
 }
 
+/// One AIR's slice of the stage's merged column buffer, plus its fold metadata.
+///
+/// Every AIR of a stage keeps its columns in one shared buffer laid out group by group:
+///
+/// ```text
+///     | air 0: main | prep | periodic | air 1: main | prep | periodic | ...
+///       ^ main_offset      ^ periodic_offset
+/// ```
+///
+/// The offsets stay valid for the whole sumcheck.
+/// Folding shrinks every column by the same factor and never reorders them.
 struct AirSlot<'air, A> {
     /// AIR evaluated by this slot.
     air: &'air A,
@@ -603,23 +642,29 @@ struct AirSlot<'air, A> {
 }
 
 impl<'air, A> AirSlot<'air, A> {
-    /// Lay out every AIR's columns once and attach its constraint and interaction fold metadata.
+    /// Lay out every AIR's columns once and attach its fold metadata.
     ///
-    /// `links` is sparse metadata keyed by original caller AIR index. As the
-    /// stage-order slots are built, every interaction-active AIR removes its
-    /// link from that map and moves it into the returned compact link vector.
-    /// Lookup-inactive AIRs therefore occupy a slot but no link-vector entry.
+    /// The sparse caller-keyed link map is flattened into a dense stage-ordered vector.
+    /// The row loop then indexes a slice instead of searching a map.
     ///
-    /// The compact links follow stage order with inactive AIRs filtered out.
-    /// Each active slot records the corresponding output position in
-    /// [`AirInteractionSlot::link_index`], replacing the caller-index map lookup
-    /// with direct vector indexing in the round kernels. Scalar and packed
-    /// couplings preserve this order, so the same link index remains valid
-    /// throughout the sumcheck.
+    /// ```text
+    ///     stage caller indices : [ 7,  2,  9,  4 ]
+    ///     input links          : {     2 -> L2,      4 -> L4 }
+    ///     returned links       : [ L2, L4 ]
+    ///     recorded link index  :       0            1
+    /// ```
     ///
-    /// For stage caller indices `[7, 2, 9, 4]` and input links `{2: L2, 4: L4}`,
-    /// the returned links are `[L2, L4]`; the slots for caller indices `2` and
-    /// `4` receive link indices `0` and `1`, respectively.
+    /// Every later representation of the coefficients keeps this order.
+    /// A recorded index therefore stays valid for the whole sumcheck.
+    ///
+    /// # Returns
+    ///
+    /// - one slot per AIR of the stage, in stage order;
+    /// - the dense link vector the slots point into.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a lookup-declaring AIR has no link, or a link names an AIR outside the stage.
     fn build<EF>(
         airs: &[&'air A],
         caller_indices: &[usize],
@@ -690,10 +735,12 @@ impl<'air, A> AirSlot<'air, A> {
         (slots, active_links)
     }
 
-    /// Select the native-degree families required at one interpolation node.
+    /// Select which expression families this AIR contributes at one interpolation node.
     ///
-    /// The first base-field round may omit the ordinary node-zero evaluation
-    /// because satisfied constraints vanish on the unfolded boolean rows.
+    /// A family is skipped past its own degree, since it is already pinned down there.
+    ///
+    /// The first base-field round also skips the ordinary node-zero evaluation:
+    /// the rows are still boolean there, so satisfied constraints are known to vanish.
     const fn enabled_families(
         &self,
         node: usize,
@@ -715,8 +762,7 @@ impl<'air, A> AirSlot<'air, A> {
 
 /// Expression families sharing one per-variable degree and one reduced claim.
 ///
-/// Grouping by degree lets a lower-degree expression family skip the interpolation
-/// nodes that only a higher-degree family needs.
+/// Grouping by degree lets a lower-degree family skip the nodes only a higher one needs.
 struct DegreeGroup<EF> {
     /// Common per-variable degree of every AIR in this group, with the eq factor stripped.
     degree: usize,
@@ -754,7 +800,14 @@ impl<EF: Field> DegreeGroup<EF> {
             .collect()
     }
 
-    /// Build native-degree groups and initialize each claim from its member AIR claims.
+    /// Build the groups and seed each one with the claims of the AIRs it holds.
+    ///
+    /// Ordinary constraints start from zero, so only the lookup groups need this.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the degrees and the caller indices disagree on length.
+    /// Panics if an AIR in a nonempty group has no claim.
     fn build_with_claims<I>(
         degrees: I,
         caller_indices: &[usize],
@@ -787,7 +840,8 @@ impl<EF: Field> DegreeGroup<EF> {
 
     /// Evaluate this group's eq-stripped round polynomial `q` at an interpolation node.
     ///
-    /// The prover never stores `q(1)`; it is recovered from the sumcheck claim relation:
+    /// The prover never stores `q(1)`.
+    /// It is recovered from the sumcheck claim relation instead:
     ///
     /// ```text
     ///     claim = (1 - tau) * q(0) + tau * q(1)
@@ -797,6 +851,7 @@ impl<EF: Field> DegreeGroup<EF> {
     /// # Panics
     ///
     /// Panics if the group degree is zero, since a constant has no round polynomial.
+    /// Panics if `tau` is zero, since recovering the dropped node divides by it.
     fn eval(&self, tau: EF, point: EF) -> EF {
         debug_assert_eq!(self.last_evals.len(), self.degree);
         assert!(self.degree > 0, "round polynomial degree must be positive");
@@ -867,7 +922,9 @@ impl<EF: Field> DegreeGroup<EF> {
         }
     }
 
-    /// Scale one already-grouped lookup evaluation vector after the row scan.
+    /// Store one lookup group's per-node sums, scaled by the lookup separation scalar.
+    ///
+    /// The row scan already summed the group's AIRs together, so no beta weighting is left.
     fn write_interaction_last_evals(&mut self, scale: EF, evals: &[EF]) {
         debug_assert_eq!(evals.len(), self.degree);
         self.last_evals
@@ -877,6 +934,16 @@ impl<EF: Field> DegreeGroup<EF> {
     }
 }
 
+/// Turn one round's raw per-node sums into the stage's transmitted round polynomial.
+///
+/// Beta weighting and the lookup scalar are applied here rather than inside the row loop.
+/// That saves one extension multiply per node per row.
+///
+/// Groups below the stage's top degree are extrapolated up to it before being summed.
+///
+/// # Panics
+///
+/// Panics if the stage has no degree group at all.
 fn finish_round<EF: Field>(
     constraint_groups: &mut [DegreeGroup<EF>],
     interaction_groups: &mut [DegreeGroup<EF>],
@@ -914,10 +981,24 @@ where
     EF: ExtensionField<F>,
     A: BaseAir<F>,
 {
-    /// Build the prover state when different AIRs have different internal degrees.
+    /// Activate a stage: materialize its periodic columns and lay out its degree groups.
     ///
-    /// `degrees[i]` is the degree of AIR `i` after stripping the active eq factor.
-    /// Every entry must be positive. The round degree is the maximum AIR degree.
+    /// Ordinary constraints and lookup links are bucketed separately.
+    /// One AIR can carry two different native degrees, and the lower must not pay for the higher.
+    ///
+    /// # Arguments
+    ///
+    /// - `stage`: the AIRs sharing this trace height, with their traces and lookup state.
+    /// - `alpha`: batches the constraints of one AIR.
+    /// - `eta`: separates lookup links from ordinary constraints.
+    /// - `betas`: one power per AIR, batching the AIRs against each other.
+    /// - `tau`: the zerocheck point coordinates this stage still has to bind.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the zerocheck point does not match the stage height.
+    /// Panics if a periodic column's period is not a power of two dividing the trace height.
+    /// Panics if the beta powers do not number one per AIR.
     #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn new(
         stage: Stage<'air, 'data, A, F, EF>,
@@ -991,13 +1072,12 @@ where
             "one beta power is required for each AIR"
         );
 
-        // Ordinary constraints retain their native degrees and their original
-        // post-scan beta weighting.
+        // Ordinary constraints keep their native degrees and their post-scan beta weighting.
         let constraint_groups =
             DegreeGroup::build(degrees.iter().map(|degrees| degrees.constraints));
 
-        // Lookup links form independent native-degree groups. Private per-AIR
-        // claims initialize only the groups containing those AIRs.
+        // Lookup links form their own native-degree groups.
+        // Only the groups holding a lookup-declaring AIR start from a nonzero claim.
         let StageCoupling {
             claims,
             links,
@@ -1593,9 +1673,9 @@ where
             .collect()
     }
 
-    /// Computes the round polynomial evaluations, dispatching to the
-    /// SIMD-packed kernel once there are enough residual rows to fill a
-    /// packed lane, mirroring [`RoundStateBase::round_poly`].
+    /// Evaluate this round's polynomial at every interpolation node.
+    ///
+    /// The packed kernel runs while a fold still leaves enough residual rows to fill a lane.
     #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn round_poly(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
@@ -1748,16 +1828,17 @@ where
         )
     }
 
-    /// SIMD-packed twin of [`Self::round_poly_unpacked`].
+    /// SIMD-packed twin of the scalar kernel above.
     ///
-    /// Every column is already extension-valued (folded by earlier rounds),
-    /// so packing groups `F::Packing::WIDTH` consecutive residual rows of
-    /// each `Poly<EF>` column into one `EF::ExtensionPacking`, via an
-    /// unaligned [`PackedFieldExtension::from_ext_slice`] read exactly like
-    /// [`RoundStateBase::round_poly_packed`] does for its base-field
-    /// columns. The AIR is driven through [`PackedExt`], which wraps the
-    /// packed extension value so it supports arithmetic against the base
-    /// field `F` directly (see that type's docs for why this is needed).
+    /// Earlier rounds already lifted every column into the extension field.
+    /// One lane group therefore holds as many consecutive residual rows as the base field packs:
+    ///
+    /// ```text
+    ///     rows   : x_0  x_1  x_2  x_3 ...
+    ///     lanes  : |------- one packed element -------|
+    /// ```
+    ///
+    /// A wrapper supplies the mixed base-times-extension multiply the AIR interface needs.
     #[tracing::instrument(skip_all, level = "debug")]
     fn round_poly_packed(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where

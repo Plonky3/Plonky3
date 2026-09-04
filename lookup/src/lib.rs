@@ -23,5 +23,5 @@ pub use challenges::Challenges;
 pub use count::Count;
 pub use logup::LogUpGadget;
 pub use protocol::LookupProtocol;
-pub use symbolic::{InteractionSymbolicBuilder, get_all_interaction_symbolic_constraints};
+pub use symbolic::InteractionSymbolicBuilder;
 pub use types::*;
