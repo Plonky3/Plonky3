@@ -591,13 +591,9 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         let mut restored =
             restore_paths(proof, &sorted_unique, &arity_schedule, full_sibling_count)?;
 
-        // Every representative opening must expose one row per committed matrix.
-        // Ascending, distinct leaf order already holds by construction.
+        // Every representative opening must expose one row per committed matrix, each at its
+        // matrix's width. Ascending, distinct leaf order already holds by construction.
         for &rep in &reps {
-            if opened_values[rep].len() != dimensions.len() {
-                return Err(WrongBatchSize);
-            }
-            // Row boundaries within a flattened leaf hash are only pinned by the widths.
             check_widths(dimensions, &opened_values[rep])?;
         }
 
