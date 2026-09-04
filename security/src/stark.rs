@@ -12,6 +12,7 @@
 //! Pass `&[]` when only the baseline AIR + DEEP + LDT terms apply.
 
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 
 use crate::assumption::SecurityAssumption;
 use crate::error::ErrorBits;
@@ -227,19 +228,30 @@ pub fn proven_security_report<L: LowDegreeTest>(
         grinding,
     );
 
-    let ldr = ldt.best_ldr(air, shape).map(|(m, ldr_ldt)| {
-        let list_size = list_size_ldr_m(log_blowup, m);
-        regime_report(
-            Regime::ListDecoding { m },
-            air,
-            shape,
-            list_size,
-            ldr_ldt,
-            batching_term(SecurityAssumption::JohnsonBound, shape, log_blowup, Some(m)),
-            extras,
-            grinding,
-        )
-    });
+    // Pick `m` by the composite rather than by the low-degree test alone. The
+    // batching term grows as `(m + 1/2)⁵`, so the LDT's own optimum can be far
+    // from the composite's; see `LowDegreeTest::ldr_candidates`.
+    let ldr = ldt
+        .ldr_candidates(air, shape)
+        .into_iter()
+        .map(|(m, ldr_ldt)| {
+            let list_size = list_size_ldr_m(log_blowup, m);
+            regime_report(
+                Regime::ListDecoding { m },
+                air,
+                shape,
+                list_size,
+                ldr_ldt,
+                batching_term(SecurityAssumption::JohnsonBound, shape, log_blowup, Some(m)),
+                extras,
+                grinding,
+            )
+        })
+        .max_by(|a, b| {
+            a.security_bits()
+                .partial_cmp(&b.security_bits())
+                .unwrap_or(Ordering::Equal)
+        });
 
     SecurityReport { udr, ldr }
 }
@@ -638,6 +650,117 @@ mod tests {
             )
             .max(0.0);
         assert!(batch_term.bits.bits() < fixed_m_bits);
+    }
+
+    /// A low-degree test that forwards to a [`crate::fri::FriRegime`] but
+    /// leaves [`LowDegreeTest::ldr_candidates`] at its default, so the
+    /// composite sees only the LDT's own optimum — the behaviour before that
+    /// hook existed.
+    struct LdtOnlyChoice(crate::fri::FriRegime);
+
+    impl LowDegreeTest for LdtOnlyChoice {
+        fn log_blowup(&self) -> usize {
+            self.0.log_blowup()
+        }
+
+        fn proven_error_udr(&self, air: &StarkAirParams, shape: &InstanceShape) -> ErrorBits {
+            self.0.proven_error_udr(air, shape)
+        }
+
+        fn best_ldr(
+            &self,
+            air: &StarkAirParams,
+            shape: &InstanceShape,
+        ) -> Option<(usize, ErrorBits)> {
+            self.0.best_ldr(air, shape)
+        }
+
+        fn conjectured_error(&self, shape: &InstanceShape) -> ErrorBits {
+            self.0.conjectured_error(shape)
+        }
+    }
+
+    /// A regime whose low-degree test can be pushed to a large proximity
+    /// parameter by grinding, which is what exposes the batching term's
+    /// `(m + 1/2)⁵` growth.
+    fn grindable_regime(commit_pow_bits: usize) -> crate::fri::FriRegime {
+        crate::fri::FriRegime {
+            log_blowup: 1,
+            num_queries: 64,
+            log_final_poly_len: 0,
+            max_log_arity: 2,
+            commit_pow_bits,
+            query_pow_bits: 20,
+        }
+    }
+
+    /// Choosing `m` by the composite is never worse than choosing it by the
+    /// low-degree test alone, and is strictly better once the batching term
+    /// binds: the LDT's optimum trades that term away for a gain worth less.
+    #[test]
+    fn proven_report_picks_m_by_the_composite_not_the_low_degree_test() {
+        let air = air();
+        let shape = batched_shape();
+
+        for commit_pow_bits in [0, 8, 16, 20, 24] {
+            let regime = grindable_regime(commit_pow_bits);
+            let composite =
+                proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+            let ldt_only = proven_security_report(
+                &LdtOnlyChoice(regime),
+                &air,
+                &shape,
+                &[],
+                &GrindingSites::NONE,
+            );
+
+            assert!(
+                composite.security_bits() >= ldt_only.security_bits() - 1e-9,
+                "composite choice lost to the LDT-only choice at commit_pow_bits {commit_pow_bits}: \
+                 {} < {}",
+                composite.security_bits(),
+                ldt_only.security_bits()
+            );
+        }
+
+        // The two genuinely differ here: the LDT-only choice takes a much
+        // larger `m` and the batching term collapses under it.
+        let regime = grindable_regime(0);
+        let composite = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+        let ldt_only = proven_security_report(
+            &LdtOnlyChoice(regime),
+            &air,
+            &shape,
+            &[],
+            &GrindingSites::NONE,
+        );
+        assert!(
+            composite.security_bits() > ldt_only.security_bits(),
+            "expected the composite choice to beat the LDT-only choice"
+        );
+    }
+
+    /// Commit-phase grinding must never lower the reported proven level.
+    ///
+    /// While `m` was chosen by the low-degree test alone it could: grinding
+    /// let the LDT tolerate a far larger `m`, and the batching term fell away
+    /// faster than the LDT term rose.
+    #[test]
+    fn commit_grinding_never_lowers_the_proven_level_when_openings_are_batched() {
+        let air = air();
+        let shape = batched_shape();
+
+        let mut previous = f64::NEG_INFINITY;
+        for commit_pow_bits in [0, 4, 8, 12, 16, 20, 24, 28] {
+            let regime = grindable_regime(commit_pow_bits);
+            let level = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE)
+                .security_bits();
+            assert!(
+                level >= previous - 1e-9,
+                "grinding {commit_pow_bits} bits lowered the level: {previous} -> {level}"
+            );
+            previous = level;
+        }
     }
 
     /// The conjectured report's attained bits equal the scalar

@@ -36,6 +36,29 @@ pub trait LowDegreeTest {
     /// `None` when no valid `m` exists (e.g. the trace is too small).
     fn best_ldr(&self, air: &StarkAirParams, shape: &InstanceShape) -> Option<(usize, ErrorBits)>;
 
+    /// Every admissible list-decoding regime: the proximity parameter `m`
+    /// paired with the LDT-only error attained there.
+    ///
+    /// [`crate::stark::proven_security_report`] evaluates the *full* composite
+    /// at each candidate and keeps the best, instead of trusting the LDT's own
+    /// optimum. The two disagree whenever a term outside the LDT depends on
+    /// `m`: the batched-openings term grows as `(m + 1/2)⁵`, so an `m` chosen
+    /// to maximise the LDT alone can sit far from the one that maximises the
+    /// composite. Left to [`Self::best_ldr`], grinding that lets the LDT
+    /// tolerate a larger `m` would then *lower* the reported level, breaking
+    /// the invariant that proof of work never costs security.
+    ///
+    /// The default returns [`Self::best_ldr`]'s single choice, which leaves
+    /// any existing implementation correct; override it to expose the whole
+    /// admissible range.
+    fn ldr_candidates(
+        &self,
+        air: &StarkAirParams,
+        shape: &InstanceShape,
+    ) -> Vec<(usize, ErrorBits)> {
+        self.best_ldr(air, shape).into_iter().collect()
+    }
+
     /// Conjectured LDT error (random-words / heuristic regime).
     fn conjectured_error(&self, shape: &InstanceShape) -> ErrorBits;
 

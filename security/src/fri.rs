@@ -60,6 +60,14 @@ impl LowDegreeTest for FriRegime {
         best_ldr_m(self, air, shape)
     }
 
+    fn ldr_candidates(
+        &self,
+        air: &StarkAirParams,
+        shape: &InstanceShape,
+    ) -> Vec<(usize, ErrorBits)> {
+        ldr_candidates(self, air, shape)
+    }
+
     fn conjectured_error(&self, shape: &InstanceShape) -> ErrorBits {
         conjectured_error(self, shape)
     }
@@ -276,19 +284,38 @@ pub fn best_ldr_m(
     air: &StarkAirParams,
     shape: &InstanceShape,
 ) -> Option<(usize, ErrorBits)> {
-    let trace_length = 1usize << shape.log_trace_length;
-    let m_max = core::cmp::min(compute_upper_m(trace_length, air.max_combo), LDR_M_CAP);
-    let m_min = 3usize;
-    if m_max < m_min {
-        return None;
-    }
-    (m_min..=m_max)
-        .map(|m| (m, proven_error_ldr_m(regime, air, shape, m)))
+    ldr_candidates(regime, air, shape)
+        .into_iter()
         .max_by(|a, b| {
             a.1.bits()
                 .partial_cmp(&b.1.bits())
                 .unwrap_or(core::cmp::Ordering::Equal)
         })
+}
+
+/// Every admissible `m ∈ [3, min(compute_upper_m, LDR_M_CAP)]` with the
+/// LDT-only error attained there, in increasing order of `m`.
+///
+/// [`best_ldr_m`] picks from this list by the LDT error alone;
+/// [`crate::stark::proven_security_report`] takes the whole list and picks by
+/// the full composite, which is the choice that stays valid once a term
+/// outside the LDT depends on `m` (see [`crate::ldt::LowDegreeTest::ldr_candidates`]).
+///
+/// Empty when the trace is too small to admit any valid `m`.
+pub fn ldr_candidates(
+    regime: &FriRegime,
+    air: &StarkAirParams,
+    shape: &InstanceShape,
+) -> Vec<(usize, ErrorBits)> {
+    let trace_length = 1usize << shape.log_trace_length;
+    let m_max = core::cmp::min(compute_upper_m(trace_length, air.max_combo), LDR_M_CAP);
+    let m_min = 3usize;
+    if m_max < m_min {
+        return Vec::new();
+    }
+    (m_min..=m_max)
+        .map(|m| (m, proven_error_ldr_m(regime, air, shape, m)))
+        .collect()
 }
 
 #[cfg(test)]
