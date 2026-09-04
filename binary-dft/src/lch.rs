@@ -14,8 +14,11 @@ use crate::traits::AdditiveNtt;
 /// The Lin–Chung–Han additive NTT over the Cantor-basis domain.
 ///
 /// Twiddles are index shifts (D8): at stage `j` and butterfly block `blk` the twiddle is
-/// `W_j(shift) + domain_point(blk << 1)`, so the only per-size precomputation is the `ℓ − 1 − j`
-/// increments that consecutive blocks of a stage differ by.
+/// `W_j(shift) + domain_point(blk << 1)`, so there is no twiddle table.
+///
+/// Consecutive blocks differ by a fixed increment, so a block takes its twiddle from the one
+/// before it rather than walking its own index.
+/// The `ℓ - 1` increments are shared by every stage and are the only per-size precomputation.
 ///
 /// `W_j` is `F_2`-linear and `domain_point(0)` is zero, so over the subspace itself — the
 /// coset with `shift = 0` — the first block of every stage has a zero twiddle and its
@@ -45,12 +48,15 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
         let width = mat.width();
         let log_n = log2_strict_usize(mat.height());
 
+        // An increment depends only on a block index's trailing-zero count, never on the stage,
+        // so one table serves every stage and each stage uses the prefix it reaches.
+        // A height of one runs no stage and needs no table.
+        let steps = domain_point_steps::<F>(log_n.saturating_sub(1));
         for j in (0..log_n).rev() {
             let half = (1 << j) * width;
             // D8: the block starting at row `b` of the coset `shift + S_ℓ` has twiddle
             // `W_j(shift) + point(b >> j)`, and block `blk` starts at row `blk << (j + 1)`.
             let base = subspace_polynomial::<F>(j, shift);
-            let steps = domain_point_steps::<F>(log_n - 1 - j);
             let per_task = (BUTTERFLY_GRAIN / half).max(1);
             mat.values
                 .par_chunks_mut(per_task * (half << 1))
@@ -58,6 +64,8 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
                 .for_each(|(task, group)| {
                     let first = task * per_task;
                     let mut t = base + domain_point::<F>(first << 1);
+                    // Invariant: blocks are visited in ascending index order.
+                    // Carrying the twiddle from one block to the next relies on it.
                     for (i, block) in group.chunks_mut(half << 1).enumerate() {
                         if i != 0 {
                             t += steps[(first + i).trailing_zeros() as usize];
@@ -97,11 +105,14 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
         let width = mat.width();
         let log_n = log2_strict_usize(mat.height());
 
+        // An increment depends only on a block index's trailing-zero count, never on the stage,
+        // so one table serves every stage and each stage uses the prefix it reaches.
+        // A height of one runs no stage and needs no table.
+        let steps = domain_point_steps::<F>(log_n.saturating_sub(1));
         for j in 0..log_n {
             let half = (1 << j) * width;
             // Twiddles as derived in `shifted_ntt_batch`, with the stages run in reverse.
             let base = subspace_polynomial::<F>(j, shift);
-            let steps = domain_point_steps::<F>(log_n - 1 - j);
             let per_task = (BUTTERFLY_GRAIN / half).max(1);
             mat.values
                 .par_chunks_mut(per_task * (half << 1))
@@ -109,6 +120,8 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
                 .for_each(|(task, group)| {
                     let first = task * per_task;
                     let mut t = base + domain_point::<F>(first << 1);
+                    // Invariant: blocks are visited in ascending index order.
+                    // Carrying the twiddle from one block to the next relies on it.
                     for (i, block) in group.chunks_mut(half << 1).enumerate() {
                         if i != 0 {
                             t += steps[(first + i).trailing_zeros() as usize];
