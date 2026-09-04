@@ -266,7 +266,7 @@ jobs:
       # tools (and taplo's `time` dependency chain) from source every run.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-sort,taplo
+          tool: cargo-machete,cargo-sort,taplo
 
       - uses: Swatinem/rust-cache@v2
 
@@ -275,6 +275,11 @@ jobs:
 
       - name: Check TOML formatting
         run: taplo fmt --check
+
+      # `--with-metadata` resolves each manifest through cargo.
+      # Only that resolution makes dev-dependencies visible to the scan.
+      - name: Unused dependencies
+        run: cargo machete --with-metadata
 
       - name: Clippy
         run: cargo +stable clippy --all-targets -- -D warnings

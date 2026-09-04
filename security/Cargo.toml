@@ -13,7 +13,6 @@ categories.workspace = true
 libm.workspace = true
 p3-air.workspace = true
 p3-field.workspace = true
-p3-util.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
 
 [dev-dependencies]

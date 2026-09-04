@@ -21,7 +21,6 @@ p3-util.workspace = true
 
 itertools.workspace = true
 num-bigint.workspace = true
-paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 

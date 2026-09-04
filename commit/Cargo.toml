@@ -17,11 +17,11 @@ test-utils = ["p3-challenger"]
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
-p3-multilinear-util.workspace = true
 p3-util.workspace = true
 
 itertools.workspace = true
-serde.workspace = true
+# The opening types derive their codecs, and they hold `Vec`s.
+serde = { workspace = true, features = ["derive", "alloc"] }
 
 # for testing
 p3-challenger = { workspace = true, optional = true }
