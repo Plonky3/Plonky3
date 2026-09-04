@@ -232,6 +232,19 @@ impl StarkSecurityParams {
     /// field) and whether the prover commits zk's randomizing codeword. Together
     /// with the AIR they determine `num_batched_functions` — see
     /// [`num_batched_openings`].
+    ///
+    /// `grinding` is required rather than defaulted for the same reason: a
+    /// silent [`GrindingSites::NONE`] is safe in direction, since it only
+    /// understates, but it makes every grinding knob inert in the report. A
+    /// caller who raises `p3_fri::FriParameters::batch_proof_of_work_bits` and
+    /// sees the reported level not move has hit exactly that. Pass
+    /// `fri_params.grinding_sites()`, extended with the sites the surrounding
+    /// protocol enforces — see [`Self::grinding`] for the full recipe.
+    // The list is the inputs a security level is a function of: the low-degree
+    // test, the AIR and its layout, the two crypto parameters, the opening
+    // shape, and where the protocol grinds. Grouping any of them behind another
+    // name would only move the same values one level down.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_air<F, EF, A>(
         fri: FriRegime,
         air: &A,
@@ -240,6 +253,7 @@ impl StarkSecurityParams {
         collision_resistance: usize,
         max_combo: usize,
         openings: OpeningShape,
+        grinding: GrindingSites,
     ) -> Self
     where
         F: Field,
@@ -272,6 +286,7 @@ impl StarkSecurityParams {
             max_combo,
             num_batched_functions,
         )
+        .with_grinding(grinding)
     }
 
     /// The low-degree test owns the query- and commit-phase grinding sites,
@@ -607,6 +622,7 @@ mod tests {
             128,
             2,
             OpeningShape::new(4),
+            GrindingSites::NONE,
         );
 
         // Degree-1 constraints give a single quotient chunk of 4 columns, and
@@ -644,6 +660,7 @@ mod tests {
             128,
             2,
             OpeningShape::new(4),
+            GrindingSites::NONE,
         );
         let b = StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
             regime,
@@ -653,10 +670,71 @@ mod tests {
             128,
             1,
             OpeningShape::new(4),
+            GrindingSites::NONE,
         );
 
         assert_eq!(a.num_batched_functions, 20);
         assert_eq!(b.num_batched_functions, 12);
+    }
+
+    /// A grinding site the protocol enforces must move the reported level.
+    ///
+    /// This is the regression guard for the shape of bug where the knob exists,
+    /// the prover pays it and the verifier checks it, but the report never sees
+    /// it: raising `p3_fri::FriParameters::batch_proof_of_work_bits` then
+    /// changes nothing at all, at any value.
+    #[test]
+    fn from_air_threads_the_grinding_sites_into_the_report() {
+        let regime = benchmark_high_arity_params(124).fri_regime();
+        // Wide enough that the batched-openings round is the binding one, which
+        // is the round the batch site protects.
+        let air = MockAir {
+            width: 1000,
+            num_constraints: 3,
+            reads_next_row: true,
+        };
+        let layout = AirLayout::from_air(&air);
+        let degree_bits = 16;
+
+        let build = |grinding| {
+            StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
+                regime,
+                &air,
+                layout,
+                124,
+                128,
+                2,
+                OpeningShape::new(4),
+                grinding,
+            )
+        };
+
+        let ungrounded = build(GrindingSites::NONE);
+        let ground = build(GrindingSites {
+            batch_combination: 16,
+            ..GrindingSites::NONE
+        });
+
+        assert_eq!(ungrounded.grinding, GrindingSites::NONE);
+        assert_eq!(ground.grinding.batch_combination, 16);
+
+        let before = ConjecturedSecurity::compute_from_params(&ungrounded, degree_bits);
+        let after = ConjecturedSecurity::compute_from_params(&ground, degree_bits);
+        assert!(
+            after.security_bits > before.security_bits,
+            "batch grinding bought nothing in the report: {} -> {}",
+            before.security_bits,
+            after.security_bits
+        );
+
+        let before = ProvenSecurity::compute_from_proof(degree_bits, &ungrounded);
+        let after = ProvenSecurity::compute_from_proof(degree_bits, &ground);
+        assert!(
+            after.security_bits() > before.security_bits(),
+            "batch grinding bought nothing in the proven report: {} -> {}",
+            before.security_bits(),
+            after.security_bits()
+        );
     }
 
     /// The derived count lowers the reported proven level relative to the `1`

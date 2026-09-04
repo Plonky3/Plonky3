@@ -105,6 +105,7 @@ where
         128,
         2,
         OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
+        fri_params.grinding_sites(),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
@@ -160,6 +161,7 @@ where
         128,
         2,
         OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
+        fri_params.grinding_sites(),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
@@ -207,6 +209,7 @@ pub fn prove_m31_keccak<
         128,
         2,
         OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
+        fri_params.grinding_sites(),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
@@ -261,6 +264,7 @@ where
         128,
         2,
         OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
+        fri_params.grinding_sites(),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);

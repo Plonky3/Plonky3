@@ -193,24 +193,22 @@ fn level(params: &StarkSecurityParams, degree_bits: usize, sites: GrindingSites)
 /// round, which is the whole reason the site exists.
 #[test]
 fn batch_grinding_raises_the_level_when_the_batch_round_binds() {
-    let params = StarkSecurityParams {
-        num_batched_functions: 1 << 8,
-        ..StarkSecurityParams::new(
-            p3_security::fri::FriRegime {
-                log_blowup: 3,
-                num_queries: 64,
-                log_final_poly_len: 0,
-                max_log_arity: 3,
-                commit_pow_bits: 0,
-                query_pow_bits: 16,
-            },
-            128,
-            128,
-            512,
-            9,
-            2,
-        )
-    };
+    let params = StarkSecurityParams::new(
+        p3_security::fri::FriRegime {
+            log_blowup: 3,
+            num_queries: 64,
+            log_final_poly_len: 0,
+            max_log_arity: 3,
+            commit_pow_bits: 0,
+            query_pow_bits: 16,
+        },
+        128,
+        128,
+        512,
+        9,
+        2,
+        1 << 8,
+    );
     let degree_bits = 20;
 
     let ungrounded = level(&params, degree_bits, GrindingSites::NONE);
@@ -249,6 +247,7 @@ fn out_of_domain_grinding_raises_the_level_when_the_deep_round_binds() {
         1,
         9,
         2,
+        1,
     );
     let degree_bits = 24;
 
@@ -272,24 +271,22 @@ fn out_of_domain_grinding_raises_the_level_when_the_deep_round_binds() {
 /// reported level would mean the boost had been wired to the wrong term.
 #[test]
 fn grinding_is_monotone_at_every_site() {
-    let params = StarkSecurityParams {
-        num_batched_functions: 1 << 8,
-        ..StarkSecurityParams::new(
-            p3_security::fri::FriRegime {
-                log_blowup: 3,
-                num_queries: 64,
-                log_final_poly_len: 0,
-                max_log_arity: 3,
-                commit_pow_bits: 0,
-                query_pow_bits: 16,
-            },
-            128,
-            128,
-            512,
-            9,
-            2,
-        )
-    };
+    let params = StarkSecurityParams::new(
+        p3_security::fri::FriRegime {
+            log_blowup: 3,
+            num_queries: 64,
+            log_final_poly_len: 0,
+            max_log_arity: 3,
+            commit_pow_bits: 0,
+            query_pow_bits: 16,
+        },
+        128,
+        128,
+        512,
+        9,
+        2,
+        1 << 8,
+    );
     let degree_bits = 20;
 
     let mut previous = level(&params, degree_bits, GrindingSites::NONE);

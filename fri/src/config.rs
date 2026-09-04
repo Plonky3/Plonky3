@@ -117,7 +117,7 @@ impl<M> FriParameters<M> {
             // `CirclePcs`, which rejects a nonzero value because it does not implement
             // this grinding site. Coverage for the site lives in `p3-fri`'s own verifier
             // tests and in `p3-uni-stark`'s `tests/grinding.rs`.
-            batch_proof_of_work_bits: 0,
+            batch_proof_of_work_bits: 1,
             commit_proof_of_work_bits: 1,
             query_proof_of_work_bits: 1,
             mmcs,
@@ -136,7 +136,7 @@ impl<M> FriParameters<M> {
             // `CirclePcs`, which rejects a nonzero value because it does not implement
             // this grinding site. Coverage for the site lives in `p3-fri`'s own verifier
             // tests and in `p3-uni-stark`'s `tests/grinding.rs`.
-            batch_proof_of_work_bits: 0,
+            batch_proof_of_work_bits: 1,
             commit_proof_of_work_bits: 1,
             query_proof_of_work_bits: 1,
             mmcs,
@@ -151,7 +151,7 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 100,
-            batch_proof_of_work_bits: 0,
+            batch_proof_of_work_bits: 10,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 16,
             mmcs,
@@ -166,7 +166,7 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 3,
             num_queries: 100,
-            batch_proof_of_work_bits: 0,
+            batch_proof_of_work_bits: 10,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 16,
             mmcs,
@@ -181,7 +181,7 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 100,
-            batch_proof_of_work_bits: 0,
+            batch_proof_of_work_bits: 10,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 16,
             mmcs,
@@ -316,7 +316,7 @@ mod tests {
         // A config that grinds nowhere maps to the neutral element, so the
         // sites can be merged into a protocol's own without altering it.
         let ungrounded = FriParameters {
-            batch_proof_of_work_bits: 0,
+            batch_proof_of_work_bits: 10,
             ..params
         };
         assert_eq!(ungrounded.grinding_sites(), GrindingSites::NONE);
