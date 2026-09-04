@@ -73,10 +73,30 @@ jobs:
           exit 1
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - name: Run release-plz
+      - name: Run release-plz (attempt 1/3)
+        id: release-plz-1
         uses: release-plz/action@v0.5
-        with:
+        continue-on-error: true
+        with: &release-plz-with
           command: release
-        env:
+        env: &release-plz-env
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Wait before retry (crates.io / GitHub rate limiting)
+        if: steps.release-plz-1.outcome == 'failure'
+        run: sleep 120
+      - name: Run release-plz (attempt 2/3)
+        id: release-plz-2
+        if: steps.release-plz-1.outcome == 'failure'
+        uses: release-plz/action@v0.5
+        continue-on-error: true
+        with: *release-plz-with
+        env: *release-plz-env
+      - name: Wait before retry (crates.io / GitHub rate limiting)
+        if: steps.release-plz-2.outcome == 'failure'
+        run: sleep 300
+      - name: Run release-plz (attempt 3/3)
+        if: steps.release-plz-2.outcome == 'failure'
+        uses: release-plz/action@v0.5
+        with: *release-plz-with
+        env: *release-plz-env
