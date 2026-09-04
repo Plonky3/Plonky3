@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.7.0] - 2026-09-04
+### Merged PRs
+- Chore: fix latest stable clippy (#1994)
+- Feat(field): characteristic-agnostic groundwork for binary fields (#2000)
+- Feat(binary-field): GF(2) through GF(2^128) tower fields (#2001)
+
 ## [0.6.0] - 2026-06-11
 ### Merged PRs
 - Add broadcast, pack_columns, pack_columns_fn, and unpack_iter to PackedValue (#1450)

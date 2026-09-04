@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.7.0] - 2026-09-04
+### Merged PRs
+- Chore: fix latest stable clippy (#1994)
+- Feat(sumcheck): subtraction-free projective (monomial-basis) sum-check on the prover (eprint 2026/762) (#1900)
+- Feat(field): characteristic-agnostic groundwork for binary fields (#2000)
+- Feat: adapt log levels of some inner functions (#1999)
+- Feat(binary-dft): additive NTT and the Encoder abstraction (#2003)
+- Feat(sumcheck): ring switching over an arbitrary field extension (#2006)
+- Fix(sumcheck): unpack suffix-bound product polynomials (#2008)
+
 ## [0.6.0] - 2026-06-11
 ### Merged PRs
 - Refactor: move sumcheck to an independent crate (#1672)
