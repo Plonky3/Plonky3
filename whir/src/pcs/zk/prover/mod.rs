@@ -40,7 +40,13 @@ use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
 use crate::pcs::zk::committer::{FoldedRsCode, zk_padded_matrix};
 use crate::pcs::zk::config::ZkWhirConfig;
 use crate::pcs::zk::proof::{ZkRoundProof, ZkWhirProof};
-use crate::utils::padded_ood_t1;
+use crate::utils::{eval_ze_star_n, par_add_scaled_powers, par_eval_ze_star_n};
+
+/// Chunk length for the parallel power runs over message-length vectors.
+///
+/// Each chunk is evaluated independently and re-based by one `rho^{c · POW_CHUNK}`
+/// shift, trading a serial dependency chain for a parallel one per chunk.
+const POW_CHUNK: usize = 1 << 12;
 
 /// HVZK-WHIR prover.
 #[derive(Debug)]
@@ -269,7 +275,10 @@ where
                     !rho_points.contains(&rho),
                     "OOD points must be pairwise distinct",
                 );
-                let answer = padded_ood_t1(rho, message.as_slice(), &mask_message);
+                // ze*(rho) over (message || mask_message): the long message side
+                // runs as chunked parallel Horner, the short mask tail serially.
+                let answer = par_eval_ze_star_n(rho, message.as_slice(), POW_CHUNK)
+                    + eval_ze_star_n(rho, &mask_message) * rho.exp_u64(message_len as u64);
                 challenger.observe_algebra_element(answer);
                 rho_points.push(rho);
                 ood_answers.push(answer);
@@ -371,26 +380,10 @@ where
                 }
                 weight_delta
             };
-            // Chunked parallel power run: chunk `c` starts at coeff * rho^(c * CHUNK).
-            const POW_CHUNK: usize = 1 << 12;
+            // OOD layers: delta[b] += c_j * rho_j^b.
             for (&rho, &coeff) in rho_points.iter().zip(ood_coeffs) {
-                weight_delta.par_chunks_mut(POW_CHUNK).enumerate().for_each(
-                    |(chunk_idx, chunk)| {
-                        let mut term = coeff * rho.exp_u64((chunk_idx * POW_CHUNK) as u64);
-                        for dst in chunk {
-                            *dst += term;
-                            term *= rho;
-                        }
-                    },
-                );
+                par_add_scaled_powers(&mut weight_delta, rho, coeff, POW_CHUNK);
             }
-            let claim_delta = message
-                .as_slice()
-                .par_chunks(POW_CHUNK)
-                .zip(weight_delta.par_chunks(POW_CHUNK))
-                .map(|(m, w)| dot_product::<EF, _, _>(m.iter().copied(), w.iter().copied()))
-                .sum::<EF>();
-            sumcheck_prover.accumulate_claim(&weight_delta, claim_delta);
 
             // Mask side: the fresh mask enters the relation.
             let mask_covector = switch_mask_covector(
@@ -402,20 +395,21 @@ where
                 &query_points,
                 query_coeffs,
             );
+            // The batched-claim identity pins the source-side increment:
+            //
+            //     carried + claim_delta + <mask covector, mask message> = mu'
+            //
+            // `accumulate_claim` re-derives it from <evals, weights> in debug builds.
+            let claim_delta = joint
+                - carried
+                - dot_product::<EF, _, _>(
+                    mask_covector.iter().copied(),
+                    mask_message.iter().copied(),
+                );
+            sumcheck_prover.accumulate_claim(&weight_delta, claim_delta);
+
             // The running total must match a full re-evaluation.
             debug_assert_eq!(masks.aux, masks.claims.evaluate(&masks.messages));
-            // Cross-check the batched-claim identity:
-            //
-            //     residual + aux + <mask covector, mask message> = mu'
-            debug_assert_eq!(
-                sumcheck_prover.claimed_sum()
-                    + masks.aux
-                    + dot_product::<EF, _, _>(
-                        mask_covector.iter().copied(),
-                        mask_message.iter().copied(),
-                    ),
-                joint,
-            );
             masks.push_switch_mask(
                 mask_covector,
                 mask_message,
