@@ -159,34 +159,47 @@ mod tests {
         }
     }
 
-    /// Folding the codeword equals binding the message's lowest variable in the evaluation
-    /// basis (`Poly::fix_suffix_var`), for codewords blown up at several rates: every real
-    /// prover fold runs on one.
-    #[test]
-    fn folding_the_codeword_equals_binding_the_lowest_variable() {
-        let mut rng = SmallRng::seed_from_u64(0xF01D);
-        for log_inv_rate in 0..=2 {
-            for log_n in 1..=7 {
-                let n = 1usize << log_n;
-                for trial in 0..4 {
-                    let coeffs: Vec<BinaryField128> =
-                        (0..n).map(|_| rng.random::<BinaryField128>()).collect();
-                    let beta: BinaryField128 = rng.random();
+    proptest! {
+        // Each case runs the naive oracle twice over a codeword of up to 512 symbols, so the
+        // per-case cost is far above a typical property test's; 64 cases still explore every
+        // (rate, length) pair many times over.
+        #![proptest_config(ProptestConfig::with_cases(64))]
 
-                    let mut message = coeffs.clone();
-                    message.resize(n << log_inv_rate, BinaryField128::ZERO);
+        /// The crate's central identity: folding the codeword equals binding the message's
+        /// lowest variable in the evaluation basis (`Poly::fix_suffix_var`).
+        ///
+        /// The oracle is [`NaiveAdditiveNtt`], which evaluates the definition directly and
+        /// shares no identity with the fold, so agreement is evidence rather than restatement.
+        /// `log_n` and `log_inv_rate` are generated rather than swept because the identity is
+        /// claimed for every message length and every blowup a prover can configure, not for a
+        /// chosen list; every real prover fold runs on a blown-up codeword, so rate 0 is the
+        /// degenerate end of the range rather than the case of interest.
+        #[test]
+        fn folding_the_codeword_equals_binding_the_lowest_variable(
+            log_inv_rate in 0usize..=2,
+            log_n in 1usize..=7,
+            raw in prop::collection::vec(any::<u128>(), 128),
+            beta_raw: u128,
+        ) {
+            let n = 1usize << log_n;
+            let coeffs: Vec<BinaryField128> = raw[..n]
+                .iter()
+                .copied()
+                .map(BinaryField128::from_repr)
+                .collect();
+            let beta = BinaryField128::from_repr(beta_raw);
 
-                    let bound = Poly::new(coeffs).fix_suffix_var(beta);
-                    let mut bound_message = bound.into_evals();
-                    bound_message.resize(bound_message.len() << log_inv_rate, BinaryField128::ZERO);
+            let mut message = coeffs.clone();
+            message.resize(n << log_inv_rate, BinaryField128::ZERO);
 
-                    assert_eq!(
-                        fold_codeword(&encode(&message), beta),
-                        encode(&bound_message),
-                        "log_inv_rate={log_inv_rate} log_n={log_n} trial={trial}"
-                    );
-                }
-            }
+            let bound = Poly::new(coeffs).fix_suffix_var(beta);
+            let mut bound_message = bound.into_evals();
+            bound_message.resize(bound_message.len() << log_inv_rate, BinaryField128::ZERO);
+
+            prop_assert_eq!(
+                fold_codeword(&encode(&message), beta),
+                encode(&bound_message)
+            );
         }
     }
 

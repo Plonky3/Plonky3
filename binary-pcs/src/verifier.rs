@@ -284,6 +284,8 @@ mod tests {
     use p3_binary_dft::{AdditiveRsEncoder, NaiveAdditiveNtt};
     use p3_binary_field::BinaryField128;
     use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+    use p3_commit::Mmcs;
+    use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::layout::{Layout, SuffixProver, Table};
@@ -293,7 +295,7 @@ mod tests {
     use super::{BinaryPcsError, sample_query_indices, verify_query_paths};
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::proof::BinaryPcsProof;
-    use crate::prover::{commit, fold_rounds, open_queries};
+    use crate::prover::{RoundCommitment, commit, fold_rounds, open_queries};
     use crate::test_util::{challenger, mmcs};
 
     type F = BinaryField128;
@@ -485,5 +487,79 @@ mod tests {
         );
 
         assert_eq!(verifier_indices, prover_indices);
+    }
+
+    /// The fold chain is the only thing tying one committed round to the next, and this is the
+    /// attack it exists for: a prover that commits a round which is a perfectly valid codeword
+    /// but simply is not the fold of its predecessor.
+    ///
+    /// The tamper adds one constant to every symbol of the first intermediate round. Constants
+    /// are degree-0 polynomials, so the shifted vector is still a codeword of that round's
+    /// code — not a malformed object any shape or proximity check could reject, but a
+    /// well-formed commitment to the wrong polynomial. It is re-committed and opened honestly
+    /// against its own root, so the round's Merkle multiproof verifies and the transcript is
+    /// untouched; `fold_pair` is what disagrees.
+    #[test]
+    fn a_committed_round_that_is_not_the_fold_of_its_predecessor_is_rejected() {
+        let mut rng = SmallRng::seed_from_u64(0xF01D);
+        let poly = Poly::<F>::rand(&mut rng, NUM_VARIABLES);
+        let table = Table::new(RowMajorMatrix::new(poly.into_evals(), 1 << NUM_VARIABLES));
+        let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
+
+        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
+        let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
+        let mmcs_instance = mmcs();
+
+        let mut prover_ch = challenger();
+        let (base_commitment, prover_data) =
+            commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
+        let (base_merkle_data, sumcheck_data, mut rounds, randomness, final_codeword) =
+            fold_rounds(prover_data, &config, &mmcs_instance, &mut prover_ch);
+
+        // `rounds[0]` carries fold round 1, the round the base round's fold must reproduce.
+        let shifted: Vec<F> = mmcs_instance.get_matrices(&rounds[0].merkle_data)[0]
+            .values
+            .iter()
+            .map(|&v| v + F::ONE)
+            .collect();
+        let (commitment, merkle_data) =
+            mmcs_instance.commit_matrix(RowMajorMatrix::new(shifted, 1));
+        rounds[0] = RoundCommitment {
+            commitment,
+            merkle_data,
+        };
+
+        let mut verifier_ch = prover_ch.clone();
+        let query_proofs = open_queries(
+            &config,
+            &mmcs_instance,
+            &mut prover_ch,
+            &base_merkle_data,
+            &rounds,
+        );
+
+        let proof = BinaryPcsProof {
+            sumcheck: sumcheck_data,
+            rounds: query_proofs.rounds,
+            base_opened_values: query_proofs.base_opened_values,
+            base_multi_proof: query_proofs.base_multi_proof,
+            final_codeword: Poly::new(final_codeword),
+            pow_witness: query_proofs.pow_witness,
+            evals: Vec::new(),
+        };
+
+        let err = verify_query_paths(
+            &config,
+            &mmcs_instance,
+            &base_commitment,
+            randomness.as_slice(),
+            &proof,
+            &mut verifier_ch,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, BinaryPcsError::FoldMismatch { round: 1, query: 0 }),
+            "expected FoldMismatch at round 1 query 0, got {err:?}"
+        );
     }
 }

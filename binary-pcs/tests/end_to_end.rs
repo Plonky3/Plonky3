@@ -19,7 +19,9 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, SuffixProver, Table};
-use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
+use p3_sumcheck::{
+    OpeningBatch, OpeningEvals, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec,
+};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -597,5 +599,63 @@ fn a_short_evals_vector_is_rejected() {
             }
         ),
         "expected OpeningBatchCountMismatch, got {err:?}"
+    );
+}
+
+/// The evaluation claim is what makes this a commitment and not merely a proximity test, and
+/// this is the test that holds it to that: a proof carrying a wrong evaluation of the committed
+/// polynomial must be rejected.
+///
+/// Nothing else in this file covers it. Every other negative test perturbs the proof's
+/// *structure* — a codeword symbol, an opened row, a round count, a witness — and the closest
+/// one, `a_proof_checked_against_a_different_protocol_is_rejected`, swaps which column is
+/// opened rather than what it evaluates to. Deleting the final check's product clause would
+/// leave all of them passing.
+///
+/// The claimed evaluations are absorbed as each claim is recorded, so tampering one both
+/// desyncs every challenge drawn afterwards and breaks the claim the sumcheck rounds reduce.
+/// The final check is where the reduced claim meets the codeword, and so where it surfaces.
+#[test]
+fn a_false_evaluation_claim_is_rejected() {
+    let (pcs, commitment, mut proof, protocol) =
+        run_lifecycle(NUM_VARIABLES, LOG_INV_RATE, POW_BITS, SECURITY_LEVEL, 17);
+
+    let genuine = proof.evals[0].current()[0];
+    proof.evals[0] = OpeningEvals::new(vec![genuine + F::ONE], Vec::new());
+
+    let mut verifier_challenger = challenger();
+    let err = pcs
+        .verify(&commitment, &proof, &mut verifier_challenger, protocol)
+        .unwrap_err();
+    assert!(
+        matches!(err, BinaryPcsError::FinalCheck),
+        "expected FinalCheck, got {err:?}"
+    );
+}
+
+/// A tampered sumcheck round message must be rejected. The sumcheck is the leg that reduces
+/// the opening claim to a single scalar, so a prover free to rewrite a round message is free to
+/// reduce a false claim to a true one.
+///
+/// Each round's `[h(0), h(inf)]` pair is observed before that round's challenge is sampled, so
+/// altering one both changes every later fold challenge and breaks the running claim. Round 3
+/// is interior — neither the first, which no earlier round feeds, nor the last, which the final
+/// check reads directly — so the rejection cannot be an artifact of a boundary the round loop
+/// treats specially.
+#[test]
+fn a_tampered_sumcheck_round_message_is_rejected() {
+    let (pcs, commitment, mut proof, protocol) =
+        run_lifecycle(NUM_VARIABLES, LOG_INV_RATE, POW_BITS, SECURITY_LEVEL, 18);
+
+    assert!(proof.sumcheck.num_rounds() > 4);
+    proof.sumcheck.polynomial_evaluations[3][0] += F::ONE;
+
+    let mut verifier_challenger = challenger();
+    let err = pcs
+        .verify(&commitment, &proof, &mut verifier_challenger, protocol)
+        .unwrap_err();
+    assert!(
+        matches!(err, BinaryPcsError::FinalCheck),
+        "expected FinalCheck, got {err:?}"
     );
 }
