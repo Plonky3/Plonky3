@@ -3,12 +3,11 @@
 //! rather than only failing. Everything here goes through `p3-binary-pcs`'s public
 //! `MultilinearPcs`/`PrescribedPointPcs` surface, exactly as an external caller would.
 //!
-//! Every genuine proof is produced with `SuffixProver` and `folding = 0`, the only
-//! configuration this crate's commit phase accepts, and every prover/verifier pair uses two
-//! independently constructed challengers seeded identically rather than one challenger cloned
-//! after proving: a challenger cloned from the prover's own transcript already carries every
-//! observation the prover made, correct or not, so it can never disagree with a proof that
-//! desyncs the transcript from what the prover actually produced.
+//! Every prover/verifier pair uses two independently constructed challengers seeded
+//! identically rather than one challenger cloned after proving: a challenger cloned from the
+//! prover's own transcript already carries every observation the prover made, correct or not,
+//! so it can never disagree with a proof that desyncs the transcript from what the prover
+//! actually produced.
 
 use p3_binary_field::{BinaryChallenger, BinaryField128};
 use p3_binary_pcs::{BinaryPcs, BinaryPcsConfig, BinaryPcsError, BinaryPcsParams, BinaryPcsProof};
@@ -30,7 +29,7 @@ type MyHash = SerializingHasher<Keccak256Hash>;
 type MyCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
 type MyMmcs = MerkleTreeMmcs<F, u8, MyHash, MyCompress, 2, 32>;
 type MyChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
-type MyPcs = BinaryPcs<MyMmcs, SuffixProver<F, F>>;
+type MyPcs = BinaryPcs<MyMmcs>;
 
 /// Default shape shared by every negative test: enough intermediate rounds
 /// (`num_fold_rounds - 1 == 7`) to truncate or permute, and `pow_bits > 0` so the grinding
@@ -87,7 +86,6 @@ fn run_lifecycle(
 
     let config = BinaryPcsConfig::try_new(
         num_variables,
-        0,
         params(log_inv_rate, pow_bits, security_level),
     )
     .unwrap();
@@ -113,9 +111,9 @@ fn assert_round_trips(num_variables: usize, log_inv_rate: usize, seed: u64) {
         });
 }
 
-/// The configuration sweep, `SuffixProver` / `folding = 0` only: `PrefixProver` does not stay
-/// in lockstep with the codeword fold (covered in `prover.rs`'s unit tests), and `folding > 0`
-/// is rejected by `BinaryPcsConfig::try_new`.
+/// The configuration sweep over the two knobs a caller has: the polynomial's arity and the
+/// code rate. The binding order is not a knob — the codeword fold only matches suffix binding,
+/// which `prover.rs`'s unit tests pin — so the type fixes it rather than the sweep covering it.
 #[test]
 fn small_configurations_round_trip() {
     for &num_variables in &[6usize, 8, 10, 12] {
@@ -269,7 +267,6 @@ fn a_proof_checked_against_a_different_protocol_is_rejected() {
 
     let config = BinaryPcsConfig::try_new(
         NUM_VARIABLES,
-        0,
         params(LOG_INV_RATE, POW_BITS, SECURITY_LEVEL),
     )
     .unwrap();
@@ -427,7 +424,6 @@ fn zero_claim_lifecycle(
 
     let config = BinaryPcsConfig::try_new(
         num_variables,
-        0,
         params(LOG_INV_RATE, POW_BITS, SECURITY_LEVEL),
     )
     .unwrap();

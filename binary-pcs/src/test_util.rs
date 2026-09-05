@@ -51,29 +51,25 @@ const fn params() -> BinaryPcsParams {
 /// returns everything a caller needs to replay or mutate the proof: the PCS instance (reusable
 /// for a fresh verify call), the commitment, the genuine proof, and the opening protocol that
 /// produced it.
-///
-/// `num_variables` and `folding` are forwarded to [`BinaryPcsConfig::try_new`] verbatim; only
-/// `folding = 0` derives a config this crate's commit phase accepts.
 #[allow(clippy::type_complexity)]
 pub(crate) fn run_lifecycle(
     num_variables: usize,
-    folding: usize,
 ) -> (
-    BinaryPcs<MyMmcs, SuffixProver<F, F>>,
+    BinaryPcs<MyMmcs>,
     <MyMmcs as Mmcs<F>>::Commitment,
     BinaryPcsProof<MyMmcs>,
     OpeningProtocol,
 ) {
     let mut rng = SmallRng::seed_from_u64(0xB1DA_u64);
     let table = Table::rand(&mut rng, 1, num_variables);
-    let witness = SuffixProver::<F, F>::new_witness(vec![table], folding);
+    let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(num_variables, 1),
         vec![OpeningBatch::new(vec![0], Vec::new())],
     )]);
 
-    let config = BinaryPcsConfig::try_new(num_variables, folding, params()).unwrap();
+    let config = BinaryPcsConfig::try_new(num_variables, params()).unwrap();
     let pcs = BinaryPcs::new(config, mmcs());
 
     let mut prover_challenger = challenger();

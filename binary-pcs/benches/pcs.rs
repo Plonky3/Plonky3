@@ -27,7 +27,7 @@ type MyHash = SerializingHasher<Keccak256Hash>;
 type MyCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
 type MyMmcs = MerkleTreeMmcs<F, u8, MyHash, MyCompress, 2, 32>;
 type MyChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
-type MyPcs = BinaryPcs<MyMmcs, SuffixProver<F, F>>;
+type MyPcs = BinaryPcs<MyMmcs>;
 
 /// The polynomial arities under test.
 const NUMS_VARIABLES: [usize; 3] = [16, 18, 20];
@@ -54,7 +54,7 @@ fn make_pcs(num_variables: usize) -> MyPcs {
         pow_bits: POW_BITS,
         security_level: SECURITY_LEVEL,
     };
-    let config = BinaryPcsConfig::try_new(num_variables, 0, params).unwrap();
+    let config = BinaryPcsConfig::try_new(num_variables, params).unwrap();
     BinaryPcs::new(config, mmcs())
 }
 

@@ -12,7 +12,6 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_binary_dft::AdditiveRsEncoder;
 use p3_binary_field::BinaryField128;
@@ -22,9 +21,10 @@ use p3_field::PrimeCharacteristicRing;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, Verifier, Witness};
-use p3_sumcheck::strategy::{Basis, VariableOrder};
+use p3_sumcheck::strategy::Basis;
 use p3_sumcheck::{OpeningEvals, OpeningProtocol, PrescribedPointPcs, SumcheckData, SumcheckError};
 
+use crate::PcsLayout;
 use crate::error::BinaryPcsError;
 use crate::params::BinaryPcsConfig;
 use crate::proof::BinaryPcsProof;
@@ -34,38 +34,35 @@ use crate::verifier::{check_round_and_final_lengths, verify_query_paths};
 /// A multilinear polynomial commitment scheme over `BinaryField128`: an additive-domain
 /// Reed-Solomon codeword folded in lockstep with a residual sumcheck.
 ///
-/// `L` selects the stacked-layout binding mode; the commit and fold phases reject any layout
-/// other than [`SuffixProver`](p3_sumcheck::layout::SuffixProver) at run time (see `prover.rs`),
-/// since the codeword fold only stays in correspondence with suffix-order binding.
-pub struct BinaryPcs<MT, L> {
+/// The stacked-layout binding mode is fixed rather than chosen: the codeword fold merges
+/// adjacent pairs, which only the suffix-order binding of
+/// [`SuffixProver`](p3_sumcheck::layout::SuffixProver) matches.
+pub struct BinaryPcs<MT> {
     config: BinaryPcsConfig,
     mmcs: MT,
     encoder: AdditiveRsEncoder<BinaryField128>,
-    _marker: PhantomData<L>,
 }
 
-impl<MT, L> BinaryPcs<MT, L> {
+impl<MT> BinaryPcs<MT> {
     /// Builds a PCS instance from a derived configuration and a base-field MMCS.
     pub fn new(config: BinaryPcsConfig, mmcs: MT) -> Self {
         Self {
             config,
             mmcs,
             encoder: AdditiveRsEncoder::default(),
-            _marker: PhantomData,
         }
     }
 }
 
-impl<MT, L> BinaryPcs<MT, L>
+impl<MT> BinaryPcs<MT>
 where
     MT: Mmcs<BinaryField128>,
-    L: Layout<BinaryField128, BinaryField128>,
 {
     /// Runs the fold-and-query pipeline shared by `open` and `open_at`, once every opening
     /// claim the protocol names has already been recorded against `prover_data.layout`.
     fn finish_open<Challenger>(
         &self,
-        prover_data: BinaryPcsProverData<MT, L>,
+        prover_data: BinaryPcsProverData<MT>,
         evals: Vec<OpeningEvals<BinaryField128>>,
         challenger: &mut Challenger,
     ) -> BinaryPcsProof<MT>
@@ -136,12 +133,6 @@ where
             + CanSampleUniformBits<BinaryField128>
             + CanObserve<MT::Commitment>,
     {
-        assert_eq!(
-            L::strategy().variable_order,
-            VariableOrder::Suffix,
-            "the codeword folds adjacent pairs, which only suffix-order binding matches"
-        );
-
         if protocol.num_openings() != proof.evals.len() {
             return Err(BinaryPcsError::OpeningBatchCountMismatch {
                 expected: protocol.num_openings(),
@@ -173,7 +164,7 @@ where
         // replayed randomness, not the proof's raw bytes.
         let mut layout_verifier = Verifier::<BinaryField128, BinaryField128>::new(
             &protocol.table_shapes(),
-            L::strategy(),
+            PcsLayout::strategy(),
         );
 
         for (i, (table_idx, batch)) in protocol.iter_openings().enumerate() {
@@ -221,12 +212,12 @@ where
             }
         }
 
-        // The codeword fold runs in `L`'s own variable order: suffix binding folds the last
-        // variable first, so `betas` ends up in round order, and the committed polynomial's
-        // variable-order point is its reverse — exactly what `eval_constraints_poly`
-        // reconstructs internally when given that same order.
+        // The codeword fold runs in the layout's own variable order: suffix binding folds the
+        // last variable first, so `betas` ends up in round order, and the committed
+        // polynomial's variable-order point is its reverse — exactly what
+        // `eval_constraints_poly` reconstructs internally when given that same order.
         let fold_point = Point::new(betas);
-        let evaluation_of_weights = L::strategy()
+        let evaluation_of_weights = PcsLayout::strategy()
             .variable_order
             .eval_constraints_poly(core::slice::from_ref(&constraint), &fold_point);
         let final_value = proof.final_codeword.as_slice()[0];
@@ -252,10 +243,9 @@ where
     }
 }
 
-impl<MT, L, Challenger> MultilinearPcs<BinaryField128, Challenger> for BinaryPcs<MT, L>
+impl<MT, Challenger> MultilinearPcs<BinaryField128, Challenger> for BinaryPcs<MT>
 where
     MT: Mmcs<BinaryField128>,
-    L: Layout<BinaryField128, BinaryField128>,
     Challenger: FieldChallenger<BinaryField128>
         + GrindingChallenger<Witness = BinaryField128>
         + CanSampleUniformBits<BinaryField128>
@@ -263,7 +253,7 @@ where
 {
     type Val = BinaryField128;
     type Commitment = MT::Commitment;
-    type ProverData = BinaryPcsProverData<MT, L>;
+    type ProverData = BinaryPcsProverData<MT>;
     type Proof = BinaryPcsProof<MT>;
     type Error = BinaryPcsError<MT::Error>;
     type Witness = Witness<BinaryField128>;
@@ -278,7 +268,7 @@ where
         witness: Self::Witness,
         challenger: &mut Challenger,
     ) -> (Self::Commitment, Self::ProverData) {
-        commit::<L, _, MT, _>(&self.config, &self.encoder, &self.mmcs, challenger, witness)
+        commit(&self.config, &self.encoder, &self.mmcs, challenger, witness)
     }
 
     fn open(
@@ -309,10 +299,9 @@ where
     }
 }
 
-impl<MT, L, Challenger> PrescribedPointPcs<BinaryField128, Challenger> for BinaryPcs<MT, L>
+impl<MT, Challenger> PrescribedPointPcs<BinaryField128, Challenger> for BinaryPcs<MT>
 where
     MT: Mmcs<BinaryField128>,
-    L: Layout<BinaryField128, BinaryField128>,
     Challenger: FieldChallenger<BinaryField128>
         + GrindingChallenger<Witness = BinaryField128>
         + CanSampleUniformBits<BinaryField128>
@@ -375,7 +364,7 @@ mod tests {
     use p3_challenger::{CanObserve, FieldChallenger};
     use p3_commit::{Mmcs, MultilinearPcs};
     use p3_multilinear_util::point::Point;
-    use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
+    use p3_sumcheck::layout::{Layout, SuffixProver, Table};
     use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -395,29 +384,11 @@ mod tests {
     /// show up as a failure rather than pass by sharing state.
     #[test]
     fn commit_open_verify_round_trips() {
-        let (pcs, commitment, proof, protocol) = run_lifecycle(NUM_VARIABLES, 0);
+        let (pcs, commitment, proof, protocol) = run_lifecycle(NUM_VARIABLES);
 
         let mut verifier_challenger = challenger();
         pcs.verify(&commitment, &proof, &mut verifier_challenger, protocol)
             .unwrap();
-    }
-
-    /// A verifier instantiated with a `PrefixProver` layout is stopped before it inspects any
-    /// proof content: `verify_opening` asserts `L::strategy()` against `VariableOrder::Suffix`,
-    /// mirroring the same guard on the prover side (`prover::commit`, `prover::fold_rounds`).
-    /// Without it, a `BinaryPcs<MT, PrefixProver<F, F>>` verifier would run the whole protocol
-    /// against a genuine `SuffixProver` proof and reject it only at `FinalCheck`, with no
-    /// indication that the layouts disagree.
-    #[test]
-    #[should_panic(expected = "only suffix-order binding matches")]
-    fn verify_rejects_a_non_suffix_layout() {
-        let (_pcs, commitment, proof, protocol) = run_lifecycle(NUM_VARIABLES, 0);
-
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, 0, params()).unwrap();
-        let mismatched_pcs: BinaryPcs<MyMmcs, PrefixProver<F, F>> = BinaryPcs::new(config, mmcs());
-
-        let mut verifier_challenger = challenger();
-        let _ = mismatched_pcs.verify(&commitment, &proof, &mut verifier_challenger, protocol);
     }
 
     /// The workspace wire format is postcard, which is not self-describing; a proof type that
@@ -425,7 +396,7 @@ mod tests {
     /// also exercises the `Poly` deserialize path `FinalCodewordLengthMismatch` exists to guard.
     #[test]
     fn a_proof_round_trips_through_postcard() {
-        let (pcs, commitment, proof, protocol) = run_lifecycle(NUM_VARIABLES, 0);
+        let (pcs, commitment, proof, protocol) = run_lifecycle(NUM_VARIABLES);
 
         let bytes = postcard::to_allocvec(&proof).unwrap();
         let decoded: BinaryPcsProof<MyMmcs> = postcard::from_bytes(&bytes).unwrap();
@@ -455,7 +426,7 @@ mod tests {
     fn open_at_fixture(
         seed: u64,
     ) -> (
-        BinaryPcs<MyMmcs, SuffixProver<F, F>>,
+        BinaryPcs<MyMmcs>,
         <MyMmcs as Mmcs<F>>::Commitment,
         BinaryPcsProof<MyMmcs>,
         OpeningProtocol,
@@ -470,7 +441,7 @@ mod tests {
             vec![OpeningBatch::new(vec![0], Vec::new())],
         )]);
 
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, 0, params()).unwrap();
+        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
         let pcs = BinaryPcs::new(config, mmcs());
 
         let mut prover_challenger = challenger();
@@ -580,8 +551,8 @@ mod tests {
             ),
         ]);
 
-        let config = BinaryPcsConfig::try_new(stacked_arity, 0, params()).unwrap();
-        let pcs: BinaryPcs<MyMmcs, SuffixProver<F, F>> = BinaryPcs::new(config, mmcs());
+        let config = BinaryPcsConfig::try_new(stacked_arity, params()).unwrap();
+        let pcs: BinaryPcs<MyMmcs> = BinaryPcs::new(config, mmcs());
 
         let mut prover_challenger = challenger();
         let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);

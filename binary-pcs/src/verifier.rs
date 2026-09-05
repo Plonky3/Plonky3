@@ -359,18 +359,13 @@ mod tests {
         let table = Table::new(RowMajorMatrix::new(poly.into_evals(), 1 << NUM_VARIABLES));
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, 0, params()).unwrap();
+        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
 
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) = commit::<SuffixProver<F, F>, _, _, _>(
-            &config,
-            &encoder,
-            &mmcs_instance,
-            &mut prover_ch,
-            witness,
-        );
+        let (base_commitment, prover_data) =
+            commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
         let (base_merkle_data, sumcheck_data, rounds, randomness, final_codeword) =
             fold_rounds(prover_data, &config, &mmcs_instance, &mut prover_ch);
 
@@ -425,18 +420,13 @@ mod tests {
         let table = Table::new(RowMajorMatrix::new(poly.into_evals(), 1 << NUM_VARIABLES));
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, 0, params()).unwrap();
+        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
 
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) = commit::<SuffixProver<F, F>, _, _, _>(
-            &config,
-            &encoder,
-            &mmcs_instance,
-            &mut prover_ch,
-            witness,
-        );
+        let (base_commitment, prover_data) =
+            commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
         let (base_merkle_data, sumcheck_data, rounds, randomness, _final_codeword) =
             fold_rounds(prover_data, &config, &mmcs_instance, &mut prover_ch);
 

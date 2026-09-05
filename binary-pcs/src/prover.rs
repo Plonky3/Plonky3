@@ -1,16 +1,17 @@
-//! Prover side: commit the stacked polynomial at `folding = 0`, then fold its codeword in
-//! lockstep with the residual sumcheck.
+//! Prover side: commit the stacked polynomial as one codeword column, then fold that codeword
+//! in lockstep with the residual sumcheck.
 //!
-//! At `folding = 0`, `Layout::commit` produces a width-1 codeword — one Reed-Solomon-encoded
-//! column, the whole committed polynomial — and `Layout::into_sumcheck` consumes zero
-//! preprocessing rounds, so every one of the `num_variables` residual sumcheck rounds is a
-//! folding round. Each round's challenge both binds one multilinear variable, through
-//! [`SuffixProver`](p3_sumcheck::layout::SuffixProver)'s evaluation-basis binding, and folds
-//! the codeword by the same challenge, through [`fold_codeword`], a Reed-Solomon codeword fold
+//! [`PcsLayout`] commits with no preprocessing depth, so `Layout::commit` produces a width-1
+//! codeword — one Reed-Solomon-encoded column, the whole committed polynomial — and
+//! `Layout::into_sumcheck` consumes zero preprocessing rounds, leaving every one of the
+//! `num_variables` residual sumcheck rounds a folding round. Each round's challenge is used
+//! twice: it binds one multilinear variable, through [`PcsLayout`]'s evaluation-basis suffix
+//! binding, and it folds the codeword, through [`fold_codeword`], a Reed-Solomon codeword fold
 //! in the same basis (see `fold.rs`). The two stay in correspondence throughout: see
 //! `the_codeword_and_the_sumcheck_stay_in_lockstep` below, which drives the real `Layout`
 //! machinery and checks it, and `prefix_layout_does_not_stay_in_lockstep`, which checks that
-//! `PrefixProver`'s prefix-first binding does not share the property.
+//! prefix-first binding does not share the property — the reason [`PcsLayout`] is fixed rather
+//! than chosen by the caller.
 
 use alloc::vec::Vec;
 
@@ -21,22 +22,31 @@ use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::SumcheckData;
 use p3_sumcheck::layout::{Layout, Witness};
-use p3_sumcheck::strategy::VariableOrder;
 
+use crate::PcsLayout;
 use crate::fold::fold_codeword;
 use crate::params::BinaryPcsConfig;
 use crate::proof::RoundProof;
 use crate::verifier::{flat_pair_indices, sample_query_indices};
 
+/// Preprocessing depth the commit phase lays out inside a committed row.
+///
+/// Zero, so the codeword is a single column and every variable is folded rather than bound
+/// across a row. Binding a prefix inside the row is the deferred head collapse, which needs
+/// its own eq-weighted column combination before it composes with the folds below.
+const FOLDING: usize = 0;
+
 /// Data produced by committing the base codeword: the layout used to build the residual
 /// sumcheck, and the base commitment's Merkle prover data.
-pub struct BinaryPcsProverData<MT: Mmcs<BinaryField128>, L> {
+///
+/// Opaque to callers, who receive it from `commit` and hand it back to `open`.
+pub struct BinaryPcsProverData<MT: Mmcs<BinaryField128>> {
     /// The layout that ran the commit phase, carried forward to build the residual sumcheck
     /// and, later, to evaluate opening claims against the committed polynomial.
-    pub layout: L,
+    pub(crate) layout: PcsLayout,
     /// The base codeword's Merkle prover data, needed to open base-round queries once the
     /// query phase samples its indices.
-    pub merkle_data: MT::ProverData<DenseMatrix<BinaryField128>>,
+    pub(crate) merkle_data: MT::ProverData<DenseMatrix<BinaryField128>>,
 }
 
 /// One folding round's prover-side output.
@@ -50,17 +60,15 @@ pub(crate) struct RoundCommitment<MT: Mmcs<BinaryField128>> {
 /// Commits `witness`'s stacked polynomial and returns the base commitment alongside the data
 /// needed to run the residual sumcheck and later open the base codeword's queries.
 ///
-/// `witness` must have `config.num_variables()` variables and `config.folding()` preprocessing
-/// depth.
-pub(crate) fn commit<L, E, MT, Ch>(
+/// `witness` must have `config.num_variables()` variables and be built at [`FOLDING`].
+pub(crate) fn commit<E, MT, Ch>(
     config: &BinaryPcsConfig,
     encoder: &E,
     mmcs: &MT,
     challenger: &mut Ch,
     witness: Witness<BinaryField128>,
-) -> (MT::Commitment, BinaryPcsProverData<MT, L>)
+) -> (MT::Commitment, BinaryPcsProverData<MT>)
 where
-    L: Layout<BinaryField128, BinaryField128>,
     E: Encoder<BinaryField128>,
     MT: Mmcs<BinaryField128>,
     Ch: FieldChallenger<BinaryField128>
@@ -68,23 +76,17 @@ where
         + CanObserve<MT::Commitment>,
 {
     assert_eq!(
-        L::strategy().variable_order,
-        VariableOrder::Suffix,
-        "the codeword folds adjacent pairs, which only suffix-order binding matches"
-    );
-
-    assert_eq!(
         witness.num_variables(),
         config.num_variables(),
         "witness arity must match the config it is committed against"
     );
 
-    let (layout, commitment, merkle_data) = L::commit(
+    let (layout, commitment, merkle_data) = PcsLayout::commit(
         encoder,
         mmcs,
         challenger,
         witness,
-        config.folding(),
+        FOLDING,
         config.log_inv_rate(),
     );
 
@@ -112,8 +114,8 @@ where
 /// folded codeword.
 #[must_use]
 #[allow(clippy::type_complexity)]
-pub(crate) fn fold_rounds<L, MT, Ch>(
-    prover_data: BinaryPcsProverData<MT, L>,
+pub(crate) fn fold_rounds<MT, Ch>(
+    prover_data: BinaryPcsProverData<MT>,
     config: &BinaryPcsConfig,
     mmcs: &MT,
     challenger: &mut Ch,
@@ -125,18 +127,11 @@ pub(crate) fn fold_rounds<L, MT, Ch>(
     Vec<BinaryField128>,
 )
 where
-    L: Layout<BinaryField128, BinaryField128>,
     MT: Mmcs<BinaryField128>,
     Ch: FieldChallenger<BinaryField128>
         + GrindingChallenger<Witness = BinaryField128>
         + CanObserve<MT::Commitment>,
 {
-    assert_eq!(
-        L::strategy().variable_order,
-        VariableOrder::Suffix,
-        "the codeword folds adjacent pairs, which only suffix-order binding matches"
-    );
-
     let BinaryPcsProverData {
         layout,
         merkle_data,
@@ -147,15 +142,14 @@ where
     assert_eq!(
         randomness.num_variables(),
         0,
-        "the commit phase runs at folding = 0, so the residual sumcheck consumes no head rounds"
+        "the commit phase runs at zero preprocessing depth, so the sumcheck consumes no head rounds"
     );
 
-    // At folding = 0, the base commitment is a width-1 codeword: the starting point for the
-    // fold loop below.
+    // The base commitment is a width-1 codeword: the starting point for the fold loop below.
     let base_matrix = mmcs.get_matrices(&merkle_data)[0];
     assert_eq!(
         base_matrix.width, 1,
-        "folding = 0 commits a width-1 codeword"
+        "zero preprocessing depth commits a width-1 codeword"
     );
     let mut codeword = base_matrix.values.clone();
 
@@ -285,7 +279,7 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::{BinaryPcsProverData, commit, fold_codeword, fold_rounds};
+    use super::{commit, fold_codeword, fold_rounds};
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::test_util::{challenger, mmcs};
 
@@ -330,9 +324,13 @@ mod tests {
         assert!(codeword.iter().all(|&v| v == final_value));
     }
 
-    /// The lockstep property is specific to `SuffixProver`'s evaluation-basis binding order:
-    /// driving the identical procedure through `PrefixProver` does not leave every symbol of
-    /// the final codeword equal to the constant the sumcheck folds to.
+    /// The lockstep property is specific to suffix binding's evaluation-basis order: driving
+    /// the identical procedure through `PrefixProver` does not leave every symbol of the final
+    /// codeword equal to the constant the sumcheck folds to.
+    ///
+    /// This is why `PcsLayout` is a fixed type rather than a caller-supplied parameter: the
+    /// two orders are not interchangeable, and the difference is a property of the fold's
+    /// pair-merging arithmetic, not a tuning choice.
     #[test]
     fn prefix_layout_does_not_stay_in_lockstep() {
         let mut rng = SmallRng::seed_from_u64(21);
@@ -384,18 +382,13 @@ mod tests {
             pow_bits: 4,
             security_level: 40,
         };
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, 0, params).unwrap();
+        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
 
         let mut ch = challenger();
-        let (_commitment, prover_data) = commit::<SuffixProver<F, F>, _, _, _>(
-            &config,
-            &encoder,
-            &mmcs_instance,
-            &mut ch,
-            witness,
-        );
+        let (_commitment, prover_data) =
+            commit(&config, &encoder, &mmcs_instance, &mut ch, witness);
         let (_merkle_data, _sumcheck_data, rounds, randomness, final_codeword) =
             fold_rounds(prover_data, &config, &mmcs_instance, &mut ch);
 
@@ -410,33 +403,6 @@ mod tests {
         assert!(final_codeword.iter().all(|&v| v == expected));
     }
 
-    /// `commit` rejects a `PrefixProver` layout before doing any work: the codeword fold only
-    /// matches suffix-order binding.
-    #[test]
-    #[should_panic(expected = "only suffix-order binding matches")]
-    fn commit_rejects_a_non_suffix_layout() {
-        let params = BinaryPcsParams {
-            log_inv_rate: LOG_INV_RATE,
-            pow_bits: 4,
-            security_level: 40,
-        };
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, 0, params).unwrap();
-        let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
-        let mmcs_instance = mmcs();
-        let mut ch = challenger();
-        let poly = Poly::<F>::rand(&mut SmallRng::seed_from_u64(0), NUM_VARIABLES);
-        let table = Table::new(RowMajorMatrix::new(poly.into_evals(), 1 << NUM_VARIABLES));
-        let witness = PrefixProver::<F, F>::new_witness(vec![table], 0);
-
-        let _ = commit::<PrefixProver<F, F>, _, _, _>(
-            &config,
-            &encoder,
-            &mmcs_instance,
-            &mut ch,
-            witness,
-        );
-    }
-
     /// `commit` rejects a witness whose arity disagrees with the config in every build
     /// profile, not only a debug one: falling through would surface later as a confusing
     /// `FinalCodewordLengthMismatch`, or a panic inside `fold_codeword` on a length-1
@@ -449,7 +415,7 @@ mod tests {
             pow_bits: 4,
             security_level: 40,
         };
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, 0, params).unwrap();
+        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
         let mut ch = challenger();
@@ -457,46 +423,6 @@ mod tests {
         let table = Table::rand(&mut rng, 1, NUM_VARIABLES - 1);
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
-        let _ = commit::<SuffixProver<F, F>, _, _, _>(
-            &config,
-            &encoder,
-            &mmcs_instance,
-            &mut ch,
-            witness,
-        );
-    }
-
-    /// `fold_rounds` rejects a `PrefixProver` layout too, independently of `commit`'s own
-    /// guard: a caller that assembled `BinaryPcsProverData` by some other path must still be
-    /// stopped here.
-    #[test]
-    #[should_panic(expected = "only suffix-order binding matches")]
-    fn fold_rounds_rejects_a_non_suffix_layout() {
-        let mut rng = SmallRng::seed_from_u64(21);
-        let table = Table::rand(&mut rng, 1, NUM_VARIABLES);
-        let witness = PrefixProver::<F, F>::new_witness(vec![table], 0);
-
-        let mut ch = challenger();
-        let (layout, _root, merkle_data) = PrefixProver::<F, F>::commit(
-            &AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default(),
-            &mmcs(),
-            &mut ch,
-            witness,
-            0,
-            LOG_INV_RATE,
-        );
-
-        let params = BinaryPcsParams {
-            log_inv_rate: LOG_INV_RATE,
-            pow_bits: 4,
-            security_level: 40,
-        };
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, 0, params).unwrap();
-        let prover_data = BinaryPcsProverData {
-            layout,
-            merkle_data,
-        };
-
-        let _ = fold_rounds(prover_data, &config, &mmcs(), &mut ch);
+        let _ = commit(&config, &encoder, &mmcs_instance, &mut ch, witness);
     }
 }
