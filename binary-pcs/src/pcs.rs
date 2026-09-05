@@ -119,14 +119,14 @@ where
     /// point the fold challenges define, times the final codeword's (uniform) value equals the
     /// running sumcheck claim; `verify_query_paths` then ties every sampled query's fold chain
     /// to that same codeword.
-    fn verify_opening<Challenger>(
+    fn verify_opening<'p, Challenger>(
         &self,
         commitment: &MT::Commitment,
-        proof: &BinaryPcsProof<MT>,
+        proof: &'p BinaryPcsProof<MT>,
         protocol: &OpeningProtocol,
         points: Option<&[Point<BinaryField128>]>,
         challenger: &mut Challenger,
-    ) -> Result<Vec<OpeningEvals<BinaryField128>>, BinaryPcsError<MT::Error>>
+    ) -> Result<&'p [OpeningEvals<BinaryField128>], BinaryPcsError<MT::Error>>
     where
         Challenger: FieldChallenger<BinaryField128>
             + GrindingChallenger<Witness = BinaryField128>
@@ -239,7 +239,7 @@ where
             challenger,
         )?;
 
-        Ok(proof.evals.clone())
+        Ok(&proof.evals)
     }
 }
 
@@ -352,6 +352,7 @@ where
     ) -> Result<Vec<OpeningEvals<BinaryField128>>, Self::Error> {
         assert_eq!(protocol.num_openings(), points.len());
         self.verify_opening(commitment, proof, protocol, Some(points), challenger)
+            .map(<[_]>::to_vec)
     }
 }
 

@@ -6,7 +6,18 @@
 //! the base codeword's domain, addresses position `i >> r` at round `r`; folding that
 //! position's pair with round `r`'s challenge must reproduce the value read at position
 //! `i >> (r + 1)` of round `r + 1`.
+//!
+//! Every one of those reads goes through `i >> 1`:
+//!
+//! - Round 0 opens the pair `[i & !1, (i & !1) + 1]`.
+//! - Round 0 folds that pair at the domain point of the pair's low position.
+//! - Round `r >= 1` sees only `i >> r`.
+//!
+//! So bit 0 of `i` selects nothing, and a query is a pair index.
+//! Sampling draws that pair index directly.
+//! That is what makes one distinct draw mean one distinct fold-chain test.
 
+use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -22,19 +33,46 @@ use crate::fold::fold_pair;
 use crate::params::BinaryPcsConfig;
 use crate::proof::BinaryPcsProof;
 
-/// Samples `num_queries` distinct indices, uniformly at random, from `[0, domain_size)`.
+/// Number of distinct fold-chain tests a codeword of `domain_size` symbols admits.
 ///
-/// Indices come from `sample_uniform_bits::<true>`, which rejection-samples internally,
-/// rather than from the low bits of a sampled field element: the latter biases each draw and
-/// inflates the decoding radius the query bound is stated against.
+/// One per fold pair, so half the domain.
+/// Every check reads both symbols of a pair, so bit 0 of a position selects nothing.
+pub(crate) const fn num_distinct_queries(domain_size: usize, num_queries: usize) -> usize {
+    let num_pairs = domain_size / 2;
+    if num_queries < num_pairs {
+        num_queries
+    } else {
+        num_pairs
+    }
+}
+
+/// Samples distinct fold pairs from the base codeword's domain.
 ///
-/// Duplicates are rejected, so the output length is `min(num_queries, domain_size)`; a
-/// request for more indices than the domain holds returns the whole domain. Returns indices
-/// in ascending order.
+/// Returns each sampled pair's low-indexed position, in ascending order.
+/// Every returned position is even.
+///
+/// # Why a pair index
+///
+/// Both symbols of a pair are read and folded together at every round.
+/// Two symbol positions differing only in bit 0 therefore name the same test.
+/// Drawing one bit fewer and doubling aligns the enforced distinctness with the query bound.
+///
+/// # Why uniform bits
+///
+/// A uniform element of the codeword alphabet is already a uniform 128-bit string.
+/// Its low bits therefore carry no bias.
+/// The binary challenger's uniform sampler is itself a plain mask over transcript bytes.
+/// That sampler is used because it is the interface that states the guarantee.
+/// A challenger over a prime field then cannot silently reintroduce bias.
+///
+/// # Returns
+///
+/// One position per distinct pair, capped at the number of pairs the domain holds.
+/// A request for more pairs than exist returns every pair.
 ///
 /// # Panics
 ///
-/// Panics if `domain_size` is not a power of two.
+/// Panics unless `domain_size` is a power of two of at least two.
 pub(crate) fn sample_query_indices<Challenger, F>(
     domain_size: usize,
     num_queries: usize,
@@ -44,21 +82,23 @@ where
     Challenger: FieldChallenger<F> + CanSampleUniformBits<F>,
     F: Field,
 {
-    let bits = log2_strict_usize(domain_size);
-    let target = num_queries.min(domain_size);
+    // One bit narrower than the domain: a sampled value indexes pairs, not symbols.
+    let pair_bits = log2_strict_usize(domain_size / 2);
+    let target = num_distinct_queries(domain_size, num_queries);
 
-    let mut indices: Vec<usize> = Vec::with_capacity(target);
-    while indices.len() < target {
-        let index = challenger
-            .sample_uniform_bits::<true>(bits)
+    // A set, not a linear scan over what has already been drawn.
+    // Once the target approaches the pair count, the draw count is a coupon-collector tail.
+    // The small-domain configurations reach exactly that.
+    let mut pairs = BTreeSet::new();
+    while pairs.len() < target {
+        let pair = challenger
+            .sample_uniform_bits::<true>(pair_bits)
             .expect("RESAMPLE = true: rejection loops internally, never errors");
-        if !indices.contains(&index) {
-            indices.push(index);
-        }
+        pairs.insert(pair);
     }
 
-    indices.sort_unstable();
-    indices
+    // `BTreeSet` iterates in ascending order, so doubling preserves it.
+    pairs.into_iter().map(|pair| pair << 1).collect()
 }
 
 /// The pair of positions round `round`'s codeword must supply to carry query `index` onward:
@@ -183,7 +223,7 @@ where
     check_round_and_final_lengths(config, proof)?;
 
     let domain_size = config.domain_size();
-    let target_queries = config.num_queries().min(domain_size);
+    let target_queries = num_distinct_queries(domain_size, config.num_queries());
     let expected_opens = 2 * target_queries;
 
     check_round_shape(0, &proof.base_opened_values, expected_opens)?;
@@ -312,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn query_indices_are_distinct_sorted_and_in_range() {
+    fn query_indices_are_distinct_sorted_even_and_in_range() {
         let mut c = challenger();
         let indices = sample_query_indices::<_, BinaryField128>(1 << 10, 12, &mut c);
         assert_eq!(indices.len(), 12);
@@ -321,13 +361,22 @@ mod tests {
             "sorted and distinct"
         );
         assert!(indices.iter().all(|&i| i < 1 << 10), "in range");
+        // Each position is a pair's low symbol, so bit 0 is clear by construction.
+        // Distinct and even together mean no two draws are fold siblings.
+        assert!(indices.iter().all(|&i| i.is_multiple_of(2)), "pair-aligned");
     }
 
     #[test]
-    fn a_request_larger_than_the_domain_returns_the_whole_domain() {
+    fn a_request_larger_than_the_domain_returns_every_pair() {
+        // Invariant: a query is a pair, so an 8-symbol domain holds 4 tests, not 8.
+        //
+        //     symbols: 0 1 2 3 4 5 6 7
+        //     pairs:   |0| |2| |4| |6|
+        //
+        // Asking for 100 therefore yields the 4 low positions, not 8 indices.
         let mut c = challenger();
         let indices = sample_query_indices::<_, BinaryField128>(8, 100, &mut c);
-        assert_eq!(indices, (0..8).collect::<Vec<_>>());
+        assert_eq!(indices, alloc::vec![0, 2, 4, 6]);
     }
 
     #[test]

@@ -12,4 +12,11 @@ domain is one. The Johnson bound is not refuted — it is an unconditional theor
 those same counterexamples show to be tight — but `p3-security` documents it as resting on a
 correlated-agreement conjecture, and it is excluded here by choice, not by mathematics.
 
+Two obligations the types do not carry:
+
+- **Binding, not hiding.** The final codeword travels in the clear and every query opening is a
+  raw codeword symbol, so this must not be used where zero-knowledge is required.
+- **Collision resistance is the caller's.** The derived schedule prices the field's width and
+  the query count, never the Merkle tree it is paired with.
+
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.

@@ -145,39 +145,57 @@ where
         "the commit phase runs at zero preprocessing depth, so the sumcheck consumes no head rounds"
     );
 
-    // The base commitment is a width-1 codeword: the starting point for the fold loop below.
-    let base_matrix = mmcs.get_matrices(&merkle_data)[0];
     assert_eq!(
-        base_matrix.width, 1,
+        mmcs.get_matrices(&merkle_data)[0].width,
+        1,
         "zero preprocessing depth commits a width-1 codeword"
     );
-    let mut codeword = base_matrix.values.clone();
 
-    // One sumcheck round, one codeword fold, per iteration. The last fold's codeword is not
-    // committed: it is returned as the final codeword, so the round loop only commits the
-    // folds a `RoundCommitment` actually needs.
+    // One sumcheck round, one codeword fold, per iteration.
+    //
+    //     round r < last:  challenge beta_r -> fold 2-to-1 -> commit -> observe root
+    //     round r = last:  challenge beta_r -> fold 2-to-1 -> return in the clear
+    //
+    // The last fold's codeword is never committed.
+    // It travels in the proof as the final codeword instead.
     let num_fold_rounds = config.num_fold_rounds();
-    let mut rounds = Vec::with_capacity(num_fold_rounds - 1);
+    let mut rounds: Vec<RoundCommitment<MT>> = Vec::with_capacity(num_fold_rounds - 1);
+    let mut final_codeword = Vec::new();
     for round in 0..num_fold_rounds {
         let challenge =
             sumcheck.compute_sumcheck_polynomials(&mut sumcheck_data, challenger, 1, 0, None);
         let beta = challenge.as_slice()[0];
         randomness.extend(&challenge);
 
-        codeword = fold_codeword(&codeword, beta);
+        // Fold out of the previous round's Merkle leaves, never out of a copy of them.
+        // The commitment scheme already owns every codeword it committed.
+        // The fold allocates its own output, so this borrow ends before the push below.
+        let source = if round == 0 {
+            &merkle_data
+        } else {
+            &rounds[round - 1].merkle_data
+        };
+        let folded = fold_codeword(&mmcs.get_matrices(source)[0].values, beta);
 
         if round + 1 < num_fold_rounds {
-            let (commitment, round_data) =
-                mmcs.commit_matrix(RowMajorMatrix::new(codeword.clone(), 1));
+            let (commitment, round_data) = mmcs.commit_matrix(RowMajorMatrix::new(folded, 1));
             challenger.observe(commitment.clone());
             rounds.push(RoundCommitment {
                 commitment,
                 merkle_data: round_data,
             });
+        } else {
+            final_codeword = folded;
         }
     }
 
-    (merkle_data, sumcheck_data, rounds, randomness, codeword)
+    (
+        merkle_data,
+        sumcheck_data,
+        rounds,
+        randomness,
+        final_codeword,
+    )
 }
 
 /// The query phase's prover-side output: every opening `verifier::verify_query_paths` needs,
