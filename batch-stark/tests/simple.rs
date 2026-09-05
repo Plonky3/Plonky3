@@ -1522,6 +1522,7 @@ fn test_invalid_trace_width_rejected() {
         lookup_terminals: valid_proof.lookup_terminals.clone(),
         degree_bits: valid_proof.degree_bits.clone(),
         lookup_pow_witness: valid_proof.lookup_pow_witness,
+        deep_pow_witness: valid_proof.deep_pow_witness,
     };
 
     // Verification should fail due to width mismatch
@@ -2243,6 +2244,56 @@ fn batch_without_lookups_carries_no_witness() {
             err,
             BatchVerificationError::InvalidLookupPow(InvalidLookupPow::UnexpectedWitness)
         ),
+        "wrong error variant: {err:?}"
+    );
+}
+
+/// Difficulty small enough to grind instantly, large enough that a wrong
+/// witness is rejected with overwhelming probability.
+const DEEP_POW_BITS: usize = 8;
+
+/// A proof produced with out-of-domain grinding verifies.
+#[test]
+fn deep_grinding_round_trips() {
+    let config = make_config(2024).with_deep_proof_of_work_bits(DEEP_POW_BITS);
+    let airs = lookup_grinding_airs();
+
+    lookup_grinding_case(&config, &config, &airs, |_| {}).expect("ground proof verifies");
+}
+
+/// A tampered out-of-domain witness is rejected even at the difficulty the
+/// proof was produced with, which is what makes the grind binding rather than
+/// decorative.
+#[test]
+fn tampered_deep_pow_witness_is_rejected() {
+    let config = make_config(2024).with_deep_proof_of_work_bits(DEEP_POW_BITS);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.deep_pow_witness += Val::ONE;
+    })
+    .expect_err("a tampered witness must be rejected");
+
+    assert!(
+        matches!(err, BatchVerificationError::InvalidDeepPowWitness),
+        "wrong error variant: {err:?}"
+    );
+}
+
+/// A verifier demanding more out-of-domain grinding than the prover paid
+/// rejects. This is the failure mode of a prover/verifier config mismatch,
+/// and it must be a rejection rather than a silently weaker proof.
+#[test]
+fn deep_pow_difficulty_mismatch_is_rejected() {
+    let prover_config = make_config(2024);
+    let verifier_config = make_config(2024).with_deep_proof_of_work_bits(24);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&prover_config, &verifier_config, &airs, |_| {})
+        .expect_err("a difficulty mismatch must be rejected");
+
+    assert!(
+        matches!(err, BatchVerificationError::InvalidDeepPowWitness),
         "wrong error variant: {err:?}"
     );
 }

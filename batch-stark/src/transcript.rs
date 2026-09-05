@@ -308,9 +308,36 @@ impl<SC: SGC> BatchTranscript<SC> {
         self.challenger.observe(commitment.clone());
     }
 
-    /// Sample the out-of-domain evaluation point zeta.
-    pub fn sample_zeta(&mut self) -> Challenge<SC> {
-        self.challenger.sample_algebra_element()
+    /// Prover side: grind `pow_bits` before the out-of-domain point, then sample it.
+    ///
+    /// Every earlier commitment and lookup terminal is already in the transcript, so the witness
+    /// commits the prover to the whole batch: a prover hunting for a favourable `zeta` pays
+    /// `2^pow_bits` work per candidate.
+    pub fn grind_and_sample_zeta(&mut self, pow_bits: usize) -> (Challenge<SC>, Val<SC>)
+    where
+        SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
+    {
+        let witness = self.challenger.grind(pow_bits);
+        (self.challenger.sample_algebra_element(), witness)
+    }
+
+    /// Verifier side: check the witness guarding the out-of-domain point, then resample it.
+    ///
+    /// `None` means the witness did not satisfy the proof-of-work predicate — either it was
+    /// forged, or the prover and verifier disagree on
+    /// [`p3_uni_stark::StarkGenericConfig::deep_proof_of_work_bits`].
+    pub fn check_and_sample_zeta(
+        &mut self,
+        pow_bits: usize,
+        witness: Val<SC>,
+    ) -> Option<Challenge<SC>>
+    where
+        SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
+    {
+        if !self.challenger.check_witness(pow_bits, witness) {
+            return None;
+        }
+        Some(self.challenger.sample_algebra_element())
     }
 
     #[inline]

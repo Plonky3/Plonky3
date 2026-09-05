@@ -362,6 +362,7 @@ where
         lookup_terminals,
         degree_bits,
         lookup_pow_witness,
+        deep_pow_witness,
     } = proof;
 
     let all_lookups = &common.lookups;
@@ -597,8 +598,11 @@ where
         transcript.observe_random_commitment(r_commit);
     }
 
-    // Sample OOD point.
-    let zeta = transcript.sample_zeta();
+    // Check the proof of work guarding the out-of-domain point, then resample it. The check
+    // runs before the sample, so a bad witness is rejected without zeta ever being drawn.
+    let zeta = transcript
+        .check_and_sample_zeta(config.deep_proof_of_work_bits(), *deep_pow_witness)
+        .ok_or(BatchVerificationError::InvalidDeepPowWitness)?;
 
     let (coms_to_verify, quotient_domains) = commitments_with_opening_points(
         config,
