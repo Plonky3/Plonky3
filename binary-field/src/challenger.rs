@@ -261,6 +261,7 @@ mod tests {
     use p3_symmetric::{Hash, MerkleCap};
 
     use crate::challenger::{BITS_SAMPLE_BYTES, BinaryChallenger};
+    use crate::tower::TowerLevel;
     use crate::{BinaryField8, BinaryField32, BinaryField128, Gf2, Ghash128};
 
     type Inner = HashChallenger<u8, Keccak256Hash, 32>;
@@ -298,10 +299,8 @@ mod tests {
         let drawn: BinaryField128 = tower.sample();
 
         let mut ghash = mk::<Ghash128>();
-        ghash.observe(Ghash128::from_le_bytes(
-            element.into_bytes().into_iter().collect::<Vec<_>>()[..]
-                .try_into()
-                .unwrap(),
+        ghash.observe(Ghash128::from_le_byte_iter(
+            element.into_bytes().into_iter(),
         ));
         let mirrored: Ghash128 = ghash.sample();
 

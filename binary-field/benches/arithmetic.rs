@@ -341,7 +341,9 @@ fn bench_representation_square(c: &mut Criterion) {
     group.finish();
 }
 
-/// Inversion in the polynomial basis, which routes through the tower and pays two conversions.
+/// Inversion in the polynomial basis, against converting to the tower and inverting there.
+///
+/// Both arms see the same operands, none of them zero, so neither can panic.
 fn bench_representation_inverse(c: &mut Criterion) {
     let (_, ghash) = representation_operands();
     let nonzero: Vec<Ghash128> = ghash
@@ -353,7 +355,7 @@ fn bench_representation_inverse(c: &mut Criterion) {
     group.bench_function("through tower", |b| {
         // Include both basis conversions in the comparison.
         b.iter(|| {
-            black_box(&ghash).iter().fold(Ghash128::ZERO, |acc, &y| {
+            black_box(&nonzero).iter().fold(Ghash128::ZERO, |acc, &y| {
                 acc + Ghash128::from(BinaryField128::from(y).inverse())
             })
         });

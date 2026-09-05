@@ -29,10 +29,10 @@ const NIBBLE_3: u64 = NIBBLE_0 << 3;
 /// # Why the carries never escape
 ///
 /// Bit `p` counts the pairs `(i, j)` with `i + j = p` drawn from the two masks.
-/// A 64-bit word holds at most 16 positions in one residue class.
+/// Writing `p = 4k + r + s`, that count is `k + 1`, and `k` is at most 15.
 ///
-/// At most 15 pairs reach any `p <= 56`, which fits the three free bits above `p`.
-/// Only `p = 60` reaches 16, and its carry leaves the word entirely.
+/// So every `p <= 59` sees at most 15 pairs, which fit the three free bits above `p`.
+/// Positions 60 to 63 reach 16, and a fifth bit there lands outside the word.
 #[inline]
 pub(super) const fn bmul64(x: u64, y: u64) -> u64 {
     // Bits of the first operand, one residue class per word.

@@ -16,18 +16,15 @@ mod sqrt;
 
 pub(crate) use sqrt::poly_sqrt_128;
 
-// The addition chain pays for its 320 KiB of Frobenius maps only where a product is a single
-// instruction.
-// Without one the tower norm wins, so the maps are not compiled at all.
-#[cfg(any(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    all(target_arch = "aarch64", target_feature = "aes"),
-))]
+// The addition chain pays for its 320 KiB of Frobenius maps only where a product is fast
+// enough for ten of them to beat a change of basis.
+//
+// That is the carryless-multiply x86 path.
+// AArch64 measures the two routes level, and the software path loses outright, so neither
+// compiles the maps.
+#[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 mod inverse;
-#[cfg(any(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    all(target_arch = "aarch64", target_feature = "aes"),
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 pub(crate) use inverse::poly_inverse_128;
 
 // Compiled on every target, even where a backend supersedes it.
@@ -61,7 +58,7 @@ mod x86_64;
 
 /// Whether the target has a carryless-multiply instruction.
 ///
-/// - The tower routes here only when it does, since its own recursion beats the software path.
+/// - The tower routes here only when it does, and takes its own recursion otherwise.
 /// - The polynomial-basis field has no such alternative and always routes here.
 /// - Most targets need `+pclmulqdq` / `+aes` asked for, or `-C target-cpu=native`.
 pub(crate) const HAS_HARDWARE_CLMUL: bool = cfg!(any(

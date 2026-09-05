@@ -29,10 +29,7 @@ const TOWER_GENERATOR: u128 = 0x1_0000_0000_0000_0005;
 const ALPHA: u128 = clmul::tower_image_128(1 << 64);
 
 /// The inverse of an element known to be nonzero, by the addition chain over Frobenius maps.
-#[cfg(any(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    all(target_arch = "aarch64", target_feature = "aes"),
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 #[inline]
 fn invert_nonzero(x: Ghash128) -> Ghash128 {
     Ghash128(clmul::poly_inverse_128(x.0))
@@ -40,12 +37,9 @@ fn invert_nonzero(x: Ghash128) -> Ghash128 {
 
 /// The inverse of an element known to be nonzero, through the tower norm.
 ///
-/// The tower inverts through a norm recursion down to a `GF(2^8)` lookup table.
-/// A software product costs more than the two changes of basis around it.
-#[cfg(not(any(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    all(target_arch = "aarch64", target_feature = "aes"),
-)))]
+/// The tower recurses through the norm down to a `GF(2^8)` lookup table.
+/// Everywhere the addition chain is not faster, that beats it for no table at all.
+#[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
 #[inline]
 fn invert_nonzero(x: Ghash128) -> Ghash128 {
     Ghash128::from(BinaryField128::from(x).inverse())
@@ -186,18 +180,11 @@ impl PrimeCharacteristicRing for Ghash128 {
 
 impl Field for Ghash128 {
     // One element is one 128-bit lane, so a wide carryless multiply packs several of them.
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "vpclmulqdq",
-        any(target_feature = "avx2", target_feature = "avx512f")
-    ))]
-    type Packing = crate::PackedGhash128;
-    #[cfg(not(all(
-        target_arch = "x86_64",
-        target_feature = "vpclmulqdq",
-        any(target_feature = "avx2", target_feature = "avx512f")
-    )))]
-    type Packing = Self;
+    // Which register that is, and whether there is one at all, is settled in `packed`.
+    //
+    // Without a packing the alias resolves to this type itself, which is why the lint is off.
+    #[allow(clippy::use_self)]
+    type Packing = crate::packed::Packing;
 
     const GENERATOR: Self = Self(clmul::tower_image_128(TOWER_GENERATOR));
 

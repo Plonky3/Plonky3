@@ -14,7 +14,8 @@ Key items:
 - `Gf2` — the base field `GF(2)`
 - `BinaryField2`, `BinaryField4`, `BinaryField8`, `BinaryField16`, `BinaryField32`, `BinaryField64`, `BinaryField128` — the tower levels, each a quadratic extension of the one below
 - `Ghash128` — `GF(2^128)` in the GHASH polynomial basis, with `From` conversions to and from the widest tower level
-- `PackedGhash128` — the SIMD packing, holding two elements per register under `AVX2` and four under `AVX-512`
+- `PackedGhash128` — the SIMD packing, two elements per register on `avx2` and four on `avx512f`,
+  in both cases only when `vpclmulqdq` is also enabled, so it is absent from the rendered docs
 - `BasedVectorSpace` / `ExtensionField` between every pair of byte-aligned tower levels, in the tower basis
 - `BinaryChallenger` — Fiat–Shamir over a byte challenger; every bit pattern is a field element, so no rejection sampling is needed
 - Carryless-multiply fast paths on x86-64 (`pclmulqdq`, `vpclmulqdq`) and AArch64 (`aes`), with a software backend everywhere else

@@ -12,24 +12,36 @@ use p3_util::log2_strict_usize;
 use crate::domain::{domain_point, domain_point_steps, subspace_polynomial};
 use crate::traits::AdditiveNtt;
 
-/// The Lin–Chung–Han additive NTT over a Cantor-basis domain.
+/// The Lin–Chung–Han additive NTT over the Cantor-basis domain.
 ///
-/// At stage `j`, block `blk` has twiddle `W_j(shift) + domain_point(blk << 1)`.
-/// There is no twiddle table.
+/// Twiddles are index shifts (D8): at stage `j` and butterfly block `blk` the twiddle is
+/// `W_j(shift) + domain_point(blk << 1)`, so there is no twiddle table.
 ///
-/// Consecutive blocks differ by a fixed increment, shared by every stage.
+/// Consecutive blocks differ by a fixed increment, so a block takes its twiddle from the one
+/// before it rather than walking its own index.
+/// The `ℓ - 1` increments are shared by every stage and are the only per-size precomputation.
 ///
-/// Butterflies run on SIMD packings, and drop the multiply where the twiddle is zero.
+/// `W_j` is `F_2`-linear and `domain_point(0)` is zero, so over the subspace itself — the
+/// coset with `shift = 0` — the first block of every stage has a zero twiddle and its
+/// butterfly collapses to a single addition. The inner loop takes that as a separate case,
+/// which removes one multiply in `2/ℓ` of them.
 #[derive(Clone, Debug, Default)]
 pub struct LchNtt<F> {
     _marker: PhantomData<F>,
 }
 
-/// Elements per side of a butterfly task.
+/// The number of field elements one butterfly task covers on each side of a block.
 ///
-/// Narrow blocks share a task.
-/// Wide blocks split into pieces of this size, which have too few blocks to fill a machine.
-/// Either way a stage leaves enough independent tasks to be worth handing to other threads.
+/// Stage `j` has `2^(ℓ − 1 − j)` blocks of `half = 2^j · width` elements per side, so cutting
+/// each side into pieces of this size leaves `n · width / (2 · BUTTERFLY_GRAIN)` pieces at
+/// every stage, independent of `j`: the wide stages, which have too few blocks to fill a
+/// machine, are split from within instead. Stages with `half ≤ BUTTERFLY_GRAIN` keep a single
+/// piece per side and instead gather `BUTTERFLY_GRAIN / half` whole blocks into one task, so a
+/// task is a piece of this size on either side of the crossover.
+///
+/// At a few nanoseconds per butterfly a piece of this size is microseconds of work, well above
+/// the cost of handing a task to another thread, while still leaving hundreds of pieces per
+/// stage at the smallest useful heights.
 pub(crate) const BUTTERFLY_GRAIN: usize = 1 << 10;
 
 impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
@@ -314,8 +326,8 @@ mod tests {
             prop_assert_eq!(ntt.shifted_intt_batch(evals, shift), coeffs);
         }
 
-        /// The low-degree extension agrees with the oracle, on a coset too.
-        /// The input rows reappear as the prefix of the output.
+        /// `LchNtt`'s low-degree extension agrees with the oracle's, on a coset too, and the
+        /// input rows reappear as the prefix: the correspondence Phase 3 folds along.
         #[test]
         fn lch_lde_matches_naive(
             log_n in 0usize..=6,
@@ -339,8 +351,9 @@ mod tests {
     /// A height whose stages take more than one butterfly task, so a task seeds its twiddle at
     /// a block index of its own rather than at zero.
     ///
-    /// The round-trip test is blind to the schedule.
-    /// Both directions read the same twiddles, so they invert each other regardless.
+    /// The oracle tests all sit below that height, and `lch_round_trips` is blind to the
+    /// schedule: both directions read the same twiddles, so they invert each other whatever
+    /// those twiddles are. Only a comparison against an independent walk pins them.
     #[test]
     fn lch_matches_a_twiddle_walk_across_several_tasks() {
         const LOG_N: usize = 12;
@@ -367,7 +380,8 @@ mod tests {
         }
     }
 
-    /// An index past the field's bit width needs a Cantor vector it does not have.
+    /// An index of `S_ℓ` past the bit width of `F` calls for a Cantor basis vector this level
+    /// does not have.
     #[test]
     #[should_panic]
     fn shifted_ntt_batch_rejects_l_past_the_bit_width() {
@@ -376,7 +390,7 @@ mod tests {
         let _ = LchNtt::<BinaryField8>::default().ntt_batch(coeffs);
     }
 
-    /// A height that is not a power of two has no well-defined `l`.
+    /// A height that is not a power of two has no well-defined `ℓ`.
     #[test]
     #[should_panic]
     fn shifted_ntt_batch_rejects_a_non_power_of_two_height() {
@@ -407,7 +421,8 @@ mod tests {
         }
     }
 
-    /// The domain does not depend on the level, so neither does the transform.
+    /// The same data transformed at two levels agrees after embedding: the domain does not
+    /// depend on the level, so neither does the transform.
     #[test]
     fn levels_agree_after_embedding() {
         const LOG_N: usize = 6;

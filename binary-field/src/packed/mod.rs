@@ -13,9 +13,23 @@
 ))]
 mod x86_64;
 
+// Which type the field packs into, decided once here rather than at each use.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+))]
+pub(crate) use PackedGhash128 as Packing;
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "vpclmulqdq",
     any(target_feature = "avx2", target_feature = "avx512f")
 ))]
 pub use x86_64::PackedGhash128;
+
+#[cfg(not(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+)))]
+pub(crate) use crate::Ghash128 as Packing;
