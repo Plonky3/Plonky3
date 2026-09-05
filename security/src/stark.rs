@@ -226,7 +226,10 @@ fn regime_report(
 /// (lookup arguments, custom DEEP variants, batched openings, …) into every
 /// regime; pass `&[]` for the baseline AIR + DEEP + LDT composite.
 ///
-/// [`SecurityReport::security_bits`] reproduces [`proven_security`]; the report
+/// [`SecurityReport::security_bits`] matches [`proven_security`] when `shape.num_batched_functions
+/// < 2`, i.e. when there is no batching term to make the two regimes' choice of `m` diverge (see
+/// [`LowDegreeTest::ldr_candidates`]); more generally it is at least as tight, since this report
+/// picks `m` from the same full composite it reports rather than from the LDT alone. The report
 /// additionally exposes which term binds in each regime.
 ///
 /// `grinding` sites the protocol's proof-of-work per error source; pass
