@@ -256,6 +256,14 @@ impl StarkSecurityParams {
         EF: ExtensionField<F>,
         A: Air<SymbolicAirBuilder<F, EF>>,
     {
+        let main_next = !air.main_next_row_columns().is_empty();
+        let preprocessed_next = !air.preprocessed_next_row_columns().is_empty();
+        debug_assert!(
+            max_combo >= 1 + (main_next || preprocessed_next) as usize,
+            "max_combo ({max_combo}) must cover every rotation the AIR reads: \
+             main_next={main_next}, preprocessed_next={preprocessed_next}"
+        );
+
         let shape = P3AirShape::from_air::<F, EF, A>(air, layout, max_combo);
         let challenge_dimension = <EF as BasedVectorSpace<F>>::DIMENSION;
 
@@ -269,9 +277,9 @@ impl StarkSecurityParams {
 
         let num_batched_functions = num_batched_openings(
             layout.main_width,
-            !air.main_next_row_columns().is_empty(),
+            main_next,
             layout.preprocessed_width,
-            !air.preprocessed_next_row_columns().is_empty(),
+            preprocessed_next,
             num_quotient_chunks,
             challenge_dimension,
             openings.is_zk,
