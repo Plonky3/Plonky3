@@ -1232,6 +1232,27 @@ mod tests {
     }
 
     #[test]
+    fn reject_zero_blowup() {
+        // Invariant: at log_blowup = 0 every length-N word is itself a degree-<N codeword, so
+        // the folding chain and final-polynomial check are satisfied by an arbitrary
+        // reduced-opening word.
+        //
+        // Fixture state: an honest proof built with log_blowup >= 1.
+        //
+        // Mutation: verify it under params with log_blowup = 0.
+        let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        pcs.fri_params.log_blowup = 0;
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("zero-blowup instance must be rejected");
+
+        assert!(
+            matches!(err, FriError::ZeroBlowup),
+            "expected ZeroBlowup, got {err:?}"
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "num_queries must be at least 1")]
     fn prover_rejects_zero_queries() {
         // The prover must refuse to build a vacuous proof.
@@ -1248,6 +1269,43 @@ mod tests {
         // Zero queries; every other parameter is otherwise valid.
         let mut fri_params = FriParameters::new_testing(challenge_mmcs, 0);
         fri_params.num_queries = 0;
+
+        let pcs = TestPcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
+
+        // Commit to a random single-column trace of 2^{10} rows.
+        let log_n = 10;
+        let d =
+            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
+        let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
+        let (_comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+
+        // Commit succeeds; the assert fires inside the opening (FRI prover).
+        let zeta: Challenge = rng.random();
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        let _ = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal);
+    }
+
+    #[test]
+    #[should_panic(expected = "log_blowup must be at least 1")]
+    fn prover_rejects_zero_blowup() {
+        // The prover must refuse to build a proof the verifier would accept unconditionally.
+        // The verifier guards the same config, so the failure is symmetric.
+        let mut rng = SmallRng::seed_from_u64(0);
+
+        // Build the hash stack: field hasher → compression → Merkle tree.
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // Zero blowup; every other parameter is otherwise valid.
+        let mut fri_params = FriParameters::new_testing(challenge_mmcs, 0);
+        fri_params.log_blowup = 0;
 
         let pcs = TestPcs {
             mmcs: val_mmcs,

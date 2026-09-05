@@ -42,6 +42,12 @@ where
         params.num_queries > 0,
         "num_queries must be at least 1 for Circle-FRI soundness"
     );
+    // At rate 1 every length-N word is itself a degree-<N codeword, so the folding chain
+    // would accept an arbitrary reduced-opening word. The verifier rejects it.
+    assert!(
+        params.log_blowup > 0,
+        "log_blowup must be at least 1 for Circle-FRI soundness"
+    );
 
     // check sorted descending
     assert!(

@@ -40,6 +40,11 @@ where
     if params.num_queries == 0 {
         return Err(FriError::ZeroQueries);
     }
+    // Reject rate-1 FRI: every length-N word is a degree-<N codeword, so an arbitrary
+    // reduced-opening word would pass the folding chain unchecked.
+    if params.log_blowup == 0 {
+        return Err(FriError::ZeroBlowup);
+    }
 
     // There must be exactly one commit-phase proof-of-work witness per round.
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
