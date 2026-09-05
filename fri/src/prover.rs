@@ -14,7 +14,7 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     BatchMultiOpening, CommitPhaseMultiStep, FriFoldingStrategy, FriParameters, FriProof,
-    ProverDataWithOpeningPoints, compute_log_arity_for_round,
+    ProverDataWithOpeningPoints, fold_schedule,
 };
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
@@ -208,28 +208,26 @@ where
         "max_log_arity must be at least 1 to guarantee folding progress"
     );
 
+    let log_final_height = params.log_blowup + params.log_final_poly_len;
+
+    // Derive the whole folding schedule before folding anything.
+    //
+    // The verifier derives the identical one from the committed heights.
+    // Nothing about it is read from the proof.
+    let input_log_heights: Vec<usize> = inputs
+        .iter()
+        .map(|input| log2_strict_usize(input.len()))
+        .collect();
+    let log_arities = fold_schedule(&input_log_heights, log_final_height, params.max_log_arity);
+
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
     let mut data = vec![];
-    let mut log_arities = vec![];
     let mut pow_witnesses = vec![];
 
-    let log_final_height = params.log_blowup + params.log_final_poly_len;
-
-    while folded.len() > params.blowup() * params.final_poly_len() {
-        let log_current_height = log2_strict_usize(folded.len());
-        let next_input_log_height = inputs_iter.peek().map(|v| log2_strict_usize(v.len()));
-
-        //Compute the arity for this round
-        let log_arity = compute_log_arity_for_round(
-            log_current_height,
-            next_input_log_height,
-            log_final_height,
-            params.max_log_arity,
-        );
+    for &log_arity in &log_arities {
         let arity = 1 << log_arity;
-        log_arities.push(log_arity);
 
         // As folded is in bit reversed order, the evaluations at conjugate points are adjacent.
         // We reinterpret the vector as a matrix of width `arity`.

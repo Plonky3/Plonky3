@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::{
     BatchMultiOpening, CommitPhaseMultiStep, CommitmentWithOpeningPoints, FriFoldingStrategy,
-    FriParameters, FriProof,
+    FriParameters, FriProof, fold_schedule,
 };
 
 #[derive(Debug, Error)]
@@ -73,6 +73,16 @@ where
         round: usize,
         log_arity: usize,
         max: usize,
+    },
+    /// The proof folded on a different schedule than the committed heights dictate.
+    ///
+    /// Both sides derive the schedule; it is never agreed over the wire.
+    #[error("fold schedule mismatch: expected {expected:?}, got {got:?}")]
+    FoldScheduleMismatch {
+        /// Schedule derived from the committed heights and the parameters.
+        expected: Vec<usize>,
+        /// Schedule the proof folded on.
+        got: Vec<usize>,
     },
     #[error("final folded height mismatch: expected {expected}, got {got}")]
     FinalFoldHeightMismatch { expected: usize, got: usize },
@@ -282,6 +292,35 @@ where
             expected,
             got: log_global_max_height,
         });
+    }
+
+    // Pin the whole schedule, not just the height it sums to.
+    //
+    // The cross-check above constrains only the sum.
+    // Two schedules summing alike would both pass it.
+    let mut input_log_heights: Vec<usize> = commitments_with_opening_points
+        .iter()
+        .flat_map(|(_, mats)| {
+            mats.iter()
+                .map(|(domain, _)| log2_strict_usize(domain.size()) + params.log_blowup)
+        })
+        .collect();
+    // Folding sees one input per distinct height, tallest first.
+    input_log_heights.sort_unstable_by(|a, b| b.cmp(a));
+    input_log_heights.dedup();
+
+    if !input_log_heights.is_empty() {
+        let expected_schedule = fold_schedule(
+            &input_log_heights,
+            params.log_blowup + params.log_final_poly_len,
+            params.max_log_arity,
+        );
+        if expected_schedule != log_arities {
+            return Err(FriError::FoldScheduleMismatch {
+                expected: expected_schedule,
+                got: log_arities,
+            });
+        }
     }
 
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
@@ -1049,6 +1088,18 @@ mod tests {
     /// The challenger is advanced past the opened-values observation,
     /// ready for the verification entry point.
     fn make_test_fixture_with_queries(num_queries: usize) -> TestFixture {
+        make_test_fixture_with(num_queries, 1, 3)
+    }
+
+    /// Build a fixture with a chosen query count, folding cap, and trace height.
+    ///
+    /// A cap above one lets a single input fold non-uniformly.
+    /// That is what separates two schedules sharing a height sum.
+    fn make_test_fixture_with(
+        num_queries: usize,
+        max_log_arity: usize,
+        log_degree: usize,
+    ) -> TestFixture {
         // Use a fixed seed so every test run is deterministic.
         let mut rng = SmallRng::seed_from_u64(42);
 
@@ -1073,7 +1124,7 @@ mod tests {
         let fri_params = FriParameters {
             log_blowup: 1,
             log_final_poly_len: 0,
-            max_log_arity: 1,
+            max_log_arity,
             num_queries,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 0,
@@ -1083,10 +1134,9 @@ mod tests {
         // Wrap the parameters and commitment scheme into a PCS instance.
         let pcs = TwoAdicFriPcs::new(Radix2Dit::default(), input_mmcs.clone(), fri_params.clone());
 
-        // Commit to a single 8-row, 2-column trace matrix.
-        // With blowup 2 the evaluation domain has 16 points (log height 4).
-        // Binary folding produces 3 rounds: 16 -> 8 -> 4 -> 2.
-        let log_degree = 3;
+        // Commit to a single 2-column trace matrix of the requested height.
+        // With blowup 2 the evaluation domain is twice as tall.
+        // The default of 8 rows gives log height 4, folded binary in 3 rounds.
         let width = 2;
         let domain = <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
             Challenge,
@@ -1585,6 +1635,56 @@ mod tests {
                 assert_eq!(round, 0);
                 assert_eq!(log_arity, 0);
                 assert_eq!(max, f.fri_params.max_log_arity);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reordered_fold_schedule_rejected() {
+        // Invariant: the schedule is derived, not accepted.
+        //
+        // Fixture state: one input at log height 5, final height 1, cap 3.
+        //
+        // Mutation: swap the two arities.
+        //
+        //     honest:    [3, 1]   folds 5 -> 2 -> 1
+        //     tampered:  [1, 3]   folds 5 -> 4 -> 1
+        //
+        // Every earlier guard still passes:
+        //
+        //     round count      unchanged
+        //     each arity <= 3  yes
+        //     sum of arities   4, matching the height cross-check
+        //
+        // Only the derived schedule separates them.
+        let f = make_test_fixture_with(2, 3, 4);
+        let mut proof = f.proof.clone();
+
+        let honest: Vec<usize> = proof
+            .commit_phase_openings
+            .iter()
+            .map(|opening| opening.log_arity as usize)
+            .collect();
+        assert_eq!(honest, vec![3, 1], "fixture must fold non-uniformly");
+
+        proof.commit_phase_openings[0].log_arity = 1;
+        proof.commit_phase_openings[1].log_arity = 3;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject a reordered fold schedule");
+
+        match err {
+            FriError::FoldScheduleMismatch { expected, got } => {
+                assert_eq!(expected, vec![3, 1]);
+                assert_eq!(got, vec![1, 3]);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
