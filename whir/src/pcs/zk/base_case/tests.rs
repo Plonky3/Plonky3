@@ -348,8 +348,9 @@ fn base_case_rejects_unbound_source_reveal() {
     )
     .unwrap_err();
     // The committed source genuinely differs from the reveal, so the source
-    // spot check fails. The failing position is fixed by the test seed.
-    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 1 });
+    // spot check fails. The failing position is fixed by the test seed and
+    // the query-index sampler.
+    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 2 });
 }
 
 #[test]
