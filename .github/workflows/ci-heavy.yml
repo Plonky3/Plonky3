@@ -8,6 +8,7 @@ on:
     branches: [ "*" ]
     paths:
       - "whir/src/**"
+      - "binary-pcs/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -48,3 +49,23 @@ jobs:
 
       - name: Test WHIR exhaustive sweep with parallel
         run: cargo test -p p3-whir --features parallel pcs::tests::test_whir_end_to_end_exhaustive -- --ignored --exact
+
+  binary_pcs_large_configuration:
+    name: binary-pcs 2^16 round trip
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Set flags
+        # No x86_64 target carries carry-less multiply in its baseline, so without this the
+        # runner falls back to recursive tower multiplication and the job measures that
+        # instead. Appended to the existing flags so we keep -C debuginfo=0.
+        run: echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=+pclmulqdq" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test the 2^16 round trip
+        run: cargo test -p p3-binary-pcs --release --test end_to_end large_configuration_2_16_round_trips -- --ignored --exact
