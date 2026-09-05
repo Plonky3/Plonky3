@@ -171,12 +171,14 @@ pub const fn security_report(
 /// Coefficient `2 · (2^log_folding_arity − 1)` of the folding round, or `None` when the arity is
 /// too large to compute it without wrapping.
 ///
-/// The bound needs `2^arity` and then doubles it, so anything from 63 upwards overflows `u64`.
-/// A wrapped shift is the dangerous case rather than a merely wrong one: `1u64 << 64` masks to
-/// `1u64 << 0`, leaving the coefficient at zero, and [`round`] reads a zero coefficient as "the
-/// protocol has no such round" and reports it at the cap. The round would then vanish from the
-/// budget of a verifier compiled in release, where the shift does not panic. Reporting zero bits
-/// instead refuses the configuration loudly.
+/// `2^63` is the last shift that does not itself overflow `u64`, and `2 · (2^63 − 1) = 2^64 − 2`
+/// still fits, so `log_folding_arity = 63` could be computed exactly; the cutoff at `63` is one
+/// notch more conservative than the arithmetic strictly requires, refusing the input a step early
+/// rather than relying on that margin. From `64` upwards a wrapped shift is the dangerous case
+/// rather than a merely wrong one: `1u64 << 64` masks to `1u64 << 0`, leaving the coefficient at
+/// zero, and [`round`] reads a zero coefficient as "the protocol has no such round" and reports it
+/// at the cap. The round would then vanish from the budget of a verifier compiled in release,
+/// where the shift does not panic. Reporting zero bits instead refuses the configuration loudly.
 const fn folding_coefficient(log_folding_arity: u32) -> Option<u64> {
     if log_folding_arity >= u64::BITS - 1 {
         return None;
