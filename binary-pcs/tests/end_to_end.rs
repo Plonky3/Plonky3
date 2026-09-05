@@ -103,13 +103,22 @@ fn run_lifecycle(
 /// Runs one commit/open/verify round trip at `num_variables` and `log_inv_rate`, with the
 /// prover and the verifier on two independently constructed challengers seeded identically.
 fn assert_round_trips(num_variables: usize, log_inv_rate: usize, seed: u64) {
+    assert_round_trips_at(num_variables, log_inv_rate, POW_BITS, seed);
+}
+
+/// Runs one round trip with the grinding budget spelled out.
+///
+/// For the configurations whose point is the budget rather than the shape.
+fn assert_round_trips_at(num_variables: usize, log_inv_rate: usize, pow_bits: usize, seed: u64) {
     let (pcs, commitment, proof, protocol) =
-        run_lifecycle(num_variables, log_inv_rate, POW_BITS, SECURITY_LEVEL, seed);
+        run_lifecycle(num_variables, log_inv_rate, pow_bits, SECURITY_LEVEL, seed);
 
     let mut verifier_challenger = challenger();
     pcs.verify(&commitment, &proof, &mut verifier_challenger, protocol)
         .unwrap_or_else(|err| {
-            panic!("num_variables={num_variables} log_inv_rate={log_inv_rate}: {err:?}")
+            panic!(
+                "num_variables={num_variables} log_inv_rate={log_inv_rate} pow_bits={pow_bits}: {err:?}"
+            )
         });
 }
 
@@ -123,6 +132,24 @@ fn small_configurations_round_trip() {
             let seed = (num_variables as u64) << 8 | log_inv_rate as u64;
             assert_round_trips(num_variables, log_inv_rate, seed);
         }
+    }
+}
+
+#[test]
+fn a_zero_grinding_budget_round_trips() {
+    // Invariant: a zero grinding budget must leave both transcripts in the same state.
+    //
+    //     prover  : grind(0)         -> witness zero, transcript untouched
+    //     verifier: check_witness(0) -> accepts,      transcript untouched
+    //
+    // Both sides return early, and they agree only because both do.
+    // Drop either early return and the two desync at query sampling.
+    // Every honest proof would then stop verifying, at every shape.
+    //
+    // A zero budget is accepted for any positive security level, so it is reachable.
+    for &log_inv_rate in &[1usize, 2, 3] {
+        let seed = 0xB17_u64 << 8 | log_inv_rate as u64;
+        assert_round_trips_at(NUM_VARIABLES, log_inv_rate, 0, seed);
     }
 }
 
