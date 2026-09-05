@@ -157,7 +157,7 @@ where
     /// The proof of work guarding the out-of-domain point is invalid.
     ///
     /// Either the witness was forged, or the prover and verifier disagree on
-    /// [`crate::StarkGenericConfig::deep_proof_of_work_bits`].
+    /// [`crate::StarkGenericConfig::ood_proof_of_work_bits`].
     #[error("invalid proof-of-work witness for the out-of-domain point")]
-    InvalidDeepPowWitness,
+    InvalidOodPowWitness,
 }

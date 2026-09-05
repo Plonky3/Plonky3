@@ -325,7 +325,7 @@ impl<SC: SGC> BatchTranscript<SC> {
     ///
     /// `None` means the witness did not satisfy the proof-of-work predicate — either it was
     /// forged, or the prover and verifier disagree on
-    /// [`p3_uni_stark::StarkGenericConfig::deep_proof_of_work_bits`].
+    /// [`p3_uni_stark::StarkGenericConfig::ood_proof_of_work_bits`].
     pub fn check_and_sample_zeta(
         &mut self,
         pow_bits: usize,

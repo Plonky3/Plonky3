@@ -21,8 +21,8 @@ pub struct Proof<SC: StarkGenericConfig> {
     /// Proof of work for the phase before the out-of-domain point is sampled.
     ///
     /// Trivially valid (and unread) when
-    /// [`StarkGenericConfig::deep_proof_of_work_bits`] is `0`.
-    pub deep_pow_witness: Val<SC>,
+    /// [`StarkGenericConfig::ood_proof_of_work_bits`] is `0`.
+    pub ood_pow_witness: Val<SC>,
 }
 
 impl<SC: StarkGenericConfig> Proof<SC> {

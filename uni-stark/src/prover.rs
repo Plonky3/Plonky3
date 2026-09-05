@@ -365,9 +365,9 @@ where
     // cases but it is a completeness issue and contributes a completeness error of |gK| = 2N/|EF|.
     //
     // Grinding before the sample makes each attempt at a favourable `zeta` cost
-    // `2^deep_proof_of_work_bits` work, adding that many bits to the round's error above. `dN/|EF|`
+    // `2^ood_proof_of_work_bits` work, adding that many bits to the round's error above. `dN/|EF|`
     // is fixed by the AIR and the trace height, so this grind is the only parameter that moves it.
-    let deep_pow_witness = challenger.grind(config.deep_proof_of_work_bits());
+    let ood_pow_witness = challenger.grind(config.ood_proof_of_work_bits());
     let zeta: SC::Challenge = challenger.sample_algebra_element();
     let zeta_next = trace_domain
         .next_point(zeta)
@@ -443,7 +443,7 @@ where
         opened_values,
         opening_proof,
         degree_bits: log_ext_degree,
-        deep_pow_witness,
+        ood_pow_witness,
     }
 }
 

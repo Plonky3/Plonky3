@@ -495,8 +495,8 @@ where
 
     // Grind before the out-of-domain point, then sample it. Every commitment and lookup
     // terminal above is already observed, so the witness commits the prover to the whole batch.
-    let (zeta, deep_pow_witness): (Challenge<SC>, Val<SC>) =
-        transcript.grind_and_sample_zeta(config.deep_proof_of_work_bits());
+    let (zeta, ood_pow_witness): (Challenge<SC>, Val<SC>) =
+        transcript.grind_and_sample_zeta(config.ood_proof_of_work_bits());
 
     // Build the opening rounds and produce the FRI opening proof.
     let (opened_values, opening_proof) = {
@@ -719,7 +719,7 @@ where
         lookup_terminals,
         degree_bits: log_ext_degrees,
         lookup_pow_witness,
-        deep_pow_witness,
+        ood_pow_witness,
     }
 }
 

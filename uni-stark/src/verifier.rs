@@ -302,7 +302,7 @@ where
         opened_values,
         opening_proof,
         degree_bits,
-        deep_pow_witness,
+        ood_pow_witness,
     } = proof;
     let degree_bits = *degree_bits;
 
@@ -445,9 +445,9 @@ where
     // Check the proof of work guarding the out-of-domain point, then sample it.
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has
-    // degree `d`, plus `deep_proof_of_work_bits` from the grind checked here.
-    if !challenger.check_witness(config.deep_proof_of_work_bits(), *deep_pow_witness) {
-        return Err(VerificationError::InvalidDeepPowWitness);
+    // degree `d`, plus `ood_proof_of_work_bits` from the grind checked here.
+    if !challenger.check_witness(config.ood_proof_of_work_bits(), *ood_pow_witness) {
+        return Err(VerificationError::InvalidOodPowWitness);
     }
     let zeta: SC::Challenge = challenger.sample_algebra_element();
 

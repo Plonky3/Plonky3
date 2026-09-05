@@ -142,12 +142,12 @@ pub struct StarkSecurityParams {
     /// so a site claimed here but not enforced in the protocol overstates
     /// security. For a uni-STARK over `p3-fri` the two enforced sites are
     /// `p3_fri::FriParameters::grinding_sites` (the batch-combination
-    /// challenge) and [`crate::StarkGenericConfig::deep_proof_of_work_bits`]
+    /// challenge) and [`crate::StarkGenericConfig::ood_proof_of_work_bits`]
     /// (the out-of-domain point), so a faithful value is:
     ///
     /// ```ignore
     /// GrindingSites {
-    ///     out_of_domain: config.deep_proof_of_work_bits(),
+    ///     out_of_domain: config.ood_proof_of_work_bits(),
     ///     ..fri_params.grinding_sites()
     /// }
     /// ```

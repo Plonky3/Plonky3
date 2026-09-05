@@ -39,9 +39,9 @@ where
     /// The proof of work guarding the out-of-domain point is invalid.
     ///
     /// Either the witness was forged, or the prover and verifier disagree on
-    /// [`p3_uni_stark::StarkGenericConfig::deep_proof_of_work_bits`].
+    /// [`p3_uni_stark::StarkGenericConfig::ood_proof_of_work_bits`].
     #[error("invalid proof-of-work witness for the out-of-domain point")]
-    InvalidDeepPowWitness,
+    InvalidOodPowWitness,
 }
 
 impl<PcsErr: Debug> From<InvalidLookupPow> for BatchVerificationError<PcsErr> {

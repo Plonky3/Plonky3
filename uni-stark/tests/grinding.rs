@@ -1,6 +1,6 @@
 //! End-to-end coverage for the two grinding sites outside the low-degree test:
 //! the PCS opening-batching challenge (`FriParameters::batch_proof_of_work_bits`)
-//! and the DEEP out-of-domain point (`StarkGenericConfig::deep_proof_of_work_bits`).
+//! and the DEEP out-of-domain point (`StarkGenericConfig::ood_proof_of_work_bits`).
 //!
 //! Both are proof-of-work phases whose only job is to add bits to a *proven*
 //! soundness bound, so what has to be true of them is narrow and testable: a
@@ -78,7 +78,7 @@ type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 /// Difficulties small enough to grind instantly, large enough that a wrong
 /// witness is rejected with overwhelming probability.
 const BATCH_POW_BITS: usize = 8;
-const DEEP_POW_BITS: usize = 8;
+const OOD_POW_BITS: usize = 8;
 
 const fn fri_params(
     batch_proof_of_work_bits: usize,
@@ -96,7 +96,7 @@ const fn fri_params(
     }
 }
 
-fn make_config(batch_pow_bits: usize, deep_pow_bits: usize) -> MyConfig {
+fn make_config(batch_pow_bits: usize, ood_pow_bits: usize) -> MyConfig {
     let mut rng = SmallRng::seed_from_u64(42);
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
@@ -108,7 +108,7 @@ fn make_config(batch_pow_bits: usize, deep_pow_bits: usize) -> MyConfig {
         val_mmcs,
         fri_params(batch_pow_bits, challenge_mmcs),
     );
-    MyConfig::new(pcs, Challenger::new(perm)).with_deep_proof_of_work_bits(deep_pow_bits)
+    MyConfig::new(pcs, Challenger::new(perm)).with_ood_proof_of_work_bits(ood_pow_bits)
 }
 
 /// The default config grinds at neither new site, so an existing caller keeps
@@ -116,7 +116,7 @@ fn make_config(batch_pow_bits: usize, deep_pow_bits: usize) -> MyConfig {
 #[test]
 fn ungrounded_config_is_the_default() {
     let config = make_config(0, 0);
-    assert_eq!(config.deep_proof_of_work_bits(), 0);
+    assert_eq!(config.ood_proof_of_work_bits(), 0);
 
     let trace = generate_square_trace::<Val>(1 << 3);
     let proof = prove(&config, &SquareAir, trace, &[]);
@@ -126,7 +126,7 @@ fn ungrounded_config_is_the_default() {
 /// A proof produced with both grinds verifies against the same config.
 #[test]
 fn grinding_at_both_sites_round_trips() {
-    let config = make_config(BATCH_POW_BITS, DEEP_POW_BITS);
+    let config = make_config(BATCH_POW_BITS, OOD_POW_BITS);
     let trace = generate_square_trace::<Val>(1 << 3);
     let proof = prove(&config, &SquareAir, trace, &[]);
     verify(&config, &SquareAir, &proof, &[]).expect("ground proof verifies");
@@ -136,15 +136,15 @@ fn grinding_at_both_sites_round_trips() {
 /// witness rather than as a downstream constraint failure: the check runs
 /// before `zeta` is sampled, so nothing past it is even reached.
 #[test]
-fn tampered_deep_pow_witness_is_rejected() {
-    let config = make_config(0, DEEP_POW_BITS);
+fn tampered_ood_pow_witness_is_rejected() {
+    let config = make_config(0, OOD_POW_BITS);
     let trace = generate_square_trace::<Val>(1 << 3);
     let mut proof = prove(&config, &SquareAir, trace, &[]);
-    proof.deep_pow_witness += Val::ONE;
+    proof.ood_pow_witness += Val::ONE;
 
     match verify(&config, &SquareAir, &proof, &[]) {
-        Err(VerificationError::InvalidDeepPowWitness) => {}
-        other => panic!("expected InvalidDeepPowWitness, got {other:?}"),
+        Err(VerificationError::InvalidOodPowWitness) => {}
+        other => panic!("expected InvalidOodPowWitness, got {other:?}"),
     }
 }
 
@@ -152,15 +152,15 @@ fn tampered_deep_pow_witness_is_rejected() {
 /// rejects. This is the failure mode of a prover/verifier config mismatch, and
 /// it must be a rejection rather than a silently weaker proof.
 #[test]
-fn deep_pow_difficulty_mismatch_is_rejected() {
+fn ood_pow_difficulty_mismatch_is_rejected() {
     let prover_config = make_config(0, 0);
     let trace = generate_square_trace::<Val>(1 << 3);
     let proof = prove(&prover_config, &SquareAir, trace, &[]);
 
     let verifier_config = make_config(0, 24);
     match verify(&verifier_config, &SquareAir, &proof, &[]) {
-        Err(VerificationError::InvalidDeepPowWitness) => {}
-        other => panic!("expected InvalidDeepPowWitness, got {other:?}"),
+        Err(VerificationError::InvalidOodPowWitness) => {}
+        other => panic!("expected InvalidOodPowWitness, got {other:?}"),
     }
 }
 

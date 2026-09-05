@@ -95,7 +95,7 @@ pub trait StarkGenericConfig: Clone {
     ///
     /// Defaults to `0`, which costs the prover nothing and leaves the
     /// transcript byte-for-byte as it was before this site existed.
-    fn deep_proof_of_work_bits(&self) -> usize {
+    fn ood_proof_of_work_bits(&self) -> usize {
         0
     }
 }
@@ -108,8 +108,8 @@ pub struct StarkConfig<Pcs, Challenge, Challenger> {
     challenger: Challenger,
     /// See [`StarkGenericConfig::lookup_proof_of_work_bits`].
     lookup_proof_of_work_bits: usize,
-    /// See [`StarkGenericConfig::deep_proof_of_work_bits`].
-    deep_proof_of_work_bits: usize,
+    /// See [`StarkGenericConfig::ood_proof_of_work_bits`].
+    ood_proof_of_work_bits: usize,
     _phantom: PhantomData<Challenge>,
 }
 
@@ -117,14 +117,14 @@ impl<Pcs: Clone, Challenge: Clone, Challenger: Clone> StarkConfig<Pcs, Challenge
     /// A configuration that grinds at neither of the sites outside the
     /// low-degree test.
     ///
-    /// Use [`Self::with_deep_proof_of_work_bits`] and
+    /// Use [`Self::with_ood_proof_of_work_bits`] and
     /// [`Self::with_lookup_proof_of_work_bits`] to add them.
     pub const fn new(pcs: Pcs, challenger: Challenger) -> Self {
         Self {
             pcs,
             challenger,
             lookup_proof_of_work_bits: 0,
-            deep_proof_of_work_bits: 0,
+            ood_proof_of_work_bits: 0,
             _phantom: PhantomData,
         }
     }
@@ -135,11 +135,11 @@ impl<Pcs: Clone, Challenge: Clone, Challenger: Clone> StarkConfig<Pcs, Challenge
     /// must be configured identically — a mismatch is a rejected proof, not a
     /// silently weaker one.
     ///
-    /// See [`StarkGenericConfig::deep_proof_of_work_bits`] for what the bits
+    /// See [`StarkGenericConfig::ood_proof_of_work_bits`] for what the bits
     /// buy.
     #[must_use]
-    pub const fn with_deep_proof_of_work_bits(mut self, bits: usize) -> Self {
-        self.deep_proof_of_work_bits = bits;
+    pub const fn with_ood_proof_of_work_bits(mut self, bits: usize) -> Self {
+        self.ood_proof_of_work_bits = bits;
         self
     }
 
@@ -183,7 +183,7 @@ where
         self.lookup_proof_of_work_bits
     }
 
-    fn deep_proof_of_work_bits(&self) -> usize {
-        self.deep_proof_of_work_bits
+    fn ood_proof_of_work_bits(&self) -> usize {
+        self.ood_proof_of_work_bits
     }
 }
