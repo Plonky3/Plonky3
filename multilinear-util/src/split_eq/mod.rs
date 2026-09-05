@@ -28,7 +28,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
 use crate::point::Point;
-use crate::poly::{PARALLEL_THRESHOLD, Poly, PolyView};
+use crate::poly::{Poly, PolyView};
 
 /// Factored eq polynomial table for scale * eq(z, .).
 ///
@@ -115,23 +115,13 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
 
         // Number of scalar elements per eq1 block.
         let cs = self.eq1.num_scalar_evals();
-        if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
-            // Sequential: chunk poly by eq1 block size, pair with eq0 weights.
-            // For each chunk, compute the inner dot product with eq1,
-            // then multiply by the corresponding eq0 weight.
-            poly.as_slice()
-                .chunks(cs)
-                .zip_eq(self.eq0.iter())
-                .map(|(chunk, &w0)| self.eq1.dot_with_base(chunk) * w0)
-                .sum::<EF>()
-        } else {
-            // Parallel: same logic with parallel iterators.
-            poly.as_slice()
-                .par_chunks(cs)
-                .zip_eq(self.eq0.as_slice().par_iter())
-                .map(|(chunk, &w0)| self.eq1.dot_with_base(chunk) * w0)
-                .sum::<EF>()
-        }
+        // One item dots one suffix block of base evals, then scales by one prefix weight.
+        poly.as_slice()
+            .par_chunks(cs)
+            .zip_eq(self.eq0.as_slice().par_iter())
+            .with_min_task_bytes(cs * size_of::<F>() + size_of::<EF>())
+            .map(|(chunk, &w0)| self.eq1.dot_with_base(chunk) * w0)
+            .sum::<EF>()
     }
 
     /// Evaluates an extension-field polynomial against the factored eq table.
@@ -153,21 +143,13 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         }
 
         let cs = self.eq1.num_scalar_evals();
-        if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
-            // Sequential outer loop: dot each chunk with eq1, weight by eq0.
-            poly.as_slice()
-                .chunks(cs)
-                .zip_eq(self.eq0.iter())
-                .map(|(chunk, &w0)| self.eq1.dot_with_ext(chunk) * w0)
-                .sum::<EF>()
-        } else {
-            // Parallel path.
-            poly.as_slice()
-                .par_chunks(cs)
-                .zip_eq(self.eq0.as_slice().par_iter())
-                .map(|(chunk, &w0)| self.eq1.dot_with_ext(chunk) * w0)
-                .sum::<EF>()
-        }
+        // One item dots one suffix block of extension evals, scaled by one prefix weight.
+        poly.as_slice()
+            .par_chunks(cs)
+            .zip_eq(self.eq0.as_slice().par_iter())
+            .with_min_task_bytes((cs + 1) * size_of::<EF>())
+            .map(|(chunk, &w0)| self.eq1.dot_with_ext(chunk) * w0)
+            .sum::<EF>()
     }
 
     /// Evaluates a SIMD-packed extension-field polynomial against the factored eq table.
@@ -194,20 +176,13 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         };
 
         // Both polynomial and eq1 are packed; use packed dot product kernel.
-        if (1 << (self.num_variables() - log2_strict_usize(F::Packing::WIDTH))) < PARALLEL_THRESHOLD
-        {
-            poly.as_slice()
-                .chunks(cs)
-                .zip_eq(self.eq0.iter())
-                .map(|(chunk, &w0)| self.eq1.dot_with_ext_packed(chunk) * w0)
-                .sum::<EF>()
-        } else {
-            poly.as_slice()
-                .par_chunks(cs)
-                .zip_eq(self.eq0.as_slice().par_iter())
-                .map(|(chunk, &w0)| self.eq1.dot_with_ext_packed(chunk) * w0)
-                .sum::<EF>()
-        }
+        // One item dots one suffix block of packed evals, scaled by one prefix weight.
+        poly.as_slice()
+            .par_chunks(cs)
+            .zip_eq(self.eq0.as_slice().par_iter())
+            .with_min_task_bytes(cs * size_of::<EF::ExtensionPacking>() + size_of::<EF>())
+            .map(|(chunk, &w0)| self.eq1.dot_with_ext_packed(chunk) * w0)
+            .sum::<EF>()
     }
 
     /// Adds the factored eq table into a scalar output buffer.
@@ -226,21 +201,13 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // Collapse optional scale into a single weight; identity if absent.
         let w_scale = scale.unwrap_or(EF::ONE);
         let cs = self.eq1.num_scalar_evals();
-        if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
-            // Sequential: for each eq0 entry, accumulate eq1 * (eq0_weight * scale).
-            out.chunks_mut(cs)
-                .zip(self.eq0.iter())
-                .for_each(|(chunk, &w0)| {
-                    self.eq1.accumulate_scalar_into(chunk, w0 * w_scale);
-                });
-        } else {
-            // Parallel: same with parallel chunk iteration.
-            out.par_chunks_mut(cs)
-                .zip(self.eq0.as_slice().par_iter())
-                .for_each(|(chunk, &w0)| {
-                    self.eq1.accumulate_scalar_into(chunk, w0 * w_scale);
-                });
-        }
+        // One item reads one suffix block of weights and rewrites the matching output.
+        out.par_chunks_mut(cs)
+            .zip(self.eq0.as_slice().par_iter())
+            .with_min_task_bytes(2 * cs * size_of::<EF>())
+            .for_each(|(chunk, &w0)| {
+                self.eq1.accumulate_scalar_into(chunk, w0 * w_scale);
+            });
     }
 
     /// Materializes the full eq table as a polynomial.
@@ -274,19 +241,13 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         } else {
             // Chunk size in packed elements (scalar chunk size / W).
             let cs = self.eq1.num_scalar_evals() / F::Packing::WIDTH;
-            if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
-                out.chunks_mut(cs)
-                    .zip(self.eq0.iter())
-                    .for_each(|(chunk, &w0)| {
-                        self.eq1.accumulate_packed_into(chunk, w0 * w_scale);
-                    });
-            } else {
-                out.par_chunks_mut(cs)
-                    .zip(self.eq0.as_slice().par_iter())
-                    .for_each(|(chunk, &w0)| {
-                        self.eq1.accumulate_packed_into(chunk, w0 * w_scale);
-                    });
-            }
+            // One item reads one suffix block of weights and rewrites the matching output.
+            out.par_chunks_mut(cs)
+                .zip(self.eq0.as_slice().par_iter())
+                .with_min_task_bytes(2 * cs * size_of::<EF::ExtensionPacking>())
+                .for_each(|(chunk, &w0)| {
+                    self.eq1.accumulate_packed_into(chunk, w0 * w_scale);
+                });
         }
     }
 
@@ -310,7 +271,14 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // Number of base-field elements per eq0 entry.
         let size_outer = poly.num_evals() / self.eq0.num_evals();
 
-        if (1 << poly.num_variables()) < PARALLEL_THRESHOLD {
+        // One item folds one prefix block of base evals into a whole inner accumulator.
+        //
+        // The sequential pass accumulates into one shared buffer, which no split can do.
+        // Only a loop worth splitting pays for the per-task accumulators a split needs.
+        if !should_split(
+            self.eq0.num_evals(),
+            size_outer * size_of::<F>() + (1 << k_inner) * size_of::<EF>(),
+        ) {
             // Sequential: accumulate each eq0 chunk into a shared output buffer.
             let mut out = Poly::<EF>::zero(k_inner);
             poly.as_slice()
@@ -363,7 +331,13 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         let k_inner = poly.num_variables() - self.num_variables() - k_pack;
         let size_outer = poly.num_evals() / self.eq0.num_evals();
 
-        if (1 << poly.num_variables()) < PARALLEL_THRESHOLD {
+        // One item folds one prefix block of base evals into a whole inner accumulator.
+        //
+        // The sequential pass accumulates into one shared buffer, which no split can do.
+        if !should_split(
+            self.eq0.num_evals(),
+            size_outer * size_of::<F>() + (1 << k_inner) * size_of::<EF::ExtensionPacking>(),
+        ) {
             let mut out = Poly::<EF::ExtensionPacking>::zero(k_inner);
             poly.as_slice()
                 .chunks(size_outer)
@@ -425,22 +399,14 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         assert!(self.num_variables() <= poly.num_variables());
         assert_eq!(out.len(), poly.num_evals() >> self.num_variables());
 
-        if (1 << poly.num_variables()) < PARALLEL_THRESHOLD {
-            // Sequential: each output element is a full dot product of one row
-            // against the factored eq tables.
-            out.iter_mut()
-                .zip_eq(poly.as_slice().chunks(1 << self.num_variables()))
-                .for_each(|(out, chunk)| {
-                    *out = self.eq1.compress_suffix_dot(chunk, &self.eq0);
-                });
-        } else {
-            // Parallel: each output element is independent.
-            out.par_iter_mut()
-                .zip(poly.as_slice().par_chunks(1 << self.num_variables()))
-                .for_each(|(out, chunk)| {
-                    *out = self.eq1.compress_suffix_dot(chunk, &self.eq0);
-                });
-        }
+        // One item dots one suffix block of base evals into a single output entry.
+        let suffix_rows = 1 << self.num_variables();
+        out.par_iter_mut()
+            .zip(poly.as_slice().par_chunks(suffix_rows))
+            .with_min_task_bytes(suffix_rows * size_of::<F>() + size_of::<EF>())
+            .for_each(|(out, chunk)| {
+                *out = self.eq1.compress_suffix_dot(chunk, &self.eq0);
+            });
     }
 
     /// Evaluates a base-field polynomial against the repeat-last successor weights.
@@ -484,21 +450,15 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         //
         // Each outer (prefix) weight then dots its suffix block against the
         // suffix-half equality table starting one row early.
-        let mut sum = if poly.num_evals() < PARALLEL_THRESHOLD {
-            self.eq0
-                .iter()
-                .zip_eq(evals[1..].chunks(cs))
-                .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
-                .sum::<EF>()
-        } else {
-            // Same contraction, distributed across threads for large tables.
-            self.eq0
-                .0
-                .par_iter()
-                .zip_eq(evals[1..].par_chunks(cs))
-                .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
-                .sum::<EF>()
-        };
+        // One item dots one suffix block of base evals, scaled by one prefix weight.
+        let mut sum = self
+            .eq0
+            .as_slice()
+            .par_iter()
+            .zip_eq(evals[1..].par_chunks(cs))
+            .with_min_task_bytes(cs * size_of::<F>() + size_of::<EF>())
+            .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
+            .sum::<EF>();
 
         // Boundary term: the all-ones equality weight times the repeated maximal row.
         sum += *self.eq0.as_slice().last().unwrap() * self.eq1.last_scalar() * last;
@@ -533,7 +493,14 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             return out;
         }
 
-        if (1 << poly.num_variables()) < PARALLEL_THRESHOLD {
+        // One item folds one prefix block of base evals into a whole inner accumulator.
+        //
+        // The sequential pass threads a carry from block to block, which no split can do.
+        // Only a loop worth splitting pays to rebuild each boundary from its own index.
+        if !should_split(
+            self.eq0.num_evals(),
+            size_outer * size_of::<F>() + inner_size * size_of::<EF>(),
+        ) {
             // Sequential pass threads a carry across outer chunks.
             // The shift means each prefix row also receives its predecessor's
             // last suffix weight, which lives in the previous chunk.
@@ -622,33 +589,20 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             return Poly::new(out);
         }
 
-        if poly.num_evals() < PARALLEL_THRESHOLD {
-            // For each prefix row, contract its suffix block against the shifted table.
-            out.iter_mut()
-                .zip_eq(poly.as_slice().chunks(suffix_rows))
-                .for_each(|(out, chunk)| {
-                    // Drop the first suffix row so row y reads its predecessor y - 1,
-                    // then split the prefix-half weights across the suffix sub-blocks.
-                    *out = self
-                        .eq0
-                        .iter()
-                        .zip_eq(chunk[1..].chunks(cs))
-                        .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
-                        .sum();
-                });
-        } else {
-            // Same per-prefix-row contraction, distributed across threads.
-            out.par_iter_mut()
-                .zip_eq(poly.as_slice().par_chunks(suffix_rows))
-                .for_each(|(out, chunk)| {
-                    *out = self
-                        .eq0
-                        .iter()
-                        .zip_eq(chunk[1..].chunks(cs))
-                        .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
-                        .sum();
-                });
-        }
+        // One item contracts one suffix block of base evals into a single output entry.
+        out.par_iter_mut()
+            .zip_eq(poly.as_slice().par_chunks(suffix_rows))
+            .with_min_task_bytes(suffix_rows * size_of::<F>() + size_of::<EF>())
+            .for_each(|(out, chunk)| {
+                // Drop the first suffix row so row y reads its predecessor y - 1,
+                // then split the prefix-half weights across the suffix sub-blocks.
+                *out = self
+                    .eq0
+                    .iter()
+                    .zip_eq(chunk[1..].chunks(cs))
+                    .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
+                    .sum();
+            });
 
         Poly::new(out)
     }
