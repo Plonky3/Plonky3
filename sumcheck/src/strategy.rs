@@ -881,17 +881,45 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         self.poly.eval(point)
     }
 
-    /// Computes the current round's plain quadratic coefficients without
-    /// touching the transcript or folding the polynomial.
-    pub(crate) fn round_coefficients(&self) -> (EF, EF) {
-        self.poly.round_coefficients()
+    /// Measures the current round, first applying a binding held back from the last one.
+    ///
+    /// A held-back binding is absorbed into the measuring pass.
+    /// The round then reads its tables once instead of twice.
+    ///
+    /// The slot is cleared here.
+    /// The caller puts this round's own challenge back into it.
+    pub(crate) fn measure_round(&mut self, pending: &mut Option<EF>) -> (EF, EF) {
+        match pending.take() {
+            // A challenge is waiting, so bind and measure in one pass.
+            Some(r) => self.poly.fold_round_coefficients(r),
+            // Nothing waiting, so this is a plain measuring pass.
+            None => self.poly.round_coefficients(),
+        }
     }
 
-    /// Folds the residual product polynomial by one challenge and updates the
-    /// claimed sum with the same quadratic extrapolation as the plain path.
-    pub(crate) fn fold_round_with_coefficients(&mut self, c0: EF, c_inf: EF, gamma: EF) {
+    /// Applies a binding that no measuring pass absorbed.
+    ///
+    /// The last round of a batch has no successor to fuse with.
+    /// Any later reader of the tables must still see them bound.
+    pub(crate) fn bind_pending(&mut self, pending: Option<EF>) {
+        if let Some(r) = pending {
+            self.poly.fold_round(r);
+        }
+    }
+
+    /// Advances the running claim to the round polynomial at the challenge.
+    ///
+    /// This is the quadratic extrapolation through 0, 1 and infinity the verifier applies.
+    /// The binding itself is left to the caller.
+    pub(crate) fn reduce_claim_with_coefficients(&mut self, c0: EF, c_inf: EF, gamma: EF) {
         self.sum = extrapolate_01inf(c0, self.sum - c0, c_inf, gamma);
-        self.poly.fold_round(gamma);
+    }
+
+    /// Asserts that the claim is the inner product of the bound pair.
+    ///
+    /// Only meaningful once every binding has been applied.
+    /// A driver that holds bindings back therefore calls this at the end, not per round.
+    pub(crate) fn debug_assert_claim(&self) {
         debug_assert_eq!(self.sum, self.poly.dot_product());
     }
 
@@ -964,10 +992,7 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
 
         for _ in 0..folding_factor {
             // Measure this round, absorbing whatever binding the last one left behind.
-            let (c_a, c_inf) = match pending {
-                Some(r) => self.poly.fold_round_coefficients(r),
-                None => self.poly.round_coefficients(),
-            };
+            let (c_a, c_inf) = self.measure_round(&mut pending);
 
             // Commit to the transcript, do the optional grinding, take the challenge.
             let r = sumcheck_data.observe_and_sample(challenger, c_a, c_inf, pow_bits);
@@ -982,12 +1007,10 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         }
 
         // The last challenge has no successor to fuse with, so it binds on its own.
-        if let Some(r) = pending {
-            self.poly.fold_round(r);
-        }
+        self.bind_pending(pending);
 
         // Invariant: the claim is the inner product of the bound pair.
-        debug_assert_eq!(self.sum, self.poly.dot_product());
+        self.debug_assert_claim();
 
         Point::new(challenges)
     }
