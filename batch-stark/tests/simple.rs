@@ -847,6 +847,7 @@ fn test_two_instances() -> Result<(), impl Debug> {
 /// uses representative deployment-scale parameters.
 #[test]
 fn security_estimate_with_and_without_lookups() {
+    use p3_batch_stark::security::num_batched_openings;
     use p3_security::grinding::GrindingSites;
     use p3_security::logup::{self, LOGUP_LABEL, LogUpAir};
     use p3_security::shape::{InstanceShape, StarkAirParams};
@@ -903,11 +904,15 @@ fn security_estimate_with_and_without_lookups() {
         max_constraint_degree: 2,
         max_combo: 2,
     };
+    // A width-100 AIR that reads its own next row, committing two quotient chunks over the
+    // degree-4 extension, plus eight lookup interactions on the shared bus: the count
+    // `TwoAdicFriPcs::open` actually batches, not a hand-picked stand-in.
+    let num_batched_functions = num_batched_openings(100, true, 0, false, 2, 8, 4, false);
     let shape = InstanceShape {
         log_trace_length: 22,
         modulus_bits: <Challenge as Field>::bits(),
         collision_resistance: 128,
-        num_batched_functions: 8,
+        num_batched_functions,
     };
 
     // The shared bus carries width-2 messages; a lookup-heavy deployment issues
