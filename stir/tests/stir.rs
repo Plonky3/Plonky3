@@ -39,6 +39,14 @@ fn shape_of<E: Debug, IE: Debug>(err: StirError<E, IE>) -> ProofShapeError {
     }
 }
 
+/// `draws`, ascending and deduplicated: the shape the unique-index lists carry.
+fn sorted_dedup(draws: &[usize]) -> Vec<usize> {
+    let mut unique = draws.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    unique
+}
+
 // ---------------------------------------------------------------------------
 // Generic prove/verify harness.
 // ---------------------------------------------------------------------------
@@ -469,6 +477,10 @@ mod babybear_stir {
         let outputs_a = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof_a, &mut v_ch_a)
             .expect("first proof should verify under transcript replay");
         assert_eq!(idx_a, outputs_a.first_round_indices);
+        assert_eq!(
+            sorted_dedup(&outputs_a.first_round_draws),
+            outputs_a.first_round_indices
+        );
 
         let mut p_ch_b = challenger.clone();
         let (proof_b, idx_b) = prove_stir(&config, poly, &dft, &mut p_ch_b);
@@ -476,6 +488,10 @@ mod babybear_stir {
         let outputs_b = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof_b, &mut v_ch_b)
             .expect("second proof should verify under transcript replay");
         assert_eq!(idx_b, outputs_b.first_round_indices);
+        assert_eq!(
+            sorted_dedup(&outputs_b.first_round_draws),
+            outputs_b.first_round_indices
+        );
     }
 
     #[test]
@@ -3125,6 +3141,37 @@ mod babybear_stir_multi {
             });
     }
 
+    /// The round-0 draws the prover reports are exactly the ones the verifier samples, one
+    /// per configured query, and both sides' unique lists are their sorted deduplication.
+    #[test]
+    fn test_multi_first_round_draws_agree_between_prover_and_verifier() {
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        let log_degrees = [8usize, 6];
+        let (configs, polys) = make_instances(&params, &log_degrees);
+        let config_refs: Vec<&StirConfig<F, EF, MyMmcs, Challenger>> = configs.iter().collect();
+
+        let mut p_ch = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys, &dft, &mut p_ch);
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+
+        let mut v_ch = challenger;
+        let outputs =
+            verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proofs, &mut v_ch)
+                .expect("honest multi-instance proof verifies");
+
+        for ((config, (_, first_round)), output) in configs.iter().zip(&results).zip(&outputs) {
+            let expected_draws = if config.num_rounds() == 0 {
+                config.final_queries
+            } else {
+                config.round_configs[0].num_queries
+            };
+            assert_eq!(first_round.draws.len(), expected_draws);
+            assert_eq!(first_round.draws, output.first_round_draws);
+            assert_eq!(sorted_dedup(&first_round.draws), first_round.unique_sorted);
+            assert_eq!(output.first_round_indices, first_round.unique_sorted);
+        }
+    }
+
     #[test]
     fn test_multi_one_bucket() {
         let (params, dft, challenger) = make_params(1, 2, 16, 0);
@@ -3177,7 +3224,8 @@ mod babybear_stir_multi {
         assert_eq!(results.len(), 1);
         let (multi_proof, multi_idx) = &results[0];
 
-        assert_eq!(single_idx, *multi_idx);
+        assert_eq!(single_idx, multi_idx.unique_sorted);
+        assert_eq!(sorted_dedup(&multi_idx.draws), multi_idx.unique_sorted);
         let single_bytes = postcard::to_allocvec(&single_proof).expect("serialize");
         let multi_bytes = postcard::to_allocvec(multi_proof).expect("serialize");
         assert_eq!(

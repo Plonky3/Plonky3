@@ -1101,36 +1101,35 @@ where
             .iter()
             .zip(&stir_configs)
             .zip(bucket_results)
-            .map(
-                |((&log_h, stir_config), (stir_proof, first_round_query_indices))| {
-                    let log_arity0 = stir_config.log_starting_folding_factor;
+            .map(|((&log_h, stir_config), (stir_proof, first_round))| {
+                let log_arity0 = stir_config.log_starting_folding_factor;
 
-                    let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> =
-                        commitment_data_with_opening_points
-                            .iter()
-                            .map(|(data, _)| {
-                                // Each group has its own tree on its own domain, so a bucket
-                                // reads exactly the group committed at its LDE height —
-                                // never a partial slice of one, and nothing from the others.
-                                let group = data.group_at(log_h)?;
+                let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> =
+                    commitment_data_with_opening_points
+                        .iter()
+                        .map(|(data, _)| {
+                            // Each group has its own tree on its own domain, so a bucket
+                            // reads exactly the group committed at its LDE height —
+                            // never a partial slice of one, and nothing from the others.
+                            let group = data.group_at(log_h)?;
 
-                                let q_globals: Vec<usize> = first_round_query_indices
-                                    .iter()
-                                    .map(|&j| reverse_bits_len(j, log_h - log_arity0))
-                                    .collect();
+                            let q_globals: Vec<usize> = first_round
+                                .unique_sorted
+                                .iter()
+                                .map(|&j| reverse_bits_len(j, log_h - log_arity0))
+                                .collect();
 
-                                let (opened_values, opening_proof) =
-                                    self.input_mmcs.open_multi_batch(&q_globals, &group.data);
-                                Some(InputOpenings {
-                                    opened_values,
-                                    opening_proof,
-                                })
+                            let (opened_values, opening_proof) =
+                                self.input_mmcs.open_multi_batch(&q_globals, &group.data);
+                            Some(InputOpenings {
+                                opened_values,
+                                opening_proof,
                             })
-                            .collect();
+                        })
+                        .collect();
 
-                    (stir_proof, input_openings)
-                },
-            )
+                (stir_proof, input_openings)
+            })
             .collect();
 
         (all_opened_values, bucket_proofs)
