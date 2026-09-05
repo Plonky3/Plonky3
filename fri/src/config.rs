@@ -206,9 +206,145 @@ pub fn compute_log_arity_for_round(
     max_fold.min(max_log_arity)
 }
 
+/// Derive the whole folding schedule before any folding happens.
+///
+/// # Overview
+///
+/// A round's arity is capped by three things:
+///
+/// - distance left to the final height,
+/// - distance down to where the next input joins,
+/// - the configured maximum.
+///
+/// All three are known before folding starts.
+/// So the schedule is known too, and neither side reads it from a proof.
+///
+/// # Arguments
+///
+/// - `input_log_heights`: log-heights of the folding inputs, strictly decreasing.
+/// - `log_final_height`: log-height at which folding stops.
+/// - `max_log_arity`: largest arity any single round may use.
+///
+/// # Returns
+///
+/// One log-arity per commit round, in round order.
+///
+/// Empty when nothing sits above the final height.
+/// A verifier derives this from untrusted heights, so it returns rather than panics.
+///
+/// # Panics
+///
+/// When the input heights are not strictly decreasing.
+#[must_use]
+pub fn fold_schedule(
+    input_log_heights: &[usize],
+    log_final_height: usize,
+    max_log_arity: usize,
+) -> Vec<usize> {
+    assert!(
+        input_log_heights.windows(2).all(|pair| pair[0] > pair[1]),
+        "input log-heights must be strictly decreasing",
+    );
+
+    // Folding starts at the tallest input and stops at the final height.
+    let Some(&tallest) = input_log_heights.first() else {
+        return Vec::new();
+    };
+    if tallest <= log_final_height {
+        return Vec::new();
+    }
+    let mut log_height = tallest;
+
+    // Index of the next input still waiting to be rolled in.
+    let mut next_input = 1;
+    let mut schedule = Vec::new();
+
+    while log_height > log_final_height {
+        // Cap by the final height, the next input, and the configured maximum.
+        let log_arity = compute_log_arity_for_round(
+            log_height,
+            input_log_heights.get(next_input).copied(),
+            log_final_height,
+            max_log_arity,
+        );
+        schedule.push(log_arity);
+        log_height -= log_arity;
+
+        // An input whose height the fold just reached is rolled in here.
+        // The next round then folds the combined codeword.
+        if input_log_heights.get(next_input) == Some(&log_height) {
+            next_input += 1;
+        }
+    }
+
+    schedule
+}
+
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use super::*;
+
+    #[test]
+    fn schedule_folds_the_whole_way_down() {
+        // Invariant: the arities sum to the distance the codeword has to travel.
+        //
+        // Fixture state: one input at height 2^10, folding down to 2^2.
+        //
+        //     10 -> 2 is 8 levels, in steps of at most 3
+        //     8 = 3 + 3 + 2
+        assert_eq!(fold_schedule(&[10], 2, 3), vec![3, 3, 2]);
+
+        // Binary folding takes one level per round.
+        assert_eq!(fold_schedule(&[10], 2, 1), vec![1; 8]);
+    }
+
+    #[test]
+    fn schedule_pauses_where_an_input_joins() {
+        // Invariant: a round never folds past the height of the next input.
+        //
+        // An input joins only once the codeword reaches its height.
+        // A round that overshot would leave it nowhere to join.
+        //
+        // Fixture state: inputs at 2^10 and 2^6, final height 2^2, max arity 3.
+        //
+        //     10 --3--> 7 --1--> 6   <- input joins here
+        //      6 --3--> 3 --1--> 2   <- final height
+        assert_eq!(fold_schedule(&[10, 6], 2, 3), vec![3, 1, 3, 1]);
+    }
+
+    #[test]
+    fn schedule_is_empty_without_inputs() {
+        // Boundary: nothing to fold means no commit rounds.
+        assert_eq!(fold_schedule(&[], 2, 3), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn every_schedule_lands_exactly_on_the_final_height() {
+        // Invariant: folding never overshoots or stops short.
+        //
+        // Overshooting loses the evaluations the query phase needs.
+        for max_log_arity in 1..=4 {
+            for log_final_height in 0..4 {
+                for tall in (log_final_height + 1)..12 {
+                    // A second input somewhere strictly between the two ends.
+                    for short in (log_final_height + 1)..tall {
+                        let schedule =
+                            fold_schedule(&[tall, short], log_final_height, max_log_arity);
+                        assert_eq!(
+                            schedule.iter().sum::<usize>(),
+                            tall - log_final_height,
+                            "max_log_arity={max_log_arity} final={log_final_height} \
+                             inputs=[{tall}, {short}]",
+                        );
+                        // No round may exceed the configured maximum.
+                        assert!(schedule.iter().all(|&a| a <= max_log_arity && a > 0));
+                    }
+                }
+            }
+        }
+    }
 
     /// Pins the field-by-field mapping in [`FriParameters::security_regime`].
     /// Distinct values per field catch a mis-wired mapping (e.g. swapping the
