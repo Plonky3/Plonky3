@@ -262,10 +262,13 @@ impl StarkSecurityParams {
     {
         let shape = P3AirShape::from_air::<F, EF, A>(air, layout, max_combo);
 
-        // `get_log_num_quotient_chunks`'s formula, which is what the prover
-        // commits and therefore what the PCS batches.
+        // `get_log_num_quotient_chunks`'s formula for the chunk count, then the same `<< is_zk`
+        // doubling `prove_with_preprocessed` applies on top of it (`num_quotient_chunks = 1 <<
+        // (log_num_quotient_chunks + is_zk)`, `uni-stark/src/prover.rs`) to get what is actually
+        // committed and therefore what the PCS batches.
         let constraint_degree = (shape.max_constraint_degree + openings.is_zk as usize).max(2);
-        let num_quotient_chunks = 1usize << log2_ceil_usize(constraint_degree - 1);
+        let log_num_quotient_chunks = log2_ceil_usize(constraint_degree - 1);
+        let num_quotient_chunks = 1usize << (log_num_quotient_chunks + openings.is_zk as usize);
 
         let num_batched_functions = num_batched_openings(
             layout.main_width,
@@ -632,6 +635,36 @@ mod tests {
             params.num_batched_functions > 1,
             "a derived count must switch the batching term on"
         );
+    }
+
+    /// Under zero-knowledge, `prove_with_preprocessed` doubles the derived chunk count
+    /// (`num_quotient_chunks = 1 << (log_num_quotient_chunks + is_zk)`, `uni-stark/src/prover.rs`)
+    /// on top of the `+1` already folded into `constraint_degree`. `from_air` must apply that same
+    /// doubling, not stop at the `+1`.
+    #[test]
+    fn from_air_derives_the_doubled_zk_quotient_chunk_count() {
+        let regime = benchmark_high_arity_params(124).fri_regime();
+        let air = MockAir {
+            width: 8,
+            num_constraints: 3,
+            reads_next_row: true,
+        };
+        let layout = AirLayout::from_air(&air);
+
+        let params = StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
+            regime,
+            &air,
+            layout,
+            124,
+            128,
+            2,
+            OpeningShape::new(4).with_zk(),
+            GrindingSites::NONE,
+        );
+
+        // Two quotient chunks (the zk doubling), each 4 columns, plus one zk randomizing
+        // codeword of 4 columns, plus the trace opened at both points: 2·8 + 2·4 + 4.
+        assert_eq!(params.num_batched_functions, 28);
     }
 
     /// An AIR that never reads the next row is opened at one point, so it
