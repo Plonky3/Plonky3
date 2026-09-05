@@ -1,20 +1,21 @@
 use alloc::collections::btree_map::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, batch_multiplicative_inverse};
+use p3_field::{
+    ExtensionField, Field, HornerIter, PrimeField64, TwoAdicField, batch_multiplicative_inverse,
+};
 use p3_matrix::Dimensions;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 use thiserror::Error;
 
 use crate::{
     BatchMultiOpening, CommitPhaseMultiStep, CommitmentWithOpeningPoints, FriFoldingStrategy,
-    FriParameters, FriProof, fold_schedule,
+    FriParameters, FriProof, VerifierTranscript, fold_schedule, fri_shape,
 };
 
 #[derive(Debug, Error)]
@@ -190,11 +191,12 @@ pub fn verify_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     input_mmcs: &InputMmcs,
 ) -> Result<(), FriError<FriMmcs::Error, InputMmcs::Error>>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Challenger:
+        FieldChallenger<Val> + GrindingChallenger<Witness = Val> + CanObserve<FriMmcs::Commitment>,
     Folding: FriFoldingStrategy<
             Val,
             Challenge,
@@ -307,18 +309,16 @@ where
     input_log_heights.sort_unstable_by(|a, b| b.cmp(a));
     input_log_heights.dedup();
 
-    if !input_log_heights.is_empty() {
-        let expected_schedule = fold_schedule(
-            &input_log_heights,
-            params.log_blowup + params.log_final_poly_len,
-            params.max_log_arity,
-        );
-        if expected_schedule != log_arities {
-            return Err(FriError::FoldScheduleMismatch {
-                expected: expected_schedule,
-                got: log_arities,
-            });
-        }
+    let expected_schedule = fold_schedule(
+        &input_log_heights,
+        params.log_blowup + params.log_final_poly_len,
+        params.max_log_arity,
+    );
+    if expected_schedule != log_arities {
+        return Err(FriError::FoldScheduleMismatch {
+            expected: expected_schedule,
+            got: log_arities,
+        });
     }
 
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
@@ -328,23 +328,10 @@ where
         });
     }
 
-    // Generate all of the random challenges for the FRI rounds, checking PoW per round.
-    let betas: Vec<Challenge> = proof
-        .commit_phase_commits
-        .iter()
-        .zip(&proof.commit_pow_witnesses)
-        .map(|(comm, witness)| {
-            // Observe the commitment, check the PoW witness, then sample the
-            // folding challenge.
-            challenger.observe(comm.clone());
-            if !challenger.check_witness(params.commit_proof_of_work_bits, *witness) {
-                return Err(FriError::InvalidPowWitness);
-            }
-            Ok(challenger.sample_algebra_element())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
     // Ensure that the final polynomial has the expected degree.
+    //
+    // The transcript describes it as one step of that width.
+    // A different width is untrusted input, so it is rejected before absorbing.
     if proof.final_poly.len() != params.final_poly_len() {
         return Err(FriError::FinalPolyLengthMismatch {
             expected: params.final_poly_len(),
@@ -352,29 +339,41 @@ where
         });
     }
 
-    // Observe all coefficients of the final polynomial.
-    challenger.observe_algebra_slice(&proof.final_poly);
+    // Every length is now known good, so the transcript can replay.
+    //
+    // The batching challenge above belongs to the caller's transcript, not to
+    // FRI's, so seeding starts here.
+    let mut transcript = VerifierTranscript::<Challenger, Val, Challenge>::new(
+        challenger,
+        fri_shape(
+            params,
+            &input_log_heights,
+            log_global_max_height + folding.extra_query_index_bits(),
+        ),
+    );
 
-    // Bind the variable-arity schedule into the transcript before query grinding.
-    for &log_arity in &log_arities {
-        challenger.observe(Val::from_usize(log_arity));
-    }
+    // One folding challenge per round, each guarded by its own grinding step.
+    let betas: Vec<Challenge> = proof
+        .commit_phase_commits
+        .iter()
+        .zip(&proof.commit_pow_witnesses)
+        .map(|(comm, witness)| {
+            transcript
+                .commit_round(comm.clone(), Some(*witness))
+                .map_err(|_| FriError::InvalidPowWitness)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    // Check PoW.
-    if !challenger.check_witness(params.query_proof_of_work_bits, proof.query_pow_witness) {
-        return Err(FriError::InvalidPowWitness);
-    }
+    // Bind the final polynomial, re-check the query grind, redraw the indices.
+    let indices = transcript
+        .query_phase(&proof.final_poly, Some(proof.query_pow_witness))
+        .map_err(|_| FriError::InvalidPowWitness)?;
+
+    // Every described step has now been replayed.
+    transcript.finish();
 
     // The log of the final domain size.
     let log_final_height = params.log_blowup + params.log_final_poly_len;
-
-    // Sample every query index. The transcript is identical to sampling one
-    // index per query proof: nothing is observed between samples.
-    let indices: Vec<usize> = iter::repeat_with(|| {
-        challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits())
-    })
-    .take(params.num_queries)
-    .collect();
 
     // Check all input openings against their commitments (one shared proof per
     // batch) and combine the opened values into each query's FRI inputs.
@@ -1481,7 +1480,9 @@ mod tests {
         //
         //     input openings:    []   (was [batch_0])
         //     commitment data:   []   (was [(commit, mats)])
-        //     → reduced openings = [] → fold chain has no starting value
+        //
+        // With no committed heights the derived schedule is empty.
+        // The proof's fold rounds are rejected before the fold chain is reached.
         proof.input_openings = vec![];
         let empty_cwop: Vec<
             CommitmentWithOpeningPoints<
@@ -1502,7 +1503,10 @@ mod tests {
         .expect_err("should reject proof with no committed polynomials");
 
         match err {
-            FriError::MissingInitialReducedOpening { .. } => {}
+            FriError::FoldScheduleMismatch { expected, got } => {
+                assert!(expected.is_empty());
+                assert_eq!(got.len(), f.proof.commit_phase_commits.len());
+            }
             other => panic!("wrong error variant: {other:?}"),
         }
     }

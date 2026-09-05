@@ -15,7 +15,7 @@ use crate::fs::error::TranscriptError;
 use crate::fs::pattern::{Hierarchy, Interaction, Kind, Label, Length, Pattern, PatternPlayer};
 use crate::fs::state::assert_challenge_security;
 use crate::fs::unit::Unit;
-use crate::{CanObserve, GrindingChallenger};
+use crate::{CanObserve, CanSampleBits, GrindingChallenger};
 
 /// Drives a verifier-side transcript in lockstep with a recorded pattern.
 ///
@@ -272,6 +272,52 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
             });
         }
         Ok(())
+    }
+
+    /// Replay a value the challenger knows how to encode, carried by the caller.
+    ///
+    /// The value is prover-chosen, so it is untrusted.
+    /// Binding it stops the prover choosing it after seeing the next challenge.
+    ///
+    /// Its width is not bound here.
+    /// The component that owns the value rejects a wrong-shaped one.
+    pub fn observe_opaque<T>(&mut self, label: Label, value: T) -> TranscriptBound<T>
+    where
+        T: Clone,
+        C: CanObserve<T>,
+    {
+        // Validate: the next pattern step is an opaque message.
+        self.player.interact(Interaction::opaque(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Scalar,
+        ));
+        // The challenger owns the encoding, so hand the value over whole.
+        self.challenger.observe(value.clone());
+        TranscriptBound::wrap(value)
+    }
+
+    /// Sample `count` challenges of `width` uniform bits, in lockstep with the prover.
+    pub fn challenge_bits(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleBits<usize>,
+    {
+        self.player.interact(Interaction::bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        (0..count)
+            .map(|_| TranscriptBound::wrap(self.challenger.sample_bits(width)))
+            .collect()
     }
 
     /// Replay a public-scalar step by absorbing the caller-supplied value.

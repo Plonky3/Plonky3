@@ -5,7 +5,7 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{ExtensionField, TwoAdicField, batch_multiplicative_inverse};
+use p3_field::{ExtensionField, PrimeField64, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixCow};
@@ -72,7 +72,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs,
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger, R> Pcs<Challenge, Challenger>
     for HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     StandardUniform: Distribution<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
     InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,

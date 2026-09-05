@@ -24,7 +24,8 @@ use p3_commit::{Mmcs, OpenedValues, Pcs, PeriodicLdeTable};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse, dot_product,
+    ExtensionField, PackedFieldExtension, PrimeField64, TwoAdicField, batch_multiplicative_inverse,
+    dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -252,7 +253,7 @@ fn lagrange_interpolate_at<F: TwoAdicField, EF: ExtensionField<F>>(
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
     for TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     Dft: TwoAdicSubgroupDft<Val>,
     InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,

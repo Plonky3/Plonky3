@@ -13,7 +13,7 @@ use crate::fs::domain_separator::DomainSeparator;
 use crate::fs::pattern::{Hierarchy, Interaction, Kind, Label, Length, Pattern, PatternPlayer};
 use crate::fs::state::assert_challenge_security;
 use crate::fs::unit::Unit;
-use crate::{CanObserve, GrindingChallenger};
+use crate::{CanObserve, CanSampleBits, GrindingChallenger};
 
 /// Drives a prover-side transcript in lockstep with a recorded pattern.
 ///
@@ -381,6 +381,63 @@ impl<C, U: Unit> ProverState<C, U> {
                 ExtensionFieldCodec::<F, EF, Cdc>::observe(&mut self.challenger, v);
                 TranscriptBound::wrap(*v)
             })
+            .collect()
+    }
+
+    /// Absorb a value the challenger knows how to encode, carried by the caller.
+    ///
+    /// # When to use this
+    ///
+    /// A commitment is the usual case.
+    /// Its width lives in the commitment scheme's configuration, not here.
+    ///
+    /// # What is bound
+    ///
+    /// The value's content, through the challenger's own encoding.
+    /// Its width is not, so two runs differing only in that share a fingerprint.
+    ///
+    /// Bind such widths through the instance label where a protocol can see them.
+    pub fn observe_opaque<T>(&mut self, label: Label, value: T) -> TranscriptBound<T>
+    where
+        T: Clone,
+        C: CanObserve<T>,
+    {
+        // Validate: the next pattern step is an opaque message.
+        self.player.interact(Interaction::opaque(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Scalar,
+        ));
+        // The challenger owns the encoding, so hand the value over whole.
+        self.challenger.observe(value.clone());
+        TranscriptBound::wrap(value)
+    }
+
+    /// Sample `count` challenges of `width` uniform bits under one step.
+    ///
+    /// The width travels in the step.
+    /// A verifier drawing narrower indices fails the shape check.
+    ///
+    /// Nothing is absorbed between draws, so one step describes them all.
+    pub fn challenge_bits(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleBits<usize>,
+    {
+        self.player.interact(Interaction::bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        (0..count)
+            .map(|_| TranscriptBound::wrap(self.challenger.sample_bits(width)))
             .collect()
     }
 
