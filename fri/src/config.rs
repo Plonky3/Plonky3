@@ -113,11 +113,11 @@ impl<M> FriParameters<M> {
             log_final_poly_len,
             max_log_arity: 1,
             num_queries: 2,
-            // One bit, so the site is exercised without slowing tests down. `CirclePcs`
-            // shares these parameters but neither grinds nor checks this site, and the
-            // circle tests build the PCS by struct literal rather than through
-            // `CirclePcs::new`, so its guard against a nonzero value does not see this.
-            batch_proof_of_work_bits: 1,
+            // Zero because `CirclePcs` shares these parameters, samples its own
+            // batch-combination challenge, and does not grind before it: a nonzero value here
+            // would claim a bit the circle prover never pays and the circle verifier never
+            // checks. A caller that wants the batch site exercised sets it explicitly.
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 1,
             query_proof_of_work_bits: 1,
             mmcs,
@@ -132,11 +132,8 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 2,
-            // One bit, so the site is exercised without slowing tests down. `CirclePcs`
-            // shares these parameters but neither grinds nor checks this site, and the
-            // circle tests build the PCS by struct literal rather than through
-            // `CirclePcs::new`, so its guard against a nonzero value does not see this.
-            batch_proof_of_work_bits: 1,
+            // See `new_testing`.
+            batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 1,
             query_proof_of_work_bits: 1,
             mmcs,
