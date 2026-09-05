@@ -9,10 +9,10 @@ use p3_blake3_air::Blake3Air;
 use p3_dft::Radix2DitParallel;
 use p3_examples::airs::ProofObjective;
 use p3_examples::dfts::DftChoice;
-use p3_examples::parsers::{DftOptions, FieldOptions, MerkleHashOptions, ProofOptions};
+use p3_examples::parsers::{DftOptions, FieldOptions, MerkleHashOptions, PcsOptions, ProofOptions};
 use p3_examples::proofs::{
-    prove_m31_keccak, prove_m31_poseidon2, prove_monty31_keccak, prove_monty31_poseidon2,
-    report_result,
+    prove_m31_keccak, prove_m31_poseidon2, prove_monty31_keccak, prove_monty31_keccak_stir,
+    prove_monty31_poseidon2, prove_monty31_poseidon2_stir, report_result,
 };
 use p3_field::extension::BinomialExtensionField;
 use p3_keccak_air::KeccakAir;
@@ -69,6 +69,10 @@ struct Args {
     /// The hash function to use when assembling the Merkle tree.
     #[arg(short, long, ignore_case = true, value_enum)]
     merkle_hash: MerkleHashOptions,
+
+    /// The polynomial commitment scheme backing the STARK's opening protocol.
+    #[arg(short, long, ignore_case = true, value_enum, default_value_t = PcsOptions::Fri)]
+    pcs: PcsOptions,
 }
 
 fn main() {
@@ -181,15 +185,32 @@ fn main() {
                 ),
             };
 
-            match args.merkle_hash {
-                MerkleHashOptions::KeccakF => {
+            match (args.pcs, args.merkle_hash) {
+                (PcsOptions::Fri, MerkleHashOptions::KeccakF) => {
                     let result = prove_monty31_keccak::<_, EF, _, _>(&proof_goal, dft, num_hashes);
                     report_result(result);
                 }
-                MerkleHashOptions::Poseidon2 => {
+                (PcsOptions::Fri, MerkleHashOptions::Poseidon2) => {
                     let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng);
                     let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng);
                     let result = prove_monty31_poseidon2::<_, EF, _, _, _, _>(
+                        &proof_goal,
+                        dft,
+                        num_hashes,
+                        perm16,
+                        perm24,
+                    );
+                    report_result(result);
+                }
+                (PcsOptions::Stir, MerkleHashOptions::KeccakF) => {
+                    let result =
+                        prove_monty31_keccak_stir::<_, EF, _, _>(&proof_goal, dft, num_hashes);
+                    report_result(result);
+                }
+                (PcsOptions::Stir, MerkleHashOptions::Poseidon2) => {
+                    let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng);
+                    let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng);
+                    let result = prove_monty31_poseidon2_stir::<_, EF, _, _, _, _>(
                         &proof_goal,
                         dft,
                         num_hashes,
@@ -266,15 +287,32 @@ fn main() {
                 ),
             };
 
-            match args.merkle_hash {
-                MerkleHashOptions::KeccakF => {
+            match (args.pcs, args.merkle_hash) {
+                (PcsOptions::Fri, MerkleHashOptions::KeccakF) => {
                     let result = prove_monty31_keccak::<_, EF, _, _>(&proof_goal, dft, num_hashes);
                     report_result(result);
                 }
-                MerkleHashOptions::Poseidon2 => {
+                (PcsOptions::Fri, MerkleHashOptions::Poseidon2) => {
                     let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
                     let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut rng);
                     let result = prove_monty31_poseidon2::<_, EF, _, _, _, _>(
+                        &proof_goal,
+                        dft,
+                        num_hashes,
+                        perm16,
+                        perm24,
+                    );
+                    report_result(result);
+                }
+                (PcsOptions::Stir, MerkleHashOptions::KeccakF) => {
+                    let result =
+                        prove_monty31_keccak_stir::<_, EF, _, _>(&proof_goal, dft, num_hashes);
+                    report_result(result);
+                }
+                (PcsOptions::Stir, MerkleHashOptions::Poseidon2) => {
+                    let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+                    let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut rng);
+                    let result = prove_monty31_poseidon2_stir::<_, EF, _, _, _, _>(
                         &proof_goal,
                         dft,
                         num_hashes,
@@ -344,6 +382,12 @@ fn main() {
                     "Currently there are no available DFT options when using Mersenne31. Please remove the --discrete_fourier_transform flag."
                 ),
             };
+
+            if args.pcs == PcsOptions::Stir {
+                panic!(
+                    "STIR is only wired into the two-adic (KoalaBear/BabyBear) pipeline. Mersenne31 uses the circle STARK with FRI; remove --pcs or pick a two-adic field."
+                );
+            }
 
             match args.merkle_hash {
                 MerkleHashOptions::KeccakF => {

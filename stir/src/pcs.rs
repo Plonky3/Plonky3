@@ -58,13 +58,14 @@ use core::ops::Deref;
 use itertools::{Itertools, izip};
 use p3_challenger::{
     CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
+    SerializingChallenger32,
 };
 use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PrimeCharacteristicRing,
-    TwoAdicField, batch_multiplicative_inverse,
+    PrimeField32, TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -186,11 +187,34 @@ impl<C> Deref for StirCommitment<C> {
     }
 }
 
+/// `StirCommitment<C>`'s `CanObserve` impl is written once per challenger backend rather than
+/// as a single generic impl: a blanket `impl<Ch: CanObserve<F> + CanObserve<C>, F, C>
+/// CanObserve<StirCommitment<C>> for Ch` would leave `F` unconstrained by `Ch`, which Rust
+/// rejects. Each impl below observes the group count as a length prefix (so a challenger
+/// cannot confuse two commitments with different group counts), then each root, in the same
+/// order every backend uses.
+///
+/// `SerializingChallenger64` has the identical gap (no impl here) — left out under YAGNI, since
+/// nothing in this crate or its dependents currently pairs `TwoAdicStirPcs` with it.
 impl<F, P, C, const WIDTH: usize, const RATE: usize> CanObserve<StirCommitment<C>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Copy + PrimeCharacteristicRing,
     P: CryptographicPermutation<[F; WIDTH]>,
+    Self: CanObserve<C>,
+{
+    fn observe(&mut self, commitment: StirCommitment<C>) {
+        <Self as CanObserve<F>>::observe(self, F::from_usize(commitment.0.len()));
+        for root in commitment.0 {
+            self.observe(root);
+        }
+    }
+}
+
+impl<F, Inner, C> CanObserve<StirCommitment<C>> for SerializingChallenger32<F, Inner>
+where
+    F: PrimeField32,
+    Inner: CanObserve<u8>,
     Self: CanObserve<C>,
 {
     fn observe(&mut self, commitment: StirCommitment<C>) {
