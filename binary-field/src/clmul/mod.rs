@@ -234,6 +234,124 @@ mod tests {
         super::basis::poly_to_tower_128(super::poly_square_128(super::basis::tower_to_poly_128(a)))
     }
 
+    /// The lane choreography of the vector kernel, written with shifts instead of intrinsics.
+    ///
+    /// The kernel itself compiles only where the target has the vector carryless multiply, so on
+    /// every other target nothing checks the algebra it implements. This mirrors that algebra
+    /// step for step, leaving only the meaning of the instructions to the targets that run them.
+    ///
+    /// The one instruction that needs translating concatenates two vectors and takes the sixteen
+    /// bytes starting at byte eight, which on a little-endian target is this:
+    ///
+    /// ```text
+    ///     bytes:   [ x_0 .. x_15 ][ y_0 .. y_15 ]
+    ///     taken:            ^^^^^^^^^^^^^ from byte 8
+    ///     value:   (x >> 64) | (y << 64)
+    /// ```
+    fn vector_kernel_shape(a: u128, b: u128) -> u128 {
+        // Concatenate and slice from byte eight, as the vector extract does.
+        let ext = |x: u128, y: u128| (x >> 64) | (y << 64);
+        // The two halves each instruction picks out of its operands.
+        let clmul_low = |x: u128, y: u128| super::clmul_64x64(x as u64, y as u64);
+        let clmul_high = |x: u128, y: u128| super::clmul_64x64((x >> 64) as u64, (y >> 64) as u64);
+
+        // The modulus tail in both halves, so either can be taken against it.
+        let tail = (TAIL_128 as u64 as u128) | ((TAIL_128 as u64 as u128) << 64);
+
+        // Swapping the halves of one operand turns the two cross products into the same lane
+        // choices as the two diagonal ones.
+        let swapped = ext(b, b);
+        let middle = clmul_low(a, swapped) ^ clmul_high(a, swapped);
+
+        // The 256-bit product, split at `x^128`.
+        let low = clmul_low(a, b) ^ ext(0, middle);
+        let high = clmul_high(a, b) ^ ext(middle, 0);
+
+        // First fold: the top half of the product times the tail, itself split at `x^64`.
+        let folded = clmul_high(high, tail);
+        let spill = ext(folded, 0);
+        let carried = ext(0, folded);
+
+        // Second fold: the seven bits that spilled back above `x^128` join the low half of the
+        // first fold's input, so one further product finishes the reduction.
+        low ^ clmul_low(high ^ spill, tail) ^ carried
+    }
+
+    /// The operands whose half products and reduction spill are maximal, plus the identities.
+    const KERNEL_CORNERS: [u128; 10] = [
+        0,
+        1,
+        u128::MAX,
+        1 << 127,
+        1 << 64,
+        (1u128 << 64) - 1,
+        u128::MAX << 64,
+        0x8000_0000_0000_0001_8000_0000_0000_0001,
+        1 << 121,
+        TAIL_128,
+    ];
+
+    #[test]
+    fn the_vector_kernel_algebra_matches_the_composition_on_extremes() {
+        // Invariant: the lane choreography reduces to the same field element as assembling the
+        // 256-bit product and folding it, on every pair of corner operands.
+        for a in KERNEL_CORNERS {
+            for b in KERNEL_CORNERS {
+                assert_eq!(
+                    vector_kernel_shape(a, b),
+                    super::composed_poly_mul_128(a, b),
+                    "{a:#x} * {b:#x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_squaring_tables_match_the_polynomial_basis_route_on_the_basis() {
+        // Squaring is `GF(2)`-linear in characteristic 2, since the cross term of `(a + b)^2` is
+        // `2ab`. Two linear maps agreeing on a basis agree everywhere, so checking the vectors
+        // `1 << i` settles all `2^64` (resp. `2^128`) inputs rather than sampling them.
+        for i in 0..64 {
+            let a = 1u64 << i;
+            assert_eq!(
+                super::square_64(a),
+                square_64_through_the_polynomial_basis(a),
+                "gf64 basis vector {i}"
+            );
+        }
+        for i in 0..128 {
+            let a = 1u128 << i;
+            assert_eq!(
+                super::square_128(a),
+                square_128_through_the_polynomial_basis(a),
+                "gf128 basis vector {i}"
+            );
+        }
+
+        // Additivity of the tabulated map itself. A column set that was mis-indexed, or built
+        // from a map that is not linear, fails here even where the basis vectors agree.
+        for i in 0..64 {
+            for j in 0..64 {
+                let (a, b) = (1u64 << i, 1u64 << j);
+                assert_eq!(
+                    super::square_64(a ^ b),
+                    super::square_64(a) ^ super::square_64(b),
+                    "gf64 {i},{j}"
+                );
+            }
+        }
+        for i in 0..128 {
+            for j in 0..128 {
+                let (a, b) = (1u128 << i, 1u128 << j);
+                assert_eq!(
+                    super::square_128(a ^ b),
+                    super::square_128(a) ^ super::square_128(b),
+                    "gf128 {i},{j}"
+                );
+            }
+        }
+    }
+
     /// The carryless product of two 128-bit polynomials, one bit of `b` at a time.
     fn scalar_clmul_128x128(a: u128, b: u128) -> (u128, u128) {
         let mut low = 0u128;
@@ -292,6 +410,13 @@ mod tests {
         #[test]
         fn the_dispatched_carryless_product_matches_the_bit_serial_one(a: u64, b: u64) {
             prop_assert_eq!(super::clmul_64x64(a, b), super::scalar_clmul_64x64(a, b));
+        }
+
+        /// The lane choreography of the vector kernel must reduce to the same field element as
+        /// the composition, on every target rather than only the ones that run the kernel.
+        #[test]
+        fn the_vector_kernel_algebra_matches_the_composition(a: u128, b: u128) {
+            prop_assert_eq!(vector_kernel_shape(a, b), super::composed_poly_mul_128(a, b));
         }
 
         /// The half-product decomposition must reproduce the bit-serial 256-bit product.
