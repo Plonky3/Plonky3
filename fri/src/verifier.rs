@@ -1,14 +1,14 @@
 use alloc::collections::btree_map::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, Field, HornerIter, TwoAdicField, batch_multiplicative_inverse, dot_product,
+    ExtensionField, Field, HornerIter, PrimeField64, TwoAdicField, batch_multiplicative_inverse,
+    dot_product,
 };
 use p3_matrix::Dimensions;
 use p3_util::{log2_strict_usize, reverse_bits_len};
@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::{
     BatchMultiOpening, CommitPhaseMultiStep, CommitmentWithOpeningPoints, FriFoldingStrategy,
-    FriParameters, FriProof, fold_schedule,
+    FriParameters, FriProof, TranscriptFailure, VerifierTranscript, fold_schedule, fri_shape,
 };
 
 #[derive(Debug, Error)]
@@ -215,6 +215,29 @@ impl core::fmt::Display for PowPhase {
     }
 }
 
+/// Turn a failed transcript step into the matching verification error.
+///
+/// The grinding phase is a property of where the step sits in the run, so the
+/// caller replaying that step supplies it.
+const fn fri_error_from<CommitMmcsErr, InputError>(
+    failure: TranscriptFailure,
+    phase: PowPhase,
+) -> FriError<CommitMmcsErr, InputError>
+where
+    CommitMmcsErr: core::fmt::Debug,
+    InputError: core::fmt::Debug,
+{
+    match failure {
+        // A witness that is absent and one that is too weak both fail the same step.
+        TranscriptFailure::PowWitness | TranscriptFailure::MissingPowWitness => {
+            FriError::InvalidPowWitness(phase)
+        }
+        TranscriptFailure::FinalPolyLen { expected, got } => {
+            FriError::FinalPolyLengthMismatch { expected, got }
+        }
+    }
+}
+
 /// A chain of FRI input openings allowing a verifier to check a sequence of
 /// FRI folds and rolls. The first element of each pair indicates the round of
 /// fri in which the input should be rolled in. The second element is the opening.
@@ -242,11 +265,12 @@ pub fn verify_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     input_mmcs: &InputMmcs,
 ) -> Result<(), FriError<FriMmcs::Error, InputMmcs::Error>>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Challenger:
+        FieldChallenger<Val> + GrindingChallenger<Witness = Val> + CanObserve<FriMmcs::Commitment>,
     Folding: FriFoldingStrategy<
             Val,
             Challenge,
@@ -399,23 +423,10 @@ where
         });
     }
 
-    // Generate all of the random challenges for the FRI rounds, checking PoW per round.
-    let betas: Vec<Challenge> = proof
-        .commit_phase_commits
-        .iter()
-        .zip(&proof.commit_pow_witnesses)
-        .map(|(comm, witness)| {
-            // Observe the commitment, check the PoW witness, then sample the
-            // folding challenge.
-            challenger.observe(comm.clone());
-            if !challenger.check_witness(params.commit_proof_of_work_bits, *witness) {
-                return Err(FriError::InvalidPowWitness(PowPhase::CommitPhase));
-            }
-            Ok(challenger.sample_algebra_element())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
     // Ensure that the final polynomial has the expected degree.
+    //
+    // The transcript describes it as one step of that width.
+    // A different width is untrusted input, so it is rejected before absorbing.
     if proof.final_poly.len() != params.final_poly_len() {
         return Err(FriError::FinalPolyLengthMismatch {
             expected: params.final_poly_len(),
@@ -423,29 +434,41 @@ where
         });
     }
 
-    // Observe all coefficients of the final polynomial.
-    challenger.observe_algebra_slice(&proof.final_poly);
+    // Every length is now known good, so the transcript can replay.
+    //
+    // The batching challenge above belongs to the caller's transcript, not to
+    // FRI's, so seeding starts here.
+    let mut transcript = VerifierTranscript::<Challenger, Val, Challenge>::new(
+        challenger,
+        fri_shape(
+            params,
+            &input_log_heights,
+            log_global_max_height + folding.extra_query_index_bits(),
+        ),
+    );
 
-    // Bind the variable-arity schedule into the transcript before query grinding.
-    for &log_arity in &log_arities {
-        challenger.observe(Val::from_usize(log_arity));
-    }
+    // One folding challenge per round, each guarded by its own grinding step.
+    let betas: Vec<Challenge> = proof
+        .commit_phase_commits
+        .iter()
+        .zip(&proof.commit_pow_witnesses)
+        .map(|(comm, witness)| {
+            transcript
+                .commit_round(comm.clone(), Some(*witness))
+                .map_err(|e| fri_error_from(e, PowPhase::CommitPhase))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    // Check PoW.
-    if !challenger.check_witness(params.query_proof_of_work_bits, proof.query_pow_witness) {
-        return Err(FriError::InvalidPowWitness(PowPhase::Query));
-    }
+    // Bind the final polynomial, re-check the query grind, redraw the indices.
+    let indices = transcript
+        .query_phase(&proof.final_poly, Some(proof.query_pow_witness))
+        .map_err(|e| fri_error_from(e, PowPhase::Query))?;
+
+    // Every described step has now been replayed.
+    transcript.finish();
 
     // The log of the final domain size.
     let log_final_height = params.log_blowup + params.log_final_poly_len;
-
-    // Sample every query index. The transcript is identical to sampling one
-    // index per query proof: nothing is observed between samples.
-    let indices: Vec<usize> = iter::repeat_with(|| {
-        challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits())
-    })
-    .take(params.num_queries)
-    .collect();
 
     // Check all input openings against their commitments (one shared proof per
     // batch) and combine the opened values into each query's FRI inputs.
