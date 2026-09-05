@@ -37,6 +37,12 @@ pub enum MerkleHashOptions {
     Poseidon2,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum PcsOptions {
+    Fri,
+    Stir,
+}
+
 /// Produce a collection of PossibleValue's for an Enum variant.
 ///
 /// We allow any prefix of the full name which uniquely determines the variant.
@@ -160,6 +166,19 @@ impl ValueEnum for MerkleHashOptions {
             Self::Poseidon2 => {
                 get_aliases("poseidon-2", 1, Some(vec![("poseidon2", 9), ("p2", 2)]))
             }
+        })
+    }
+}
+
+impl ValueEnum for PcsOptions {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Fri, Self::Stir]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Self::Fri => get_aliases("fri", 1, None),
+            Self::Stir => get_aliases("stir", 1, None),
         })
     }
 }

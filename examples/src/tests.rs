@@ -23,7 +23,8 @@ use rand::rngs::SmallRng;
 
 use crate::dfts::DftChoice;
 use crate::proofs::{
-    prove_m31_keccak, prove_m31_poseidon2, prove_monty31_keccak, prove_monty31_poseidon2,
+    prove_m31_keccak, prove_m31_poseidon2, prove_monty31_keccak, prove_monty31_keccak_stir,
+    prove_monty31_poseidon2, prove_monty31_poseidon2_stir,
 };
 
 // 128 rows for the Generic Poseidon2 AIR.
@@ -109,6 +110,52 @@ fn test_end_to_end_koalabear_keccak_hashes_parallel_dft_keccak_merkle_tree()
     let dft = DftChoice::Parallel(Radix2DitParallel::default());
 
     prove_monty31_keccak::<_, EF, _, _>(&proof_goal, dft, num_hashes)
+}
+
+#[test]
+fn test_end_to_end_koalabear_keccak_hashes_parallel_dft_keccak_merkle_tree_stir()
+-> Result<(), impl Debug> {
+    let num_hashes = TRACE_SIZE / 24;
+
+    type EF = BinomialExtensionField<KoalaBear, 4>;
+
+    let proof_goal = KeccakAir {};
+
+    let dft = DftChoice::Parallel(Radix2DitParallel::default());
+
+    prove_monty31_keccak_stir::<_, EF, _, _>(&proof_goal, dft, num_hashes)
+}
+
+#[test]
+fn test_end_to_end_koalabear_vectorized_poseidon2_hashes_recursive_dft_poseidon2_merkle_tree_stir()
+-> Result<(), impl Debug> {
+    // WARNING: Use a real cryptographic PRNG in applications!!
+    let mut rng = SmallRng::seed_from_u64(1);
+
+    type EF = BinomialExtensionField<KoalaBear, 4>;
+
+    let constants = RoundConstants::from_rng(&mut rng);
+    const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
+    const SBOX_REGISTERS: usize = 0;
+    const PARTIAL_ROUNDS: usize = KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16;
+
+    let proof_goal: VectorizedPoseidon2Air<
+        KoalaBear,
+        GenericPoseidon2LinearLayersKoalaBear,
+        P2_WIDTH,
+        SBOX_DEGREE,
+        SBOX_REGISTERS,
+        { KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS },
+        PARTIAL_ROUNDS,
+        P2_VECTOR_LEN,
+    > = VectorizedPoseidon2Air::new(constants);
+
+    let dft = DftChoice::Recursive(RecursiveDft::new(TRACE_SIZE << 1));
+
+    let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng);
+    let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng);
+
+    prove_monty31_poseidon2_stir::<_, EF, _, _, _, _>(&proof_goal, dft, TRACE_SIZE, perm16, perm24)
 }
 
 #[test]
