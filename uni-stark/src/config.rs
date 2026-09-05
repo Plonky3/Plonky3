@@ -29,7 +29,7 @@ pub type Com<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
 /// fails to resolve — method-call syntax has no way to name which `CanObserve`
 /// impl is meant. This helper carries no grinding bound, so inside it the
 /// choice is unambiguous.
-pub fn observe_commitment<SC: StarkGenericConfig>(
+pub(crate) fn observe_commitment<SC: StarkGenericConfig>(
     challenger: &mut SC::Challenger,
     commitment: Com<SC>,
 ) {
