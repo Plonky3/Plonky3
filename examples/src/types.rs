@@ -1,7 +1,8 @@
 //! This contains a large number of type definitions which help simplify the code in other files and keep clippy happy.
 //!
 //! In particular this builds up to defining the types `KeccakStarkConfig`,
-//! `KeccakCircleStarkConfig`, `Poseidon2StarkConfig`, `Poseidon2CircleStarkConfig`.
+//! `KeccakCircleStarkConfig`, `Poseidon2StarkConfig`, `Poseidon2CircleStarkConfig`,
+//! `StirKeccakStarkConfig`, `StirPoseidon2StarkConfig`.
 //! These are needed to define our proof functions.
 
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
@@ -11,6 +12,7 @@ use p3_field::Field;
 use p3_fri::TwoAdicFriPcs;
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
+use p3_stir::TwoAdicStirPcs;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
@@ -66,6 +68,34 @@ pub(crate) type Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24> = StarkConfig<
         F,
         Poseidon2MerkleMmcs<F, Perm16, Perm24>,
         ExtensionMmcs<F, EF, Poseidon2MerkleMmcs<F, Perm16, Perm24>>,
+    >,
+    EF,
+    DuplexChallenger<F, Perm24, 24, 16>,
+>;
+
+// Types related to using STIR as the opening protocol, mirroring the two FRI-backed
+// configs above (`KeccakStarkConfig`, `Poseidon2StarkConfig`) but two-adic only —
+// STIR, like FRI, has no circle-STARK counterpart in this crate.
+pub(crate) type StirKeccakStarkConfig<F, EF, DFT> = StarkConfig<
+    TwoAdicStirPcs<
+        F,
+        DFT,
+        KeccakMerkleMmcs<F>,
+        ExtensionMmcs<F, EF, KeccakMerkleMmcs<F>>,
+        EF,
+        SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>,
+    >,
+    EF,
+    SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>,
+>;
+pub(crate) type StirPoseidon2StarkConfig<F, EF, DFT, Perm16, Perm24> = StarkConfig<
+    TwoAdicStirPcs<
+        F,
+        DFT,
+        Poseidon2MerkleMmcs<F, Perm16, Perm24>,
+        ExtensionMmcs<F, EF, Poseidon2MerkleMmcs<F, Perm16, Perm24>>,
+        EF,
+        DuplexChallenger<F, Perm24, 24, 16>,
     >,
     EF,
     DuplexChallenger<F, Perm24, 24, 16>,
