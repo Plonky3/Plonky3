@@ -320,7 +320,7 @@ mod tests {
         // A config that grinds nowhere maps to the neutral element, so the
         // sites can be merged into a protocol's own without altering it.
         let ungrounded = FriParameters {
-            batch_proof_of_work_bits: 10,
+            batch_proof_of_work_bits: 0,
             ..params
         };
         assert_eq!(ungrounded.grinding_sites(), GrindingSites::NONE);
