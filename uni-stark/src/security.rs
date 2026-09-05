@@ -8,7 +8,7 @@ use core::cmp::max;
 
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
-use p3_field::{ExtensionField, Field};
+use p3_field::{BasedVectorSpace, ExtensionField, Field};
 use p3_security::fri::FriRegime;
 // Re-exported (rather than merely imported) so that declaring
 // [`StarkSecurityParams::grinding`] does not oblige a caller to add a direct
@@ -21,27 +21,24 @@ use p3_util::{log2_ceil_usize, log2_floor_usize};
 /// What the polynomial commitment scheme commits beyond what the AIR itself
 /// determines.
 ///
-/// Both facts are properties of the proof configuration rather than of the
-/// AIR, so [`StarkSecurityParams::from_air`] cannot read them off the AIR and
-/// takes them here instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// This is a property of the proof configuration rather than of the AIR, so
+/// [`StarkSecurityParams::from_air`] cannot read it off the AIR and takes it
+/// here instead. The degree of the challenge field over the base field — the
+/// width in base-field columns of one committed quotient chunk, and of the zk
+/// randomizing codeword — is not part of this shape: `from_air` already has
+/// `EF` in scope and derives it from there, so there is no second value that
+/// could disagree with the type parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct OpeningShape {
-    /// Degree of the challenge field over the base field, which is the width
-    /// in base-field columns of one committed quotient chunk (and of the zk
-    /// randomizing codeword).
-    pub challenge_dimension: usize,
     /// Whether zero-knowledge is enabled, which adds one randomizing codeword
     /// to the batch and one to the quotient's degree.
     pub is_zk: bool,
 }
 
 impl OpeningShape {
-    /// Non-zk configuration over a challenge field of the given degree.
-    pub const fn new(challenge_dimension: usize) -> Self {
-        Self {
-            challenge_dimension,
-            is_zk: false,
-        }
+    /// Non-zk configuration.
+    pub const fn new() -> Self {
+        Self { is_zk: false }
     }
 
     /// The same, with zero-knowledge enabled.
@@ -227,11 +224,10 @@ impl StarkSecurityParams {
     /// permutation fields at `0`, so permutation-argument constraints are not counted
     /// and security is overstated.
     ///
-    /// `openings` supplies the two facts the AIR does not carry: how wide a
-    /// committed quotient chunk is (the challenge field's degree over the base
-    /// field) and whether the prover commits zk's randomizing codeword. Together
-    /// with the AIR they determine `num_batched_functions` — see
-    /// [`num_batched_openings`].
+    /// `openings` supplies the one fact neither the AIR nor `EF` carries: whether the prover
+    /// commits zk's randomizing codeword. The other input `num_batched_functions` needs — how
+    /// wide a committed quotient chunk is — is `EF`'s own degree over `F`, already in scope here;
+    /// see [`num_batched_openings`] for the formula the two combine into.
     ///
     /// `grinding` is required rather than defaulted for the same reason: a
     /// silent [`GrindingSites::NONE`] is safe in direction, since it only
@@ -261,6 +257,7 @@ impl StarkSecurityParams {
         A: Air<SymbolicAirBuilder<F, EF>>,
     {
         let shape = P3AirShape::from_air::<F, EF, A>(air, layout, max_combo);
+        let challenge_dimension = <EF as BasedVectorSpace<F>>::DIMENSION;
 
         // `get_log_num_quotient_chunks`'s formula for the chunk count, then the same `<< is_zk`
         // doubling `prove_with_preprocessed` applies on top of it (`num_quotient_chunks = 1 <<
@@ -276,7 +273,7 @@ impl StarkSecurityParams {
             layout.preprocessed_width,
             !air.preprocessed_next_row_columns().is_empty(),
             num_quotient_chunks,
-            openings.challenge_dimension,
+            challenge_dimension,
             openings.is_zk,
         );
 
@@ -508,8 +505,14 @@ mod tests {
     use p3_air::symbolic::SymbolicVariable;
     use p3_air::{AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
 
     use super::*;
+
+    /// The degree-4 extension the `from_air`-derivation tests use as `EF`, so
+    /// `challenge_dimension` is a real property of the type parameter rather than a
+    /// number picked to match by coincidence.
+    type Ext = BinomialExtensionField<BabyBear, 4>;
 
     /// A trace-only AIR of a chosen width, with `num_constraints` degree-1
     /// constraints. `reads_next_row` drives [`BaseAir::main_next_row_columns`],
@@ -534,8 +537,8 @@ mod tests {
         }
     }
 
-    impl Air<SymbolicAirBuilder<BabyBear>> for MockAir {
-        fn eval(&self, builder: &mut SymbolicAirBuilder<BabyBear>) {
+    impl<EF: ExtensionField<BabyBear>> Air<SymbolicAirBuilder<BabyBear, EF>> for MockAir {
+        fn eval(&self, builder: &mut SymbolicAirBuilder<BabyBear, EF>) {
             for i in 0..self.num_constraints {
                 let var: SymbolicVariable<BabyBear> =
                     builder.main().current(i % self.width).unwrap();
@@ -617,14 +620,14 @@ mod tests {
         };
         let layout = AirLayout::from_air(&air);
 
-        let params = StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
+        let params = StarkSecurityParams::from_air::<BabyBear, Ext, _>(
             regime,
             &air,
             layout,
             124,
             128,
             2,
-            OpeningShape::new(4),
+            OpeningShape::new(),
             GrindingSites::NONE,
         );
 
@@ -651,14 +654,14 @@ mod tests {
         };
         let layout = AirLayout::from_air(&air);
 
-        let params = StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
+        let params = StarkSecurityParams::from_air::<BabyBear, Ext, _>(
             regime,
             &air,
             layout,
             124,
             128,
             2,
-            OpeningShape::new(4).with_zk(),
+            OpeningShape::new().with_zk(),
             GrindingSites::NONE,
         );
 
@@ -685,24 +688,24 @@ mod tests {
             reads_next_row: false,
         };
 
-        let a = StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
+        let a = StarkSecurityParams::from_air::<BabyBear, Ext, _>(
             regime,
             &with_next,
             layout_of(&with_next),
             124,
             128,
             2,
-            OpeningShape::new(4),
+            OpeningShape::new(),
             GrindingSites::NONE,
         );
-        let b = StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
+        let b = StarkSecurityParams::from_air::<BabyBear, Ext, _>(
             regime,
             &without_next,
             layout_of(&without_next),
             124,
             128,
             1,
-            OpeningShape::new(4),
+            OpeningShape::new(),
             GrindingSites::NONE,
         );
 
@@ -730,14 +733,14 @@ mod tests {
         let degree_bits = 16;
 
         let build = |grinding| {
-            StarkSecurityParams::from_air::<BabyBear, BabyBear, _>(
+            StarkSecurityParams::from_air::<BabyBear, Ext, _>(
                 regime,
                 &air,
                 layout,
                 124,
                 128,
                 2,
-                OpeningShape::new(4),
+                OpeningShape::new(),
                 grinding,
             )
         };

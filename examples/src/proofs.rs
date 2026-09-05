@@ -5,7 +5,7 @@ use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::ComplexExtendable;
-use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
+use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::{Mersenne31, QM31};
@@ -104,7 +104,7 @@ where
         EF::bits(),
         128,
         2,
-        OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
+        OpeningShape::new(),
         fri_params.grinding_sites(),
     );
 
@@ -160,7 +160,7 @@ where
         EF::bits(),
         128,
         2,
-        OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
+        OpeningShape::new(),
         fri_params.grinding_sites(),
     );
 
@@ -208,7 +208,7 @@ pub fn prove_m31_keccak<
         EF::bits(),
         128,
         2,
-        OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
+        OpeningShape::new(),
         fri_params.grinding_sites(),
     );
 
@@ -263,7 +263,7 @@ where
         EF::bits(),
         128,
         2,
-        OpeningShape::new(<EF as BasedVectorSpace<F>>::DIMENSION),
+        OpeningShape::new(),
         fri_params.grinding_sites(),
     );
 
