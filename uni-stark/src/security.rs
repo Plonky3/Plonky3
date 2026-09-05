@@ -259,7 +259,7 @@ impl StarkSecurityParams {
         let main_next = !air.main_next_row_columns().is_empty();
         let preprocessed_next = !air.preprocessed_next_row_columns().is_empty();
         debug_assert!(
-            max_combo >= 1 + (main_next || preprocessed_next) as usize,
+            max_combo > (main_next || preprocessed_next) as usize,
             "max_combo ({max_combo}) must cover every rotation the AIR reads: \
              main_next={main_next}, preprocessed_next={preprocessed_next}"
         );
