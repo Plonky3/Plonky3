@@ -118,13 +118,22 @@ where
         let half = EF::TWO.inverse();
         let mut aux_carry = aux_claim;
 
+        // A challenge is not applied on the spot.
+        // It is handed to the next round, which binds and measures in one pass.
+        //
+        // Everything the loop does between the two is scalar work.
+        // Assembling the round polynomial, the transcript, the grinding and the mask
+        // evaluation never read the tables.
+        let mut pending: Option<EF> = None;
+
         for (round_idx, mask) in masks.iter().enumerate() {
             let j = round_idx + 1;
             let mask_endpoints = mask[0].double() + mask[1..].iter().copied().sum::<EF>();
             sum_future_endpoints -= mask_endpoints;
             aux_carry *= half;
 
-            let (plain_c0, plain_c_inf) = self.round_coefficients();
+            // Measure this round, absorbing whatever binding the last one left behind.
+            let (plain_c0, plain_c_inf) = self.measure_round(&mut pending);
             // The aux carry enters only the transmitted constant slot; the
             // source-side fold below keeps the raw coefficients.
             let h = round_ctx.assemble(
@@ -151,9 +160,19 @@ where
             let mask_at_gamma = mask.iter().copied().horner(gamma);
             mask_evals_at_gamma.push(mask_at_gamma);
 
-            self.fold_round_with_coefficients(plain_c0, plain_c_inf, gamma);
+            // Advance the claim now; the binding waits for the next round's pass.
+            self.reduce_claim_with_coefficients(plain_c0, plain_c_inf, gamma);
+            pending = Some(gamma);
+
             rs.push(gamma);
         }
+
+        // The last challenge has no successor to fuse with.
+        // The weight scaling below reads the tables, so it binds here.
+        self.bind_pending(pending);
+
+        // Invariant: the claim is the inner product of the bound pair.
+        self.debug_assert_claim();
 
         self.scale_weights_and_claim(eps);
 
