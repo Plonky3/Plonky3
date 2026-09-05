@@ -2,8 +2,8 @@
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
-use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt};
-use p3_binary_field::{BinaryField32, BinaryField64, BinaryField128, TowerLevel};
+use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt, PolyBasisNtt};
+use p3_binary_field::{BinaryField32, BinaryField64, BinaryField128, Ghash128, TowerLevel};
 use p3_commit::Encoder;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_matrix::dense::RowMajorMatrix;
@@ -25,24 +25,31 @@ const LOG_INV_RATE: usize = 1;
 const BABY_BEAR_ROW_RATIO: usize = 4;
 
 fn bench_ntt(c: &mut Criterion) {
-    ntt::<BinaryField32>(c);
-    ntt::<BinaryField64>(c);
-    ntt::<BinaryField128>(c);
+    ntt(c, "32", &LchNtt::<BinaryField32>::default());
+    ntt(c, "64", &LchNtt::<BinaryField64>::default());
+
+    // The three routes to a `GF(2^128)` transform, in the order they cost.
+    //
+    //     128/tower  every twiddle multiply changes basis twice and back
+    //     128/hybrid the matrix changes basis once on the way in and once on the way out
+    //     128/ghash  the data is already in the basis the multiply wants
+    ntt(c, "128/tower", &LchNtt::<BinaryField128>::default());
+    ntt(c, "128/hybrid", &PolyBasisNtt::default());
+    ntt(c, "128/ghash", &LchNtt::<Ghash128>::default());
 }
 
 /// The forward transform of a width-[`WIDTH`] matrix over `S_ℓ`, across [`LOG_HEIGHTS`].
-fn ntt<F: TowerLevel>(c: &mut Criterion)
+fn ntt<F: TowerLevel, N: AdditiveNtt<F>>(c: &mut Criterion, name: &str, ntt: &N)
 where
     StandardUniform: Distribution<F>,
 {
-    let mut group = c.benchmark_group(format!("ntt/{}", 1usize << F::LOG_BITS));
+    let mut group = c.benchmark_group(format!("ntt/{name}"));
     group.sample_size(10);
 
     let mut rng = SmallRng::seed_from_u64(1);
-    let ntt = LchNtt::<F>::default();
     for log_height in LOG_HEIGHTS {
         let coeffs = RowMajorMatrix::<F>::rand(&mut rng, 1 << log_height, WIDTH);
-        group.bench_with_input(BenchmarkId::from_parameter(log_height), &ntt, |b, ntt| {
+        group.bench_with_input(BenchmarkId::from_parameter(log_height), ntt, |b, ntt| {
             b.iter_batched(
                 || coeffs.clone(),
                 |m| ntt.ntt_batch(m),

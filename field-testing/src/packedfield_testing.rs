@@ -910,7 +910,13 @@ where
         let sum = a + b;
         let diff = a - b;
         let prod = a * b;
-        let quot = a / b;
+        // Division requires a nonzero denominator in every lane.
+        // Keep the original operands for the other operations, including zero products.
+        let denominator = PF::from_fn(|i| {
+            let value = b.as_slice()[i];
+            if value.is_zero() { PF::Scalar::ONE } else { value }
+        });
+        let quot = a / denominator;
         let neg_a = -a;
 
         let sum = sum.as_slice();
@@ -928,7 +934,7 @@ where
                 "sub mismatch at lane {}", i);
             prop_assert_eq!(prod[i], a[i] * b[i],
                 "mul mismatch at lane {}", i);
-            prop_assert_eq!(quot[i], a[i] / b[i],
+            prop_assert_eq!(quot[i], a[i] / denominator.as_slice()[i],
                 "div mismatch at lane {}", i);
             prop_assert_eq!(neg_a[i], -a[i],
                 "neg mismatch at lane {}", i);
@@ -936,11 +942,12 @@ where
     });
 }
 
+/// Everything a packing must satisfy beyond being a ring.
+///
+/// Held apart from the ring suite so a characteristic-2 packing can pair it with its own.
 #[macro_export]
-macro_rules! test_packed_field {
-    ($packedfield:ty, $zeros:expr, $ones:expr, $specials:expr) => {
-        $crate::test_ring_with_eq!($packedfield, $zeros, $ones);
-
+macro_rules! test_packed_field_ops {
+    ($packedfield:ty, $specials:expr) => {
         mod packed_field_tests {
             use p3_field::PrimeCharacteristicRing;
 
@@ -989,6 +996,25 @@ macro_rules! test_packed_field {
                 $crate::test_packed_vs_scalar_proptest::<$packedfield>();
             }
         }
+    };
+}
+
+#[macro_export]
+macro_rules! test_packed_field {
+    ($packedfield:ty, $zeros:expr, $ones:expr, $specials:expr) => {
+        $crate::test_ring_with_eq!($packedfield, $zeros, $ones);
+        $crate::test_packed_field_ops!($packedfield, $specials);
+    };
+}
+
+/// The full packing suite, for a packing of a field of characteristic 2.
+///
+/// Only the ring half differs: halving and dividing by a power of two panic there.
+#[macro_export]
+macro_rules! test_packed_binary_field {
+    ($packedfield:ty, $zeros:expr, $ones:expr, $specials:expr) => {
+        $crate::test_ring_with_eq_char2!($packedfield, $zeros, $ones);
+        $crate::test_packed_field_ops!($packedfield, $specials);
     };
 }
 

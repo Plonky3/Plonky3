@@ -3,6 +3,7 @@
 use core::marker::PhantomData;
 
 use p3_binary_field::TowerLevel;
+use p3_field::{PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -70,21 +71,9 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
                         if i != 0 {
                             t += steps[(first + i).trailing_zeros() as usize];
                         }
-                        let zero = t.is_zero();
                         let (lo, hi) = block.split_at_mut(half);
                         let butterfly = |lo: &mut [F], hi: &mut [F]| {
-                            if zero {
-                                // (u, v) ↦ (u, u + v)
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    *v += *u;
-                                }
-                            } else {
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    // (u, v) ↦ (u + t·v, u + t·v + v)
-                                    *u += t * *v;
-                                    *v += *u;
-                                }
-                            }
+                            packed_butterfly::<F, false>(lo, hi, t);
                         };
                         // Pairs are independent across the block, so a block wider than the
                         // grain is split further rather than run on a single thread.
@@ -126,21 +115,9 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
                         if i != 0 {
                             t += steps[(first + i).trailing_zeros() as usize];
                         }
-                        let zero = t.is_zero();
                         let (lo, hi) = block.split_at_mut(half);
                         let butterfly = |lo: &mut [F], hi: &mut [F]| {
-                            if zero {
-                                // (u', v') ↦ (u = u', v = u' + v')
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    *v += *u;
-                                }
-                            } else {
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    // (u', v') ↦ (u = u' + t·v, v = u' + v')
-                                    *v += *u;
-                                    *u += t * *v;
-                                }
-                            }
+                            packed_butterfly::<F, true>(lo, hi, t);
                         };
                         // Pairs are independent across the block, so a block wider than the
                         // grain is split further rather than run on a single thread.
@@ -158,13 +135,54 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
     }
 }
 
+/// Apply a butterfly to full SIMD vectors and any remaining scalar elements.
+#[inline]
+fn packed_butterfly<F: TowerLevel, const INVERSE: bool>(lo: &mut [F], hi: &mut [F], t: F) {
+    // Both sides have equal length, so their packed prefixes and tails pair exactly.
+    let (lo, lo_tail) = F::Packing::pack_slice_with_suffix_mut(lo);
+    let (hi, hi_tail) = F::Packing::pack_slice_with_suffix_mut(hi);
+    let zero = t.is_zero();
+    butterfly_values::<_, INVERSE>(lo, hi, t.into(), zero);
+    butterfly_values::<_, INVERSE>(lo_tail, hi_tail, t, zero);
+}
+
+/// Apply the same field identities to scalar or packed values.
+#[inline]
+fn butterfly_values<R: PrimeCharacteristicRing + Copy, const INVERSE: bool>(
+    lo: &mut [R],
+    hi: &mut [R],
+    t: R,
+    zero: bool,
+) {
+    if zero {
+        // A zero twiddle reduces both transform directions to (u, u + v).
+        for (u, v) in lo.iter_mut().zip(hi) {
+            *v += *u;
+        }
+    } else if INVERSE {
+        // Recover v first, then remove its twiddle contribution from u.
+        for (u, v) in lo.iter_mut().zip(hi) {
+            *v += *u;
+            *u += t * *v;
+        }
+    } else {
+        // Evaluate the pair as (u + t*v, u + t*v + v).
+        for (u, v) in lo.iter_mut().zip(hi) {
+            *u += t * *v;
+            *v += *u;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
 
     use p3_binary_field::{
-        BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, TowerLevel,
+        BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
+        TowerLevel,
     };
+    use p3_field::PrimeCharacteristicRing;
     use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_util::log2_strict_usize;
@@ -227,6 +245,22 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn ghash_packing_matches_naive_and_round_trips(
+            log_n in 0usize..=7,
+            width in 1usize..=9,
+            seed: u64,
+            shift: u64,
+        ) {
+            // Odd widths force scalar tails alongside SIMD prefixes.
+            check_matches_naive::<Ghash128>(log_n, width, seed, shift);
+            let coeffs = matrix::<Ghash128>(log_n, width, seed);
+            let shift = sample::<Ghash128>(shift);
+            let ntt = LchNtt::<Ghash128>::default();
+            let transformed = ntt.shifted_ntt_batch(coeffs.clone(), shift);
+            prop_assert_eq!(ntt.shifted_intt_batch(transformed, shift), coeffs);
+        }
 
         #[test]
         fn lch_matches_naive_at_8_bits(
@@ -406,6 +440,54 @@ mod tests {
         let large = LchNtt::<BinaryField128>::default().ntt_batch(coeffs128);
         for (s, l) in small.values.iter().zip(&large.values) {
             assert_eq!(u128::from(s.to_repr()), l.to_repr());
+        }
+    }
+
+    #[test]
+    fn ghash_packing_matches_scalar_across_tasks() {
+        // These blocks cross the task-size boundary and leave scalar tails at narrow stages.
+        for width in [3, 5] {
+            for shift in [Ghash128::ZERO, sample::<Ghash128>(17)] {
+                let coeffs = matrix::<Ghash128>(11, width, 29);
+                let ntt = LchNtt::<Ghash128>::default();
+                let actual = ntt.shifted_ntt_batch(coeffs.clone(), shift);
+                // The serial oracle uses scalar products and recomputes every twiddle.
+                assert_eq!(actual, twiddle_walk_ntt(coeffs.clone(), shift));
+                assert_eq!(ntt.shifted_intt_batch(actual, shift), coeffs);
+            }
+        }
+    }
+
+    /// The transform must commute with the change of basis between the two representations.
+    ///
+    /// It is built from twiddle multiplies.
+    /// Only a field isomorphism preserves multiplication, so this pins that too.
+    #[test]
+    fn the_two_representations_of_the_widest_level_transform_alike() {
+        const LOG_N: usize = 7;
+        const WIDTH: usize = 3;
+
+        // Express one matrix in both field bases.
+        let tower_coeffs = matrix::<BinaryField128>(LOG_N, WIDTH, 11);
+        let ghash_coeffs = RowMajorMatrix::new(
+            tower_coeffs
+                .values
+                .iter()
+                .copied()
+                .map(Ghash128::from)
+                .collect(),
+            WIDTH,
+        );
+
+        let shift = sample::<BinaryField128>(0x0123_4567_89ab_cdef);
+
+        let tower = LchNtt::<BinaryField128>::default().shifted_ntt_batch(tower_coeffs, shift);
+        let ghash =
+            LchNtt::<Ghash128>::default().shifted_ntt_batch(ghash_coeffs, Ghash128::from(shift));
+
+        // Converting before or after the transform must give the same values.
+        for (t, g) in tower.values.iter().zip(&ghash.values) {
+            assert_eq!(Ghash128::from(*t), *g);
         }
     }
 }

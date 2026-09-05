@@ -34,19 +34,29 @@ use crate::{Gf2, tables};
 /// `cantor_basis` is *the* Cantor basis — `v_0 = 1` and `v_i² + v_i = v_{i−1}` — not merely some
 /// `F_2`-linearly independent sequence. An external implementation satisfying none of that would
 /// fail silently, with wrong evaluations rather than a compile error, wherever those assume it.
-mod private {
+pub(crate) mod private {
     pub trait Sealed {}
 }
 
-/// One level of the Wiedemann tower. `Repr` is the backing integer; `LOG_BITS` is `k` for `GF(2^(2^k))`.
+/// One level of the Wiedemann tower, `GF(2^(2^k))`, in whichever basis carries it.
+///
+/// The tower fixes each level as an abstract field, not as a set of bit patterns.
+///
+/// An implementation may hold its elements in any `F_2`-basis of that field.
+/// What it may not do is report a Cantor basis other than the image of the tower's own.
+///
+/// That is what makes every transform agree whichever representation runs it.
 pub trait TowerLevel: Field + private::Sealed {
+    /// The backing integer of an element.
     type Repr: Copy;
+
+    /// The `k` in `GF(2^(2^k))`.
     const LOG_BITS: usize;
     /// Build an element from a bit pattern, discarding the bits above `2^LOG_BITS`.
     fn from_repr(r: Self::Repr) -> Self;
     /// The bit pattern of this element, zero above `2^LOG_BITS`.
     fn to_repr(self) -> Self::Repr;
-    /// Multiply by the generator `X_{k−1}` of this level over the one below.
+    /// Multiply by the tower's generator `X_{k−1}` of this level over the one below.
     fn mul_alpha(self) -> Self;
     /// Build an element from the next [`RawDataSerializable::NUM_BYTES`] bytes of a
     /// little-endian byte stream, discarding the bits above `2^LOG_BITS`.

@@ -1594,41 +1594,46 @@ macro_rules! test_field {
     };
 }
 
-/// A [`test_field!`]-equivalent suite for fields of characteristic 2.
+/// The ring suite, for a ring of characteristic 2.
 ///
-/// `PrimeCharacteristicRing::{halve, div_2exp_u64}` are documented to panic
-/// unconditionally in characteristic 2, so this replaces [`test_div_2exp_u64`] with
-/// [`test_halve_panics_char2`] and [`test_div_2exp_u64_panics_char2`], which pin that
-/// panic, and swaps every other halve-dependent (or otherwise characteristic-2-degenerate)
-/// check for a characteristic-2-safe sibling (`test_ring_with_eq_char2`,
-/// `test_mul_2exp_u64_is_zero_above_e0`, `test_inverse_char2`, `test_sqrt_char2`,
-/// `test_powers_collect_char2`, `test_ring_axioms_proptest_char2`,
-/// `test_field_axioms_proptest_char2`).
+/// Halving and dividing by a power of two are undefined there.
+///
+/// This pins their panic rather than exercising them.
 #[macro_export]
-macro_rules! test_binary_field {
-    ($field:ty, $zeros: expr, $ones: expr, $factors: expr) => {
+macro_rules! test_ring_with_eq_char2 {
+    ($ring:ty, $zeros: expr, $ones: expr) => {
         mod ring_tests {
             use p3_field::PrimeCharacteristicRing;
 
             #[test]
             fn test_ring_with_eq() {
-                $crate::test_ring_with_eq_char2::<$field>($zeros, $ones);
+                $crate::test_ring_with_eq_char2::<$ring>($zeros, $ones);
             }
             #[test]
             fn test_mul_2exp_u64() {
-                $crate::test_mul_2exp_u64_is_zero_above_e0::<$field>();
+                $crate::test_mul_2exp_u64_is_zero_above_e0::<$ring>();
             }
             #[test]
             #[should_panic]
             fn test_halve_panics() {
-                $crate::test_halve_panics_char2::<$field>();
+                $crate::test_halve_panics_char2::<$ring>();
             }
             #[test]
             #[should_panic]
             fn test_div_2exp_u64_panics() {
-                $crate::test_div_2exp_u64_panics_char2::<$field>();
+                $crate::test_div_2exp_u64_panics_char2::<$ring>();
             }
         }
+    };
+}
+
+/// The full field suite, for a field of characteristic 2.
+///
+/// Every check that halving would reach is swapped for its characteristic-2 sibling.
+#[macro_export]
+macro_rules! test_binary_field {
+    ($field:ty, $zeros: expr, $ones: expr, $factors: expr) => {
+        $crate::test_ring_with_eq_char2!($field, $zeros, $ones);
 
         mod field_tests {
             #[test]
