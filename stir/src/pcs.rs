@@ -190,15 +190,32 @@ impl<C> Deref for StirCommitment<C> {
     }
 }
 
-/// `StirCommitment<C>`'s `CanObserve` impl is written once per challenger backend rather than
-/// as a single generic impl: a blanket `impl<Ch: CanObserve<F> + CanObserve<C>, F, C>
-/// CanObserve<StirCommitment<C>> for Ch` would leave `F` unconstrained by `Ch`, which Rust
-/// rejects. Each impl below observes the group count as a length prefix (so a challenger
-/// cannot confuse two commitments with different group counts), then each root, in the same
-/// order every backend uses.
+/// Absorbs a commitment's group count, then each of its roots.
 ///
-/// `SerializingChallenger64` has the identical gap (no impl here) — left out under YAGNI, since
-/// nothing in this crate or its dependents currently pairs `TwoAdicStirPcs` with it.
+/// The count goes in first, as one fixed-width field element.
+/// Two commitments with different group counts therefore cannot produce the same transcript.
+/// Absorbing three roots as one commitment also stays distinct from absorbing them as two.
+///
+/// Every challenger backend routes here rather than writing the sequence out again.
+/// A backend that absorbed a commitment differently would not fail a test: prover and verifier
+/// share one challenger type, so both would be wrong together.
+fn observe_stir_commitment<Ch, F, C>(challenger: &mut Ch, commitment: StirCommitment<C>)
+where
+    Ch: CanObserve<F> + CanObserve<C>,
+    F: PrimeCharacteristicRing,
+{
+    challenger.observe(F::from_usize(commitment.0.len()));
+    for root in commitment.0 {
+        challenger.observe(root);
+    }
+}
+
+// The shared body above is a free function rather than a blanket impl.
+// A blanket impl would leave the field type constrained only by the where clause, which Rust
+// rejects as an unconstrained parameter, so each backend needs its own impl regardless.
+//
+// A backend with no impl here cannot be paired with this commitment scheme at all.
+// The 64-bit serializing challenger has none, since nothing pairs it with this scheme today.
 impl<F, P, C, const WIDTH: usize, const RATE: usize> CanObserve<StirCommitment<C>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
@@ -207,10 +224,7 @@ where
     Self: CanObserve<C>,
 {
     fn observe(&mut self, commitment: StirCommitment<C>) {
-        <Self as CanObserve<F>>::observe(self, F::from_usize(commitment.0.len()));
-        for root in commitment.0 {
-            self.observe(root);
-        }
+        observe_stir_commitment::<_, F, _>(self, commitment);
     }
 }
 
@@ -221,10 +235,7 @@ where
     Self: CanObserve<C>,
 {
     fn observe(&mut self, commitment: StirCommitment<C>) {
-        <Self as CanObserve<F>>::observe(self, F::from_usize(commitment.0.len()));
-        for root in commitment.0 {
-            self.observe(root);
-        }
+        observe_stir_commitment::<_, F, _>(self, commitment);
     }
 }
 
@@ -1950,18 +1961,20 @@ fn compute_inverse_denominators<'a, F: TwoAdicField, EF: ExtensionField<F>>(
 
 #[cfg(test)]
 mod tests {
-    use alloc::format;
+    use alloc::{format, vec};
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_challenger::DuplexChallenger;
+    use p3_challenger::{CanSampleBits, DuplexChallenger, HashChallenger};
     use p3_commit::ExtensionMmcs;
     use p3_dft::Radix2DitParallel;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_security::whir::SecurityAssumption;
-    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use p3_symmetric::{Hash, PaddingFreeSponge, TruncatedPermutation};
     use proptest::prelude::*;
+    use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
@@ -1994,6 +2007,95 @@ mod tests {
         // soundness accounting is charged at.
         let ell: usize = coeffs.iter().map(|&(_, gap)| gap + 1).sum();
         assert_eq!(ell, 13);
+    }
+
+    // A digest that the serializing challenger can absorb byte by byte.
+    fn digest(byte: u8) -> Hash<BabyBear, u8, 32> {
+        Hash::from([byte; 32])
+    }
+
+    // The serializing backend, over the byte hasher the Keccak-Merkle configurations use.
+    fn byte_challenger() -> SerializingChallenger32<BabyBear, HashChallenger<u8, Keccak256Hash, 32>>
+    {
+        SerializingChallenger32::from_hasher(Vec::new(), Keccak256Hash {})
+    }
+
+    #[test]
+    fn the_group_count_separates_one_commitment_from_two() {
+        // Invariant: the group count is absorbed as a length prefix, so a commitment cannot
+        // be split or merged without changing the transcript.
+        //
+        //     one commitment : len=2 | root_a | root_b
+        //     two commitments: len=1 | root_a | len=1 | root_b
+        //
+        // Without the prefix both flatten to `root_a | root_b` and sample the same challenge.
+        let (root_a, root_b) = (digest(0xAA), digest(0xBB));
+
+        let mut merged = byte_challenger();
+        merged.observe(StirCommitment(vec![root_a, root_b]));
+
+        let mut split = byte_challenger();
+        split.observe(StirCommitment(vec![root_a]));
+        split.observe(StirCommitment(vec![root_b]));
+
+        assert_ne!(
+            merged.sample_bits(24),
+            split.sample_bits(24),
+            "the length prefix must separate these two absorptions"
+        );
+    }
+
+    #[test]
+    fn the_root_order_is_part_of_the_transcript() {
+        // Two commitments over the same roots in opposite order must not collide: the roots
+        // are absorbed in sequence, never as an order-insensitive set.
+        let (root_a, root_b) = (digest(0xAA), digest(0xBB));
+
+        let mut forward = byte_challenger();
+        forward.observe(StirCommitment(vec![root_a, root_b]));
+
+        let mut reversed = byte_challenger();
+        reversed.observe(StirCommitment(vec![root_b, root_a]));
+
+        assert_ne!(forward.sample_bits(24), reversed.sample_bits(24));
+    }
+
+    #[test]
+    fn every_backend_absorbs_a_commitment_the_same_way() {
+        // Invariant: a backend's impl is the shared sequence, never a hand-written variant.
+        //
+        //     observe(commitment)  ==  observe(len) then observe(each root)
+        //
+        // Checked per backend against the sequence spelled out by hand, since prover and
+        // verifier share one challenger type and would be wrong together if it drifted.
+        let roots = vec![digest(0x01), digest(0x02), digest(0x03)];
+
+        let mut via_commitment = byte_challenger();
+        via_commitment.observe(StirCommitment(roots.clone()));
+
+        let mut by_hand = byte_challenger();
+        by_hand.observe(BabyBear::from_usize(roots.len()));
+        for root in roots {
+            by_hand.observe(root);
+        }
+
+        assert_eq!(via_commitment.sample_bits(24), by_hand.sample_bits(24));
+
+        // The same obligation, for the duplex backend the Poseidon2 configurations use.
+        let perm = TestPerm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
+
+        let mut duplex_via_commitment = TestChallenger::new(perm.clone());
+        duplex_via_commitment.observe(StirCommitment(vec![BabyBear::ONE, BabyBear::TWO]));
+
+        let mut duplex_by_hand = TestChallenger::new(perm);
+        duplex_by_hand.observe(BabyBear::TWO);
+        duplex_by_hand.observe(BabyBear::ONE);
+        duplex_by_hand.observe(BabyBear::TWO);
+
+        assert_eq!(
+            duplex_via_commitment.sample_bits(24),
+            duplex_by_hand.sample_bits(24)
+        );
     }
 
     #[test]
