@@ -491,8 +491,16 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         // Split the rows into a bounded number of contiguous chunks; each task runs the
         // field's columnwise kernel serially over its chunk (letting it defer modular
         // reductions across rows) and the per-task accumulators are summed at the end.
-        let num_chunks = (4 * current_num_threads()).clamp(1, height.max(1));
-        let chunk_rows = height.div_ceil(num_chunks);
+        //
+        // One item is one matrix row plus the vector entry it is weighted by.
+        //
+        // The floor collapses the split to a single chunk when the matrix is too small
+        // to be worth handing to another worker.
+        let row_bytes = packed_width * size_of::<T::Packing>() + size_of::<FieldArray<EF, N>>();
+        let chunk_rows = height
+            .div_ceil((4 * current_num_threads()).clamp(1, height.max(1)))
+            .max(min_task_len(height, row_bytes));
+        let num_chunks = height.div_ceil(chunk_rows.max(1));
 
         let packed_results: Vec<EF::ExtensionPacking> =
             (0..num_chunks).into_par_iter().par_fold_reduce(
