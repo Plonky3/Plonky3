@@ -29,7 +29,7 @@ use tracing::instrument;
 
 use crate::SumcheckData;
 use crate::constraints::Constraint;
-use crate::strategy::{Basis, RoundMessage, VariableOrder};
+use crate::strategy::{Basis, RoundMessage, VariableOrder, fold_and_round_coefficients_prefix};
 
 /// A paired representation of evaluation and weight polynomials for quadratic sumcheck.
 ///
@@ -456,6 +456,78 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
             }
         };
         (msg.c_a, msg.c_inf)
+    }
+
+    /// Binds the round variable and measures the next round's message in one pass.
+    ///
+    /// # Overview
+    ///
+    /// Binding writes the bound tables out and measuring reads them straight back.
+    /// One pass does both instead.
+    ///
+    /// Each bound entry then crosses the memory hierarchy once per round, not twice.
+    /// The multiply count is unchanged.
+    ///
+    /// # Returns
+    ///
+    /// The bound pair's round polynomial at 0, and its leading coefficient.
+    ///
+    /// # Why two states fall back
+    ///
+    /// - Suffix binding pairs adjacent entries, not half-apart faces.
+    ///   An in-place write would race its own reads.
+    /// - A table below four entries leaves the bound half with nothing to sum over.
+    pub(crate) fn fold_round_coefficients(&mut self, r: EF) -> (EF, EF) {
+        // The fused pass binds a prefix variable and needs the bound table to keep one.
+        // That is four entries in the table it starts from.
+        let fusable = self.order == VariableOrder::Prefix
+            && match &self.inner {
+                MaybePacked::Packed { evals, .. } => evals.num_evals() >= 4,
+                MaybePacked::Unpacked { evals, .. } => evals.num_evals() >= 4,
+            };
+
+        // Bind and measure as two separate passes, exactly as a plain round does.
+        if !fusable {
+            self.fold_round(r);
+            return self.round_coefficients();
+        }
+
+        let RoundMessage { c_a, c_inf } = match &mut self.inner {
+            MaybePacked::Packed { evals, weights } => {
+                let msg = fold_and_round_coefficients_prefix(
+                    evals.as_mut_slice(),
+                    weights.as_mut_slice(),
+                    r,
+                );
+
+                // The bound table is the lower half of each buffer.
+                evals.truncate_to_half();
+                weights.truncate_to_half();
+
+                // Horizontal reduction across SIMD lanes, as in the unfused round.
+                RoundMessage {
+                    c_a: EF::ExtensionPacking::to_ext_iter([msg.c_a]).sum(),
+                    c_inf: EF::ExtensionPacking::to_ext_iter([msg.c_inf]).sum(),
+                }
+            }
+            MaybePacked::Unpacked { evals, weights } => {
+                let msg = fold_and_round_coefficients_prefix(
+                    evals.as_mut_slice(),
+                    weights.as_mut_slice(),
+                    r,
+                );
+
+                // Scalar storage needs no lane reduction.
+                evals.truncate_to_half();
+                weights.truncate_to_half();
+                msg
+            }
+        };
+
+        // The bound tables may now be small enough that scalar storage is faster.
+        self.transition();
+
+        (c_a, c_inf)
     }
 
     /// Folds both product-polynomial sides by one verifier challenge.

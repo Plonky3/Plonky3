@@ -169,6 +169,30 @@ impl<F> Poly<F> {
         self.0
     }
 
+    /// Keeps the lower half of the evaluation table and drops the upper half.
+    ///
+    /// Binding the first variable writes its result over the lower half.
+    ///
+    /// The upper half is dead once that is done.
+    /// Dropping it is what takes the arity down by one.
+    ///
+    /// This is that second step on its own.
+    /// A caller whose own pass wrote the lower half calls it to finish the binding.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant.
+    #[inline]
+    pub fn truncate_to_half(&mut self) {
+        let num_evals = self.num_evals();
+
+        // A constant has no variable to bind, so there is no upper half to drop.
+        assert!(num_evals > 1, "no free variables");
+
+        // The lower half already holds the bound values.
+        self.0.truncate(num_evals / 2);
+    }
+
     /// Pads the evaluation vector with zeros up to `num_variables`.
     ///
     /// # Panics
