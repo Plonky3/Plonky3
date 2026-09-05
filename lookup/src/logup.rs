@@ -632,9 +632,14 @@ impl LookupProtocol for LogUpGadget {
         // Used as the per-row delta when building the accumulator.
         let mut row_totals = SC::Challenge::zero_vec(height);
 
+        // One item writes one chunk of auxiliary rows plus its row totals.
+        //
+        // The body also inverts, so charging it by bytes undercharges.
+        // The floor then settles at one chunk per task, where an unfloored loop sits today.
         aux_trace
             .par_chunks_mut(CHUNK_SIZE * width)
             .zip(row_totals.par_chunks_mut(CHUNK_SIZE))
+            .with_min_task_bytes(CHUNK_SIZE * (width + 1) * size_of::<SC::Challenge>())
             .enumerate()
             .for_each(|(chunk_idx, (chunk_aux, chunk_row_totals))| {
                 // Derive the absolute row range for this chunk.
@@ -834,8 +839,15 @@ impl LookupProtocol for LogUpGadget {
         // After the three phases, `row_totals` holds an *inclusive* prefix sum.
         // The accumulator column then reads `acc[i+1] = row_totals[i]`, leaving
         // `acc[0] = 0` from the initial zeroed buffer.
+        //
+        // One chunk per worker keeps the middle phase, serial in the chunk count, tiny.
+        //
+        // The floor collapses that to a single chunk when the scan is too short to split.
+        // All three phases then degenerate into one serial pass over the totals.
         let num_threads = current_num_threads();
-        let chunk_size = height.div_ceil(num_threads);
+        let chunk_size = height
+            .div_ceil(num_threads)
+            .max(min_task_len(height, size_of::<SC::Challenge>()));
 
         // Phase A — Local inclusive prefix sums, one chunk per thread.
         row_totals.par_chunks_mut(chunk_size).for_each(|chunk| {

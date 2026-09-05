@@ -44,8 +44,13 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
     // Pre-allocate the output: each Rayon task writes a disjoint sub-slice.
     let mut result = F::zero_vec(x.len());
 
+    // One item reads one chunk of inputs and writes the matching chunk of inverses.
+    //
+    // The body is arithmetic rather than traffic, so charging it by bytes undercharges.
+    // The floor then settles at one chunk per task, where an unfloored loop already sits.
     x.par_chunks(CHUNK_SIZE)
         .zip(result.par_chunks_mut(CHUNK_SIZE))
+        .with_min_task_bytes(2 * CHUNK_SIZE * size_of::<F>())
         .for_each(|(x_chunk, result_chunk)| {
             // Phase 1 — split the chunk:
             //   - packed: 4-aligned prefix viewed as 4-lane arrays,

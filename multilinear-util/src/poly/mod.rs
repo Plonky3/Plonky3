@@ -20,8 +20,6 @@ use crate::eq_batch::eval_eq_batch;
 use crate::point::Point;
 use crate::split_eq::SplitEq;
 
-pub(crate) const PARALLEL_THRESHOLD: usize = 4096;
-
 /// Number of variables at which we switch from recursive scalar evaluation to the
 /// SIMD-packed `SplitEq` path.
 ///
@@ -436,17 +434,11 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         // Split into x_0 = 0 (mutable) and x_0 = 1 (read-only) halves.
         let (p0, p1) = self.0.split_at_mut(mid);
 
-        if num_evals >= PARALLEL_THRESHOLD {
-            // Parallel: fold each pair in place.
-            p0.par_iter_mut()
-                .zip(p1.par_iter())
-                .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * r);
-        } else {
-            // Sequential: fold each pair in place.
-            p0.iter_mut()
-                .zip(p1.iter())
-                .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * r);
-        }
+        // One item reads a high-half entry and rewrites the matching low-half entry.
+        p0.par_iter_mut()
+            .zip(p1.par_iter())
+            .with_min_task_bytes(2 * size_of::<A>())
+            .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * r);
 
         // Discard the second half; the first half now holds the folded result.
         self.0.truncate(mid);
@@ -478,15 +470,11 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         // Split into x_0 = 0 (mutable) and x_0 = 1 (read-only) halves.
         let (p0, p1) = self.0.split_at_mut(mid);
 
-        if num_evals >= PARALLEL_THRESHOLD {
-            // Parallel: sum each low/high pair in place.
-            p0.par_iter_mut()
-                .zip(p1.par_iter())
-                .for_each(|(a0, &a1)| *a0 += a1);
-        } else {
-            // Sequential: sum each low/high pair in place.
-            p0.iter_mut().zip(p1.iter()).for_each(|(a0, &a1)| *a0 += a1);
-        }
+        // One item reads a high-half entry and rewrites the matching low-half entry.
+        p0.par_iter_mut()
+            .zip(p1.par_iter())
+            .with_min_task_bytes(2 * size_of::<A>())
+            .for_each(|(a0, &a1)| *a0 += a1);
 
         // Discard the second half; the first half now holds the summed result.
         self.0.truncate(mid);
@@ -521,17 +509,11 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         // High half: monomials with x_0 (the leading-coefficient part a1).
         let (p0, p1) = self.0.split_at_mut(mid);
 
-        if num_evals >= PARALLEL_THRESHOLD {
-            // Parallel: fold each pair in place.
-            p0.par_iter_mut()
-                .zip(p1.par_iter())
-                .for_each(|(a0, &a1)| *a0 += a1 * r);
-        } else {
-            // Sequential: fold each pair in place.
-            p0.iter_mut()
-                .zip(p1.iter())
-                .for_each(|(a0, &a1)| *a0 += a1 * r);
-        }
+        // One item reads a high-half entry and rewrites the matching low-half entry.
+        p0.par_iter_mut()
+            .zip(p1.par_iter())
+            .with_min_task_bytes(2 * size_of::<A>())
+            .for_each(|(a0, &a1)| *a0 += a1 * r);
 
         // Discard the second half; the first half now holds the folded result.
         self.0.truncate(mid);
@@ -552,7 +534,11 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     {
         assert!(self.as_constant().is_none(), "no free variables");
         let mid = self.num_evals() / 2;
-        if self.num_evals() < PARALLEL_THRESHOLD {
+        // One item reads an adjacent pair and writes one entry.
+        //
+        // The in-place pass rewrites the table as it walks it, which no split can do.
+        // Only a loop worth splitting pays for the half-size buffer a split needs.
+        if !should_split(mid, 3 * size_of::<A>()) {
             // Output index `i` reads inputs `2i` and `2i + 1`, both at or ahead
             // of the write position, so no slot is overwritten before it is read.
             for i in 0..mid {
@@ -597,21 +583,14 @@ where
         assert!(evals.len() > 1, "no free variables");
 
         let (p0, p1) = evals.split_at(evals.len() / 2);
-        if evals.len() >= PARALLEL_THRESHOLD {
-            Poly::new(
-                p0.par_iter()
-                    .zip(p1.par_iter())
-                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect(),
-            )
-        } else {
-            Poly::new(
-                p0.iter()
-                    .zip(p1.iter())
-                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect(),
-            )
-        }
+        // One item reads a pair of table entries and writes one folded entry.
+        Poly::new(
+            p0.par_iter()
+                .zip(p1.par_iter())
+                .with_min_task_bytes(2 * size_of::<A>() + size_of::<F>())
+                .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                .collect(),
+        )
     }
 
     /// Evaluates the prefix-variable fix at a single residual index, without
@@ -662,21 +641,16 @@ where
         let r = Ext::ExtensionPacking::from(r);
         let poly = A::Packing::pack_slice(evals);
         let (p0, p1) = poly.split_at(poly.len() / 2);
-        if evals.len() >= PARALLEL_THRESHOLD {
-            Poly::new(
-                p0.par_iter()
-                    .zip(p1.par_iter())
-                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect(),
-            )
-        } else {
-            Poly::new(
-                p0.iter()
-                    .zip(p1.iter())
-                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect(),
-            )
-        }
+        // One item reads a pair of packed base entries and writes one packed extension.
+        Poly::new(
+            p0.par_iter()
+                .zip(p1.par_iter())
+                .with_min_task_bytes(
+                    2 * size_of::<A::Packing>() + size_of::<Ext::ExtensionPacking>(),
+                )
+                .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                .collect(),
+        )
     }
 
     /// Fixes the suffix variable at a challenge value, returning a folded polynomial.
@@ -698,18 +672,14 @@ where
     {
         assert!(self.as_constant().is_none(), "no free variables");
         let evals = self.as_slice();
-        if evals.len() >= PARALLEL_THRESHOLD {
-            // Parallel: interpolate each adjacent pair [p(x',0), p(x',1)].
-            Poly::new(
-                evals
-                    .par_chunks(2)
-                    .map(|a| r * (a[1] - a[0]) + a[0])
-                    .collect(),
-            )
-        } else {
-            // Sequential: same interpolation over adjacent pairs.
-            Poly::new(evals.chunks(2).map(|a| r * (a[1] - a[0]) + a[0]).collect())
-        }
+        // One item reads an adjacent pair of table entries and writes one folded entry.
+        Poly::new(
+            evals
+                .par_chunks(2)
+                .with_min_task_bytes(2 * size_of::<A>() + size_of::<F>())
+                .map(|a| r * (a[1] - a[0]) + a[0])
+                .collect(),
+        )
     }
 
     /// Converts a scalar extension-field polynomial into SIMD-packed form.
@@ -966,6 +936,7 @@ pub(crate) mod test {
         ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField64, dot_product,
     };
     use p3_matrix::dense::RowMajorMatrixView;
+    use p3_maybe_rayon::prelude::should_split;
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
@@ -973,7 +944,7 @@ pub(crate) mod test {
 
     use crate::eq_batch::eval_eq_batch;
     use crate::point::Point;
-    use crate::poly::{PARALLEL_THRESHOLD, Poly};
+    use crate::poly::Poly;
 
     type F = BabyBear;
     type PackedF = <F as p3_field::Field>::Packing;
@@ -1625,8 +1596,13 @@ pub(crate) mod test {
 
     #[test]
     fn test_compress_parallel_path() {
-        let num_evals = PARALLEL_THRESHOLD;
+        // Fixture state: large enough that the fold really is cut across tasks.
+        //
+        // One item of the fold touches a pair of field elements.
+        // Asking the shared policy with that shape is what the fold itself asks.
+        let num_evals = 1 << 16;
         let mid = num_evals / 2;
+        assert!(should_split(mid, 2 * size_of::<F>()));
         let p_left_0 = F::from_u64(1);
         let p_right_0 = F::from_usize(mid + 1);
         let p_left_1 = F::from_u64(2);
