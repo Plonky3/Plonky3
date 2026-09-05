@@ -79,13 +79,14 @@ fn gray_chain_steps(num_pairs: usize) -> Vec<BinaryField128> {
 ///
 /// # Panics
 ///
-/// Panics if `codeword` has odd length. A codeword always has a power-of-two length, so an odd
-/// one means the caller has lost track of the round schedule.
+/// Panics unless the codeword is empty or has a power-of-two length.
+/// That is the shape every round schedule produces.
+/// It is also the shape the per-level step table is sized for.
 #[must_use]
 pub fn fold_codeword(codeword: &[BinaryField128], beta: BinaryField128) -> Vec<BinaryField128> {
     assert!(
-        codeword.len().is_multiple_of(2),
-        "codeword length must be even"
+        codeword.is_empty() || codeword.len().is_power_of_two(),
+        "codeword length must be a power of two"
     );
 
     let num_pairs = codeword.len() / 2;
@@ -225,10 +226,25 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "codeword length must be even")]
+    #[should_panic(expected = "codeword length must be a power of two")]
     fn an_odd_length_codeword_is_rejected() {
         let odd = [BinaryField128::ONE; 3];
         let _ = fold_codeword(&odd, BinaryField128::ONE);
+    }
+
+    #[test]
+    #[should_panic(expected = "codeword length must be a power of two")]
+    fn an_even_non_power_of_two_codeword_is_rejected() {
+        // Even is not enough: the per-level step table is sized for a power of two.
+        // Six symbols is three pairs, which no round schedule produces.
+        let six = [BinaryField128::ONE; 6];
+        let _ = fold_codeword(&six, BinaryField128::ONE);
+    }
+
+    #[test]
+    fn an_empty_codeword_folds_to_an_empty_one() {
+        // Zero pairs to fold, and zero levels to index, so the empty input is not a panic.
+        assert!(fold_codeword(&[], BinaryField128::ONE).is_empty());
     }
 
     /// `f_0 + beta * f_1`, the novel-basis combination, is a different operation from

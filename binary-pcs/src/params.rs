@@ -33,6 +33,11 @@ const ALPHABET_BITS: usize = 128;
 /// caller, which is why this crate does not re-export `SecurityAssumption`.
 const REGIME: SecurityAssumption = SecurityAssumption::UniqueDecoding;
 
+// A change of regime must fail to compile, not fail at run time.
+// The other regimes are refuted over `F_2`-subspace domains.
+// No configuration should accept them, so there is nothing to report as an error.
+const _: () = assert!(matches!(REGIME, SecurityAssumption::UniqueDecoding));
+
 /// `ceil(log2(value))`.
 ///
 /// For `value >= 2` the highest set bit of `value - 1` sits one below the ceiling at a power
@@ -60,6 +65,24 @@ const fn log2_ceil_u128(value: u128) -> usize {
 /// Their sum is `n + 1 + 2 * num_fold_rounds` over `|F|`. The sum cannot overflow: `try_new`
 /// admits `log_domain_size` only below `usize::BITS`, so `n` stays below `2^64`.
 ///
+/// The two terms compose under different conventions:
+///
+/// - The commit term is a per-round bound, charged once.
+/// - The sumcheck term is union-bounded over every round.
+///
+/// Charging a per-round bound once is the round-by-round convention.
+/// The security crate composes the same way, taking the worst term rather than summing errors.
+/// The mixture here is conservative, never optimistic.
+///
+/// At arity 2 the choice is numerically inert:
+///
+/// ```text
+///     commit    n + 1      = 2^22   at the largest shape benched here
+///     sumcheck  2 * rounds = 40
+/// ```
+///
+/// Raising the arity shrinks the round count without shrinking `n`, so the two stay far apart.
+///
 /// Taking the ceiling of the logarithm rounds the result **down**, so this understates the
 /// achieved security by up to one bit rather than overstating it.
 const fn field_security_bits_at(log_domain_size: usize, num_fold_rounds: usize) -> usize {
@@ -79,6 +102,11 @@ pub struct BinaryPcsParams {
 }
 
 /// The round schedule derived from [`BinaryPcsParams`] and the polynomial's arity.
+///
+/// The schedule prices the field's width and the query count, and nothing else.
+/// In particular it does not price the commitment scheme, which is supplied separately.
+/// A digest narrower than `2 * security_level` bits leaves the reported level undeliverable.
+/// Supplying one wide enough is the caller's obligation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BinaryPcsConfig {
     params: BinaryPcsParams,
@@ -127,13 +155,6 @@ pub enum BinaryPcsConfigError {
     /// The derived query count was zero, which would accept any codeword.
     #[error("derived a query count of zero")]
     ZeroQueries,
-
-    /// Reached with a regime other than unique decoding.
-    ///
-    /// Unreachable through the public API, which exposes no regime knob; this guards the
-    /// private core against a future caller.
-    #[error("only the unique-decoding regime is supported over F_2-subspace domains")]
-    UnsupportedSoundnessRegime,
 }
 
 impl BinaryPcsConfig {
@@ -154,10 +175,6 @@ impl BinaryPcsConfig {
         num_variables: usize,
         params: BinaryPcsParams,
     ) -> Result<Self, BinaryPcsConfigError> {
-        if !matches!(REGIME, SecurityAssumption::UniqueDecoding) {
-            return Err(BinaryPcsConfigError::UnsupportedSoundnessRegime);
-        }
-
         // The codeword length is computed downstream as `1usize << log_len`, so `log_len`
         // must stay below `usize::BITS` or that shift is already invalid. `checked_add`
         // guards the sum itself: an adversarial `num_variables` and `log_inv_rate` must not
