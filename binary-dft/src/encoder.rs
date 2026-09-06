@@ -18,7 +18,7 @@ use crate::traits::AdditiveNtt;
 /// the evaluation of `f̂(Ŵ_0(x), …, Ŵ_{k−1}(x))` on `S_{k + log_inv_rate}`.
 ///
 /// The alphabet is `BinaryField128`, where [`PolyBasisNtt`] is the faster transform and falls
-/// back to [`LchNtt`](crate::LchNtt) on a target without a carryless multiply, so it is the default.
+/// back to the portable tower transform on a target without a carryless multiply, so it is the default.
 ///
 /// `F` is phantom: [`Encoder`] is only implemented below for `F = BinaryField128`, and stays
 /// that way as long as the alphabet is fixed (D9), so the parameter carries no other instance.

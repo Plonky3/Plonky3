@@ -8,6 +8,7 @@ mod encoder;
 mod lch;
 mod naive;
 mod poly;
+mod tower;
 mod traits;
 
 pub use domain::*;
