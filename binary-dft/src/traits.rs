@@ -1,6 +1,7 @@
 //! The additive NTT interface shared by the reference and fast transforms.
 
 use p3_binary_field::TowerLevel;
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 
 /// An additive NTT: evaluation of the novel polynomial basis on an `F_2`-linear subspace.
@@ -58,6 +59,11 @@ pub trait AdditiveNtt<F: TowerLevel> {
         added_bits: usize,
         shift: F,
     ) -> RowMajorMatrix<F> {
+        let log_n = p3_util::log2_strict_usize(mat.height());
+        assert!(log_n <= 1 << F::LOG_BITS, "domain exceeds field dimension");
+        if added_bits == 0 {
+            return mat;
+        }
         let coeffs = self.shifted_intt_batch(mat, shift);
         let width = coeffs.width;
         let len = coeffs.values.len();
@@ -75,5 +81,39 @@ pub trait AdditiveNtt<F: TowerLevel> {
         let mut values = F::zero_vec(padded_len);
         values[..len].copy_from_slice(&coeffs.values);
         self.shifted_ntt_batch(RowMajorMatrix::new(values, width), shift)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_binary_field::BinaryField8;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::dense::RowMajorMatrix;
+
+    use super::AdditiveNtt;
+    use crate::LchNtt;
+
+    #[test]
+    fn identity_lde_preserves_input_allocation() {
+        let mat = RowMajorMatrix::new(vec![BinaryField8::ONE; 32], 4);
+        let ptr = mat.values.as_ptr();
+        let result = LchNtt::default().lde_batch(mat, 0);
+        assert_eq!(result.values.as_ptr(), ptr);
+        assert_eq!(result.values, vec![BinaryField8::ONE; 32]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn identity_lde_rejects_invalid_height() {
+        let _ = LchNtt::default().lde_batch(RowMajorMatrix::new(vec![BinaryField8::ONE; 3], 1), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn identity_lde_rejects_domain_above_field_dimension() {
+        let _ =
+            LchNtt::default().lde_batch(RowMajorMatrix::new(vec![BinaryField8::ONE; 512], 1), 0);
     }
 }
