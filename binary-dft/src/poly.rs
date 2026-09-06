@@ -105,18 +105,98 @@ fn stage(values: &mut [u128], half: usize, j: usize, twiddles: &Twiddles, invers
         });
 }
 
+// A conservative tile budget; the row count scales with the element size and matrix width.
+const TILE_BYTES: usize = 32 * 1024;
+
+/// A tile stays on one worker across its adjacent stages.
+fn local_stage(
+    values: &mut [u128],
+    half: usize,
+    j: usize,
+    twiddles: &Twiddles,
+    inverse: bool,
+    first: usize,
+) {
+    let mut t = twiddles.at(j, first);
+    for (index, block) in values.chunks_mut(half << 1).enumerate() {
+        let (lo, hi) = block.split_at_mut(half);
+        if t == 0 {
+            for (u, v) in lo.iter_mut().zip(hi) {
+                *v ^= *u;
+            }
+        } else if inverse {
+            for (u, v) in lo.iter_mut().zip(hi) {
+                *v ^= *u;
+                *u ^= poly_basis::mul(t, *v);
+            }
+        } else {
+            for (u, v) in lo.iter_mut().zip(hi) {
+                *u ^= poly_basis::mul(t, *v);
+                *v ^= *u;
+            }
+        }
+        t ^= twiddles.deltas[(first + index).trailing_ones() as usize];
+    }
+}
+
+/// Complete the stages confined to one cache-sized set of rows before leaving it.
+fn local_stages(
+    values: &mut [u128],
+    width: usize,
+    log_n: usize,
+    twiddles: &Twiddles,
+    inverse: bool,
+) -> usize {
+    let rows = (TILE_BYTES / core::mem::size_of::<u128>() / width).max(1);
+    let local = p3_util::log2_floor_usize(rows).min(log_n);
+    let tile_len = (1 << local) * width;
+    values
+        .par_chunks_mut(tile_len)
+        .enumerate()
+        .for_each(|(tile, values)| {
+            for k in 0..local {
+                let j = if inverse { k } else { local - 1 - k };
+                local_stage(
+                    values,
+                    (1 << j) * width,
+                    j,
+                    twiddles,
+                    inverse,
+                    tile << (local - j - 1),
+                );
+            }
+        });
+    local
+}
+
 /// Forward transform of polynomial-basis values in an existing allocation.
 fn forward(values: &mut [u128], width: usize, log_n: usize, shift: BinaryField128) {
     let twiddles = Twiddles::new(log_n, shift);
-    for j in (0..log_n).rev() {
+    if core::mem::size_of_val(values) <= TILE_BYTES {
+        for j in (0..log_n).rev() {
+            stage(values, (1 << j) * width, j, &twiddles, false);
+        }
+        return;
+    }
+    let rows = (TILE_BYTES / core::mem::size_of::<u128>() / width).max(1);
+    let local = p3_util::log2_floor_usize(rows).min(log_n);
+    for j in (local..log_n).rev() {
         stage(values, (1 << j) * width, j, &twiddles, false);
     }
+    local_stages(values, width, log_n, &twiddles, false);
 }
 
 /// Inverse transform with the data kept in the polynomial basis.
 fn inverse(values: &mut [u128], width: usize, log_n: usize, shift: BinaryField128) {
     let twiddles = Twiddles::new(log_n, shift);
-    for j in 0..log_n {
+    if core::mem::size_of_val(values) <= TILE_BYTES {
+        for j in 0..log_n {
+            stage(values, (1 << j) * width, j, &twiddles, true);
+        }
+        return;
+    }
+    let local = local_stages(values, width, log_n, &twiddles, true);
+    for j in local..log_n {
         stage(values, (1 << j) * width, j, &twiddles, true);
     }
 }
@@ -361,6 +441,21 @@ mod tests {
                     t ^= twiddles.deltas[block.trailing_ones() as usize];
                 }
             }
+        }
+    }
+
+    #[test]
+    fn transforms_cross_cache_boundaries_in_natural_order() {
+        for width in [1, 3, 16, 64] {
+            let mat = matrix(12, width, 29);
+            let shift = BinaryField128::from_repr((1 << 127) | 7919);
+            let expected = crate::LchNtt::default().shifted_ntt_batch(mat.clone(), shift);
+            let actual = PolyBasisNtt::default().shifted_ntt_batch(mat.clone(), shift);
+            assert_eq!(actual, expected);
+            assert_eq!(
+                PolyBasisNtt::default().shifted_intt_batch(actual, shift),
+                mat
+            );
         }
     }
 
