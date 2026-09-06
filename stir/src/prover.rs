@@ -22,7 +22,7 @@ use tracing::instrument;
 use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    compute_shake_polynomial, eval_poly_parallel, fold_codeword, fold_domain_params,
+    FiberFold, compute_shake_polynomial, eval_poly_parallel, fold_codeword, fold_domain_params,
     interpolate_poly, next_domain_shift, sample_ood_points, vanishing_poly_from_roots,
 };
 
@@ -594,7 +594,6 @@ struct FinalRoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
     final_new_log_domain: usize,
     final_new_shift: F,
 
-    final_codeword: Vec<EF>,
     final_poly: Vec<EF>,
 
     query_indices: Vec<usize>,
@@ -626,7 +625,6 @@ where
             current_log_domain,
             final_new_log_domain,
             final_new_shift,
-            final_codeword: Vec::new(),
             final_poly: Vec::new(),
             query_indices: Vec::new(),
             seen_query_indices: Vec::new(),
@@ -640,24 +638,14 @@ where
         // See the round-fold note in `RoundProver::fold_and_commit`: `gamma / current_shift`
         // over subgroup coordinates is the paper's coset fold at challenge `gamma`.
         let final_fold_beta = final_gamma * EF::from(self.current_shift.inverse());
-        self.final_codeword = tracing::debug_span!("fold_codeword").in_scope(|| {
-            fold_codeword::<F, EF>(
-                current_oracle_codeword,
-                final_fold_beta,
-                final_log_arity,
-                self.current_log_domain,
-            )
-        });
-        // The final polynomial has only `final_len` coefficients, far fewer than
-        // `final_codeword`'s full domain size. Rather than run a full-size iDFT and discard
-        // the (necessarily zero) high coefficients, gather a `final_len`-sized coset — every
-        // `stride`-th natural-order point, which is exactly the subgroup coset of that size —
-        // and run the small iDFT directly on it.
         let final_len = self.config.final_poly_len();
-        let stride = self.final_codeword.len() / final_len;
-        let final_poly_evals: Vec<EF> = (0..final_len)
-            .map(|i| self.final_codeword[i * stride])
-            .collect();
+        let final_poly_evals = fold_sparse::<F, EF>(
+            current_oracle_codeword,
+            final_fold_beta,
+            final_log_arity,
+            self.current_log_domain,
+            final_len,
+        );
         self.final_poly = coeffs_from_codeword(self.dft, &final_poly_evals, self.final_new_shift);
         &self.final_poly
     }
@@ -1271,6 +1259,30 @@ where
     prove_stir_multi_inner(configs, initial_codewords, dft, challenger, false)
 }
 
+/// Fold only the strided fibers needed to recover a degree-bounded final polynomial.
+fn fold_sparse<F: TwoAdicField, EF: ExtensionField<F>>(
+    codeword: &[EF],
+    beta: EF,
+    log_arity: usize,
+    log_domain: usize,
+    len: usize,
+) -> Vec<EF> {
+    let arity = 1usize << log_arity;
+    let height = codeword.len() / arity;
+    let stride = height / len;
+    let folder = FiberFold::new(log_domain, log_arity, beta);
+    let mut fiber = EF::zero_vec(arity);
+    (0..len)
+        .map(|i| {
+            let j = i * stride;
+            for (lane, value) in fiber.iter_mut().enumerate() {
+                *value = codeword[j + lane * height];
+            }
+            folder.fold_in_place(&mut fiber, j)
+        })
+        .collect()
+}
+
 /// Evaluate a degree-bounded polynomial using small transforms on interleaved cosets.
 fn eval_low_degree_on_coset<F, EF, Dft>(
     dft: &Dft,
@@ -1479,6 +1491,26 @@ mod tests {
 
     use super::*;
     use crate::utils::eval_poly_at_base;
+
+    #[test]
+    fn sparse_fold_matches_full_fold() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        let codeword: Vec<EF> = (0..256).map(|i| EF::from_usize(i * i + 3)).collect();
+        for log_arity in 0..=5 {
+            let full = fold_codeword::<F, EF>(&codeword, EF::from_usize(19), log_arity, 8);
+            for len in [1, 2, 4, 8] {
+                let sparse = fold_sparse::<F, EF>(&codeword, EF::from_usize(19), log_arity, 8, len);
+                assert_eq!(
+                    sparse,
+                    full.iter()
+                        .step_by(full.len() / len)
+                        .copied()
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
 
     #[test]
     fn small_coset_evaluation_matches_horner() {
