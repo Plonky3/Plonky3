@@ -6,7 +6,7 @@ use p3_symmetric::{CryptographicHasher, Hash, MerkleCap};
 use crate::{CanFinalizeDigest, CanObserve, CanSample};
 
 /// A generic challenger that uses a cryptographic hash function to generate challenges.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct HashChallenger<T, H, const OUT_LEN: usize>
 where
     T: Clone,
@@ -18,6 +18,26 @@ where
     output_buffer: Vec<T>,
     /// The cryptographic hash function used for generating challenges.
     hasher: H,
+}
+
+impl<T, H, const OUT_LEN: usize> Clone for HashChallenger<T, H, OUT_LEN>
+where
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]> + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            input_buffer: self.input_buffer.clone(),
+            output_buffer: self.output_buffer.clone(),
+            hasher: self.hasher.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.input_buffer.clone_from(&source.input_buffer);
+        self.output_buffer.clone_from(&source.output_buffer);
+        self.hasher.clone_from(&source.hasher);
+    }
 }
 
 impl<T, H, const OUT_LEN: usize> HashChallenger<T, H, OUT_LEN>
@@ -39,7 +59,8 @@ where
 
         // Chaining values.
         self.input_buffer.extend_from_slice(&output);
-        self.output_buffer = output.into();
+        self.output_buffer.clear();
+        self.output_buffer.extend(output);
     }
 }
 
@@ -200,6 +221,34 @@ mod tests {
                     )
                 });
             [sum, F::from_usize(len)]
+        }
+    }
+
+    #[test]
+    fn clone_from_preserves_stream_and_reuses_buffers() {
+        let mut source = HashChallenger::new(vec![F::ONE; 17], TestHasher {});
+        let _: F = source.sample();
+        let mut worker = HashChallenger::new(vec![F::ZERO; 64], TestHasher {});
+        worker.flush();
+        let input_ptr = worker.input_buffer.as_ptr();
+        let output_ptr = worker.output_buffer.as_ptr();
+        for i in 0..8 {
+            worker.clone_from(&source);
+            let mut expected = source.clone();
+            assert_eq!(worker.input_buffer.as_ptr(), input_ptr);
+            assert_eq!(worker.output_buffer.as_ptr(), output_ptr);
+            for _ in 0..7 {
+                assert_eq!(worker.sample(), expected.sample());
+            }
+            assert_eq!(worker.output_buffer.as_ptr(), output_ptr);
+            let observation = F::from_usize(i);
+            worker.observe(observation);
+            expected.observe(observation);
+            for _ in 0..7 {
+                assert_eq!(worker.sample(), expected.sample());
+            }
+            source.observe(observation);
+            let _: F = source.sample();
         }
     }
 

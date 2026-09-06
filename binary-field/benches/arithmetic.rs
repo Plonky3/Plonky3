@@ -312,6 +312,22 @@ fn bench_maps(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_grind(c: &mut Criterion) {
+    use p3_binary_field::BinaryChallenger;
+    use p3_challenger::{CanObserve, GrindingChallenger};
+    use p3_keccak::Keccak256Hash;
+    let mut challenger =
+        BinaryChallenger::<BinaryField128, _>::from_hasher(vec![42; 512], Keccak256Hash);
+    challenger.observe(BinaryField128::ONE);
+    c.bench_function("grind/128/12", |b| {
+        b.iter_batched(
+            || challenger.clone(),
+            |mut ch| ch.grind(black_box(12)),
+            BatchSize::SmallInput,
+        )
+    });
+}
+
 criterion_group!(
     benches,
     bench_mul,
@@ -319,6 +335,7 @@ criterion_group!(
     bench_inverse,
     bench_mul_alpha,
     bench_flatten_to_base,
-    bench_maps
+    bench_maps,
+    bench_grind
 );
 criterion_main!(benches);
