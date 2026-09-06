@@ -941,8 +941,11 @@ where
 
         // Keyed by `(log_shared_lde_height, log_native_height)`. The outer key selects which
         // STIR instance a class feeds; the inner key is `Combine`'s per-class degree.
-        let mut reduced_openings: alloc::collections::BTreeMap<(usize, usize), Vec<Challenge>> =
-            alloc::collections::BTreeMap::new();
+        type PointNumerators<EF> = LinearMap<EF, (Vec<EF>, EF)>;
+        let mut numerators: alloc::collections::BTreeMap<
+            (usize, usize),
+            PointNumerators<Challenge>,
+        > = alloc::collections::BTreeMap::new();
         let mut num_reduced: alloc::collections::BTreeMap<(usize, usize), usize> =
             alloc::collections::BTreeMap::new();
 
@@ -968,37 +971,67 @@ where
                 );
 
                 let key = (log_lde_h, log_native_h);
-                let ro = reduced_openings
-                    .entry(key)
-                    .or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
-
-                // Precompute alpha-batched row values for this matrix (reused per point).
-                let p_x_vec: Vec<Challenge> = mat
-                    .rowwise_packed_dot_product::<Challenge>(&packed_alpha_powers)
+                let by_point = numerators.entry(key).or_default();
+                let height_count = num_reduced.entry(key).or_insert(0);
+                let matrix_offset = alpha.exp_u64(*height_count as u64);
+                *height_count += mat.width() * points_for_mat.len();
+                let weights: Vec<_> = packed_alpha_powers
+                    .iter()
+                    .map(|&w| w * matrix_offset)
                     .collect();
 
+                // Absorb this matrix's first exponent offset into the row weights once.
+                let p_x_vec: Vec<Challenge> = mat
+                    .rowwise_packed_dot_product::<Challenge>(&weights)
+                    .collect();
+                let point_step = alpha.exp_u64(mat.width() as u64);
+                let mut point_offset = Challenge::ONE;
                 for (point, ys) in points_for_mat.iter().zip(opened_for_mat.iter()) {
-                    let height_count = num_reduced.entry(key).or_insert(0);
-                    let alpha_pow_offset = alpha.exp_u64(*height_count as u64);
-                    *height_count += ys.len();
-
-                    let full_height = mat.height();
-                    let inv_denom = &inv_denoms.get(point).unwrap()[..full_height];
-
-                    let y_combined: Challenge = ys
-                        .iter()
-                        .zip(alpha_powers.iter())
-                        .map(|(&y, &ap)| y * ap)
-                        .sum();
-
-                    ro.par_iter_mut()
-                        .zip(inv_denom.par_iter().zip(p_x_vec.par_iter()))
-                        .for_each(|(ro_val, (&inv_d, &p_x))| {
-                            *ro_val += alpha_pow_offset * (p_x - y_combined) * inv_d;
-                        });
+                    let (numerator, y_sum) = by_point.get_or_insert_with(*point, || {
+                        (Challenge::zero_vec(mat.height()), Challenge::ZERO)
+                    });
+                    let y_combined: Challenge =
+                        ys.iter().zip(&alpha_powers).map(|(&y, &ap)| y * ap).sum();
+                    *y_sum += matrix_offset * point_offset * y_combined;
+                    if point_offset == Challenge::ONE {
+                        numerator
+                            .par_iter_mut()
+                            .zip(&p_x_vec)
+                            .for_each(|(n, &p)| *n += p);
+                    } else {
+                        numerator
+                            .par_iter_mut()
+                            .zip(&p_x_vec)
+                            .for_each(|(n, &p)| *n += p * point_offset);
+                    }
+                    point_offset *= point_step;
                 }
             }
         }
+
+        // Matrices in a class opened at one point share a denominator. Divide their
+        // accumulated numerator once, preserving the caller-order alpha exponents above.
+        let mut reduced_openings: alloc::collections::BTreeMap<(usize, usize), Vec<Challenge>> =
+            numerators
+                .into_iter()
+                .map(|(key, by_point)| {
+                    let mut contributions = by_point.into_iter();
+                    let (point, (mut result, y_sum)) =
+                        contributions.next().expect("nonempty point list");
+                    result
+                        .par_iter_mut()
+                        .zip(inv_denoms.get(&point).unwrap())
+                        .for_each(|(value, &inverse)| *value = (*value - y_sum) * inverse);
+                    for (point, (numerator, y_sum)) in contributions {
+                        result
+                            .par_iter_mut()
+                            .zip(numerator)
+                            .zip(inv_denoms.get(&point).unwrap())
+                            .for_each(|((value, n), &inverse)| *value += (n - y_sum) * inverse);
+                    }
+                    (key, result)
+                })
+                .collect();
 
         // Step 3: within each distinct shared-LDE-height bucket (one physical domain, hence
         // one STIR instance), merge its native-height classes via `Combine` (§4.5) when more
