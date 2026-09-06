@@ -9,7 +9,9 @@
 //!     map the result back
 //! ```
 //!
-//! Each backend supplies the same routines, and each has a portable definition to test against.
+//! The scalar kernels build on an architecture-specific `64 × 64 → 128` product and shared
+//! reductions. AArch64 batch kernels also keep the wider product and reduction in vector
+//! registers; every backend is checked against portable arithmetic.
 
 mod basis;
 mod sqrt;
@@ -58,9 +60,16 @@ mod x86_64;
 
 /// Whether the target has a carryless-multiply instruction.
 ///
-/// - The tower routes here only when it does, and takes its own recursion otherwise.
+/// The bit-serial fallback below keeps every routine in this module correct everywhere, but it
+/// is far slower than the recursive tower arithmetic:
+///
+/// - The tower routes here only when the instruction is really there, and takes its own
+///   recursion otherwise.
 /// - The polynomial-basis field has no such alternative and always routes here.
-/// - Most targets need `+pclmulqdq` / `+aes` asked for, or `-C target-cpu=native`.
+///
+/// This is a compile-time decision, and neither feature is in the baseline of most targets:
+/// `aarch64-apple-darwin` has `aes`, but generic AArch64 Linux and every `x86_64` target need
+/// `-C target-feature=+aes` / `+pclmulqdq` (or `-C target-cpu=native`) for the fast path.
 pub(crate) const HAS_HARDWARE_CLMUL: bool = cfg!(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
     all(target_arch = "aarch64", target_feature = "aes"),
@@ -173,6 +182,20 @@ pub(crate) use portable::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_s
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 pub(crate) use x86_64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
 
+/// Batch products favor instruction throughput over the latency of a dependent chain.
+#[inline]
+#[allow(clippy::missing_const_for_fn)]
+pub(crate) fn poly_mul_128_batch(a: u128, b: u128) -> u128 {
+    #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+    {
+        aarch64::poly_mul_128_batch(a, b)
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
+    {
+        poly_mul_128(a, b)
+    }
+}
+
 /// Multiplication in `GF(2^128)`, taking and returning the tower representation.
 ///
 /// The three changes of basis are sixteen dependent lookups each.
@@ -252,6 +275,7 @@ mod tests {
             let x = BinaryField128::from_repr(a);
             let y = BinaryField128::from_repr(b);
             prop_assert_eq!(super::mul_128(a, b), x.reference_mul(y).to_repr());
+            prop_assert_eq!(super::poly_mul_128_batch(a, b), poly_mul(a, b, 128, TAIL_128));
         }
 
         #[test]
