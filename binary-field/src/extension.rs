@@ -15,7 +15,7 @@ use core::ops::{Add, Mul, Sub};
 use core::{ptr, slice};
 
 use p3_field::extension::HasFrobenius;
-use p3_field::op_assign_macros::{impl_add_base_field, impl_mul_base_field, impl_sub_base_field};
+use p3_field::op_assign_macros::{impl_add_base_field, impl_sub_base_field};
 use p3_field::{
     Algebra, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, Powers,
     PrimeCharacteristicRing,
@@ -40,7 +40,33 @@ macro_rules! binary_tower_extension {
 
         impl_add_base_field!($upper, $lower);
         impl_sub_base_field!($upper, $lower);
-        impl_mul_base_field!($upper, $lower);
+        impl Mul<$lower> for $upper {
+            type Output = Self;
+
+            #[inline]
+            fn mul(self, rhs: $lower) -> Self {
+                // These intermediate subfields need more coefficient products than the
+                // native full-width backend; the byte and quadratic subfields do not.
+                if crate::clmul::HAS_HARDWARE_CLMUL
+                    && <$upper>::BITS == 128
+                    && matches!(<$lower>::BITS, 16 | 32)
+                {
+                    return self * Self::from(rhs);
+                }
+                <Self as BasedVectorSpace<$lower>>::from_basis_coefficients_fn(|i| {
+                    <$lower>::from_repr((self.to_repr() >> (i * <$lower>::BITS)) as $lower_repr) * rhs
+                })
+            }
+        }
+
+        impl Mul<$upper> for $lower {
+            type Output = $upper;
+
+            #[inline]
+            fn mul(self, rhs: $upper) -> $upper {
+                rhs * self
+            }
+        }
 
         impl Algebra<$lower> for $upper {}
 
@@ -299,6 +325,7 @@ mod tests {
             assert_eq!(a + s, a + s_up);
             assert_eq!(a - s, a - s_up);
             assert_eq!(a * s, a * s_up);
+            assert_eq!(s * a, a * s_up);
 
             let mut acc = a;
             acc += s;
