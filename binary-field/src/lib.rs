@@ -8,6 +8,7 @@ mod challenger;
 mod clmul;
 mod extension;
 mod gf2;
+mod linear;
 pub mod poly_basis;
 mod tables;
 mod tower;
