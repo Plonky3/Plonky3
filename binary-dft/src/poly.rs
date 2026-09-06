@@ -9,7 +9,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
-use crate::domain::{domain_point, domain_point_steps, subspace_polynomial};
+use crate::domain::domain_point;
 use crate::lch::{BUTTERFLY_GRAIN, LchNtt};
 use crate::traits::AdditiveNtt;
 
@@ -29,118 +29,95 @@ pub struct PolyBasisNtt {
     tower: LchNtt<BinaryField128>,
 }
 
-/// The twiddle of block `blk` of stage `j`, in the polynomial basis.
-#[inline]
-fn twiddle(base: BinaryField128, blk: usize) -> u128 {
-    poly_basis::from_tower(base + domain_point::<BinaryField128>(blk << 1))
+/// Stage shifts and the XOR increments between consecutive block twiddles.
+struct Twiddles {
+    basis: [u128; usize::BITS as usize],
+    deltas: [u128; usize::BITS as usize],
+    shifts: [u128; usize::BITS as usize],
 }
 
-/// [`domain_point_steps`] carried into the polynomial basis.
-///
-/// The change of basis is additive, so an increment converted here applies to a twiddle
-/// already in this basis by `XOR`.
-fn twiddle_steps(count: usize) -> Vec<u128> {
-    domain_point_steps::<BinaryField128>(count)
-        .into_iter()
-        .map(poly_basis::from_tower)
-        .collect()
+impl Twiddles {
+    fn new(log_n: usize, shift: BinaryField128) -> Self {
+        let mut result = Self {
+            basis: [0; usize::BITS as usize],
+            deltas: [0; usize::BITS as usize],
+            shifts: [0; usize::BITS as usize],
+        };
+        let mut delta = 0;
+        let mut base = poly_basis::from_tower(shift);
+        for j in 0..log_n {
+            result.basis[j] = poly_basis::from_tower(BinaryField128::cantor_basis(j + 1));
+            delta ^= result.basis[j];
+            result.deltas[j] = delta;
+            result.shifts[j] = base;
+            base = poly_basis::square(base) ^ base;
+        }
+        result
+    }
+
+    const fn at(&self, stage: usize, mut block: usize) -> u128 {
+        let mut t = self.shifts[stage];
+        while block != 0 {
+            t ^= self.basis[block.trailing_zeros() as usize];
+            block &= block - 1;
+        }
+        t
+    }
+}
+
+/// A stage uses bounded chunks, each starting from its own independently indexed twiddle.
+fn stage(values: &mut [u128], half: usize, j: usize, twiddles: &Twiddles, inverse: bool) {
+    let blocks_per_chunk = (BUTTERFLY_GRAIN / (half << 1)).max(1);
+    values
+        .par_chunks_mut((half << 1) * blocks_per_chunk)
+        .enumerate()
+        .for_each(|(chunk_index, chunk)| {
+            let first = chunk_index * blocks_per_chunk;
+            let mut t = twiddles.at(j, first);
+            for (index, block) in chunk.chunks_mut(half << 1).enumerate() {
+                let (lo, hi) = block.split_at_mut(half);
+                let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
+                    if t == 0 {
+                        for (u, v) in lo.iter_mut().zip(hi) {
+                            *v ^= *u;
+                        }
+                    } else if inverse {
+                        for (u, v) in lo.iter_mut().zip(hi) {
+                            *v ^= *u;
+                            *u ^= poly_basis::mul(t, *v);
+                        }
+                    } else {
+                        for (u, v) in lo.iter_mut().zip(hi) {
+                            *u ^= poly_basis::mul(t, *v);
+                            *v ^= *u;
+                        }
+                    }
+                };
+                if half <= BUTTERFLY_GRAIN {
+                    butterfly(lo, hi);
+                } else {
+                    lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                        .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                        .for_each(|(lo, hi)| butterfly(lo, hi));
+                }
+                t ^= twiddles.deltas[(first + index).trailing_ones() as usize];
+            }
+        });
 }
 
 /// Forward transform of polynomial-basis values in an existing allocation.
-///
-/// An increment depends only on a block index's trailing-zero count, never on the stage, so one
-/// table serves every stage and each stage uses the prefix it reaches. A height of one runs no
-/// stage and needs no table.
 fn forward(values: &mut [u128], width: usize, log_n: usize, shift: BinaryField128) {
-    let steps = twiddle_steps(log_n.saturating_sub(1));
+    let twiddles = Twiddles::new(log_n, shift);
     for j in (0..log_n).rev() {
-        let half = (1 << j) * width;
-        let base = subspace_polynomial::<BinaryField128>(j, shift);
-        let per_task = (BUTTERFLY_GRAIN / half).max(1);
-        values
-            .par_chunks_mut(per_task * (half << 1))
-            .enumerate()
-            .for_each(|(task, group)| {
-                let first = task * per_task;
-                let mut t = twiddle(base, first);
-                // Invariant: blocks are visited in ascending index order.
-                // Carrying the twiddle from one block to the next relies on it.
-                for (i, block) in group.chunks_mut(half << 1).enumerate() {
-                    if i != 0 {
-                        t ^= steps[(first + i).trailing_zeros() as usize];
-                    }
-                    let zero = t == 0;
-                    let (lo, hi) = block.split_at_mut(half);
-                    let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
-                        if zero {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v ^= *u;
-                            }
-                        } else {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *u ^= poly_basis::mul(t, *v);
-                                *v ^= *u;
-                            }
-                        }
-                    };
-                    if half <= BUTTERFLY_GRAIN {
-                        butterfly(lo, hi);
-                    } else {
-                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                            .for_each(|(lo, hi)| butterfly(lo, hi));
-                    }
-                }
-            });
+        stage(values, (1 << j) * width, j, &twiddles, false);
     }
 }
 
 /// Inverse transform with the data kept in the polynomial basis.
-///
-/// An increment depends only on a block index's trailing-zero count, never on the stage, so one
-/// table serves every stage and each stage uses the prefix it reaches. A height of one runs no
-/// stage and needs no table.
 fn inverse(values: &mut [u128], width: usize, log_n: usize, shift: BinaryField128) {
-    let steps = twiddle_steps(log_n.saturating_sub(1));
+    let twiddles = Twiddles::new(log_n, shift);
     for j in 0..log_n {
-        let half = (1 << j) * width;
-        let base = subspace_polynomial::<BinaryField128>(j, shift);
-        let per_task = (BUTTERFLY_GRAIN / half).max(1);
-        values
-            .par_chunks_mut(per_task * (half << 1))
-            .enumerate()
-            .for_each(|(task, group)| {
-                let first = task * per_task;
-                let mut t = twiddle(base, first);
-                // Invariant: blocks are visited in ascending index order.
-                // Carrying the twiddle from one block to the next relies on it.
-                for (i, block) in group.chunks_mut(half << 1).enumerate() {
-                    if i != 0 {
-                        t ^= steps[(first + i).trailing_zeros() as usize];
-                    }
-                    let zero = t == 0;
-                    let (lo, hi) = block.split_at_mut(half);
-                    let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
-                        if zero {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v ^= *u;
-                            }
-                        } else {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v ^= *u;
-                                *u ^= poly_basis::mul(t, *v);
-                            }
-                        }
-                    };
-                    if half <= BUTTERFLY_GRAIN {
-                        butterfly(lo, hi);
-                    } else {
-                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                            .for_each(|(lo, hi)| butterfly(lo, hi));
-                    }
-                }
-            });
+        stage(values, (1 << j) * width, j, &twiddles, true);
     }
 }
 
@@ -256,7 +233,12 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .enumerate()
             .for_each(|(c, chunk)| {
                 chunk.copy_from_slice(&coeffs);
-                forward(chunk, width, log_n, shift + domain_point::<BinaryField128>((c + 1) << log_n));
+                forward(
+                    chunk,
+                    width,
+                    log_n,
+                    shift + domain_point::<BinaryField128>((c + 1) << log_n),
+                );
                 for v in chunk {
                     *v = poly_basis::to_tower(*v).to_repr();
                 }
@@ -357,6 +339,29 @@ mod tests {
     #[should_panic = "extended codeword length overflows usize"]
     fn lde_rejects_length_overflow() {
         let _ = PolyBasisNtt::default().lde_batch(matrix(1, 1, 0), usize::BITS as usize - 1);
+    }
+
+    #[test]
+    fn incremental_twiddles_match_independent_domain_points() {
+        use p3_binary_field::poly_basis;
+
+        use crate::domain::{domain_point, subspace_polynomial};
+        let shift = BinaryField128::from_repr((1 << 127) | 123);
+        let twiddles = super::Twiddles::new(usize::BITS as usize - 1, shift);
+        for stage in [0, 1, 7, 15, 31]
+            .into_iter()
+            .filter(|&stage| stage < usize::BITS as usize - 1)
+        {
+            for start in [0, 1, 63, 127, (1usize << (usize::BITS - 3)) - 3] {
+                let mut t = twiddles.at(stage, start);
+                for block in start..start + 9 {
+                    let expected = subspace_polynomial(stage, shift)
+                        + domain_point::<BinaryField128>(block << 1);
+                    assert_eq!(t, poly_basis::from_tower(expected));
+                    t ^= twiddles.deltas[block.trailing_ones() as usize];
+                }
+            }
+        }
     }
 
     proptest! {
