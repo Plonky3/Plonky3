@@ -155,6 +155,17 @@ pub trait ParIterExt: Iterator {
         U: IntoIterator,
         F: Fn(Self::Item) -> U;
 
+    /// Initialize one serial state and reuse it for every mapped item.
+    fn map_init<INIT, OP, T, R>(self, init: INIT, op: OP) -> impl Iterator<Item = R>
+    where
+        Self: Sized,
+        INIT: Fn() -> T + Sync + Send,
+        OP: Fn(&mut T, Self::Item) -> R + Sync + Send,
+    {
+        let mut state = init();
+        self.map(move |item| op(&mut state, item))
+    }
+
     /// Serially, `init` is called once and the single state is reused across every item,
     /// unlike rayon's `for_each_init`, which calls `init` once per split.
     fn for_each_init<OP, INIT, T>(self, init: INIT, op: OP)
@@ -234,4 +245,43 @@ where
 /// Always 1: there is only one thread of execution in a serial build.
 pub const fn current_num_threads() -> usize {
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::ParIterExt;
+
+    #[test]
+    fn map_init_reuses_state_in_order_and_accepts_empty_input() {
+        let initialized = AtomicUsize::new(0);
+        let mut values = (1..4).map_init(
+            || {
+                initialized.fetch_add(1, Ordering::Relaxed);
+                0
+            },
+            |state, item| {
+                *state += item;
+                *state
+            },
+        );
+        assert_eq!(values.next(), Some(1));
+        assert_eq!(values.next(), Some(3));
+        assert_eq!(values.next(), Some(6));
+        assert_eq!(values.next(), None);
+        assert_eq!(initialized.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            (0..0)
+                .map_init(
+                    || 0,
+                    |state, item| {
+                        *state += item;
+                        *state
+                    }
+                )
+                .next(),
+            None
+        );
+    }
 }

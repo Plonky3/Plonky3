@@ -232,8 +232,15 @@ where
 
         let witness = (0..num_candidates)
             .into_par_iter()
-            .map(candidate)
-            .find_any(|witness| self.clone().check_witness(bits, *witness))
+            .map_init(
+                || self.clone(),
+                |worker, index| {
+                    worker.inner.clone_from(&self.inner);
+                    let witness = candidate(index);
+                    worker.check_witness(bits, witness).then_some(witness)
+                },
+            )
+            .find_map_any(core::convert::identity)
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
         witness
@@ -554,8 +561,9 @@ mod tests {
         // letting this exercise the real `grind` path instead of just its assertions.
         let mut challenger: BinaryChallenger<BinaryField128, AlwaysZeroInner> =
             BinaryChallenger::new(AlwaysZeroInner);
-        let witness = challenger.grind(56);
-        assert!(challenger.check_witness(56, witness));
+        let bits = 56.min(usize::BITS as usize - 1);
+        let witness = challenger.grind(bits);
+        assert!(challenger.check_witness(bits, witness));
     }
 
     #[test]
