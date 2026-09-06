@@ -77,20 +77,10 @@ fn stage(values: &mut [u128], half: usize, j: usize, twiddles: &Twiddles, invers
             for (index, block) in chunk.chunks_mut(half << 1).enumerate() {
                 let (lo, hi) = block.split_at_mut(half);
                 let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
-                    if t == 0 {
-                        for (u, v) in lo.iter_mut().zip(hi) {
-                            *v ^= *u;
-                        }
-                    } else if inverse {
-                        for (u, v) in lo.iter_mut().zip(hi) {
-                            *v ^= *u;
-                            *u ^= poly_basis::mul(t, *v);
-                        }
+                    if inverse {
+                        poly_basis::butterfly_inverse(lo, hi, t);
                     } else {
-                        for (u, v) in lo.iter_mut().zip(hi) {
-                            *u ^= poly_basis::mul(t, *v);
-                            *v ^= *u;
-                        }
+                        poly_basis::butterfly_forward(lo, hi, t);
                     }
                 };
                 if half <= BUTTERFLY_GRAIN {
@@ -120,20 +110,10 @@ fn local_stage(
     let mut t = twiddles.at(j, first);
     for (index, block) in values.chunks_mut(half << 1).enumerate() {
         let (lo, hi) = block.split_at_mut(half);
-        if t == 0 {
-            for (u, v) in lo.iter_mut().zip(hi) {
-                *v ^= *u;
-            }
-        } else if inverse {
-            for (u, v) in lo.iter_mut().zip(hi) {
-                *v ^= *u;
-                *u ^= poly_basis::mul(t, *v);
-            }
+        if inverse {
+            poly_basis::butterfly_inverse(lo, hi, t);
         } else {
-            for (u, v) in lo.iter_mut().zip(hi) {
-                *u ^= poly_basis::mul(t, *v);
-                *v ^= *u;
-            }
+            poly_basis::butterfly_forward(lo, hi, t);
         }
         t ^= twiddles.deltas[(first + index).trailing_ones() as usize];
     }
