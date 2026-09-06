@@ -35,6 +35,20 @@ pub trait AdditiveNtt<F: TowerLevel> {
         self.shifted_ntt_batch(mat, F::ZERO)
     }
 
+    /// Transforms a matrix whose coefficient prefix has been padded with zero rows.
+    ///
+    /// The caller supplies `2^log_inv_rate` times the original height and must leave
+    /// every entry after that original prefix zero. Implementations may ignore that tail.
+    /// The default evaluates the full matrix; optimized implementations can skip zero work.
+    ///
+    /// # Panics
+    /// Panics for an invalid transform height or if the padding exceeds that height.
+    fn ntt_batch_padded(&self, mat: RowMajorMatrix<F>, log_inv_rate: usize) -> RowMajorMatrix<F> {
+        let log_n = p3_util::log2_strict_usize(mat.height());
+        assert!(log_inv_rate <= log_n, "padding exceeds matrix height");
+        self.ntt_batch(mat)
+    }
+
     /// Inverse of [`ntt_batch`](Self::ntt_batch).
     fn intt_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         self.shifted_intt_batch(mat, F::ZERO)

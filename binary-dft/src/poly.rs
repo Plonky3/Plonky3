@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
+use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -34,6 +35,41 @@ fn twiddle(base: BinaryField128, blk: usize) -> u128 {
     poly_basis::from_tower(base + domain_point::<BinaryField128>(blk << 1))
 }
 
+/// Forward transform of polynomial-basis values in an existing allocation.
+fn forward(values: &mut [u128], width: usize, log_n: usize, shift: BinaryField128) {
+    for j in (0..log_n).rev() {
+        let half = (1 << j) * width;
+        let base = subspace_polynomial::<BinaryField128>(j, shift);
+        values
+            .par_chunks_mut(half << 1)
+            .enumerate()
+            .for_each(|(blk, block)| {
+                let t = twiddle(base, blk);
+                let zero = t == 0;
+                let (lo, hi) = block.split_at_mut(half);
+                let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
+                    if zero {
+                        for (u, v) in lo.iter_mut().zip(hi) {
+                            *v ^= *u;
+                        }
+                    } else {
+                        for (u, v) in lo.iter_mut().zip(hi) {
+                            *u ^= poly_basis::mul(t, *v);
+                            *v ^= *u;
+                        }
+                    }
+                };
+                if half <= BUTTERFLY_GRAIN {
+                    butterfly(lo, hi);
+                } else {
+                    lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                        .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                        .for_each(|(lo, hi)| butterfly(lo, hi));
+                }
+            });
+    }
+}
+
 impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
     fn shifted_ntt_batch(
         &self,
@@ -57,38 +93,48 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .par_iter_mut()
             .for_each(|v| *v = poly_basis::from_tower(BinaryField128::from_repr(*v)));
 
-        for j in (0..log_n).rev() {
-            let half = (1 << j) * width;
-            let base = subspace_polynomial::<BinaryField128>(j, shift);
-            values
-                .par_chunks_mut(half << 1)
-                .enumerate()
-                .for_each(|(blk, block)| {
-                    let t = twiddle(base, blk);
-                    let zero = t == 0;
-                    let (lo, hi) = block.split_at_mut(half);
-                    let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
-                        if zero {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v ^= *u;
-                            }
-                        } else {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *u ^= poly_basis::mul(t, *v);
-                                *v ^= *u;
-                            }
-                        }
-                    };
-                    if half <= BUTTERFLY_GRAIN {
-                        butterfly(lo, hi);
-                    } else {
-                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                            .for_each(|(lo, hi)| butterfly(lo, hi));
-                    }
-                });
-        }
+        forward(&mut values, width, log_n, shift);
 
+        values
+            .par_iter_mut()
+            .for_each(|v| *v = poly_basis::to_tower(*v).to_repr());
+        mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
+        mat
+    }
+
+    fn ntt_batch_padded(
+        &self,
+        mut mat: RowMajorMatrix<BinaryField128>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField128> {
+        let log_n = log2_strict_usize(mat.height());
+        assert!(log_inv_rate <= log_n, "padding exceeds matrix height");
+        if log_inv_rate == 0 || !poly_basis::HAS_HARDWARE_CLMUL {
+            return self.ntt_batch(mat);
+        }
+        let width = mat.width;
+        let log_message = log_n - log_inv_rate;
+        let len = mat.values.len() >> log_inv_rate;
+        let mut values: Vec<u128> = core::mem::take(&mut mat.values)
+            .into_iter()
+            .map(BinaryField128::to_repr)
+            .collect();
+        let (message, tail) = values.split_at_mut(len);
+        message.par_iter_mut().for_each(|v| {
+            *v = poly_basis::from_tower(BinaryField128::from_repr(*v));
+        });
+        // Keep the coefficient prefix immutable until every other coset has copied it.
+        // Each worker transforms its final destination, without a temporary coset matrix.
+        tail.par_chunks_mut(len).enumerate().for_each(|(c, chunk)| {
+            chunk.copy_from_slice(message);
+            forward(
+                chunk,
+                width,
+                log_message,
+                domain_point((c + 1) << log_message),
+            );
+        });
+        forward(message, width, log_message, BinaryField128::ZERO);
         values
             .par_iter_mut()
             .for_each(|v| *v = poly_basis::to_tower(*v).to_repr());
@@ -179,6 +225,23 @@ mod tests {
                 .collect(),
             width,
         )
+    }
+
+    #[test]
+    fn padded_transform_matches_naive_at_wide_widths() {
+        use p3_field::PrimeCharacteristicRing;
+        for width in [1, 4, 16, 64] {
+            for added in [0, 1, 2, 3] {
+                let mut mat = matrix(4, width, 13);
+                mat.values
+                    .resize(mat.values.len() << added, BinaryField128::ZERO);
+                let expected = NaiveAdditiveNtt::default().ntt_batch(mat.clone());
+                assert_eq!(
+                    PolyBasisNtt::default().ntt_batch_padded(mat, added),
+                    expected
+                );
+            }
+        }
     }
 
     proptest! {

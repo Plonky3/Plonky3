@@ -7,10 +7,8 @@ use p3_commit::Encoder;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
-use crate::domain::domain_point;
 use crate::poly::PolyBasisNtt;
 use crate::traits::AdditiveNtt;
 
@@ -37,14 +35,13 @@ impl<Ntt: AdditiveNtt<BinaryField128> + Sync> Encoder<BinaryField128>
 {
     fn encode_batch(
         &self,
-        message: RowMajorMatrix<BinaryField128>,
+        mut message: RowMajorMatrix<BinaryField128>,
         log_inv_rate: usize,
     ) -> RowMajorMatrix<BinaryField128> {
         if log_inv_rate == 0 {
             return self.ntt.ntt_batch(message);
         }
 
-        let width = message.width();
         let len = message.values.len();
         let padded_len = u32::try_from(log_inv_rate)
             .ok()
@@ -54,30 +51,9 @@ impl<Ntt: AdditiveNtt<BinaryField128> + Sync> Encoder<BinaryField128>
             // what actually proves no bits were lost.
             .filter(|&padded| padded >> log_inv_rate == len)
             .expect("codeword length overflows usize");
-        let log_message_height = log2_strict_usize(message.height());
-
-        // Zero-padding to `S_{k+r}` and transforming the whole codeword leaves the appended
-        // `hi` coefficient half zero at every stage `j >= k`, so those butterflies only ever
-        // replicate `lo` — yet the carryless multiply against that zero still runs, `r` stages
-        // deep. The equivalent computation is `2^r` independent height-`2^k` transforms of the
-        // unpadded message, one per coset `c` of `S_k` in `S_{k+r}`, evaluated at
-        // `domain_point(c << k)`: every codeword row decomposes as `c*2^k + m` with
-        // `domain_point(c*2^k + m) = domain_point(c << k) + domain_point(m)`, and the padding
-        // rows never enter the computation at all. Each coset is independent, so they run in
-        // parallel; `shifted_ntt_batch` takes its message by value, so each needs its own copy.
-        let mut values = BinaryField128::zero_vec(padded_len);
-        values
-            .par_chunks_mut(len)
-            .enumerate()
-            .for_each(|(c, chunk)| {
-                let shift = domain_point::<BinaryField128>(c << log_message_height);
-                let coset = self
-                    .ntt
-                    .shifted_ntt_batch(RowMajorMatrix::new(message.values.clone(), width), shift);
-                chunk.copy_from_slice(&coset.values);
-            });
-
-        RowMajorMatrix::new(values, width)
+        let _ = log2_strict_usize(message.height());
+        message.values.resize(padded_len, BinaryField128::ZERO);
+        self.ntt.ntt_batch_padded(message, log_inv_rate)
     }
 }
 
