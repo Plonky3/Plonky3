@@ -593,6 +593,8 @@ macro_rules! karatsuba_over_the_level_below {
 
 karatsuba_over_the_level_below!(BinaryField16);
 karatsuba_over_the_level_below!(BinaryField32);
+karatsuba_over_the_level_below!(BinaryField64);
+karatsuba_over_the_level_below!(BinaryField128);
 
 impl BinaryField64 {
     /// The carryless-multiply fast path where the target has the instruction for it, and the
@@ -604,7 +606,7 @@ impl BinaryField64 {
         if HAS_HARDWARE_CLMUL {
             Self(mul_64(self.0, rhs.0))
         } else {
-            self.reference_mul(rhs)
+            self.karatsuba_mul(rhs)
         }
     }
 
@@ -630,7 +632,7 @@ impl BinaryField128 {
         if HAS_HARDWARE_CLMUL {
             Self(mul_128(self.0, rhs.0))
         } else {
-            self.reference_mul(rhs)
+            self.karatsuba_mul(rhs)
         }
     }
 
