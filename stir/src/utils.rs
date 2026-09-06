@@ -37,8 +37,8 @@ pub fn eval_poly<F: Field>(poly: &[F], point: F) -> F {
 /// dispatch.
 pub fn eval_poly_parallel<F: Field>(poly: &[F], point: F) -> F {
     const MIN_PARALLEL_LEN: usize = 4096;
-    if poly.len() < MIN_PARALLEL_LEN {
-        return eval_poly(poly, point);
+    if poly.len() < MIN_PARALLEL_LEN || current_num_threads() == 1 {
+        return eval_poly_chains(poly, point);
     }
 
     let num_chunks = current_num_threads().max(1);
@@ -46,11 +46,66 @@ pub fn eval_poly_parallel<F: Field>(poly: &[F], point: F) -> F {
     let point_pow_chunk = point.exp_u64(chunk_size as u64);
 
     poly.par_chunks(chunk_size)
-        .map(|chunk| eval_poly(chunk, point))
+        .map(|chunk| eval_poly_chains(chunk, point))
         .collect::<Vec<F>>()
         .into_iter()
         .rev()
         .fold(F::ZERO, |acc, chunk_val| acc * point_pow_chunk + chunk_val)
+}
+
+/// Four independent residue-class Horner chains expose instruction-level parallelism.
+fn eval_poly_chains<F: Field>(poly: &[F], point: F) -> F {
+    if poly.len() < 32 {
+        return eval_poly(poly, point);
+    }
+    let (blocks, tail) = poly.as_chunks::<4>();
+    let mut sums = [F::ZERO; 4];
+    sums[..tail.len()].copy_from_slice(tail);
+    let step = point.exp_power_of_2(2);
+    for block in blocks.iter().rev() {
+        for i in 0..4 {
+            sums[i] = sums[i] * step + block[i];
+        }
+    }
+    sums.into_iter()
+        .rev()
+        .fold(F::ZERO, |acc, value| acc * point + value)
+}
+
+/// Evaluate two OOD points in one coefficient sweep, retaining independent Horner chains.
+pub(crate) fn eval_poly_pair_parallel<F: Field>(poly: &[F], points: [F; 2]) -> [F; 2] {
+    fn local<F: Field>(poly: &[F], points: [F; 2]) -> [F; 2] {
+        let (blocks, tail) = poly.as_chunks::<4>();
+        let mut sums = [[F::ZERO; 4]; 2];
+        sums[0][..tail.len()].copy_from_slice(tail);
+        sums[1][..tail.len()].copy_from_slice(tail);
+        let steps = points.map(|p| p.exp_power_of_2(2));
+        for block in blocks.iter().rev() {
+            for i in 0..4 {
+                sums[0][i] = sums[0][i] * steps[0] + block[i];
+                sums[1][i] = sums[1][i] * steps[1] + block[i];
+            }
+        }
+        core::array::from_fn(|i| {
+            sums[i]
+                .iter()
+                .rev()
+                .fold(F::ZERO, |acc, &v| acc * points[i] + v)
+        })
+    }
+    if poly.len() < 4096 || current_num_threads() == 1 {
+        return local(poly, points);
+    }
+    let chunk_len = poly.len().div_ceil(current_num_threads());
+    let steps = points.map(|p| p.exp_u64(chunk_len as u64));
+    poly.par_chunks(chunk_len)
+        .map(|chunk| local(chunk, points))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .fold([F::ZERO; 2], |acc, values| {
+            core::array::from_fn(|i| acc[i] * steps[i] + values[i])
+        })
 }
 
 /// Divide a coefficient-form polynomial by the linear factor `(X - point)`.
@@ -772,6 +827,22 @@ mod tests {
     type EF = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2BabyBear<16>;
     type TestChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+    #[test]
+    fn paired_horner_matches_independent_scalar_evaluation() {
+        for len in [0, 1, 3, 31, 32, 33, 4095, 4096, 4097] {
+            let coeffs: Vec<EF> = (0..len).map(|i| EF::from_usize(i + 3)).collect();
+            for points in [[EF::ZERO, EF::ONE], [EF::from_usize(7); 2]] {
+                assert_eq!(
+                    eval_poly_pair_parallel(&coeffs, points),
+                    points.map(|p| eval_poly(&coeffs, p))
+                );
+                for p in points {
+                    assert_eq!(eval_poly_parallel(&coeffs, p), eval_poly(&coeffs, p));
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_eval_poly_zero() {

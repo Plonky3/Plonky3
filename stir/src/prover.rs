@@ -22,8 +22,9 @@ use tracing::instrument;
 use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    FiberFold, compute_shake_polynomial, eval_poly_parallel, fold_codeword, fold_domain_params,
-    interpolate_poly, next_domain_shift, sample_ood_points, vanishing_poly_from_roots,
+    FiberFold, compute_shake_polynomial, eval_poly_pair_parallel, eval_poly_parallel,
+    fold_codeword, fold_domain_params, interpolate_poly, next_domain_shift, sample_ood_points,
+    vanishing_poly_from_roots,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -296,11 +297,14 @@ where
         let truncated = &self.fold_coeffs[..folded_degree_bound.min(self.fold_coeffs.len())];
 
         self.ood_points = ood_points;
-        self.ood_answers = self
-            .ood_points
-            .iter()
-            .map(|&z| eval_poly_parallel(truncated, z))
-            .collect();
+        self.ood_answers = if let &[first, second] = self.ood_points.as_slice() {
+            eval_poly_pair_parallel(truncated, [first, second]).to_vec()
+        } else {
+            self.ood_points
+                .iter()
+                .map(|&z| eval_poly_parallel(truncated, z))
+                .collect()
+        };
         &self.ood_answers
     }
 
