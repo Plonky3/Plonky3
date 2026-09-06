@@ -533,6 +533,89 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
     coeffs
 }
 
+/// Interpolate base-field query points first, then extend through the few OOD points.
+/// Returns both the interpolant and the vanishing polynomial.
+pub(crate) fn interpolate_with_base_points<F: Field, EF: ExtensionField<F>>(
+    points: &[F],
+    values: &[EF],
+    extra_points: &[EF],
+    extra_values: &[EF],
+) -> (Vec<EF>, Vec<EF>) {
+    assert_eq!(points.len(), values.len());
+    assert_eq!(extra_points.len(), extra_values.len());
+    let n = points.len();
+    let denominators: Vec<F> = (1..n)
+        .flat_map(|k| (k..n).map(move |i| points[i] - points[i - k]))
+        .collect();
+    assert!(
+        !denominators.contains(&F::ZERO),
+        "all interpolation points must be distinct"
+    );
+    let inverses = batch_multiplicative_inverse(&denominators);
+    let mut dd = values.to_vec();
+    let mut offset = 0;
+    for k in 1..n {
+        for i in (k..n).rev() {
+            dd[i] = (dd[i] - dd[i - 1]) * inverses[offset + i - k];
+        }
+        offset += n - k;
+    }
+    let mut coeffs = EF::zero_vec(n);
+    let mut basis = Vec::with_capacity(n + 1);
+    basis.push(F::ONE);
+    for k in 0..n {
+        for (coeff, &b) in coeffs.iter_mut().zip(&basis) {
+            *coeff += dd[k] * b;
+        }
+        basis.push(F::ZERO);
+        for i in (1..basis.len()).rev() {
+            basis[i] = basis[i - 1] - basis[i] * points[k];
+        }
+        basis[0] *= -points[k];
+    }
+    let mut vanishing: Vec<EF> = basis.into_iter().map(EF::from).collect();
+    for (&point, &value) in extra_points.iter().zip(extra_values) {
+        let denominator = eval_poly(&vanishing, point);
+        assert!(
+            !denominator.is_zero(),
+            "all interpolation points must be distinct"
+        );
+        let scale = (value - eval_poly(&coeffs, point)) / denominator;
+        coeffs.resize(vanishing.len(), EF::ZERO);
+        for (coeff, &b) in coeffs.iter_mut().zip(&vanishing) {
+            *coeff += scale * b;
+        }
+        vanishing.push(EF::ZERO);
+        for i in (1..vanishing.len()).rev() {
+            vanishing[i] = vanishing[i - 1] - vanishing[i] * point;
+        }
+        vanishing[0] *= -point;
+    }
+    while coeffs.len() > 1 && coeffs.last() == Some(&EF::ZERO) {
+        coeffs.pop();
+    }
+    (coeffs, vanishing)
+}
+
+/// Form the query factor in the base field before multiplying the few OOD factors.
+pub(crate) fn vanishing_with_base_roots<F: Field, EF: ExtensionField<F>>(
+    points: &[F],
+    extra_points: &[EF],
+) -> Vec<EF> {
+    let mut coeffs: Vec<EF> = vanishing_poly_from_roots(points)
+        .into_iter()
+        .map(EF::from)
+        .collect();
+    for &point in extra_points {
+        coeffs.push(EF::ZERO);
+        for i in (1..coeffs.len()).rev() {
+            coeffs[i] = coeffs[i - 1] - coeffs[i] * point;
+        }
+        coeffs[0] *= -point;
+    }
+    coeffs
+}
+
 /// Verify shake polynomial consistency at a random point `rho`.
 ///
 /// Checks that `S(rho) == sum_{y in P} (ans(rho) - val_y) / (rho - y)` using batch inversion.
@@ -815,8 +898,8 @@ pub fn lagrange_interpolate_at<F: Field, EF: ExtensionField<F>>(
 mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -827,6 +910,41 @@ mod tests {
     type EF = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2BabyBear<16>;
     type TestChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+    #[test]
+    fn mixed_interpolation_and_vanishing_match_generic_oracles() {
+        for n in [0, 1, 2, 16, 64] {
+            let points: Vec<F> = (1..=n).map(F::from_usize).collect();
+            let values: Vec<EF> = (1..=n)
+                .map(|i| EF::from_basis_coefficients_fn(|d| F::from_usize(i * i + d + 3)))
+                .collect();
+            for extra_len in 0..=2 {
+                let extra: Vec<EF> = (0..extra_len)
+                    .map(|i| EF::from_basis_coefficients_fn(|d| F::from_usize(n + i + d + 1)))
+                    .collect();
+                let extra_values: Vec<EF> =
+                    (0..extra_len).map(|i| EF::from_usize(i + 17)).collect();
+                let all_points: Vec<EF> = points
+                    .iter()
+                    .copied()
+                    .map(EF::from)
+                    .chain(extra.iter().copied())
+                    .collect();
+                let all_values: Vec<EF> = values.iter().chain(&extra_values).copied().collect();
+                let (ans, vanishing) =
+                    interpolate_with_base_points(&points, &values, &extra, &extra_values);
+                assert_eq!(ans, interpolate_poly(&all_points, &all_values));
+                assert_eq!(vanishing, vanishing_poly_from_roots(&all_points));
+                assert_eq!(vanishing_with_base_roots(&points, &extra), vanishing);
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "all interpolation points must be distinct")]
+    fn mixed_interpolation_rejects_cross_domain_duplicates() {
+        let _ = interpolate_with_base_points(&[F::ONE], &[EF::ONE], &[EF::ONE], &[EF::ZERO]);
+    }
 
     #[test]
     fn paired_horner_matches_independent_scalar_evaluation() {

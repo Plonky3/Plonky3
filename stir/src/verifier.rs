@@ -15,7 +15,7 @@ use crate::error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel,
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
     FiberFold, check_shake_consistency, eval_poly, eval_poly_at_base, fold_domain_params,
-    next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points, vanishing_poly_from_roots,
+    next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points, vanishing_with_base_roots,
 };
 
 /// `(index, row)` pairs for a round's queries, in draw order.
@@ -450,7 +450,7 @@ where
             alloc::collections::BTreeSet::new();
 
         for (q, (&j, row_evals)) in query_indices.iter().zip(&round_rows).enumerate() {
-            let fold_point = EF::from(self.fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
+            let fold_point = EF::from(self.fold_shift * fold_gen.exp_u64(j as u64));
 
             let fold_val = query_fold_value(
                 row_evals,
@@ -499,7 +499,14 @@ where
         let r_comb_pow_gap1 = self.r_comb.exp_u64((gap + 1) as u64);
         RoundVerifyOutput {
             ctx: VirtualRoundContext {
-                vanishing_coeffs: vanishing_poly_from_roots(all_points),
+                vanishing_coeffs: vanishing_with_base_roots(
+                    &self
+                        .query_points
+                        .iter()
+                        .map(|p| p.as_base().expect("base-field query point"))
+                        .collect::<Vec<F>>(),
+                    &self.ood_points,
+                ),
                 ans_poly: ans_polynomial,
                 r_comb: self.r_comb,
                 gap,

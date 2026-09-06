@@ -23,8 +23,8 @@ use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
     FiberFold, compute_shake_polynomial, eval_poly_pair_parallel, eval_poly_parallel,
-    fold_codeword, fold_domain_params, interpolate_poly, next_domain_shift, sample_ood_points,
-    vanishing_poly_from_roots,
+    fold_codeword, fold_domain_params, interpolate_with_base_points, next_domain_shift,
+    sample_ood_points,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -175,6 +175,7 @@ struct RoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
     seen_query_indices: Vec<usize>,
 
     ans_poly: Vec<EF>,
+    vanishing_coeffs: Vec<EF>,
     shake_poly: Vec<EF>,
     all_points: Vec<EF>,
 }
@@ -217,6 +218,7 @@ where
             query_answers: Vec::new(),
             seen_query_indices: Vec::new(),
             ans_poly: Vec::new(),
+            vanishing_coeffs: Vec::new(),
             shake_poly: Vec::new(),
             all_points: Vec::new(),
         }
@@ -316,7 +318,7 @@ where
         for &j in &query_indices {
             if seen.insert(j) {
                 self.query_points
-                    .push(EF::from(self.fold_shift) * EF::from(fold_gen.exp_u64(j as u64)));
+                    .push(EF::from(self.fold_shift * fold_gen.exp_u64(j as u64)));
                 self.query_answers.push(self.folded_codeword[j]);
             }
         }
@@ -334,14 +336,17 @@ where
             .chain(self.query_points.iter())
             .copied()
             .collect();
-        let all_values: Vec<EF> = self
-            .ood_answers
+        let base_points: Vec<F> = self
+            .query_points
             .iter()
-            .chain(self.query_answers.iter())
-            .copied()
+            .map(|p| p.as_base().expect("base-field query point"))
             .collect();
-
-        self.ans_poly = interpolate_poly(&self.all_points, &all_values);
+        (self.ans_poly, self.vanishing_coeffs) = interpolate_with_base_points(
+            &base_points,
+            &self.query_answers,
+            &self.ood_points,
+            &self.ood_answers,
+        );
         self.shake_poly = compute_shake_polynomial(&self.ans_poly, &self.all_points);
         (&self.ans_poly, &self.shake_poly)
     }
@@ -365,7 +370,7 @@ where
         let next_log_domain = self.next_log_domain;
         let num_answers = all_points.len();
 
-        let vanishing_coeffs = vanishing_poly_from_roots(&all_points);
+        let vanishing_coeffs = core::mem::take(&mut self.vanishing_coeffs);
         // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
         // `num_answers + 1` coefficients.
         let log_answer_len = log2_ceil_usize(num_answers + 1).min(next_log_domain);
