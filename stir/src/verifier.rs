@@ -1,5 +1,6 @@
 //! STIR verifier implementation (Construction 5.2).
 
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
 use itertools::izip;
@@ -21,6 +22,7 @@ use crate::utils::{
 
 /// `(index, row)` pairs for a round's queries, in draw order.
 type FirstRoundPairs<EF> = Vec<(usize, Vec<EF>)>;
+type RoundRows<'a, EF> = Cow<'a, [Vec<EF>]>;
 
 #[derive(Clone)]
 struct VirtualRoundContext<EF> {
@@ -232,12 +234,12 @@ struct RoundRowsRequest<'a, EF: Field, M: Mmcs<EF>> {
 ///
 /// Shared by the intermediate-round and final-round query-fetch steps, which differ only in
 /// which openings, commitment, and dimensions apply.
-fn fetch_round_rows<EF, M, Src, IE>(
+fn fetch_round_rows<'a, EF, M, Src, IE>(
     mmcs: &M,
     is_external: bool,
     external_fibers: &mut Option<Src>,
-    req: &RoundRowsRequest<'_, EF, M>,
-) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>
+    req: &RoundRowsRequest<'a, EF, M>,
+) -> Result<RoundRows<'a, EF>, StirError<M::Error, IE>>
 where
     EF: Field,
     M: Mmcs<EF>,
@@ -250,7 +252,8 @@ where
         let source = external_fibers
             .take()
             .expect("the external source is consumed exactly once");
-        return external_fibers_in_draw_order(req.query_indices, req.arity, req.round, source);
+        return external_fibers_in_draw_order(req.query_indices, req.arity, req.round, source)
+            .map(Cow::Owned);
     }
 
     let openings = req
@@ -293,7 +296,7 @@ where
         round: req.round,
         source,
     })?;
-    Ok(openings.row_evals.clone())
+    Ok(Cow::Borrowed(&openings.row_evals))
 }
 
 /// Compute one query's expected fold value against the current virtual oracle.
@@ -419,6 +422,7 @@ where
         external_fibers: &mut Option<Src>,
         commitment: Option<&M::Commitment>,
         query_indices: &[usize],
+        retain_binding: bool,
     ) -> Result<(), StirError<M::Error, IE>>
     where
         M: Mmcs<EF>,
@@ -460,7 +464,7 @@ where
         let mut seen_query_indices: alloc::collections::BTreeSet<usize> =
             alloc::collections::BTreeSet::new();
 
-        for (q, (&j, row_evals)) in query_indices.iter().zip(&round_rows).enumerate() {
+        for (q, (&j, row_evals)) in query_indices.iter().zip(round_rows.iter()).enumerate() {
             let fold_point = EF::from(self.fold_shift * fold_gen.exp_u64(j as u64));
 
             let fold_val = query_fold_value(
@@ -479,7 +483,7 @@ where
             if seen_query_indices.insert(j) {
                 self.query_points.push(fold_point);
                 self.query_answers.push(fold_val);
-                if round == 0 {
+                if round == 0 && retain_binding {
                     self.first_round_pairs.push((j, row_evals.clone()));
                 }
             }
@@ -627,6 +631,7 @@ where
         external_fibers,
         commitment,
         &query_indices,
+        true,
     )?;
 
     // Step 4: ans + shake polynomial observation and consistency check.
@@ -711,6 +716,7 @@ where
         external_fibers: &mut Option<Src>,
         commitment: Option<&M::Commitment>,
         final_indices: &[usize],
+        retain_binding: bool,
     ) -> Result<FirstRoundPairs<EF>, StirError<M::Error, IE>>
     where
         M: Mmcs<EF>,
@@ -755,7 +761,7 @@ where
             self.fold_beta,
         );
 
-        for (q, (&j, row_evals)) in final_indices.iter().zip(&final_rows).enumerate() {
+        for (q, (&j, row_evals)) in final_indices.iter().zip(final_rows.iter()).enumerate() {
             let fold_val = query_fold_value(
                 row_evals,
                 j,
@@ -776,7 +782,7 @@ where
                 return Err(StirError::FinalPolyMismatch);
             }
 
-            if num_rounds == 0 && final_seen.insert(j) {
+            if retain_binding && num_rounds == 0 && final_seen.insert(j) {
                 first_round_pairs.push((j, row_evals.clone()));
             }
         }
@@ -866,6 +872,7 @@ where
         external_fibers,
         commitment,
         &final_indices,
+        true,
     )
 }
 
@@ -1080,6 +1087,7 @@ where
         proofs,
         challenger,
         None::<Vec<NoExternalFibersMulti<EF, M::Error>>>,
+        true,
     )
 }
 
@@ -1104,7 +1112,7 @@ where
         + CanSampleUniformBits<F>,
     Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
 {
-    verify_stir_multi_inner(configs, proofs, challenger, Some(initial_fibers))
+    verify_stir_multi_inner(configs, proofs, challenger, Some(initial_fibers), true)
 }
 
 /// Shared body of [`verify_stir_multi`] and [`verify_stir_multi_with_external_initial`].
@@ -1115,11 +1123,12 @@ where
 /// - every active instance's replicated grind witness must agree,
 /// - else [`ProofShapeError::ReplicatedWitnessMismatch`],
 /// - then the shared grind is checked once, at the max of the active instances' bits.
-fn verify_stir_multi_inner<F, EF, M, Challenger, IE, Src>(
+pub(crate) fn verify_stir_multi_inner<F, EF, M, Challenger, IE, Src>(
     configs: &[&StirConfig<F, EF, M, Challenger>],
     proofs: &[&StirProof<EF, M, Challenger::Witness>],
     challenger: &mut Challenger,
     external_fibers: Option<Vec<Src>>,
+    retain_binding: bool,
 ) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error, IE>>
 where
     F: TwoAdicField,
@@ -1317,6 +1326,7 @@ where
                 &mut external_fibers[i],
                 commitment,
                 &query_indices,
+                retain_binding,
             )?;
         }
 
@@ -1457,8 +1467,13 @@ where
             &mut external_fibers[i],
             commitment,
             &final_indices,
+            retain_binding,
         )?;
         first_round_pairs[i].extend(final_pairs);
+    }
+
+    if !retain_binding {
+        return Ok(Vec::new());
     }
 
     Ok(first_round_pairs
@@ -1473,4 +1488,93 @@ where
             }
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_commit::ExtensionMmcs;
+    use p3_dft::Radix2DitParallel;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+    use crate::{SecurityAssumption, StirParameters};
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type ValMmcs =
+        MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, Hash, Compress, 2, 8>;
+    type M = ExtensionMmcs<F, EF, ValMmcs>;
+    type C = DuplexChallenger<F, Perm, 16, 8>;
+
+    #[test]
+    fn skipping_binding_output_preserves_checks_and_transcript() {
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(718);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let mmcs = M::new(ValMmcs::new(
+            Hash::new(perm.clone()),
+            Compress::new(perm.clone()),
+            0,
+        ));
+        let params = StirParameters {
+            log_blowup: 1,
+            log_folding_factor: 2,
+            log_starting_folding_factor: 2,
+            soundness_type: SecurityAssumption::CapacityBound,
+            security_level: 16,
+            max_pow_bits: 0,
+            mmcs,
+        };
+        for log_degree in [4, 12] {
+            let config = StirConfig::<F, EF, M, C>::new(log_degree, params.clone());
+            let poly = (0..1 << log_degree).map(|_| rng.random()).collect();
+            let base = C::new(perm.clone());
+            let (proof, indices) = crate::prover::prove_stir(
+                &config,
+                poly,
+                &Radix2DitParallel::default(),
+                &mut base.clone(),
+            );
+            let mut public_ch = base.clone();
+            let public = verify_stir_multi(&[&config], &[&proof], &mut public_ch).unwrap();
+            assert_eq!(public[0].first_round_indices, indices);
+            assert_eq!(public[0].first_round_fiber_evals.len(), indices.len());
+            assert!(!indices.is_empty());
+            let mut skip_ch = base.clone();
+            let skipped = verify_stir_multi_inner(
+                &[&config],
+                &[&proof],
+                &mut skip_ch,
+                None::<Vec<NoExternalFibersMulti<EF, <M as Mmcs<EF>>::Error>>>,
+                false,
+            )
+            .unwrap();
+            assert!(skipped.is_empty());
+            assert_eq!(
+                public_ch.sample_algebra_element::<EF>(),
+                skip_ch.sample_algebra_element::<EF>()
+            );
+            let mut bad = proof;
+            bad.final_polynomial[0] += EF::ONE;
+            assert!(verify_stir_multi(&[&config], &[&bad], &mut base.clone()).is_err());
+            assert!(
+                verify_stir_multi_inner(
+                    &[&config],
+                    &[&bad],
+                    &mut base.clone(),
+                    None::<Vec<NoExternalFibersMulti<EF, <M as Mmcs<EF>>::Error>>>,
+                    false
+                )
+                .is_err()
+            );
+        }
+    }
 }

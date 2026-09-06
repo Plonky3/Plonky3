@@ -83,7 +83,7 @@ use crate::error::{ProofShapeError, StirError};
 use crate::proof::StirProof;
 use crate::prover::prove_stir_multi_from_external_codewords;
 use crate::utils::combine_on_coset;
-use crate::verifier::verify_stir_multi_with_external_initial;
+use crate::verifier::verify_stir_multi_inner;
 
 /// Batched openings of one input commitment's LDE matrices at the STIR-derived query
 /// positions for one LDE-height bucket.
@@ -1832,11 +1832,12 @@ where
 
         // Any transcript-touching step stays inside `verify_stir_multi_with_external_initial`;
         // every closure above only reads public data and its own bucket's input openings.
-        verify_stir_multi_with_external_initial(
+        verify_stir_multi_inner(
             &stir_config_refs,
             &stir_proofs,
             challenger,
-            initial_fibers,
+            Some(initial_fibers),
+            false,
         )?;
 
         Ok(())
