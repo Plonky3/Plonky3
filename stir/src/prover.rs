@@ -352,90 +352,41 @@ where
 
     /// Evaluate the next virtual witness on the next round's domain. Touches no transcript
     /// state, so it may run after the caller has moved on to other instances.
-    fn finish(mut self, r_comb: EF) -> RoundFinish<F, EF, M> {
-        // Construction 5.2: f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}).
-        //
-        // DegCor(x) = (1 - (r_comb*x)^{gap+1}) / (1 - r_comb*x) is geometric in x over the
-        // coset (base-field ratio, EF-valued start), so it is evaluated pointwise via two
-        // `Powers` sweeps instead of a third DFT; its `(1 - r_comb*x)` denominator is folded
-        // into the vanishing-polynomial batch inversion below (one inversion, not two). Ans
-        // and the vanishing polynomial still need evaluating — their roots are this round's
-        // arbitrary interpolation points — but both are tiny next to the domain, so they go
-        // through the low-degree coset evaluation rather than a full-size DFT each.
+    fn prepare_finish(&mut self, r_comb: EF) -> NumericFinishJob<F, EF> {
         drop(core::mem::take(&mut self.folded_codeword));
         drop(core::mem::take(&mut self.fold_coeffs));
-        let all_points = core::mem::take(&mut self.all_points);
-        let next_shift = self.next_shift;
-        let next_log_domain = self.next_log_domain;
-        let num_answers = all_points.len();
-
-        let vanishing_coeffs = core::mem::take(&mut self.vanishing_coeffs);
-        // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
-        // `num_answers + 1` coefficients.
-        let log_answer_len = log2_ceil_usize(num_answers + 1).min(next_log_domain);
-        let evaluations = tracing::debug_span!("eval_low_degree_pair_on_coset").in_scope(|| {
-            eval_low_degree_pair_on_coset(
-                self.dft,
-                &self.ans_poly,
-                &vanishing_coeffs,
-                next_shift,
-                next_log_domain,
-                log_answer_len,
-            )
-        });
-
-        // x_j = next_shift * g^j, so step_j = r_comb * x_j = step_start * g^j, and the degree
-        // correction's numerator sweeps the same coset at stride `num_answers + 1`. Both are
-        // geometric with a base-field ratio, so each chunk seeds one exponentiation and then
-        // advances by a base-field multiply: no power tables, and no ext-by-ext products.
-        const POWER_CHUNK: usize = 1 << 12;
-        let g_next = F::two_adic_generator(next_log_domain);
-        let g_next_hi = g_next.exp_u64((num_answers + 1) as u64);
-        let step_start = r_comb * next_shift;
-        let step_start_hi = step_start.exp_u64((num_answers + 1) as u64);
-
-        // The quotient denominators are the vanishing evaluations scaled by the degree
-        // correction's `(1 - step)` denominator, so they are formed in place.
-        let next_oracle_codeword = tracing::debug_span!("quotient_sweep").in_scope(|| {
-            let mut next_oracle_codeword = core::mem::take(&mut self.next_commit_codeword);
-            let mut combined_denoms = EF::zero_vec(next_oracle_codeword.len());
-            next_oracle_codeword
-                .par_chunks_mut(POWER_CHUNK)
-                .zip(combined_denoms.par_chunks_mut(POWER_CHUNK))
-                .zip(evaluations.par_chunks(2 * POWER_CHUNK))
-                .enumerate()
-                .for_each(|(chunk_idx, ((values, denoms), pairs))| {
-                    let start = (chunk_idx * POWER_CHUNK) as u64;
-                    let mut step = step_start * g_next.exp_u64(start);
-                    let mut numerator_step = step_start_hi * g_next_hi.exp_u64(start);
-                    for ((value, denom), pair) in
-                        values.iter_mut().zip(denoms).zip(pairs.as_chunks::<2>().0)
-                    {
-                        *value = (*value - pair[0]) * (EF::ONE - numerator_step);
-                        *denom = pair[1] * (EF::ONE - step);
-                        step *= g_next;
-                        numerator_step *= g_next_hi;
-                    }
-                });
-            drop(evaluations);
-            let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
-            drop(combined_denoms);
-            next_oracle_codeword
-                .par_iter_mut()
-                .zip(combined_inverses)
-                .for_each(|(value, inverse)| *value *= inverse);
-            next_oracle_codeword
-        });
-
-        RoundFinish {
-            next_codeword: next_oracle_codeword,
-            next_commit_data: self.new_data.take().expect("set by `fold_and_commit`"),
-            next_shift,
-            next_log_domain,
-            seen_query_indices: core::mem::take(&mut self.seen_query_indices),
+        let num_answers = self.all_points.len();
+        drop(core::mem::take(&mut self.all_points));
+        NumericFinishJob {
+            next_commit_codeword: core::mem::take(&mut self.next_commit_codeword),
             ans_poly: core::mem::take(&mut self.ans_poly),
+            vanishing_coeffs: core::mem::take(&mut self.vanishing_coeffs),
+            next_shift: self.next_shift,
+            next_log_domain: self.next_log_domain,
+            num_answers,
+            r_comb,
+        }
+    }
+
+    fn complete_finish(
+        mut self,
+        (next_codeword, ans_poly): NumericFinishOutput<EF>,
+    ) -> RoundFinish<F, EF, M> {
+        RoundFinish {
+            next_codeword,
+            next_commit_data: self.new_data.take().expect("set by `fold_and_commit`"),
+            next_shift: self.next_shift,
+            next_log_domain: self.next_log_domain,
+            seen_query_indices: core::mem::take(&mut self.seen_query_indices),
+            ans_poly,
             shake_poly: core::mem::take(&mut self.shake_poly),
         }
+    }
+
+    fn finish(mut self, r_comb: EF) -> RoundFinish<F, EF, M> {
+        let job = self.prepare_finish(r_comb);
+        let output = finish_numeric(self.dft, job);
+        self.complete_finish(output)
     }
 }
 
@@ -862,6 +813,110 @@ struct MultiInstanceState<F, EF: Field, M: Mmcs<EF>> {
     first_round_query_indices: Vec<usize>,
 }
 
+/// Owned arithmetic inputs; MMCS state and transcript metadata stay on the driver thread.
+pub(crate) struct NumericFinishJob<F, EF> {
+    next_commit_codeword: Vec<EF>,
+    ans_poly: Vec<EF>,
+    vanishing_coeffs: Vec<EF>,
+    next_shift: F,
+    next_log_domain: usize,
+    num_answers: usize,
+    r_comb: EF,
+}
+
+type NumericFinishOutput<EF> = (Vec<EF>, Vec<EF>);
+pub(crate) type FinishBatchFn<F, EF, Dft> =
+    fn(&Dft, Vec<NumericFinishJob<F, EF>>) -> Vec<NumericFinishOutput<EF>>;
+
+fn finish_numeric<F, EF, Dft>(dft: &Dft, job: NumericFinishJob<F, EF>) -> NumericFinishOutput<EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F>,
+{
+    let NumericFinishJob {
+        next_commit_codeword,
+        ans_poly,
+        vanishing_coeffs,
+        next_shift,
+        next_log_domain,
+        num_answers,
+        r_comb,
+    } = job;
+    // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
+    // `num_answers + 1` coefficients.
+    let log_answer_len = log2_ceil_usize(num_answers + 1).min(next_log_domain);
+    let evaluations = tracing::debug_span!("eval_low_degree_pair_on_coset").in_scope(|| {
+        eval_low_degree_pair_on_coset(
+            dft,
+            &ans_poly,
+            &vanishing_coeffs,
+            next_shift,
+            next_log_domain,
+            log_answer_len,
+        )
+    });
+
+    // x_j = next_shift * g^j, so step_j = r_comb * x_j = step_start * g^j, and the degree
+    // correction's numerator sweeps the same coset at stride `num_answers + 1`. Both are
+    // geometric with a base-field ratio, so each chunk seeds one exponentiation and then
+    // advances by a base-field multiply: no power tables, and no ext-by-ext products.
+    const POWER_CHUNK: usize = 1 << 12;
+    let g_next = F::two_adic_generator(next_log_domain);
+    let g_next_hi = g_next.exp_u64((num_answers + 1) as u64);
+    let step_start = r_comb * next_shift;
+    let step_start_hi = step_start.exp_u64((num_answers + 1) as u64);
+
+    // The quotient denominators are the vanishing evaluations scaled by the degree
+    // correction's `(1 - step)` denominator, so they are formed in place.
+    let next_oracle_codeword = tracing::debug_span!("quotient_sweep").in_scope(|| {
+        let mut next_oracle_codeword = next_commit_codeword;
+        let mut combined_denoms = EF::zero_vec(next_oracle_codeword.len());
+        next_oracle_codeword
+            .par_chunks_mut(POWER_CHUNK)
+            .zip(combined_denoms.par_chunks_mut(POWER_CHUNK))
+            .zip(evaluations.par_chunks(2 * POWER_CHUNK))
+            .enumerate()
+            .for_each(|(chunk_idx, ((values, denoms), pairs))| {
+                let start = (chunk_idx * POWER_CHUNK) as u64;
+                let mut step = step_start * g_next.exp_u64(start);
+                let mut numerator_step = step_start_hi * g_next_hi.exp_u64(start);
+                for ((value, denom), pair) in
+                    values.iter_mut().zip(denoms).zip(pairs.as_chunks::<2>().0)
+                {
+                    *value = (*value - pair[0]) * (EF::ONE - numerator_step);
+                    *denom = pair[1] * (EF::ONE - step);
+                    step *= g_next;
+                    numerator_step *= g_next_hi;
+                }
+            });
+        drop(evaluations);
+        let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
+        drop(combined_denoms);
+        next_oracle_codeword
+            .par_iter_mut()
+            .zip(combined_inverses)
+            .for_each(|(value, inverse)| *value *= inverse);
+        next_oracle_codeword
+    });
+
+    (next_oracle_codeword, ans_poly)
+}
+
+pub(crate) fn parallel_finish<F, EF, Dft>(
+    dft: &Dft,
+    jobs: Vec<NumericFinishJob<F, EF>>,
+) -> Vec<NumericFinishOutput<EF>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F> + Sync,
+{
+    jobs.into_par_iter()
+        .map(|job| finish_numeric(dft, job))
+        .collect()
+}
+
 /// Prove low degree for `B` polynomials of possibly different degrees in lockstep, sharing
 /// every grind across the instances active at that site.
 ///
@@ -884,6 +939,7 @@ fn prove_stir_multi_inner<F, EF, Dft, M, Challenger>(
     dft: &Dft,
     challenger: &mut Challenger,
     commit_initial: bool,
+    finish_batch: Option<FinishBatchFn<F, EF, Dft>>,
 ) -> StirMultiOutput<EF, M, Challenger::Witness>
 where
     F: TwoAdicField,
@@ -1061,7 +1117,7 @@ where
             query_openings: Option<StirQueryOpenings<EF, M>>,
             r_comb: EF,
         }
-        let phase4: Vec<Phase4<'_, F, EF, Dft, M, Challenger>> = phase3
+        let mut phase4: Vec<Phase4<'_, F, EF, Dft, M, Challenger>> = phase3
             .into_iter()
             .map(|p| {
                 let mut rp = p.rp;
@@ -1082,8 +1138,26 @@ where
             .collect();
 
         // Phase 5 (finish): touches no transcript state, so instance order no longer matters.
+        let finish_batch = finish_batch.filter(|_| {
+            phase4.len() >= 2
+                && phase4.iter().fold(0usize, |sum, job| {
+                    sum.saturating_add(job.rp.next_commit_codeword.len())
+                }) >= 4096
+        });
+        let mut outputs = finish_batch.map(|finish| {
+            let jobs = phase4
+                .iter_mut()
+                .map(|p| p.rp.prepare_finish(p.r_comb))
+                .collect();
+            finish(dft, jobs).into_iter()
+        });
         for (&i, p) in active.iter().zip(phase4) {
-            let finish = p.rp.finish(p.r_comb);
+            let finish = match &mut outputs {
+                Some(outputs) => {
+                    p.rp.complete_finish(outputs.next().expect("one output per finish job"))
+                }
+                None => p.rp.finish(p.r_comb),
+            };
             states[i].round_proofs.push(StirRoundProof {
                 commitment: p.commit,
                 folding_pow_witness,
@@ -1189,6 +1263,49 @@ where
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>,
 {
+    prove_stir_multi_with_finisher(configs, poly_coeffs, dft, challenger, None)
+}
+
+/// Like [`prove_stir_multi`], scheduling independent round finish work in parallel.
+/// Transcript operations stay in instance order. Requires the `parallel` feature for parallel
+/// execution; single-instance and small batches run directly.
+#[instrument(skip_all)]
+pub fn prove_stir_multi_with_parallel_finish<F, EF, Dft, M, Challenger>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    poly_coeffs: Vec<Vec<EF>>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+) -> StirMultiOutput<EF, M, Challenger::Witness>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F> + Sync,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
+    prove_stir_multi_with_finisher(configs, poly_coeffs, dft, challenger, Some(parallel_finish))
+}
+
+fn prove_stir_multi_with_finisher<F, EF, Dft, M, Challenger>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    poly_coeffs: Vec<Vec<EF>>,
+    dft: &Dft,
+    challenger: &mut Challenger,
+    finish_batch: Option<FinishBatchFn<F, EF, Dft>>,
+) -> StirMultiOutput<EF, M, Challenger::Witness>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+{
     assert_eq!(
         configs.len(),
         poly_coeffs.len(),
@@ -1204,7 +1321,14 @@ where
             codeword_from_coeffs(dft, coeffs, F::GENERATOR, log_initial_domain)
         })
         .collect();
-    prove_stir_multi_inner(configs, initial_codewords, dft, challenger, true)
+    prove_stir_multi_inner(
+        configs,
+        initial_codewords,
+        dft,
+        challenger,
+        true,
+        finish_batch,
+    )
 }
 
 /// Prove low degree for `B` initial natural-order codewords on each instance's starting
@@ -1229,7 +1353,7 @@ where
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>,
 {
-    prove_stir_multi_inner(configs, initial_codewords, dft, challenger, true)
+    prove_stir_multi_inner(configs, initial_codewords, dft, challenger, true, None)
 }
 
 /// Prove low degree for `B` initial codewords the caller has already bound (see
@@ -1260,7 +1384,7 @@ where
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>,
 {
-    prove_stir_multi_inner(configs, initial_codewords, dft, challenger, false)
+    prove_stir_multi_inner(configs, initial_codewords, dft, challenger, false, None)
 }
 
 /// Fold only the strided fibers needed to recover a degree-bounded final polynomial.

@@ -3560,6 +3560,41 @@ mod babybear_stir_multi {
         );
     }
 
+    #[test]
+    fn parallel_finish_matches_serial_proofs_and_transcript() {
+        let (params, dft, challenger) = make_params(1, 2, 32, 0);
+        for heights in [
+            vec![],
+            vec![4],
+            vec![4, 4],
+            vec![12],
+            vec![12; 4],
+            vec![12, 10, 8],
+        ] {
+            let (configs, polys) = make_instances(&params, &heights);
+            let refs: Vec<_> = configs.iter().collect();
+            let mut serial_ch = challenger.clone();
+            let mut parallel_ch = challenger.clone();
+            let serial = prove_stir_multi(&refs, polys.clone(), &dft, &mut serial_ch);
+            let parallel = p3_stir::prover::prove_stir_multi_with_parallel_finish(
+                &refs,
+                polys,
+                &dft,
+                &mut parallel_ch,
+            );
+            assert_eq!(
+                postcard::to_allocvec(&serial).unwrap(),
+                postcard::to_allocvec(&parallel).unwrap()
+            );
+            assert_eq!(
+                serial_ch.sample_algebra_element::<EF>(),
+                parallel_ch.sample_algebra_element::<EF>()
+            );
+            let proofs: Vec<_> = parallel.iter().map(|(proof, _)| proof).collect();
+            verify_stir_multi(&refs, &proofs, &mut challenger.clone()).unwrap();
+        }
+    }
+
     /// An empty batch has no transcript operations, matching the prover, so it verifies.
     #[test]
     fn test_multi_empty_batch_verifies() {
