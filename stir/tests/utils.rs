@@ -394,3 +394,16 @@ fn folds_match_independent_lagrange_over_fields_and_arities() {
     >();
     check::<p3_goldilocks::Goldilocks, BinomialExtensionField<p3_goldilocks::Goldilocks, 2>>();
 }
+
+#[test]
+fn interpolation_and_shake_handle_empty_and_constant_inputs() {
+    assert!(interpolate_poly::<EF>(&[], &[]).is_empty());
+    assert!(compute_shake_polynomial::<EF>(&[], &[]).is_empty());
+    assert!(compute_shake_polynomial(&[ef(7)], &[ef(2)]).is_empty());
+    assert!(compute_shake_polynomial(&[ef(7), ef(3)], &[]).is_empty());
+    assert_eq!(interpolate_poly(&[ef(2)], &[ef(7)]), vec![ef(7)]);
+    assert_eq!(
+        compute_shake_polynomial(&[ef(7), ef(3)], &[ef(2)]),
+        vec![ef(3)]
+    );
+}

@@ -354,10 +354,22 @@ where
 /// The shake polynomial enables the verifier to check that `ans` correctly interpolates
 /// all `(y_i, ans(y_i))` pairs without recomputing a full Lagrange interpolation.
 pub fn compute_shake_polynomial<F: Field>(ans: &[F], points: &[F]) -> Vec<F> {
-    points
-        .iter()
-        .map(|&y| divide_by_linear(ans, y).0)
-        .fold(vec![], |acc, q| add_polys(&acc, &q))
+    if points.is_empty() {
+        return Vec::new();
+    }
+    assert!(
+        !ans.is_empty(),
+        "shake requires a nonempty answer polynomial"
+    );
+    let mut shake = F::zero_vec(ans.len() - 1);
+    for &point in points {
+        let mut carry = F::ZERO;
+        for (slot, &coeff) in shake.iter_mut().zip(&ans[1..]).rev() {
+            carry = coeff + carry * point;
+            *slot += carry;
+        }
+    }
+    shake
 }
 
 /// Interpolate a polynomial through the given `(points, values)` pairs.
@@ -414,19 +426,18 @@ pub fn interpolate_poly<F: Field>(points: &[F], values: &[F]) -> Vec<F> {
     let mut coeffs = vec![F::ZERO; n];
     // Build coefficient form by Horner: accumulate from the highest term.
     // basis[k] = prod_{j<k} (X - points[j]) in coefficient form.
-    let mut basis: Vec<F> = vec![F::ONE];
+    let mut basis: Vec<F> = Vec::with_capacity(n);
+    basis.push(F::ONE);
     coeffs[0] = dd[0];
 
     for k in 1..n {
         // Multiply current basis by (X - points[k-1]).
         let pk = points[k - 1];
-        let old_len = basis.len();
-        let mut new_basis = vec![F::ZERO; old_len + 1];
-        for (i, &b) in basis.iter().enumerate() {
-            new_basis[i + 1] += b;
-            new_basis[i] -= b * pk;
+        basis.push(F::ZERO);
+        for i in (1..basis.len()).rev() {
+            basis[i] = basis[i - 1] - basis[i] * pk;
         }
-        basis = new_basis;
+        basis[0] *= -pk;
 
         // Add dd[k] * basis to coeffs.
         for (i, &b) in basis.iter().enumerate() {
