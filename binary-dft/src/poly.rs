@@ -10,10 +10,10 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
 use crate::domain::domain_point;
-use crate::lch::{BUTTERFLY_GRAIN, LchNtt};
+use crate::lch::BUTTERFLY_GRAIN;
 use crate::traits::AdditiveNtt;
 
-/// [`LchNtt`] over `BinaryField128`, with the data held in the polynomial basis throughout.
+/// [`LchNtt`](crate::LchNtt) over `BinaryField128`, with the data held in the polynomial basis throughout.
 ///
 /// A tower-basis product converts both operands into the polynomial basis and the result back,
 /// sixteen dependent table lookups apiece, which is most of what a butterfly costs. Converting
@@ -23,10 +23,11 @@ use crate::traits::AdditiveNtt;
 ///
 /// Without a carryless-multiply instruction that product is a bit-serial loop and slower than
 /// the tower arithmetic it replaces, so on such a target the transform runs in the tower basis
-/// instead. The choice is a constant and only one arm survives compilation.
+/// instead, using typed subfield multiplication when the twiddle permits it.
+/// The choice is a constant and only one arm survives compilation.
 #[derive(Clone, Debug, Default)]
 pub struct PolyBasisNtt {
-    tower: LchNtt<BinaryField128>,
+    tower: crate::tower::TowerNtt,
 }
 
 /// Stage shifts and the XOR increments between consecutive block twiddles.
