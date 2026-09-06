@@ -2,7 +2,7 @@
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
-use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt};
+use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt, PolyBasisNtt};
 use p3_binary_field::{BinaryField32, BinaryField64, BinaryField128, TowerLevel};
 use p3_commit::Encoder;
 use p3_dft::Radix2DFTSmallBatch;
@@ -93,5 +93,113 @@ fn bench_encode(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_ntt, bench_encode);
+/// Direct polynomial-backend workloads, including small later-round domains.
+fn bench_poly(c: &mut Criterion) {
+    eprintln!(
+        "binary-dft: parallel={}, threads={}, hardware_clmul={}",
+        cfg!(feature = "parallel"),
+        p3_maybe_rayon::prelude::current_num_threads(),
+        p3_binary_field::poly_basis::HAS_HARDWARE_CLMUL
+    );
+    let mut group = c.benchmark_group("poly");
+    group.sample_size(10);
+    let mut rng = SmallRng::seed_from_u64(7);
+    let ntt = PolyBasisNtt::default();
+    let encoder = AdditiveRsEncoder::<BinaryField128>::default();
+    let shift = BinaryField128::from_repr(1 << 127);
+    for log_height in [4, 8, 12, 16] {
+        for width in [1, 4, 16, 64] {
+            let mat = RowMajorMatrix::<BinaryField128>::rand(&mut rng, 1 << log_height, width);
+            let parameter = format!("h{log_height}/w{width}");
+            for op in ["forward", "inverse", "shifted"] {
+                group.bench_with_input(BenchmarkId::new(op, &parameter), &mat, |b, mat| {
+                    b.iter_batched(
+                        || mat.clone(),
+                        |m| match op {
+                            "forward" => ntt.ntt_batch(m),
+                            "inverse" => ntt.intt_batch(m),
+                            _ => ntt.shifted_ntt_batch(m, shift),
+                        },
+                        BatchSize::PerIteration,
+                    );
+                });
+            }
+            for added in [0, 1, 2, 3] {
+                group.bench_with_input(
+                    BenchmarkId::new(format!("lde/r{added}"), &parameter),
+                    &mat,
+                    |b, mat| {
+                        b.iter_batched(
+                            || mat.clone(),
+                            |m| ntt.shifted_lde_batch(m, added, shift),
+                            BatchSize::PerIteration,
+                        );
+                    },
+                );
+                group.bench_with_input(
+                    BenchmarkId::new(format!("encode/r{added}"), &parameter),
+                    &mat,
+                    |b, mat| {
+                        b.iter_batched(
+                            || mat.clone(),
+                            |m| encoder.encode_batch(m, added),
+                            BatchSize::PerIteration,
+                        );
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
+/// The production layout, encoder and Merkle commitment together.
+fn bench_commit(c: &mut Criterion) {
+    use p3_binary_field::BinaryChallenger;
+    use p3_challenger::HashChallenger;
+    use p3_keccak::Keccak256Hash;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::commit::commit_base;
+    use p3_sumcheck::strategy::VariableOrder;
+    use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+
+    type Hash = SerializingHasher<Keccak256Hash>;
+    type Compress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
+    type Mmcs = MerkleTreeMmcs<BinaryField128, u8, Hash, Compress, 2, 32>;
+    type Challenger = BinaryChallenger<BinaryField128, HashChallenger<u8, Keccak256Hash, 32>>;
+    let mmcs = Mmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
+    let encoder = AdditiveRsEncoder::<BinaryField128>::default();
+    let mut rng = SmallRng::seed_from_u64(11);
+    let mut group = c.benchmark_group("commit_base");
+    group.sample_size(10);
+    for log_height in [8, 12, 16] {
+        for folding in [0, 2, 4, 6] {
+            let matrix =
+                RowMajorMatrix::<BinaryField128>::rand(&mut rng, 1 << log_height, 1 << folding);
+            let poly = Poly::new(matrix.values);
+            for added in [1, 2, 3] {
+                for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
+                    let parameter = format!("{order:?}/h{log_height}/w{}/r{added}", 1 << folding);
+                    group.bench_function(parameter, |b| {
+                        b.iter(|| {
+                            commit_base(
+                                order,
+                                &encoder,
+                                &mmcs,
+                                &mut Challenger::from_hasher(Vec::new(), Keccak256Hash),
+                                &poly,
+                                folding,
+                                added,
+                            )
+                        });
+                    });
+                }
+            }
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_ntt, bench_encode, bench_poly, bench_commit);
 criterion_main!(benches);
