@@ -1469,6 +1469,90 @@ mod babybear_pcs {
     }
 
     #[test]
+    fn pcs_still_accepts_a_non_sync_dft() {
+        #[derive(Clone, Default)]
+        struct LocalDft(core::cell::Cell<usize>);
+        impl p3_dft::TwoAdicSubgroupDft<Val> for LocalDft {
+            type Evaluations = <Dft as p3_dft::TwoAdicSubgroupDft<Val>>::Evaluations;
+            fn dft_batch(&self, mat: RowMajorMatrix<Val>) -> Self::Evaluations {
+                self.0.set(self.0.get() + 1);
+                Dft::default().dft_batch(mat)
+            }
+        }
+        type LocalPcs =
+            TwoAdicStirPcs<Val, LocalDft, ValMmcs, ChallengeMmcs, Challenge, Challenger>;
+        let perm = Perm::new_from_rng_128(&mut seeded_rng());
+        let (mmcs, challenge_mmcs) = make_mmcs(&perm);
+        let pcs = LocalPcs::new(
+            LocalDft::default(),
+            mmcs,
+            StirParameters {
+                log_blowup: 1,
+                log_folding_factor: 2,
+                log_starting_folding_factor: 2,
+                soundness_type: SecurityAssumption::CapacityBound,
+                security_level: 16,
+                max_pow_bits: 0,
+                mmcs: challenge_mmcs,
+            },
+        );
+        let domain = pcs.natural_domain_for_degree(16);
+        let input = RowMajorMatrix::<Val>::rand(&mut seeded_rng(), 16, 2);
+        let (_, data) = pcs.commit(vec![(domain, input)]);
+        let mut challenger = Challenger::new(perm);
+        let point = challenger.sample_algebra_element();
+        pcs.open(vec![(&data, vec![vec![point]])], &mut challenger);
+    }
+
+    #[test]
+    fn parallel_ldes_preserve_order_commitments_and_proofs() {
+        let (pcs, base) = get_pcs_with_spread(3);
+        let enabled = pcs.clone().with_parallel_ldes(true);
+        let disabled = enabled.clone().with_parallel_ldes(false);
+        let mut rng = seeded_rng();
+        for heights in [vec![4; 8], vec![10], vec![10, 8, 10, 6], vec![8; 16]] {
+            let inputs: Vec<_> = heights
+                .iter()
+                .enumerate()
+                .map(|(i, &height)| {
+                    let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                        &pcs,
+                        1 << height,
+                    );
+                    (
+                        domain,
+                        RowMajorMatrix::<Val>::rand(&mut rng, 1 << height, i % 3 + 1),
+                    )
+                })
+                .collect();
+            let (commit, data) = pcs.commit(inputs.clone());
+            let mut transcript = base.clone();
+            observe_commitment(&mut transcript, &commit);
+            let point = transcript.sample_algebra_element();
+            let (opened, proof) = pcs.open(
+                vec![(&data, vec![vec![point]; inputs.len()])],
+                &mut transcript.clone(),
+            );
+            for candidate in [&enabled, &disabled] {
+                let (other_commit, other_data) = candidate.commit(inputs.clone());
+                assert_eq!(commit, other_commit);
+                let ldes = candidate.get_quotient_ldes(inputs.clone(), 1);
+                assert_eq!(candidate.commit_ldes(ldes).0, commit);
+                let (other_opened, other_proof) = candidate.open(
+                    vec![(&other_data, vec![vec![point]; inputs.len()])],
+                    &mut transcript.clone(),
+                );
+                assert_eq!(opened, other_opened);
+                assert_eq!(
+                    postcard::to_allocvec(&proof).unwrap(),
+                    postcard::to_allocvec(&other_proof).unwrap()
+                );
+            }
+        }
+        assert!(enabled.get_quotient_ldes(Vec::new(), 1).is_empty());
+    }
+
+    #[test]
     fn width_aware_policy_round_trips_pooled_commitments_and_authenticates_widths() {
         let (default_pcs, mut base) = get_pcs_with_spread(3);
         let pcs = default_pcs.clone().with_width_aware_grouping(true);

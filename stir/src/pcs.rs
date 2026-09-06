@@ -289,6 +289,46 @@ const CONFIG_CACHE_CAPACITY: usize = 256;
 /// does not, so wider spreads get their own domain.
 pub const DEFAULT_MAX_LOG_HEIGHT_SPREAD: usize = 3;
 
+// An absent transform preserves an already extended, bit-reversed matrix.
+type LdeJob<Val> = (Vec<Val>, usize, Option<(usize, Val)>);
+type LdeBatchFn<Val, Dft> = fn(&Dft, Vec<LdeJob<Val>>) -> Vec<Vec<Val>>;
+
+fn extend_lde_job<Val: TwoAdicField, Dft: TwoAdicSubgroupDft<Val>>(
+    dft: &Dft,
+    (values, width, transform): LdeJob<Val>,
+) -> Vec<Val> {
+    match transform {
+        None => values,
+        Some((extra_bits, shift)) => {
+            dft.coset_lde_batch(RowMajorMatrix::new(values, width), extra_bits, shift)
+                .bit_reverse_rows()
+                .to_row_major_matrix()
+                .values
+        }
+    }
+}
+
+fn parallel_ldes<Val: TwoAdicField, Dft: TwoAdicSubgroupDft<Val> + Sync>(
+    dft: &Dft,
+    jobs: Vec<LdeJob<Val>>,
+) -> Vec<Vec<Val>> {
+    let (active, work) = jobs
+        .iter()
+        .filter(|job| job.2.is_some())
+        .fold((0usize, 0usize), |(count, work), job| {
+            (count + 1, work.saturating_add(job.0.len()))
+        });
+    if active < 2 || work < 4096 {
+        jobs.into_iter()
+            .map(|job| extend_lde_job(dft, job))
+            .collect()
+    } else {
+        jobs.into_par_iter()
+            .map(|job| extend_lde_job(dft, job))
+            .collect()
+    }
+}
+
 /// A polynomial commitment scheme using STIR to generate opening proofs.
 #[derive(Clone, Debug)]
 pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> {
@@ -302,6 +342,7 @@ pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> 
     /// everything on one domain. See [`DEFAULT_MAX_LOG_HEIGHT_SPREAD`].
     max_log_height_spread: usize,
     width_aware_grouping: bool,
+    lde_batch: Option<LdeBatchFn<Val, Dft>>,
     /// `StirConfig::try_new` runs an 80-iteration floating-point bisection per stage to
     /// derive sound round parameters. `open`/`verify` re-derive it per LDE-height bucket, and
     /// bucket shapes recur across calls and across proofs of the same statement, so caching
@@ -322,6 +363,7 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
             stir,
             max_log_height_spread: DEFAULT_MAX_LOG_HEIGHT_SPREAD,
             width_aware_grouping: false,
+            lde_batch: None,
             config_cache: Arc::new(RwLock::new(alloc::collections::BTreeMap::new())),
         }
     }
@@ -345,6 +387,39 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
     pub const fn with_width_aware_grouping(mut self, enabled: bool) -> Self {
         self.width_aware_grouping = enabled;
         self
+    }
+
+    /// Schedule independent matrix LDEs in parallel when the `parallel` feature is enabled.
+    /// Defaults to false; matrix order and commitments are unchanged. Single jobs and small
+    /// batches run directly, preserving the DFT's own parallelism.
+    #[must_use]
+    pub fn with_parallel_ldes(mut self, enabled: bool) -> Self
+    where
+        Val: TwoAdicField,
+        Dft: TwoAdicSubgroupDft<Val> + Sync,
+    {
+        self.lde_batch = enabled.then_some(parallel_ldes::<Val, Dft>);
+        self
+    }
+
+    fn extend_ldes(&self, jobs: Vec<LdeJob<Val>>) -> Vec<RowMajorMatrix<Val>>
+    where
+        Val: TwoAdicField,
+        Dft: TwoAdicSubgroupDft<Val>,
+    {
+        let widths: Vec<_> = jobs.iter().map(|job| job.1).collect();
+        let values = match self.lde_batch {
+            Some(extend) => extend(&self.dft, jobs),
+            None => jobs
+                .into_iter()
+                .map(|job| extend_lde_job(&self.dft, job))
+                .collect(),
+        };
+        values
+            .into_iter()
+            .zip(widths)
+            .map(|(values, width)| RowMajorMatrix::new(values, width))
+            .collect()
     }
 
     /// How wide a native-height spread this instance lets share one LDE domain.
@@ -757,23 +832,20 @@ where
             .collect();
         let widths: Vec<usize> = inputs.iter().map(|(_, matrix)| matrix.width()).collect();
         let plan = self.plan_groups_with_widths(&log_native_heights, &widths);
-        let grouped: Vec<_> = inputs
+        let jobs = inputs
             .into_iter()
             .zip(&log_native_heights)
             .zip(&plan.group_of_matrix)
             .map(|(((domain, evals), &log_native_height), &group_idx)| {
-                // Effective per-matrix blowup: `log_blowup` for the tallest matrix in the
-                // group, and one extra bit per octave of height below it — which is what the
-                // spread cap bounds. See the module-level cost note.
                 let extra_bits = plan.log_lde_heights[group_idx] - log_native_height;
                 let shift = Val::GENERATOR / domain.shift();
-                let lde = self
-                    .dft
-                    .coset_lde_batch(evals, extra_bits, shift)
-                    .bit_reverse_rows()
-                    .to_row_major_matrix();
-                group_fiber_rows(lde, self.stir.log_starting_folding_factor)
+                (evals.values, evals.width, Some((extra_bits, shift)))
             })
+            .collect();
+        let grouped = self
+            .extend_ldes(jobs)
+            .into_iter()
+            .map(|lde| group_fiber_rows(lde, self.stir.log_starting_folding_factor))
             .collect();
         self.commit_groups(&plan, grouped, &log_native_heights, &widths)
     }
@@ -816,7 +888,7 @@ where
         _num_chunks: usize,
     ) -> Vec<RowMajorMatrix<Val>> {
         let min_height = 1usize << self.stir.log_starting_folding_factor;
-        evaluations
+        let jobs = evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
@@ -828,12 +900,14 @@ where
                     self.stir.log_starting_folding_factor,
                 );
                 let shift = Val::GENERATOR / domain.shift();
-                self.dft
-                    .coset_lde_batch(evals, self.stir.log_blowup, shift)
-                    .bit_reverse_rows()
-                    .to_row_major_matrix()
+                (
+                    evals.values,
+                    evals.width,
+                    Some((self.stir.log_blowup, shift)),
+                )
             })
-            .collect()
+            .collect();
+        self.extend_ldes(jobs)
     }
 
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
@@ -865,26 +939,31 @@ where
             .collect();
         let widths: Vec<usize> = ldes.iter().map(Matrix::width).collect();
         let plan = self.plan_groups_with_widths(&log_native_heights, &widths);
-        let grouped: Vec<_> = ldes
+        let jobs = ldes
             .into_iter()
             .zip(&log_native_heights)
             .zip(&plan.group_of_matrix)
             .map(|((lde, &log_native_height), &group_idx)| {
                 let log_lde_height = plan.log_lde_heights[group_idx];
-                let extended = if lde.height() == 1usize << log_lde_height {
-                    lde
+                if lde.height() == 1usize << log_lde_height {
+                    (lde.values, lde.width, None)
                 } else {
                     // A bit-reversed prefix is the native-size strided coset. Treat its
                     // GENERATOR shift as part of the polynomial, so re-extension uses shift 1.
                     let (native, _) = lde.split_rows(1usize << log_native_height);
                     let natural = native.bit_reverse_rows().to_row_major_matrix();
-                    self.dft
-                        .coset_lde_batch(natural, log_lde_height - log_native_height, Val::ONE)
-                        .bit_reverse_rows()
-                        .to_row_major_matrix()
-                };
-                group_fiber_rows(extended, self.stir.log_starting_folding_factor)
+                    (
+                        natural.values,
+                        natural.width,
+                        Some((log_lde_height - log_native_height, Val::ONE)),
+                    )
+                }
             })
+            .collect();
+        let grouped = self
+            .extend_ldes(jobs)
+            .into_iter()
+            .map(|lde| group_fiber_rows(lde, self.stir.log_starting_folding_factor))
             .collect();
         self.commit_groups(&plan, grouped, &log_native_heights, &widths)
     }
