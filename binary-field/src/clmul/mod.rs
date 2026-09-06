@@ -156,6 +156,20 @@ pub(crate) fn mul_128(a: u128, b: u128) -> u128 {
     basis::poly_to_tower_128(product)
 }
 
+/// A narrow hardware consumer: independent dot-product terms amortize the basis changes.
+#[inline]
+pub(crate) fn dot_product_32(pairs: impl Iterator<Item = (u32, u32)>) -> u32 {
+    let product = pairs.fold(0u64, |sum, (a, b)| {
+        sum ^ clmul_64x64(
+            basis::tower_to_poly_32(a) as u64,
+            basis::tower_to_poly_32(b) as u64,
+        ) as u64
+    });
+    let fold = clmul_64x64(product >> 32, basis::TAIL_32 as u64) as u64;
+    let spill = clmul_64x64(fold >> 32, basis::TAIL_32 as u64) as u32;
+    basis::poly_to_tower_32(product as u32 ^ fold as u32 ^ spill)
+}
+
 /// Sum unreduced products before paying for one reduction and one output basis change.
 #[inline]
 pub(crate) fn dot_product_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
@@ -207,7 +221,7 @@ mod tests {
 
     use super::basis::{TAIL_64, TAIL_128, poly_mul};
     use crate::tower::TowerLevel;
-    use crate::{BinaryField64, BinaryField128};
+    use crate::{BinaryField32, BinaryField64, BinaryField128};
 
     /// The carryless product of two 128-bit polynomials, one bit of `b` at a time.
     fn scalar_clmul_128x128(a: u128, b: u128) -> (u128, u128) {
@@ -232,6 +246,13 @@ mod tests {
             let y = BinaryField128::from_repr(b);
             prop_assert_eq!(super::mul_128(a, b), x.reference_mul(y).to_repr());
             prop_assert_eq!(super::poly_mul_128_batch(a, b), poly_mul(a, b, 128, TAIL_128));
+        }
+
+        #[test]
+        fn narrow_dot_product_matches_reference(a: u32, b: u32, c: u32, d: u32) {
+            let expected = BinaryField32::from_repr(a).reference_mul(BinaryField32::from_repr(b))
+                + BinaryField32::from_repr(c).reference_mul(BinaryField32::from_repr(d));
+            prop_assert_eq!(super::dot_product_32([(a, b), (c, d)].into_iter()), expected.to_repr());
         }
 
         #[test]

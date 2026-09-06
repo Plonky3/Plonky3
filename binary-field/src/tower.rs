@@ -372,7 +372,11 @@ macro_rules! binary_tower_level {
             fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
                 if N == 0 { return Self::ZERO; }
                 if N == 1 { return u[0] * v[0]; }
-                if HAS_HARDWARE_CLMUL && Self::BITS == 64 {
+                if HAS_HARDWARE_CLMUL && Self::BITS == 32 {
+                    Self::from_repr(crate::clmul::dot_product_32(
+                        u.iter().zip(v).map(|(a, b)| (a.0 as u32, b.0 as u32)),
+                    ) as $repr)
+                } else if HAS_HARDWARE_CLMUL && Self::BITS == 64 {
                     Self::from_repr(crate::clmul::dot_product_64(
                         u.iter().zip(v).map(|(a, b)| (a.0 as u64, b.0 as u64)),
                     ) as $repr)
@@ -767,6 +771,15 @@ mod tests {
                 .map(|(&a, &b)| a.reference_mul(b))
                 .sum::<BinaryField128>();
             assert_eq!(BinaryField128::dot_product(&u, &v), expected);
+            let u32 = u.map(|x| BinaryField32::from_repr(x.to_repr() as u32));
+            let v32 = v.map(|x| BinaryField32::from_repr(x.to_repr() as u32));
+            assert_eq!(
+                BinaryField32::dot_product(&u32, &v32),
+                u32.iter()
+                    .zip(&v32)
+                    .map(|(&a, &b)| a.reference_mul(b))
+                    .sum()
+            );
             let u = u.map(|x| BinaryField64::from_repr(x.to_repr() as u64));
             let v = v.map(|x| BinaryField64::from_repr(x.to_repr() as u64));
             assert_eq!(
