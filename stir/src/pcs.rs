@@ -941,11 +941,7 @@ where
                 let log_arity0 = stir_config.log_starting_folding_factor;
                 let lanes = sample_lanes::<Val, _>(challenger, first_round.draws.len(), log_arity0);
                 let positions = query_positions(&first_round.draws, &lanes, log_h, log_arity0);
-                // The LDE is stored bit-reversed, so natural position `p` is row `rev(p)`.
-                let row_indices: Vec<usize> = positions
-                    .iter()
-                    .map(|&p| reverse_bits_len(p, log_h))
-                    .collect();
+                let row_indices = positions_to_row_indices(&positions, log_h);
 
                 let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> = prover_data
                     .iter()
@@ -1468,10 +1464,7 @@ where
                 sample_lanes::<Val, _>(challenger, output.first_round_draws.len(), log_arity0);
             let positions = query_positions(&output.first_round_draws, &lanes, log_h, log_arity0);
             let n_q = positions.len();
-            let row_indices: Vec<usize> = positions
-                .iter()
-                .map(|&p| reverse_bits_len(p, log_h))
-                .collect();
+            let row_indices = positions_to_row_indices(&positions, log_h);
             // Coset point of each queried position: `GENERATOR * g^p`.
             let query_points: Vec<Val> = positions
                 .iter()
@@ -1752,7 +1745,6 @@ fn sample_lanes<Val, Challenger>(
     log_arity0: usize,
 ) -> Vec<usize>
 where
-    Val: TwoAdicField,
     Challenger: CanSampleUniformBits<Val>,
 {
     (0..num_draws)
@@ -1789,6 +1781,15 @@ fn query_positions(
 /// A natural-order position's `(fiber index, lane)`, inverting [`query_positions`].
 const fn split_position(position: usize, fold_height0: usize) -> (usize, usize) {
     (position % fold_height0, position / fold_height0)
+}
+
+/// The bit-reversed LDE row index of each natural-order position: the LDE is stored
+/// bit-reversed, so natural position `p` is row `rev(p)`.
+fn positions_to_row_indices(positions: &[usize], log_h: usize) -> Vec<usize> {
+    positions
+        .iter()
+        .map(|&p| reverse_bits_len(p, log_h))
+        .collect()
 }
 
 /// One commitment's claims: per matrix, its domain and its `(point, values)` pairs.

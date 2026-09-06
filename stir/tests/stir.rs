@@ -1277,6 +1277,11 @@ mod babybear_pcs {
         challenger.observe(commit.clone());
     }
 
+    /// `log_starting_folding_factor` of [`get_pcs_with_spread`]'s STIR parameters: the round-0
+    /// fold arity, i.e. the length of each fiber the PCS opens against the committed initial
+    /// oracle.
+    const LOG_STARTING_FOLDING_FACTOR: usize = 2;
+
     fn get_pcs() -> (MyPcs, Challenger) {
         get_pcs_with_spread(p3_stir::DEFAULT_MAX_LOG_HEIGHT_SPREAD)
     }
@@ -1290,7 +1295,7 @@ mod babybear_pcs {
         let stir_params = StirParameters {
             log_blowup: 1,
             log_folding_factor: 2,
-            log_starting_folding_factor: 2,
+            log_starting_folding_factor: LOG_STARTING_FOLDING_FACTOR,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: 16,
             max_pow_bits: 0,
@@ -2547,7 +2552,12 @@ mod babybear_pcs {
             .query_openings
             .as_ref()
             .expect("round 0 opens the committed initial oracle");
-        assert!(fibers.row_evals.iter().all(|fiber| fiber.len() == 1 << 2));
+        assert!(
+            fibers
+                .row_evals
+                .iter()
+                .all(|fiber| fiber.len() == 1 << LOG_STARTING_FOLDING_FACTOR)
+        );
 
         let opening = input_openings[0]
             .as_ref()
@@ -3214,8 +3224,8 @@ mod babybear_pcs {
 
 mod babybear_stir_multi {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_stir::prover::{prove_stir, prove_stir_multi};
-    use p3_stir::verifier::verify_stir_multi;
+    use p3_stir::prover::{prove_stir, prove_stir_multi, prove_stir_multi_from_external_codewords};
+    use p3_stir::verifier::{verify_stir_multi, verify_stir_multi_with_external_initial};
 
     use super::*;
 
@@ -3324,6 +3334,107 @@ mod babybear_stir_multi {
             assert_eq!(first_round.draws, output.first_round_draws);
             assert_eq!(sorted_dedup(&first_round.draws), first_round.unique_sorted);
             assert_eq!(output.first_round_indices, first_round.unique_sorted);
+        }
+    }
+
+    /// The result an external fiber source returns.
+    type FiberResult = Result<Vec<Vec<EF>>, StirError<<MyMmcs as Mmcs<EF>>::Error>>;
+
+    /// Fiber source for one instance's external codeword, honest for the indices STIR queries
+    /// in the round that reads it: lane `l` of query `j` sits at natural-order position
+    /// `j + l * fold_height`, mirroring `verify_external_initial`'s single-instance source.
+    fn external_fiber_source(
+        codeword: Vec<EF>,
+        arity: usize,
+        fold_height: usize,
+    ) -> impl FnOnce(&[usize]) -> FiberResult {
+        move |js: &[usize]| {
+            Ok(js
+                .iter()
+                .map(|&j| (0..arity).map(|l| codeword[j + l * fold_height]).collect())
+                .collect())
+        }
+    }
+
+    /// Prove and verify two different-degree instances whose initial oracles are external,
+    /// exercising `verify_stir_multi_inner`'s per-instance external-oracle wiring: distinct
+    /// `external_fibers[i]` sources, `is_external` flags, and right-aligned instance offsets,
+    /// none of which any other test drives with `initial_is_external == true`.
+    #[test]
+    fn test_multi_external_initial_oracle_verifies() {
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        let log_degrees = [8usize, 6];
+        let (configs, polys) = make_instances(&params, &log_degrees);
+        let config_refs: Vec<&StirConfig<F, EF, MyMmcs, Challenger>> = configs.iter().collect();
+
+        let codewords: Vec<Vec<EF>> = configs
+            .iter()
+            .zip(polys)
+            .map(|(config, coeffs)| {
+                codeword_from_coeffs(
+                    &dft,
+                    coeffs,
+                    F::GENERATOR,
+                    config.log_starting_domain_size(),
+                )
+            })
+            .collect();
+
+        // Binding each codeword before proving is the caller's job. Observing its values
+        // stands in for the PCS layer's input commitments, as in `verify_external_initial`.
+        let mut p_ch = challenger.clone();
+        for codeword in &codewords {
+            p_ch.observe_algebra_slice(codeword);
+        }
+        let results = prove_stir_multi_from_external_codewords(
+            &config_refs,
+            codewords.clone(),
+            &dft,
+            &mut p_ch,
+        );
+        assert_eq!(results.len(), log_degrees.len());
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+
+        let mut v_ch = challenger;
+        for codeword in &codewords {
+            v_ch.observe_algebra_slice(codeword);
+        }
+
+        let initial_fibers: Vec<_> = configs
+            .iter()
+            .zip(&codewords)
+            .map(|(config, codeword)| {
+                let arity = 1usize << config.log_starting_folding_factor;
+                let fold_height = (1usize << config.log_starting_domain_size()) / arity;
+                external_fiber_source(codeword.clone(), arity, fold_height)
+            })
+            .collect();
+
+        let outputs = verify_stir_multi_with_external_initial::<F, EF, MyMmcs, Challenger, (), _>(
+            &config_refs,
+            &proofs,
+            &mut v_ch,
+            initial_fibers,
+        )
+        .expect("honest multi-instance external-oracle proof verifies");
+
+        for (((config, codeword), (_, first_round)), output) in
+            configs.iter().zip(&codewords).zip(&results).zip(&outputs)
+        {
+            let arity = 1usize << config.log_starting_folding_factor;
+            let fold_height = (1usize << config.log_starting_domain_size()) / arity;
+
+            assert_eq!(sorted_dedup(&first_round.draws), first_round.unique_sorted);
+            assert_eq!(output.first_round_indices, first_round.unique_sorted);
+
+            for (&j, evals) in output
+                .first_round_indices
+                .iter()
+                .zip(&output.first_round_fiber_evals)
+            {
+                let expected: Vec<EF> = (0..arity).map(|l| codeword[j + l * fold_height]).collect();
+                assert_eq!(evals, &expected);
+            }
         }
     }
 
