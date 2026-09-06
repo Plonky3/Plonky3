@@ -2511,6 +2511,149 @@ mod babybear_pcs {
         );
     }
 
+    /// Every bucket's STIR proof carries its own initial-oracle commitment and opens that
+    /// commitment's fibers in round 0, while the input openings hold one LDE row per matrix
+    /// per queried position.
+    #[test]
+    fn test_pcs_proof_commits_the_initial_oracle_and_opens_single_input_rows() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let width = 3;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+
+        let mut p_ch = challenger_template;
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        observe_commitment(&mut p_ch, &commit);
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (_, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        assert_eq!(proof.len(), 1);
+        let (stir_proof, input_openings) = &proof[0];
+        assert!(stir_proof.initial_commitment.is_some());
+        let round0 = stir_proof
+            .round_proofs
+            .first()
+            .expect("log_d = 6 has intermediate rounds");
+        let fibers = round0
+            .query_openings
+            .as_ref()
+            .expect("round 0 opens the committed initial oracle");
+        assert!(fibers.row_evals.iter().all(|fiber| fiber.len() == 1 << 2));
+
+        let opening = input_openings[0]
+            .as_ref()
+            .expect("the commitment sits on this bucket");
+        assert!(!opening.opened_values.is_empty());
+        assert!(
+            opening
+                .opened_values
+                .iter()
+                .all(|per_query| per_query.len() == 1 && per_query[0].len() == width),
+            "one row of the single committed matrix per queried position"
+        );
+    }
+
+    /// The round-0 fibers are authenticated against STIR's own commitment: a changed lane
+    /// value fails the Merkle check before any lane comparison runs.
+    #[test]
+    fn test_pcs_rejects_a_tampered_initial_oracle_fiber() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 3);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        observe_commitment(&mut p_ch, &commit);
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        proof[0].0.round_proofs[0]
+            .query_openings
+            .as_mut()
+            .expect("round 0 opens the committed initial oracle")
+            .row_evals[0][0] += Challenge::ONE;
+
+        let mut v_ch = challenger_template;
+        observe_commitment(&mut v_ch, &commit);
+        let _v_zeta: Challenge = v_ch.sample_algebra_element();
+        let claims = vec![(
+            commit,
+            vec![(domain, vec![(zeta, opening_values[0][0][0].clone())])],
+        )];
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
+            .expect_err("a tampered initial-oracle fiber must be rejected");
+        assert!(
+            matches!(
+                err,
+                StirError::InvalidMmcsProof {
+                    round: RoundLabel::Round(0),
+                    ..
+                }
+            ),
+            "expected the round-0 Merkle check to fail, got {err:?}"
+        );
+    }
+
+    /// The single input row per query is authenticated against the input commitment.
+    #[test]
+    fn test_pcs_rejects_a_tampered_input_row() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 3);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        observe_commitment(&mut p_ch, &commit);
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        proof[0].1[0]
+            .as_mut()
+            .expect("the commitment sits on this bucket")
+            .opened_values[0][0][0] += Val::ONE;
+
+        let mut v_ch = challenger_template;
+        observe_commitment(&mut v_ch, &commit);
+        let _v_zeta: Challenge = v_ch.sample_algebra_element();
+        let claims = vec![(
+            commit,
+            vec![(domain, vec![(zeta, opening_values[0][0][0].clone())])],
+        )];
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
+            .expect_err("a tampered input row must be rejected");
+        assert!(
+            matches!(err, StirError::InputError(_)),
+            "expected the input Merkle check to fail, got {err:?}"
+        );
+    }
+
     /// A per-commitment `opened_values` vector truncated to fewer rows than the queried
     /// positions must be rejected before the MMCS multi-batch verification (which expects
     /// matching lengths) is even called.
