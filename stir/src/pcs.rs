@@ -839,21 +839,12 @@ where
                 let extended = if lde.height() == 1usize << log_lde_height {
                     lde
                 } else {
-                    // Recovering the polynomial and evaluating it on the wider coset is a
-                    // forward transform of its coefficients, zero-padded to the target size.
-                    // A second `lde` would instead read those coefficients back as evaluations
-                    // on a subgroup, and extend a different polynomial.
-                    let natural_lde = lde.bit_reverse_rows().to_row_major_matrix();
-                    let mut coeffs = self.dft.coset_idft_batch(natural_lde, Val::GENERATOR);
-                    let width = coeffs.width();
-                    coeffs
-                        .values
-                        .truncate((1usize << log_native_height) * width);
-                    coeffs
-                        .values
-                        .resize((1usize << log_lde_height) * width, Val::ZERO);
+                    // A bit-reversed prefix is the native-size strided coset. Treat its
+                    // GENERATOR shift as part of the polynomial, so re-extension uses shift 1.
+                    let (native, _) = lde.split_rows(1usize << log_native_height);
+                    let natural = native.bit_reverse_rows().to_row_major_matrix();
                     self.dft
-                        .coset_dft_batch(coeffs, Val::GENERATOR)
+                        .coset_lde_batch(natural, log_lde_height - log_native_height, Val::ONE)
                         .bit_reverse_rows()
                         .to_row_major_matrix()
                 };
