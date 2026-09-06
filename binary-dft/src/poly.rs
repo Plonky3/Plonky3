@@ -66,8 +66,51 @@ impl Twiddles {
     }
 }
 
+/// Schedule enough butterfly-sized work per worker to amortize parallel dispatch.
+// The serial dependency exposes a `const` thread-count query, while the parallel
+// implementation cannot; keep this shared scheduler callable in both configurations.
+#[allow(clippy::missing_const_for_fn)]
+fn use_parallel(elements: usize) -> bool {
+    let threads = p3_maybe_rayon::prelude::current_num_threads();
+    threads > 1 && elements >= 2 * BUTTERFLY_GRAIN * threads
+}
+
+fn for_chunks(
+    values: &mut [u128],
+    chunk_len: usize,
+    stages: usize,
+    operation: impl Fn((usize, &mut [u128])) + Send + Sync,
+) {
+    if values.len() > chunk_len && use_parallel(values.len().saturating_mul(stages.max(1))) {
+        values
+            .par_chunks_mut(chunk_len)
+            .enumerate()
+            .for_each(operation);
+    } else {
+        values.chunks_mut(chunk_len).enumerate().for_each(operation);
+    }
+}
+
+fn convert(values: &mut [u128], conversion: impl Fn(u128) -> u128 + Send + Sync) {
+    // Basis conversion does several dependent lookups per element, more work than
+    // a butterfly, so it amortizes dispatch at a smaller byte volume.
+    if use_parallel(values.len().saturating_mul(4)) {
+        values
+            .par_iter_mut()
+            .for_each(|value| *value = conversion(*value));
+    } else {
+        values
+            .iter_mut()
+            .for_each(|value| *value = conversion(*value));
+    }
+}
+
 /// A stage uses bounded chunks, each starting from its own independently indexed twiddle.
 fn stage(values: &mut [u128], half: usize, j: usize, twiddles: &Twiddles, inverse: bool) {
+    if !use_parallel(values.len()) {
+        local_stage(values, half, j, twiddles, inverse, 0);
+        return;
+    }
     let blocks_per_chunk = (BUTTERFLY_GRAIN / (half << 1)).max(1);
     values
         .par_chunks_mut((half << 1) * blocks_per_chunk)
@@ -131,22 +174,19 @@ fn local_stages(
     let rows = (TILE_BYTES / core::mem::size_of::<u128>() / width).max(1);
     let local = p3_util::log2_floor_usize(rows).min(log_n);
     let tile_len = (1 << local) * width;
-    values
-        .par_chunks_mut(tile_len)
-        .enumerate()
-        .for_each(|(tile, values)| {
-            for k in 0..local {
-                let j = if inverse { k } else { local - 1 - k };
-                local_stage(
-                    values,
-                    (1 << j) * width,
-                    j,
-                    twiddles,
-                    inverse,
-                    tile << (local - j - 1),
-                );
-            }
-        });
+    for_chunks(values, tile_len, local, |(tile, values)| {
+        for k in 0..local {
+            let j = if inverse { k } else { local - 1 - k };
+            local_stage(
+                values,
+                (1 << j) * width,
+                j,
+                twiddles,
+                inverse,
+                tile << (local - j - 1),
+            );
+        }
+    });
     local
 }
 
@@ -201,15 +241,13 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .into_iter()
             .map(BinaryField128::to_repr)
             .collect();
-        values
-            .par_iter_mut()
-            .for_each(|v| *v = poly_basis::from_tower(BinaryField128::from_repr(*v)));
+        convert(&mut values, |v| {
+            poly_basis::from_tower(BinaryField128::from_repr(v))
+        });
 
         forward(&mut values, width, log_n, shift);
 
-        values
-            .par_iter_mut()
-            .for_each(|v| *v = poly_basis::to_tower(*v).to_repr());
+        convert(&mut values, |v| poly_basis::to_tower(v).to_repr());
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
     }
@@ -232,24 +270,30 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .map(BinaryField128::to_repr)
             .collect();
         let (message, tail) = values.split_at_mut(len);
-        message.par_iter_mut().for_each(|v| {
-            *v = poly_basis::from_tower(BinaryField128::from_repr(*v));
+        convert(message, |v| {
+            poly_basis::from_tower(BinaryField128::from_repr(v))
         });
-        // Keep the coefficient prefix immutable until every other coset has copied it.
-        // Each worker transforms its final destination, without a temporary coset matrix.
-        tail.par_chunks_mut(len).enumerate().for_each(|(c, chunk)| {
-            chunk.copy_from_slice(message);
-            forward(
-                chunk,
-                width,
-                log_message,
-                domain_point((c + 1) << log_message),
-            );
-        });
-        forward(message, width, log_message, BinaryField128::ZERO);
-        values
-            .par_iter_mut()
-            .for_each(|v| *v = poly_basis::to_tower(*v).to_repr());
+        if len >= 2 * BUTTERFLY_GRAIN * p3_maybe_rayon::prelude::current_num_threads() {
+            // Keep large coefficient copies next to evaluation so the copied data
+            // is still hot, including when only one worker is available.
+            for_chunks(tail, len, log_message, |(c, chunk)| {
+                chunk.copy_from_slice(message);
+                forward(
+                    chunk,
+                    width,
+                    log_message,
+                    domain_point((c + 1) << log_message),
+                );
+            });
+            forward(message, width, log_message, BinaryField128::ZERO);
+        } else {
+            // Small cosets can run together after all coefficient copies are made.
+            for_chunks(tail, len, 1, |(_, chunk)| chunk.copy_from_slice(message));
+            for_chunks(&mut values, len, log_message, |(c, chunk)| {
+                forward(chunk, width, log_message, domain_point(c << log_message));
+            });
+        }
+        convert(&mut values, |v| poly_basis::to_tower(v).to_repr());
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
     }
@@ -282,28 +326,25 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .collect();
         let mut values = alloc::vec![0u128; padded_len];
         values[..len].copy_from_slice(&coeffs);
-        coeffs
-            .par_iter_mut()
-            .for_each(|v| *v = poly_basis::from_tower(BinaryField128::from_repr(*v)));
+        convert(&mut coeffs, |v| {
+            poly_basis::from_tower(BinaryField128::from_repr(v))
+        });
         inverse(&mut coeffs, width, log_n, shift);
 
         // The input evaluations already are the first coset. Only new cosets need
         // evaluation and conversion back from the polynomial basis.
-        values[len..]
-            .par_chunks_mut(len)
-            .enumerate()
-            .for_each(|(c, chunk)| {
-                chunk.copy_from_slice(&coeffs);
-                forward(
-                    chunk,
-                    width,
-                    log_n,
-                    shift + domain_point::<BinaryField128>((c + 1) << log_n),
-                );
-                for v in chunk {
-                    *v = poly_basis::to_tower(*v).to_repr();
-                }
-            });
+        for_chunks(&mut values[len..], len, log_n, |(c, chunk)| {
+            chunk.copy_from_slice(&coeffs);
+            forward(
+                chunk,
+                width,
+                log_n,
+                shift + domain_point::<BinaryField128>((c + 1) << log_n),
+            );
+            for v in chunk {
+                *v = poly_basis::to_tower(*v).to_repr();
+            }
+        });
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
     }
@@ -324,15 +365,13 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .into_iter()
             .map(BinaryField128::to_repr)
             .collect();
-        values
-            .par_iter_mut()
-            .for_each(|v| *v = poly_basis::from_tower(BinaryField128::from_repr(*v)));
+        convert(&mut values, |v| {
+            poly_basis::from_tower(BinaryField128::from_repr(v))
+        });
 
         inverse(&mut values, width, log_n, shift);
 
-        values
-            .par_iter_mut()
-            .for_each(|v| *v = poly_basis::to_tower(*v).to_repr());
+        convert(&mut values, |v| poly_basis::to_tower(v).to_repr());
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
     }
