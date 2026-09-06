@@ -242,11 +242,20 @@ where
                 current_log_domain,
             )
         });
-        self.fold_coeffs = coeffs_from_codeword(self.dft, &self.folded_codeword, self.fold_shift);
+        let folded_len =
+            1usize << (self.config.round_configs[self.round].log_degree - self.log_arity);
+        let stride = self.folded_codeword.len() / folded_len;
+        let native_evals: Vec<EF> = self
+            .folded_codeword
+            .iter()
+            .step_by(stride)
+            .copied()
+            .collect();
+        self.fold_coeffs = coeffs_from_codeword(self.dft, &native_evals, self.fold_shift);
 
-        self.next_commit_codeword = codeword_from_coeffs(
+        self.next_commit_codeword = eval_low_degree_on_coset(
             self.dft,
-            self.fold_coeffs.clone(),
+            &self.fold_coeffs,
             self.next_shift,
             self.next_log_domain,
         );
@@ -281,10 +290,7 @@ where
     /// Evaluate the folded polynomial at the sampled OOD points. The answers are the round's
     /// second prover message and must be absorbed by the caller.
     fn ood_answers(&mut self, ood_points: Vec<EF>) -> &[EF] {
-        // `fold_coeffs` is padded to the next round's full domain size, but the folded
-        // polynomial's true degree is bounded by the round's degree schedule (a fixed
-        // factor smaller); evaluating only the non-trivially-zero prefix cuts Horner's
-        // work by that same factor.
+        // Evaluate the folded polynomial using its degree-sized coefficient prefix.
         let rc = &self.config.round_configs[self.round];
         let folded_degree_bound = 1usize << (rc.log_degree - self.log_arity);
         let truncated = &self.fold_coeffs[..folded_degree_bound.min(self.fold_coeffs.len())];
@@ -1265,6 +1271,40 @@ where
     prove_stir_multi_inner(configs, initial_codewords, dft, challenger, false)
 }
 
+/// Evaluate a degree-bounded polynomial using small transforms on interleaved cosets.
+fn eval_low_degree_on_coset<F, EF, Dft>(
+    dft: &Dft,
+    coeffs: &[EF],
+    shift: F,
+    log_size: usize,
+) -> Vec<EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+{
+    let size = 1usize << log_size;
+    let len = coeffs.len().next_power_of_two();
+    assert!(len <= size);
+    let num_cosets = size / len;
+    let generator = F::two_adic_generator(log_size);
+    let mut scaled = EF::zero_vec(size);
+    scaled
+        .par_chunks_mut(num_cosets)
+        .enumerate()
+        .for_each(|(c, row)| {
+            let coeff = coeffs.get(c).copied().unwrap_or(EF::ZERO);
+            let ratio = generator.exp_u64(c as u64);
+            let mut scale = shift.exp_u64(c as u64);
+            for value in row {
+                *value = coeff * scale;
+                scale *= ratio;
+            }
+        });
+    dft.dft_algebra_batch(RowMajorMatrix::new(scaled, num_cosets))
+        .values
+}
+
 /// Evaluate two polynomials of at most `2^log_len` coefficients on the coset `shift * <g>` of
 /// size `2^log_size`, returning both codewords in **natural order**.
 ///
@@ -1427,5 +1467,37 @@ fn open_fiber_rows<EF: Field, M: Mmcs<EF>>(
     StirQueryOpenings {
         row_evals,
         opening_proof,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_dft::Radix2DitParallel;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+
+    use super::*;
+    use crate::utils::eval_poly_at_base;
+
+    #[test]
+    fn small_coset_evaluation_matches_horner() {
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        let dft = Radix2DitParallel::<F>::default();
+        for log_size in 0..=8 {
+            for len in [0, 1, 3, 8, 32, 256] {
+                if len > 1 << log_size {
+                    continue;
+                }
+                let coeffs: Vec<EF> = (0..len).map(|i| EF::from_usize(i + 1)).collect();
+                let shift = F::GENERATOR;
+                let values = eval_low_degree_on_coset(&dft, &coeffs, shift, log_size);
+                let g = F::two_adic_generator(log_size);
+                for (&value, point) in values.iter().zip(g.shifted_powers(shift)) {
+                    assert_eq!(value, eval_poly_at_base(&coeffs, point));
+                }
+            }
+        }
     }
 }
