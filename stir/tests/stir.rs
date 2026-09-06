@@ -1885,7 +1885,7 @@ mod babybear_pcs {
     #[test]
     fn test_pcs_single_degree2_no_intermediate_rounds() {
         // log_stir_degree == log_folding_factor, so STIR runs no intermediate rounds and the
-        // final-round queries read the external initial oracle directly.
+        // final-round queries are the ones reading the committed initial oracle.
         do_test_pcs(&[2]);
     }
 
@@ -1902,7 +1902,7 @@ mod babybear_pcs {
     #[test]
     fn test_pcs_two_tier_multiple_different_degrees() {
         // Round 0 folds by k0=4 (log=2); every later round folds by k=8 (log=3) —
-        // exercises the PCS-layer input fiber grouping and reconstruction
+        // exercises the PCS-layer lane sampling and position split
         // (`log_starting_folding_factor`) across multiple height buckets under a schedule
         // that changes arity after round 0.
         #[allow(unused_imports)]
@@ -2045,9 +2045,10 @@ mod babybear_pcs {
         let (stir_commit, stir_data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&stir_pcs, [(stir_domain, mat)]);
         observe_commitment(&mut stir_p_ch, &stir_commit);
-        // STIR's input commitment hashes fiber-grouped leaves, so its root — and hence the
-        // point derived from it — differs from FRI's over the same matrix. Proof size does
-        // not depend on which point is opened, so the comparison stays like-for-like.
+        // STIR's commitment wraps one root per shared-domain group, so the transcript absorbs
+        // a group count before the root and the point derived from it differs from FRI's over
+        // the same matrix. Proof size does not depend on which point is opened, so the
+        // comparison stays like-for-like.
         let stir_zeta: Challenge = stir_p_ch.sample_algebra_element();
         let (stir_openings, stir_proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &stir_pcs,
@@ -2557,8 +2558,8 @@ mod babybear_pcs {
             ProofShapeError::InputOpenedRowCount {
                 log_height: log_d + 1,
                 commitment: 0,
-                expected: 14,
-                got: 13,
+                expected: 18,
+                got: 17,
             }
         );
     }
@@ -2635,15 +2636,14 @@ mod babybear_pcs {
         let err = verify_with_claimed_degrees(&[8, 8], &[8, 6])
             .expect_err("an understated native height must be rejected");
         // Two classes rather than one give a different `combine_key`, hence a different
-        // `StirConfig`, hence a different first-round query count. The disagreement is caught
-        // by the opened-row shape check before any algebraic check runs.
+        // `StirConfig`, hence a different first-round query count. STIR runs before the lane
+        // check, so the disagreement surfaces on its own round-0 openings.
         assert_eq!(
             shape_of(err),
-            ProofShapeError::InputOpenedRowCount {
-                log_height: 9,
-                commitment: 0,
-                expected: 21,
-                got: 20,
+            ProofShapeError::QueryOpeningCount {
+                round: RoundLabel::Round(0),
+                expected: 22,
+                got: 21,
             }
         );
     }
@@ -2656,11 +2656,10 @@ mod babybear_pcs {
             .expect_err("an overstated native height must be rejected");
         assert_eq!(
             shape_of(err),
-            ProofShapeError::InputOpenedRowCount {
-                log_height: 9,
-                commitment: 0,
-                expected: 17,
-                got: 21,
+            ProofShapeError::QueryOpeningCount {
+                round: RoundLabel::Round(0),
+                expected: 21,
+                got: 22,
             }
         );
     }
@@ -3015,7 +3014,7 @@ mod babybear_pcs {
     }
 
     #[test]
-    fn test_pcs_rejects_stray_initial_commitment() {
+    fn test_pcs_rejects_a_missing_or_swapped_initial_commitment() {
         let (pcs, challenger_template) = get_pcs();
         let mut rng = seeded_rng();
         let log_d = 6;
@@ -3029,27 +3028,40 @@ mod babybear_pcs {
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
         observe_commitment(&mut p_ch, &commit);
         let zeta: Challenge = p_ch.sample_algebra_element();
-        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
             vec![(&data, vec![vec![zeta]])],
             &mut p_ch,
         );
 
-        // The PCS runs STIR with an external initial oracle, so a proof carrying a commitment
-        // to it is malformed: accepting one would let a prover feed the transcript an extra
-        // message the verifier never checks.
-        proof[0].0.initial_commitment = Some(proof[0].0.round_proofs[0].commitment.clone());
+        let verify_with = |proof: &<MyPcs as Pcs<Challenge, Challenger>>::Proof| {
+            let mut v_ch = challenger_template.clone();
+            observe_commitment(&mut v_ch, &commit);
+            let v_zeta: Challenge = v_ch.sample_algebra_element();
+            let claims = vec![(
+                commit.clone(),
+                vec![(domain, vec![(v_zeta, opening_values[0][0][0].clone())])],
+            )];
+            <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, proof, &mut v_ch)
+        };
 
-        let mut v_ch = challenger_template;
-        observe_commitment(&mut v_ch, &commit);
-        let v_zeta: Challenge = v_ch.sample_algebra_element();
-        let claims = vec![(
-            commit,
-            vec![(domain, vec![(v_zeta, opening_values[0][0][0].clone())])],
-        )];
-        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .expect_err("a stray initial commitment must be rejected");
-        assert_eq!(shape_of(err), ProofShapeError::UnexpectedInitialCommitment);
+        // STIR commits the initial oracle itself, and that commitment is what the round-0
+        // fibers — and hence the lane checks — are authenticated against. Dropping it leaves
+        // the transcript a message short.
+        let mut dropped = proof.clone();
+        dropped[0].0.initial_commitment = None;
+        let err = verify_with(&dropped).expect_err("a missing initial commitment is malformed");
+        assert_eq!(shape_of(err), ProofShapeError::MissingInitialCommitment);
+
+        // Swapping it for another root the proof already carries must not authenticate the
+        // round-0 openings.
+        let mut swapped = proof;
+        swapped[0].0.initial_commitment = Some(swapped[0].0.round_proofs[0].commitment.clone());
+        let err = verify_with(&swapped).expect_err("a swapped initial commitment must be rejected");
+        assert!(
+            matches!(err, StirError::InvalidMmcsProof { round, .. } if round == RoundLabel::Round(0)),
+            "expected a round-0 MMCS failure, got {err:?}"
+        );
     }
 }
 
