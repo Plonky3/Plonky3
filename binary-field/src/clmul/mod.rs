@@ -129,6 +129,19 @@ pub(crate) fn mul_64(a: u64, b: u64) -> u64 {
     basis::poly_to_tower_64(reduce_64(product))
 }
 
+/// Two products sharing the converted multiplier, as used by the quadratic norm inverse.
+#[inline]
+pub(crate) fn mul_pair_64(a: u64, b: u64, scalar: u64) -> (u64, u64) {
+    let scalar = basis::tower_to_poly_64(scalar);
+    let product = |value| {
+        basis::poly_to_tower_64(reduce_64(clmul_64x64(
+            basis::tower_to_poly_64(value),
+            scalar,
+        )))
+    };
+    (product(a), product(b))
+}
+
 /// Multiplication in `GF(2^128)`, taking and returning the polynomial representation.
 #[inline]
 pub(crate) fn poly_mul_128(a: u128, b: u128) -> u128 {
