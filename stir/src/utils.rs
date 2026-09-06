@@ -729,12 +729,16 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
     let new_height = codeword.len() / arity;
     assert!(new_height > 0);
 
-    let mut data = codeword.to_vec();
+    if log_arity == 0 {
+        return codeword.to_vec();
+    }
+    let mut input = codeword;
+    let mut data = Vec::new();
     let mut current_beta = beta;
     let mut cur_log_domain = log_domain_size;
 
     for _ in 0..log_arity {
-        let height = data.len() / 2;
+        let height = input.len() / 2;
 
         // fold(j) = (lo + hi)/2 + beta * (lo - hi) / (2 * g^j)
         //         = (lo + hi)/2 + (beta/2) * g_inv^j * (lo - hi)
@@ -750,13 +754,14 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
         data = (0..height)
             .into_par_iter()
             .map(|j| {
-                let lo = data[j];
-                let hi = data[j + height];
+                let lo = input[j];
+                let hi = input[j + height];
                 let hip = halve_inv_powers[j];
                 (lo + hi).halve() + (lo - hi) * current_beta * hip
             })
             .collect();
 
+        input = &data;
         current_beta = current_beta.square();
         cur_log_domain -= 1;
     }
