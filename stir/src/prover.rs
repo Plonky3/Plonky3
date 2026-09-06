@@ -5,7 +5,6 @@
 //! Before committing, the codeword is arranged as a `(new_height × arity)` matrix where
 //! row `j` contains the fiber, allowing a single MMCS opening to reveal the entire fiber.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
@@ -14,7 +13,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     BasedVectorSpace, ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
 };
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
@@ -1429,16 +1428,8 @@ fn commit_as_fiber_matrix<EF: Field, M: Mmcs<EF>>(
 ) -> (M::Commitment, M::ProverData<RowMajorMatrix<EF>>) {
     let arity = 1 << log_arity;
     let new_height = codeword.len() / arity;
-    let mut matrix = vec![EF::ZERO; codeword.len()];
-    matrix
-        .par_chunks_mut(arity)
-        .enumerate()
-        .for_each(|(j, row)| {
-            for (k, slot) in row.iter_mut().enumerate() {
-                *slot = codeword[j + k * new_height];
-            }
-        });
-    mmcs.commit_matrix(RowMajorMatrix::new(matrix, arity))
+    let matrix = RowMajorMatrixView::new(codeword, new_height).transpose();
+    mmcs.commit_matrix(matrix)
 }
 
 /// Opens `indices` against the current commitment's fiber matrix as one shared, pruned
