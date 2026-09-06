@@ -11,6 +11,7 @@ use std::hint::black_box;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
+    TowerLevel, poly_basis,
 };
 use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
@@ -31,7 +32,12 @@ const LANES: usize = 10;
 macro_rules! bench_level {
     ($c:expr, $t:ty, $bits:literal) => {{
         let mut rng = SmallRng::seed_from_u64(1);
-        let operands: Vec<$t> = (0..REPS).map(|_| rng.random::<$t>()).collect();
+        let operands: Vec<$t> = (0..REPS)
+            .map(|_| {
+                let x = rng.random::<$t>();
+                if x.is_zero() { <$t>::ONE } else { x }
+            })
+            .collect();
 
         let mut group = $c.benchmark_group(concat!("mul/", $bits));
 
@@ -172,12 +178,7 @@ fn bench_inverse(c: &mut Criterion) {
 }
 
 fn bench_mul_alpha(c: &mut Criterion) {
-    // `α = X_5`, the generator of `GF(2^64)` over `GF(2^32)`, sits at bit 32 of the tower
-    // representation. `TowerLevel::mul_alpha` is crate-internal, so this measures the product
-    // by that element through the public operator instead.
-    let mut alpha_bytes = [0u8; 16];
-    alpha_bytes[4] = 1;
-    let alpha = BinaryField128::from_le_bytes(alpha_bytes);
+    let alpha = BinaryField128::ONE.mul_alpha();
 
     let mut rng = SmallRng::seed_from_u64(1);
     let operands: Vec<BinaryField128> = (0..REPS).map(|_| rng.random()).collect();
@@ -195,6 +196,13 @@ fn bench_mul_alpha(c: &mut Criterion) {
             black_box(&operands)
                 .iter()
                 .fold(BinaryField128::ZERO, |acc, &y| acc + y * alpha)
+        });
+    });
+    group.bench_function("typed", |b| {
+        b.iter(|| {
+            black_box(&operands)
+                .iter()
+                .fold(BinaryField128::ZERO, |acc, &y| acc + y.mul_alpha())
         });
     });
     group.finish();
@@ -501,6 +509,70 @@ fn bench_ghash_dot(c: &mut Criterion) {
     bench_dot_width::<<Ghash128 as Field>::Packing, 64>(c, "packed");
 }
 
+fn bench_maps(c: &mut Criterion) {
+    let mut rng = SmallRng::seed_from_u64(17);
+    let values: Vec<BinaryField128> = (0..REPS).map(|_| rng.random()).collect();
+    let mut group = c.benchmark_group("maps/128");
+    group.bench_function("sqrt", |b| {
+        b.iter(|| {
+            black_box(&values)
+                .iter()
+                .map(|x| x.try_sqrt().unwrap())
+                .sum::<BinaryField128>()
+        })
+    });
+    group.bench_function("frobenius64", |b| {
+        b.iter(|| {
+            black_box(&values)
+                .iter()
+                .map(|x| x.exp_power_of_2(64))
+                .sum::<BinaryField128>()
+        })
+    });
+    group.bench_function("to_poly", |b| {
+        b.iter(|| {
+            black_box(&values)
+                .iter()
+                .fold(0u128, |acc, &x| acc ^ poly_basis::from_tower(x))
+        })
+    });
+    let polys: Vec<_> = values.iter().copied().map(poly_basis::from_tower).collect();
+    group.bench_function("from_poly", |b| {
+        b.iter(|| {
+            black_box(&polys)
+                .iter()
+                .map(|&x| poly_basis::to_tower(x))
+                .sum::<BinaryField128>()
+        })
+    });
+    group.bench_function("poly_mul", |b| {
+        b.iter(|| {
+            black_box(&polys)
+                .iter()
+                .fold(1, |acc, &x| poly_basis::mul(acc, x))
+        })
+    });
+    group.finish();
+    let mut group = c.benchmark_group("mixed/128");
+    macro_rules! mixed {
+        ($t:ty, $name:literal) => {{
+            let scalar: $t = rng.random();
+            group.bench_function($name, |b| {
+                b.iter(|| {
+                    black_box(&values)
+                        .iter()
+                        .fold(BinaryField128::ONE, |acc, &x| (acc + x) * black_box(scalar))
+                })
+            });
+        }};
+    }
+    mixed!(BinaryField8, "8");
+    mixed!(BinaryField16, "16");
+    mixed!(BinaryField32, "32");
+    mixed!(BinaryField64, "64");
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_mul,
@@ -515,6 +587,7 @@ criterion_group!(
     bench_representation_convert,
     bench_packing,
     bench_ghash_sqrt,
-    bench_ghash_dot
+    bench_ghash_dot,
+    bench_maps
 );
 criterion_main!(benches);
