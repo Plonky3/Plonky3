@@ -328,6 +328,36 @@ fn bench_grind(c: &mut Criterion) {
     });
 }
 
+fn bench_bulk(c: &mut Criterion) {
+    use p3_binary_field::BinaryChallenger;
+    use p3_challenger::{CanObserve, CanSample};
+    use p3_keccak::Keccak256Hash;
+    let challenger =
+        BinaryChallenger::<BinaryField128, _>::from_hasher(vec![42; 32], Keccak256Hash);
+    c.bench_function("bulk/sample128", |b| {
+        b.iter_batched(
+            || challenger.clone(),
+            |mut ch| {
+                let samples: Vec<BinaryField128> = (0..1024).map(|_| ch.sample()).collect();
+                black_box(samples)
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    c.bench_function("bulk/observe128", |b| {
+        b.iter_batched(
+            || challenger.clone(),
+            |mut ch| {
+                for _ in 0..1024 {
+                    ch.observe(black_box(BinaryField128::ONE));
+                }
+                black_box(ch)
+            },
+            BatchSize::SmallInput,
+        )
+    });
+}
+
 criterion_group!(
     benches,
     bench_mul,
@@ -336,6 +366,7 @@ criterion_group!(
     bench_mul_alpha,
     bench_flatten_to_base,
     bench_maps,
-    bench_grind
+    bench_grind,
+    bench_bulk
 );
 criterion_main!(benches);

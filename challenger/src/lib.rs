@@ -47,6 +47,13 @@ pub trait CanSample<T> {
     /// Sample a single challenge value from the transcript.
     fn sample(&mut self) -> T;
 
+    /// Fill an existing buffer with consecutive samples.
+    fn sample_into_slice(&mut self, values: &mut [T]) {
+        for value in values {
+            *value = self.sample();
+        }
+    }
+
     /// Sample an array of `N` challenge values from the transcript.
     fn sample_array<const N: usize>(&mut self) -> [T; N] {
         array::from_fn(|_| self.sample())
@@ -171,6 +178,11 @@ where
     #[inline(always)]
     fn sample(&mut self) -> T {
         (*self).sample()
+    }
+
+    #[inline(always)]
+    fn sample_into_slice(&mut self, values: &mut [T]) {
+        (*self).sample_into_slice(values);
     }
 
     #[inline(always)]

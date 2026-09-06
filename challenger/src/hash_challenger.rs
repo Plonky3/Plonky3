@@ -75,6 +75,12 @@ where
 
         self.input_buffer.push(value);
     }
+    fn observe_slice(&mut self, values: &[T]) {
+        if !values.is_empty() {
+            self.output_buffer.clear();
+            self.input_buffer.extend_from_slice(values);
+        }
+    }
 }
 
 impl<T, H, const N: usize, const OUT_LEN: usize> CanObserve<[T; N]>
@@ -156,6 +162,41 @@ where
             .pop()
             .expect("Output buffer should be non-empty")
     }
+    fn sample_into_slice(&mut self, mut values: &mut [T]) {
+        while !values.is_empty() {
+            if self.output_buffer.is_empty() {
+                self.flush();
+            }
+            assert!(
+                !self.output_buffer.is_empty(),
+                "Output buffer should be non-empty"
+            );
+            let count = values.len().min(self.output_buffer.len());
+            let start = self.output_buffer.len() - count;
+            let (head, tail) = values.split_at_mut(count);
+            for (slot, sample) in head.iter_mut().zip(self.output_buffer.drain(start..).rev()) {
+                *slot = sample;
+            }
+            values = tail;
+        }
+    }
+
+    fn sample_vec(&mut self, n: usize) -> Vec<T> {
+        let mut result = Vec::with_capacity(n);
+        while result.len() < n {
+            if self.output_buffer.is_empty() {
+                self.flush();
+            }
+            assert!(
+                !self.output_buffer.is_empty(),
+                "Output buffer should be non-empty"
+            );
+            let count = (n - result.len()).min(self.output_buffer.len());
+            let start = self.output_buffer.len() - count;
+            result.extend(self.output_buffer.drain(start..).rev());
+        }
+        result
+    }
 }
 
 impl<T, H, const OUT_LEN: usize> CanFinalizeDigest for HashChallenger<T, H, OUT_LEN>
@@ -221,6 +262,35 @@ mod tests {
                     )
                 });
             [sum, F::from_usize(len)]
+        }
+    }
+
+    #[test]
+    fn bulk_operations_preserve_the_scalar_stream_at_boundaries() {
+        for prefix in [0, 1, 2, 3] {
+            for len in [0, 1, 2, 3, 7, 19] {
+                let mut bulk = HashChallenger::new(vec![F::ONE; 17], TestHasher {});
+                let mut scalar = bulk.clone();
+                for _ in 0..prefix {
+                    assert_eq!(bulk.sample(), scalar.sample());
+                }
+                bulk.observe_slice(&[] as &[F]);
+                let mut samples = vec![F::ZERO; len];
+                bulk.sample_into_slice(&mut samples);
+                let expected: Vec<_> = (0..len).map(|_| scalar.sample()).collect();
+                assert_eq!(samples, expected);
+                assert_eq!(bulk.sample(), scalar.sample());
+                let observations = [F::from_u8(3), F::from_u8(9)];
+                bulk.observe_slice(&observations);
+                for x in observations {
+                    scalar.observe(x);
+                }
+                assert_eq!(
+                    bulk.sample_vec(len),
+                    (0..len).map(|_| scalar.sample()).collect::<Vec<_>>()
+                );
+                assert_eq!(bulk.sample(), scalar.sample());
+            }
         }
     }
 
