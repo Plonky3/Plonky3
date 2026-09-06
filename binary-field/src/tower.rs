@@ -560,13 +560,13 @@ impl BinaryField8 {
         Self(tables::mul(self.0, rhs.0))
     }
 
-    /// Squaring through the `GF(2^8)` log and exponential tables.
+    /// Squaring through the direct `GF(2^8)` table.
     #[inline]
     const fn table_square(self) -> Self {
         Self(tables::square(self.0))
     }
 
-    /// Inversion through the `GF(2^8)` log and exponential tables.
+    /// Inversion through the direct `GF(2^8)` table.
     #[inline]
     const fn table_try_inverse(self) -> Option<Self> {
         match tables::try_inverse(self.0) {
