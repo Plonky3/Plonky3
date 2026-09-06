@@ -20,12 +20,32 @@ subfield `GF(2)`, so they carry the parity of their argument rather than its bit
 `from_u64(2)` is zero. `from_le_bytes` and `interpolation_node` are the bit-pattern
 constructors.
 
-Two deliberate scope boundaries:
+`TowerLevel` exposes the tower structure and typed generator multiplication.
 
-- `TowerLevel` — the trait carrying `LOG_BITS`, `from_repr`, `to_repr` and `mul_alpha` — is
-  `pub(crate)`, keeping the public surface minimal. Downstream crates work through the
-  `p3-field` traits instead; exporting it later is an additive change.
-- Arithmetic is unpacked: `Packing` is `Self` at every level, so elements are never bit-packed
-  into SIMD lanes. A packed representation is a separate design.
+Arithmetic is unpacked: `Packing` is `Self` at every level, so elements are never bit-packed
+into SIMD lanes. The polynomial slice kernels process independent SIMD products while
+preserving the scalar field layout.
+
+## Hardware builds
+
+Hardware dispatch is selected at compile time, so this `no_std` crate performs no CPU checks
+inside scalar arithmetic. `poly_basis::HAS_HARDWARE_CLMUL` describes that compiled choice.
+The default `aarch64-apple-darwin` target enables `aes` (including PMULL); generic AArch64 Linux
+and baseline x86-64 use the portable tower fallback.
+
+For a binary deployed only to CPUs supporting the named feature:
+
+```sh
+RUSTFLAGS="-C target-feature=+aes" cargo build --release --target aarch64-unknown-linux-gnu
+RUSTFLAGS="-C target-feature=+pclmulqdq" cargo build --release --target x86_64-unknown-linux-gnu
+```
+
+For a local build, `RUSTFLAGS="-C target-cpu=native" cargo build --release` enables the host's
+features. Use the baseline target when distributing to heterogeneous CPUs. To exercise the
+portable AArch64 path explicitly:
+
+```sh
+CARGO_TARGET_DIR=target/portable RUSTFLAGS="-C target-feature=-aes" cargo test -p p3-binary-field --release
+```
 
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.
