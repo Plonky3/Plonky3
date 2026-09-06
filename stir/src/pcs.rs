@@ -81,7 +81,7 @@ use tracing::instrument;
 use crate::config::{StirConfig, StirConfigError, StirParameters};
 use crate::error::{ProofShapeError, StirError};
 use crate::proof::StirProof;
-use crate::prover::prove_stir_multi_from_external_codewords;
+use crate::prover::{FinishBatchFn, parallel_finish, prove_stir_multi_inner};
 use crate::utils::combine_on_coset;
 use crate::verifier::verify_stir_multi_inner;
 
@@ -343,6 +343,7 @@ pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> 
     max_log_height_spread: usize,
     width_aware_grouping: bool,
     lde_batch: Option<LdeBatchFn<Val, Dft>>,
+    finish_batch: Option<FinishBatchFn<Val, Challenge, Dft>>,
     /// `StirConfig::try_new` runs an 80-iteration floating-point bisection per stage to
     /// derive sound round parameters. `open`/`verify` re-derive it per LDE-height bucket, and
     /// bucket shapes recur across calls and across proofs of the same statement, so caching
@@ -364,6 +365,7 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
             max_log_height_spread: DEFAULT_MAX_LOG_HEIGHT_SPREAD,
             width_aware_grouping: false,
             lde_batch: None,
+            finish_batch: None,
             config_cache: Arc::new(RwLock::new(alloc::collections::BTreeMap::new())),
         }
     }
@@ -399,6 +401,20 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
         Dft: TwoAdicSubgroupDft<Val> + Sync,
     {
         self.lde_batch = enabled.then_some(parallel_ldes::<Val, Dft>);
+        self
+    }
+
+    /// Schedule independent STIR instance finish work in parallel with the `parallel` feature.
+    /// Defaults to false; transcript order and proofs are unchanged. Small or single-instance
+    /// finish batches run directly.
+    #[must_use]
+    pub fn with_parallel_finish(mut self, enabled: bool) -> Self
+    where
+        Val: TwoAdicField,
+        Challenge: ExtensionField<Val> + TwoAdicField,
+        Dft: TwoAdicSubgroupDft<Val> + Sync,
+    {
+        self.finish_batch = enabled.then_some(parallel_finish::<Val, Challenge, Dft>);
         self
     }
 
@@ -1233,11 +1249,13 @@ where
             })
             .collect();
 
-        let bucket_results = prove_stir_multi_from_external_codewords(
+        let bucket_results = prove_stir_multi_inner(
             &stir_config_refs,
             initial_codewords,
             &self.dft,
             challenger,
+            false,
+            self.finish_batch,
         );
 
         let bucket_proofs = bucket_log_heights

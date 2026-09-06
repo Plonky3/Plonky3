@@ -933,7 +933,7 @@ where
 /// `verifier::verify_stir_multi_inner` checks the copies agree before checking the grind once.
 ///
 /// Returns one `(proof, first_round_query_indices)` pair per instance, in `configs` order.
-fn prove_stir_multi_inner<F, EF, Dft, M, Challenger>(
+pub(crate) fn prove_stir_multi_inner<F, EF, Dft, M, Challenger>(
     configs: &[&StirConfig<F, EF, M, Challenger>],
     initial_codewords: Vec<Vec<EF>>,
     dft: &Dft,

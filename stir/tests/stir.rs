@@ -1505,6 +1505,55 @@ mod babybear_pcs {
     }
 
     #[test]
+    fn pcs_parallel_finish_preserves_proofs_and_can_be_disabled() {
+        let (pcs, base) = get_pcs_with_spread(0);
+        let enabled = pcs.clone().with_parallel_finish(true);
+        let disabled = enabled.clone().with_parallel_finish(false);
+        let mut rng = seeded_rng();
+        let inputs: Vec<_> = [12, 11, 10]
+            .into_iter()
+            .map(|height| {
+                (
+                    pcs.natural_domain_for_degree(1 << height),
+                    RowMajorMatrix::<Val>::rand(&mut rng, 1 << height, 4),
+                )
+            })
+            .collect();
+        let (commit, data) = pcs.commit(inputs.clone());
+        let mut transcript = base;
+        observe_commitment(&mut transcript, &commit);
+        let point = transcript.sample_algebra_element();
+        let (opened, proof) = pcs.open(
+            vec![(&data, vec![vec![point]; inputs.len()])],
+            &mut transcript.clone(),
+        );
+        for candidate in [&enabled, &disabled] {
+            let mut prover_ch = transcript.clone();
+            let (other_opened, other_proof) = candidate.open(
+                vec![(&data, vec![vec![point]; inputs.len()])],
+                &mut prover_ch,
+            );
+            assert_eq!(opened, other_opened);
+            assert_eq!(
+                postcard::to_allocvec(&proof).unwrap(),
+                postcard::to_allocvec(&other_proof).unwrap()
+            );
+            let claims = inputs
+                .iter()
+                .enumerate()
+                .map(|(i, (domain, _))| (*domain, vec![(point, opened[0][i][0].clone())]))
+                .collect();
+            candidate
+                .verify(
+                    vec![(commit.clone(), claims)],
+                    &other_proof,
+                    &mut transcript.clone(),
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
     fn parallel_ldes_preserve_order_commitments_and_proofs() {
         let (pcs, base) = get_pcs_with_spread(3);
         let enabled = pcs.clone().with_parallel_ldes(true);
