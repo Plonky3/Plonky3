@@ -319,8 +319,12 @@ struct RoundVerifyOutput<F, EF> {
     ctx: VirtualRoundContext<EF>,
     next_shift: F,
     next_log_domain: usize,
-    /// `(index, row)` pairs for round-0 queries, in draw order. Empty unless this was round 0.
+    /// `(index, row)` pairs for round-0 queries, one per distinct index in first-seen order.
+    /// Empty unless this was round 0.
     first_round_pairs: FirstRoundPairs<EF>,
+    /// Every round-0 query draw in transcript order, repeats included. Empty unless this was
+    /// round 0.
+    first_round_draws: Vec<usize>,
 }
 
 /// One instance's in-flight intermediate round, advanced in the order the transcript demands.
@@ -341,6 +345,7 @@ struct RoundVerifier<F, EF: Field> {
     query_points: Vec<EF>,
     query_answers: Vec<EF>,
     first_round_pairs: FirstRoundPairs<EF>,
+    first_round_draws: Vec<usize>,
     r_comb: EF,
 }
 
@@ -365,6 +370,7 @@ where
             query_points: Vec::new(),
             query_answers: Vec::new(),
             first_round_pairs: Vec::new(),
+            first_round_draws: Vec::new(),
             r_comb: EF::ZERO,
         }
     }
@@ -454,6 +460,9 @@ where
                 q,
             )?;
 
+            if round == 0 {
+                self.first_round_draws.push(j);
+            }
             if seen_query_indices.insert(j) {
                 self.query_points.push(fold_point);
                 self.query_answers.push(fold_val);
@@ -497,6 +506,7 @@ where
             next_shift: self.next_shift,
             next_log_domain: self.next_log_domain,
             first_round_pairs: self.first_round_pairs,
+            first_round_draws: self.first_round_draws,
         }
     }
 }
@@ -657,8 +667,9 @@ where
 
     /// Fetch the final-round oracle rows, fold each query against the current virtual oracle,
     /// and check the fold against the sent final polynomial. Returns the round-0 `(index, row)`
-    /// pairs the PCS layer needs for input binding, when this is also the first round.
-    #[allow(clippy::too_many_arguments)]
+    /// pairs and the round-0 draws the PCS layer needs for input binding, when this is also the
+    /// first round.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn fetch_and_check<M, Challenger, IE, Src>(
         &self,
         config: &StirConfig<F, EF, M, Challenger>,
@@ -671,7 +682,7 @@ where
         external_fibers: &mut Option<Src>,
         commitment: Option<&M::Commitment>,
         final_indices: &[usize],
-    ) -> Result<FirstRoundPairs<EF>, StirError<M::Error, IE>>
+    ) -> Result<(FirstRoundPairs<EF>, Vec<usize>), StirError<M::Error, IE>>
     where
         M: Mmcs<EF>,
         Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
@@ -706,6 +717,7 @@ where
         let mut final_seen: alloc::collections::BTreeSet<usize> =
             alloc::collections::BTreeSet::new();
         let mut first_round_pairs: FirstRoundPairs<EF> = Vec::new();
+        let mut first_round_draws: Vec<usize> = Vec::new();
 
         let final_domain_gen = F::two_adic_generator(current_log_domain);
         let final_fiber_step = final_domain_gen.exp_power_of_2(self.final_new_log_domain);
@@ -731,18 +743,21 @@ where
                 return Err(StirError::FinalPolyMismatch);
             }
 
-            if num_rounds == 0 && final_seen.insert(j) {
-                first_round_pairs.push((j, row_evals.clone()));
+            if num_rounds == 0 {
+                first_round_draws.push(j);
+                if final_seen.insert(j) {
+                    first_round_pairs.push((j, row_evals.clone()));
+                }
             }
         }
 
-        Ok(first_round_pairs)
+        Ok((first_round_pairs, first_round_draws))
     }
 }
 
 /// Verify the final STIR round: the last fold is checked directly against the sent final
 /// polynomial rather than committed and queried again like an intermediate round.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn verify_final_round<F, EF, M, Challenger, IE, Src>(
     config: &StirConfig<F, EF, M, Challenger>,
     proof: &StirProof<EF, M, F>,
@@ -754,7 +769,7 @@ fn verify_final_round<F, EF, M, Challenger, IE, Src>(
     is_external: bool,
     external_fibers: &mut Option<Src>,
     commitment: Option<&M::Commitment>,
-) -> Result<FirstRoundPairs<EF>, StirError<M::Error, IE>>
+) -> Result<(FirstRoundPairs<EF>, Vec<usize>), StirError<M::Error, IE>>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
@@ -840,6 +855,10 @@ pub struct StirVerifyOutputs<EF> {
     pub first_round_indices: Vec<usize>,
     /// Row evaluations for each unique query, aligned with `first_round_indices`.
     pub first_round_fiber_evals: Vec<Vec<EF>>,
+    /// Every query draw of that same round in transcript order, repeats included; exactly
+    /// `num_queries` (or `final_queries`) long. `first_round_indices` is its sorted
+    /// deduplication.
+    pub first_round_draws: Vec<usize>,
 }
 
 /// Source of the queried fibers of an external initial oracle, when there is none.
@@ -950,6 +969,7 @@ where
     // Round-0 query view, recorded once and returned for the PCS input-binding step.
     // Pairs are inserted in challenger-sample (insertion) order; sorted by index at the end.
     let mut first_round_pairs: FirstRoundPairs<EF> = Vec::new();
+    let mut first_round_draws: Vec<usize> = Vec::new();
 
     // Commitment holding the oracle round `r` reads. Round 0 reads the initial oracle, which
     // has no commitment when it is external — callers must not reach this for that case.
@@ -977,6 +997,7 @@ where
         )?;
 
         first_round_pairs.extend(output.first_round_pairs);
+        first_round_draws.extend(output.first_round_draws);
         prev_ctx = Some(output.ctx);
         current_shift = output.next_shift;
         current_log_domain = output.next_log_domain;
@@ -984,7 +1005,7 @@ where
 
     // Final round: verify the final fold against the last virtual oracle.
     let final_commitment = round_commitment(num_rounds);
-    let final_pairs = verify_final_round(
+    let (final_pairs, final_draws) = verify_final_round(
         config,
         proof,
         num_rounds,
@@ -997,6 +1018,7 @@ where
         final_commitment,
     )?;
     first_round_pairs.extend(final_pairs);
+    first_round_draws.extend(final_draws);
 
     // Sort by index (ascending) so the PCS layer's output ordering is deterministic and
     // matches the prover-side `first_round_query_indices` which is also sorted.
@@ -1007,6 +1029,7 @@ where
     Ok(StirVerifyOutputs {
         first_round_indices,
         first_round_fiber_evals,
+        first_round_draws,
     })
 }
 
@@ -1070,7 +1093,7 @@ where
 /// - every active instance's replicated grind witness must agree,
 /// - else [`ProofShapeError::ReplicatedWitnessMismatch`],
 /// - then the shared grind is checked once, at the max of the active instances' bits.
-fn verify_stir_multi_inner<F, EF, M, Challenger, IE, Src>(
+pub(crate) fn verify_stir_multi_inner<F, EF, M, Challenger, IE, Src>(
     configs: &[&StirConfig<F, EF, M, Challenger>],
     proofs: &[&StirProof<EF, M, Challenger::Witness>],
     challenger: &mut Challenger,
@@ -1149,6 +1172,7 @@ where
 
     let mut prev_ctx: Vec<Option<VirtualRoundContext<EF>>> = (0..b).map(|_| None).collect();
     let mut first_round_pairs: Vec<FirstRoundPairs<EF>> = (0..b).map(|_| Vec::new()).collect();
+    let mut first_round_draws: Vec<Vec<usize>> = (0..b).map(|_| Vec::new()).collect();
 
     for r in 0..max_m {
         let active: Vec<usize> = (0..b).filter(|&i| offset(i) <= r).collect();
@@ -1300,6 +1324,7 @@ where
         // Phase 5: touches no transcript state, so instance order no longer matters.
         for (i, output) in finishes {
             first_round_pairs[i].extend(output.first_round_pairs);
+            first_round_draws[i].extend(output.first_round_draws);
             prev_ctx[i] = Some(output.ctx);
             shifts[i] = output.next_shift;
             log_domains[i] = output.next_log_domain;
@@ -1389,7 +1414,7 @@ where
         };
         let is_external = configs[i].num_rounds() == 0 && initial_is_external;
 
-        let final_pairs = fvs[i].fetch_and_check(
+        let (final_pairs, final_draws) = fvs[i].fetch_and_check(
             configs[i],
             proofs[i],
             configs[i].num_rounds(),
@@ -1402,17 +1427,20 @@ where
             &final_indices,
         )?;
         first_round_pairs[i].extend(final_pairs);
+        first_round_draws[i].extend(final_draws);
     }
 
     Ok(first_round_pairs
         .into_iter()
-        .map(|mut pairs| {
+        .zip(first_round_draws)
+        .map(|(mut pairs, draws)| {
             pairs.sort_by_key(|(j, _)| *j);
             let (first_round_indices, first_round_fiber_evals): (Vec<_>, Vec<_>) =
                 pairs.into_iter().unzip();
             StirVerifyOutputs {
                 first_round_indices,
                 first_round_fiber_evals,
+                first_round_draws: draws,
             }
         })
         .collect())
