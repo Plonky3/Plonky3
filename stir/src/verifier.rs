@@ -14,8 +14,8 @@ use crate::config::{StirConfig, StirRoundConfig};
 use crate::error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, StirError};
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    FiberFold, check_shake_consistency, eval_poly, eval_poly_at_base, fold_domain_params,
-    next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points, vanishing_with_base_roots,
+    FiberFold, check_shake_consistency, eval_poly_at_base, fold_domain_params, next_domain_shift,
+    reduce_mod_x_pow_minus_c, sample_ood_points, vanishing_with_base_roots,
 };
 
 /// `(index, row)` pairs for a round's queries, in draw order.
@@ -758,9 +758,9 @@ where
                 q,
             )?;
 
-            let x_j = EF::from(self.final_new_shift) * EF::from(final_gen.exp_u64(j as u64));
+            let x_j = self.final_new_shift * final_gen.exp_u64(j as u64);
 
-            let expected = eval_poly(&proof.final_polynomial, x_j);
+            let expected = eval_poly_at_base(&proof.final_polynomial, x_j);
             if fold_val != expected {
                 return Err(StirError::FinalPolyMismatch);
             }
