@@ -13,7 +13,7 @@ use p3_field::{
     ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_maybe_rayon::prelude::*;
-use p3_util::log2_strict_usize;
+use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 
 /// Evaluate a polynomial at a point using Horner's method.
 ///
@@ -302,6 +302,34 @@ pub fn reduce_mod_x_pow_minus_c<F: Field, EF: ExtensionField<F>>(
         c_pow *= c;
     }
     remainder
+}
+
+/// Small radix-2 DFT for a remainder evaluated on its full base-field coset.
+pub(crate) fn eval_fiber_remainder<F: TwoAdicField, EF: ExtensionField<F>>(
+    coeffs: &[EF],
+    shift: F,
+) -> Vec<EF> {
+    let log_len = log2_strict_usize(coeffs.len());
+    let mut values: Vec<EF> = coeffs
+        .iter()
+        .zip(shift.powers())
+        .map(|(&c, p)| c * p)
+        .collect();
+    reverse_slice_index_bits(&mut values);
+    for log_block in 1..=log_len {
+        let block_len = 1usize << log_block;
+        let root = F::two_adic_generator(log_block);
+        for block in values.chunks_exact_mut(block_len) {
+            let (lo, hi) = block.split_at_mut(block_len / 2);
+            for ((lo, hi), twiddle) in lo.iter_mut().zip(hi).zip(root.powers()) {
+                let t = *hi * twiddle;
+                let original = *lo;
+                *lo = original + t;
+                *hi = original - t;
+            }
+        }
+    }
+    values
 }
 
 /// Coefficients of the vanishing polynomial `prod_{y in roots} (X - y)`.
@@ -910,6 +938,23 @@ mod tests {
     type EF = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2BabyBear<16>;
     type TestChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+    #[test]
+    fn fiber_remainder_fft_matches_horner() {
+        for log_len in 0..=8 {
+            let coeffs: Vec<EF> = (0..1usize << log_len)
+                .map(|i| EF::from_basis_coefficients_fn(|d| F::from_usize(i + d + 3)))
+                .collect();
+            for shift in [F::ONE, F::GENERATOR] {
+                let expected: Vec<EF> = F::two_adic_generator(log_len)
+                    .shifted_powers(shift)
+                    .take(coeffs.len())
+                    .map(|x| eval_poly_at_base(&coeffs, x))
+                    .collect();
+                assert_eq!(eval_fiber_remainder(&coeffs, shift), expected);
+            }
+        }
+    }
 
     #[test]
     fn mixed_interpolation_and_vanishing_match_generic_oracles() {

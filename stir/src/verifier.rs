@@ -14,8 +14,9 @@ use crate::config::{StirConfig, StirRoundConfig};
 use crate::error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, StirError};
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    FiberFold, check_shake_consistency, eval_poly_at_base, fold_domain_params, next_domain_shift,
-    reduce_mod_x_pow_minus_c, sample_ood_points, vanishing_with_base_roots,
+    FiberFold, check_shake_consistency, eval_fiber_remainder, eval_poly_at_base,
+    fold_domain_params, next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points,
+    vanishing_with_base_roots,
 };
 
 /// `(index, row)` pairs for a round's queries, in draw order.
@@ -71,10 +72,16 @@ where
     let ans_rem = reduce_mod_x_pow_minus_c(&ctx.ans_poly, arity, common_power);
     let vanishing_rem = reduce_mod_x_pow_minus_c(&ctx.vanishing_coeffs, arity, common_power);
 
-    let mut denoms: Vec<EF> = points
-        .iter()
-        .map(|&x| eval_poly_at_base(&vanishing_rem, x))
-        .collect();
+    const FFT_MIN_ARITY: usize = 32;
+    let ans_evals = (arity >= FFT_MIN_ARITY).then(|| eval_fiber_remainder(&ans_rem, points[0]));
+    let mut denoms: Vec<EF> = if arity >= FFT_MIN_ARITY {
+        eval_fiber_remainder(&vanishing_rem, points[0])
+    } else {
+        points
+            .iter()
+            .map(|&x| eval_poly_at_base(&vanishing_rem, x))
+            .collect()
+    };
     // A vanishing evaluation of zero means this fiber meets the round's interpolation nodes,
     // which is a malformed round. Checked before the degree-correction denominator is folded
     // in, so it can never be confused with the `step == 1` case handled below.
@@ -103,8 +110,12 @@ where
 
     Some(
         izip!(row_evals, &points, &steps, &inverses)
-            .map(|(&row_eval, &x, &step, &inverse)| {
-                let quotient = (row_eval - eval_poly_at_base(&ans_rem, x)) * inverse;
+            .enumerate()
+            .map(|(lane, (&row_eval, &x, &step, &inverse))| {
+                let ans = ans_evals
+                    .as_ref()
+                    .map_or_else(|| eval_poly_at_base(&ans_rem, x), |values| values[lane]);
+                let quotient = (row_eval - ans) * inverse;
                 if step == EF::ONE {
                     quotient * EF::from_usize(gap + 1)
                 } else {

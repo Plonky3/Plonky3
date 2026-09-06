@@ -173,6 +173,14 @@ mod babybear_stir {
     }
 
     #[test]
+    fn test_large_fiber_remainder_fft_prove_verify() {
+        for log_arity in [5, 6] {
+            let (params, dft, challenger) = make_params(1, log_arity);
+            do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 13);
+        }
+    }
+
+    #[test]
     fn test_prove_verify_blowup1_fold2_degree4() {
         let (params, dft, challenger) = make_params(1, 2);
         do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 4);
