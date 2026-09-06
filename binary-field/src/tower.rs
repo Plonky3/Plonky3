@@ -25,7 +25,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::clmul::{HAS_HARDWARE_CLMUL, mul_64, mul_128, square_64, square_128};
+use crate::clmul::{HAS_HARDWARE_CLMUL, mul_64, mul_128};
 use crate::{Gf2, tables};
 
 /// Seals [`TowerLevel`] against implementation outside this crate.
@@ -338,7 +338,17 @@ macro_rules! binary_tower_level {
 
             #[inline]
             fn square(&self) -> Self {
-                self.$square()
+                if Self::BITS >= 16 {
+                    Self::from_repr(match Self::BITS {
+                        16 => crate::linear::square_16(self.0 as u16) as $repr,
+                        32 => BinaryField32::from_repr(self.0 as u32).byte_square().to_repr() as $repr,
+                        64 => crate::linear::square_64(self.0 as u64) as $repr,
+                        128 => crate::linear::square_128(self.0 as u128) as $repr,
+                        _ => unreachable!(),
+                    })
+                } else {
+                    self.$square()
+                }
             }
 
             #[inline]
@@ -576,6 +586,17 @@ impl BinaryField8 {
     }
 }
 
+impl BinaryField32 {
+    /// Square the two quadratic levels above GF256 using its compact byte table.
+    #[inline]
+    fn byte_square(self) -> Self {
+        let (a0, a1) = self.split();
+        let a0_sq = a0.reference_square();
+        let a1_sq = a1.reference_square();
+        Self::join(a0_sq + a1_sq, a1_sq.mul_alpha())
+    }
+}
+
 /// Give a level Karatsuba multiplication over the `Mul` of the level below.
 ///
 /// The recurrence is the one [`binary_tower_level`] documents on `reference_mul`, but the
@@ -623,7 +644,7 @@ impl BinaryField64 {
     /// Squaring through the tower-basis matrix, which is a lookup table on every target.
     #[inline]
     fn table_square(self) -> Self {
-        Self(square_64(self.0))
+        Self(crate::clmul::square_64(self.0))
     }
 }
 
@@ -644,7 +665,7 @@ impl BinaryField128 {
     /// Squaring through the tower-basis matrix, which is a lookup table on every target.
     #[inline]
     fn table_square(self) -> Self {
-        Self(square_128(self.0))
+        Self(crate::clmul::square_128(self.0))
     }
 }
 
@@ -1151,9 +1172,11 @@ mod tests {
         /// `reference_mul` recurses to the bottom of the tower without dispatching, so squaring
         /// through it is independent of every fast path.
         #[test]
-        fn square_agrees_with_the_reference_product(a in bf128(), b in bf64()) {
+        fn square_agrees_with_the_reference_product(a in bf128(), b in bf64(), c in any::<u32>()) {
             prop_assert_eq!(a.square(), a.reference_mul(a));
             prop_assert_eq!(b.square(), b.reference_mul(b));
+            let c = BinaryField32::from_repr(c);
+            prop_assert_eq!(c.square(), c.reference_mul(c));
         }
 
         #[test]
