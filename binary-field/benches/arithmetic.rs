@@ -1,8 +1,8 @@
 //! Tower arithmetic, comparing the recursive reference routines against whatever `Mul` and
 //! `square` dispatch to on the host.
 //!
-//! The two are the same routine below `GF(2^64)`; at 64 and 128 bits both operators take the
-//! carryless-multiply fast path where the target has the instruction for it. Rerunning with
+//! Production multiplication uses byte tables at the lower levels and carryless multiplication
+//! at 64 and 128 bits where available; squaring uses direct tower linear maps. Rerunning with
 //! `RUSTFLAGS="-C target-feature=-aes"` (AArch64) or without `+pclmulqdq` (x86-64) measures the
 //! same code with the fast path turned off.
 
@@ -251,47 +251,49 @@ fn bench_flatten_to_base(c: &mut Criterion) {
 fn bench_maps(c: &mut Criterion) {
     let mut rng = SmallRng::seed_from_u64(17);
     let values: Vec<BinaryField128> = (0..REPS).map(|_| rng.random()).collect();
-    let mut group = c.benchmark_group("maps/128");
-    group.bench_function("sqrt", |b| {
-        b.iter(|| {
-            black_box(&values)
-                .iter()
-                .map(|x| x.try_sqrt().unwrap())
-                .sum::<BinaryField128>()
-        })
-    });
-    group.bench_function("frobenius64", |b| {
-        b.iter(|| {
-            black_box(&values)
-                .iter()
-                .map(|x| x.exp_power_of_2(64))
-                .sum::<BinaryField128>()
-        })
-    });
-    group.bench_function("to_poly", |b| {
-        b.iter(|| {
-            black_box(&values)
-                .iter()
-                .fold(0u128, |acc, &x| acc ^ poly_basis::from_tower(x))
-        })
-    });
-    let polys: Vec<_> = values.iter().copied().map(poly_basis::from_tower).collect();
-    group.bench_function("from_poly", |b| {
-        b.iter(|| {
-            black_box(&polys)
-                .iter()
-                .map(|&x| poly_basis::to_tower(x))
-                .sum::<BinaryField128>()
-        })
-    });
-    group.bench_function("poly_mul", |b| {
-        b.iter(|| {
-            black_box(&polys)
-                .iter()
-                .fold(1, |acc, &x| poly_basis::mul(acc, x))
-        })
-    });
-    group.finish();
+    {
+        let mut group = c.benchmark_group("maps/128");
+        group.bench_function("sqrt", |b| {
+            b.iter(|| {
+                black_box(&values)
+                    .iter()
+                    .map(|x| x.try_sqrt().unwrap())
+                    .sum::<BinaryField128>()
+            });
+        });
+        group.bench_function("frobenius64", |b| {
+            b.iter(|| {
+                black_box(&values)
+                    .iter()
+                    .map(|x| x.exp_power_of_2(64))
+                    .sum::<BinaryField128>()
+            });
+        });
+        group.bench_function("to_poly", |b| {
+            b.iter(|| {
+                black_box(&values)
+                    .iter()
+                    .fold(0u128, |acc, &x| acc ^ poly_basis::from_tower(x))
+            });
+        });
+        let polys: Vec<_> = values.iter().copied().map(poly_basis::from_tower).collect();
+        group.bench_function("from_poly", |b| {
+            b.iter(|| {
+                black_box(&polys)
+                    .iter()
+                    .map(|&x| poly_basis::to_tower(x))
+                    .sum::<BinaryField128>()
+            });
+        });
+        group.bench_function("poly_mul", |b| {
+            b.iter(|| {
+                black_box(&polys)
+                    .iter()
+                    .fold(1, |acc, &x| poly_basis::mul(acc, x))
+            });
+        });
+        group.finish();
+    }
     let mut group = c.benchmark_group("mixed/128");
     macro_rules! mixed {
         ($t:ty, $name:literal) => {{
@@ -301,7 +303,7 @@ fn bench_maps(c: &mut Criterion) {
                     black_box(&values)
                         .iter()
                         .fold(BinaryField128::ONE, |acc, &x| (acc + x) * black_box(scalar))
-                })
+                });
             });
         }};
     }
@@ -324,7 +326,7 @@ fn bench_grind(c: &mut Criterion) {
             || challenger.clone(),
             |mut ch| ch.grind(black_box(12)),
             BatchSize::SmallInput,
-        )
+        );
     });
 }
 
@@ -342,7 +344,7 @@ fn bench_bulk(c: &mut Criterion) {
                 black_box(samples)
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     c.bench_function("bulk/observe128", |b| {
         b.iter_batched(
@@ -354,16 +356,68 @@ fn bench_bulk(c: &mut Criterion) {
                 black_box(ch)
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     let coefficients = vec![BinaryField8::ONE; 1 << 20];
     c.bench_function("bulk/reconstitute128", |b| {
         b.iter_batched(
             || coefficients.clone(),
-            |v| <BinaryField128 as BasedVectorSpace<BinaryField8>>::reconstitute_from_base(v),
+            <BinaryField128 as BasedVectorSpace<BinaryField8>>::reconstitute_from_base,
             BatchSize::SmallInput,
-        )
+        );
     });
+}
+
+fn bench_batch_kernels(c: &mut Criterion) {
+    let mut rng = SmallRng::seed_from_u64(17);
+    let scalar = rng.random::<u128>();
+    {
+        let mut group = c.benchmark_group("batch/poly128");
+        for len in [1, 16, 256, 4096] {
+            let values: Vec<u128> = (0..len).map(|_| rng.random()).collect();
+            group.bench_function(format!("mul/{len}"), |b| {
+                b.iter_batched(
+                    || values.clone(),
+                    |mut v| {
+                        poly_basis::mul_slice(&mut v, black_box(scalar));
+                        v
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+            group.bench_function(format!("butterfly/{len}"), |b| {
+                b.iter_batched(
+                    || (values.clone(), values.clone()),
+                    |(mut lo, mut hi)| {
+                        poly_basis::butterfly_forward(&mut lo, &mut hi, black_box(scalar));
+                        (lo, hi)
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+        group.finish();
+    }
+    let mut group = c.benchmark_group("dot_product");
+    macro_rules! dot {
+        ($t:ty, $n:literal) => {{
+            let a: [$t; $n] = core::array::from_fn(|_| rng.random());
+            let b: [$t; $n] = core::array::from_fn(|_| rng.random());
+            group.bench_function(concat!(stringify!($t), "/", $n), |bench| {
+                bench.iter(|| <$t>::dot_product(black_box(&a), black_box(&b)));
+            });
+        }};
+    }
+    dot!(BinaryField32, 2);
+    dot!(BinaryField32, 16);
+    dot!(BinaryField32, 128);
+    dot!(BinaryField64, 2);
+    dot!(BinaryField64, 16);
+    dot!(BinaryField64, 128);
+    dot!(BinaryField128, 2);
+    dot!(BinaryField128, 16);
+    dot!(BinaryField128, 128);
+    group.finish();
 }
 
 criterion_group!(
@@ -375,6 +429,7 @@ criterion_group!(
     bench_flatten_to_base,
     bench_maps,
     bench_grind,
-    bench_bulk
+    bench_bulk,
+    bench_batch_kernels
 );
 criterion_main!(benches);
