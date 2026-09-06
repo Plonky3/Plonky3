@@ -95,6 +95,55 @@ fn forward(values: &mut [u128], width: usize, log_n: usize, shift: BinaryField12
     }
 }
 
+/// Inverse transform with the data kept in the polynomial basis.
+///
+/// An increment depends only on a block index's trailing-zero count, never on the stage, so one
+/// table serves every stage and each stage uses the prefix it reaches. A height of one runs no
+/// stage and needs no table.
+fn inverse(values: &mut [u128], width: usize, log_n: usize, shift: BinaryField128) {
+    let steps = twiddle_steps(log_n.saturating_sub(1));
+    for j in 0..log_n {
+        let half = (1 << j) * width;
+        let base = subspace_polynomial::<BinaryField128>(j, shift);
+        let per_task = (BUTTERFLY_GRAIN / half).max(1);
+        values
+            .par_chunks_mut(per_task * (half << 1))
+            .enumerate()
+            .for_each(|(task, group)| {
+                let first = task * per_task;
+                let mut t = twiddle(base, first);
+                // Invariant: blocks are visited in ascending index order.
+                // Carrying the twiddle from one block to the next relies on it.
+                for (i, block) in group.chunks_mut(half << 1).enumerate() {
+                    if i != 0 {
+                        t ^= steps[(first + i).trailing_zeros() as usize];
+                    }
+                    let zero = t == 0;
+                    let (lo, hi) = block.split_at_mut(half);
+                    let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
+                        if zero {
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                *v ^= *u;
+                            }
+                        } else {
+                            for (u, v) in lo.iter_mut().zip(hi) {
+                                *v ^= *u;
+                                *u ^= poly_basis::mul(t, *v);
+                            }
+                        }
+                    };
+                    if half <= BUTTERFLY_GRAIN {
+                        butterfly(lo, hi);
+                    } else {
+                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                    }
+                }
+            });
+    }
+}
+
 impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
     fn shifted_ntt_batch(
         &self,
@@ -167,6 +216,55 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         mat
     }
 
+    fn shifted_lde_batch(
+        &self,
+        mut mat: RowMajorMatrix<BinaryField128>,
+        added_bits: usize,
+        shift: BinaryField128,
+    ) -> RowMajorMatrix<BinaryField128> {
+        if !poly_basis::HAS_HARDWARE_CLMUL {
+            return self.tower.shifted_lde_batch(mat, added_bits, shift);
+        }
+        let log_n = log2_strict_usize(mat.height());
+        if added_bits == 0 {
+            return mat;
+        }
+        let width = mat.width;
+        let len = mat.values.len();
+        let padded_len = u32::try_from(added_bits)
+            .ok()
+            .and_then(|bits| len.checked_shl(bits))
+            .filter(|&padded| padded >> added_bits == len)
+            .expect("extended codeword length overflows usize");
+        // Preserve the evaluation prefix in its final allocation, then reuse the
+        // original allocation for coefficients instead of cloning it before a resize.
+        let mut coeffs: Vec<u128> = core::mem::take(&mut mat.values)
+            .into_iter()
+            .map(BinaryField128::to_repr)
+            .collect();
+        let mut values = alloc::vec![0u128; padded_len];
+        values[..len].copy_from_slice(&coeffs);
+        coeffs
+            .par_iter_mut()
+            .for_each(|v| *v = poly_basis::from_tower(BinaryField128::from_repr(*v)));
+        inverse(&mut coeffs, width, log_n, shift);
+
+        // The input evaluations already are the first coset. Only new cosets need
+        // evaluation and conversion back from the polynomial basis.
+        values[len..]
+            .par_chunks_mut(len)
+            .enumerate()
+            .for_each(|(c, chunk)| {
+                chunk.copy_from_slice(&coeffs);
+                forward(chunk, width, log_n, shift + domain_point::<BinaryField128>((c + 1) << log_n));
+                for v in chunk {
+                    *v = poly_basis::to_tower(*v).to_repr();
+                }
+            });
+        mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
+        mat
+    }
+
     fn shifted_intt_batch(
         &self,
         mut mat: RowMajorMatrix<BinaryField128>,
@@ -187,50 +285,7 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .par_iter_mut()
             .for_each(|v| *v = poly_basis::from_tower(BinaryField128::from_repr(*v)));
 
-        // An increment depends only on a block index's trailing-zero count, never on the stage,
-        // so one table serves every stage and each stage uses the prefix it reaches.
-        // A height of one runs no stage and needs no table.
-        let steps = twiddle_steps(log_n.saturating_sub(1));
-        for j in 0..log_n {
-            let half = (1 << j) * width;
-            let base = subspace_polynomial::<BinaryField128>(j, shift);
-            let per_task = (BUTTERFLY_GRAIN / half).max(1);
-            values
-                .par_chunks_mut(per_task * (half << 1))
-                .enumerate()
-                .for_each(|(task, group)| {
-                    let first = task * per_task;
-                    let mut t = twiddle(base, first);
-                    // Invariant: blocks are visited in ascending index order.
-                    // Carrying the twiddle from one block to the next relies on it.
-                    for (i, block) in group.chunks_mut(half << 1).enumerate() {
-                        if i != 0 {
-                            t ^= steps[(first + i).trailing_zeros() as usize];
-                        }
-                        let zero = t == 0;
-                        let (lo, hi) = block.split_at_mut(half);
-                        let butterfly = |lo: &mut [u128], hi: &mut [u128]| {
-                            if zero {
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    *v ^= *u;
-                                }
-                            } else {
-                                for (u, v) in lo.iter_mut().zip(hi) {
-                                    *v ^= *u;
-                                    *u ^= poly_basis::mul(t, *v);
-                                }
-                            }
-                        };
-                        if half <= BUTTERFLY_GRAIN {
-                            butterfly(lo, hi);
-                        } else {
-                            lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                                .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                                .for_each(|(lo, hi)| butterfly(lo, hi));
-                        }
-                    }
-                });
-        }
+        inverse(&mut values, width, log_n, shift);
 
         values
             .par_iter_mut()
@@ -281,6 +336,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn shifted_lde_matches_naive_at_wide_widths() {
+        for width in [1, 4, 16, 64] {
+            for added in [0, 1, 2, 3] {
+                let mat = matrix(4, width, 17);
+                let shift = BinaryField128::from_repr(1 << 127);
+                let expected =
+                    NaiveAdditiveNtt::default().shifted_lde_batch(mat.clone(), added, shift);
+                let actual = PolyBasisNtt::default().shifted_lde_batch(mat.clone(), added, shift);
+                assert_eq!(actual, expected);
+                assert_eq!(&actual.values[..mat.values.len()], &mat.values);
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic = "extended codeword length overflows usize"]
+    fn lde_rejects_length_overflow() {
+        let _ = PolyBasisNtt::default().lde_batch(matrix(1, 1, 0), usize::BITS as usize - 1);
     }
 
     proptest! {
