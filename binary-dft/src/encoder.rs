@@ -55,6 +55,14 @@ impl<Ntt: AdditiveNtt<BinaryField128> + Sync> Encoder<BinaryField128>
         message.values.resize(padded_len, BinaryField128::ZERO);
         self.ntt.ntt_batch_padded(message, log_inv_rate)
     }
+
+    fn encode_batch_padded(
+        &self,
+        message: RowMajorMatrix<BinaryField128>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField128> {
+        self.ntt.ntt_batch_padded(message, log_inv_rate)
+    }
 }
 
 #[cfg(test)]
@@ -123,6 +131,34 @@ mod tests {
     fn encode_batch_panics_when_the_codeword_length_overflows() {
         let message = RowMajorMatrix::new(vec![F::ZERO; 2], 1);
         let _ = AdditiveRsEncoder::<F>::default().encode_batch(message, usize::BITS as usize - 1);
+    }
+
+    #[test]
+    fn padded_encoding_matches_naive() {
+        for width in [1, 4, 16, 64] {
+            for rate in [0, 1, 2, 3] {
+                let mut mat = matrix(4, width, 13);
+                mat.values.resize(mat.values.len() << rate, F::ZERO);
+                let expected = NaiveAdditiveNtt::default().ntt_batch(mat.clone());
+                assert_eq!(
+                    AdditiveRsEncoder::<F>::default().encode_batch_padded(mat, rate),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic = "padding exceeds matrix height"]
+    fn padded_encoding_rejects_excessive_padding() {
+        let _ = AdditiveRsEncoder::<F>::default().encode_batch_padded(matrix(2, 4, 0), 3);
+    }
+
+    #[test]
+    #[should_panic]
+    fn padded_encoding_rejects_non_power_of_two_height() {
+        let mat = RowMajorMatrix::new(vec![F::ZERO; 12], 4);
+        let _ = AdditiveRsEncoder::<F>::default().encode_batch_padded(mat, 1);
     }
 
     proptest! {

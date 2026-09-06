@@ -169,6 +169,17 @@ fn bench_commit(c: &mut Criterion) {
     type Mmcs = MerkleTreeMmcs<BinaryField128, u8, Hash, Compress, 2, 32>;
     type Challenger = BinaryChallenger<BinaryField128, HashChallenger<u8, Keccak256Hash, 32>>;
     let mmcs = Mmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
+    // Retain the previous padded full transform as an allocation-matched comparison.
+    struct FullPaddedEncoder;
+    impl Encoder<BinaryField128> for FullPaddedEncoder {
+        fn encode_batch(
+            &self,
+            message: RowMajorMatrix<BinaryField128>,
+            rate: usize,
+        ) -> RowMajorMatrix<BinaryField128> {
+            AdditiveRsEncoder::<BinaryField128>::default().encode_batch(message, rate)
+        }
+    }
     let encoder = AdditiveRsEncoder::<BinaryField128>::default();
     let mut rng = SmallRng::seed_from_u64(11);
     let mut group = c.benchmark_group("commit_base");
@@ -181,6 +192,19 @@ fn bench_commit(c: &mut Criterion) {
             for added in [1, 2, 3] {
                 for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
                     let parameter = format!("{order:?}/h{log_height}/w{}/r{added}", 1 << folding);
+                    group.bench_function(format!("full/{parameter}"), |b| {
+                        b.iter(|| {
+                            commit_base(
+                                order,
+                                &FullPaddedEncoder,
+                                &mmcs,
+                                &mut Challenger::from_hasher(Vec::new(), Keccak256Hash),
+                                &poly,
+                                folding,
+                                added,
+                            )
+                        });
+                    });
                     group.bench_function(parameter, |b| {
                         b.iter(|| {
                             commit_base(

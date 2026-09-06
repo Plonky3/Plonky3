@@ -18,11 +18,9 @@ use crate::strategy::VariableOrder;
 ///
 /// Prefix order transposes the local folding block so the first folded
 /// variables become columns. Suffix order keeps the folding block as the row
-/// width. The message is built directly at codeword height, with the tail
-/// left at `F::ZERO`, and passed to `encoder` at `log_inv_rate = 0`: an
-/// already-padded message at rate zero is the same computation as padding an
-/// unexpanded one at the real rate, so this is exactly what the encoder would
-/// have built internally, without the extra allocation and copy.
+/// width. The message is built directly at codeword height, with a zero tail.
+/// Passing the original rate through [`Encoder::encode_batch_padded`] lets the
+/// encoder skip zero-coefficient work while preserving this fused allocation.
 pub fn commit_base<F, E, MT, Challenger>(
     order: VariableOrder,
     encoder: &E,
@@ -58,7 +56,7 @@ where
     let message = RowMajorMatrix::new(values, width);
 
     let encoded = info_span!("encode", height = codeword_height, width)
-        .in_scope(|| encoder.encode_batch(message, 0));
+        .in_scope(|| encoder.encode_batch_padded(message, starting_log_inv_rate));
 
     let (root, prover_data) = info_span!("commit_matrix").in_scope(|| mmcs.commit_matrix(encoded));
     challenger.observe(root.clone());
