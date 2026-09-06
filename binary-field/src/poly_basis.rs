@@ -49,6 +49,66 @@ pub fn square(a: u128) -> u128 {
     clmul::poly_square_128(a)
 }
 
+/// Multiply every polynomial-basis element by the same scalar.
+#[inline]
+pub fn mul_slice(values: &mut [u128], scalar: u128) {
+    if let [value] = values {
+        *value = mul(*value, scalar);
+        return;
+    }
+    for value in values {
+        *value = clmul::poly_mul_128_batch(*value, scalar);
+    }
+}
+
+/// Apply `(lo, hi) -> (lo + scalar*hi, lo + (scalar + 1)*hi)` in place.
+///
+/// # Panics
+/// Panics if the slice lengths differ.
+#[inline]
+pub fn butterfly_forward(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
+    assert_eq!(lo.len(), hi.len(), "butterfly lengths differ");
+    if scalar == 0 {
+        for (lo, hi) in lo.iter().zip(hi) {
+            *hi ^= *lo;
+        }
+        return;
+    }
+    if lo.len() == 1 {
+        lo[0] ^= mul(scalar, hi[0]);
+        hi[0] ^= lo[0];
+        return;
+    }
+    for (lo, hi) in lo.iter_mut().zip(hi) {
+        *lo ^= clmul::poly_mul_128_batch(scalar, *hi);
+        *hi ^= *lo;
+    }
+}
+
+/// Undo [`butterfly_forward`] with the same scalar.
+///
+/// # Panics
+/// Panics if the slice lengths differ.
+#[inline]
+pub fn butterfly_inverse(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
+    assert_eq!(lo.len(), hi.len(), "butterfly lengths differ");
+    if scalar == 0 {
+        for (lo, hi) in lo.iter().zip(hi) {
+            *hi ^= *lo;
+        }
+        return;
+    }
+    if lo.len() == 1 {
+        hi[0] ^= lo[0];
+        lo[0] ^= mul(scalar, hi[0]);
+        return;
+    }
+    for (lo, hi) in lo.iter_mut().zip(hi) {
+        *hi ^= *lo;
+        *lo ^= clmul::poly_mul_128_batch(scalar, *hi);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use p3_field::PrimeCharacteristicRing;
@@ -88,6 +148,51 @@ mod tests {
             let x = element(a);
             prop_assert_eq!(to_tower(square(from_tower(x))), x.square());
         }
+    }
+
+    #[test]
+    fn slice_operations_match_reference_tower_arithmetic() {
+        use alloc::vec::Vec;
+        for len in [0, 1, 2, 3, 8, 17, 64, 257] {
+            for scalar in [0, 1, 0xfeed_9876_0123_4567_89ab_cdef_9876_5432] {
+                let t = element(scalar);
+                let xs: Vec<_> = (0..len)
+                    .map(|i| {
+                        element(
+                            (i as u128 + 1).wrapping_mul(0xfeed_8765_dead_beef_cafe_0123_4567_89ab),
+                        )
+                    })
+                    .collect();
+                let ys: Vec<_> = xs.iter().rev().copied().collect();
+                let mut lo: Vec<_> = xs.iter().copied().map(from_tower).collect();
+                let mut hi: Vec<_> = ys.iter().copied().map(from_tower).collect();
+                let original = (lo.clone(), hi.clone());
+                super::butterfly_forward(&mut lo, &mut hi, from_tower(t));
+                for i in 0..len {
+                    let expected = xs[i] + ys[i].reference_mul(t);
+                    assert_eq!(to_tower(lo[i]), expected);
+                    assert_eq!(to_tower(hi[i]), expected + ys[i]);
+                }
+                super::butterfly_inverse(&mut lo, &mut hi, from_tower(t));
+                assert_eq!((&lo, &hi), (&original.0, &original.1));
+                super::mul_slice(&mut lo, from_tower(t));
+                for i in 0..len {
+                    assert_eq!(to_tower(lo[i]), xs[i].reference_mul(t));
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic = "butterfly lengths differ"]
+    fn forward_rejects_mismatched_lengths() {
+        super::butterfly_forward(&mut [0], &mut [], 0);
+    }
+
+    #[test]
+    #[should_panic = "butterfly lengths differ"]
+    fn inverse_rejects_mismatched_lengths() {
+        super::butterfly_inverse(&mut [], &mut [0], 1);
     }
 
     /// The basis change fixes zero and one, as any field isomorphism must.
