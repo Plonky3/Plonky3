@@ -25,6 +25,25 @@ pub trait Encoder<F: Field> {
     /// Panics if the height of `message` is not a power of two, or if the codeword height
     /// `2^(k + log_inv_rate)` overflows `usize`.
     fn encode_batch(&self, message: RowMajorMatrix<F>, log_inv_rate: usize) -> RowMajorMatrix<F>;
+
+    /// Encodes a coefficient matrix already padded to its final height.
+    ///
+    /// The original message occupies the first `height / 2^log_inv_rate` rows; the
+    /// caller must set the remaining entries to zero. Implementations may ignore
+    /// that tail and use the rate to avoid work on zero coefficients.
+    /// The default preserves the ordinary transform of the full padded matrix.
+    ///
+    /// # Panics
+    /// Panics if the height is not a power of two or the padding exceeds its height.
+    fn encode_batch_padded(
+        &self,
+        message: RowMajorMatrix<F>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<F> {
+        let log_height = p3_util::log2_strict_usize(message.height());
+        assert!(log_inv_rate <= log_height, "padding exceeds matrix height");
+        self.encode_batch(message, 0)
+    }
 }
 
 /// Reed-Solomon over the two-adic subgroup of order `2^(k + log_inv_rate)`: each column of
@@ -78,8 +97,9 @@ mod tests {
         padded
             .values
             .resize(message.values.len() * 4, BabyBear::ZERO);
-        let expected = dft.dft_batch(padded).to_row_major_matrix();
+        let expected = dft.dft_batch(padded.clone()).to_row_major_matrix();
 
+        assert_eq!(dft.encode_batch_padded(padded, 2), expected);
         assert_eq!(dft.encode_batch(message, 2), expected);
     }
 

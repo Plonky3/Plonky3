@@ -102,3 +102,38 @@ fn prefix_prover_commits_over_a_binary_field() {
 
     assert_eq!(root_fast, root_ref);
 }
+
+/// The padded production path preserves both layouts and their independently encoded roots.
+#[test]
+fn polynomial_commit_matches_naive_for_both_orders() {
+    use p3_matrix::dense::RowMajorMatrix;
+
+    let mut rng = SmallRng::seed_from_u64(19);
+    let values: Vec<F> = (0..1 << 8).map(|_| rng.random()).collect();
+    let mmcs = mmcs();
+    for folding in [0, 2, 4, 6] {
+        for rate in [1, 2, 3] {
+            for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
+                let message = match order {
+                    VariableOrder::Prefix => {
+                        RowMajorMatrixView::new(&values, 1 << (8 - folding)).transpose()
+                    }
+                    VariableOrder::Suffix => RowMajorMatrix::new(values.clone(), 1 << folding),
+                };
+                let expected = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default()
+                    .encode_batch(message, rate);
+                let (expected_root, _) = mmcs.commit_matrix(expected);
+                let (root, _) = commit_base(
+                    order,
+                    &AdditiveRsEncoder::<F>::default(),
+                    &mmcs,
+                    &mut challenger(),
+                    &Poly::new(values.clone()),
+                    folding,
+                    rate,
+                );
+                assert_eq!(root, expected_root);
+            }
+        }
+    }
+}
