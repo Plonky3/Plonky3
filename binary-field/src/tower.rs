@@ -369,6 +369,23 @@ macro_rules! binary_tower_level {
             }
 
             #[inline]
+            fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+                if N == 0 { return Self::ZERO; }
+                if N == 1 { return u[0] * v[0]; }
+                if HAS_HARDWARE_CLMUL && Self::BITS == 64 {
+                    Self::from_repr(crate::clmul::dot_product_64(
+                        u.iter().zip(v).map(|(a, b)| (a.0 as u64, b.0 as u64)),
+                    ) as $repr)
+                } else if HAS_HARDWARE_CLMUL && Self::BITS == 128 {
+                    Self::from_repr(crate::clmul::dot_product_128(
+                        u.iter().zip(v).map(|(a, b)| (a.0 as u128, b.0 as u128)),
+                    ) as $repr)
+                } else {
+                    u.iter().zip(v).map(|(&a, &b)| a * b).sum()
+                }
+            }
+
+            #[inline]
             fn xor(&self, y: &Self) -> Self {
                 *self + *y
             }
@@ -734,6 +751,38 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn fused_dot_products_match_reference_for_arbitrary_lengths() {
+        fn check<const N: usize>() {
+            let u: [BinaryField128; N] = core::array::from_fn(|i| {
+                BinaryField128::from_repr(
+                    (i as u128 + 1).wrapping_mul(0xfeed_dead_beef_9876_0123_4567_cafe_dcba),
+                )
+            });
+            let v = core::array::from_fn(|i| u[N - 1 - i] + BinaryField128::ONE);
+            let expected = u
+                .iter()
+                .zip(&v)
+                .map(|(&a, &b)| a.reference_mul(b))
+                .sum::<BinaryField128>();
+            assert_eq!(BinaryField128::dot_product(&u, &v), expected);
+            let u = u.map(|x| BinaryField64::from_repr(x.to_repr() as u64));
+            let v = v.map(|x| BinaryField64::from_repr(x.to_repr() as u64));
+            assert_eq!(
+                BinaryField64::dot_product(&u, &v),
+                u.iter().zip(&v).map(|(&a, &b)| a.reference_mul(b)).sum()
+            );
+        }
+        check::<0>();
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<7>();
+        check::<16>();
+        check::<33>();
+        check::<128>();
+    }
 
     #[test]
     fn prime_subfield_scaling_is_selection() {

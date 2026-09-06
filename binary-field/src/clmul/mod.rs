@@ -156,6 +156,24 @@ pub(crate) fn mul_128(a: u128, b: u128) -> u128 {
     basis::poly_to_tower_128(product)
 }
 
+/// Sum unreduced products before paying for one reduction and one output basis change.
+#[inline]
+pub(crate) fn dot_product_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
+    let product = pairs.fold(0, |sum, (a, b)| {
+        sum ^ clmul_64x64(basis::tower_to_poly_64(a), basis::tower_to_poly_64(b))
+    });
+    basis::poly_to_tower_64(reduce_64(product))
+}
+
+#[inline]
+pub(crate) fn dot_product_128(pairs: impl Iterator<Item = (u128, u128)>) -> u128 {
+    let (low, high) = pairs.fold((0, 0), |(low, high), (a, b)| {
+        let (lo, hi) = clmul_128x128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
+        (low ^ lo, high ^ hi)
+    });
+    basis::poly_to_tower_128(reduce_128(low, high))
+}
+
 /// Squaring in `GF(2^64)`, taking and returning the tower representation.
 ///
 /// The change of basis is linear and applied once here, where a product of two operands pays
