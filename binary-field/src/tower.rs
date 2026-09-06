@@ -10,8 +10,10 @@
 //! half holds the `T_k`-coefficient of `1`, the high half the `T_k`-coefficient of `X_k`, and
 //! the splitting repeats down to the individual bits of `GF(2)`.
 
+use alloc::vec::Vec;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
+use core::mem::ManuallyDrop;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
@@ -408,6 +410,16 @@ macro_rules! binary_tower_level {
             }
 
             #[inline]
+            fn zero_vec(len: usize) -> Vec<Self> {
+                let mut values = ManuallyDrop::new(alloc::vec![0 as $repr; len]);
+                // SAFETY: the transparent wrapper has exactly the integer's layout, and
+                // zero is canonical. The allocation retains its original size and alignment.
+                unsafe {
+                    Vec::from_raw_parts(values.as_mut_ptr().cast(), values.len(), values.capacity())
+                }
+            }
+
+            #[inline]
             fn xor(&self, y: &Self) -> Self {
                 *self + *y
             }
@@ -763,6 +775,29 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn zero_vectors_preserve_layout_and_support_growth() {
+        macro_rules! check {
+            ($field:ty) => {
+                for len in [0, 1, 33, 1024] {
+                    let mut values = <$field>::zero_vec(len);
+                    assert_eq!(values.len(), len);
+                    assert!(values.iter().all(|x| *x == <$field>::ZERO));
+                    values.push(<$field>::ONE);
+                    values.reserve(100);
+                    assert_eq!(values.pop(), Some(<$field>::ONE));
+                }
+            };
+        }
+        check!(BinaryField2);
+        check!(BinaryField4);
+        check!(BinaryField8);
+        check!(BinaryField16);
+        check!(BinaryField32);
+        check!(BinaryField64);
+        check!(BinaryField128);
+    }
 
     #[test]
     fn fused_dot_products_match_reference_for_arbitrary_lengths() {
