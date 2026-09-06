@@ -1710,14 +1710,12 @@ where
                             // not depend on the class, so they are swept once for the whole
                             // fiber set and inverted in a single batch rather than once per
                             // `(class, query, lane)`.
-                            let mut fiber_steps = Vec::with_capacity(n_q * arity0);
                             let mut denoms = Vec::with_capacity(n_q * arity0);
                             for &j in first_round_unique_js {
                                 let mut fiber_point =
                                     Val::GENERATOR * domain_gen.exp_u64(j as u64);
                                 for _ in 0..arity0 {
                                     let step = *r_comb * fiber_point;
-                                    fiber_steps.push(step);
                                     denoms.push(Challenge::ONE - step);
                                     fiber_point *= fiber_step;
                                 }
@@ -1746,19 +1744,20 @@ where
                                     },
                                 )?;
 
+                                if gap == 0 { continue; }
                                 // Within a query the lanes advance by the fixed base-field
                                 // ratio `fiber_step^(gap+1)`, so the numerator sweep costs one
                                 // extension exponentiation per query instead of one per lane.
                                 let gap_plus_1 = (gap + 1) as u64;
                                 let lane_ratio = fiber_step.exp_u64(gap_plus_1);
+                                let challenge_hi = r_comb.exp_u64(gap_plus_1);
                                 for q_idx in 0..n_q {
-                                    let base = q_idx * arity0;
-                                    let mut step_hi = fiber_steps[base].exp_u64(gap_plus_1);
+                                    let point = Val::GENERATOR * domain_gen.exp_u64(first_round_unique_js[q_idx] as u64);
+                                    let mut step_hi = challenge_hi * point.exp_u64(gap_plus_1);
                                     for l in 0..arity0 {
                                         combined[q_idx][l] += r_i
                                             * ro_class[q_idx][l]
-                                            * (Challenge::ONE - step_hi)
-                                            * inv_denoms[base + l];
+                                            * (Challenge::ONE - step_hi);
                                         step_hi *= lane_ratio;
                                     }
                                 }
@@ -1768,6 +1767,17 @@ where
                                     combined[q_idx][l] += r_i
                                         * ro_class[q_idx][l]
                                         * Challenge::from_usize(gap + 1);
+                                }
+                            }
+                            for (value, &inverse) in combined.iter_mut().flatten().zip(&inv_denoms) {
+                                *value *= inverse;
+                            }
+                            for (&log_native_h, ro_class) in native_heights.iter().zip(&expected_ro_by_class) {
+                                let &(r_i, gap) = &coeffs_by_height[&log_native_h];
+                                if gap == 0 {
+                                    for (value, &ro) in combined.iter_mut().flatten().zip(ro_class.iter().flatten()) {
+                                        *value += r_i * ro;
+                                    }
                                 }
                             }
                             Ok(combined)

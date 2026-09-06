@@ -140,6 +140,19 @@ where
     const POWER_CHUNK: usize = 1 << 12;
     let mut result = EF::zero_vec(n);
 
+    for &(_, _, values) in groups {
+        assert_eq!(values.len(), n, "group values must span the full coset");
+    }
+    if groups.iter().all(|&(_, gap, _)| gap == 0) {
+        for &(r_i, _, values) in groups {
+            result
+                .par_iter_mut()
+                .zip(values)
+                .for_each(|(r, &v)| *r += r_i * v);
+        }
+        return result;
+    }
+
     let mut denoms = EF::zero_vec(n);
     denoms
         .par_chunks_mut(POWER_CHUNK)
@@ -165,27 +178,39 @@ where
     drop(denoms);
 
     for &(r_i, gap, values) in groups {
-        assert_eq!(values.len(), n, "group values must span the full coset");
+        if gap == 0 {
+            continue;
+        }
 
         let g_hi = g.exp_u64((gap + 1) as u64);
         let step_start_hi = step_start.exp_u64((gap + 1) as u64);
         result
             .par_chunks_mut(POWER_CHUNK)
             .zip(values.par_chunks(POWER_CHUNK))
-            .zip(inv_denoms.par_chunks(POWER_CHUNK))
             .enumerate()
-            .for_each(|(chunk_idx, ((res_chunk, val_chunk), inv_chunk))| {
+            .for_each(|(chunk_idx, (res_chunk, val_chunk))| {
                 let mut step_hi = step_start_hi * g_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
-                for ((res, &val), &inv_denom) in res_chunk.iter_mut().zip(val_chunk).zip(inv_chunk)
-                {
+                for (res, &val) in res_chunk.iter_mut().zip(val_chunk) {
                     let numer = EF::ONE - step_hi;
-                    *res += r_i * val * numer * inv_denom;
+                    *res += r_i * val * numer;
                     step_hi *= g_hi;
                 }
             });
 
         if let Some(p) = degenerate {
             result[p] += r_i * values[p] * EF::from_usize(gap + 1);
+        }
+    }
+    result
+        .par_iter_mut()
+        .zip(inv_denoms)
+        .for_each(|(value, inv)| *value *= inv);
+    for &(r_i, gap, values) in groups {
+        if gap == 0 {
+            result
+                .par_iter_mut()
+                .zip(values)
+                .for_each(|(r, &v)| *r += r_i * v);
         }
     }
     result
