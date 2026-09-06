@@ -16,8 +16,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use num_bigint::BigUint;
 use p3_field::op_assign_macros::{
-    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_sub_assign, impl_sub_base_field, ring_sum,
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_methods, impl_sub_assign,
+    impl_sub_base_field, ring_sum,
 };
 use p3_field::{Algebra, Field, Packable, PrimeCharacteristicRing, RawDataSerializable};
 use rand::Rng;
@@ -516,7 +516,24 @@ macro_rules! binary_tower_level {
 
         impl_add_base_field!($name, Gf2);
         impl_sub_base_field!($name, Gf2);
-        impl_mul_base_field!($name, Gf2);
+        impl Mul<Gf2> for $name {
+            type Output = Self;
+
+            #[inline]
+            #[allow(clippy::suspicious_arithmetic_impl)]
+            fn mul(self, rhs: Gf2) -> Self {
+                Self(self.0 & (0 as $repr).wrapping_sub(rhs.to_repr() as $repr))
+            }
+        }
+
+        impl Mul<$name> for Gf2 {
+            type Output = $name;
+
+            #[inline]
+            fn mul(self, rhs: $name) -> $name {
+                rhs * self
+            }
+        }
 
         impl Algebra<Gf2> for $name {}
     };
@@ -717,6 +734,26 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn prime_subfield_scaling_is_selection() {
+        macro_rules! check {
+            ($field:ty, $value:expr) => {{
+                let x = <$field>::from_repr($value);
+                assert_eq!(x * Gf2::ZERO, <$field>::ZERO);
+                assert_eq!(Gf2::ZERO * x, <$field>::ZERO);
+                assert_eq!(x * Gf2::ONE, x);
+                assert_eq!(Gf2::ONE * x, x);
+            }};
+        }
+        check!(BinaryField2, 3);
+        check!(BinaryField4, 15);
+        check!(BinaryField8, 255);
+        check!(BinaryField16, 0xdead);
+        check!(BinaryField32, 0xdead_beef);
+        check!(BinaryField64, 0xdead_beef_cafe_8765);
+        check!(BinaryField128, 0xdead_beef_cafe_8765_0123_4567_89ab_cdef);
+    }
 
     /// The prime factors of `2^n − 1` for each level `n` of the tower.
     const FACTORS_2: [u128; 1] = [3];
