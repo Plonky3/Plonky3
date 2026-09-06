@@ -352,6 +352,33 @@ macro_rules! binary_tower_level {
             }
 
             #[inline]
+            fn exp_power_of_2(&self, power_log: usize) -> Self {
+                let mut power = power_log % Self::BITS;
+                let mut value = *self;
+                // The nontrivial quadratic automorphism is X -> X + alpha.
+                if power >= Self::BITS / 2 {
+                    let (lo, hi) = value.split();
+                    value = Self::join(lo + hi.mul_alpha(), hi);
+                    power -= Self::BITS / 2;
+                }
+                if power == 1 {
+                    return value.square();
+                }
+                if Self::BITS >= 16 {
+                    Self::from_repr(match Self::BITS {
+                        16 => crate::linear::frobenius_16(value.0 as u16, power) as $repr,
+                        32 => crate::linear::frobenius_32(value.0 as u32, power) as $repr,
+                        64 => crate::linear::frobenius_64(value.0 as u64, power) as $repr,
+                        128 => crate::linear::frobenius_128(value.0 as u128, power) as $repr,
+                        _ => unreachable!(),
+                    })
+                } else {
+                    for _ in 0..power { value = value.square(); }
+                    value
+                }
+            }
+
+            #[inline]
             fn xor(&self, y: &Self) -> Self {
                 *self + *y
             }
@@ -382,7 +409,17 @@ macro_rules! binary_tower_level {
             #[inline]
             fn try_sqrt(&self) -> Option<Self> {
                 // Squaring is the Frobenius, of order `BITS`, so `a^(2^(BITS - 1))` squares to `a`.
-                Some(self.exp_power_of_2(Self::BITS - 1))
+                if Self::BITS >= 16 {
+                    Some(Self::from_repr(match Self::BITS {
+                        16 => crate::linear::sqrt_16(self.0 as u16) as $repr,
+                        32 => crate::linear::sqrt_32(self.0 as u32) as $repr,
+                        64 => crate::linear::sqrt_64(self.0 as u64) as $repr,
+                        128 => crate::linear::sqrt_128(self.0 as u128) as $repr,
+                        _ => unreachable!(),
+                    }))
+                } else {
+                    Some(self.exp_power_of_2(Self::BITS - 1))
+                }
             }
 
             #[inline]
