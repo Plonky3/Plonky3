@@ -14,9 +14,8 @@ use crate::config::{StirConfig, StirRoundConfig};
 use crate::error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, StirError};
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    check_shake_consistency, eval_poly, eval_poly_at_base, fold_domain_params,
-    lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points,
-    vanishing_poly_from_roots,
+    FiberFold, check_shake_consistency, eval_poly, eval_poly_at_base, fold_domain_params,
+    next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points, vanishing_poly_from_roots,
 };
 
 /// `(index, row)` pairs for a round's queries, in draw order.
@@ -300,7 +299,7 @@ fn query_fold_value<F, EF, MmcsErr, InputErr>(
     fiber_step: F,
     arity: usize,
     current_shift: F,
-    fold_beta: EF,
+    folder: &FiberFold<F, EF>,
     prev_ctx: Option<&VirtualRoundContext<EF>>,
     round: RoundLabel,
     query: usize,
@@ -314,15 +313,11 @@ where
         .take(arity)
         .collect();
 
-    let current_fiber =
+    let mut current_fiber =
         materialize_virtual_fiber::<F, EF>(row_evals, &subgroup_points, current_shift, prev_ctx)
             .ok_or(StirError::InvalidRoundConsistency { round, query })?;
 
-    Ok(lagrange_interpolate_at(
-        &subgroup_points,
-        &current_fiber,
-        fold_beta,
-    ))
+    Ok(folder.fold_in_place(&mut current_fiber, j))
 }
 
 /// Output of verifying one intermediate STIR round.
@@ -445,6 +440,11 @@ where
         // virtual-oracle materialization and the fold.
         let domain_gen = F::two_adic_generator(current_log_domain);
         let fiber_step = domain_gen.exp_power_of_2(self.fold_log_domain);
+        let folder = FiberFold::new(
+            current_log_domain,
+            current_log_domain - self.fold_log_domain,
+            self.fold_beta,
+        );
 
         let mut seen_query_indices: alloc::collections::BTreeSet<usize> =
             alloc::collections::BTreeSet::new();
@@ -459,7 +459,7 @@ where
                 fiber_step,
                 self.arity,
                 current_shift,
-                self.fold_beta,
+                &folder,
                 prev_ctx,
                 RoundLabel::Round(round),
                 q,
@@ -731,6 +731,11 @@ where
 
         let final_domain_gen = F::two_adic_generator(current_log_domain);
         let final_fiber_step = final_domain_gen.exp_power_of_2(self.final_new_log_domain);
+        let folder = FiberFold::new(
+            current_log_domain,
+            current_log_domain - self.final_new_log_domain,
+            self.fold_beta,
+        );
 
         for (q, (&j, row_evals)) in final_indices.iter().zip(&final_rows).enumerate() {
             let fold_val = query_fold_value(
@@ -740,7 +745,7 @@ where
                 final_fiber_step,
                 self.final_arity,
                 current_shift,
-                self.fold_beta,
+                &folder,
                 prev_ctx,
                 RoundLabel::Final,
                 q,

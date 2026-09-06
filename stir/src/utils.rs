@@ -581,20 +581,56 @@ pub fn fold_fiber<F: TwoAdicField, EF: ExtensionField<F>>(
     log_arity: usize,
     beta: EF,
 ) -> EF {
-    let arity = 1 << log_arity;
-    assert_eq!(fiber.len(), arity);
+    let folder = FiberFold::<F, EF>::new(log_new_height + log_arity, log_arity, beta);
+    if fiber.len() <= 16 {
+        let mut scratch = [EF::ZERO; 16];
+        scratch[..fiber.len()].copy_from_slice(fiber);
+        folder.fold_in_place(&mut scratch[..fiber.len()], j)
+    } else {
+        folder.fold_in_place(&mut fiber.to_vec(), j)
+    }
+}
 
-    let new_height = 1 << log_new_height;
-    let log_domain_size = log_new_height + log_arity;
+/// Geometry and challenge powers shared by every queried fiber in a round.
+pub(crate) struct FiberFold<F, EF> {
+    generator_inv: F,
+    step_inv: F,
+    betas: Vec<EF>,
+    arity: usize,
+}
 
-    // Build subgroup x-coordinates: g^j, g^{j+new_height}, ..., g^{j+(arity-1)*new_height}
-    // where g = two_adic_generator(log_domain_size).
-    let g = F::two_adic_generator(log_domain_size);
-    let x0 = g.exp_u64(j as u64);
-    let step = g.exp_u64(new_height as u64); // = zeta = arity-th root of unity
-    let xs: Vec<F> = step.shifted_powers(x0).take(arity).collect();
+impl<F: TwoAdicField, EF: ExtensionField<F>> FiberFold<F, EF> {
+    pub(crate) fn new(log_domain: usize, log_arity: usize, beta: EF) -> Self {
+        Self {
+            generator_inv: F::two_adic_generator(log_domain).inverse(),
+            step_inv: F::two_adic_generator(log_arity).inverse(),
+            betas: core::iter::successors(Some(beta), |b| Some(b.square()))
+                .take(log_arity)
+                .collect(),
+            arity: 1 << log_arity,
+        }
+    }
 
-    lagrange_interpolate_at(&xs, fiber, beta)
+    pub(crate) fn fold_in_place(&self, fiber: &mut [EF], j: usize) -> EF {
+        assert_eq!(fiber.len(), self.arity);
+        let mut point_inv = self.generator_inv.exp_u64(j as u64);
+        let mut step_inv = self.step_inv;
+        let mut len = fiber.len();
+        for &beta in &self.betas {
+            let half = len / 2;
+            let mut inverse = point_inv.halve();
+            for lane in 0..half {
+                let lo = fiber[lane];
+                let hi = fiber[lane + half];
+                fiber[lane] = (lo + hi).halve() + (lo - hi) * beta * inverse;
+                inverse *= step_inv;
+            }
+            len = half;
+            point_inv = point_inv.square();
+            step_inv = step_inv.square();
+        }
+        fiber[0]
+    }
 }
 
 /// Evaluate the Lagrange interpolating polynomial through `(xs[i], ys[i])` at `point`.
