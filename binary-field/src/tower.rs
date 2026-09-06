@@ -213,6 +213,14 @@ macro_rules! binary_tower_level {
                 let norm_inv = norm
                     .try_inverse()
                     .expect("the norm of a nonzero element is nonzero");
+                if HAS_HARDWARE_CLMUL && Self::BITS == 128 {
+                    let (lo, hi) = crate::clmul::mul_pair_64(
+                        (a0 + a1.mul_alpha()).to_repr() as u64,
+                        a1.to_repr() as u64,
+                        norm_inv.to_repr() as u64,
+                    );
+                    return Some(Self::from_repr(lo as $repr | ((hi as $repr) << (Self::BITS / 2))));
+                }
                 Some(Self::join((a0 + a1.mul_alpha()) * norm_inv, a1 * norm_inv))
             }
 
