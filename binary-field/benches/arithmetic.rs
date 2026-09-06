@@ -617,6 +617,14 @@ fn bench_bulk(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
+    let coefficients = vec![BinaryField8::ONE; 1 << 20];
+    c.bench_function("bulk/reconstitute128", |b| {
+        b.iter_batched(
+            || coefficients.clone(),
+            |v| <BinaryField128 as BasedVectorSpace<BinaryField8>>::reconstitute_from_base(v),
+            BatchSize::SmallInput,
+        )
+    });
 }
 
 criterion_group!(
