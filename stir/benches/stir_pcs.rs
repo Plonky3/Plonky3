@@ -45,6 +45,10 @@ fn seeded_rng() -> SmallRng {
 }
 
 fn make_pcs() -> (MyPcs, Challenger) {
+    make_pcs_with_schedule(2, 2, 20)
+}
+
+fn make_pcs_with_schedule(start: usize, steady: usize, pow: usize) -> (MyPcs, Challenger) {
     let perm = Perm::new_from_rng_128(&mut seeded_rng());
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
@@ -53,11 +57,11 @@ fn make_pcs() -> (MyPcs, Challenger) {
 
     let stir_params = StirParameters {
         log_blowup: 1,
-        log_folding_factor: 2,
-        log_starting_folding_factor: 2,
+        log_folding_factor: steady,
+        log_starting_folding_factor: start,
         soundness_type: SecurityAssumption::CapacityBound,
         security_level: 100,
-        max_pow_bits: 20,
+        max_pow_bits: pow,
         mmcs: challenge_mmcs,
     };
 
@@ -191,5 +195,107 @@ fn bench_verify(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_commit, bench_open, bench_verify);
+/// Explicit schedule/PoW choices; production defaults and security targets are unchanged.
+fn bench_schedules(c: &mut Criterion) {
+    let mut group = c.benchmark_group("stir_pcs/schedules");
+    group.sample_size(10);
+    for (start, steady) in [(2, 2), (2, 3), (3, 3)] {
+        for pow in [0, 8] {
+            for width in [4, 64] {
+                for (layout, heights) in [
+                    ("single", &[14usize][..]),
+                    ("mixed", &[14usize, 12, 10][..]),
+                ] {
+                    let (pcs, challenger) = make_pcs_with_schedule(start, steady, pow);
+                    let mut rng = seeded_rng();
+                    let inputs: DomainsAndPolys = heights
+                        .iter()
+                        .map(|&log_d| {
+                            let domain =
+                                <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                                    &pcs,
+                                    1 << log_d,
+                                );
+                            (
+                                domain,
+                                RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width),
+                            )
+                        })
+                        .collect();
+                    let label =
+                        format!("{layout}/w{width}/{}-{}/pow{pow}", 1 << start, 1 << steady);
+                    group.bench_function(BenchmarkId::new("commit", &label), |b| {
+                        b.iter_batched(
+                            || inputs.clone(),
+                            |inputs| <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, inputs),
+                            BatchSize::LargeInput,
+                        );
+                    });
+                    let (commit, data) =
+                        <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, inputs.clone());
+                    let mut base = challenger;
+                    commit.iter().for_each(|root| base.observe(root.clone()));
+                    let zeta: Challenge = base.sample_algebra_element();
+                    let points = vec![vec![zeta]; inputs.len()];
+                    let (opened, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+                        &pcs,
+                        vec![(&data, points.clone())],
+                        &mut base.clone(),
+                    );
+                    let claims: Vec<_> = inputs
+                        .iter()
+                        .zip(&opened[0])
+                        .map(|((domain, _), openings)| (*domain, vec![(zeta, openings[0].clone())]))
+                        .collect();
+                    eprintln!(
+                        "stir_pcs/proof_size/{label}: {} bytes",
+                        postcard::to_allocvec(&proof).unwrap().len()
+                    );
+                    group.bench_function(BenchmarkId::new("open", &label), |b| {
+                        b.iter_batched(
+                            || {
+                                let mut ch = base.clone();
+                                let nonce: Val = rng.random();
+                                ch.observe(nonce);
+                                ch
+                            },
+                            |mut ch| {
+                                <MyPcs as Pcs<Challenge, Challenger>>::open(
+                                    &pcs,
+                                    vec![(&data, points.clone())],
+                                    &mut ch,
+                                )
+                            },
+                            BatchSize::LargeInput,
+                        );
+                    });
+                    group.bench_function(BenchmarkId::new("verify", &label), |b| {
+                        b.iter_batched(
+                            || base.clone(),
+                            |mut ch| {
+                                <MyPcs as Pcs<Challenge, Challenger>>::verify(
+                                    &pcs,
+                                    vec![(commit.clone(), claims.clone())],
+                                    &proof,
+                                    &mut ch,
+                                )
+                                .unwrap();
+                            },
+                            BatchSize::SmallInput,
+                        );
+                    });
+                }
+            }
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_commit,
+    bench_open,
+    bench_verify,
+    bench_schedules
+);
 criterion_main!(benches);
