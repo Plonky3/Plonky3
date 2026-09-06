@@ -63,8 +63,8 @@ use p3_commit::{Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PrimeCharacteristicRing,
-    TwoAdicField, batch_multiplicative_inverse,
+    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -1426,6 +1426,7 @@ where
         let matrix_lde_heights = &matrix_lde_heights;
         let point_data = &point_data;
         let alpha_powers = &alpha_powers;
+        let packed_alpha_powers = &packed_alpha_powers;
         let bucket_combine = &bucket_combine;
 
         // STIR's initial oracle is the (possibly `Combine`d) reduced opening, which is a
@@ -1657,11 +1658,13 @@ where
                                     let width = mat_widths[mat_idx];
                                     let row_vals =
                                         &row_vals_by_mat[mat_idx][slot * width..][..width];
-                                    let p_x: Challenge = row_vals
-                                        .iter()
-                                        .zip(alpha_powers.iter())
-                                        .map(|(&v, &ap)| ap * v)
-                                        .sum();
+                                    let p_x: Challenge = if Val::Packing::WIDTH == 1 || width < 2 * Val::Packing::WIDTH {
+                                        row_vals.iter().zip(alpha_powers.iter()).map(|(&v, &ap)| ap * v).sum()
+                                    } else {
+                                        RowMajorMatrixView::new(row_vals, width)
+                                            .rowwise_packed_dot_product::<Challenge>(packed_alpha_powers)
+                                            .sum()
+                                    };
 
                                     let ro_class =
                                         &mut expected_ro_by_class[mat_class_indices[mat_idx]];
