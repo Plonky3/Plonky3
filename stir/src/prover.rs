@@ -354,6 +354,8 @@ where
         // and the vanishing polynomial still need evaluating — their roots are this round's
         // arbitrary interpolation points — but both are tiny next to the domain, so they go
         // through the low-degree coset evaluation rather than a full-size DFT each.
+        drop(core::mem::take(&mut self.folded_codeword));
+        drop(core::mem::take(&mut self.fold_coeffs));
         let all_points = core::mem::take(&mut self.all_points);
         let next_shift = self.next_shift;
         let next_log_domain = self.next_log_domain;
@@ -363,17 +365,16 @@ where
         // Ans interpolates `num_answers` points and the vanishing polynomial has exactly
         // `num_answers + 1` coefficients.
         let log_answer_len = log2_ceil_usize(num_answers + 1).min(next_log_domain);
-        let (ans_evals, vanishing_evals) = tracing::debug_span!("eval_low_degree_pair_on_coset")
-            .in_scope(|| {
-                eval_low_degree_pair_on_coset(
-                    self.dft,
-                    &self.ans_poly,
-                    &vanishing_coeffs,
-                    next_shift,
-                    next_log_domain,
-                    log_answer_len,
-                )
-            });
+        let evaluations = tracing::debug_span!("eval_low_degree_pair_on_coset").in_scope(|| {
+            eval_low_degree_pair_on_coset(
+                self.dft,
+                &self.ans_poly,
+                &vanishing_coeffs,
+                next_shift,
+                next_log_domain,
+                log_answer_len,
+            )
+        });
 
         // x_j = next_shift * g^j, so step_j = r_comb * x_j = step_start * g^j, and the degree
         // correction's numerator sweeps the same coset at stride `num_answers + 1`. Both are
@@ -388,38 +389,33 @@ where
         // The quotient denominators are the vanishing evaluations scaled by the degree
         // correction's `(1 - step)` denominator, so they are formed in place.
         let next_oracle_codeword = tracing::debug_span!("quotient_sweep").in_scope(|| {
-            let mut combined_denoms = vanishing_evals;
-            combined_denoms
-                .par_chunks_mut(POWER_CHUNK)
-                .enumerate()
-                .for_each(|(chunk_idx, chunk)| {
-                    let mut step = step_start * g_next.exp_u64((chunk_idx * POWER_CHUNK) as u64);
-                    for denom in chunk.iter_mut() {
-                        *denom *= EF::ONE - step;
-                        step *= g_next;
-                    }
-                });
-            let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
-            drop(combined_denoms);
-
-            // `commit_as_fiber_matrix` has already copied the committed codeword into the
-            // Merkle tree, so the next oracle is formed in place over it.
             let mut next_oracle_codeword = core::mem::take(&mut self.next_commit_codeword);
+            let mut combined_denoms = EF::zero_vec(next_oracle_codeword.len());
             next_oracle_codeword
                 .par_chunks_mut(POWER_CHUNK)
-                .zip(ans_evals.par_chunks(POWER_CHUNK))
-                .zip(combined_inverses.par_chunks(POWER_CHUNK))
+                .zip(combined_denoms.par_chunks_mut(POWER_CHUNK))
+                .zip(evaluations.par_chunks(2 * POWER_CHUNK))
                 .enumerate()
-                .for_each(|(chunk_idx, ((chunk, ans_chunk), inverse_chunk))| {
-                    let mut numerator_step =
-                        step_start_hi * g_next_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
-                    for ((value, &ans), &inverse) in
-                        chunk.iter_mut().zip(ans_chunk).zip(inverse_chunk)
+                .for_each(|(chunk_idx, ((values, denoms), pairs))| {
+                    let start = (chunk_idx * POWER_CHUNK) as u64;
+                    let mut step = step_start * g_next.exp_u64(start);
+                    let mut numerator_step = step_start_hi * g_next_hi.exp_u64(start);
+                    for ((value, denom), pair) in
+                        values.iter_mut().zip(denoms).zip(pairs.as_chunks::<2>().0)
                     {
-                        *value = (*value - ans) * inverse * (EF::ONE - numerator_step);
+                        *value = (*value - pair[0]) * (EF::ONE - numerator_step);
+                        *denom = pair[1] * (EF::ONE - step);
+                        step *= g_next;
                         numerator_step *= g_next_hi;
                     }
                 });
+            drop(evaluations);
+            let combined_inverses = batch_multiplicative_inverse(&combined_denoms);
+            drop(combined_denoms);
+            next_oracle_codeword
+                .par_iter_mut()
+                .zip(combined_inverses)
+                .for_each(|(value, inverse)| *value *= inverse);
             next_oracle_codeword
         });
 
@@ -1342,7 +1338,7 @@ fn eval_low_degree_pair_on_coset<F, EF, Dft>(
     shift: F,
     log_size: usize,
     log_len: usize,
-) -> (Vec<EF>, Vec<EF>)
+) -> Vec<EF>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + BasedVectorSpace<F>,
@@ -1371,30 +1367,9 @@ where
             }
         });
 
-    let transformed = dft
-        .dft_algebra_batch(RowMajorMatrix::new(scaled, 2 * num_cosets))
-        .values;
-
-    // Transform row `b` holds the evaluations at `i = a + num_cosets * b` for every `a`, i.e.
-    // the natural-order block `[num_cosets * b, num_cosets * (b + 1))`.
-    let mut first_evals = EF::zero_vec(size);
-    let mut second_evals = EF::zero_vec(size);
-    first_evals
-        .par_chunks_mut(num_cosets)
-        .zip(second_evals.par_chunks_mut(num_cosets))
-        .zip(transformed.par_chunks_exact(2 * num_cosets))
-        .for_each(|((first_block, second_block), row)| {
-            for ((first_slot, second_slot), pair) in first_block
-                .iter_mut()
-                .zip(second_block.iter_mut())
-                .zip(row.as_chunks::<2>().0.iter())
-            {
-                *first_slot = pair[0];
-                *second_slot = pair[1];
-            }
-        });
-
-    (first_evals, second_evals)
+    // Each consecutive pair is (Ans(x), Z(x)) in natural point order.
+    dft.dft_algebra_batch(RowMajorMatrix::new(scaled, 2 * num_cosets))
+        .values
 }
 
 /// Evaluate a polynomial (coefficients in `EF`) on a coset `shift * <g>` of size
