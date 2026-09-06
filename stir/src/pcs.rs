@@ -28,7 +28,7 @@
 //! correctly derived from the committed inputs.
 //!
 //! **Verify**: reproduce the grouping from the claimed domain sizes — it is a pure function of
-//! those and the PCS parameters, so no part of it travels in the proof — then replay the same
+//! the public matrix shapes and the PCS parameters, so no part of it travels in the proof — then replay the same
 //! alpha-batching and `Combine` from the opening values, and for each bucket call
 //! [`verify_stir_with_external_initial`](crate::verifier::verify_stir_with_external_initial).
 //! STIR's initial oracle *is* the (possibly combined) reduced opening, which the transcript
@@ -301,6 +301,7 @@ pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> 
     /// each height gets its own STIR instance. A value at or above the committed spread puts
     /// everything on one domain. See [`DEFAULT_MAX_LOG_HEIGHT_SPREAD`].
     max_log_height_spread: usize,
+    width_aware_grouping: bool,
     /// `StirConfig::try_new` runs an 80-iteration floating-point bisection per stage to
     /// derive sound round parameters. `open`/`verify` re-derive it per LDE-height bucket, and
     /// bucket shapes recur across calls and across proofs of the same statement, so caching
@@ -320,6 +321,7 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
             input_mmcs,
             stir,
             max_log_height_spread: DEFAULT_MAX_LOG_HEIGHT_SPREAD,
+            width_aware_grouping: false,
             config_cache: Arc::new(RwLock::new(alloc::collections::BTreeMap::new())),
         }
     }
@@ -331,6 +333,17 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
     #[must_use]
     pub const fn with_max_log_height_spread(mut self, max_log_height_spread: usize) -> Self {
         self.max_log_height_spread = max_log_height_spread;
+        self
+    }
+
+    /// Weight commitment cost by total matrix width at each height, including repeats.
+    /// This favors commit work and can increase opening time.
+    ///
+    /// Defaults to false. Both prover and verifier must use the same setting. The minimum
+    /// group count, spread cap, and conservative Combine feasibility checks are unchanged.
+    #[must_use]
+    pub const fn with_width_aware_grouping(mut self, enabled: bool) -> Self {
+        self.width_aware_grouping = enabled;
         self
     }
 
@@ -532,9 +545,9 @@ where
     /// group's shared domain, so a group costs its own height once per member, in both DFT
     /// work and Merkle leaf material. Filling each group greedily instead reaches the same
     /// group count but pulls short heights onto the tallest domain that will take them, which
-    /// is the most expensive placement available to them. Both objectives read only the
-    /// distinct heights, so the prover and the verifier derive the same partition.
-    fn partition_native_heights(&self, descending: &[usize]) -> Vec<usize> {
+    /// is the most expensive placement available to them. By default the cost counts distinct heights. The opt-in width-aware policy instead
+    /// counts every matrix column. Both sides derive those weights from public shapes.
+    fn partition_native_heights(&self, descending: &[usize], weights: &[u128]) -> Vec<usize> {
         let Some(&lowest) = descending.last() else {
             return Vec::new();
         };
@@ -558,9 +571,15 @@ where
                     continue;
                 }
                 let (groups, cost) = best[i];
+                let total_width = weights[i..j]
+                    .iter()
+                    .fold(0u128, |sum, &w| sum.saturating_add(w));
+                let height = 1u128
+                    .checked_shl(descending[i].try_into().unwrap_or(u32::MAX))
+                    .unwrap_or(u128::MAX);
                 let candidate = (
                     groups + 1,
-                    cost + ((j - i) as u128) * (1u128 << descending[i]),
+                    cost.saturating_add(total_width.saturating_mul(height)),
                 );
                 if candidate < best[j] {
                     best[j] = candidate;
@@ -582,17 +601,37 @@ where
 
     /// Assign a commitment's matrices to shared LDE domains.
     ///
-    /// Depends only on the multiset of native heights and this PCS's parameters, so the
+    /// Depends only on the public matrix shapes and this PCS's parameters, so the
     /// verifier reproduces it exactly from the claimed domain sizes — the layout is never
     /// carried in the proof, and a prover that used a different one fails the input MMCS
     /// check, whose dimensions it fixes.
+    #[cfg(test)]
     fn plan_groups(&self, log_native_heights: &[usize]) -> GroupPlan {
+        self.plan_groups_with_widths(log_native_heights, &vec![1; log_native_heights.len()])
+    }
+
+    fn plan_groups_with_widths(&self, log_native_heights: &[usize], widths: &[usize]) -> GroupPlan {
+        assert_eq!(log_native_heights.len(), widths.len());
         let mut distinct: Vec<usize> = log_native_heights.to_vec();
         distinct.sort_unstable();
         distinct.dedup();
         distinct.reverse();
 
-        let sizes = self.partition_native_heights(&distinct);
+        let weights: Vec<u128> = distinct
+            .iter()
+            .map(|&height| {
+                if self.width_aware_grouping {
+                    log_native_heights
+                        .iter()
+                        .zip(widths)
+                        .filter(|&(&h, _)| h == height)
+                        .fold(0u128, |sum, (_, &width)| sum.saturating_add(width as u128))
+                } else {
+                    1
+                }
+            })
+            .collect();
+        let sizes = self.partition_native_heights(&distinct, &weights);
 
         // Group index of each distinct native height, then of each matrix through it.
         let mut group_of_height: alloc::collections::BTreeMap<usize, usize> =
@@ -716,9 +755,8 @@ where
             .iter()
             .map(|(domain, _)| log2_strict_usize(domain.size()))
             .collect();
-        let plan = self.plan_groups(&log_native_heights);
-
-        let mut widths = Vec::with_capacity(inputs.len());
+        let widths: Vec<usize> = inputs.iter().map(|(_, matrix)| matrix.width()).collect();
+        let plan = self.plan_groups_with_widths(&log_native_heights, &widths);
         let grouped: Vec<_> = inputs
             .into_iter()
             .zip(&log_native_heights)
@@ -734,7 +772,6 @@ where
                     .coset_lde_batch(evals, extra_bits, shift)
                     .bit_reverse_rows()
                     .to_row_major_matrix();
-                widths.push(lde.width());
                 group_fiber_rows(lde, self.stir.log_starting_folding_factor)
             })
             .collect();
@@ -826,15 +863,13 @@ where
             .iter()
             .map(|lde| log2_strict_usize(lde.height()) - self.stir.log_blowup)
             .collect();
-        let plan = self.plan_groups(&log_native_heights);
-
-        let mut widths = Vec::with_capacity(ldes.len());
+        let widths: Vec<usize> = ldes.iter().map(Matrix::width).collect();
+        let plan = self.plan_groups_with_widths(&log_native_heights, &widths);
         let grouped: Vec<_> = ldes
             .into_iter()
             .zip(&log_native_heights)
             .zip(&plan.group_of_matrix)
             .map(|((lde, &log_native_height), &group_idx)| {
-                widths.push(lde.width());
                 let log_lde_height = plan.log_lde_heights[group_idx];
                 let extended = if lde.height() == 1usize << log_lde_height {
                     lde
@@ -1217,7 +1252,11 @@ where
                     .iter()
                     .map(|(domain, _)| log2_strict_usize(domain.size()))
                     .collect();
-                self.plan_groups(&log_native_heights)
+                let widths: Vec<usize> = domain_claims
+                    .iter()
+                    .map(|(_, claims)| claims[0].1.len())
+                    .collect();
+                self.plan_groups_with_widths(&log_native_heights, &widths)
             })
             .collect();
 
@@ -2126,6 +2165,28 @@ mod tests {
             vec![21, 13]
         );
         assert_eq!(pcs.plan_groups(&[20, 10]).log_lde_heights, vec![21, 11]);
+    }
+
+    #[test]
+    fn width_aware_groups_choose_a_cheaper_equal_count_partition() {
+        let pcs = test_pcs_with(3, SecurityAssumption::CapacityBound, 16);
+        let heights = [18, 15, 14, 13];
+        let widths = [1, 1, 1, 64];
+        assert_eq!(
+            pcs.plan_groups_with_widths(&heights, &widths)
+                .group_of_matrix,
+            vec![0, 1, 1, 1]
+        );
+        let pcs = pcs.with_width_aware_grouping(true);
+        let plan = pcs.plan_groups_with_widths(&heights, &widths);
+        assert_eq!(plan.group_of_matrix, vec![0, 0, 1, 1]);
+        assert_eq!(plan.log_lde_heights, vec![19, 15]);
+        let reordered = pcs.plan_groups_with_widths(&[13, 18, 14, 15], &[64, 1, 1, 1]);
+        assert_eq!(reordered.log_lde_heights, plan.log_lde_heights);
+        assert_eq!(reordered.group_of_matrix, vec![1, 0, 1, 0]);
+        let split_width = pcs.plan_groups_with_widths(&[18, 15, 14, 13, 13], &[1, 1, 1, 32, 32]);
+        assert_eq!(split_width.log_lde_heights, plan.log_lde_heights);
+        assert_eq!(split_width.group_of_matrix, vec![0, 0, 1, 1, 1]);
     }
 
     #[test]

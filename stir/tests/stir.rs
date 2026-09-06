@@ -1461,6 +1461,118 @@ mod babybear_pcs {
     }
 
     #[test]
+    fn width_aware_policy_round_trips_pooled_commitments_and_authenticates_widths() {
+        let (default_pcs, mut base) = get_pcs_with_spread(3);
+        let pcs = default_pcs.clone().with_width_aware_grouping(true);
+        let mut rng = seeded_rng();
+        let inputs: Vec<Vec<_>> = [
+            (&[10usize, 7, 6, 5][..], &[1usize, 1, 1, 64][..]),
+            (&[10usize, 9][..], &[2usize, 5][..]),
+        ]
+        .into_iter()
+        .map(|(heights, widths)| {
+            heights
+                .iter()
+                .zip(widths)
+                .map(|(&h, &w)| {
+                    let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                        &pcs,
+                        1 << h,
+                    );
+                    (domain, RowMajorMatrix::<Val>::rand(&mut rng, 1 << h, w))
+                })
+                .collect()
+        })
+        .collect();
+        let committed: Vec<_> = inputs
+            .iter()
+            .map(|input| {
+                let committed = <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, input.clone());
+                let ldes = <MyPcs as Pcs<Challenge, Challenger>>::get_quotient_ldes(
+                    &pcs,
+                    input.clone(),
+                    1,
+                );
+                let (lde_commit, _) =
+                    <MyPcs as Pcs<Challenge, Challenger>>::commit_ldes(&pcs, ldes);
+                assert_eq!(committed.0, lde_commit);
+                observe_commitment(&mut base, &committed.0);
+                committed
+            })
+            .collect();
+        let points: [Challenge; 2] = [base.sample_algebra_element(), base.sample_algebra_element()];
+        let data_points = committed
+            .iter()
+            .zip(&inputs)
+            .map(|((_, data), input)| (data, vec![points.to_vec(); input.len()]))
+            .collect();
+        let (opened, proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_points, &mut base.clone());
+        let claims: Vec<_> = committed
+            .iter()
+            .zip(&inputs)
+            .enumerate()
+            .map(|(c, ((commit, _), input))| {
+                (
+                    commit.clone(),
+                    input
+                        .iter()
+                        .enumerate()
+                        .map(|(m, (domain, _))| {
+                            (
+                                *domain,
+                                points
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(p, &point)| (point, opened[c][m][p].clone()))
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.clone(),
+            &proof,
+            &mut base.clone(),
+        )
+        .unwrap();
+        assert!(
+            <MyPcs as Pcs<Challenge, Challenger>>::verify(
+                &default_pcs,
+                claims.clone(),
+                &proof,
+                &mut base.clone()
+            )
+            .is_err()
+        );
+        let mut inconsistent_widths = claims.clone();
+        inconsistent_widths[0].1[0].1[1].1.pop();
+        assert!(
+            <MyPcs as Pcs<Challenge, Challenger>>::verify(
+                &pcs,
+                inconsistent_widths,
+                &proof,
+                &mut base.clone()
+            )
+            .is_err()
+        );
+        let mut missing_points = claims;
+        missing_points[0].1[0].1.clear();
+        assert!(
+            <MyPcs as Pcs<Challenge, Challenger>>::verify(
+                &pcs,
+                missing_points,
+                &proof,
+                &mut base.clone()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn test_pcs_commit_ldes_groups_like_commit_and_round_trips() {
         #[allow(unused_imports)]
         use p3_commit::Pcs as _;
