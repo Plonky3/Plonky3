@@ -135,7 +135,7 @@ where
 {
     let n = 1usize << log_domain;
     let g = F::two_adic_generator(log_domain);
-    let step_start = r_comb * EF::from(shift);
+    let step_start = r_comb * shift;
 
     const POWER_CHUNK: usize = 1 << 12;
     let mut result = EF::zero_vec(n);
@@ -145,10 +145,10 @@ where
         .par_chunks_mut(POWER_CHUNK)
         .enumerate()
         .for_each(|(chunk_idx, chunk)| {
-            let mut step = step_start * EF::from(g.exp_u64((chunk_idx * POWER_CHUNK) as u64));
+            let mut step = step_start * g.exp_u64((chunk_idx * POWER_CHUNK) as u64);
             for d in chunk.iter_mut() {
                 *d = EF::ONE - step;
-                step *= EF::from(g);
+                step *= g;
             }
         });
 
@@ -175,13 +175,12 @@ where
             .zip(inv_denoms.par_chunks(POWER_CHUNK))
             .enumerate()
             .for_each(|(chunk_idx, ((res_chunk, val_chunk), inv_chunk))| {
-                let mut step_hi =
-                    step_start_hi * EF::from(g_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64));
+                let mut step_hi = step_start_hi * g_hi.exp_u64((chunk_idx * POWER_CHUNK) as u64);
                 for ((res, &val), &inv_denom) in res_chunk.iter_mut().zip(val_chunk).zip(inv_chunk)
                 {
                     let numer = EF::ONE - step_hi;
                     *res += r_i * val * numer * inv_denom;
-                    step_hi *= EF::from(g_hi);
+                    step_hi *= g_hi;
                 }
             });
 
@@ -551,7 +550,7 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
             .map(|j| {
                 let lo = data[j];
                 let hi = data[j + height];
-                let hip = EF::from(halve_inv_powers[j]);
+                let hip = halve_inv_powers[j];
                 (lo + hi).halve() + (lo - hi) * current_beta * hip
             })
             .collect();

@@ -354,3 +354,43 @@ fn test_fold_codeword_higher_arity_agrees_with_fold_fiber() {
         }
     }
 }
+
+#[test]
+fn folds_match_independent_lagrange_over_fields_and_arities() {
+    use p3_field::{ExtensionField, TwoAdicField};
+    use p3_stir::utils::{fold_codeword, fold_fiber, lagrange_eval_at};
+
+    fn check<F: TwoAdicField, EF: ExtensionField<F>>() {
+        let log_domain = 7;
+        let g = F::two_adic_generator(log_domain);
+        let codeword: Vec<EF> = (0..1 << log_domain)
+            .map(|i| EF::from_u64(i * i + 7))
+            .collect();
+        for log_arity in 0..=5 {
+            let arity = 1 << log_arity;
+            let height = codeword.len() / arity;
+            for beta in [EF::ZERO, EF::from_u64(19), EF::from(g)] {
+                let folded = fold_codeword::<F, EF>(&codeword, beta, log_arity, log_domain);
+                for j in [0, 1, height - 1] {
+                    let xs: Vec<F> = (0..arity)
+                        .map(|lane| g.exp_u64((j + lane * height) as u64))
+                        .collect();
+                    let fiber: Vec<EF> =
+                        (0..arity).map(|lane| codeword[j + lane * height]).collect();
+                    let expected = lagrange_eval_at(&xs, &fiber, beta);
+                    assert_eq!(folded[j], expected);
+                    assert_eq!(
+                        fold_fiber::<F, EF>(&fiber, j, log_domain - log_arity, log_arity, beta),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+    check::<F, EF>();
+    check::<
+        p3_koala_bear::KoalaBear,
+        p3_field::extension::QuinticTrinomialExtensionField<p3_koala_bear::KoalaBear>,
+    >();
+    check::<p3_goldilocks::Goldilocks, BinomialExtensionField<p3_goldilocks::Goldilocks, 2>>();
+}
