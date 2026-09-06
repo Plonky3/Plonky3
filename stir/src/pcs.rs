@@ -891,11 +891,22 @@ where
 
         let inv_denoms = compute_inverse_denominators::<Val, Challenge>(&mats_and_points, &coset);
 
-        // Precompute adjusted barycentric weights once per opening point.
-        // adjusted[i] = 1/(z - x_i) - 1/z, reused across all matrices opened at z.
+        // Only native-height prefixes participate in opening interpolation.
+        let mut max_native_by_point: LinearMap<Challenge, usize> = LinearMap::new();
+        for ((_, points), layout) in mats_and_points.iter().zip(&matrix_layouts) {
+            for (points, &(log_native, _)) in points.iter().zip(layout) {
+                for &point in points {
+                    let max = max_native_by_point.get_or_insert_with(point, || 0);
+                    *max = (*max).max(1usize << log_native);
+                }
+            }
+        }
         let adjusted_weights: LinearMap<Challenge, Vec<Challenge>> = inv_denoms
             .iter()
-            .map(|(point, denoms)| (*point, compute_adjusted_weights(*point, denoms)))
+            .map(|(point, denoms)| {
+                let height = *max_native_by_point.get(point).expect("opening point");
+                (*point, compute_adjusted_weights(*point, &denoms[..height]))
+            })
             .collect();
 
         let all_opened_values: OpenedValues<Challenge> = mats_and_points
@@ -980,7 +991,25 @@ where
                     .map(|&w| w * matrix_offset)
                     .collect();
 
-                // Absorb this matrix's first exponent offset into the row weights once.
+                // One-point matrices stream their row dots directly into the numerator.
+                // Multiple points retain one cache to amortize the row reduction.
+                if points_for_mat.len() == 1 {
+                    let point = points_for_mat[0];
+                    let (numerator, y_sum) = by_point.get_or_insert_with(point, || {
+                        (Challenge::zero_vec(mat.height()), Challenge::ZERO)
+                    });
+                    let y_combined: Challenge = opened_for_mat[0]
+                        .iter()
+                        .zip(&alpha_powers)
+                        .map(|(&y, &ap)| y * ap)
+                        .sum();
+                    *y_sum += matrix_offset * y_combined;
+                    numerator
+                        .par_iter_mut()
+                        .zip(mat.rowwise_packed_dot_product::<Challenge>(&weights))
+                        .for_each(|(value, p)| *value += p);
+                    continue;
+                }
                 let p_x_vec: Vec<Challenge> = mat
                     .rowwise_packed_dot_product::<Challenge>(&weights)
                     .collect();
