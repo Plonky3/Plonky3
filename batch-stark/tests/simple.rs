@@ -8,8 +8,8 @@ use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
-    BatchVerificationError, ProverData, StarkGenericConfig, StarkInstance, VerificationError,
-    prove_batch, verify_batch,
+    BatchVerificationError, InvalidLookupPow, ProverData, StarkGenericConfig, StarkInstance,
+    VerificationError, prove_batch, verify_batch,
 };
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -27,7 +27,7 @@ use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
-use p3_uni_stark::{InvalidProofShapeError, PeriodicColumnError, StarkConfig};
+use p3_uni_stark::{InvalidProofShapeError, OpeningShape, PeriodicColumnError, StarkConfig};
 use p3_util::{assert_clone, assert_send, assert_sync, log2_strict_usize};
 use rand::SeedableRng;
 use rand::rngs::{SmallRng, StdRng};
@@ -552,6 +552,7 @@ fn make_config_allow_tiny_trace(seed: u64) -> MyConfig {
         log_final_poly_len: 0,
         max_log_arity: 1,
         num_queries: 2,
+        batch_proof_of_work_bits: 0,
         commit_proof_of_work_bits: 1,
         query_proof_of_work_bits: 1,
         mmcs: challenge_mmcs,
@@ -590,6 +591,7 @@ fn make_two_adic_compat_config(seed: u64) -> MyConfig {
         log_final_poly_len: 2,
         max_log_arity: 1,
         num_queries: 2,
+        batch_proof_of_work_bits: 0,
         commit_proof_of_work_bits: 1,
         query_proof_of_work_bits: 1,
         mmcs: challenge_mmcs,
@@ -642,6 +644,7 @@ fn make_circle_config() -> CircleConfig {
         log_final_poly_len: 0,
         max_log_arity: 1,
         num_queries: 40,
+        batch_proof_of_work_bits: 0,
         commit_proof_of_work_bits: 8,
         query_proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
@@ -844,6 +847,7 @@ fn test_two_instances() -> Result<(), impl Debug> {
 /// uses representative deployment-scale parameters.
 #[test]
 fn security_estimate_with_and_without_lookups() {
+    use p3_batch_stark::security::num_batched_openings;
     use p3_security::grinding::GrindingSites;
     use p3_security::logup::{self, LOGUP_LABEL, LogUpAir};
     use p3_security::shape::{InstanceShape, StarkAirParams};
@@ -884,6 +888,7 @@ fn security_estimate_with_and_without_lookups() {
         log_final_poly_len: 0,
         max_log_arity: 3,
         num_queries: 256,
+        batch_proof_of_work_bits: 0,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 16,
         mmcs: (),
@@ -899,11 +904,16 @@ fn security_estimate_with_and_without_lookups() {
         max_constraint_degree: 2,
         max_combo: 2,
     };
+    // A width-100 AIR that reads its own next row, committing two quotient chunks over the
+    // degree-4 extension, plus eight lookup interactions on the shared bus: the count
+    // `TwoAdicFriPcs::open` actually batches, not a hand-picked stand-in.
+    let num_batched_functions =
+        num_batched_openings(100, true, 0, false, 2, 8, 4, OpeningShape::new());
     let shape = InstanceShape {
         log_trace_length: 22,
         modulus_bits: <Challenge as Field>::bits(),
         collision_resistance: 128,
-        num_batched_functions: 8,
+        num_batched_functions,
     };
 
     // The shared bus carries width-2 messages; a lookup-heavy deployment issues
@@ -1517,6 +1527,8 @@ fn test_invalid_trace_width_rejected() {
         opening_proof: valid_proof.opening_proof.clone(),
         lookup_terminals: valid_proof.lookup_terminals.clone(),
         degree_bits: valid_proof.degree_bits.clone(),
+        lookup_pow_witness: valid_proof.lookup_pow_witness,
+        ood_pow_witness: valid_proof.ood_pow_witness,
     };
 
     // Verification should fail due to width mismatch
@@ -2084,6 +2096,214 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
     verify_batch(&config, &airs, &proof, &pvs, common)
 }
 
+/// Difficulty small enough to grind instantly, large enough that a wrong
+/// witness is rejected with overwhelming probability.
+const LOOKUP_POW_BITS: usize = 8;
+
+/// The two-AIR fixture used by the lookup-grinding tests: a `MulAir` with local
+/// lookups and a `FibonacciAir` with none.
+const fn lookup_grinding_airs() -> [DemoAirWithLookups; 2] {
+    let log_height = 4;
+    let mul_air_lookups = MulAirLookups::new(MulAir { reps: 2 }, true, false, vec![]);
+    let fib_air_lookups = FibAirLookups::new(
+        FibonacciAir {
+            log_height,
+            tamper_index: None,
+        },
+        false,
+        None,
+    );
+    [
+        DemoAirWithLookups::MulLookups(mul_air_lookups),
+        DemoAirWithLookups::FibLookups(fib_air_lookups),
+    ]
+}
+
+/// The same shape with lookups switched off on both AIRs, so the batch samples
+/// no lookup challenge at all.
+const fn no_lookup_airs() -> [DemoAirWithLookups; 2] {
+    let log_height = 4;
+    let mul_air_lookups = MulAirLookups::new(MulAir { reps: 2 }, false, false, vec![]);
+    let fib_air_lookups = FibAirLookups::new(
+        FibonacciAir {
+            log_height,
+            tamper_index: None,
+        },
+        false,
+        None,
+    );
+    [
+        DemoAirWithLookups::MulLookups(mul_air_lookups),
+        DemoAirWithLookups::FibLookups(fib_air_lookups),
+    ]
+}
+
+/// Run one prove/verify round of the fixture, letting the caller tamper with the
+/// proof and verify under a possibly different config.
+fn lookup_grinding_case(
+    prover_config: &MyConfig,
+    verifier_config: &MyConfig,
+    airs: &[DemoAirWithLookups; 2],
+    tamper: impl FnOnce(&mut BatchProof<MyConfig>),
+) -> Result<(), BatchVerificationError<impl Debug>> {
+    let log_height = 4;
+    let height = 1 << log_height;
+    let mul_trace = mul_trace::<Val>(height, 2);
+    let fib_trace = fib_trace::<Val>(0, 1, 16);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+
+    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(
+        prover_config,
+        airs,
+        &[log_height, log_height],
+    );
+    let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace];
+    let instances = StarkInstance::new_multiple(airs, &traces, &[vec![], fib_pis.clone()]);
+
+    let mut proof = prove_batch(prover_config, &instances, &prover_data);
+    tamper(&mut proof);
+
+    let pvs = vec![vec![], fib_pis];
+    verify_batch(verifier_config, airs, &proof, &pvs, common)
+}
+
+/// A proof produced with lookup grinding verifies, and carries the witness.
+#[test]
+fn lookup_grinding_round_trips() {
+    let config = make_config(2024).with_lookup_proof_of_work_bits(LOOKUP_POW_BITS);
+    let airs = lookup_grinding_airs();
+
+    lookup_grinding_case(&config, &config, &airs, |proof| {
+        assert!(
+            proof.lookup_pow_witness.is_some(),
+            "a batch with lookups must carry a witness"
+        );
+    })
+    .expect("ground proof verifies");
+}
+
+/// A tampered witness is rejected even at the difficulty the proof was produced
+/// with, which is what makes the grind binding rather than decorative.
+#[test]
+fn tampered_lookup_pow_witness_is_rejected() {
+    let config = make_config(2024).with_lookup_proof_of_work_bits(LOOKUP_POW_BITS);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.lookup_pow_witness = proof.lookup_pow_witness.map(|w| w + Val::ONE);
+    })
+    .expect_err("a tampered witness must be rejected");
+
+    assert!(
+        matches!(
+            err,
+            BatchVerificationError::InvalidLookupPow(InvalidLookupPow::BadWitness)
+        ),
+        "wrong error variant: {err:?}"
+    );
+}
+
+/// A verifier demanding more grinding than the prover paid rejects. This is the
+/// failure mode of a prover/verifier config mismatch, and it must be a rejection
+/// rather than a silently weaker proof.
+#[test]
+fn lookup_pow_difficulty_mismatch_is_rejected() {
+    let prover_config = make_config(2024);
+    let verifier_config = make_config(2024).with_lookup_proof_of_work_bits(24);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&prover_config, &verifier_config, &airs, |_| {})
+        .expect_err("a difficulty mismatch must be rejected");
+
+    assert!(
+        matches!(
+            err,
+            BatchVerificationError::InvalidLookupPow(InvalidLookupPow::BadWitness)
+        ),
+        "wrong error variant: {err:?}"
+    );
+}
+
+/// A batch with no lookups samples no lookup challenge, so it grinds nothing and
+/// must carry no witness — and one smuggled in is rejected rather than ignored.
+#[test]
+fn batch_without_lookups_carries_no_witness() {
+    let config = make_config(2024).with_lookup_proof_of_work_bits(LOOKUP_POW_BITS);
+    let airs = no_lookup_airs();
+
+    lookup_grinding_case(&config, &config, &airs, |proof| {
+        assert!(
+            proof.lookup_pow_witness.is_none(),
+            "a batch without lookups must carry no witness"
+        );
+    })
+    .expect("ungrounded proof verifies");
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.lookup_pow_witness = Some(Val::ONE);
+    })
+    .expect_err("a witness for a challenge that is never sampled must be rejected");
+
+    assert!(
+        matches!(
+            err,
+            BatchVerificationError::InvalidLookupPow(InvalidLookupPow::UnexpectedWitness)
+        ),
+        "wrong error variant: {err:?}"
+    );
+}
+
+/// Difficulty small enough to grind instantly, large enough that a wrong
+/// witness is rejected with overwhelming probability.
+const OOD_POW_BITS: usize = 8;
+
+/// A proof produced with out-of-domain grinding verifies.
+#[test]
+fn ood_grinding_round_trips() {
+    let config = make_config(2024).with_ood_proof_of_work_bits(OOD_POW_BITS);
+    let airs = lookup_grinding_airs();
+
+    lookup_grinding_case(&config, &config, &airs, |_| {}).expect("ground proof verifies");
+}
+
+/// A tampered out-of-domain witness is rejected even at the difficulty the
+/// proof was produced with, which is what makes the grind binding rather than
+/// decorative.
+#[test]
+fn tampered_ood_pow_witness_is_rejected() {
+    let config = make_config(2024).with_ood_proof_of_work_bits(OOD_POW_BITS);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.ood_pow_witness += Val::ONE;
+    })
+    .expect_err("a tampered witness must be rejected");
+
+    assert!(
+        matches!(err, BatchVerificationError::InvalidOodPowWitness),
+        "wrong error variant: {err:?}"
+    );
+}
+
+/// A verifier demanding more out-of-domain grinding than the prover paid
+/// rejects. This is the failure mode of a prover/verifier config mismatch,
+/// and it must be a rejection rather than a silently weaker proof.
+#[test]
+fn ood_pow_difficulty_mismatch_is_rejected() {
+    let prover_config = make_config(2024);
+    let verifier_config = make_config(2024).with_ood_proof_of_work_bits(24);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&prover_config, &verifier_config, &airs, |_| {})
+        .expect_err("a difficulty mismatch must be rejected");
+
+    assert!(
+        matches!(err, BatchVerificationError::InvalidOodPowWitness),
+        "wrong error variant: {err:?}"
+    );
+}
+
 /// Test with global lookups only using MulAirLookups and FibAirLookups
 #[test]
 fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
@@ -2224,6 +2444,50 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
     let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
 
     let proof = prove_batch(&config, &instances, &prover_data);
+
+    let derived: usize = airs
+        .iter()
+        .zip(&proof.opened_values.instances)
+        .enumerate()
+        .map(|(i, (air, opened))| {
+            p3_batch_stark::security::num_batched_openings(
+                <DemoAirWithLookups as BaseAir<Val>>::width(air),
+                !<DemoAirWithLookups as BaseAir<Val>>::main_next_row_columns(air).is_empty(),
+                <DemoAirWithLookups as BaseAir<Val>>::preprocessed_width(air),
+                !<DemoAirWithLookups as BaseAir<Val>>::preprocessed_next_row_columns(air)
+                    .is_empty(),
+                opened.base_opened_values.quotient_chunks.len(),
+                common.lookups[i].len(),
+                4,
+                OpeningShape::hiding(4),
+            )
+        })
+        .sum();
+    let public: usize = proof
+        .opened_values
+        .instances
+        .iter()
+        .map(|opened| {
+            let base = &opened.base_opened_values;
+            base.trace_local.len()
+                + base.trace_next.as_ref().map_or(0, Vec::len)
+                + base.preprocessed_local.as_ref().map_or(0, Vec::len)
+                + base.preprocessed_next.as_ref().map_or(0, Vec::len)
+                + base.quotient_chunks.iter().map(Vec::len).sum::<usize>()
+                + base.random.as_ref().map_or(0, Vec::len)
+                + opened.permutation_local.len()
+                + opened.permutation_next.len()
+        })
+        .sum();
+    let hiding: usize = proof
+        .opening_proof
+        .0
+        .iter()
+        .flatten()
+        .flatten()
+        .map(Vec::len)
+        .sum();
+    assert_eq!(derived, public + hiding);
 
     let pvs = vec![vec![], fib_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
