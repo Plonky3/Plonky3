@@ -925,8 +925,10 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     ///
     /// The last round of a batch has no successor to fuse with.
     /// Any later reader of the tables must still see them bound.
-    pub(crate) fn bind_pending(&mut self, pending: Option<EF>) {
-        if let Some(r) = pending {
+    ///
+    /// The slot is cleared, so a second call binds nothing.
+    pub(crate) fn bind_pending(&mut self, pending: &mut Option<EF>) {
+        if let Some(r) = pending.take() {
             self.poly.fold_round(r);
         }
     }
@@ -1031,7 +1033,7 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         }
 
         // The last challenge has no successor to fuse with, so it binds on its own.
-        self.bind_pending(pending);
+        self.bind_pending(&mut pending);
 
         // Invariant: the claim is the inner product of the bound pair.
         self.debug_assert_claim();

@@ -169,7 +169,7 @@ where
 
         // The last challenge has no successor to fuse with.
         // The weight scaling below reads the tables, so it binds here.
-        self.bind_pending(pending);
+        self.bind_pending(&mut pending);
 
         // Invariant: the claim is the inner product of the bound pair.
         self.debug_assert_claim();
@@ -189,14 +189,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use alloc::vec::Vec;
+    use alloc::{format, vec};
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{PrimeCharacteristicRing, dot_product};
+    use p3_field::{Field, PackedValue, PrimeCharacteristicRing, dot_product};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
+    use p3_util::log2_strict_usize;
     use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
     use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
@@ -319,6 +320,101 @@ mod tests {
             verifier_handoff.claimed_residual,
             prover_handoff.residual_prover.claimed_sum() + final_mask_residual,
         );
+    }
+
+    #[test]
+    fn deferred_binding_drives_the_same_hiding_rounds_as_binding_on_the_spot() {
+        // Invariant: holding a binding back a round changes nothing this driver produces.
+        //
+        // Fixture state: five shapes, both binding orders, a non-zero auxiliary claim.
+        //
+        //     (2, 1)   one round, so the fused branch is never taken
+        //     (4, 4)   every variable bound, the terminal case
+        //     (9, 3)   packed storage, then the unpacking handoff
+        //     (9, 9)   packed storage bound all the way down
+        //     (15, 3)  large enough to reach the threaded branch of the fused pass
+        let log_width = log2_strict_usize(<F as Field>::Packing::WIDTH);
+
+        for (n_vars, folding_factor) in [(2usize, 1usize), (4, 4), (9, 3), (9, 9), (15, 3)] {
+            for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
+                let mut rng = SmallRng::seed_from_u64(0x5EED + n_vars as u64);
+                let evals = Poly::<EF>::rand(&mut rng, n_vars);
+                let weights = Poly::<EF>::rand(&mut rng, n_vars);
+                let claimed_sum = dot_product::<EF, _, _>(
+                    evals.as_slice().iter().copied(),
+                    weights.as_slice().iter().copied(),
+                );
+
+                // A pair below one SIMD lane group has nothing to pack.
+                let build = || {
+                    if n_vars >= log_width {
+                        ProductPolynomial::<F, EF>::new_packed(
+                            order,
+                            evals.pack::<F, EF>(),
+                            weights.pack::<F, EF>(),
+                        )
+                    } else {
+                        ProductPolynomial::<F, EF>::new_unpacked(
+                            order,
+                            evals.clone(),
+                            weights.clone(),
+                        )
+                    }
+                };
+
+                // The auxiliary claim rides the transmitted constant slot only.
+                // A non-zero one would show up here if it ever reached the binding.
+                let aux_claim = EF::from_u64(7);
+
+                let ell_zk = 4;
+                let (perm, mmcs, encoding) = make_setup(31, ell_zk);
+                let mut challenger = MyChallenger::new(perm);
+                let mut mask_rng = SmallRng::seed_from_u64(37);
+                let mut zk_data = ZkSumcheckData::<F, EF>::default();
+
+                // Arm under test: the driver, which holds each binding back a round.
+                let handoff = SumcheckProver::new(build(), claimed_sum).into_zk_sumcheck(
+                    &mut zk_data,
+                    &encoding,
+                    &mmcs,
+                    folding_factor,
+                    0,
+                    aux_claim,
+                    &mut challenger,
+                    &mut mask_rng,
+                );
+
+                // Reference arm: replay the same challenges, binding each on the spot.
+                let mut reference = SumcheckProver::new(build(), claimed_sum);
+                for &gamma in handoff.randomness.iter() {
+                    let (c0, c_inf) = reference.measure_round(&mut None);
+                    reference.reduce_claim_with_coefficients(c0, c_inf, gamma);
+                    reference.bind_pending(&mut Some(gamma));
+                }
+                reference.scale_weights_and_claim(handoff.eps);
+
+                let shape = format!("{order:?}, {n_vars} variables, {folding_factor} rounds");
+
+                // The claim chains every round message, so a drift in any of them shows here.
+                assert_eq!(
+                    handoff.residual_prover.claimed_sum(),
+                    reference.claimed_sum(),
+                    "{shape}"
+                );
+
+                // Both bound tables, entry for entry.
+                assert_eq!(
+                    handoff.residual_prover.evals().as_slice(),
+                    reference.evals().as_slice(),
+                    "{shape}"
+                );
+                assert_eq!(
+                    handoff.residual_prover.weights().as_slice(),
+                    reference.weights().as_slice(),
+                    "{shape}"
+                );
+            }
+        }
     }
 
     #[test]

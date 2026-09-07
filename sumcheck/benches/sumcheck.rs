@@ -20,11 +20,14 @@ use std::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, FieldChallenger, GrindingChallenger};
+use p3_commit::ExtensionMmcs;
+use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{
     Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, TwoAdicField,
 };
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
+use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
@@ -35,7 +38,10 @@ use p3_sumcheck::strategy::{
     RoundMessage, SumcheckProver, VariableOrder, sumcheck_coefficients_prefix,
     sumcheck_coefficients_prefix_projective, sumcheck_coefficients_suffix,
 };
+use p3_sumcheck::zk::ZkSumcheckData;
 use p3_sumcheck::{OpeningBatch, SumcheckData};
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -681,6 +687,104 @@ where
     black_box((data, residual, randomness));
 }
 
+/// Variable count for the hiding residual driver.
+///
+/// Matches the largest plain-prover case, so the two curves are read side by side.
+const ZK_RESIDUAL_SIZE: usize = 20;
+
+/// Message length of the mask code.
+///
+/// Section 2.7 of eprint 2026/391 sizes masks at `O(lambda / log log lambda)`.
+/// Sixteen is the value the hiding WHIR benches use, so the mask cost is realistic.
+const ZK_ELL: usize = 16;
+
+/// Randomness symbols appended to each mask before encoding.
+const ZK_T: usize = 2;
+
+/// Benches the hiding residual driver folding one batch of rounds.
+///
+/// The hiding prover reaches this driver once per WHIR round.
+/// Its plain counterpart is the multi-round driver benched above.
+fn bench_zk_residual(c: &mut Criterion) {
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type BaseMmcs =
+        MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, Hash, Compress, 2, 8>;
+    type Mmcs = ExtensionMmcs<F, EF, BaseMmcs>;
+    type Dft = Radix2DFTSmallBatch<EF>;
+    type Enc = ReedSolomonZkEncoding<EF, Dft>;
+    type Challenger = DuplexChallenger<F, Perm, 16, 8>;
+
+    let mut group = c.benchmark_group("sumcheck/babybear/zk_residual");
+
+    // The hiding path commits a mask oracle per batch, so keep the sample count low.
+    group.sample_size(10);
+
+    let mut rng = rng_for(0x000D, ZK_RESIDUAL_SIZE);
+    let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(42));
+
+    // Mask commitment scheme and code, sized as the hiding WHIR prover sizes them.
+    let mmcs = Mmcs::new(BaseMmcs::new(
+        Hash::new(perm.clone()),
+        Compress::new(perm.clone()),
+        0,
+    ));
+    let encoding = Enc::new(
+        ZK_T,
+        ZK_ELL,
+        (ZK_ELL + ZK_T).next_power_of_two(),
+        Dft::default(),
+    );
+
+    // The pair the driver folds, with the claim it starts from.
+    let evals = Poly::<EF>::rand(&mut rng, ZK_RESIDUAL_SIZE);
+    let weights = Poly::<EF>::rand(&mut rng, ZK_RESIDUAL_SIZE);
+    let poly = ProductPolynomial::<F, EF>::new_packed(
+        VariableOrder::Prefix,
+        evals.pack::<F, EF>(),
+        weights.pack::<F, EF>(),
+    );
+    let sum = poly.dot_product();
+
+    group.throughput(Throughput::Elements(1 << ZK_RESIDUAL_SIZE));
+    group.bench_function(
+        BenchmarkId::from_parameter(format!("k{ZK_RESIDUAL_SIZE}")),
+        |b| {
+            b.iter_batched(
+                // Setup (untimed): the driver consumes the prover and the transcript.
+                || {
+                    (
+                        SumcheckProver::new(poly.clone(), sum),
+                        Challenger::new(perm.clone()),
+                        SmallRng::seed_from_u64(7),
+                    )
+                },
+                // Routine (timed): one batch of rounds, grinding disabled.
+                |(prover, mut challenger, mut mask_rng)| {
+                    let mut data = ZkSumcheckData::<F, EF>::default();
+                    let handoff = prover.into_zk_sumcheck(
+                        &mut data,
+                        &encoding,
+                        &mmcs,
+                        FOLDING,
+                        0,
+                        EF::ZERO,
+                        &mut challenger,
+                        &mut mask_rng,
+                    );
+                    black_box((data, handoff));
+                },
+                BatchSize::LargeInput,
+            );
+        },
+    );
+
+    group.finish();
+}
+
 /// Coefficient kernel for every field.
 fn round_coefficients(c: &mut Criterion) {
     bench_round_coefficients::<BabyBear4>(c);
@@ -732,5 +836,6 @@ criterion_group!(
     prover,
     combine,
     layout,
+    bench_zk_residual,
 );
 criterion_main!(benches);
