@@ -7,7 +7,7 @@ use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::log2_strict_usize;
+use p3_util::{log2_floor_usize, log2_strict_usize};
 
 use crate::domain::domain_point;
 use crate::lch::BUTTERFLY_GRAIN;
@@ -91,6 +91,18 @@ fn for_chunks(
     }
 }
 
+/// The polynomial-basis coordinates of an element held in the tower basis.
+#[inline]
+fn into_poly(value: u128) -> u128 {
+    poly_basis::from_tower(BinaryField128::from_repr(value))
+}
+
+/// The tower-basis bit pattern of an element held in polynomial coordinates.
+#[inline]
+fn into_tower(value: u128) -> u128 {
+    poly_basis::to_tower(value).to_repr()
+}
+
 fn convert(values: &mut [u128], conversion: impl Fn(u128) -> u128 + Send + Sync) {
     // Basis conversion does several dependent lookups per element, more work than
     // a butterfly, so it amortizes dispatch at a smaller byte volume.
@@ -103,6 +115,44 @@ fn convert(values: &mut [u128], conversion: impl Fn(u128) -> u128 + Send + Sync)
             .iter_mut()
             .for_each(|value| *value = conversion(*value));
     }
+}
+
+/// Apply a per-element map to a tile the schedule is already holding in cache.
+fn convert_tile(tile: &mut [u128], conversion: impl Fn(u128) -> u128) {
+    for value in tile {
+        *value = conversion(*value);
+    }
+}
+
+/// Where the two basis conversions ride, instead of taking a pass over the matrix each.
+///
+/// A conversion is a pure per-element map, so it commutes with every butterfly ordering.
+/// Applied where the schedule already holds the element in cache it costs the lookups alone,
+/// and no memory traffic at all.
+#[derive(Copy, Clone, Debug)]
+struct Fold {
+    /// Map out of the tower basis where the transform first reads each element.
+    entry: bool,
+    /// Map back into the tower basis where the transform last writes each element.
+    exit: bool,
+}
+
+impl Fold {
+    /// Take tower-basis values and hand tower-basis values back.
+    const BOTH: Self = Self {
+        entry: true,
+        exit: true,
+    };
+    /// Take tower-basis values and leave the result in polynomial coordinates.
+    const ENTRY: Self = Self {
+        entry: true,
+        exit: false,
+    };
+    /// Take polynomial coordinates and hand tower-basis values back.
+    const EXIT: Self = Self {
+        entry: false,
+        exit: true,
+    };
 }
 
 /// A stage uses bounded chunks, each starting from its own independently indexed twiddle.
@@ -142,6 +192,70 @@ fn stage(values: &mut [u128], half: usize, j: usize, twiddles: &Twiddles, invers
 // A conservative tile budget; the row count scales with the element size and matrix width.
 const TILE_BYTES: usize = 32 * 1024;
 
+/// Bytes one worker's staging tile may occupy.
+///
+/// The tile is streamed rather than randomly addressed, so it need not fit in L1.
+/// What it must not do is spill out of the private cache level below the shared one.
+/// A sweep of the fusion depth at width 16 puts the optimum at 64 KiB, which fuses 8 stages.
+/// A 1 MiB tile fuses 12 stages and runs a third slower.
+/// That is exactly the per-core private cache size of the machine the sweep ran on.
+const STAGING_BYTES: usize = 64 * 1024;
+
+/// The shape of one transform, and the two places its stage sequence is cut.
+///
+/// A stage pairs rows a power of two apart, so the whole matrix has to be traversed once per
+/// stage unless a set of rows closed under several stages can be brought into cache.
+/// There are two such sets, and one cut point each:
+///
+/// ```text
+///     stages log_n-1 .. local     rows spaced far apart, gathered into a staging tile
+///     stages local-1 .. 0         rows already adjacent, so a contiguous tile holds them
+/// ```
+///
+/// The count of contiguous-tile stages never exceeds the count of stages there are.
+#[derive(Copy, Clone, Debug)]
+struct Plan {
+    /// Elements per row.
+    width: usize,
+    /// Base-two logarithm of the row count.
+    log_n: usize,
+    /// Bottom stages that run to completion inside one contiguous tile of rows.
+    local: usize,
+    /// Long-stride stages that one staging tile fuses into a single pass over the matrix.
+    depth: usize,
+}
+
+impl Plan {
+    /// The cut points a matrix of this shape gets, from the two cache budgets.
+    fn new(width: usize, log_n: usize) -> Self {
+        let element = core::mem::size_of::<u128>();
+        let tile_rows = (TILE_BYTES / element / width).max(1);
+        let staging_rows = (STAGING_BYTES / element / width).max(1);
+        Self {
+            width,
+            log_n,
+            local: log2_floor_usize(tile_rows).min(log_n),
+            depth: log2_floor_usize(staging_rows),
+        }
+    }
+
+    /// Stages above the contiguous tile that run as plain full passes.
+    ///
+    /// Fusing a single stage would move the same bytes the stage moves on its own, plus the
+    /// copy in and out of the staging tile, so one stage is left over rather than fused.
+    /// A staging tile too narrow to hold two rows leaves every stage over.
+    const fn leftover(&self) -> usize {
+        let above = self.log_n - self.local;
+        if self.depth < 2 {
+            above
+        } else if above % self.depth == 1 {
+            1
+        } else {
+            0
+        }
+    }
+}
+
 /// A tile stays on one worker across its adjacent stages.
 fn local_stage(
     values: &mut [u128],
@@ -163,62 +277,321 @@ fn local_stage(
     }
 }
 
-/// Complete the stages confined to one cache-sized set of rows before leaving it.
-fn local_stages(
-    values: &mut [u128],
+/// Run the `depth` stages that a tile of `2^depth` consecutive rows holds.
+///
+/// The tile is a radix-2 network on its rows: sub-layer `s` pairs rows `2^(depth-1-s)` apart
+/// and splits the tile into `2^s` blocks of `2^(depth-s)` rows, each block carrying one
+/// twiddle. Globally those blocks are the blocks `block * 2^s + g`, `g = 0 .. 2^s`, of stage
+/// `top - 1 - s`, so the twiddle walk starts at `block << s`.
+fn tile_stages(
+    tile: &mut [u128],
     width: usize,
-    log_n: usize,
+    depth: usize,
+    top: usize,
     twiddles: &Twiddles,
     inverse: bool,
-) -> usize {
-    let rows = (TILE_BYTES / core::mem::size_of::<u128>() / width).max(1);
-    let local = p3_util::log2_floor_usize(rows).min(log_n);
+    block: usize,
+) {
+    for k in 0..depth {
+        // The forward direction runs the widest sub-layer first, the inverse the narrowest.
+        let s = if inverse { depth - 1 - k } else { k };
+        local_stage(
+            tile,
+            (1 << (depth - 1 - s)) * width,
+            top - 1 - s,
+            twiddles,
+            inverse,
+            block << s,
+        );
+    }
+}
+
+/// Complete the stages confined to one cache-sized set of rows before leaving it.
+fn local_stages(values: &mut [u128], plan: Plan, twiddles: &Twiddles, inverse: bool, fold: Fold) {
+    let Plan { width, local, .. } = plan;
     let tile_len = (1 << local) * width;
-    for_chunks(values, tile_len, local, |(tile, values)| {
-        for k in 0..local {
-            let j = if inverse { k } else { local - 1 - k };
-            local_stage(
-                values,
-                (1 << j) * width,
-                j,
-                twiddles,
-                inverse,
-                tile << (local - j - 1),
-            );
+    for_chunks(values, tile_len, local, |(index, tile)| {
+        // The tile is the first read of every element it holds when it runs before every
+        // other stage, and the last write when it runs after them.
+        if fold.entry {
+            convert_tile(tile, into_poly);
+        }
+        tile_stages(tile, width, local, local, twiddles, inverse, index);
+        if fold.exit {
+            convert_tile(tile, into_tower);
         }
     });
-    local
+}
+
+/// A raw handle to the matrix, so tasks that own rows spaced apart can run side by side.
+///
+/// Slice splitters cut a slice into contiguous pieces only, and the rows one staging tile
+/// gathers are a power of two apart, so the tasks share this handle and address their own
+/// rows through it.
+///
+/// # Safety
+/// The row sets two live tasks address must be disjoint, and the exclusive borrow the base
+/// pointer comes from must outlive every task.
+#[derive(Copy, Clone)]
+struct Rows {
+    /// First element of the matrix.
+    base: *mut u128,
+    /// Elements per row.
+    width: usize,
+    /// Rows in the matrix.
+    count: usize,
+}
+
+// SAFETY: the handle is a pointer and two lengths, with no interior mutability and no `Drop`,
+// so sending or sharing it moves no data. The only caller derives the row index of every task
+// from a bijection onto the row range, which is what makes concurrent use race-free.
+unsafe impl Send for Rows {}
+// SAFETY: see the `Send` implementation.
+unsafe impl Sync for Rows {}
+
+impl Rows {
+    /// Check that a walk of `rows` rows from `first` in steps of `stride` stays inside the
+    /// matrix.
+    ///
+    /// The walk is increasing, so bounding its last row bounds all of them.
+    /// This runs once per tile rather than once per row, which is why it is a hard check and
+    /// not a debug one: a row index past the end would otherwise be a write past the end of
+    /// the matrix.
+    ///
+    /// # Panics
+    /// Panics if the last row of the walk is at or beyond the row count.
+    fn check(&self, first: usize, stride: usize, rows: usize) {
+        assert!(
+            rows == 0 || first + (rows - 1) * stride < self.count,
+            "staged row walk leaves the matrix"
+        );
+    }
+
+    /// Copy the rows `first`, `first + stride`, ... into consecutive rows of the tile.
+    ///
+    /// # Safety
+    /// No other live task may address any of the rows the walk names.
+    unsafe fn gather(&self, first: usize, stride: usize, tile: &mut [u128]) {
+        let rows = tile.chunks_exact_mut(self.width);
+        self.check(first, stride, rows.len());
+        for (k, row) in rows.enumerate() {
+            // SAFETY: the bound above puts every row of the walk inside the matrix, and the
+            // tile is a separate allocation, so the two ranges cannot overlap. The row is a
+            // whole chunk, so it has room for exactly the elements copied into it.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    self.base.add((first + k * stride) * self.width),
+                    row.as_mut_ptr(),
+                    self.width,
+                );
+            }
+        }
+    }
+
+    /// Write consecutive rows of the tile back over the rows they were gathered from.
+    ///
+    /// # Safety
+    /// No other live task may address any of the rows the walk names.
+    unsafe fn scatter(&self, first: usize, stride: usize, tile: &[u128]) {
+        let rows = tile.chunks_exact(self.width);
+        self.check(first, stride, rows.len());
+        for (k, row) in rows.enumerate() {
+            // SAFETY: as in the gather, with the direction of the copy reversed.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    row.as_ptr(),
+                    self.base.add((first + k * stride) * self.width),
+                    self.width,
+                );
+            }
+        }
+    }
+}
+
+/// Run stages `top - 1` down to `top - depth` through one staging tile per worker.
+///
+/// Each of those stages pairs rows far apart, so on its own it reads and writes the whole
+/// matrix. The rows they touch split into small sets that are closed under all of them: with
+/// `S = 2^(top-depth)` and `offset < S`, the `2^depth` rows
+///
+/// ```text
+///     row(k) = block * 2^top + offset + k * S ,     k = 0 .. 2^depth
+/// ```
+///
+/// are closed because stage `top-1-s` pairs rows `2^(top-1-s) = 2^(depth-1-s) * S` apart,
+/// which is a distance of `2^(depth-1-s)` in `k`, inside the set for every `s < depth`.
+/// Gathering those rows into one contiguous tile therefore runs all `depth` stages on a
+/// working set that stays in cache, so the matrix is read once and written once for the
+/// group instead of once per stage.
+///
+/// The twiddle a sub-layer needs is the twiddle of the global block its pair lies in. For
+/// sub-layer `s` that block index is
+///
+/// ```text
+///     row(k) >> (top - s) = block * 2^s + (k >> (depth - s))
+/// ```
+///
+/// because `row(k) >> (top-s) = block * 2^s + ((offset + k*S) >> (top-s))`, and writing
+/// `k = q * 2^(depth-s) + r` gives `offset + r * S < 2^(top-s)`, so only `q = k >> (depth-s)`
+/// survives the shift. That is precisely the block index a contiguous run of `2^(depth-s)`
+/// staged rows carries, which is why the tile runs as an ordinary radix-2 network whose
+/// twiddle walk starts at `block << s`.
+fn fused_stages(
+    values: &mut [u128],
+    plan: Plan,
+    top: usize,
+    depth: usize,
+    twiddles: &Twiddles,
+    inverse: bool,
+    convert_basis: bool,
+) {
+    let width = plan.width;
+    let len = values.len();
+    // Rows between two consecutive staged rows, and elements in one staging tile.
+    let stride = 1 << (top - depth);
+    let tile_len = width << depth;
+    // One tile per `(block, offset)` pair, which is one tile per `2^depth` rows.
+    let tiles = len / tile_len;
+    debug_assert_eq!(stride << depth, 1 << top, "staged rows do not span a block");
+    debug_assert_eq!(tiles * tile_len, len, "tiles do not partition the matrix");
+
+    let rows = Rows {
+        base: values.as_mut_ptr(),
+        width,
+        count: len / width,
+    };
+    let task = |tile: &mut Vec<u128>, index: usize| {
+        // A tile index splits into the stage-`top` block it lies in and its offset inside
+        // the stride, which together with `k` name a row:
+        //
+        //     index  = block * S + offset
+        //     row(k) = block * 2^top + offset + k * S
+        let block = index >> (top - depth);
+        let first = (block << top) + (index & (stride - 1));
+        // SAFETY: `index` runs over `0..tiles` and `k` over `0..2^depth`, so
+        // `(block, offset, k) -> row(k)` is a mixed-radix decomposition of `0..2^log_n`:
+        // every row is inside the matrix and belongs to exactly one tile index, hence to
+        // exactly one task. The exclusive borrow of the matrix outlives the whole region.
+        unsafe { rows.gather(first, stride, tile) };
+        // The gather is the first read of every element when this is the first group of a
+        // forward transform.
+        if convert_basis && !inverse {
+            convert_tile(tile, into_poly);
+        }
+        tile_stages(tile, width, depth, top, twiddles, inverse, block);
+        // The scatter is the last write of every element when this is the last group of an
+        // inverse transform.
+        if convert_basis && inverse {
+            convert_tile(tile, into_tower);
+        }
+        // SAFETY: the rows are the ones the gather read, so the argument above applies
+        // unchanged.
+        unsafe { rows.scatter(first, stride, tile) };
+    };
+
+    // One staging tile per worker, not per task: a task is a few tens of microseconds of
+    // work and the tile is tens of kilobytes.
+    let new_tile = || alloc::vec![0u128; tile_len];
+    if use_parallel(len.saturating_mul(depth)) {
+        (0..tiles).into_par_iter().for_each_init(new_tile, task);
+    } else {
+        let mut tile = new_tile();
+        for index in 0..tiles {
+            task(&mut tile, index);
+        }
+    }
 }
 
 /// Forward transform of polynomial-basis values in an existing allocation.
-fn forward(values: &mut [u128], width: usize, log_n: usize, shift: BinaryField128) {
+fn forward(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
+    let Plan {
+        width,
+        log_n,
+        local,
+        depth,
+    } = plan;
     let twiddles = Twiddles::new(log_n, shift);
-    if core::mem::size_of_val(values) <= TILE_BYTES {
-        for j in (0..log_n).rev() {
-            stage(values, (1 << j) * width, j, &twiddles, false);
-        }
-        return;
+    let leftover = plan.leftover();
+
+    // Peel fused groups from the top stage downwards, each replacing `take` full passes.
+    // The first group's gather is the first read of every element, so it carries the entry
+    // conversion.
+    let mut entry = fold.entry;
+    let mut top = log_n;
+    while top - local > leftover {
+        let take = depth.min(top - local - leftover);
+        fused_stages(values, plan, top, take, &twiddles, false, entry);
+        entry = false;
+        top -= take;
     }
-    let rows = (TILE_BYTES / core::mem::size_of::<u128>() / width).max(1);
-    let local = p3_util::log2_floor_usize(rows).min(log_n);
-    for j in (local..log_n).rev() {
+
+    // A plain pass carries no per-element map, so a conversion still owed ahead of one takes
+    // a pass of its own.
+    if entry && top > local {
+        convert(values, into_poly);
+        entry = false;
+    }
+    for j in (local..top).rev() {
         stage(values, (1 << j) * width, j, &twiddles, false);
     }
-    local_stages(values, width, log_n, &twiddles, false);
+
+    // The contiguous tile finishes the bottom stages, and is the last write of every
+    // element.
+    local_stages(
+        values,
+        plan,
+        &twiddles,
+        false,
+        Fold {
+            entry,
+            exit: fold.exit,
+        },
+    );
 }
 
 /// Inverse transform with the data kept in the polynomial basis.
-fn inverse(values: &mut [u128], width: usize, log_n: usize, shift: BinaryField128) {
+fn inverse(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
+    let Plan {
+        width,
+        log_n,
+        local,
+        depth,
+    } = plan;
     let twiddles = Twiddles::new(log_n, shift);
-    if core::mem::size_of_val(values) <= TILE_BYTES {
-        for j in 0..log_n {
-            stage(values, (1 << j) * width, j, &twiddles, true);
-        }
-        return;
-    }
-    let local = local_stages(values, width, log_n, &twiddles, true);
-    for j in local..log_n {
+    let leftover = plan.leftover();
+
+    // The contiguous tile runs first, so it is the first read of every element, and the last
+    // write too when no stage runs above it.
+    let tile_exit = fold.exit && local == log_n;
+    let mut exit = fold.exit && !tile_exit;
+    local_stages(
+        values,
+        plan,
+        &twiddles,
+        true,
+        Fold {
+            entry: fold.entry,
+            exit: tile_exit,
+        },
+    );
+
+    // Stages the staging tile does not pay for go before the groups, so a group still
+    // reaches the top stage and can carry the exit conversion.
+    for j in local..local + leftover {
         stage(values, (1 << j) * width, j, &twiddles, true);
+    }
+    let mut base = local + leftover;
+    while base < log_n {
+        let take = depth.min(log_n - base);
+        base += take;
+        let last = base == log_n;
+        fused_stages(values, plan, base, take, &twiddles, true, exit && last);
+        exit &= !last;
+    }
+
+    // No group ran, so the exit conversion needs a pass of its own.
+    if exit {
+        convert(values, into_tower);
     }
 }
 
@@ -241,13 +614,11 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .into_iter()
             .map(BinaryField128::to_repr)
             .collect();
-        convert(&mut values, |v| {
-            poly_basis::from_tower(BinaryField128::from_repr(v))
-        });
 
-        forward(&mut values, width, log_n, shift);
+        // Both conversions ride along with the transform's first and last touch of each
+        // element, so neither costs a pass over the matrix.
+        forward(&mut values, Plan::new(width, log_n), shift, Fold::BOTH);
 
-        convert(&mut values, |v| poly_basis::to_tower(v).to_repr());
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
     }
@@ -269,10 +640,10 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .into_iter()
             .map(BinaryField128::to_repr)
             .collect();
+        // A coset transform converts its own copy of the message, so the copies move
+        // tower-basis rows and no conversion pass is needed at either end.
+        let plan = Plan::new(width, log_message);
         let (message, tail) = values.split_at_mut(len);
-        convert(message, |v| {
-            poly_basis::from_tower(BinaryField128::from_repr(v))
-        });
         if len >= 2 * BUTTERFLY_GRAIN * p3_maybe_rayon::prelude::current_num_threads() {
             // Keep large coefficient copies next to evaluation so the copied data
             // is still hot, including when only one worker is available.
@@ -280,20 +651,19 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
                 chunk.copy_from_slice(message);
                 forward(
                     chunk,
-                    width,
-                    log_message,
+                    plan,
                     domain_point((c + 1) << log_message),
+                    Fold::BOTH,
                 );
             });
-            forward(message, width, log_message, BinaryField128::ZERO);
+            forward(message, plan, BinaryField128::ZERO, Fold::BOTH);
         } else {
             // Small cosets can run together after all coefficient copies are made.
             for_chunks(tail, len, 1, |(_, chunk)| chunk.copy_from_slice(message));
             for_chunks(&mut values, len, log_message, |(c, chunk)| {
-                forward(chunk, width, log_message, domain_point(c << log_message));
+                forward(chunk, plan, domain_point(c << log_message), Fold::BOTH);
             });
         }
-        convert(&mut values, |v| poly_basis::to_tower(v).to_repr());
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
     }
@@ -326,10 +696,10 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .collect();
         let mut values = alloc::vec![0u128; padded_len];
         values[..len].copy_from_slice(&coeffs);
-        convert(&mut coeffs, |v| {
-            poly_basis::from_tower(BinaryField128::from_repr(v))
-        });
-        inverse(&mut coeffs, width, log_n, shift);
+        // The coefficients stay in the polynomial basis: every coset transform starts from a
+        // copy of them.
+        let plan = Plan::new(width, log_n);
+        inverse(&mut coeffs, plan, shift, Fold::ENTRY);
 
         // The input evaluations already are the first coset. Only new cosets need
         // evaluation and conversion back from the polynomial basis.
@@ -337,13 +707,10 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             chunk.copy_from_slice(&coeffs);
             forward(
                 chunk,
-                width,
-                log_n,
+                plan,
                 shift + domain_point::<BinaryField128>((c + 1) << log_n),
+                Fold::EXIT,
             );
-            for v in chunk {
-                *v = poly_basis::to_tower(*v).to_repr();
-            }
         });
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
@@ -365,13 +732,10 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .into_iter()
             .map(BinaryField128::to_repr)
             .collect();
-        convert(&mut values, |v| {
-            poly_basis::from_tower(BinaryField128::from_repr(v))
-        });
 
-        inverse(&mut values, width, log_n, shift);
+        // See the forward transform: neither conversion costs a pass of its own.
+        inverse(&mut values, Plan::new(width, log_n), shift, Fold::BOTH);
 
-        convert(&mut values, |v| poly_basis::to_tower(v).to_repr());
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
     }
@@ -379,14 +743,91 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryField128, TowerLevel};
+    use alloc::vec::Vec;
+
+    use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
     use p3_matrix::dense::RowMajorMatrix;
     use proptest::prelude::*;
 
-    use super::PolyBasisNtt;
+    use super::{Fold, Plan, PolyBasisNtt};
     use crate::lch::LchNtt;
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
+
+    /// Cut points small enough to keep the test matrices tiny, one pair per branch of the
+    /// schedule:
+    ///
+    /// ```text
+    ///     (2, 3)  full groups, plus a one-stage leftover at local + depth + 1
+    ///     (2, 0)  a staging tile too narrow for two rows, so no group runs at all
+    ///     (0, 3)  no contiguous tile, so every stage is fused
+    ///     (1, 1)  a depth of one, which never pays for a tile
+    /// ```
+    const CUTS: [(usize, usize); 4] = [(2, 3), (2, 0), (0, 3), (1, 1)];
+
+    /// Widths that cover a single element per row, an odd row, and rows of several elements.
+    const WIDTHS: [usize; 4] = [1, 3, 16, 64];
+
+    /// Neither basis conversion rides along, so only the stage schedule is under test.
+    const NONE: Fold = Fold {
+        entry: false,
+        exit: false,
+    };
+
+    /// A shift with bits in both halves, so no twiddle is accidentally zero.
+    fn test_shift() -> BinaryField128 {
+        BinaryField128::from_repr((1 << 127) | 7919)
+    }
+
+    /// Values whose bits depend on the position, so a misapplied twiddle cannot cancel out.
+    fn coefficients(log_n: usize, width: usize) -> Vec<u128> {
+        (0..(width << log_n))
+            .map(|i| {
+                let low = (i as u64)
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                    .wrapping_add(0x5555_5555_5555_5555);
+                let high = low.rotate_left(17).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
+                (u128::from(high) << 64) | u128::from(low)
+            })
+            .collect()
+    }
+
+    /// One full pass per stage, straight off the twiddle accessor: the schedule every cut of
+    /// the stage sequence has to reproduce bit for bit.
+    fn per_stage_schedule(
+        values: &mut [u128],
+        width: usize,
+        log_n: usize,
+        shift: BinaryField128,
+        inverse: bool,
+    ) {
+        let twiddles = super::Twiddles::new(log_n, shift);
+        for k in 0..log_n {
+            // The forward direction runs the widest stage first, the inverse the narrowest.
+            let j = if inverse { k } else { log_n - 1 - k };
+            // Stage `j` pairs rows `2^j` apart, so a block spans `2^(j+1)` rows and the
+            // block index alone picks the twiddle.
+            let half = (1 << j) * width;
+            for (block, rows) in values.chunks_mut(half << 1).enumerate() {
+                let t = twiddles.at(j, block);
+                let (lo, hi) = rows.split_at_mut(half);
+                if inverse {
+                    poly_basis::butterfly_inverse(lo, hi, t);
+                } else {
+                    poly_basis::butterfly_forward(lo, hi, t);
+                }
+            }
+        }
+    }
+
+    /// Run the scheduled transform of one direction in place.
+    fn scheduled(values: &mut [u128], plan: Plan, inverse: bool, fold: Fold) {
+        if inverse {
+            super::inverse(values, plan, test_shift(), fold);
+        } else {
+            super::forward(values, plan, test_shift(), fold);
+        }
+    }
 
     /// Builds a matrix whose entries are distinct functions of the seed and the position.
     fn matrix(log_n: usize, width: usize, seed: u64) -> RowMajorMatrix<BinaryField128> {
@@ -401,6 +842,119 @@ mod tests {
                 .collect(),
             width,
         )
+    }
+
+    #[test]
+    fn every_cut_of_the_stage_sequence_matches_the_per_stage_schedule() {
+        // Invariant: cutting the stage sequence into staging groups and a contiguous tile is
+        // a pure reordering of memory traffic. Every element must come out bit for bit what
+        // one full pass per stage produces, in both directions.
+        //
+        // The heights below are the branch boundaries of the cut:
+        //
+        //     local            nothing above the tile, so the tile is the whole transform
+        //     local + 1        one stage above the tile, which is left unfused
+        //     local + depth    one full staging group
+        //     local + depth+1  a full group and a one-stage leftover
+        //     2*local + depth  several groups and several tiles
+        for (local, depth) in CUTS {
+            for log_n in [
+                local,
+                local + 1,
+                local + depth,
+                local + depth + 1,
+                2 * local + depth,
+            ] {
+                for width in WIDTHS {
+                    let plan = Plan {
+                        width,
+                        log_n,
+                        local: local.min(log_n),
+                        depth,
+                    };
+                    for inverse in [false, true] {
+                        let mut expected = coefficients(log_n, width);
+                        let mut actual = expected.clone();
+                        per_stage_schedule(&mut expected, width, log_n, test_shift(), inverse);
+                        scheduled(&mut actual, plan, inverse, NONE);
+                        assert_eq!(actual, expected, "{plan:?} inverse={inverse}");
+                    }
+                }
+            }
+        }
+
+        // The production cut points, at heights that put the interesting branch on each
+        // width. Fixture state, from the two cache budgets:
+        //
+        //     width  1 @ 2^10   local 10, depth 12   the tile is the whole transform
+        //     width  3 @ 2^10   local  9, depth 10   one stage above the tile, unfused
+        //     width 16 @ 2^10   local  7, depth  8   one group of three stages
+        //     width 64 @ 2^10   local  5, depth  6   one group of five stages
+        //     width 512 @ 2^8   local  2, depth  3   two groups of three stages
+        for (width, log_n) in [(1, 10), (3, 10), (16, 10), (64, 10), (512, 8)] {
+            let plan = Plan::new(width, log_n);
+            for inverse in [false, true] {
+                let mut expected = coefficients(log_n, width);
+                let mut actual = expected.clone();
+                per_stage_schedule(&mut expected, width, log_n, test_shift(), inverse);
+                scheduled(&mut actual, plan, inverse, NONE);
+                assert_eq!(actual, expected, "{plan:?} inverse={inverse}");
+            }
+        }
+    }
+
+    #[test]
+    fn folded_conversions_match_standalone_conversion_passes() {
+        // Invariant: a basis conversion carried by whichever phase first reads or last writes
+        // an element is the same map as a standalone pass over the whole matrix before or
+        // after the transform.
+        //
+        // The cut points decide which phase carries it — a staging group's gather, a
+        // staging group's scatter, the contiguous tile, or a pass of its own — so the same
+        // set of cuts as the schedule test runs here.
+        for (local, depth) in CUTS {
+            for log_n in [
+                local,
+                local + 1,
+                local + depth,
+                local + depth + 1,
+                2 * local + depth,
+            ] {
+                for width in WIDTHS {
+                    let plan = Plan {
+                        width,
+                        log_n,
+                        local: local.min(log_n),
+                        depth,
+                    };
+                    for inverse in [false, true] {
+                        let input = coefficients(log_n, width);
+
+                        // Conversion in, then the schedule.
+                        let mut expected = input.clone();
+                        super::convert(&mut expected, super::into_poly);
+                        scheduled(&mut expected, plan, inverse, NONE);
+                        let mut actual = input.clone();
+                        scheduled(&mut actual, plan, inverse, Fold::ENTRY);
+                        assert_eq!(actual, expected, "entry {plan:?} inverse={inverse}");
+
+                        // Conversion in, the schedule, conversion out.
+                        super::convert(&mut expected, super::into_tower);
+                        let mut actual = input.clone();
+                        scheduled(&mut actual, plan, inverse, Fold::BOTH);
+                        assert_eq!(actual, expected, "both {plan:?} inverse={inverse}");
+
+                        // The schedule, then conversion out.
+                        let mut expected = input.clone();
+                        scheduled(&mut expected, plan, inverse, NONE);
+                        super::convert(&mut expected, super::into_tower);
+                        let mut actual = input;
+                        scheduled(&mut actual, plan, inverse, Fold::EXIT);
+                        assert_eq!(actual, expected, "exit {plan:?} inverse={inverse}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
