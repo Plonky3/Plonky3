@@ -30,6 +30,17 @@ use p3_util::log2_strict_usize;
 use crate::point::Point;
 use crate::poly::{Poly, PolyView};
 
+/// Element widths one extension multiply-accumulate is charged as, for task sizing.
+///
+/// These contractions do one such step per element they read, so pricing them by the
+/// bytes they move undercharges them by an order of magnitude.
+///
+/// ```text
+///     degree-4 extension multiply-add : about 6 ns
+///     three element widths at 100 ps  : 4.8 ns
+/// ```
+const MUL_ACC_BYTES: usize = 3;
+
 /// Factored eq polynomial table for scale * eq(z, .).
 ///
 /// Splits the evaluation point z at the midpoint into (z_prefix, z_suffix):
@@ -116,10 +127,11 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // Number of scalar elements per eq1 block.
         let cs = self.eq1.num_scalar_evals();
         // One item dots one suffix block of base evals, then scales by one prefix weight.
+        // A block is priced by its multiply-accumulates, which cost far more than its reads.
         poly.as_slice()
             .par_chunks(cs)
             .zip_eq(self.eq0.as_slice().par_iter())
-            .with_min_task_bytes(cs * size_of::<F>() + size_of::<EF>())
+            .with_min_task_bytes(MUL_ACC_BYTES * cs * size_of::<EF>())
             .map(|(chunk, &w0)| self.eq1.dot_with_base(chunk) * w0)
             .sum::<EF>()
     }
@@ -144,10 +156,11 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
 
         let cs = self.eq1.num_scalar_evals();
         // One item dots one suffix block of extension evals, scaled by one prefix weight.
+        // A block is priced by its multiply-accumulates, which cost far more than its reads.
         poly.as_slice()
             .par_chunks(cs)
             .zip_eq(self.eq0.as_slice().par_iter())
-            .with_min_task_bytes((cs + 1) * size_of::<EF>())
+            .with_min_task_bytes(MUL_ACC_BYTES * cs * size_of::<EF>())
             .map(|(chunk, &w0)| self.eq1.dot_with_ext(chunk) * w0)
             .sum::<EF>()
     }
@@ -177,10 +190,11 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
 
         // Both polynomial and eq1 are packed; use packed dot product kernel.
         // One item dots one suffix block of packed evals, scaled by one prefix weight.
+        // A block is priced by its multiply-accumulates, which cost far more than its reads.
         poly.as_slice()
             .par_chunks(cs)
             .zip_eq(self.eq0.as_slice().par_iter())
-            .with_min_task_bytes(cs * size_of::<EF::ExtensionPacking>() + size_of::<EF>())
+            .with_min_task_bytes(MUL_ACC_BYTES * cs * size_of::<EF::ExtensionPacking>())
             .map(|(chunk, &w0)| self.eq1.dot_with_ext_packed(chunk) * w0)
             .sum::<EF>()
     }
@@ -204,7 +218,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // One item reads one suffix block of weights and rewrites the matching output.
         out.par_chunks_mut(cs)
             .zip(self.eq0.as_slice().par_iter())
-            .with_min_task_bytes(2 * cs * size_of::<EF>())
+            .with_min_task_bytes(MUL_ACC_BYTES * cs * size_of::<EF>())
             .for_each(|(chunk, &w0)| {
                 self.eq1.accumulate_scalar_into(chunk, w0 * w_scale);
             });
@@ -244,7 +258,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             // One item reads one suffix block of weights and rewrites the matching output.
             out.par_chunks_mut(cs)
                 .zip(self.eq0.as_slice().par_iter())
-                .with_min_task_bytes(2 * cs * size_of::<EF::ExtensionPacking>())
+                .with_min_task_bytes(MUL_ACC_BYTES * cs * size_of::<EF::ExtensionPacking>())
                 .for_each(|(chunk, &w0)| {
                     self.eq1.accumulate_packed_into(chunk, w0 * w_scale);
                 });
@@ -277,7 +291,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // Only a loop worth splitting pays for the per-task accumulators a split needs.
         if !should_split(
             self.eq0.num_evals(),
-            size_outer * size_of::<F>() + (1 << k_inner) * size_of::<EF>(),
+            MUL_ACC_BYTES * size_outer * size_of::<EF>() + 2 * (1 << k_inner) * size_of::<EF>(),
         ) {
             // Sequential: accumulate each eq0 chunk into a shared output buffer.
             let mut out = Poly::<EF>::zero(k_inner);
@@ -336,7 +350,8 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // The sequential pass accumulates into one shared buffer, which no split can do.
         if !should_split(
             self.eq0.num_evals(),
-            size_outer * size_of::<F>() + (1 << k_inner) * size_of::<EF::ExtensionPacking>(),
+            MUL_ACC_BYTES * size_outer * size_of::<EF::ExtensionPacking>()
+                + 2 * (1 << k_inner) * size_of::<EF::ExtensionPacking>(),
         ) {
             let mut out = Poly::<EF::ExtensionPacking>::zero(k_inner);
             poly.as_slice()
@@ -400,10 +415,11 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         assert_eq!(out.len(), poly.num_evals() >> self.num_variables());
 
         // One item dots one suffix block of base evals into a single output entry.
+        // A block is priced by its multiply-accumulates, which cost far more than its reads.
         let suffix_rows = 1 << self.num_variables();
         out.par_iter_mut()
             .zip(poly.as_slice().par_chunks(suffix_rows))
-            .with_min_task_bytes(suffix_rows * size_of::<F>() + size_of::<EF>())
+            .with_min_task_bytes(MUL_ACC_BYTES * suffix_rows * size_of::<EF>())
             .for_each(|(out, chunk)| {
                 *out = self.eq1.compress_suffix_dot(chunk, &self.eq0);
             });
@@ -456,7 +472,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             .as_slice()
             .par_iter()
             .zip_eq(evals[1..].par_chunks(cs))
-            .with_min_task_bytes(cs * size_of::<F>() + size_of::<EF>())
+            .with_min_task_bytes(MUL_ACC_BYTES * cs * size_of::<EF>())
             .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
             .sum::<EF>();
 
@@ -499,7 +515,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // Only a loop worth splitting pays to rebuild each boundary from its own index.
         if !should_split(
             self.eq0.num_evals(),
-            size_outer * size_of::<F>() + inner_size * size_of::<EF>(),
+            MUL_ACC_BYTES * size_outer * size_of::<EF>() + 2 * inner_size * size_of::<EF>(),
         ) {
             // Sequential pass threads a carry across outer chunks.
             // The shift means each prefix row also receives its predecessor's
@@ -590,9 +606,10 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         }
 
         // One item contracts one suffix block of base evals into a single output entry.
+        // A block is priced by its multiply-accumulates, which cost far more than its reads.
         out.par_iter_mut()
             .zip_eq(poly.as_slice().par_chunks(suffix_rows))
-            .with_min_task_bytes(suffix_rows * size_of::<F>() + size_of::<EF>())
+            .with_min_task_bytes(MUL_ACC_BYTES * suffix_rows * size_of::<EF>())
             .for_each(|(out, chunk)| {
                 // Drop the first suffix row so row y reads its predecessor y - 1,
                 // then split the prefix-half weights across the suffix sub-blocks.
@@ -987,7 +1004,7 @@ mod tests {
         #[test]
         fn prop_compress_prefix_shifted_matches_reference(
             split_vars in 0usize..=8,
-            inner_vars in 0usize..=6,
+            inner_vars in 0usize..=8,
             seed in any::<u64>(),
         ) {
             // Invariant: prefix compression with shifted weights matches the
@@ -1047,5 +1064,46 @@ mod tests {
                     .compress_suffix_shifted(ext_poly.as_view()),
             );
         }
+    }
+
+    /// Only a build with a thread pool ever reaches the arm this pins.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn compress_prefix_shifted_rebuilds_boundaries_when_split() {
+        // The two arms of this contraction differ in more than how the work is divided.
+        //
+        //     one task   : threads a carry from one prefix block to the next
+        //     many tasks : rebuilds each block's boundary from its own index
+        //
+        // The property test covers the carry-threading arm across its whole range, and
+        // only brushes the other in its top corner.
+        // This pins the boundary-rebuilding arm at a shape that splits on a wide pool.
+        let mut rng = SmallRng::seed_from_u64(0xB0117);
+        let split_vars = 8;
+        let inner_vars = 12;
+        let point = Point::<EF>::rand(&mut rng, split_vars);
+        let poly = Poly::<F>::rand(&mut rng, split_vars + inner_vars);
+
+        // Fixture state: the shape the contraction hands to the shared policy.
+        //
+        //     prefix blocks : 2^(split_vars / 2)                    = 16
+        //     block width   : 2^(split_vars + inner_vars) / blocks  = 2^16
+        //     accumulator   : 2^inner_vars, read and written once per block
+        let prefix_blocks = 1 << (split_vars / 2);
+        let size_outer = poly.num_evals() / prefix_blocks;
+        let item_bytes =
+            MUL_ACC_BYTES * size_outer * size_of::<EF>() + 2 * (1 << inner_vars) * size_of::<EF>();
+        assert!(
+            should_split(prefix_blocks, item_bytes),
+            "shape no longer splits on a pool of {} workers",
+            current_num_threads()
+        );
+
+        // The split arm must still agree with the dense reference.
+        let expected = compress_prefix_shifted_poly_reference(&poly, &point);
+        assert_eq!(
+            expected,
+            SplitEq::<F, EF>::new_packed(&point, EF::ONE).compress_prefix_shifted(poly.as_view()),
+        );
     }
 }

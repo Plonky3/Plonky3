@@ -837,7 +837,7 @@ impl LookupProtocol for LogUpGadget {
         let num_threads = current_num_threads();
         let chunk_size = height
             .div_ceil(num_threads)
-            .max(min_task_len(height, size_of::<EF>()));
+            .max(min_task_len(height, 2 * size_of::<EF>()));
 
         // Phase A — Local inclusive prefix sums, one chunk per thread.
         row_totals.par_chunks_mut(chunk_size).for_each(|chunk| {
