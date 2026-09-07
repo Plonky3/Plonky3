@@ -258,9 +258,11 @@ pub struct VerifierTranscript<'a, C, F: PrimeField64, EF> {
     ///
     /// The proof carries every value, so the driver reads an empty wire.
     state: VerifierState<'static, &'a mut C, Alphabet<F>>,
+    /// Evaluations each round polynomial is described as carrying.
+    degree: usize,
     /// Grinding difficulty per round, or zero to omit grinding.
     pow_bits: usize,
-    /// Index of the next round to play, used to place a grinding failure.
+    /// Index of the next round to play, used to place a round failure.
     round: usize,
     /// Marker for the extension field the rounds carry.
     _ef: PhantomData<EF>,
@@ -291,6 +293,7 @@ where
 
         Self {
             state,
+            degree,
             pow_bits,
             round: 0,
             _ef: PhantomData,
@@ -299,25 +302,35 @@ where
 
     /// Replay one round: bind the polynomial, re-check the grind, draw the challenge.
     ///
+    /// Every value comes from the proof, so every disagreement is a rejection.
+    ///
     /// # Errors
     ///
-    /// When the supplied witness misses the required difficulty.
-    ///
-    /// # Panics
-    ///
-    /// When the evaluation count differs from the described one.
-    /// The caller checks that first and rejects a mismatch with an error.
+    /// - The evaluation count differs from the described one.
+    /// - Grinding is enabled and the round carries no witness.
+    /// - The witness misses the required difficulty.
     pub fn round(&mut self, evals: &[EF], witness: Option<F>) -> Result<EF, GenericDegreeError> {
         let round = self.round;
         self.round += 1;
 
         // Bind the polynomial before the challenge that will be evaluated on it.
         self.state
-            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(ROUND_POLY, evals);
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(ROUND_POLY, evals)
+            .map_err(|_| GenericDegreeError::PolyEvalCountMismatch {
+                round,
+                expected: self.degree,
+                actual: evals.len(),
+            })?;
 
         // Re-run the prover's grinding step on the witness it committed to.
         if self.pow_bits > 0 {
-            let witness = witness.expect("a positive difficulty requires a witness per round");
+            // With no witness the described step cannot be played at all.
+            //
+            // Releasing the completeness check keeps this rejection the only failure.
+            let Some(witness) = witness else {
+                self.state.abort();
+                return Err(GenericDegreeError::MissingPowWitness { round });
+            };
             self.state
                 .observe_pow(ROUND_POW, self.pow_bits, witness)
                 .map_err(|_| GenericDegreeError::InvalidPowWitness { round })?;
@@ -340,5 +353,75 @@ where
         self.state
             .finalize()
             .expect("the generic-degree sumcheck reads an empty wire");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type Ch = DuplexChallenger<F, Perm, 16, 8>;
+
+    fn fresh_challenger() -> Ch {
+        // Fixed seed so a transcript built here is reproducible.
+        let mut rng = SmallRng::seed_from_u64(0xDEADBEEF);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        Ch::new(perm)
+    }
+
+    // These two tests drive the verifier transcript the way a downstream crate
+    // would: straight from proof fields, with no shape pre-check in front.
+    //
+    // Both malformed inputs must return an error.
+    // A panic here would compound with the driver's own drop check and abort.
+
+    #[test]
+    fn a_round_polynomial_of_the_wrong_width_is_rejected() {
+        // Described run: 2 rounds, 3 evaluations per round polynomial, no grinding.
+        //
+        //     described:    Fixed(3)
+        //     proof holds:  2        -> rejected on round 0
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            VerifierTranscript::<Ch, F, EF>::new(&mut challenger, 2, 3, 0, EF::ZERO);
+
+        let err = transcript
+            .round(&[EF::ONE, EF::ONE], None)
+            .expect_err("a round polynomial outside the described width must error");
+
+        assert_eq!(
+            err,
+            GenericDegreeError::PolyEvalCountMismatch {
+                round: 0,
+                expected: 3,
+                actual: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn a_round_missing_its_grinding_witness_is_rejected() {
+        // Described run: 2 rounds, 3 evaluations, 4 bits of grinding per round.
+        //
+        // A described grinding step cannot be replayed with no witness to feed it.
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            VerifierTranscript::<Ch, F, EF>::new(&mut challenger, 2, 3, 4, EF::ZERO);
+
+        let err = transcript
+            .round(&[EF::ONE; 3], None)
+            .expect_err("a described grinding step with no witness must error");
+
+        assert_eq!(err, GenericDegreeError::MissingPowWitness { round: 0 });
     }
 }

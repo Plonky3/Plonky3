@@ -91,18 +91,9 @@ pub trait RoundProver<EF> {
         for _ in 0..num_rounds {
             let evals = self.round_poly();
 
-            // The described step carries exactly `degree` evaluations.
-            //
-            // A different count would diverge from the agreed shape.
-            // That is a bug in this state, not untrusted input, so it panics.
-            assert_eq!(
-                evals.len(),
-                degree,
-                "round polynomial carries {} evaluations, expected {degree}",
-                evals.len(),
-            );
-
             // Bind the polynomial, grind, and draw this round's challenge.
+            //
+            // Binding compares the evaluation count against the described width.
             let (challenge, witness) = transcript.round(&evals);
 
             // Store what the round produced alongside what it bound.

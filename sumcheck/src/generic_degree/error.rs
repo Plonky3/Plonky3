@@ -31,6 +31,12 @@ pub enum GenericDegreeError {
         /// Actual witness count.
         actual: usize,
     },
+    /// Grinding is enabled but a round carries no witness.
+    #[error("sumcheck round {round}: missing pow witness")]
+    MissingPowWitness {
+        /// Round whose witness is absent.
+        round: usize,
+    },
     /// A PoW witness failed to validate.
     #[error("sumcheck round {round}: invalid pow witness")]
     InvalidPowWitness {
