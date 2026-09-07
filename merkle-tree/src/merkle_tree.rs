@@ -250,12 +250,16 @@ pub(crate) fn select_arity_step<const N: usize>(
 ///
 /// A zero-filled allocation is free: the operating system hands back pages that are already
 /// zero and only faults them in when the hashing threads write them.
+///
 /// The standard vector constructor reaches that path only when it can see at run time that the
-/// element is all zero bits, and it deliberately gives up on that check for arrays longer than
-/// sixteen elements, which is exactly the shape of a thirty-two-byte digest.
+/// element is all zero bits.
+///
+/// It gives up on that check for arrays longer than sixteen elements, which is exactly the
+/// shape of a thirty-two-byte digest.
 ///
 /// Building the layer as one flat run of digest words restores the check, because a word is a
 /// primitive the constructor still inspects.
+///
 /// The flat run and the run of digests have the very same allocation layout, so viewing one as
 /// the other costs nothing:
 ///
@@ -265,6 +269,7 @@ pub(crate) fn select_arity_step<const N: usize>(
 /// ```
 ///
 /// # Panics
+///
 /// Panics if the layer is too large for the address space.
 fn default_digest_layer<W, const DIGEST_ELEMS: usize>(len: usize) -> Vec<[W; DIGEST_ELEMS]>
 where
@@ -292,8 +297,10 @@ where
 
     // SAFETY: an array of `DIGEST_ELEMS` words has no padding, so `len` digests occupy exactly
     // the `len * DIGEST_ELEMS` words allocated above, with the same alignment as one word.
+    //
     // The requested length equals the reserved capacity, so the layout handed back to the
     // allocator on drop is byte for byte the layout it handed out.
+    //
     // Every word is initialized, so every digest slot reads as the default digest.
     unsafe { Vec::from_raw_parts(ptr, len, len) }
 }
@@ -302,10 +309,14 @@ where
 ///
 /// A parallel dispatch costs a fixed amount per level, and the levels near the root hold so few
 /// nodes that the dispatch outweighs the hashing itself.
+///
 /// Grouping messages is independent of threading, so a small level keeps the full vector width
 /// even while it runs on one thread.
-/// 1024 is the point where the two costs balance in practice: it still leaves tens of nodes per
-/// thread on a many-core machine, and every wider level fans out.
+///
+/// 1024 is the point where the two costs balance in practice.
+///
+/// It still leaves tens of nodes per thread on a many-core machine, and every wider level fans
+/// out.
 const SERIAL_LEVEL_NODES: usize = 1024;
 
 /// Output nodes handed to one parallel task.
@@ -318,8 +329,9 @@ const TASK_NODES: usize = 1024;
 ///
 /// A batched hasher wants its messages back to back in memory, and a matrix only promises access
 /// one row at a time, so a group of rows is copied into a buffer first.
-/// 16 KiB keeps that buffer inside the first-level cache, so the hasher reads the rows back while
-/// they are still hot.
+///
+/// 16 KiB keeps that buffer inside the first-level cache, so the hasher reads the rows back
+/// while they are still hot.
 const ROW_SCRATCH_BYTES: usize = 16 * 1024;
 
 /// Hash a run of rows from a set of equal-height matrices, several messages per hash call.
@@ -328,12 +340,15 @@ const ROW_SCRATCH_BYTES: usize = 16 * 1024;
 /// which is exactly what the unbatched path feeds its hasher one row at a time.
 ///
 /// # Arguments
+///
 /// - `h`: hasher applied to each row message.
 /// - `matrices`: matrices of equal height whose rows are concatenated.
+///
 /// - `first_row`: index of the row whose digest lands in the first output slot.
 /// - `out`: one slot per consecutive row starting at that index.
 ///
 /// # Panics
+///
 /// Panics if any matrix is shorter than the requested row range.
 fn hash_rows_batched<F, W, H, M, const DIGEST_ELEMS: usize>(
     h: &H,
@@ -399,8 +414,10 @@ fn hash_rows_batched<F, W, H, M, const DIGEST_ELEMS: usize>(
 /// Compress a run of already-grouped children, several groups per compression call.
 ///
 /// # Arguments
+///
 /// - `c`: compression function applied to each group.
 /// - `groups`: one array of `N` children per output node.
+///
 /// - `out`: one slot per group.
 fn compress_groups_batched<T, C, const N: usize>(c: &C, groups: &[[T; N]], out: &mut [T])
 where
@@ -917,11 +934,14 @@ mod tests {
     /// Tree shapes the batched and unbatched drivers must agree on, as matrix heights and width.
     ///
     /// Between them they cover every boundary the batching introduces:
+    ///
     /// - A tree of a single row, which has no level above the leaves at all.
     /// - Odd heights, which leave a padding tail at the top of a level.
     /// - Node counts that leave a partial final group in a hash call.
+    ///
     /// - Several matrices sharing the tallest height, so a leaf message spans two rows.
     /// - A ragged height ladder, which forces injection levels.
+    ///
     /// - Levels wide enough to fan out across threads instead of staying serial.
     /// - Rows long enough to make the sponge absorb more than one block.
     const SHAPES: &[(&[usize], usize)] = &[
@@ -980,6 +1000,7 @@ mod tests {
     ///
     /// Three is deliberately neither a power of two nor a divisor of any test height, so every
     /// group the driver forms ends in a short remainder.
+    ///
     /// Leaving the batched hash at its default also isolates the driver: any disagreement comes
     /// from how the driver assembles messages, not from a vectorized sponge.
     #[derive(Clone, Copy, Debug)]
@@ -1098,6 +1119,7 @@ mod tests {
         // At arity four a level takes either a full four-to-one step, which the batched arm
         // handles, or a binary bridge step before an injection, which falls back to the
         // unbatched arm.
+        //
         // Both must land on the same digests.
         let h = SerializingHasher::new(Keccak256Hash);
         let c = CompressionFunctionFromHasher::<_, 4, 32>::new(Keccak256Hash);

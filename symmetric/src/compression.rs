@@ -11,6 +11,7 @@ pub trait PseudoCompressionFunction<T, const N: usize>: Clone {
     ///
     /// One means every group is compressed on its own, which is the behaviour of a plain scalar permutation.
     /// A vectorized implementation reports how many independent states its permutation advances at once.
+    ///
     /// Callers read this only to decide whether grouping compressions is worth the bookkeeping.
     const LANES: usize = 1;
 

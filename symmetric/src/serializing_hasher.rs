@@ -4,10 +4,15 @@ use crate::CryptographicHasher;
 
 /// Size of the stack buffer that holds the serialized bytes of one group of rows.
 ///
-/// The batched inner hash needs its messages back to back in memory, and a field element only
-/// becomes bytes through a serializing iterator, so the bytes have to be materialized somewhere.
-/// 8 KiB stays inside a typical 32 KiB L1 data cache and still holds eight messages for rows of
-/// up to 1 KiB, which keeps every lane of a vector sponge busy at the widths a Merkle leaf uses.
+/// The batched inner hash needs its messages back to back in memory.
+///
+/// A field element only becomes bytes through a serializing iterator, so the bytes have to be
+/// materialized somewhere.
+///
+/// 8 KiB stays inside a typical 32 KiB L1 data cache.
+///
+/// It still holds eight messages for rows of up to 1 KiB, which keeps every lane of a vector
+/// sponge busy at the widths a Merkle leaf uses.
 const ROW_BYTES_SCRATCH: usize = 8 * 1024;
 
 /// Converts a hasher which can hash bytes, u32's or u64's into a hasher which can hash field elements.
@@ -91,9 +96,10 @@ where
 
             // Serialize row by row so each message starts on its own row boundary.
             //
-            // The row boundaries are computed from the declared serialized width of one field
-            // element, so a stream of any other length would shift every later message and
-            // silently change its digest; both directions are therefore checked.
+            // The row boundaries come from the declared serialized width of one field element.
+            //
+            // A stream of any other length would shift every later message and silently change
+            // its digest, so both directions are checked.
             for (slot, row) in bytes.chunks_mut(row_bytes).zip(rows.chunks(row_len)) {
                 let mut stream = F::into_byte_stream(row.iter().copied()).into_iter();
                 for dst in slot.iter_mut() {

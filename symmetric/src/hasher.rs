@@ -8,6 +8,7 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     ///
     /// One means every message is hashed on its own, which is the behaviour of a plain scalar sponge.
     /// A vectorized implementation reports how many independent states its permutation advances at once.
+    ///
     /// Callers read this only to decide whether grouping messages is worth the bookkeeping.
     const LANES: usize = 1;
 
@@ -72,6 +73,7 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     /// An override exists purely to exploit vector hardware and must return the very same digests.
     ///
     /// # Panics
+    ///
     /// Panics if the input length is not a whole multiple of the number of requested digests.
     fn hash_many(&self, input: &[Item], out: &mut [Out]) {
         // No digests requested means there is nothing to read from the input.
