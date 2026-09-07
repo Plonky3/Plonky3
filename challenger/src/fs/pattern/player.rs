@@ -79,6 +79,14 @@ impl PatternPlayer {
         self.finalized
     }
 
+    /// The step awaiting playback, or nothing once the cursor has run past the end.
+    ///
+    /// A driver holding an untrusted count checks it against this before absorbing.
+    #[must_use]
+    pub fn next_interaction(&self) -> Option<&Interaction> {
+        self.pattern.interactions().get(self.position)
+    }
+
     /// Confirm that every recorded step has been replayed.
     ///
     /// Takes `&mut self` so an owner can finalise in place.

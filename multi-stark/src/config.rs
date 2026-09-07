@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_commit::MultilinearPcs;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, PrimeField64};
 use p3_sumcheck::layout::Table;
 
 /// The wiring a multilinear AIR proof depends on.
@@ -13,7 +13,11 @@ use p3_sumcheck::layout::Table;
 /// The prover and verifier are generic over any implementation.
 pub trait MultiStarkConfig {
     /// Base field the trace and committed columns live in.
-    type Val: Field;
+    ///
+    /// The transcript packs its seed bytes into base-field elements.
+    /// The modulus therefore has to fit in 64 bits.
+    /// Every field a grinding challenger works over already does.
+    type Val: PrimeField64;
 
     /// Extension field that challenges are drawn from.
     ///

@@ -132,6 +132,16 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         result
     }
 
+    /// Release the completeness check because the proof is being rejected.
+    ///
+    /// A driver that bails part-way through calls this before returning its error.
+    ///
+    /// Dropping an unfinished driver otherwise panics.
+    /// That panic would land on top of an error already travelling to the caller.
+    pub fn abort(&mut self) {
+        self.player.abort();
+    }
+
     /// Take `n` raw bytes from the wire cursor, or fail if out of bounds.
     ///
     /// The bound is computed with `checked_add` so the arithmetic is total.
@@ -168,6 +178,129 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         // Absorb so future samples depend on the prover's salt.
         U::observe_bytes(&mut self.challenger, bytes);
         Ok(bytes)
+    }
+
+    /// Replay an extension-field message the caller carries itself.
+    ///
+    /// # Overview
+    ///
+    /// A reading method takes the next value off the wire this driver consumes.
+    /// An observing method takes it from the caller instead.
+    /// Both bind the value into the sponge the same way.
+    ///
+    /// # When to use this
+    ///
+    /// A protocol whose proof is its own type has already deserialised the value.
+    /// The prover must have used the matching observing method.
+    ///
+    /// # Trust
+    ///
+    /// The value is prover-chosen, so it is untrusted.
+    /// Binding it stops the prover choosing it after seeing the next challenge.
+    pub fn observe_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
+    where
+        F: PrimeField64,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        // Validate: the next pattern step is a scalar message of extension type.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Scalar,
+        ));
+        // Sponge only: the value came from the caller's own proof type.
+        ExtensionFieldCodec::<F, EF, Cdc>::observe(&mut self.challenger, value);
+        TranscriptBound::wrap(*value)
+    }
+
+    /// Replay a fixed-length list of extension-field messages the caller carries itself.
+    ///
+    /// The count travels inside the caller's own proof type, not on the wire.
+    ///
+    /// It is therefore attacker-controlled, and it is compared against the
+    /// recorded shape before any value is absorbed.
+    ///
+    /// # Errors
+    ///
+    /// When the count differs from the recorded one.
+    pub fn observe_extensions<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        values: &[EF],
+    ) -> Result<Vec<TranscriptBound<EF>>, TranscriptError>
+    where
+        F: PrimeField64,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        // The recorded count is the only one this step accepts.
+        //
+        //     recorded step: Fixed(3)
+        //     supplied:      4        -> rejected, nothing absorbed
+        //
+        // A recorded step of some other shape falls through to the player below.
+        // Reaching it means the driver called the wrong method, which is a bug.
+        if let Some(Length::Fixed(expected)) =
+            self.player.next_interaction().map(Interaction::length)
+            && expected != values.len()
+        {
+            return self.poison(Err(TranscriptError::BadProofShape {
+                reason: "list length differs from the recorded shape",
+            }));
+        }
+
+        // Validate: the next pattern step is a fixed-length list of extension messages.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Fixed(values.len()),
+        ));
+
+        // Absorb in order and hand back one binding witness per value.
+        Ok(values
+            .iter()
+            .map(|v| {
+                ExtensionFieldCodec::<F, EF, Cdc>::observe(&mut self.challenger, v);
+                TranscriptBound::wrap(*v)
+            })
+            .collect())
+    }
+
+    /// Replay a proof-of-work step whose witness the caller carries itself.
+    ///
+    /// # Errors
+    ///
+    /// When the witness does not produce the required number of zero bits.
+    pub fn observe_pow(
+        &mut self,
+        label: Label,
+        bits: usize,
+        witness: C::Witness,
+    ) -> Result<(), TranscriptError>
+    where
+        C: GrindingChallenger,
+        <C as GrindingChallenger>::Witness: PrimeField64,
+    {
+        // Validate: the next pattern step is a proof-of-work step of this difficulty.
+        self.player
+            .interact(Interaction::algebra::<C::Witness, C::Witness>(
+                Hierarchy::Atomic,
+                Kind::Pow,
+                label,
+                Length::Fixed(bits),
+            ));
+        // Checking absorbs the witness, which is what keeps both sponges aligned.
+        if !self.challenger.check_witness(bits, witness) {
+            // Release the drop-time check so the rejection reaches the caller.
+            self.player.abort();
+            return Err(TranscriptError::BadProofShape {
+                reason: "pow witness does not produce enough zero bits",
+            });
+        }
+        Ok(())
     }
 
     /// Replay a public-scalar step by absorbing the caller-supplied value.
@@ -614,6 +747,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
     use p3_keccak::Keccak256Hash;
 
     use super::*;
@@ -624,6 +758,8 @@ mod tests {
 
     /// Concrete field exercised in this module's tests.
     type F = BabyBear;
+    /// Degree-four extension used where a step carries extension elements.
+    type EF4 = BinomialExtensionField<F, 4>;
     /// Byte codec used throughout this module.
     type ByteCodec = BytesToFieldCodec<F>;
 
@@ -648,6 +784,39 @@ mod tests {
             Length::Scalar,
         )])
         .unwrap()
+    }
+
+    #[test]
+    fn observe_extensions_rejects_a_count_the_pattern_never_described() {
+        // The step is described as carrying exactly three extension elements.
+        //
+        //     described:    Fixed(3)
+        //     driver hands: 4        -> rejected before anything is absorbed
+        let pattern = InteractionPattern::new(vec![Interaction::algebra::<F, EF4>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            "polys",
+            Length::Fixed(3),
+        )])
+        .unwrap();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"count", pattern);
+
+        // These values ride inside the caller's proof type, so the wire is empty.
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &[]);
+        let values = [EF4::ONE; 4];
+        let err = v
+            .observe_extensions::<F, EF4, ByteCodec>("polys", &values)
+            .expect_err("a count outside the described shape must error");
+        assert_eq!(
+            err,
+            TranscriptError::BadProofShape {
+                reason: "list length differs from the recorded shape",
+            }
+        );
+
+        // The rejection must be the only failure this scope produces.
+        // A drop-time panic on top of it would take the process down instead.
+        drop(v);
     }
 
     #[test]

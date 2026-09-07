@@ -313,6 +313,77 @@ impl<C, U: Unit> ProverState<C, U> {
         TranscriptBound::wrap(*value)
     }
 
+    /// Absorb one extension-field message the caller carries itself.
+    ///
+    /// # Overview
+    ///
+    /// An adding method writes its value into the proof bytes this driver builds.
+    /// An observing method does not.
+    /// Both bind the value into the sponge the same way.
+    ///
+    /// # When to use this
+    ///
+    /// A protocol whose proof is its own type already carries the value.
+    /// Writing it again here would ship it twice.
+    ///
+    /// # Wire accounting
+    ///
+    /// Nothing is written, so nothing is read on the other side.
+    ///
+    /// A prover that writes where its verifier observes leaves unread bytes.
+    /// Finalisation rejects those.
+    /// The reverse runs the verifier past the end, which fails too.
+    ///
+    /// So the two sides cannot silently disagree about who carries a value.
+    pub fn observe_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
+    where
+        F: PrimeField64,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        // Validate: the next pattern step is a scalar message of extension type.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Scalar,
+        ));
+        // Sponge only: the caller's own proof type carries the value.
+        ExtensionFieldCodec::<F, EF, Cdc>::observe(&mut self.challenger, value);
+        TranscriptBound::wrap(*value)
+    }
+
+    /// Absorb a fixed-length list of extension-field messages the caller carries itself.
+    ///
+    /// The whole list is one step.
+    /// Its length comes from the recorded shape, never from the data.
+    pub fn observe_extensions<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        values: &[EF],
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: PrimeField64,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        // Validate: the next pattern step is a fixed-length list of extension messages.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Fixed(values.len()),
+        ));
+        // Absorb in order and hand back one binding witness per value.
+        values
+            .iter()
+            .map(|v| {
+                ExtensionFieldCodec::<F, EF, Cdc>::observe(&mut self.challenger, v);
+                TranscriptBound::wrap(*v)
+            })
+            .collect()
+    }
+
     /// Absorb a fixed-length byte string as a prover message.
     ///
     /// The dominant prover message in this repository is a digest.
@@ -508,6 +579,31 @@ impl<C, U: Unit> ProverState<C, U> {
         let witness = self.challenger.grind(bits);
         // Serialize as canonical big-endian, left-padded so width is constant.
         encode_field_be(&witness, &mut self.narg);
+    }
+
+    /// Run a proof-of-work step and hand the witness back to the caller.
+    ///
+    /// The difficulty is recorded exactly as for a wire-carried step.
+    /// A verifier expecting a cheaper grind therefore fails the shape check.
+    ///
+    /// # Returns
+    ///
+    /// The witness the search found, for the caller to store in its own proof.
+    pub fn observe_pow(&mut self, label: Label, bits: usize) -> C::Witness
+    where
+        C: GrindingChallenger,
+        <C as GrindingChallenger>::Witness: PrimeField64,
+    {
+        // Validate: the next pattern step is a proof-of-work step of this difficulty.
+        self.player
+            .interact(Interaction::algebra::<C::Witness, C::Witness>(
+                Hierarchy::Atomic,
+                Kind::Pow,
+                label,
+                Length::Fixed(bits),
+            ));
+        // Grinding absorbs the winning witness, which is what advances the sponge.
+        self.challenger.grind(bits)
     }
 
     /// Open a sub-protocol marker of the given kind in the recorded pattern.
