@@ -21,12 +21,14 @@
 //! are adjacent rows in memory.
 //!
 //! Each output symbol costs two field multiplications.
-//! In the tower basis one multiplication is a polynomial-basis multiplication wrapped in a
-//! change of basis on each operand and a change back on the result.
+//!
+//! In the tower basis a multiplication is a polynomial-basis multiplication between two changes
+//! of basis on the operands and one back on the result.
 //! Each change of basis is sixteen dependent byte-table lookups, so the wrapper dominates.
-//! Folding a whole codeword therefore crosses into the polynomial basis once per loaded symbol,
-//! multiplies there with the widest carryless-multiply register the target offers, and crosses
-//! back once per produced symbol.
+//!
+//! The fold therefore crosses into the polynomial basis once per loaded symbol and back once per
+//! produced symbol, multiplying in between with the widest carryless-multiply register available.
+//!
 //! Input and output stay in the tower basis, so the folded codeword is unchanged bit for bit.
 
 use alloc::vec::Vec;
@@ -47,12 +49,15 @@ const WIDTH: usize = Packed::WIDTH;
 
 /// Output symbols one parallel task owns.
 ///
-/// Large enough that the task-opening domain evaluation is amortised over many folds; small
-/// enough to leave real parallelism at every codeword length this crate exercises.
+/// Large enough that the task-opening domain evaluation is amortised over many folds.
+///
+/// Small enough to leave real parallelism at every codeword length this crate exercises.
 const FOLD_GRAIN: usize = 1 << 10;
 
-// A task's first output index is a multiple of the grain, and the lane-offset identity below
-// needs it to be a multiple of the packing width, so the grain must cover whole packed groups.
+// A task's first output index is a multiple of the grain.
+//
+// The lane-offset identity below needs that index to be a multiple of the packing width, so the
+// grain must cover whole packed groups.
 const _: () = assert!(
     FOLD_GRAIN.is_multiple_of(WIDTH),
     "the fold grain must be a whole number of packed groups"
@@ -92,6 +97,7 @@ pub fn fold_pair(
 ///
 /// It is not additive over integer addition, because a carry moves a bit to a place the sum of
 /// the two basis vectors never reaches.
+///
 /// Carries are absent exactly when the two bit patterns are disjoint, and then addition and
 /// exclusive-or agree:
 ///
@@ -101,7 +107,9 @@ pub fn fold_pair(
 ///
 /// A packed group's first output index `g` is a multiple of the width, which is a power of two,
 /// so every bit of `g` below `log2(width)` is clear.
+///
 /// A lane index `k` is below the width, so every bit it sets is below `log2(width)`.
+///
 /// The two patterns are therefore disjoint, and doubling shifts both up one place without
 /// disturbing that:
 ///
@@ -188,8 +196,10 @@ fn fold_task(
     // Phase 2: fewer output slots left than one packed group holds.
     //
     // A task's slot count is either a whole grain or the whole codeword's pair count.
+    //
     // The grain covers whole groups, and a power-of-two pair count is a multiple of the width
     // unless it is below it, so this runs only for a codeword with fewer pairs than the width.
+    //
     // Each leftover evaluates its own domain point, so it rests on no group alignment at all.
     //
     // Twice as many symbols are left as slots, so the leftovers pair up exactly and the
@@ -209,9 +219,11 @@ fn fold_task(
 ///
 /// Each parallel task owns a contiguous run of output symbols and the pairs feeding them, so no
 /// two tasks touch the same symbol on either side.
-/// Within a task one domain evaluation serves a whole packed group: the per-call evaluation
-/// `fold_pair` does is the right form for one query's verifier-side check, but here the same
-/// value would otherwise be recomputed once per output symbol of the whole codeword.
+///
+/// Within a task one domain evaluation serves a whole packed group.
+///
+/// Evaluating per symbol instead is the right shape for a single query, but over a whole
+/// codeword it would recompute that value once per output symbol.
 ///
 /// # Panics
 ///
@@ -282,8 +294,10 @@ mod tests {
     /// `(j + 1).trailing_zeros()`.
     ///
     /// The domain map is `F_2`-linear, and `j XOR (j + 1)` sets exactly the trailing ones of
-    /// `j` together with the first zero bit above them. So consecutive doubled domain points
-    /// differ by the sum of Cantor basis vectors `1` through `level + 1`.
+    /// `j` together with the first zero bit above them.
+    ///
+    /// Consecutive doubled domain points therefore differ by the sum of Cantor basis vectors
+    /// `1` through `level + 1`.
     fn gray_chain_steps(num_pairs: usize) -> Vec<BinaryField128> {
         let levels = num_pairs.next_power_of_two().trailing_zeros() as usize;
         let mut steps = Vec::with_capacity(levels);
@@ -479,10 +493,13 @@ mod tests {
 
     #[test]
     fn the_pair_form_agrees_with_the_vector_form() {
-        // The whole-codeword form must agree with the independent per-pair computation at every
-        // position, including across a task boundary: 4096 codeword symbols is 2048 pairs, past
-        // the 1024-symbol grain, so this covers two full parallel tasks and exercises the
-        // per-task index base that a single-task codeword leaves silent.
+        // Invariant: the whole-codeword form agrees with the independent per-pair computation
+        // at every position, including across a task boundary.
+        //
+        // Fixture state: 4096 symbols is 2048 pairs, past the 1024-symbol grain.
+        //
+        // So this spans two full parallel tasks and exercises the per-task index base that a
+        // single-task codeword leaves silent.
         let mut rng = SmallRng::seed_from_u64(0x9E37_79B9_7F4A_7C15);
         let codeword: Vec<BinaryField128> = (0..4096).map(|_| rng.random()).collect();
         let beta: BinaryField128 = rng.random();
