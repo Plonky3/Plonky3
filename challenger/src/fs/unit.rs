@@ -10,12 +10,12 @@
 //!
 //! That single hook is what lets one driver run over both families of challenger.
 
-use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_field::PrimeField64;
 
 use crate::CanObserve;
+use crate::fs::TranscriptField;
 
 /// Alphabet of a sponge, together with the rule for absorbing a raw byte string into it.
 pub trait Unit {
@@ -38,7 +38,7 @@ impl Unit for u8 {
     }
 }
 
-/// Alphabet of a sponge that speaks the prime field `F` natively.
+/// Alphabet of a sponge that speaks the field `F` natively.
 ///
 /// Used as the `U` parameter of a transcript driven by `DuplexChallenger` or
 /// `SerializingChallenger32/64`.
@@ -62,45 +62,18 @@ impl<F: PrimeField64> FieldUnit<F> {
     }
 }
 
-impl<F: PrimeField64> Unit for FieldUnit<F> {
+impl<F: TranscriptField> Unit for FieldUnit<F> {
     type Item = F;
 
-    /// Absorb `bytes` as `[len] ++ [chunk_0, chunk_1, ...]`.
-    ///
-    /// Each chunk is `bytes_per_element()` bytes read little-endian, the last one zero-padded.
-    ///
-    /// The leading length element makes the encoding injective:
-    /// padding is only ambiguous without it.
-    ///
-    /// # Panics
-    ///
-    /// When `bytes.len()` does not fit in `F`.
     fn observe_bytes<C: CanObserve<F>>(challenger: &mut C, bytes: &[u8]) {
-        let chunk = Self::bytes_per_element();
-        // Length below the modulus keeps the length element itself injective.
-        assert!(
-            (bytes.len() as u128) < F::ORDER_U64 as u128,
-            "byte string of {} bytes does not fit in one field element",
-            bytes.len(),
-        );
-        // One element for the length, then one per chunk.
-        let mut packed: Vec<F> = Vec::with_capacity(1 + bytes.len().div_ceil(chunk));
-        packed.push(F::from_u64(bytes.len() as u64));
-        for window in bytes.chunks(chunk) {
-            // Little-endian fold of at most `chunk` bytes: value < 2^(8*chunk) < p.
-            let mut acc = 0u64;
-            for (i, &b) in window.iter().enumerate() {
-                acc |= (b as u64) << (8 * i);
-            }
-            packed.push(F::from_u64(acc));
-        }
-        challenger.observe_slice(&packed);
+        F::observe_seed(challenger, bytes);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;

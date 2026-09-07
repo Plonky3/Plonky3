@@ -2,8 +2,9 @@
 
 use alloc::vec::Vec;
 
+use p3_challenger::fs::TranscriptField;
 use p3_commit::MultilinearPcs;
-use p3_field::{ExtensionField, PrimeField64};
+use p3_field::ExtensionField;
 use p3_sumcheck::layout::Table;
 
 /// The wiring a multilinear AIR proof depends on.
@@ -14,10 +15,9 @@ use p3_sumcheck::layout::Table;
 pub trait MultiStarkConfig {
     /// Base field the trace and committed columns live in.
     ///
-    /// The transcript packs its seed bytes into base-field elements.
-    /// The modulus therefore has to fit in 64 bits.
-    /// Every field a grinding challenger works over already does.
-    type Val: PrimeField64;
+    /// The transcript requires an injective byte encoding for its domain separator.
+    /// Both supported prime fields and binary tower fields provide one.
+    type Val: TranscriptField;
 
     /// Extension field that challenges are drawn from.
     ///

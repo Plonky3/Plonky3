@@ -14,7 +14,9 @@
 use core::any::type_name;
 use core::fmt::{Display, Formatter};
 
-use p3_field::{BasedVectorSpace, PrimeField64};
+use p3_field::BasedVectorSpace;
+
+use crate::fs::TranscriptField;
 
 /// Position of a step in the hierarchical structure of a transcript.
 ///
@@ -111,6 +113,16 @@ pub enum TypeTag {
         /// Number of base-field coefficients per value.
         degree: usize,
     },
+    /// Coefficients in the recursively defined Wiedemann binary tower basis.
+    ///
+    /// Distinct from an algebra over `GF(2)`: each coefficient is one whole tower
+    /// element, with its own fixed-width encoding and native challenge sampling.
+    BinaryTower {
+        /// Number of bits in each tower-field coefficient.
+        bits: usize,
+        /// Number of tower-field coefficients per value.
+        degree: usize,
+    },
 }
 
 /// Compile-time identifier of a step.
@@ -138,7 +150,7 @@ pub struct Interaction {
 }
 
 impl Interaction {
-    /// Build a step carrying `A` values, where `A` is an algebra over the prime field `F`.
+    /// Build a step carrying `A` values, where `A` is an algebra over the field `F`.
     ///
     /// A base-field step is the `A = F` case, which has degree 1.
     ///
@@ -151,18 +163,15 @@ impl Interaction {
     #[must_use]
     pub fn algebra<F, A>(hierarchy: Hierarchy, kind: Kind, label: Label, length: Length) -> Self
     where
-        F: PrimeField64,
+        F: TranscriptField,
         A: BasedVectorSpace<F>,
     {
         Self {
             hierarchy,
             kind,
             label,
-            // Modulus plus degree pins the element width across compilers and crates.
-            type_tag: TypeTag::Algebra {
-                modulus: F::ORDER_U64,
-                degree: A::DIMENSION,
-            },
+            // Stable field identity plus degree binds the coefficient representation.
+            type_tag: F::algebra_tag(A::DIMENSION),
             type_name: type_name::<A>(),
             length,
         }
@@ -316,6 +325,7 @@ impl Display for TypeTag {
             Self::Marker => write!(f, "Marker"),
             Self::Bytes => write!(f, "Bytes"),
             Self::Algebra { modulus, degree } => write!(f, "Algebra({modulus}^{degree})"),
+            Self::BinaryTower { bits, degree } => write!(f, "BinaryTower({bits}^{degree})"),
         }
     }
 }
@@ -325,6 +335,7 @@ mod tests {
     use alloc::format;
 
     use p3_baby_bear::BabyBear;
+    use p3_field::PrimeField64;
     use p3_field::extension::BinomialExtensionField;
     use p3_goldilocks::Goldilocks;
     use p3_koala_bear::KoalaBear;
