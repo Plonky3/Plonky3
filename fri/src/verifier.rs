@@ -49,6 +49,21 @@ where
     /// - At least one query is required for the protocol to prove anything.
     #[error("FRI instance has zero queries; at least one is required for soundness")]
     ZeroQueries,
+    /// The instance commits to no matrices.
+    ///
+    /// - Every derived quantity comes from the committed heights.
+    /// - With none, each guard would compare against nothing and pass.
+    #[error("FRI instance commits to no matrices; at least one is required")]
+    NoCommittedMatrices,
+    /// The folding cap exceeds what this verifier can fold.
+    ///
+    /// Circle FRI folds two points at a time and nothing else.
+    /// A larger cap would let a proof declare an arity its fold cannot apply.
+    #[error("folding cap 2^{max_log_arity} exceeds the supported arity 2")]
+    UnsupportedFoldingCap {
+        /// The configured cap, in log form.
+        max_log_arity: usize,
+    },
     #[error("missing initial reduced opening at log height {expected}")]
     MissingInitialReducedOpening { expected: usize },
     #[error("initial reduced opening height mismatch: expected {expected}, got {got}")]
@@ -211,6 +226,17 @@ where
         return Err(FriError::ZeroQueries);
     }
 
+    // Reject an instance with nothing committed.
+    //
+    // Every derived quantity below comes from the committed heights.
+    // With none, each guard would compare against nothing and pass.
+    if commitments_with_opening_points
+        .iter()
+        .all(|(_, mats)| mats.is_empty())
+    {
+        return Err(FriError::NoCommittedMatrices);
+    }
+
     // Generate the Batch combination challenge
     // Soundness Error: `|f|/|EF|` where `|f|` is the number of different functions of the form
     // `(f(zeta) - fi(x))/(zeta - x)` which need to be checked.
@@ -273,23 +299,28 @@ where
         });
     }
 
-    // Cross-check: the global log-height has two independent derivations which must agree.
-    // Ref: Ben-Sasson et al., "Fast RS IOPP", ICALP 2018, §2.1.1.
+    // Heights of the folding inputs, derived once and used by both guards below.
     //
-    //     H_in   = max committed log_2(domain.size) + log_blowup
-    //     H_fold = sum(per-round log-arities) + log_blowup + log_final_poly_len
-    let expected_log_global_max_height = commitments_with_opening_points
+    // Folding sees one input per distinct height, tallest first.
+    let mut input_log_heights: Vec<usize> = commitments_with_opening_points
         .iter()
         .flat_map(|(_, mats)| {
             mats.iter()
                 .map(|(domain, _)| log2_strict_usize(domain.size()) + params.log_blowup)
         })
-        .max();
-    if let Some(expected) = expected_log_global_max_height
-        && log_global_max_height != expected
-    {
+        .collect();
+    input_log_heights.sort_unstable_by(|a, b| b.cmp(a));
+    input_log_heights.dedup();
+
+    // Cross-check: the global log-height has two independent derivations which must agree.
+    // Ref: Ben-Sasson et al., "Fast RS IOPP", ICALP 2018, §2.1.1.
+    //
+    //     H_in   = max committed log_2(domain.size) + log_blowup
+    //     H_fold = sum(per-round log-arities) + log_blowup + log_final_poly_len
+    let expected_log_global_max_height = input_log_heights[0];
+    if log_global_max_height != expected_log_global_max_height {
         return Err(FriError::GlobalMaxHeightMismatch {
-            expected,
+            expected: expected_log_global_max_height,
             got: log_global_max_height,
         });
     }
@@ -298,29 +329,16 @@ where
     //
     // The cross-check above constrains only the sum.
     // Two schedules summing alike would both pass it.
-    let mut input_log_heights: Vec<usize> = commitments_with_opening_points
-        .iter()
-        .flat_map(|(_, mats)| {
-            mats.iter()
-                .map(|(domain, _)| log2_strict_usize(domain.size()) + params.log_blowup)
-        })
-        .collect();
-    // Folding sees one input per distinct height, tallest first.
-    input_log_heights.sort_unstable_by(|a, b| b.cmp(a));
-    input_log_heights.dedup();
-
-    if !input_log_heights.is_empty() {
-        let expected_schedule = fold_schedule(
-            &input_log_heights,
-            params.log_blowup + params.log_final_poly_len,
-            params.max_log_arity,
-        );
-        if expected_schedule != log_arities {
-            return Err(FriError::FoldScheduleMismatch {
-                expected: expected_schedule,
-                got: log_arities,
-            });
-        }
+    let expected_schedule = fold_schedule(
+        &input_log_heights,
+        params.log_blowup + params.log_final_poly_len,
+        params.max_log_arity,
+    );
+    if expected_schedule != log_arities {
+        return Err(FriError::FoldScheduleMismatch {
+            expected: expected_schedule,
+            got: log_arities,
+        });
     }
 
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
@@ -1525,21 +1543,21 @@ mod tests {
     }
 
     #[test]
-    fn missing_initial_reduced_opening() {
+    fn instance_with_nothing_committed_rejected() {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
-        // The QUERY phase fold chain needs a seed: the combined evaluation
-        // of all input polynomials at the queried index. It must live at
-        // the maximum domain height. No committed polynomials → no seed.
+        // Invariant: an instance that commits to nothing proves nothing.
         //
-        // Fixture state: 1 committed polynomial → 1 seed expected.
+        // Every derived guard compares against the committed heights.
+        // With none, each would compare against nothing and pass.
         //
-        // Mutation: clear input openings + external commitment data → no seed.
+        // Fixture state: 1 committed polynomial.
+        //
+        // Mutation: clear input openings and commitment data.
         //
         //     input openings:    []   (was [batch_0])
         //     commitment data:   []   (was [(commit, mats)])
-        //     → reduced openings = [] → fold chain has no starting value
         proof.input_openings = vec![];
         let empty_cwop: Vec<
             CommitmentWithOpeningPoints<
@@ -1559,10 +1577,10 @@ mod tests {
         )
         .expect_err("should reject proof with no committed polynomials");
 
-        match err {
-            FriError::MissingInitialReducedOpening { .. } => {}
-            other => panic!("wrong error variant: {other:?}"),
-        }
+        assert!(
+            matches!(err, FriError::NoCommittedMatrices),
+            "wrong error variant: {err:?}"
+        );
     }
 
     #[test]
@@ -1638,6 +1656,147 @@ mod tests {
             }
             other => panic!("wrong error variant: {other:?}"),
         }
+    }
+
+    /// Build a fixture whose proof folded on `forged` instead of the derived schedule.
+    ///
+    /// Every commitment, sibling row and opening proof agrees with `forged`.
+    /// That is what a malicious prover would emit, not a field tamper.
+    fn make_forged_schedule_fixture(
+        num_queries: usize,
+        max_log_arity: usize,
+        log_degree: usize,
+        forged: Vec<usize>,
+    ) -> TestFixture {
+        let mut rng = SmallRng::seed_from_u64(42);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+
+        let input_mmcs = ValMmcs::new(hash.clone(), compress.clone(), 0);
+        let challenge_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress, 0));
+
+        let fri_params = FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity,
+            num_queries,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: challenge_mmcs,
+        };
+
+        // The seam that makes this proof forged rather than merely tampered.
+        let mut pcs =
+            TwoAdicFriPcs::new(Radix2Dit::default(), input_mmcs.clone(), fri_params.clone());
+        pcs.forged_fold_schedule = Some(forged);
+
+        let width = 2;
+        let domain = <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
+            Challenge,
+            Challenger,
+        >>::natural_domain_for_degree(&pcs, 1 << log_degree);
+        let trace = RowMajorMatrix::<Val>::rand_nonzero(&mut rng, 1 << log_degree, width);
+
+        let (commitment, prover_data) =
+            <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
+                Challenge,
+                Challenger,
+            >>::commit(&pcs, [(domain, trace)]);
+
+        let mut p_challenger = Challenger::new(perm.clone());
+        p_challenger.observe(&commitment);
+        let zeta: Challenge = p_challenger.sample_algebra_element();
+        let (opened_values, proof) =
+            pcs.open(vec![(&prover_data, vec![vec![zeta]])], &mut p_challenger);
+
+        let mut v_challenger = Challenger::new(perm);
+        v_challenger.observe(&commitment);
+        let _: Challenge = v_challenger.sample_algebra_element();
+
+        let cwop = vec![(
+            commitment,
+            vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
+        )];
+        for (_, round) in &cwop {
+            for (_, mat) in round {
+                for (_, point) in mat {
+                    v_challenger.observe_algebra_slice(point);
+                }
+            }
+        }
+
+        TestFixture {
+            fri_params,
+            input_mmcs,
+            proof,
+            challenger: v_challenger,
+            commitments_with_opening_points: cwop,
+        }
+    }
+
+    #[test]
+    fn forged_fold_schedule_rejected() {
+        // Invariant: a proof that folded on an underived schedule is rejected.
+        //
+        // This is the regression the derivation closes.
+        // Every part of the proof agrees with the forged schedule.
+        // No other guard has anything to catch.
+        //
+        // Fixture state: one input at log height 5, final height 1, cap 3.
+        //
+        //     derived:  [3, 1]   folds 5 -> 2 -> 1
+        //     forged:   [1, 3]   folds 5 -> 4 -> 1
+        //
+        // Both fold the same total distance, so the height cross-check agrees.
+        let f = make_forged_schedule_fixture(2, 3, 4, vec![1, 3]);
+
+        let forged: Vec<usize> = f
+            .proof
+            .commit_phase_openings
+            .iter()
+            .map(|opening| opening.log_arity as usize)
+            .collect();
+        assert_eq!(
+            forged,
+            vec![1, 3],
+            "the prover must have folded on the forgery"
+        );
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("a forged fold schedule must be rejected");
+
+        match err {
+            FriError::FoldScheduleMismatch { expected, got } => {
+                assert_eq!(expected, vec![3, 1]);
+                assert_eq!(got, vec![1, 3]);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn honest_high_arity_proof_accepted() {
+        // Invariant: the derivation accepts what an honest prover folds.
+        //
+        // Guards the forgery test above from passing for the wrong reason.
+        let f = make_test_fixture_with(2, 3, 4);
+        let mut challenger = f.challenger.clone();
+        run_verify_fri(
+            &f.fri_params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect("an honest non-uniform schedule must verify");
     }
 
     #[test]
@@ -1809,14 +1968,12 @@ mod tests {
         // Invariant: the global height cannot exceed the field two-adicity.
         // The final-poly point is a 2^height-th root of unity, absent past that.
         //
-        // With no input commitments the cross-check is skipped.
-        // A malicious proof could then inflate the fold schedule without bound.
-        // The dedicated guard must reject it instead of panicking in the generator.
+        // A malicious proof can inflate the fold schedule without bound.
+        // This guard runs before the height is used, so it rejects rather than panics.
         //
         // Fixture state: 3 rounds of arity 1.
         //
-        // Mutation: clone rounds until the schedule passes the two-adicity, then
-        // verify against an empty commitment set so only the guard stands.
+        // Mutation: clone rounds until the schedule passes the two-adicity.
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
@@ -1833,9 +1990,15 @@ mod tests {
         }
 
         let mut challenger = f.challenger.clone();
-        // Empty commitments: the cross-check is skipped, leaving only the guard.
-        let err = run_verify_fri(&f.fri_params, &proof, &mut challenger, &[], &f.input_mmcs)
-            .expect_err("height above two-adicity must be rejected");
+        // The inflated sum trips this guard before the height cross-check sees it.
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("height above two-adicity must be rejected");
 
         match err {
             FriError::GlobalMaxHeightTooLarge {

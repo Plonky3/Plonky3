@@ -50,6 +50,13 @@ pub struct TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
     pub(crate) dft: Dft,
     pub(crate) mmcs: InputMmcs,
     pub(crate) fri: FriParameters<FriMmcs>,
+    /// Folding schedule to use instead of the derived one.
+    ///
+    /// Only a test sets this.
+    /// It lets a test forge a schedule the verifier will not derive.
+    /// Every commitment and opening then agrees with the forgery.
+    #[cfg(test)]
+    pub(crate) forged_fold_schedule: Option<Vec<usize>>,
     _phantom: PhantomData<Val>,
 }
 
@@ -59,6 +66,8 @@ impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
             dft,
             mmcs,
             fri,
+            #[cfg(test)]
+            forged_fold_schedule: None,
             _phantom: PhantomData,
         }
     }
@@ -684,6 +693,18 @@ where
         let folding: TwoAdicFriFoldingForMmcs<Val, InputMmcs> = TwoAdicFriFolding(PhantomData);
 
         // Produce the FRI proof.
+        #[cfg(test)]
+        let fri_proof = prover::prove_fri_with_schedule(
+            &folding,
+            &self.fri,
+            fri_input,
+            challenger,
+            log_global_max_height,
+            &commitment_data_with_opening_points,
+            &self.mmcs,
+            self.forged_fold_schedule.clone(),
+        );
+        #[cfg(not(test))]
         let fri_proof = prover::prove_fri(
             &folding,
             &self.fri,
