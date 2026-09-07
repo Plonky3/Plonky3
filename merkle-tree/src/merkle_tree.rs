@@ -243,6 +243,61 @@ pub(crate) fn select_arity_step<const N: usize>(
     if has_intermediate { 2 } else { N }
 }
 
+/// Allocate a digest layer of `len` slots, every slot set to the default digest.
+///
+/// Every slot of a layer is overwritten by the level that produces it, apart from a short
+/// padding tail, so the fill is pure overhead and worth getting for free from the allocator.
+///
+/// A zero-filled allocation is free: the operating system hands back pages that are already
+/// zero and only faults them in when the hashing threads write them.
+/// The standard vector constructor reaches that path only when it can see at run time that the
+/// element is all zero bits, and it deliberately gives up on that check for arrays longer than
+/// sixteen elements, which is exactly the shape of a thirty-two-byte digest.
+///
+/// Building the layer as one flat run of digest words restores the check, because a word is a
+/// primitive the constructor still inspects.
+/// The flat run and the run of digests have the very same allocation layout, so viewing one as
+/// the other costs nothing:
+///
+/// ```text
+///     flat:    [ w_0 w_1 ... w_{D-1} | w_D ... w_{2D-1} | ... ]   len * D words
+///     digests: [       digest_0      |     digest_1     | ... ]   len digests
+/// ```
+///
+/// # Panics
+/// Panics if the layer is too large for the address space.
+fn default_digest_layer<W, const DIGEST_ELEMS: usize>(len: usize) -> Vec<[W; DIGEST_ELEMS]>
+where
+    W: Copy + Default,
+{
+    // A layer with no slots, or a digest of no words, owns no allocation worth reinterpreting.
+    if len == 0 || DIGEST_ELEMS == 0 {
+        return vec![[W::default(); DIGEST_ELEMS]; len];
+    }
+
+    // Guard the multiply so a wrapped word count can never under-allocate the layer.
+    let words = len
+        .checked_mul(DIGEST_ELEMS)
+        .expect("digest layer length overflows");
+
+    let mut flat: Vec<W> = vec![W::default(); words];
+
+    // A vector may reserve more than requested, and only an exact allocation converts.
+    if flat.capacity() != words {
+        return vec![[W::default(); DIGEST_ELEMS]; len];
+    }
+
+    let ptr = flat.as_mut_ptr().cast::<[W; DIGEST_ELEMS]>();
+    core::mem::forget(flat);
+
+    // SAFETY: an array of `DIGEST_ELEMS` words has no padding, so `len` digests occupy exactly
+    // the `len * DIGEST_ELEMS` words allocated above, with the same alignment as one word.
+    // The requested length equals the reserved capacity, so the layout handed back to the
+    // allocator on drop is byte for byte the layout it handed out.
+    // Every word is initialized, so every digest slot reads as the default digest.
+    unsafe { Vec::from_raw_parts(ptr, len, len) }
+}
+
 /// Output nodes below which a level is hashed on the calling thread.
 ///
 /// A parallel dispatch costs a fixed amount per level, and the levels near the root hold so few
@@ -378,9 +433,9 @@ where
     let max_height = tallest_matrices[0].height();
     let max_height_padded = padded_len(max_height, N);
 
-    // Slots past the real rows exist only so the next level can form whole groups.
-    let default_digest = [W::default(); DIGEST_ELEMS];
-    let mut digests = vec![default_digest; max_height_padded];
+    // Slots past the real rows exist only so the next level can form whole groups, and the
+    // allocation already leaves them at the default digest.
+    let mut digests = default_digest_layer::<W, DIGEST_ELEMS>(max_height_padded);
 
     hash_rows_batched(h, tallest_matrices, 0, &mut digests[..max_height]);
 
@@ -413,8 +468,7 @@ where
     let next_len = prev_layer.len() / N;
     let next_len_padded = padded_len(next_len, N);
 
-    let default_digest = [W::default(); DIGEST_ELEMS];
-    let mut next_digests = vec![default_digest; next_len_padded];
+    let mut next_digests = default_digest_layer::<W, DIGEST_ELEMS>(next_len_padded);
 
     // Any trailing child that cannot complete a group takes no part in this level.
     let (groups, _) = prev_layer[..next_len * N].as_chunks::<N>();
@@ -457,7 +511,7 @@ where
     let next_len_padded = padded_len(raw_next, N);
 
     let default_digest = [W::default(); DIGEST_ELEMS];
-    let mut next_digests = vec![default_digest; next_len_padded];
+    let mut next_digests = default_digest_layer::<W, DIGEST_ELEMS>(next_len_padded);
 
     let (groups, _) = prev_layer[..raw_next * N].as_chunks::<N>();
 
@@ -554,11 +608,9 @@ where
 
     let max_height_padded = padded_len(max_height, N);
 
-    // Prepare a default digest value to fill unused slots or padding.
-    let default_digest = [PW::Value::default(); DIGEST_ELEMS];
-
-    // Allocate the digest vector with padded size, initialized to default digest.
-    let mut digests = vec![default_digest; max_height_padded];
+    // Allocate the digest vector with padded size, every slot at the default digest so the
+    // padding tail past the real rows is already correct.
+    let mut digests = default_digest_layer::<PW::Value, DIGEST_ELEMS>(max_height_padded);
 
     // Parallel loop: process complete batches of `width` rows at a time.
     digests[0..max_height]
@@ -657,7 +709,7 @@ where
     let next_len_padded = padded_len(raw_next, N);
 
     let default_digest = [PW::Value::default(); DIGEST_ELEMS];
-    let mut next_digests = vec![default_digest; next_len_padded];
+    let mut next_digests = default_digest_layer::<PW::Value, DIGEST_ELEMS>(next_len_padded);
 
     let default_packed: [PW; DIGEST_ELEMS] =
         array::from_fn(|_| PW::broadcast(PW::Value::default()));
@@ -794,7 +846,7 @@ where
     let next_len_padded = padded_len(next_len, N);
 
     let default_digest = [P::Value::default(); DIGEST_ELEMS];
-    let mut next_digests = vec![default_digest; next_len_padded];
+    let mut next_digests = default_digest_layer::<P::Value, DIGEST_ELEMS>(next_len_padded);
 
     let default_packed: [P; DIGEST_ELEMS] = array::from_fn(|_| P::broadcast(P::Value::default()));
 
@@ -1010,6 +1062,24 @@ mod tests {
             );
         }
         assert_eq!(batched.root(), unbatched.root());
+    }
+
+    #[test]
+    fn default_digest_layer_is_all_default() {
+        // Byte digests: the word type is a primitive, so the allocation takes the zeroed path
+        // and the reinterpretation back to digests must still read as the default digest.
+        let bytes = default_digest_layer::<u8, 32>(5);
+        assert_eq!(bytes, vec![[0u8; 32]; 5]);
+
+        // A field word type whose default is not a primitive zero follows the plain fill path.
+        let words = default_digest_layer::<F, 8>(3);
+        assert_eq!(words, vec![[F::default(); 8]; 3]);
+
+        // An empty layer is legal: a height-zero tree allocates nothing.
+        assert!(default_digest_layer::<u8, 32>(0).is_empty());
+
+        // A digest width of one exercises the case where a digest is a single word.
+        assert_eq!(default_digest_layer::<u8, 1>(7), vec![[0u8; 1]; 7]);
     }
 
     #[test]
