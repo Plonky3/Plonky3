@@ -176,12 +176,14 @@ impl<F> Poly<F> {
     /// The upper half is dead once that is done.
     /// Dropping it is what takes the arity down by one.
     ///
-    /// This is that second step on its own.
-    /// A caller whose own pass wrote the lower half calls it to finish the binding.
+    /// This is that second step alone, for a pass that wrote the lower half itself.
+    /// On a table nobody bound it silently returns the restriction to the first
+    /// variable at zero, so it is hidden rather than offered.
     ///
     /// # Panics
     ///
     /// Panics if the polynomial is constant.
+    #[doc(hidden)]
     #[inline]
     pub fn truncate_to_half(&mut self) {
         let num_evals = self.num_evals();

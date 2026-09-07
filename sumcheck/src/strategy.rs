@@ -313,15 +313,18 @@ const FUSED_BLOCK_BYTES: usize = 4096;
 
 /// Number of index positions one fused block binds before measuring them.
 ///
-/// Never below the tile width, so a measurement always gets one full tile.
+/// Always a whole number of tiles.
+/// A block that ended mid-tile would send its remainder down the eager per-pair path.
+///
+/// That remainder is paid once per block, not once per table, so it has to be zero.
 #[inline]
 const fn fused_block<A>() -> usize {
-    // Positions that fit the byte budget at this element width.
-    let by_bytes = FUSED_BLOCK_BYTES / core::mem::size_of::<A>();
+    // Whole tiles that fit the byte budget at this element width.
+    let whole_tiles = FUSED_BLOCK_BYTES / core::mem::size_of::<A>() / K * K;
 
     // A wide element can exhaust the budget below one tile.
-    // The tile width wins there.
-    if by_bytes < K { K } else { by_bytes }
+    // One tile is then the floor.
+    if whole_tiles == 0 { K } else { whole_tiles }
 }
 
 /// Binds one face of a table in place.
@@ -389,8 +392,8 @@ where
 ///
 /// # Overview
 ///
-/// The bound tables land in the lower half of each input.
-/// The inputs keep their original length, so the caller drops the upper halves itself.
+/// Both tables come back bound: the lower half holds the bound values, and the
+/// upper half is dropped before returning.
 ///
 /// The message is the one a separate measuring pass over the bound tables returns.
 ///
@@ -438,20 +441,41 @@ where
 /// # Panics
 ///
 /// - The two tables must have the same length.
-/// - The length must be a multiple of four.
+/// - The length must be at least four and a multiple of four.
 ///   The bound table then keeps the variable the message sums over.
 pub fn fold_and_round_coefficients_prefix<A, Ch>(
-    evals: &mut [A],
-    weights: &mut [A],
+    evals: &mut Poly<A>,
+    weights: &mut Poly<A>,
     r: Ch,
 ) -> RoundMessage<A>
 where
     A: Algebra<Ch> + Copy + Send + Sync,
     Ch: Copy + Send + Sync,
 {
+    let message = bind_and_measure(evals.as_mut_slice(), weights.as_mut_slice(), r);
+
+    // The bound values sit in the lower half of each table.
+    evals.truncate_to_half();
+    weights.truncate_to_half();
+
+    message
+}
+
+/// The pass behind the binding above, over the raw tables.
+///
+/// The lower half of each table is left holding the bound values.
+/// Dropping the upper half is the caller's, so the half-done state stays private.
+fn bind_and_measure<A, Ch>(evals: &mut [A], weights: &mut [A], r: Ch) -> RoundMessage<A>
+where
+    A: Algebra<Ch> + Copy + Send + Sync,
+    Ch: Copy + Send + Sync,
+{
     // Precondition: paired tables, with a variable left over for the message.
+    //
+    // Zero is a multiple of four, so an empty pair would otherwise pass here and
+    // return a zero message instead of panicking.
     assert_eq!(evals.len(), weights.len());
-    assert!(evals.len().is_multiple_of(4));
+    assert!(evals.len() >= 4 && evals.len().is_multiple_of(4));
     let evals_len = evals.len();
 
     // Cut each table into the four quadrants of the two variables this pass touches.
@@ -1278,18 +1302,14 @@ mod tests {
                 want_weights.as_slice(),
             );
 
-            // Fused arm: one pass writes the bound tables into the lower halves.
+            // Fused arm: one pass binds both tables and measures the bound pair.
             let mut got_evals = Poly::new(evals);
             let mut got_weights = Poly::new(weights);
             let got = super::fold_and_round_coefficients_prefix(
-                got_evals.as_mut_slice(),
-                got_weights.as_mut_slice(),
+                &mut got_evals,
+                &mut got_weights,
                 r,
             );
-
-            // The fused pass leaves the upper halves in place, so drop them here.
-            got_evals.truncate_to_half();
-            got_weights.truncate_to_half();
 
             // The bound tables must agree entry for entry.
             prop_assert_eq!(got_evals.as_slice(), want_evals.as_slice());
@@ -1299,6 +1319,38 @@ mod tests {
             prop_assert_eq!(got.c_a, want.c_a);
             prop_assert_eq!(got.c_inf, want.c_inf);
         }
+    }
+
+    #[test]
+    fn a_fused_block_is_a_whole_number_of_tiles() {
+        // Invariant: a block never ends mid-tile.
+        //
+        // The measurement splits a block into K-wide tiles and sends the remainder
+        // down the eager per-pair path.
+        // A block remainder would be paid once per block instead of once per table.
+        //
+        // Fixture state: element widths that do and do not divide the byte budget.
+        //
+        //     1 B   -> budget / 1  is already a multiple of K
+        //     320 B -> budget / 320 = 12, which is not
+        //     192 B -> budget / 192 = 21, which is not
+        //     8192B -> budget / 8192 = 0, so the tile width is the floor
+        assert!(super::fused_block::<u8>().is_multiple_of(super::K));
+        assert!(super::fused_block::<[u8; 320]>().is_multiple_of(super::K));
+        assert!(super::fused_block::<[u8; 192]>().is_multiple_of(super::K));
+        assert_eq!(super::fused_block::<[u8; 8192]>(), super::K);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn binding_rejects_a_pair_with_nothing_left_to_measure() {
+        // Invariant: a pair too short to leave a variable is rejected, not measured.
+        //
+        // Two entries bind down to one, and a one-entry table has nothing to sum over.
+        // Producing no tiles and reporting a zero message would look like a real round.
+        let mut evals = Poly::new(vec![EF::ONE; 2]);
+        let mut weights = Poly::new(vec![EF::ONE; 2]);
+        let _ = super::fold_and_round_coefficients_prefix(&mut evals, &mut weights, EF::ONE);
     }
 
     #[test]

@@ -494,15 +494,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
 
         let RoundMessage { c_a, c_inf } = match &mut self.inner {
             MaybePacked::Packed { evals, weights } => {
-                let msg = fold_and_round_coefficients_prefix(
-                    evals.as_mut_slice(),
-                    weights.as_mut_slice(),
-                    r,
-                );
-
-                // The bound table is the lower half of each buffer.
-                evals.truncate_to_half();
-                weights.truncate_to_half();
+                let msg = fold_and_round_coefficients_prefix(evals, weights, r);
 
                 // Horizontal reduction across SIMD lanes, as in the unfused round.
                 RoundMessage {
@@ -510,17 +502,9 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
                     c_inf: EF::ExtensionPacking::to_ext_iter([msg.c_inf]).sum(),
                 }
             }
+            // Scalar storage needs no lane reduction.
             MaybePacked::Unpacked { evals, weights } => {
-                let msg = fold_and_round_coefficients_prefix(
-                    evals.as_mut_slice(),
-                    weights.as_mut_slice(),
-                    r,
-                );
-
-                // Scalar storage needs no lane reduction.
-                evals.truncate_to_half();
-                weights.truncate_to_half();
-                msg
+                fold_and_round_coefficients_prefix(evals, weights, r)
             }
         };
 
