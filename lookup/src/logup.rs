@@ -621,14 +621,19 @@ impl LookupProtocol for LogUpGadget {
         // Used as the per-row delta when building the accumulator.
         let mut row_totals = EF::zero_vec(height);
 
-        // One item writes one chunk of auxiliary rows plus its row totals.
+        // One item is a whole chunk of denominators inverted, not a chunk of writes.
         //
-        // The body also inverts, so charging it by bytes undercharges.
-        // The floor then settles at one chunk per task, where an unfloored loop sits today.
+        // Each denominator costs an amortized inversion and a handful of multiplies, so
+        // the chunk is priced the same way the batch inversion routine prices its own:
+        //
+        //     one inverted element -> five element widths
+        //
+        // That still exceeds the per-task budget, so the floor bottoms at one chunk per
+        // task, which is where an unfloored loop already sits.
         aux_trace
             .par_chunks_mut(CHUNK_SIZE * width)
             .zip(row_totals.par_chunks_mut(CHUNK_SIZE))
-            .with_min_task_bytes(CHUNK_SIZE * (width + 1) * size_of::<EF>())
+            .with_min_task_bytes(5 * CHUNK_SIZE * denoms_per_row * size_of::<EF>())
             .enumerate()
             .for_each(|(chunk_idx, (chunk_aux, chunk_row_totals))| {
                 // Derive the absolute row range for this chunk.
