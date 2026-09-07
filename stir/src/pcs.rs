@@ -1097,10 +1097,14 @@ where
                 .bit_reverse_rows();
         }
         let poly_height = 1usize << group.log_native_heights[idx_in_group];
-        let lde_mat = lde.bit_reverse_rows().to_row_major_matrix();
-        let mut coeffs = self.dft.coset_idft_batch(lde_mat, Val::GENERATOR);
-        let width = coeffs.width();
-        coeffs.values.truncate(poly_height * width);
+        let width = lde.width();
+        // In bit-reversed order the first `poly_height` rows are the polynomial's values on
+        // the native-size GENERATOR-shifted sub-coset. Interpolate only those rows instead of
+        // the whole committed LDE and discarding the high zero coefficients afterwards.
+        let native_lde = RowMajorMatrixView::new(&lde.values[..poly_height * width], width)
+            .bit_reverse_rows()
+            .to_row_major_matrix();
+        let mut coeffs = self.dft.coset_idft_batch(native_lde, Val::GENERATOR);
         coeffs.values.resize(domain.size() * width, Val::ZERO);
         let result = self
             .dft
@@ -1179,12 +1183,14 @@ where
                     // forward transform of its coefficients, zero-padded to the target size.
                     // A second `lde` would instead read those coefficients back as evaluations
                     // on a subgroup, and extend a different polynomial.
-                    let natural_lde = lde.bit_reverse_rows().to_row_major_matrix();
-                    let mut coeffs = self.dft.coset_idft_batch(natural_lde, Val::GENERATOR);
-                    let width = coeffs.width();
-                    coeffs
-                        .values
-                        .truncate((1usize << log_native_height) * width);
+                    let native_height = 1usize << log_native_height;
+                    let width = lde.width();
+                    let mut native_lde = lde;
+                    native_lde.values.truncate(native_height * width);
+                    let natural_native_lde = native_lde.bit_reverse_rows().to_row_major_matrix();
+                    let mut coeffs = self
+                        .dft
+                        .coset_idft_batch(natural_native_lde, Val::GENERATOR);
                     coeffs
                         .values
                         .resize((1usize << log_lde_height) * width, Val::ZERO);

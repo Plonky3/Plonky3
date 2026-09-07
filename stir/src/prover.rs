@@ -252,7 +252,16 @@ where
                 let folded = tracing::debug_span!("fold_codeword").in_scope(|| {
                     fold_codeword::<F, EF>(codeword, fold_beta, self.log_arity, current_log_domain)
                 });
-                let coeffs = coeffs_from_codeword(self.dft, &folded, self.fold_shift);
+                // The folded polynomial has only `folded_degree_bound` coefficients. Gather
+                // that size sub-coset for interpolation while retaining the full fold codeword
+                // below, since round queries still read it at the original domain size.
+                let rc = &self.config.round_configs[self.round];
+                let folded_degree_bound = 1usize << (rc.log_degree - self.log_arity);
+                let stride = folded.len() / folded_degree_bound;
+                let folded_subcoset: Vec<EF> = (0..folded_degree_bound)
+                    .map(|i| folded[i * stride])
+                    .collect();
+                let coeffs = coeffs_from_codeword(self.dft, &folded_subcoset, self.fold_shift);
                 self.folded_codeword = Some(folded);
                 coeffs
             }
@@ -295,10 +304,10 @@ where
 
     /// The prefix of `fold_coeffs` that can be non-zero.
     ///
-    /// `fold_coeffs` runs to whatever length the fold's source implied — the fold domain when
-    /// the round folded a committed codeword, the folded sub-coset when it folded a virtual
-    /// witness — and either can reach past the folded polynomial's true degree, which the
-    /// round's degree schedule bounds. Evaluating only that prefix skips the trailing zeros.
+    /// `fold_coeffs` has exactly the scheduled degree-bound length when the round folded a
+    /// committed codeword. When it folded a virtual witness, its sub-coset can reach past the
+    /// folded polynomial's true degree. Evaluating only this prefix skips that trailing zero
+    /// tail while remaining valid for both representations.
     fn truncated_fold_coeffs(&self) -> &[EF] {
         let rc = &self.config.round_configs[self.round];
         let folded_degree_bound = 1usize << (rc.log_degree - self.log_arity);

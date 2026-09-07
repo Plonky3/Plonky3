@@ -1352,6 +1352,49 @@ mod babybear_pcs {
         assert_eq!(evals, expected);
     }
 
+    /// The general `get_evaluations_on_domain` path must interpolate the committed polynomial
+    /// before changing cosets. Exercise both a native-size target and a target taller than the
+    /// committed LDE so neither can use the borrowed `GENERATOR`-shift prefix.
+    #[test]
+    fn get_evaluations_on_changed_shift_matches_direct_evaluation() {
+        use p3_field::coset::TwoAdicMultiplicativeCoset;
+        use p3_matrix::Matrix;
+
+        let (pcs, _) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 4;
+        let d = 1usize << log_d;
+        let width = 3;
+        let trace = RowMajorMatrix::<Val>::rand(&mut rng, d, width);
+        let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, d);
+        let (_, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace.clone())]);
+
+        let dft = Dft::default();
+        let native_coeffs = dft.idft_batch(trace);
+        for log_target in [log_d, log_d + 2] {
+            let target = TwoAdicMultiplicativeCoset::new(Val::from_u64(7), log_target).unwrap();
+            let actual = <MyPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+                &pcs, &data, 0, target,
+            )
+            .to_row_major_matrix();
+
+            let mut padded_coeffs = native_coeffs.clone();
+            padded_coeffs
+                .values
+                .resize(target.size() * width, Val::ZERO);
+            let expected = dft
+                .coset_dft_batch(padded_coeffs, target.shift())
+                .to_row_major_matrix();
+
+            assert_eq!(
+                actual, expected,
+                "changed-shift evaluation disagrees at log_target={log_target}"
+            );
+        }
+    }
+
     /// Commit `log_degrees`, with `widths[i]` columns in matrix `i`, open every matrix at one
     /// shared point, and verify.
     ///
