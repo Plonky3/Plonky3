@@ -5,6 +5,7 @@ use core::marker::PhantomData;
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
 
+use crate::fs::TranscriptField;
 use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::{
     Codec, ExtensionFieldCodec, bound_byte_width, decode_field_be_canonical, decode_len_be,
@@ -199,7 +200,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     /// Binding it stops the prover choosing it after seeing the next challenge.
     pub fn observe_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: Field + BasedVectorSpace<F>,
         Cdc: Codec<C, F>,
     {
@@ -231,7 +232,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         values: &[EF],
     ) -> Result<Vec<TranscriptBound<EF>>, TranscriptError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: Field + BasedVectorSpace<F>,
         Cdc: Codec<C, F>,
     {
@@ -282,7 +283,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ) -> Result<(), TranscriptError>
     where
         C: GrindingChallenger,
-        <C as GrindingChallenger>::Witness: PrimeField64,
+        <C as GrindingChallenger>::Witness: TranscriptField,
     {
         // Validate: the next pattern step is a proof-of-work step of this difficulty.
         self.player
@@ -309,7 +310,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     /// The verifier holds them as its own input and absorbs them as the prover did.
     pub fn observe_public_scalar<F, Cdc>(&mut self, label: Label, value: &F) -> TranscriptBound<F>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a public scalar of type `F`.
@@ -333,7 +334,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         values: &[F],
     ) -> Vec<TranscriptBound<F>>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a fixed-length list of public scalars.
@@ -359,7 +360,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         label: Label,
     ) -> Result<TranscriptBound<F>, TranscriptError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of type `F`.
@@ -383,7 +384,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         n: usize,
     ) -> Result<Vec<TranscriptBound<F>>, TranscriptError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a fixed-length list of `n` scalars.
@@ -418,7 +419,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         max: usize,
     ) -> Result<Vec<TranscriptBound<F>>, TranscriptError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         C: CanObserve<U::Item>,
         Cdc: Codec<C, F>,
     {
@@ -449,7 +450,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         label: Label,
     ) -> Result<TranscriptBound<EF>, TranscriptError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: Field + BasedVectorSpace<F>,
         Cdc: Codec<C, F>,
     {
@@ -573,7 +574,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     /// Sample one challenge scalar in lockstep with the prover.
     pub fn challenge_scalar<F, Cdc>(&mut self, label: Label) -> TranscriptBound<F>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -589,7 +590,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     /// Sample `n` challenge scalars in lockstep with the prover.
     pub fn challenge_scalars<F, Cdc>(&mut self, label: Label, n: usize) -> Vec<TranscriptBound<F>>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -607,7 +608,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     /// Sample one challenge extension-field element in lockstep with the prover.
     pub fn challenge_extension<F, EF, Cdc>(&mut self, label: Label) -> TranscriptBound<EF>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: Field + BasedVectorSpace<F>,
         Cdc: Codec<C, F>,
     {

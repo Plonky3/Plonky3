@@ -3,9 +3,8 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_field::PrimeField64;
-
-use crate::fs::codecs::{Codec, decode_field_be_canonical, encode_field_be, field_byte_size};
+use crate::fs::TranscriptField;
+use crate::fs::codecs::Codec;
 use crate::fs::error::TranscriptError;
 use crate::{CanObserve, CanSample};
 
@@ -13,13 +12,13 @@ use crate::{CanObserve, CanSample};
 ///
 /// The sponge half is a straight pass-through.
 ///
-/// The wire half is the same canonical big-endian encoding every other codec
-/// uses, so a proof stays byte-identical whichever sponge produced it.
+/// The wire half uses the field's canonical encoding. For prime fields, this is
+/// the same big-endian encoding as the byte-sponge codec.
 pub struct FieldToFieldCodec<F>(PhantomData<F>);
 
 impl<C, F> Codec<C, F> for FieldToFieldCodec<F>
 where
-    F: PrimeField64,
+    F: TranscriptField,
     C: CanObserve<F> + CanSample<F>,
 {
     /// A sample is exactly the sponge's own output.
@@ -30,7 +29,7 @@ where
     const SECURITY_BITS: u32 = 128;
 
     fn wire_len() -> usize {
-        field_byte_size::<F>()
+        F::wire_len()
     }
 
     fn observe(challenger: &mut C, value: &F) {
@@ -42,11 +41,11 @@ where
     }
 
     fn encode(value: &F, out: &mut Vec<u8>) {
-        encode_field_be(value, out);
+        F::encode(value, out);
     }
 
     fn decode(bytes: &[u8]) -> Result<F, TranscriptError> {
-        decode_field_be_canonical(bytes)
+        F::decode(bytes)
     }
 }
 

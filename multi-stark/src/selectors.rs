@@ -29,6 +29,16 @@ impl<EF> BoundaryEvals<EF> {
             transition,
         }
     }
+
+    /// Advance the selectors by a scalar multiple of their high-minus-low differences.
+    pub(super) fn add_scaled(&mut self, diff: Self, step: EF)
+    where
+        EF: PrimeCharacteristicRing + Copy,
+    {
+        self.first += diff.first * step;
+        self.last += diff.last * step;
+        self.transition += diff.transition * step;
+    }
 }
 
 impl<Packed> BoundaryEvals<Packed>
@@ -314,9 +324,7 @@ impl<EF> AddAssign for BoundaryEvals<EF>
 where
     EF: AddAssign,
 {
-    /// Advance all three selectors by one interpolation step.
-    ///
-    /// Adding the per-step difference moves each selector to the next integer node.
+    /// Add the corresponding selector values componentwise.
     fn add_assign(&mut self, rhs: Self) {
         self.first += rhs.first;
         self.last += rhs.last;

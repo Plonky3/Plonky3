@@ -5,6 +5,7 @@ use core::marker::PhantomData;
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
 
+use crate::fs::TranscriptField;
 use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::{
     Codec, ExtensionFieldCodec, bound_byte_width, encode_field_be, encode_len_be,
@@ -135,7 +136,7 @@ impl<C, U: Unit> ProverState<C, U> {
     /// The verifier re-absorbs the same value from its own inputs.
     pub fn add_public_scalar<F, Cdc>(&mut self, label: Label, value: &F) -> TranscriptBound<F>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a public scalar of type `F`.
@@ -159,7 +160,7 @@ impl<C, U: Unit> ProverState<C, U> {
         values: &[F],
     ) -> Vec<TranscriptBound<F>>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a fixed-length list of public scalars.
@@ -182,7 +183,7 @@ impl<C, U: Unit> ProverState<C, U> {
     /// Absorb one prover scalar through the supplied codec.
     pub fn add_scalar<F, Cdc>(&mut self, label: Label, value: &F) -> TranscriptBound<F>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of type `F`.
@@ -203,7 +204,7 @@ impl<C, U: Unit> ProverState<C, U> {
     /// No length prefix is written; the recorded pattern is the source of truth.
     pub fn add_scalars<F, Cdc>(&mut self, label: Label, values: &[F]) -> Vec<TranscriptBound<F>>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a fixed-length list of scalars.
@@ -253,7 +254,7 @@ impl<C, U: Unit> ProverState<C, U> {
         max: usize,
     ) -> Vec<TranscriptBound<F>>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         C: CanObserve<U::Item>,
         Cdc: Codec<C, F>,
     {
@@ -297,7 +298,7 @@ impl<C, U: Unit> ProverState<C, U> {
     /// The coefficient layout therefore has one definition, shared with the verifier.
     pub fn add_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: Field + BasedVectorSpace<F>,
         Cdc: Codec<C, F>,
     {
@@ -337,7 +338,7 @@ impl<C, U: Unit> ProverState<C, U> {
     /// So the two sides cannot silently disagree about who carries a value.
     pub fn observe_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: Field + BasedVectorSpace<F>,
         Cdc: Codec<C, F>,
     {
@@ -363,7 +364,7 @@ impl<C, U: Unit> ProverState<C, U> {
         values: &[EF],
     ) -> Vec<TranscriptBound<EF>>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: Field + BasedVectorSpace<F>,
         Cdc: Codec<C, F>,
     {
@@ -505,7 +506,7 @@ impl<C, U: Unit> ProverState<C, U> {
     /// Sample one challenge scalar of type `F` via codec `Cdc`.
     pub fn challenge_scalar<F, Cdc>(&mut self, label: Label) -> TranscriptBound<F>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -521,7 +522,7 @@ impl<C, U: Unit> ProverState<C, U> {
     /// Sample `n` challenge scalars of type `F` under a single pattern step.
     pub fn challenge_scalars<F, Cdc>(&mut self, label: Label, n: usize) -> Vec<TranscriptBound<F>>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -539,7 +540,7 @@ impl<C, U: Unit> ProverState<C, U> {
     /// Sample one challenge extension-field element coefficient by coefficient.
     pub fn challenge_extension<F, EF, Cdc>(&mut self, label: Label) -> TranscriptBound<EF>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: Field + BasedVectorSpace<F>,
         Cdc: Codec<C, F>,
     {
@@ -592,7 +593,7 @@ impl<C, U: Unit> ProverState<C, U> {
     pub fn observe_pow(&mut self, label: Label, bits: usize) -> C::Witness
     where
         C: GrindingChallenger,
-        <C as GrindingChallenger>::Witness: PrimeField64,
+        <C as GrindingChallenger>::Witness: TranscriptField,
     {
         // Validate: the next pattern step is a proof-of-work step of this difficulty.
         self.player

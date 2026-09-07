@@ -14,6 +14,7 @@ mod packed;
 pub mod poly_basis;
 mod tables;
 mod tower;
+mod transcript;
 
 pub use challenger::BinaryChallenger;
 pub use gf2::Gf2;

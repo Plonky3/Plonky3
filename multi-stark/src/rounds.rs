@@ -475,11 +475,11 @@ struct Scratch<F, EF> {
     interaction_evals: Vec<Vec<EF>>,
     /// Current-row value of each column at the active interpolation node.
     local_point: Vec<F>,
-    /// Step added to advance each current-row value to the next node.
+    /// Difference between the high and low current-row values.
     local_diff: Vec<F>,
     /// Successor-row value of each column at the active interpolation node.
     next_point: Vec<F>,
-    /// Step added to advance each successor-row value to the next node.
+    /// Difference between the high and low successor-row values.
     next_diff: Vec<F>,
 }
 
@@ -494,11 +494,11 @@ struct PackedScratch<P, EF> {
     interaction_evals: Vec<Vec<EF>>,
     /// Current-row lanes of each column at the active interpolation node.
     local_point: Vec<P>,
-    /// Step added to advance each current-row lane to the next node.
+    /// Difference between the high and low current-row lanes.
     local_diff: Vec<P>,
     /// Successor-row lanes of each column at the active interpolation node.
     next_point: Vec<P>,
-    /// Step added to advance each successor-row lane to the next node.
+    /// Difference between the high and low successor-row lanes.
     next_diff: Vec<P>,
 }
 
@@ -531,6 +531,11 @@ impl<F: Field, EF> Scratch<F, EF> {
     fn add_diffs(&mut self) {
         F::add_slices(&mut self.local_point, &self.local_diff);
         F::add_slices(&mut self.next_point, &self.next_diff);
+    }
+
+    fn add_scaled_diffs(&mut self, step: F) {
+        add_scaled_slice(&mut self.local_point, &self.local_diff, step);
+        add_scaled_slice(&mut self.next_point, &self.next_diff, step);
     }
 }
 
@@ -572,6 +577,29 @@ where
                 *next += *next_diff;
             });
     }
+
+    fn add_scaled_diffs(&mut self, step: P)
+    where
+        P: Copy,
+    {
+        add_scaled_slice(&mut self.local_point, &self.local_diff, step);
+        add_scaled_slice(&mut self.next_point, &self.next_diff, step);
+    }
+}
+
+fn add_scaled_slice<P: PrimeCharacteristicRing + Copy>(point: &mut [P], diff: &[P], step: P) {
+    point
+        .iter_mut()
+        .zip(diff)
+        .for_each(|(value, &diff)| *value += diff * step);
+}
+
+/// Consecutive node differences, computed once outside the row loops.
+/// Binary-field interpolation nodes need not differ by one.
+fn interpolation_steps<F: Field>(degree: usize) -> Vec<F> {
+    (0..degree)
+        .map(|node| F::interpolation_node(node + 1) - F::interpolation_node(node))
+        .collect()
 }
 
 /// Where one AIR's lookup link lands, for an AIR that declares one.
@@ -1192,6 +1220,7 @@ where
         let packing_width = F::Packing::WIDTH;
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
+        let node_steps = interpolation_steps::<F>(degree);
         let alpha = EF::ExtensionPacking::from(self.alpha);
 
         let coupling = InteractionCoupling {
@@ -1338,9 +1367,15 @@ where
                                 }
                             }
                         }
-                        if node != degree {
-                            scratch.add_diffs();
-                            boundary += boundary_diff;
+                        if let Some(&step) = node_steps.get(node) {
+                            if step == F::ONE {
+                                scratch.add_diffs();
+                                boundary += boundary_diff;
+                            } else {
+                                let step = F::Packing::from(step);
+                                scratch.add_scaled_diffs(step);
+                                boundary.add_scaled(boundary_diff, step);
+                            }
                         }
                     }
 
@@ -1379,6 +1414,7 @@ where
         let height = self.num_evals();
         let half = height / 2;
         let degree = self.degree();
+        let node_steps = interpolation_steps::<F>(degree);
 
         let constraint_degrees = self
             .slots
@@ -1476,9 +1512,14 @@ where
                         }
                     }
                 }
-                if node != degree {
-                    scratch.add_diffs();
-                    boundary += boundary_diff;
+                if let Some(&step) = node_steps.get(node) {
+                    if step == F::ONE {
+                        scratch.add_diffs();
+                        boundary += boundary_diff;
+                    } else {
+                        scratch.add_scaled_diffs(step);
+                        boundary.add_scaled(boundary_diff, step);
+                    }
                 }
             }
         }
@@ -1715,6 +1756,7 @@ where
         let num_evals = self.num_evals();
         let half = num_evals / 2;
         let degree = self.degree();
+        let node_steps = interpolation_steps::<EF>(degree);
         let constraint_degrees = self
             .slots
             .iter()
@@ -1797,9 +1839,14 @@ where
                             }
                         }
                     }
-                    if node != degree {
-                        scratch.add_diffs();
-                        boundary += boundary_diff;
+                    if let Some(&step) = node_steps.get(node) {
+                        if step == EF::ONE {
+                            scratch.add_diffs();
+                            boundary += boundary_diff;
+                        } else {
+                            scratch.add_scaled_diffs(step);
+                            boundary.add_scaled(boundary_diff, step);
+                        }
                     }
                 }
 
@@ -1865,6 +1912,7 @@ where
         let packing_width = F::Packing::WIDTH;
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
+        let node_steps = interpolation_steps::<EF>(degree);
         let alpha = PackedExt::new(EF::ExtensionPacking::from(self.alpha));
         let coupling = InteractionCoupling {
             links: self
@@ -2006,9 +2054,15 @@ where
                                 }
                             }
                         }
-                        if node != degree {
-                            scratch.add_diffs();
-                            boundary += boundary_diff;
+                        if let Some(&step) = node_steps.get(node) {
+                            if step == EF::ONE {
+                                scratch.add_diffs();
+                                boundary += boundary_diff;
+                            } else {
+                                let step = PackedExt::new(EF::ExtensionPacking::from(step));
+                                scratch.add_scaled_diffs(step);
+                                boundary.add_scaled(boundary_diff, step);
+                            }
                         }
                     }
 
@@ -2076,5 +2130,133 @@ where
 
         self.boundary.apply(r);
         self.round += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_air::{AirBuilder, WindowAccess};
+    use p3_binary_field::BinaryField128;
+
+    use super::*;
+
+    type F = BinaryField128;
+
+    struct BooleanAir;
+
+    impl BaseAir<F> for BooleanAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for BooleanAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice()[0];
+            let next = main.next_slice()[0];
+            builder.when_first_row().assert_bool(local);
+            builder.when_last_row().assert_bool(local);
+            builder.when_transition().assert_bool(next);
+        }
+    }
+
+    /// Compare each kernel with direct MLE evaluation at the field's distinct nodes.
+    /// Boolean trace entries satisfy the AIR, but its cubic round polynomial is
+    /// nonzero away from the Boolean nodes, exposing repeated-node interpolation.
+    fn check_binary_round_nodes(packed: bool, extension: bool) {
+        let trace = [false, true, true, false, true, false, false, true].map(F::from_bool);
+        let table = Table::new(RowMajorMatrix::new(trace.to_vec(), trace.len()));
+        let stage = Stage::new(
+            vec![&BooleanAir],
+            vec![&[]],
+            vec![0],
+            vec![None],
+            vec![&table],
+            vec![AirDegrees {
+                constraints: 3,
+                interactions: 0,
+            }],
+            StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![]),
+        );
+        let alpha = F::interpolation_node(11);
+        let tau = [5, 6, 7].map(F::interpolation_node);
+        let mut base =
+            RoundStateBase::new(stage, alpha, F::ONE, vec![F::ONE], Point::new(tau.to_vec()));
+        let prefix = if extension {
+            vec![F::interpolation_node(9)]
+        } else {
+            vec![]
+        };
+        let round = prefix.len();
+        let eq_suffix = Poly::new_from_point(&tau[round + 1..], F::ONE);
+        let actual = if extension {
+            base.round_poly(&Poly::new_from_point(&tau[1..], F::ONE));
+            let mut ext = base.fold(prefix[0]);
+            if packed {
+                ext.round_poly_packed(&eq_suffix)
+            } else {
+                let ExtColumns::Packed(columns) = ext.columns else {
+                    unreachable!("binary packing has width one");
+                };
+                ext.columns = ExtColumns::Scalar(
+                    columns
+                        .into_iter()
+                        .map(|col| col.unpack::<F, F>())
+                        .collect(),
+                );
+                ext.round_poly_unpacked(&eq_suffix)
+            }
+        } else if packed {
+            base.round_poly_packed(&eq_suffix)
+        } else {
+            base.round_poly_unpacked(&eq_suffix)
+        };
+
+        let shifted = core::array::from_fn::<_, 8, _>(|row| trace[(row + 1).min(7)]);
+        let expected = [0, 2, 3].map(|node| {
+            eq_suffix
+                .as_slice()
+                .iter()
+                .enumerate()
+                .map(|(row, &weight)| {
+                    let mut coordinates = prefix.clone();
+                    coordinates.push(F::interpolation_node(node));
+                    coordinates.extend_from_slice(Point::hypercube(row, 2 - round).as_slice());
+                    let point = Point::new(coordinates);
+                    let local = PolyView::new(trace.as_slice()).eval_base(&point);
+                    let next = PolyView::new(shifted.as_slice()).eval_base(&point);
+                    let boundary = BoundaryEvals::at(point.as_slice());
+                    let local_bool = local.square() - local;
+                    weight
+                        * ((boundary.first * local_bool * alpha + boundary.last * local_bool)
+                            * alpha
+                            + boundary.transition * (next.square() - next))
+                })
+                .sum::<F>()
+        });
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn binary_base_scalar_uses_distinct_interpolation_nodes() {
+        check_binary_round_nodes(false, false);
+    }
+
+    #[test]
+    fn binary_base_packed_uses_distinct_interpolation_nodes() {
+        check_binary_round_nodes(true, false);
+    }
+
+    #[test]
+    fn binary_extension_scalar_uses_distinct_interpolation_nodes() {
+        check_binary_round_nodes(false, true);
+    }
+
+    #[test]
+    fn binary_extension_packed_uses_distinct_interpolation_nodes() {
+        check_binary_round_nodes(true, true);
     }
 }

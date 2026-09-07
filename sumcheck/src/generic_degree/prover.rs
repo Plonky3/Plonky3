@@ -2,8 +2,9 @@
 
 use alloc::vec::Vec;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, PrimeField64};
+use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
 
 use super::proof::GenericDegreeProof;
@@ -65,7 +66,7 @@ pub trait RoundProver<EF> {
         claimed_sum: EF,
     ) -> (GenericDegreeProof<F, EF>, Point<EF>)
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -331,5 +332,104 @@ mod tests {
                 Err(other) => panic!("expected an invalid pow witness error, got {other:?}"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod binary_tests {
+    use alloc::vec::Vec;
+
+    use p3_binary_field::{BinaryChallenger, BinaryField128, TowerLevel};
+    use p3_challenger::{CanSample, HashChallenger};
+    use p3_field::Field;
+    use p3_keccak::Keccak256Hash;
+    use p3_multilinear_util::poly::Poly;
+
+    use super::RoundProver;
+    use crate::generic_degree::transcript::domain_separator;
+
+    type F = BinaryField128;
+    type Ch = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
+
+    fn fresh_challenger() -> Ch {
+        Ch::from_hasher(Vec::new(), Keccak256Hash)
+    }
+
+    struct ProductProver([Poly<F>; 3]);
+
+    impl RoundProver<F> for ProductProver {
+        fn fold(&mut self, r: F) {
+            for factor in &mut self.0 {
+                factor.fix_prefix_var_mut(r);
+            }
+        }
+
+        fn round_poly(&self) -> Vec<F> {
+            [0, 2, 3]
+                .into_iter()
+                .map(|i| {
+                    let node = F::interpolation_node(i);
+                    let half = self.0[0].num_evals() / 2;
+                    (0..half)
+                        .map(|j| {
+                            self.0
+                                .iter()
+                                .map(|factor| {
+                                    let values = factor.as_slice();
+                                    values[j] + (values[j + half] - values[j]) * node
+                                })
+                                .product::<F>()
+                        })
+                        .sum()
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn binary_sumcheck_round_trips_with_and_without_grinding() {
+        let factors: [Poly<F>; 3] = core::array::from_fn(|column| {
+            Poly::new(
+                (0..16)
+                    .map(|row| {
+                        F::from_repr(((row + 1) as u128) << (column * 40) | (column + 1) as u128)
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        });
+        let claimed_sum: F = (0..16)
+            .map(|row| factors.iter().map(|f| f.as_slice()[row]).product::<F>())
+            .sum();
+        for pow_bits in [0, 4] {
+            let mut prover = ProductProver(factors.clone());
+            let mut p_ch = fresh_challenger();
+            let (proof, p_point) = prover.prove::<F, _>(&mut p_ch, 4, 3, pow_bits, claimed_sum);
+            assert_eq!(proof.pow_witnesses.len(), if pow_bits == 0 { 0 } else { 4 });
+            let mut v_ch = fresh_challenger();
+            let (v_point, final_sum) = proof.verify(&mut v_ch, 4, 3, pow_bits).unwrap();
+            assert_eq!(p_point, v_point);
+            assert_eq!(
+                final_sum,
+                factors.iter().map(|f| f.eval_base(&v_point)).product::<F>()
+            );
+            assert_eq!(
+                CanSample::<F>::sample(&mut p_ch),
+                CanSample::<F>::sample(&mut v_ch)
+            );
+        }
+    }
+
+    #[test]
+    fn binary_sumcheck_seed_binds_rounds_degree_and_grinding() {
+        let sample = |rounds, degree, pow_bits| {
+            let mut challenger = fresh_challenger();
+            domain_separator::<F, F>(rounds, degree, pow_bits).seed(&mut challenger);
+            CanSample::<F>::sample(&mut challenger)
+        };
+        let baseline = sample(4, 3, 0);
+        assert_ne!(baseline, sample(5, 3, 0));
+        assert_ne!(baseline, sample(4, 4, 0));
+        assert_ne!(baseline, sample(4, 3, 4));
+        assert_ne!(sample(4, 3, 4), sample(4, 3, 5));
     }
 }

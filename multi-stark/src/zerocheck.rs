@@ -16,8 +16,9 @@ use alloc::vec::Vec;
 use core::iter;
 
 use p3_air::{Air, AirLayout, BaseAir};
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field, PrimeField64};
+use p3_field::{ExtensionField, Field};
 use p3_lookup::InteractionSymbolicBuilder as SymbolicAirBuilder;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -350,7 +351,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         challenger: &mut Challenger,
     ) -> (ZerocheckProof<F, EF>, Point<EF>)
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
         A: ProverAir<F, EF>,
         <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
@@ -387,7 +388,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         challenger: &mut Challenger,
     ) -> (ZerocheckProof<F, EF>, Point<EF>)
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
         A: ProverAir<F, EF>,
         <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
@@ -763,7 +764,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         challenger: &mut Challenger,
     ) -> Result<Point<EF>, ZerocheckError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
         A: VerifierAir<F, EF>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
@@ -787,7 +788,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         challenger: &mut Challenger,
     ) -> Result<Point<EF>, ZerocheckError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
         A: VerifierAir<F, EF>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
@@ -915,7 +916,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         challenger: &mut Challenger,
     ) -> Result<ZerocheckReduction<EF>, ZerocheckError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
         A: Air<SymbolicAirBuilder<F, EF>>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
@@ -943,7 +944,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         challenger: &mut Challenger,
     ) -> Result<ZerocheckReduction<EF>, ZerocheckError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
         A: Air<SymbolicAirBuilder<F, EF>>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
@@ -1029,7 +1030,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         public_values: &[&[F]],
     ) -> Result<(), ZerocheckError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
         A: VerifierAir<F, EF>,
     {

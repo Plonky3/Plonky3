@@ -30,10 +30,10 @@ use core::marker::PhantomData;
 
 use p3_challenger::fs::{
     DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction, InteractionPattern,
-    Kind, Length, ProverState, VerifierState,
+    Kind, Length, ProverState, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
-use p3_field::{ExtensionField, PrimeField64};
+use p3_field::ExtensionField;
 
 use super::error::GenericDegreeError;
 
@@ -76,7 +76,7 @@ type Alphabet<F> = FieldUnit<F>;
 #[must_use]
 pub fn pattern<F, EF>(num_rounds: usize, degree: usize, pow_bits: usize) -> InteractionPattern
 where
-    F: PrimeField64,
+    F: TranscriptField,
     EF: ExtensionField<F>,
 {
     // One step for the claimed sum, then up to three per round.
@@ -136,7 +136,7 @@ pub fn domain_separator<F, EF>(
     pow_bits: usize,
 ) -> DomainSeparator<Alphabet<F>>
 where
-    F: PrimeField64,
+    F: TranscriptField,
     EF: ExtensionField<F>,
 {
     DomainSeparator::new(
@@ -161,7 +161,7 @@ where
 ///
 /// A sumcheck runs inside a larger protocol.
 /// That protocol's own transcript continues where this one stops.
-pub struct ProverTranscript<'a, C, F: PrimeField64, EF> {
+pub struct ProverTranscript<'a, C, F: TranscriptField, EF> {
     /// Driver walking the description and holding the borrowed sponge.
     state: ProverState<&'a mut C, Alphabet<F>>,
     /// Grinding difficulty per round, or zero to omit grinding.
@@ -172,7 +172,7 @@ pub struct ProverTranscript<'a, C, F: PrimeField64, EF> {
 
 impl<'a, C, F, EF> ProverTranscript<'a, C, F, EF>
 where
-    F: PrimeField64,
+    F: TranscriptField,
     EF: ExtensionField<F>,
     C: CanObserve<F> + CanSample<F> + GrindingChallenger<Witness = F>,
 {
@@ -253,7 +253,7 @@ where
 ///
 /// The values come from the proof rather than from a wire, so the caller must
 /// have checked their lengths against the described shape first.
-pub struct VerifierTranscript<'a, C, F: PrimeField64, EF> {
+pub struct VerifierTranscript<'a, C, F: TranscriptField, EF> {
     /// Driver walking the description and holding the borrowed sponge.
     ///
     /// The proof carries every value, so the driver reads an empty wire.
@@ -270,7 +270,7 @@ pub struct VerifierTranscript<'a, C, F: PrimeField64, EF> {
 
 impl<'a, C, F, EF> VerifierTranscript<'a, C, F, EF>
 where
-    F: PrimeField64,
+    F: TranscriptField,
     EF: ExtensionField<F>,
     C: CanObserve<F> + CanSample<F> + GrindingChallenger<Witness = F>,
 {
