@@ -43,7 +43,22 @@ pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
 }
 
 impl<Val: Field, InputMmcs, FriMmcs> CirclePcs<Val, InputMmcs, FriMmcs> {
+    /// # Panics
+    ///
+    /// If `fri_params.batch_proof_of_work_bits` is nonzero. This PCS samples its
+    /// own batch-combination challenge (see [`Pcs::open`]) and does not grind
+    /// before it, so honouring that setting is not yet implemented here.
+    /// Rejecting it is deliberate: silently ignoring the field would let a
+    /// caller claim grinding bits in a soundness analysis that no prover ever
+    /// paid and no verifier ever checks.
+    // TODO: grind the batch-combination challenge here as `TwoAdicFriPcs` does,
+    // then drop this assertion.
     pub const fn new(mmcs: InputMmcs, fri_params: FriParameters<FriMmcs>) -> Self {
+        assert!(
+            fri_params.batch_proof_of_work_bits == 0,
+            "CirclePcs does not implement batch-combination grinding; \
+             batch_proof_of_work_bits must be 0"
+        );
         Self {
             mmcs,
             fri_params,
@@ -75,6 +90,8 @@ where
     InputMmcsError: core::fmt::Debug,
     FriMmcsError: core::fmt::Debug,
 {
+    #[error("CirclePcs does not implement batch-combination grinding ({bits} bits requested)")]
+    UnsupportedBatchGrinding { bits: usize },
     #[error("input MMCS error: {0:?}")]
     InputMmcsError(InputMmcsError),
     #[error("first layer MMCS error: {0:?}")]
@@ -232,6 +249,11 @@ where
         )>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
+        assert!(
+            self.fri_params.batch_proof_of_work_bits == 0,
+            "CirclePcs does not implement batch-combination grinding; \
+             batch_proof_of_work_bits must be 0"
+        );
         // Materialize the CFFT-ordered domain points once per committed height. They are shared
         // by the Lagrange denominators and the DEEP-quotient vanishing parts below, which are in
         // turn shared by every matrix opened at the same point on the same domain.
@@ -568,6 +590,11 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
+        if self.fri_params.batch_proof_of_work_bits != 0 {
+            return Err(FriError::InputError(InputError::UnsupportedBatchGrinding {
+                bits: self.fri_params.batch_proof_of_work_bits,
+            }));
+        }
         // Write evaluations to challenger
         for (_, round) in &rounds {
             for (_, mat) in round {
@@ -930,6 +957,25 @@ mod tests {
         InputError<<ValMmcs as Mmcs<Val>>::Error, <ChallengeMmcs as Mmcs<Challenge>>::Error>,
     >;
 
+    /// `FriParameters::new_benchmark` must satisfy [`CirclePcs::new`]'s guard.
+    ///
+    /// It reaches that constructor from `p3-examples` and from `monolith-air`'s
+    /// benchmark, so a nonzero `batch_proof_of_work_bits` there turns both into
+    /// a runtime panic. Nothing else catches it: every other site in the tree
+    /// builds this PCS by struct literal, which bypasses the guard entirely,
+    /// and examples and benchmarks are compiled but never run by `cargo test`.
+    #[test]
+    fn benchmark_fri_parameters_are_accepted_by_new() {
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // Panics if the guard rejects these parameters.
+        let _ = TestPcs::new(val_mmcs, FriParameters::new_benchmark(challenge_mmcs));
+    }
+
     /// Build a valid Circle PCS proof for a random single-column trace.
     ///
     /// Returns all the pieces needed to verify (or re-verify after mutation):
@@ -1023,6 +1069,34 @@ mod tests {
         // Smoke test: an honestly generated proof must verify successfully.
         let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).expect("verify err");
+    }
+
+    #[test]
+    fn reject_unsupported_batch_grinding_after_construction() {
+        let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).unwrap();
+
+        pcs.fri_params.batch_proof_of_work_bits = 20;
+        assert!(matches!(
+            try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof),
+            Err(FriError::InputError(InputError::UnsupportedBatchGrinding {
+                bits: 20
+            }))
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "CirclePcs does not implement batch-combination grinding")]
+    fn prover_rejects_unsupported_batch_grinding_after_construction() {
+        let (mut pcs, byte_hash, _, d, zeta, _, _) = setup_valid_proof();
+        let evals = RowMajorMatrix::new(vec![Val::ONE; d.size()], 1);
+        let (_, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+        pcs.fri_params.batch_proof_of_work_bits = 20;
+
+        pcs.open(
+            vec![(&data, vec![vec![zeta]])],
+            &mut Challenger::from_hasher(vec![], byte_hash),
+        );
     }
 
     #[test]
@@ -1198,6 +1272,27 @@ mod tests {
     }
 
     #[test]
+    fn reject_zero_blowup() {
+        // Invariant: at log_blowup = 0 every length-N word is itself a degree-<N codeword, so
+        // the folding chain and final-polynomial check are satisfied by an arbitrary
+        // reduced-opening word.
+        //
+        // Fixture state: an honest proof built with log_blowup >= 1.
+        //
+        // Mutation: verify it under params with log_blowup = 0.
+        let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        pcs.fri_params.log_blowup = 0;
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("zero-blowup instance must be rejected");
+
+        assert!(
+            matches!(err, FriError::ZeroBlowup),
+            "expected ZeroBlowup, got {err:?}"
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "num_queries must be at least 1")]
     fn prover_rejects_zero_queries() {
         // The prover must refuse to build a vacuous proof.
@@ -1255,6 +1350,43 @@ mod tests {
             panic!("expected UnsupportedFoldingCap, got {err:?}");
         };
         assert_eq!(max_log_arity, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "log_blowup must be at least 1")]
+    fn prover_rejects_zero_blowup() {
+        // The prover must refuse to build a proof the verifier would accept unconditionally.
+        // The verifier guards the same config, so the failure is symmetric.
+        let mut rng = SmallRng::seed_from_u64(0);
+
+        // Build the hash stack: field hasher → compression → Merkle tree.
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // Zero blowup; every other parameter is otherwise valid.
+        let mut fri_params = FriParameters::new_testing(challenge_mmcs, 0);
+        fri_params.log_blowup = 0;
+
+        let pcs = TestPcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
+
+        // Commit to a random single-column trace of 2^{10} rows.
+        let log_n = 10;
+        let d =
+            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
+        let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
+        let (_comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+
+        // Commit succeeds; the assert fires inside the opening (FRI prover).
+        let zeta: Challenge = rng.random();
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        let _ = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal);
     }
 
     #[test]
