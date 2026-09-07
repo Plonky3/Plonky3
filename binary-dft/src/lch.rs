@@ -3,19 +3,23 @@
 use core::marker::PhantomData;
 
 use p3_binary_field::TowerLevel;
+use p3_field::{PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
-use crate::domain::{domain_point, subspace_polynomial};
+use crate::domain::{domain_point, domain_point_steps, subspace_polynomial};
 use crate::traits::AdditiveNtt;
 
 /// The Lin–Chung–Han additive NTT over the Cantor-basis domain.
 ///
 /// Twiddles are index shifts (D8): at stage `j` and butterfly block `blk` the twiddle is
-/// `W_j(shift) + domain_point(blk << 1)`, so there is no twiddle table and no per-size
-/// precomputation.
+/// `W_j(shift) + domain_point(blk << 1)`, so there is no twiddle table.
+///
+/// Consecutive blocks differ by a fixed increment, so a block takes its twiddle from the one
+/// before it rather than walking its own index.
+/// The `ℓ - 1` increments are shared by every stage and are the only per-size precomputation.
 ///
 /// `W_j` is `F_2`-linear and `domain_point(0)` is zero, so over the subspace itself — the
 /// coset with `shift = 0` — the first block of every stage has a zero twiddle and its
@@ -32,7 +36,8 @@ pub struct LchNtt<F> {
 /// each side into pieces of this size leaves `n · width / (2 · BUTTERFLY_GRAIN)` pieces at
 /// every stage, independent of `j`: the wide stages, which have too few blocks to fill a
 /// machine, are split from within instead. Stages with `half ≤ BUTTERFLY_GRAIN` keep a single
-/// piece per side and pay nothing for the extra level.
+/// piece per side and instead gather `BUTTERFLY_GRAIN / half` whole blocks into one task, so a
+/// task is a piece of this size on either side of the crossover.
 ///
 /// At a few nanoseconds per butterfly a piece of this size is microseconds of work, well above
 /// the cost of handing a task to another thread, while still leaving hundreds of pieces per
@@ -44,40 +49,41 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
         let width = mat.width();
         let log_n = log2_strict_usize(mat.height());
 
+        // An increment depends only on a block index's trailing-zero count, never on the stage,
+        // so one table serves every stage and each stage uses the prefix it reaches.
+        // A height of one runs no stage and needs no table.
+        let steps = domain_point_steps::<F>(log_n.saturating_sub(1));
         for j in (0..log_n).rev() {
             let half = (1 << j) * width;
             // D8: the block starting at row `b` of the coset `shift + S_ℓ` has twiddle
             // `W_j(shift) + point(b >> j)`, and block `blk` starts at row `blk << (j + 1)`.
             let base = subspace_polynomial::<F>(j, shift);
+            let per_task = (BUTTERFLY_GRAIN / half).max(1);
             mat.values
-                .par_chunks_mut(half << 1)
+                .par_chunks_mut(per_task * (half << 1))
                 .enumerate()
-                .for_each(|(blk, block)| {
-                    let t = base + domain_point::<F>(blk << 1);
-                    let zero = t.is_zero();
-                    let (lo, hi) = block.split_at_mut(half);
-                    let butterfly = |lo: &mut [F], hi: &mut [F]| {
-                        if zero {
-                            // (u, v) ↦ (u, u + v)
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v += *u;
-                            }
-                        } else {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                // (u, v) ↦ (u + t·v, u + t·v + v)
-                                *u += t * *v;
-                                *v += *u;
-                            }
+                .for_each(|(task, group)| {
+                    let first = task * per_task;
+                    let mut t = base + domain_point::<F>(first << 1);
+                    // Invariant: blocks are visited in ascending index order.
+                    // Carrying the twiddle from one block to the next relies on it.
+                    for (i, block) in group.chunks_mut(half << 1).enumerate() {
+                        if i != 0 {
+                            t += steps[(first + i).trailing_zeros() as usize];
                         }
-                    };
-                    // Pairs are independent across the block, so a block wider than the grain
-                    // is split further rather than run on a single thread.
-                    if half <= BUTTERFLY_GRAIN {
-                        butterfly(lo, hi);
-                    } else {
-                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                        let (lo, hi) = block.split_at_mut(half);
+                        let butterfly = |lo: &mut [F], hi: &mut [F]| {
+                            packed_butterfly::<F, false>(lo, hi, t);
+                        };
+                        // Pairs are independent across the block, so a block wider than the
+                        // grain is split further rather than run on a single thread.
+                        if half <= BUTTERFLY_GRAIN {
+                            butterfly(lo, hi);
+                        } else {
+                            lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                                .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                                .for_each(|(lo, hi)| butterfly(lo, hi));
+                        }
                     }
                 });
         }
@@ -88,43 +94,83 @@ impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
         let width = mat.width();
         let log_n = log2_strict_usize(mat.height());
 
+        // An increment depends only on a block index's trailing-zero count, never on the stage,
+        // so one table serves every stage and each stage uses the prefix it reaches.
+        // A height of one runs no stage and needs no table.
+        let steps = domain_point_steps::<F>(log_n.saturating_sub(1));
         for j in 0..log_n {
             let half = (1 << j) * width;
             // Twiddles as derived in `shifted_ntt_batch`, with the stages run in reverse.
             let base = subspace_polynomial::<F>(j, shift);
+            let per_task = (BUTTERFLY_GRAIN / half).max(1);
             mat.values
-                .par_chunks_mut(half << 1)
+                .par_chunks_mut(per_task * (half << 1))
                 .enumerate()
-                .for_each(|(blk, block)| {
-                    let t = base + domain_point::<F>(blk << 1);
-                    let zero = t.is_zero();
-                    let (lo, hi) = block.split_at_mut(half);
-                    let butterfly = |lo: &mut [F], hi: &mut [F]| {
-                        if zero {
-                            // (u', v') ↦ (u = u', v = u' + v')
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                *v += *u;
-                            }
-                        } else {
-                            for (u, v) in lo.iter_mut().zip(hi) {
-                                // (u', v') ↦ (u = u' + t·v, v = u' + v')
-                                *v += *u;
-                                *u += t * *v;
-                            }
+                .for_each(|(task, group)| {
+                    let first = task * per_task;
+                    let mut t = base + domain_point::<F>(first << 1);
+                    // Invariant: blocks are visited in ascending index order.
+                    // Carrying the twiddle from one block to the next relies on it.
+                    for (i, block) in group.chunks_mut(half << 1).enumerate() {
+                        if i != 0 {
+                            t += steps[(first + i).trailing_zeros() as usize];
                         }
-                    };
-                    // Pairs are independent across the block, so a block wider than the grain
-                    // is split further rather than run on a single thread.
-                    if half <= BUTTERFLY_GRAIN {
-                        butterfly(lo, hi);
-                    } else {
-                        lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                            .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                            .for_each(|(lo, hi)| butterfly(lo, hi));
+                        let (lo, hi) = block.split_at_mut(half);
+                        let butterfly = |lo: &mut [F], hi: &mut [F]| {
+                            packed_butterfly::<F, true>(lo, hi, t);
+                        };
+                        // Pairs are independent across the block, so a block wider than the
+                        // grain is split further rather than run on a single thread.
+                        if half <= BUTTERFLY_GRAIN {
+                            butterfly(lo, hi);
+                        } else {
+                            lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                                .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                                .for_each(|(lo, hi)| butterfly(lo, hi));
+                        }
                     }
                 });
         }
         mat
+    }
+}
+
+/// Apply a butterfly to full SIMD vectors and any remaining scalar elements.
+#[inline]
+fn packed_butterfly<F: TowerLevel, const INVERSE: bool>(lo: &mut [F], hi: &mut [F], t: F) {
+    // Both sides have equal length, so their packed prefixes and tails pair exactly.
+    let (lo, lo_tail) = F::Packing::pack_slice_with_suffix_mut(lo);
+    let (hi, hi_tail) = F::Packing::pack_slice_with_suffix_mut(hi);
+    let zero = t.is_zero();
+    butterfly_values::<_, INVERSE>(lo, hi, t.into(), zero);
+    butterfly_values::<_, INVERSE>(lo_tail, hi_tail, t, zero);
+}
+
+/// Apply the same field identities to scalar or packed values.
+#[inline]
+fn butterfly_values<R: PrimeCharacteristicRing + Copy, const INVERSE: bool>(
+    lo: &mut [R],
+    hi: &mut [R],
+    t: R,
+    zero: bool,
+) {
+    if zero {
+        // A zero twiddle reduces both transform directions to (u, u + v).
+        for (u, v) in lo.iter_mut().zip(hi) {
+            *v += *u;
+        }
+    } else if INVERSE {
+        // Recover v first, then remove its twiddle contribution from u.
+        for (u, v) in lo.iter_mut().zip(hi) {
+            *v += *u;
+            *u += t * *v;
+        }
+    } else {
+        // Evaluate the pair as (u + t*v, u + t*v + v).
+        for (u, v) in lo.iter_mut().zip(hi) {
+            *u += t * *v;
+            *v += *u;
+        }
     }
 }
 
@@ -133,12 +179,17 @@ mod tests {
     use alloc::vec;
 
     use p3_binary_field::{
-        BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, TowerLevel,
+        BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
+        TowerLevel,
     };
+    use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
     use super::LchNtt;
+    use crate::domain::{domain_point, subspace_polynomial};
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
 
@@ -162,6 +213,26 @@ mod tests {
         )
     }
 
+    /// The forward transform with every twiddle walked out from its own block index, in one
+    /// serial pass and with no zero shortcut.
+    fn twiddle_walk_ntt<F: TowerLevel>(mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+        let width = mat.width();
+        let log_n = log2_strict_usize(mat.height());
+        for j in (0..log_n).rev() {
+            let half = (1 << j) * width;
+            let base = subspace_polynomial::<F>(j, shift);
+            for (blk, block) in mat.values.chunks_mut(half << 1).enumerate() {
+                let t = base + domain_point::<F>(blk << 1);
+                let (lo, hi) = block.split_at_mut(half);
+                for (u, v) in lo.iter_mut().zip(hi) {
+                    *u += t * *v;
+                    *v += *u;
+                }
+            }
+        }
+        mat
+    }
+
     /// `LchNtt` agrees with the oracle on a random matrix and a random coset.
     fn check_matches_naive<F: TowerLevel>(log_n: usize, width: usize, seed: u64, shift: u64) {
         let coeffs = matrix::<F>(log_n, width, seed);
@@ -174,6 +245,22 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn ghash_packing_matches_naive_and_round_trips(
+            log_n in 0usize..=7,
+            width in 1usize..=9,
+            seed: u64,
+            shift: u64,
+        ) {
+            // Odd widths force scalar tails alongside SIMD prefixes.
+            check_matches_naive::<Ghash128>(log_n, width, seed, shift);
+            let coeffs = matrix::<Ghash128>(log_n, width, seed);
+            let shift = sample::<Ghash128>(shift);
+            let ntt = LchNtt::<Ghash128>::default();
+            let transformed = ntt.shifted_ntt_batch(coeffs.clone(), shift);
+            prop_assert_eq!(ntt.shifted_intt_batch(transformed, shift), coeffs);
+        }
 
         #[test]
         fn lch_matches_naive_at_8_bits(
@@ -261,6 +348,38 @@ mod tests {
         }
     }
 
+    /// A height whose stages take more than one butterfly task, so a task seeds its twiddle at
+    /// a block index of its own rather than at zero.
+    ///
+    /// The oracle tests all sit below that height, and `lch_round_trips` is blind to the
+    /// schedule: both directions read the same twiddles, so they invert each other whatever
+    /// those twiddles are. Only a comparison against an independent walk pins them.
+    #[test]
+    fn lch_matches_a_twiddle_walk_across_several_tasks() {
+        const LOG_N: usize = 12;
+        let ntt = LchNtt::<BinaryField128>::default();
+        for width in [1usize, 3] {
+            for shift_bits in [0u64, 0x1234_5678_9abc_def0] {
+                let coeffs = matrix::<BinaryField128>(LOG_N, width, 5);
+                let shift = sample::<BinaryField128>(shift_bits);
+
+                let walked = twiddle_walk_ntt::<BinaryField128>(coeffs.clone(), shift);
+                assert_eq!(
+                    ntt.shifted_ntt_batch(coeffs.clone(), shift),
+                    walked,
+                    "ntt width={width} shift={shift_bits:#x}"
+                );
+                // The inverse has its own copy of the schedule, and undoing a codeword the walk
+                // produced is what holds that copy to the same twiddles.
+                assert_eq!(
+                    ntt.shifted_intt_batch(walked, shift),
+                    coeffs,
+                    "intt width={width} shift={shift_bits:#x}"
+                );
+            }
+        }
+    }
+
     /// An index of `S_ℓ` past the bit width of `F` calls for a Cantor basis vector this level
     /// does not have.
     #[test]
@@ -321,6 +440,54 @@ mod tests {
         let large = LchNtt::<BinaryField128>::default().ntt_batch(coeffs128);
         for (s, l) in small.values.iter().zip(&large.values) {
             assert_eq!(u128::from(s.to_repr()), l.to_repr());
+        }
+    }
+
+    #[test]
+    fn ghash_packing_matches_scalar_across_tasks() {
+        // These blocks cross the task-size boundary and leave scalar tails at narrow stages.
+        for width in [3, 5] {
+            for shift in [Ghash128::ZERO, sample::<Ghash128>(17)] {
+                let coeffs = matrix::<Ghash128>(11, width, 29);
+                let ntt = LchNtt::<Ghash128>::default();
+                let actual = ntt.shifted_ntt_batch(coeffs.clone(), shift);
+                // The serial oracle uses scalar products and recomputes every twiddle.
+                assert_eq!(actual, twiddle_walk_ntt(coeffs.clone(), shift));
+                assert_eq!(ntt.shifted_intt_batch(actual, shift), coeffs);
+            }
+        }
+    }
+
+    /// The transform must commute with the change of basis between the two representations.
+    ///
+    /// It is built from twiddle multiplies.
+    /// Only a field isomorphism preserves multiplication, so this pins that too.
+    #[test]
+    fn the_two_representations_of_the_widest_level_transform_alike() {
+        const LOG_N: usize = 7;
+        const WIDTH: usize = 3;
+
+        // Express one matrix in both field bases.
+        let tower_coeffs = matrix::<BinaryField128>(LOG_N, WIDTH, 11);
+        let ghash_coeffs = RowMajorMatrix::new(
+            tower_coeffs
+                .values
+                .iter()
+                .copied()
+                .map(Ghash128::from)
+                .collect(),
+            WIDTH,
+        );
+
+        let shift = sample::<BinaryField128>(0x0123_4567_89ab_cdef);
+
+        let tower = LchNtt::<BinaryField128>::default().shifted_ntt_batch(tower_coeffs, shift);
+        let ghash =
+            LchNtt::<Ghash128>::default().shifted_ntt_batch(ghash_coeffs, Ghash128::from(shift));
+
+        // Converting before or after the transform must give the same values.
+        for (t, g) in tower.values.iter().zip(&ghash.values) {
+            assert_eq!(Ghash128::from(*t), *g);
         }
     }
 }

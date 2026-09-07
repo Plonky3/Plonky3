@@ -673,6 +673,81 @@ mod tests {
     }
 
     #[test]
+    fn packed_prefix_row_pair_matches_scalar_lanes() {
+        // Invariant: each lane of the prefix-aware packed pair equals the scalar pair at that
+        // lane's row, and a block holding neither row 0 nor row `height - 1` carries the
+        // constant pair `((0, 0, 1), (0, 0, 0))`.
+        //
+        // Fixture state:
+        //   height = 64 residual rows.
+        //   a prefix accumulator obeying its own `transition = 1 - last` invariant.
+        type Packing = <EF as ExtensionField<F>>::ExtensionPacking;
+
+        let height = 1usize << 6;
+        let half = height / 2;
+        let width = <F as Field>::Packing::WIDTH;
+        let last = EF::from_u64(5);
+        let prefix = BoundaryEvals::new(EF::from_u64(3), last, EF::ONE - last);
+        let num_blocks = half / width;
+
+        for block in 0..num_blocks {
+            // First low-half row covered by this packed block.
+            let row = block * width;
+
+            let (packed_value, packed_diff) =
+                BoundaryEvals::<EF>::row_pair_with_prefix_packed::<F>(row, half, height, prefix);
+
+            for lane in 0..width {
+                // Scalar pair at the single residual row this lane represents.
+                let (scalar_value, scalar_diff) =
+                    BoundaryEvals::row_pair_with_prefix(row + lane, half, height, prefix);
+
+                assert_eq!(
+                    <Packing as PackedFieldExtension<F, EF>>::extract(&packed_value.first, lane),
+                    scalar_value.first
+                );
+                assert_eq!(
+                    <Packing as PackedFieldExtension<F, EF>>::extract(&packed_value.last, lane),
+                    scalar_value.last
+                );
+                assert_eq!(
+                    <Packing as PackedFieldExtension<F, EF>>::extract(
+                        &packed_value.transition,
+                        lane
+                    ),
+                    scalar_value.transition
+                );
+
+                assert_eq!(
+                    <Packing as PackedFieldExtension<F, EF>>::extract(&packed_diff.first, lane),
+                    scalar_diff.first
+                );
+                assert_eq!(
+                    <Packing as PackedFieldExtension<F, EF>>::extract(&packed_diff.last, lane),
+                    scalar_diff.last
+                );
+                assert_eq!(
+                    <Packing as PackedFieldExtension<F, EF>>::extract(
+                        &packed_diff.transition,
+                        lane
+                    ),
+                    scalar_diff.transition
+                );
+
+                // Row 0 lives in block 0; row `height - 1` is the high twin of the last block.
+                if block != 0 && block != num_blocks - 1 {
+                    assert_eq!(scalar_value.first, EF::ZERO);
+                    assert_eq!(scalar_value.last, EF::ZERO);
+                    assert_eq!(scalar_value.transition, EF::ONE);
+                    assert_eq!(scalar_diff.first, EF::ZERO);
+                    assert_eq!(scalar_diff.last, EF::ZERO);
+                    assert_eq!(scalar_diff.transition, EF::ZERO);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn periodic_evals_match_the_materialized_column() {
         // Invariant: the closed form on the low coordinates equals the full column's own extension.
         //

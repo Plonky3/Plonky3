@@ -31,7 +31,6 @@ p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit" }
 p3-dft = { path = "../dft" }
 p3-fri = { path = "../fri" }
-p3-goldilocks = { path = "../goldilocks" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }
 

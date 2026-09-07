@@ -7,7 +7,9 @@ use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, batch_multiplicative_inverse};
+use p3_field::{
+    ExtensionField, Field, HornerIter, TwoAdicField, batch_multiplicative_inverse, dot_product,
+};
 use p3_matrix::Dimensions;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 use thiserror::Error;
@@ -816,14 +818,64 @@ where
     }
     let mut inverse_denominators = batch_multiplicative_inverse(&denominators).into_iter();
 
+    // Within one `log_height`, the powers of `alpha` form a ladder that advances once per opened
+    // column, walking (batch, matrix, point, column) in a fixed order. The column counts come from
+    // the claimed evaluations, which `verify_multi_batch` above has already bound every opened row
+    // to, so the ladder is the same for every query.
+    //
+    // Writing `off` for the ladder position at which an opening point starts, that point contributes
+    //
+    //     sum_i alpha^(off + i) * (p_i(z) - p_i(x)) / (z - x).
+    //
+    // The `p_i(z)` half depends only on the claimed values, so it is shared across all queries. The
+    // remaining `p_i(x)` half is a dot product of extension-field powers against an authenticated
+    // base-field row. This mirrors how the prover builds the same combination in `TwoAdicFriPcs`.
+    let opening_points = || {
+        commitments_with_opening_points
+            .iter()
+            .flat_map(|(_, mats)| {
+                mats.iter().flat_map(|(mat_domain, mat_points_and_values)| {
+                    let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
+                    mat_points_and_values
+                        .iter()
+                        .map(move |(_, ps_at_z)| (log_height, ps_at_z))
+                })
+            })
+    };
+
+    // The longest ladder over all heights bounds how many powers of alpha are ever needed.
+    let mut ladder_lens = BTreeMap::<usize, usize>::new();
+    for (log_height, ps_at_z) in opening_points() {
+        *ladder_lens.entry(log_height).or_insert(0) += ps_at_z.len();
+    }
+    let alpha_powers = alpha
+        .powers()
+        .collect_n(ladder_lens.into_values().max().unwrap_or(0));
+
+    // For each opening point, its ladder start and `sum_i alpha^(off + i) * p_i(z)`.
+    let mut ladder_offsets = BTreeMap::<usize, usize>::new();
+    let point_reductions: Vec<(usize, Challenge)> = opening_points()
+        .map(|(log_height, ps_at_z)| {
+            let offset = ladder_offsets.entry(log_height).or_insert(0);
+            let start = *offset;
+            *offset += ps_at_z.len();
+            let sum_at_z = dot_product(
+                alpha_powers[start..*offset].iter().copied(),
+                ps_at_z.iter().copied(),
+            );
+            (start, sum_at_z)
+        })
+        .collect();
+
     // Combine each query's authenticated values into its reduced openings.
     indices
         .iter()
         .enumerate()
         .map(|(query, _)| {
-            // For each log_height, we store the alpha power and compute the reduced opening.
-            // log_height -> (alpha_pow, reduced_opening)
-            let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
+            // log_height -> reduced_opening
+            let mut reduced_openings = BTreeMap::<usize, Challenge>::new();
+            // The per-opening-point data above, replayed in the same order for this query.
+            let mut reductions = point_reductions.iter();
 
             for (batch, (batch_opening, (_, mats))) in input_openings
                 .iter()
@@ -839,12 +891,13 @@ where
                 {
                     let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
 
-                    let (alpha_pow, ro) = reduced_openings
+                    let ro = reduced_openings
                         .entry(log_height) // Get a mutable reference to the entry.
-                        .or_insert((Challenge::ONE, Challenge::ZERO));
+                        .or_insert(Challenge::ZERO);
 
-                    // For each polynomial `f` in our matrix, compute `(f(z) - f(x))/(z - x)`,
-                    // scale by the appropriate alpha power and add to the reduced opening for this log_height.
+                    // For each opening point, combine this matrix's polynomials with the powers of
+                    // alpha at that point's ladder position, map the combination through
+                    // `(f(z) - f(x))/(z - x)` and add it to the reduced opening for this log_height.
                     for (point, (_z, ps_at_z)) in mat_points_and_values.iter().enumerate() {
                         if mat_opening.len() != ps_at_z.len() {
                             return Err(FriError::PointEvaluationCountMismatch {
@@ -862,13 +915,22 @@ where
                         let quotient = inverse_denominators
                             .next()
                             .expect("one inverse was precomputed per opening point");
-                        for (&p_at_x, &p_at_z) in mat_opening.iter().zip(ps_at_z.iter()) {
-                            // Note we just checked batch proofs to ensure p_at_x is correct.
-                            // x, z were sent by the verifier.
-                            // ps_at_z was sent to the verifier and we are using fri to prove it is correct.
-                            *ro += *alpha_pow * (p_at_z - p_at_x) * quotient;
-                            *alpha_pow *= alpha;
-                        }
+                        // The ladder position and the combination of the claimed values at this
+                        // opening point, precomputed above in this same iteration order.
+                        let &(offset, sum_at_z) = reductions
+                            .next()
+                            .expect("one reduction was precomputed per opening point");
+
+                        // Note we just checked batch proofs to ensure mat_opening is correct.
+                        // x, z were sent by the verifier.
+                        // ps_at_z was sent to the verifier and we are using fri to prove it is correct.
+                        let sum_at_x: Challenge = dot_product(
+                            alpha_powers[offset..offset + mat_opening.len()]
+                                .iter()
+                                .copied(),
+                            mat_opening.iter().copied(),
+                        );
+                        *ro += (sum_at_z - sum_at_x) * quotient;
                     }
                 }
             }
@@ -876,18 +938,14 @@ where
             // The blowup-height entry exists only for a height-1 (constant) trace matrix.
             // Its quotient `(f(zeta) - f(x)) / (zeta - x)` must then be zero.
             // One check after all batches suffices: the random combining challenge rules out cancellation.
-            if let Some((_, ro)) = reduced_openings.get(&params.log_blowup)
+            if let Some(ro) = reduced_openings.get(&params.log_blowup)
                 && !ro.is_zero()
             {
                 return Err(FriError::FinalPolyMismatch);
             }
 
             // Return reduced openings descending by log_height.
-            Ok(reduced_openings
-                .into_iter()
-                .rev()
-                .map(|(log_height, (_, ro))| (log_height, ro))
-                .collect())
+            Ok(reduced_openings.into_iter().rev().collect())
         })
         .collect()
 }

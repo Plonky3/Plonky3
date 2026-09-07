@@ -1,5 +1,7 @@
 //! The additive NTT domain: `F_2`-linear subspaces spanned by the Cantor basis.
 
+use alloc::vec::Vec;
+
 use p3_binary_field::TowerLevel;
 
 /// The `index`-th point of the additive NTT domain, `Σ_r bit_r(index) · v_r`.
@@ -24,6 +26,26 @@ pub fn domain_point<F: TowerLevel>(index: usize) -> F {
     point
 }
 
+/// The increments of `domain_point(index << 1)` as `index` runs upwards from zero.
+///
+/// `domain_point` is `F_2`-linear in its index and `(index − 1) ^ index` is the mask of bits
+/// `0..=k` for `k = index.trailing_zeros()`, so consecutive points differ by
+/// `steps[k] = Σ_{r ≤ k} v_{r+1}`. The `count` entries returned cover every `index` below
+/// `2^count`.
+///
+/// # Panics
+/// Panics if `count` is at least the bit width of `F`.
+#[must_use]
+pub(crate) fn domain_point_steps<F: TowerLevel>(count: usize) -> Vec<F> {
+    let mut point = F::ZERO;
+    (0..count)
+        .map(|r| {
+            point += F::cantor_basis(r + 1);
+            point
+        })
+        .collect()
+}
+
 /// The subspace polynomial `W_j` of `S_j`, defined by `W_0(x) = x` and
 /// `W_j(x) = W_{j−1}(x)² + W_{j−1}(x)`.
 ///
@@ -43,7 +65,18 @@ mod tests {
     use p3_binary_field::{BinaryField8, BinaryField16, BinaryField128, TowerLevel};
     use p3_field::PrimeCharacteristicRing;
 
-    use super::{domain_point, subspace_polynomial};
+    use super::{domain_point, domain_point_steps, subspace_polynomial};
+
+    /// Chaining the increments of a stage reproduces the points a full walk reaches.
+    fn check_steps_chain_to_the_walk<F: TowerLevel>(count: usize) {
+        let steps = domain_point_steps::<F>(count);
+        let mut point = F::ZERO;
+        assert_eq!(point, domain_point::<F>(0));
+        for index in 1..1usize << count {
+            point += steps[index.trailing_zeros() as usize];
+            assert_eq!(point, domain_point::<F>(index << 1), "index={index}");
+        }
+    }
 
     /// The image of every single-bit index is the matching Cantor basis vector, which pins the
     /// basis itself and not merely some graded `F_2`-linear reparametrisation of it.
@@ -83,6 +116,15 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The increments are what a transform adds to a twiddle in place of walking the block
+    /// index, so they have to agree with that walk at every index, not merely at the ends.
+    #[test]
+    fn domain_point_steps_chain_to_the_even_domain_points() {
+        check_steps_chain_to_the_walk::<BinaryField8>(7);
+        check_steps_chain_to_the_walk::<BinaryField16>(10);
+        check_steps_chain_to_the_walk::<BinaryField128>(12);
     }
 
     /// `W_j` vanishes exactly on `S_j`, the span of the first `j` basis vectors.

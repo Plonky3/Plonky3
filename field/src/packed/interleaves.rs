@@ -393,7 +393,7 @@ macro_rules! impl_packed_field_pow_2 {
         ; [ $( ($block_len:expr, $func:ident) ),* $(,)? ],
         $width:expr
     ) => {
-        paste::paste! {
+        $crate::paste::paste! {
             unsafe impl$(<$param_name: $type_param>)? PackedFieldPow2 for $type$(<$param_name>)? {
                 #[inline]
                 fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {

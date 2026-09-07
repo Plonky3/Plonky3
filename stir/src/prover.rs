@@ -489,6 +489,7 @@ where
             next_commit_data: self.new_data.take().expect("set by `fold_and_commit`"),
             next_shift,
             next_log_domain,
+            query_indices: core::mem::take(&mut self.query_indices),
             seen_query_indices: core::mem::take(&mut self.seen_query_indices),
             ans_poly: core::mem::take(&mut self.ans_poly),
         }
@@ -501,6 +502,8 @@ struct RoundFinish<F, EF: Field, M: Mmcs<EF>> {
     next_commit_data: M::ProverData<RowMajorMatrix<EF>>,
     next_shift: F,
     next_log_domain: usize,
+    /// Every query draw of the round, in transcript order, repeats included.
+    query_indices: Vec<usize>,
     seen_query_indices: Vec<usize>,
     ans_poly: Vec<EF>,
 }
@@ -738,6 +741,7 @@ where
     fn finish(self) -> FinalRoundFinish<EF> {
         FinalRoundFinish {
             final_poly: self.final_poly,
+            query_indices: self.query_indices,
             seen_query_indices: self.seen_query_indices,
         }
     }
@@ -746,6 +750,8 @@ where
 /// Everything a finished final round hands back once its transcript phases are done.
 struct FinalRoundFinish<EF: Field> {
     final_poly: Vec<EF>,
+    /// Every query draw of the final round, in transcript order, repeats included.
+    query_indices: Vec<usize>,
     seen_query_indices: Vec<usize>,
 }
 
@@ -917,8 +923,18 @@ where
     (proof, first_round_query_indices)
 }
 
-/// One `(proof, first_round_query_indices)` pair per instance, in `configs` order.
-type StirMultiOutput<EF, M, Witness> = Vec<(StirProof<EF, M, Witness>, Vec<usize>)>;
+/// The fold-domain indices of the queries that read one instance's initial oracle: round 0's,
+/// or the final round's when the instance has no intermediate round.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstRoundQueries {
+    /// Every draw in transcript order, repeats included.
+    pub draws: Vec<usize>,
+    /// The distinct entries of `draws`, ascending.
+    pub unique_sorted: Vec<usize>,
+}
+
+/// One `(proof, first-round queries)` pair per instance, in `configs` order.
+type StirMultiOutput<EF, M, Witness> = Vec<(StirProof<EF, M, Witness>, FirstRoundQueries)>;
 
 /// Per-instance mutable state threaded through [`prove_stir_multi_inner`]'s round loop.
 struct MultiInstanceState<F, EF: Field, M: Mmcs<EF>> {
@@ -928,6 +944,7 @@ struct MultiInstanceState<F, EF: Field, M: Mmcs<EF>> {
     commit_data: Option<M::ProverData<RowMajorMatrix<EF>>>,
     initial_commitment: Option<M::Commitment>,
     round_proofs: Vec<StirRoundProof<EF, M, F>>,
+    first_round_query_draws: Vec<usize>,
     first_round_query_indices: Vec<usize>,
 }
 
@@ -946,7 +963,7 @@ struct MultiInstanceState<F, EF: Field, M: Mmcs<EF>> {
 /// The shared witness is replicated verbatim into every active instance's own proof slot;
 /// `verifier::verify_stir_multi_inner` checks the copies agree before checking the grind once.
 ///
-/// Returns one `(proof, first_round_query_indices)` pair per instance, in `configs` order.
+/// Returns one `(proof, first-round queries)` pair per instance, in `configs` order.
 fn prove_stir_multi_inner<F, EF, Dft, M, Challenger>(
     configs: &[&StirConfig<F, EF, M, Challenger>],
     initial_codewords: Vec<Vec<EF>>,
@@ -997,6 +1014,7 @@ where
             commit_data,
             initial_commitment,
             round_proofs: Vec::with_capacity(configs[i].num_rounds()),
+            first_round_query_draws: Vec::new(),
             first_round_query_indices: Vec::new(),
         });
     }
@@ -1158,6 +1176,7 @@ where
                 query_openings: p.query_openings,
             });
             if r == offset(i) {
+                states[i].first_round_query_draws = finish.query_indices;
                 states[i].first_round_query_indices = finish.seen_query_indices;
             }
             states[i].oracle = finish.next_oracle;
@@ -1212,6 +1231,7 @@ where
 
         let finish = frp.finish();
         if configs[i].num_rounds() == 0 {
+            states[i].first_round_query_draws = finish.query_indices;
             states[i].first_round_query_indices = finish.seen_query_indices;
         }
 
@@ -1225,7 +1245,10 @@ where
         };
         results.push((
             proof,
-            core::mem::take(&mut states[i].first_round_query_indices),
+            FirstRoundQueries {
+                draws: core::mem::take(&mut states[i].first_round_query_draws),
+                unique_sorted: core::mem::take(&mut states[i].first_round_query_indices),
+            },
         ));
     }
 

@@ -166,3 +166,132 @@ impl<F: Clone + Send + Sync, EF, MT: Mmcs<F>> WhirProof<F, EF, MT> {
             .map(|round| round.pow_witness.clone())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_field::Field;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_merkle_tree::{MerkleTreeError, MerkleTreeMmcs, PrunedProofError};
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+
+    type F = BabyBear;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type PackedF = <F as Field>::Packing;
+    type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+    type MyCommitment = <MyMmcs as Mmcs<F>>::Commitment;
+    type MyMultiProof = <MyMmcs as Mmcs<F>>::MultiProof;
+
+    /// One committed matrix opened at a repeated, unsorted query list.
+    ///
+    /// Indices `3` and `61` each appear twice and the list is not sorted --
+    /// exactly the shape independent-draw STIR sampling produces.
+    struct RepeatedIndexFixture {
+        mmcs: MyMmcs,
+        commitment: MyCommitment,
+        opening: SharedProofOpening<F, MyMultiProof>,
+        dimensions: [Dimensions; 1],
+        indices: [usize; 6],
+    }
+
+    impl RepeatedIndexFixture {
+        fn new() -> Self {
+            let mut rng = SmallRng::seed_from_u64(0);
+            let perm = Perm::new_from_rng_128(&mut rng);
+            let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+
+            let height = 64usize;
+            let width = 4usize;
+            let matrix = RowMajorMatrix::new(
+                (0..height * width).map(|_| rng.random::<F>()).collect(),
+                width,
+            );
+            let (commitment, prover_data) = mmcs.commit_matrix(matrix);
+
+            let indices = [3usize, 61, 3, 40, 61, 0];
+            let opening = SharedProofOpening::open(&mmcs, &indices, &prover_data);
+
+            Self {
+                mmcs,
+                commitment,
+                opening,
+                dimensions: [Dimensions { width, height }],
+                indices,
+            }
+        }
+
+        fn verify(&self) -> Result<(), MerkleTreeError> {
+            self.opening.verify(
+                &self.mmcs,
+                &self.commitment,
+                &self.dimensions,
+                &self.indices,
+            )
+        }
+    }
+
+    #[test]
+    fn shared_proof_opening_accepts_repeated_indices() {
+        // Independent-draw STIR sampling (`get_challenge_stir_queries`, the
+        // caller of this opening's `open`/`verify`) allows the same index
+        // to appear more than once in one query list. The pruned-multiproof
+        // MMCS format this opening delegates to must accept that, and must
+        // return the same row content for every occurrence of a repeated
+        // index.
+        let fixture = RepeatedIndexFixture::new();
+
+        // Every occurrence of a repeated index opens to the same row.
+        assert_eq!(
+            fixture.opening.rows[0], fixture.opening.rows[2],
+            "both openings of index 3 must agree"
+        );
+        assert_eq!(
+            fixture.opening.rows[1], fixture.opening.rows[4],
+            "both openings of index 61 must agree"
+        );
+
+        fixture
+            .verify()
+            .expect("pruned-multiproof verification must accept repeated, unsorted indices");
+    }
+
+    #[test]
+    fn shared_proof_opening_rejects_disagreeing_repeated_index() {
+        // The soundness of allowing duplicates rests on *both* occurrences of
+        // a repeated index staying bound to the same leaf. If one occurrence
+        // were free, the prover could choose that opening's fold value at
+        // will; the round's claim is a batched `sum_i gamma^i s_i`, so a
+        // single free `s_i` makes the sumcheck target satisfiable for any
+        // polynomial and the round's proximity check vacuous.
+        //
+        // Deduplication inside the pruned walk is what makes this a real
+        // hazard: the two occupancies collapse to one leaf, so a disagreement
+        // between them has to be an explicit rejection rather than a hash
+        // mismatch. Overwrite the second occurrence of index 3 (slot 2) with
+        // the row belonging to index 40 and check it is caught.
+        let mut fixture = RepeatedIndexFixture::new();
+
+        fixture.opening.rows[2] = fixture.opening.rows[3].clone();
+        assert_ne!(
+            fixture.opening.rows[0], fixture.opening.rows[2],
+            "the two openings of index 3 must actually disagree for this test to bite"
+        );
+
+        // Unique leaves ascending are [0, 3, 40, 61], so index 3 is slot 1.
+        match fixture
+            .verify()
+            .expect_err("disagreeing openings of a repeated index must be rejected")
+        {
+            MerkleTreeError::MalformedPrunedProof(
+                PrunedProofError::InconsistentDuplicateOpenings { slot },
+            ) => assert_eq!(slot, 1),
+            other => panic!("expected an inconsistent-duplicate rejection, got {other:?}"),
+        }
+    }
+}

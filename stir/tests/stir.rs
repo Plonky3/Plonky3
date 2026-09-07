@@ -39,6 +39,14 @@ fn shape_of<E: Debug, IE: Debug>(err: StirError<E, IE>) -> ProofShapeError {
     }
 }
 
+/// `draws`, ascending and deduplicated: the shape the unique-index lists carry.
+fn sorted_dedup(draws: &[usize]) -> Vec<usize> {
+    let mut unique = draws.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    unique
+}
+
 // ---------------------------------------------------------------------------
 // Generic prove/verify harness.
 // ---------------------------------------------------------------------------
@@ -469,6 +477,10 @@ mod babybear_stir {
         let outputs_a = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof_a, &mut v_ch_a)
             .expect("first proof should verify under transcript replay");
         assert_eq!(idx_a, outputs_a.first_round_indices);
+        assert_eq!(
+            sorted_dedup(&outputs_a.first_round_draws),
+            outputs_a.first_round_indices
+        );
 
         let mut p_ch_b = challenger.clone();
         let (proof_b, idx_b) = prove_stir(&config, poly, &dft, &mut p_ch_b);
@@ -476,6 +488,10 @@ mod babybear_stir {
         let outputs_b = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof_b, &mut v_ch_b)
             .expect("second proof should verify under transcript replay");
         assert_eq!(idx_b, outputs_b.first_round_indices);
+        assert_eq!(
+            sorted_dedup(&outputs_b.first_round_draws),
+            outputs_b.first_round_indices
+        );
     }
 
     #[test]
@@ -1261,6 +1277,11 @@ mod babybear_pcs {
         challenger.observe(commit.clone());
     }
 
+    /// `log_starting_folding_factor` of [`get_pcs_with_spread`]'s STIR parameters: the round-0
+    /// fold arity, i.e. the length of each fiber the PCS opens against the committed initial
+    /// oracle.
+    const LOG_STARTING_FOLDING_FACTOR: usize = 2;
+
     fn get_pcs() -> (MyPcs, Challenger) {
         get_pcs_with_spread(p3_stir::DEFAULT_MAX_LOG_HEIGHT_SPREAD)
     }
@@ -1274,7 +1295,7 @@ mod babybear_pcs {
         let stir_params = StirParameters {
             log_blowup: 1,
             log_folding_factor: 2,
-            log_starting_folding_factor: 2,
+            log_starting_folding_factor: LOG_STARTING_FOLDING_FACTOR,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: 16,
             max_pow_bits: 0,
@@ -1869,7 +1890,7 @@ mod babybear_pcs {
     #[test]
     fn test_pcs_single_degree2_no_intermediate_rounds() {
         // log_stir_degree == log_folding_factor, so STIR runs no intermediate rounds and the
-        // final-round queries read the external initial oracle directly.
+        // final-round queries are the ones reading the committed initial oracle.
         do_test_pcs(&[2]);
     }
 
@@ -1886,7 +1907,7 @@ mod babybear_pcs {
     #[test]
     fn test_pcs_two_tier_multiple_different_degrees() {
         // Round 0 folds by k0=4 (log=2); every later round folds by k=8 (log=3) —
-        // exercises the PCS-layer input fiber grouping and reconstruction
+        // exercises the PCS-layer lane sampling and position split
         // (`log_starting_folding_factor`) across multiple height buckets under a schedule
         // that changes arity after round 0.
         #[allow(unused_imports)]
@@ -2029,9 +2050,10 @@ mod babybear_pcs {
         let (stir_commit, stir_data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&stir_pcs, [(stir_domain, mat)]);
         observe_commitment(&mut stir_p_ch, &stir_commit);
-        // STIR's input commitment hashes fiber-grouped leaves, so its root — and hence the
-        // point derived from it — differs from FRI's over the same matrix. Proof size does
-        // not depend on which point is opened, so the comparison stays like-for-like.
+        // STIR's commitment wraps one root per shared-domain group, so the transcript absorbs
+        // a group count before the root and the point derived from it differs from FRI's over
+        // the same matrix. Proof size does not depend on which point is opened, so the
+        // comparison stays like-for-like.
         let stir_zeta: Challenge = stir_p_ch.sample_algebra_element();
         let (stir_openings, stir_proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &stir_pcs,
@@ -2494,6 +2516,154 @@ mod babybear_pcs {
         );
     }
 
+    /// Every bucket's STIR proof carries its own initial-oracle commitment and opens that
+    /// commitment's fibers in round 0, while the input openings hold one LDE row per matrix
+    /// per queried position.
+    #[test]
+    fn test_pcs_proof_commits_the_initial_oracle_and_opens_single_input_rows() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let width = 3;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+
+        let mut p_ch = challenger_template;
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        observe_commitment(&mut p_ch, &commit);
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (_, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        assert_eq!(proof.len(), 1);
+        let (stir_proof, input_openings) = &proof[0];
+        assert!(stir_proof.initial_commitment.is_some());
+        let round0 = stir_proof
+            .round_proofs
+            .first()
+            .expect("log_d = 6 has intermediate rounds");
+        let fibers = round0
+            .query_openings
+            .as_ref()
+            .expect("round 0 opens the committed initial oracle");
+        assert!(
+            fibers
+                .row_evals
+                .iter()
+                .all(|fiber| fiber.len() == 1 << LOG_STARTING_FOLDING_FACTOR)
+        );
+
+        let opening = input_openings[0]
+            .as_ref()
+            .expect("the commitment sits on this bucket");
+        assert!(!opening.opened_values.is_empty());
+        assert!(
+            opening
+                .opened_values
+                .iter()
+                .all(|per_query| per_query.len() == 1 && per_query[0].len() == width),
+            "one row of the single committed matrix per queried position"
+        );
+    }
+
+    /// The round-0 fibers are authenticated against STIR's own commitment: a changed lane
+    /// value fails the Merkle check before any lane comparison runs.
+    #[test]
+    fn test_pcs_rejects_a_tampered_initial_oracle_fiber() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 3);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        observe_commitment(&mut p_ch, &commit);
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        proof[0].0.round_proofs[0]
+            .query_openings
+            .as_mut()
+            .expect("round 0 opens the committed initial oracle")
+            .row_evals[0][0] += Challenge::ONE;
+
+        let mut v_ch = challenger_template;
+        observe_commitment(&mut v_ch, &commit);
+        let _v_zeta: Challenge = v_ch.sample_algebra_element();
+        let claims = vec![(
+            commit,
+            vec![(domain, vec![(zeta, opening_values[0][0][0].clone())])],
+        )];
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
+            .expect_err("a tampered initial-oracle fiber must be rejected");
+        assert!(
+            matches!(
+                err,
+                StirError::InvalidMmcsProof {
+                    round: RoundLabel::Round(0),
+                    ..
+                }
+            ),
+            "expected the round-0 Merkle check to fail, got {err:?}"
+        );
+    }
+
+    /// The single input row per query is authenticated against the input commitment.
+    #[test]
+    fn test_pcs_rejects_a_tampered_input_row() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, 3);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        observe_commitment(&mut p_ch, &commit);
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        proof[0].1[0]
+            .as_mut()
+            .expect("the commitment sits on this bucket")
+            .opened_values[0][0][0] += Val::ONE;
+
+        let mut v_ch = challenger_template;
+        observe_commitment(&mut v_ch, &commit);
+        let _v_zeta: Challenge = v_ch.sample_algebra_element();
+        let claims = vec![(
+            commit,
+            vec![(domain, vec![(zeta, opening_values[0][0][0].clone())])],
+        )];
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
+            .expect_err("a tampered input row must be rejected");
+        assert!(
+            matches!(err, StirError::InputError(_)),
+            "expected the input Merkle check to fail, got {err:?}"
+        );
+    }
+
     /// A per-commitment `opened_values` vector truncated to fewer rows than the queried
     /// positions must be rejected before the MMCS multi-batch verification (which expects
     /// matching lengths) is even called.
@@ -2541,8 +2711,8 @@ mod babybear_pcs {
             ProofShapeError::InputOpenedRowCount {
                 log_height: log_d + 1,
                 commitment: 0,
-                expected: 14,
-                got: 13,
+                expected: 18,
+                got: 17,
             }
         );
     }
@@ -2619,15 +2789,14 @@ mod babybear_pcs {
         let err = verify_with_claimed_degrees(&[8, 8], &[8, 6])
             .expect_err("an understated native height must be rejected");
         // Two classes rather than one give a different `combine_key`, hence a different
-        // `StirConfig`, hence a different first-round query count. The disagreement is caught
-        // by the opened-row shape check before any algebraic check runs.
+        // `StirConfig`, hence a different first-round query count. STIR runs before the lane
+        // check, so the disagreement surfaces on its own round-0 openings.
         assert_eq!(
             shape_of(err),
-            ProofShapeError::InputOpenedRowCount {
-                log_height: 9,
-                commitment: 0,
-                expected: 21,
-                got: 20,
+            ProofShapeError::QueryOpeningCount {
+                round: RoundLabel::Round(0),
+                expected: 22,
+                got: 21,
             }
         );
     }
@@ -2640,11 +2809,10 @@ mod babybear_pcs {
             .expect_err("an overstated native height must be rejected");
         assert_eq!(
             shape_of(err),
-            ProofShapeError::InputOpenedRowCount {
-                log_height: 9,
-                commitment: 0,
-                expected: 17,
-                got: 21,
+            ProofShapeError::QueryOpeningCount {
+                round: RoundLabel::Round(0),
+                expected: 21,
+                got: 22,
             }
         );
     }
@@ -2999,7 +3167,7 @@ mod babybear_pcs {
     }
 
     #[test]
-    fn test_pcs_rejects_stray_initial_commitment() {
+    fn test_pcs_rejects_a_missing_or_swapped_initial_commitment() {
         let (pcs, challenger_template) = get_pcs();
         let mut rng = seeded_rng();
         let log_d = 6;
@@ -3013,27 +3181,40 @@ mod babybear_pcs {
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
         observe_commitment(&mut p_ch, &commit);
         let zeta: Challenge = p_ch.sample_algebra_element();
-        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
             vec![(&data, vec![vec![zeta]])],
             &mut p_ch,
         );
 
-        // The PCS runs STIR with an external initial oracle, so a proof carrying a commitment
-        // to it is malformed: accepting one would let a prover feed the transcript an extra
-        // message the verifier never checks.
-        proof[0].0.initial_commitment = Some(proof[0].0.round_proofs[0].commitment.clone());
+        let verify_with = |proof: &<MyPcs as Pcs<Challenge, Challenger>>::Proof| {
+            let mut v_ch = challenger_template.clone();
+            observe_commitment(&mut v_ch, &commit);
+            let v_zeta: Challenge = v_ch.sample_algebra_element();
+            let claims = vec![(
+                commit.clone(),
+                vec![(domain, vec![(v_zeta, opening_values[0][0][0].clone())])],
+            )];
+            <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, proof, &mut v_ch)
+        };
 
-        let mut v_ch = challenger_template;
-        observe_commitment(&mut v_ch, &commit);
-        let v_zeta: Challenge = v_ch.sample_algebra_element();
-        let claims = vec![(
-            commit,
-            vec![(domain, vec![(v_zeta, opening_values[0][0][0].clone())])],
-        )];
-        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .expect_err("a stray initial commitment must be rejected");
-        assert_eq!(shape_of(err), ProofShapeError::UnexpectedInitialCommitment);
+        // STIR commits the initial oracle itself, and that commitment is what the round-0
+        // fibers — and hence the lane checks — are authenticated against. Dropping it leaves
+        // the transcript a message short.
+        let mut dropped = proof.clone();
+        dropped[0].0.initial_commitment = None;
+        let err = verify_with(&dropped).expect_err("a missing initial commitment is malformed");
+        assert_eq!(shape_of(err), ProofShapeError::MissingInitialCommitment);
+
+        // Swapping it for another root the proof already carries must not authenticate the
+        // round-0 openings.
+        let mut swapped = proof;
+        swapped[0].0.initial_commitment = Some(swapped[0].0.round_proofs[0].commitment.clone());
+        let err = verify_with(&swapped).expect_err("a swapped initial commitment must be rejected");
+        assert!(
+            matches!(err, StirError::InvalidMmcsProof { round, .. } if round == RoundLabel::Round(0)),
+            "expected a round-0 MMCS failure, got {err:?}"
+        );
     }
 }
 
@@ -3043,8 +3224,8 @@ mod babybear_pcs {
 
 mod babybear_stir_multi {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_stir::prover::{prove_stir, prove_stir_multi};
-    use p3_stir::verifier::verify_stir_multi;
+    use p3_stir::prover::{prove_stir, prove_stir_multi, prove_stir_multi_from_external_codewords};
+    use p3_stir::verifier::{verify_stir_multi, verify_stir_multi_with_external_initial};
 
     use super::*;
 
@@ -3125,6 +3306,138 @@ mod babybear_stir_multi {
             });
     }
 
+    /// The round-0 draws the prover reports are exactly the ones the verifier samples, one
+    /// per configured query, and both sides' unique lists are their sorted deduplication.
+    #[test]
+    fn test_multi_first_round_draws_agree_between_prover_and_verifier() {
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        let log_degrees = [8usize, 6];
+        let (configs, polys) = make_instances(&params, &log_degrees);
+        let config_refs: Vec<&StirConfig<F, EF, MyMmcs, Challenger>> = configs.iter().collect();
+
+        let mut p_ch = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys, &dft, &mut p_ch);
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+
+        let mut v_ch = challenger;
+        let outputs =
+            verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proofs, &mut v_ch)
+                .expect("honest multi-instance proof verifies");
+
+        for ((config, (_, first_round)), output) in configs.iter().zip(&results).zip(&outputs) {
+            let expected_draws = if config.num_rounds() == 0 {
+                config.final_queries
+            } else {
+                config.round_configs[0].num_queries
+            };
+            assert_eq!(first_round.draws.len(), expected_draws);
+            assert_eq!(first_round.draws, output.first_round_draws);
+            assert_eq!(sorted_dedup(&first_round.draws), first_round.unique_sorted);
+            assert_eq!(output.first_round_indices, first_round.unique_sorted);
+        }
+    }
+
+    /// The result an external fiber source returns.
+    type FiberResult = Result<Vec<Vec<EF>>, StirError<<MyMmcs as Mmcs<EF>>::Error>>;
+
+    /// Fiber source for one instance's external codeword, honest for the indices STIR queries
+    /// in the round that reads it: lane `l` of query `j` sits at natural-order position
+    /// `j + l * fold_height`, mirroring `verify_external_initial`'s single-instance source.
+    fn external_fiber_source(
+        codeword: Vec<EF>,
+        arity: usize,
+        fold_height: usize,
+    ) -> impl FnOnce(&[usize]) -> FiberResult {
+        move |js: &[usize]| {
+            Ok(js
+                .iter()
+                .map(|&j| (0..arity).map(|l| codeword[j + l * fold_height]).collect())
+                .collect())
+        }
+    }
+
+    /// Prove and verify two different-degree instances whose initial oracles are external,
+    /// exercising `verify_stir_multi_inner`'s per-instance external-oracle wiring: distinct
+    /// `external_fibers[i]` sources, `is_external` flags, and right-aligned instance offsets,
+    /// none of which any other test drives with `initial_is_external == true`.
+    #[test]
+    fn test_multi_external_initial_oracle_verifies() {
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        let log_degrees = [8usize, 6];
+        let (configs, polys) = make_instances(&params, &log_degrees);
+        let config_refs: Vec<&StirConfig<F, EF, MyMmcs, Challenger>> = configs.iter().collect();
+
+        let codewords: Vec<Vec<EF>> = configs
+            .iter()
+            .zip(polys)
+            .map(|(config, coeffs)| {
+                codeword_from_coeffs(
+                    &dft,
+                    coeffs,
+                    F::GENERATOR,
+                    config.log_starting_domain_size(),
+                )
+            })
+            .collect();
+
+        // Binding each codeword before proving is the caller's job. Observing its values
+        // stands in for the PCS layer's input commitments, as in `verify_external_initial`.
+        let mut p_ch = challenger.clone();
+        for codeword in &codewords {
+            p_ch.observe_algebra_slice(codeword);
+        }
+        let results = prove_stir_multi_from_external_codewords(
+            &config_refs,
+            codewords.clone(),
+            &dft,
+            &mut p_ch,
+        );
+        assert_eq!(results.len(), log_degrees.len());
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+
+        let mut v_ch = challenger;
+        for codeword in &codewords {
+            v_ch.observe_algebra_slice(codeword);
+        }
+
+        let initial_fibers: Vec<_> = configs
+            .iter()
+            .zip(&codewords)
+            .map(|(config, codeword)| {
+                let arity = 1usize << config.log_starting_folding_factor;
+                let fold_height = (1usize << config.log_starting_domain_size()) / arity;
+                external_fiber_source(codeword.clone(), arity, fold_height)
+            })
+            .collect();
+
+        let outputs = verify_stir_multi_with_external_initial::<F, EF, MyMmcs, Challenger, (), _>(
+            &config_refs,
+            &proofs,
+            &mut v_ch,
+            initial_fibers,
+        )
+        .expect("honest multi-instance external-oracle proof verifies");
+
+        for (((config, codeword), (_, first_round)), output) in
+            configs.iter().zip(&codewords).zip(&results).zip(&outputs)
+        {
+            let arity = 1usize << config.log_starting_folding_factor;
+            let fold_height = (1usize << config.log_starting_domain_size()) / arity;
+
+            assert_eq!(sorted_dedup(&first_round.draws), first_round.unique_sorted);
+            assert_eq!(output.first_round_indices, first_round.unique_sorted);
+
+            for (&j, evals) in output
+                .first_round_indices
+                .iter()
+                .zip(&output.first_round_fiber_evals)
+            {
+                let expected: Vec<EF> = (0..arity).map(|l| codeword[j + l * fold_height]).collect();
+                assert_eq!(evals, &expected);
+            }
+        }
+    }
+
     #[test]
     fn test_multi_one_bucket() {
         let (params, dft, challenger) = make_params(1, 2, 16, 0);
@@ -3177,7 +3490,8 @@ mod babybear_stir_multi {
         assert_eq!(results.len(), 1);
         let (multi_proof, multi_idx) = &results[0];
 
-        assert_eq!(single_idx, *multi_idx);
+        assert_eq!(single_idx, multi_idx.unique_sorted);
+        assert_eq!(sorted_dedup(&multi_idx.draws), multi_idx.unique_sorted);
         let single_bytes = postcard::to_allocvec(&single_proof).expect("serialize");
         let multi_bytes = postcard::to_allocvec(multi_proof).expect("serialize");
         assert_eq!(

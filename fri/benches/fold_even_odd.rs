@@ -1,4 +1,5 @@
 use core::marker::PhantomData;
+use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
@@ -13,6 +14,8 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
+const LOG_ARITIES: [usize; 3] = [1, 2, 3];
+
 fn bench<F: TwoAdicField, EF: ExtensionField<F>>(c: &mut Criterion, log_sizes: &[usize])
 where
     StandardUniform: Distribution<EF>,
@@ -22,18 +25,21 @@ where
     group.sample_size(10);
     let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
-    for log_size in log_sizes {
-        let n = 1 << log_size;
+    for log_arity in LOG_ARITIES {
+        let arity = 1 << log_arity;
 
-        let mut rng = SmallRng::seed_from_u64(n as u64);
-        let beta = rng.sample(StandardUniform);
-        let mat = RowMajorMatrix::<EF>::rand(&mut rng, n, 2);
+        for log_size in log_sizes {
+            let n = 1 << log_size;
 
-        group.bench_function(BenchmarkId::from_parameter(n), |b| {
-            b.iter(|| {
-                folding.fold_matrix(beta, 1, mat.clone());
+            let mut rng = SmallRng::seed_from_u64(n as u64);
+            let beta = rng.sample(StandardUniform);
+            // The input always holds `2 * n` evaluations, laid out as `arity` per folded output.
+            let mat = RowMajorMatrix::<EF>::rand(&mut rng, (2 * n) / arity, arity);
+
+            group.bench_function(BenchmarkId::new(format!("log_arity_{log_arity}"), n), |b| {
+                b.iter(|| black_box(folding.fold_matrix(beta, log_arity, mat.as_view())));
             });
-        });
+        }
     }
 }
 

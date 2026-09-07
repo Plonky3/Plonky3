@@ -7,16 +7,28 @@ use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
 use crate::MerkleTreeError;
-use crate::MerkleTreeError::{EmptyBatch, IncompatibleHeights, WrongWidth};
+use crate::MerkleTreeError::{EmptyBatch, IncompatibleHeights, WrongBatchSize, WrongWidth};
 
-/// Check that each opened row has exactly the width of its matrix.
+/// Check that the opened rows pair one-to-one with the committed matrices, each at its own width.
 ///
 /// The leaf hash flattens all rows at one height into a single element stream,
 /// so a digest match alone does not pin where one row ends and the next begins.
+///
+/// Both halves of the shape are needed to pin those boundaries:
+///
+/// - One row per committed matrix, so no matrix is skipped.
+/// - Each row exactly as wide as its matrix, so no boundary shifts.
+///
+/// Checking only the widths would leave a short opening to be read as a complete one, since
+/// the rows that are present can each still match the width of the matrix they are paired with.
 pub(crate) fn check_widths<T, R: AsRef<[T]>>(
     dimensions: &[Dimensions],
     opened_values: &[R],
 ) -> Result<(), MerkleTreeError> {
+    if opened_values.len() != dimensions.len() {
+        return Err(WrongBatchSize);
+    }
+
     for (matrix, (dims, row)) in dimensions.iter().zip(opened_values).enumerate() {
         let width = row.as_ref().len();
         if width != dims.width {
@@ -138,6 +150,52 @@ mod tests {
 
     use super::*;
     use crate::{MerkleTreeError, MerkleTreeMmcs};
+
+    #[test]
+    fn width_check_rejects_a_missing_row() {
+        // Invariant: the shape check accepts an opening only when it carries one row per
+        // committed matrix, each row exactly as wide as its matrix.
+        //
+        // Fixture state: two committed matrices, both 4 columns wide.
+        //
+        //     dimensions   : [ 4 wide, 4 wide ]
+        //     opened rows  : [ 4 wide ]
+        //     -> 1 row for 2 matrices
+        //
+        // Pairing the rows against the matrices left to right would walk only the first pair
+        // and find nothing wrong, so the row count has to be checked on its own.
+        let dims = vec![
+            Dimensions {
+                width: 4,
+                height: 8,
+            },
+            Dimensions {
+                width: 4,
+                height: 8,
+            },
+        ];
+        let one_row = vec![vec![BabyBear::ONE; 4]];
+
+        assert!(matches!(
+            check_widths(&dims, &one_row),
+            Err(MerkleTreeError::WrongBatchSize)
+        ));
+
+        // A second row of the right width completes the shape.
+        let both_rows = vec![vec![BabyBear::ONE; 4], vec![BabyBear::ONE; 4]];
+        assert!(check_widths(&dims, &both_rows).is_ok());
+
+        // Mutation: widen the second row to 5 values, leaving the count correct.
+        let wrong_width = vec![vec![BabyBear::ONE; 4], vec![BabyBear::ONE; 5]];
+        assert!(matches!(
+            check_widths(&dims, &wrong_width),
+            Err(MerkleTreeError::WrongWidth {
+                matrix: 1,
+                expected: 4,
+                got: 5,
+            })
+        ));
+    }
 
     type F = BabyBear;
 

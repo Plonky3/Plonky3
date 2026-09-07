@@ -22,7 +22,7 @@
 /// It considerably cuts down on the amount of copy/pasted code.
 macro_rules! from_integer_types {
     ($($type:ty),* $(,)? ) => {
-        $( paste::paste!{
+        $( $crate::paste::paste!{
             /// Given an integer `r`, return the sum of `r` copies of `ONE`:
             ///
             /// `r * Self::ONE =  Self::ONE + ... + Self::ONE (r times)`.
@@ -189,7 +189,7 @@ macro_rules! quotient_map_small_internals {
 macro_rules! quotient_map_small_int {
     ($field:ty, $field_size:ty, [$($small_int:ty),*] ) => {
         $(
-        paste::paste!{
+        $crate::paste::paste!{
             impl QuotientMap<$small_int> for $field {
                 $crate::quotient_map_small_internals!($field, $field_size, $small_int);
             }
@@ -199,7 +199,7 @@ macro_rules! quotient_map_small_int {
 
     ($field:ty, $field_size:ty, $field_param:ty, [$($small_int:ty),*] ) => {
         $(
-        paste::paste!{
+        $crate::paste::paste!{
             impl<FP: $field_param> QuotientMap<$small_int> for $field<FP> {
                 $crate::quotient_map_small_internals!($field, $field_size, $small_int);
             }

@@ -13,7 +13,6 @@ categories.workspace = true
 parallel = ["p3-maybe-rayon/parallel"]
 
 [dependencies]
-hashbrown.workspace = true
 itertools.workspace = true
 libm.workspace = true
 p3-challenger.workspace = true

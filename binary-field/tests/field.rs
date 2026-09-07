@@ -242,6 +242,42 @@ mod binary_field_128 {
     );
 }
 
+/// The same field as the widest tower level, in the polynomial basis of the GHASH modulus.
+///
+/// None of its arithmetic is shared with the tower's, so it runs the whole base suite.
+mod ghash_128 {
+    use num_bigint::BigUint;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field_testing::test_binary_field;
+
+    type F = p3_binary_field::Ghash128;
+
+    const ZEROS: [F; 1] = [F::ZERO];
+    const ONES: [F; 1] = [F::ONE];
+
+    /// Prime factorization of `2^128 - 1`.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 9] {
+        [
+            (BigUint::from(3u32), 1),
+            (BigUint::from(5u32), 1),
+            (BigUint::from(17u32), 1),
+            (BigUint::from(257u32), 1),
+            (BigUint::from(641u32), 1),
+            (BigUint::from(65537u32), 1),
+            (BigUint::from(274177u32), 1),
+            (BigUint::from(6700417u32), 1),
+            (BigUint::from(67280421310721u64), 1),
+        ]
+    }
+
+    test_binary_field!(
+        super::F,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
+}
+
 mod gf2_16_over_gf2_8 {
     use p3_field_testing::{test_extension_field, test_frobenius};
 

@@ -280,6 +280,14 @@ pub enum StirError<MmcsError, InputError = ()> {
         point: usize,
     },
 
+    /// The initial oracle STIR committed disagrees, at a sampled lane, with the reduced
+    /// opening the verifier rebuilt from the input openings at that same LDE position.
+    #[error(
+        "bucket 2^{log_height}, LDE position {position}: committed initial oracle disagrees \
+         with the reduced opening rebuilt from the input openings"
+    )]
+    InitialOracleMismatch { log_height: usize, position: usize },
+
     /// The requested STIR parameters cannot reach `security_level` at some LDE-height bucket.
     #[error("STIR config error: {0}")]
     Config(#[source] StirConfigError),
@@ -315,6 +323,13 @@ impl<E, IE> StirError<E, IE> {
                 commitment,
                 matrix,
                 point,
+            },
+            Self::InitialOracleMismatch {
+                log_height,
+                position,
+            } => StirError::InitialOracleMismatch {
+                log_height,
+                position,
             },
             Self::Config(e) => StirError::Config(e),
             Self::InputError(e) => StirError::InputError(f(e)),

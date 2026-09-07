@@ -23,5 +23,10 @@ pub use dup::Dup;
 pub use field::*;
 pub use helpers::*;
 pub use packed::*;
+// Re-exported so the macros this crate exports can name the token-pasting helper through
+// `$crate`, which resolves at the definition site.
+// Without it every crate expanding one of those macros would need its own dependency on it.
+#[doc(hidden)]
+pub use paste;
 pub use sqrt::{tonelli_shanks, tonelli_shanks_two_adic};
 pub use vectorized::*;
