@@ -58,6 +58,15 @@ pub trait PolynomialSpace: Copy {
     /// The number of elements of the space.
     fn size(&self) -> usize;
 
+    /// Degree multiple of the transition selector in units of a trace column.
+    ///
+    /// The default is for two-adic domains, whose linear selector has degree
+    /// independent of the trace length. Domains using a full trace-space
+    /// selector, such as Circle, return one instead.
+    fn transition_degree_multiple(&self) -> usize {
+        0
+    }
+
     /// The first point in the space.
     fn first_point(&self) -> Self::Val;
 

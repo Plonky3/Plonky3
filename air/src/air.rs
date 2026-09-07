@@ -171,6 +171,10 @@ pub trait BaseAir<F>: Sync {
     /// Normally the prover runs a full symbolic evaluation to compute this.
     /// Overriding this method lets both the prover and verifier skip that
     /// pass when only the degree (not the full constraint list) is needed.
+    /// Domains with a full trace-space transition selector, such as Circle,
+    /// still infer the domain-specific degree and take the maximum of it and
+    /// this hint. The cached degree multiple used by this hint treats transition
+    /// selectors as degree zero and cannot bound their repeated products there.
     ///
     /// The value must be an upper bound on the degree multiple of every
     /// constraint (base and extension). It does not need to be tight, but

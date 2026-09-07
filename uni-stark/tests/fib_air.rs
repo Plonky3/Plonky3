@@ -1,6 +1,7 @@
 use core::borrow::Borrow;
+use std::borrow::Cow;
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, ExtensionBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -230,6 +231,152 @@ fn make_circle_config() -> CircleConfig {
     };
     let challenger = CircleChallenger::from_hasher(vec![], byte_hash);
     CircleConfig::new(pcs, challenger)
+}
+
+struct NonlinearTransitionAir {
+    degree: usize,
+    transition_power: usize,
+    degree_hint: Option<usize>,
+    extension_constraint: bool,
+}
+
+impl<F> BaseAir<F> for NonlinearTransitionAir {
+    fn width(&self) -> usize {
+        1
+    }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        self.degree_hint
+    }
+}
+
+impl<AB: ExtensionBuilder> Air<AB> for NonlinearTransitionAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice()[0];
+        let next = main.next_slice()[0];
+        builder.when_first_row().assert_eq(local, AB::Expr::TWO);
+        let guard = builder
+            .is_transition()
+            .exp_u64(self.transition_power as u64);
+        let constraint = guard * (next - local.into().exp_u64(self.degree as u64) - AB::Expr::ONE);
+        if self.extension_constraint {
+            builder.assert_zero_ext(AB::ExprEF::from(constraint));
+        } else {
+            builder.assert_zero(constraint);
+        }
+    }
+}
+
+fn check_circle_nonlinear_transition(with_hint: bool, extension_constraint: bool) {
+    let config = make_circle_config();
+    // Both sides of power-of-two quotient buckets, plus repeated guards.
+    for (degree, transition_power) in [(2, 1), (3, 1), (4, 1), (5, 1), (8, 1), (9, 1), (3, 3)] {
+        let air = NonlinearTransitionAir {
+            degree,
+            transition_power,
+            degree_hint: with_hint.then_some(degree),
+            extension_constraint,
+        };
+        let mut value = CircleVal::TWO;
+        let trace = RowMajorMatrix::new_col(
+            (0..16)
+                .map(|_| {
+                    let current = value;
+                    value = value.exp_u64(degree as u64) + CircleVal::ONE;
+                    current
+                })
+                .collect(),
+        );
+        let mut proof = prove(&config, &air, trace, &[]);
+        assert_eq!(
+            proof.opened_values.quotient_chunks.len(),
+            (degree + transition_power - 1).next_power_of_two(),
+        );
+        assert!(
+            verify(&config, &air, &proof, &[]).is_ok(),
+            "valid degree-{degree} Circle transition rejected (hint={with_hint})"
+        );
+        proof.opened_values.trace_local[0] += CircleChallenge::ONE;
+        assert!(verify(&config, &air, &proof, &[]).is_err());
+    }
+}
+
+#[test]
+fn circle_nonlinear_transition_without_hint() {
+    check_circle_nonlinear_transition(false, false);
+}
+
+#[test]
+fn circle_nonlinear_transition_with_hint() {
+    check_circle_nonlinear_transition(true, false);
+}
+
+#[test]
+fn circle_nonlinear_transition_extension_constraints() {
+    check_circle_nonlinear_transition(false, true);
+    check_circle_nonlinear_transition(true, true);
+}
+
+struct CirclePeriodicProductAir {
+    column: Vec<CircleVal>,
+    degree: u64,
+}
+
+impl BaseAir<CircleVal> for CirclePeriodicProductAir {
+    fn width(&self) -> usize {
+        1
+    }
+
+    fn num_periodic_columns(&self) -> usize {
+        1
+    }
+
+    fn periodic_columns(&self) -> Cow<'_, [Vec<CircleVal>]> {
+        Cow::Borrowed(core::slice::from_ref(&self.column))
+    }
+}
+
+impl<AB: AirBuilder<F = CircleVal>> Air<AB> for CirclePeriodicProductAir {
+    fn eval(&self, builder: &mut AB) {
+        let periodic: AB::Expr = builder.periodic_values()[0].into();
+        let local = builder.main().current_slice()[0];
+        builder.assert_eq(local, periodic.exp_u64(self.degree));
+    }
+}
+
+#[test]
+fn circle_periodic_products_use_full_trace_degree() {
+    let config = make_circle_config();
+    for degree in [3, 5, 9] {
+        let air = CirclePeriodicProductAir {
+            column: vec![CircleVal::TWO, CircleVal::from_u32(3)],
+            degree,
+        };
+        let trace =
+            RowMajorMatrix::new_col((0..16).map(|i| air.column[i % 2].exp_u64(degree)).collect());
+        let proof = prove(&config, &air, trace, &[]);
+        assert_eq!(
+            proof.opened_values.quotient_chunks.len(),
+            (degree - 1) as usize
+        );
+        assert!(verify(&config, &air, &proof, &[]).is_ok());
+    }
+}
+
+#[test]
+#[cfg(not(debug_assertions))]
+fn circle_invalid_nonlinear_transition_is_rejected() {
+    let config = make_circle_config();
+    let air = NonlinearTransitionAir {
+        degree: 3,
+        transition_power: 3,
+        degree_hint: Some(3),
+        extension_constraint: false,
+    };
+    let trace = RowMajorMatrix::new_col(vec![CircleVal::TWO; 16]);
+    let proof = prove(&config, &air, trace, &[]);
+    assert!(verify(&config, &air, &proof, &[]).is_err());
 }
 
 fn circle_compat_case() -> (

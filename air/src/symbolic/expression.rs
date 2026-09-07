@@ -49,6 +49,13 @@ impl<F: Field> SymLeaf for BaseLeaf<F> {
         }
     }
 
+    fn degree_multiple_with_transition(&self, transition_degree: usize) -> usize {
+        match self {
+            Self::IsTransition => transition_degree,
+            _ => self.degree_multiple(),
+        }
+    }
+
     fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize {
         match self {
             Self::Variable(v) => v.poly_degree(trace_len, periodic_periods),
@@ -351,6 +358,17 @@ mod tests {
 
         // The period-2 column has degree `N - N/2 = N/2`; each squaring doubles it.
         assert_eq!(expr.poly_degree(N, &[2]), (N / 2) << DEPTH);
+        assert_eq!(expr.degree_multiple_with_transition(1), 1 << DEPTH);
+    }
+
+    #[test]
+    fn degree_multiple_counts_every_transition_factor() {
+        let transition = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsTransition);
+        let main =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0));
+        let expr = transition.clone().cube() * (main.cube() - transition);
+        assert_eq!(expr.degree_multiple_with_transition(0), 3);
+        assert_eq!(expr.degree_multiple_with_transition(1), 6);
     }
 
     #[test]

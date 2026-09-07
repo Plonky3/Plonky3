@@ -149,6 +149,12 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         1 << self.log_n
     }
 
+    fn transition_degree_multiple(&self) -> usize {
+        // `1 - normalized_last_selector` lies in the same FFT space as a trace
+        // column; unlike the two-adic selector its degree grows with the trace.
+        1
+    }
+
     fn first_point(&self) -> Self::Val {
         self.shift.to_projective_line().unwrap()
     }
