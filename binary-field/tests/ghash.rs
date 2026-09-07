@@ -97,3 +97,19 @@ fn packed_property_suite_supports_zero_in_small_fields() {
     // Half the random GF(2) denominators are zero; the suite must handle them explicitly.
     p3_field_testing::test_packed_vs_scalar_proptest::<Gf2>();
 }
+
+#[test]
+fn self_algebra_mixed_dot_product_matches_reference() {
+    // The generic field suites cover the scalar type; the packing has no such suite.
+    // It is also the type the sumcheck round kernels instantiate, so pin it here.
+    type P = <Ghash128 as Field>::Packing;
+
+    let mut rng = SmallRng::seed_from_u64(7);
+
+    // Independent operands, and different values in adjacent lanes.
+    let u: [P; 64] = array::from_fn(|_| P::from_fn(|_| rng.random()));
+    let v: [P; 64] = array::from_fn(|_| P::from_fn(|_| rng.random()));
+
+    // Compares every accumulation length against a fully reduced product-then-sum reference.
+    p3_field_testing::test_self_algebra_mixed_dot_product(&u, &v);
+}

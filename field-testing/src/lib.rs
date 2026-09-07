@@ -22,8 +22,8 @@ pub use extension_testing::*;
 use num_bigint::BigUint;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32, PrimeField64,
-    TwoAdicField, batch_multiplicative_inverse,
+    Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32,
+    PrimeField64, TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_util::iter_array_chunks_padded;
 pub use packedfield_testing::*;
@@ -193,6 +193,7 @@ where
     let vec2: [R; 64] = rng.random();
     test_sums(&vec1[..16].try_into().unwrap());
     test_dot_product(&vec1, &vec2);
+    test_self_algebra_mixed_dot_product(&vec1, &vec2);
 
     assert_eq!(
         x.exp_const_u64::<0>(),
@@ -406,6 +407,7 @@ where
     let vec2: [R; 64] = rng.random();
     test_sums(&vec1[..16].try_into().unwrap());
     test_dot_product(&vec1, &vec2);
+    test_self_algebra_mixed_dot_product(&vec1, &vec2);
 
     assert_eq!(
         x.exp_const_u64::<0>(),
@@ -924,6 +926,57 @@ pub fn test_dot_product<R: PrimeCharacteristicRing + Eq + Copy>(u: &[R; 64], v: 
         .zip(v.iter())
         .fold(R::ZERO, |acc, (&lhs, &rhs)| acc + (lhs * rhs));
     assert_eq!(dot_64, R::dot_product::<64>(u, v));
+}
+
+/// Check the mixed dot product of a ring viewed as an algebra over itself.
+///
+/// Every ring is an algebra over itself.
+/// In that case both argument arrays hold ring elements.
+/// The result must then equal the plain pairwise-multiply-then-add value.
+///
+/// The reference accumulates left to right, which pins one summation order.
+/// The implementation is free to reassociate the sum, or to delay modular reductions to the end.
+/// Both are exact in a commutative ring, so the two values must agree exactly.
+pub fn test_self_algebra_mixed_dot_product<R: PrimeCharacteristicRing + Eq + Copy>(
+    u: &[R; 64],
+    v: &[R; 64],
+) {
+    // Reference for the first `n` pairs: one fully reduced product each, added left to right.
+    fn reference<R: PrimeCharacteristicRing + Copy>(u: &[R], v: &[R], n: usize) -> R {
+        (0..n).fold(R::ZERO, |acc, i| acc + u[i] * v[i])
+    }
+
+    // The length is a compile-time constant, so the cases are spelled out rather than looped over.
+    macro_rules! check_len {
+        ($n:literal) => {
+            assert_eq!(
+                <R as Algebra<R>>::mixed_dot_product::<$n>(
+                    u[..$n].try_into().unwrap(),
+                    v[..$n].try_into().unwrap(),
+                ),
+                reference(u, v, $n),
+                "mixed dot product over {} pairs disagrees with the reference",
+                $n,
+            );
+        };
+    }
+
+    // Empty sum and single pair are the two degenerate lengths.
+    check_len!(0);
+    check_len!(1);
+
+    // 2, 4 and 8 fall exactly on the balanced-tree cases of the summation helper.
+    check_len!(2);
+    check_len!(4);
+    check_len!(8);
+
+    // 3, 5 and 13 are not powers of two, so they exercise the ragged tail of the tree.
+    check_len!(3);
+    check_len!(5);
+    check_len!(13);
+
+    // 64 is long enough to cross the chunked path of the summation helper.
+    check_len!(64);
 }
 
 pub fn test_sums<R: PrimeCharacteristicRing + Eq + Copy>(u: &[R; 16]) {

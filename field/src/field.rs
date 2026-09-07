@@ -310,10 +310,25 @@ pub trait PrimeCharacteristicRing:
     }
 
     /// Compute the dot product of two vectors.
+    ///
+    /// ```text
+    ///     result = u[0]*v[0] + u[1]*v[1] + ... + u[N-1]*v[N-1]
+    /// ```
+    ///
+    /// The products are combined with a balanced tree rather than a running accumulator.
+    /// A running accumulator makes every addition wait for the previous one to retire.
+    /// The tree keeps several partial sums in flight, so the latency chain is shorter.
+    ///
+    /// Rings whose modular reduction is linear over the accumulated representation
+    /// should override this to accumulate all `N` products unreduced and reduce once.
     #[must_use]
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        u.iter().zip(v).map(|(x, y)| x.dup() * y.dup()).sum()
+        // Materialise the `N` products first, so none of the multiplies waits on a sum.
+        let products: [Self; N] = array::from_fn(|i| u[i].dup() * v[i].dup());
+
+        // Balanced tree of depth log2(N) instead of a linear chain of N - 1 adds.
+        Self::sum_array::<N>(&products)
     }
 
     /// Compute the sum of a slice of elements whose length is a compile time constant.
@@ -872,7 +887,20 @@ pub fn chunked_linear_combination<const CHUNK: usize, A: Algebra<F> + Dup, F: Du
 }
 
 // Every ring is an algebra over itself.
-impl<R: PrimeCharacteristicRing> Algebra<R> for R {}
+impl<R: PrimeCharacteristicRing> Algebra<R> for R {
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[R; N]) -> Self {
+        // Scalars and algebra elements are the same type here, so the ring's own
+        // dot product accepts both sides unchanged.
+        //
+        //     mixed dot product over (R, R)  ==  R's own dot product
+        //
+        // That primitive is where delayed reduction lives: a ring that can accumulate
+        // `N` products in an unreduced representation reduces once instead of `N` times.
+        // Without this delegation the generic tile kernels would never see it.
+        Self::dot_product::<N>(a, f)
+    }
+}
 
 /// A collection of methods designed to help hash field elements.
 ///

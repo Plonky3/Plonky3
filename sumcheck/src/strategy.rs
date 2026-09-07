@@ -47,9 +47,11 @@ const K: usize = 8;
 ///     leading  += sum_i  (w_hi[i] - w_lo[i]) * (e_hi[i] - e_lo[i])
 /// ```
 ///
-/// where `lo`, `hi` are the two faces of the active variable. Each sum is
-/// one delayed-reduction dot product over `K` pairs, collapsing `K`
-/// widening multiplies into one Montgomery reduce per output coordinate.
+/// where `lo`, `hi` are the two faces of the active variable.
+///
+/// Each sum is one delayed-reduction dot product over `K` pairs.
+/// It collapses `K` widening multiplies into one modular reduction per output coordinate.
+/// A Monty-31 packing reduces once with Montgomery, a binary field folds the modulus once.
 #[inline(always)]
 fn chunk_round_step<B, A>(e_lo: &[B; K], e_hi: &[B; K], w_lo: &[A; K], w_hi: &[A; K]) -> (A, A)
 where
