@@ -962,8 +962,7 @@ pub(crate) mod test {
         ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField64, dot_product,
     };
     use p3_matrix::dense::RowMajorMatrixView;
-    #[cfg(feature = "parallel")]
-    use p3_maybe_rayon::prelude::should_split;
+    use p3_maybe_rayon::prelude::{current_num_threads, should_split};
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
@@ -1629,9 +1628,12 @@ pub(crate) mod test {
 
         // One item of the fold moves three field elements: two read, one rewritten.
         // Asking the shared policy with that shape is what the fold itself asks.
-        // Only a build with a thread pool ever splits, so the arm is pinned there.
-        #[cfg(feature = "parallel")]
-        assert!(should_split(mid, 3 * size_of::<F>()));
+        //
+        // A pool of one worker never splits, so the arm only exists above that.
+        // That covers a serial build and a single-vCPU runner alike.
+        if current_num_threads() > 1 {
+            assert!(should_split(mid, 3 * size_of::<F>()));
+        }
         let p_left_0 = F::from_u64(1);
         let p_right_0 = F::from_usize(mid + 1);
         let p_left_1 = F::from_u64(2);

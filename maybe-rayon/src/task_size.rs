@@ -84,8 +84,7 @@ const PICOS_PER_BYTE: u64 = 100;
 ///     32 workers : 13 us per dispatch
 /// ```
 ///
-/// - Asking 0.625 us per worker demands a loop worth about 1.5 dispatches.
-/// - That buys a clear win rather than a coin flip.
+/// - Asking 0.625 us per worker demands a loop the model prices at 1.5 dispatches.
 /// - Scaling with the pool is what keeps a 96-core host from splitting at a loss.
 ///
 /// ```text
@@ -93,6 +92,12 @@ const PICOS_PER_BYTE: u64 = 100;
 ///     32 workers : 20 us
 ///     96 workers : 60 us
 /// ```
+///
+/// How much real work that is depends on how closely a body matches the rate.
+/// A narrow-field fold is priced about 1.6x high, so its gate sits nearer one dispatch.
+///
+/// Both dispatch figures come from large pools, and the rule is extrapolated through the
+/// origin down to two workers, which is not measured.
 const MIN_PARALLEL_PICOS_PER_WORKER: u64 = 625_000;
 
 /// Time one task holds once a loop does split, in picoseconds.
