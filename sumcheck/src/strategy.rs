@@ -80,6 +80,23 @@ where
     (acc0 + w0 * e0, acc_inf + (w1 - w0) * (e1 - e0))
 }
 
+/// Splits a `2K`-wide chunk into the two faces of the suffix round variable.
+///
+/// The suffix variable is the low index bit, so the two faces of a point are
+/// adjacent entries:
+///
+/// ```text
+///     chunk : [ t0, t1, t2, t3, ... ]
+///     lo    : [ t0, t2, ... ]           the variable at 0
+///     hi    : [ t1, t3, ... ]           the variable at 1
+/// ```
+#[inline(always)]
+fn gather_pairs<T: Copy>(chunk: &[T]) -> ([T; K], [T; K]) {
+    let lo: [T; K] = core::array::from_fn(|i| chunk[2 * i]);
+    let hi: [T; K] = core::array::from_fn(|i| chunk[2 * i + 1]);
+    (lo, hi)
+}
+
 /// Component-wise sum of two `(constant, leading)` accumulator pairs.
 #[inline(always)]
 fn round_reduce<A: Copy + PrimeCharacteristicRing>(a: (A, A), b: (A, A)) -> (A, A) {
@@ -548,6 +565,328 @@ where
     RoundMessage { c_a, c_inf }
 }
 
+/// Round message of an interleaved pair, serial.
+///
+/// The suffix counterpart of the split-face scaffold: the two faces of the round
+/// variable are adjacent entries rather than separate slices, so each tile gathers
+/// them itself.
+///
+/// Parallelism is left to the caller, which owns the outer loop.
+#[inline]
+fn round_coefficients_pairs<A>(evals: &[A], weights: &[A]) -> (A, A)
+where
+    A: Algebra<A> + Copy,
+{
+    // Whole tiles first, leftovers after.
+    // A tile is `K` pairs, so `2K` consecutive entries.
+    let (e_main, e_tail) = evals.as_chunks::<{ 2 * K }>();
+    let (w_main, w_tail) = weights.as_chunks::<{ 2 * K }>();
+
+    // Main loop: K pairs per iteration through delayed-reduction dot products.
+    let main = e_main
+        .iter()
+        .zip(w_main)
+        .fold((A::ZERO, A::ZERO), |acc, (e_chunk, w_chunk)| {
+            let (e_lo, e_hi) = gather_pairs::<A>(e_chunk);
+            let (w_lo, w_hi) = gather_pairs::<A>(w_chunk);
+            round_reduce(acc, chunk_round_step(&e_lo, &e_hi, &w_lo, &w_hi))
+        });
+
+    // Tail: fewer than K pairs, so a streaming fold with eager reduction is fine.
+    let tail = e_tail
+        .chunks(2)
+        .zip(w_tail.chunks(2))
+        .fold((A::ZERO, A::ZERO), |acc, (e, w)| {
+            round_step(acc, e[0], e[1], w[0], w[1])
+        });
+
+    round_reduce(main, tail)
+}
+
+/// Binds the low index bit of a table into a half-size destination.
+///
+/// Each output entry is the line through its input pair, sampled at the challenge:
+///
+/// ```text
+///     src : [ a0, a1 | a2, a3 | a4, a5 | ... ]
+///     dst : [ b0     | b1     | b2     | ... ]
+///
+///     b_g = a_{2g} + (a_{2g+1} - a_{2g}) * r
+/// ```
+///
+/// The destination is never the source, so no entry is read after it is written.
+#[inline]
+fn bind_pairs<A, Ch>(dst: &mut [A], src: &[A], r: Ch)
+where
+    A: Algebra<Ch> + Copy,
+    Ch: Copy,
+{
+    // Every destination entry is written, so nothing it held before can be read back.
+    debug_assert_eq!(2 * dst.len(), src.len());
+
+    for (out, pair) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
+        *out = pair[0] + (pair[1] - pair[0]) * r;
+    }
+}
+
+/// Destination buffers for the out-of-place suffix fused pass.
+///
+/// One pair of buffers serves every round of a sumcheck.
+///
+/// A round writes its bound tables into the buffers, then the two trade places.
+/// The storage a round hands over is twice as long as the buffer it receives, so
+/// every later round finds a destination already long enough.
+///
+/// ```text
+///     round 1:  tables 2^n     buffers  0        -> allocate 2^{n-1}
+///     round 2:  tables 2^{n-1} buffers 2^n       -> truncate to 2^{n-2}
+///     round 3:  tables 2^{n-2} buffers 2^{n-1}   -> truncate to 2^{n-3}
+/// ```
+///
+/// One allocation per sumcheck side, not one per round.
+#[derive(Debug, Clone)]
+pub struct FoldBuffers<A> {
+    /// Destination for the bound evaluation table.
+    evals: Vec<A>,
+    /// Destination for the bound weight table.
+    weights: Vec<A>,
+}
+
+impl<A> Default for FoldBuffers<A> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<A> FoldBuffers<A> {
+    /// Creates empty buffers, to be sized by the first round that uses them.
+    pub const fn new() -> Self {
+        Self {
+            evals: Vec::new(),
+            weights: Vec::new(),
+        }
+    }
+}
+
+/// Binds a suffix variable and measures the bound pair's round message in one pass.
+///
+/// # Overview
+///
+/// Both tables come back bound to half their length.
+///
+/// The message is the one a separate measuring pass over the bound tables returns.
+///
+/// # Algorithm
+///
+/// The pass touches two variables at once.
+/// One is bound now.
+/// The other is the one the returned message sums over.
+///
+/// The suffix variable is the low index bit, so the four points of those two
+/// variables are four consecutive entries, and binding compacts each group of
+/// four into two:
+///
+/// ```text
+///     in  : [ a0, a1, a2, a3 | a4, a5, a6, a7 | ... ]
+///     out : [ b0, b1         | b2, b3         | ... ]
+///
+///     b_{2g}   = a_{4g}   + (a_{4g+1} - a_{4g})   * r
+///     b_{2g+1} = a_{4g+2} + (a_{4g+3} - a_{4g+2}) * r
+/// ```
+///
+/// Those two entries are the two faces the message sums over, so a block binds
+/// its own output and measures it straight afterwards, while it is still in cache.
+///
+/// # Why the destination is a separate buffer
+///
+/// Output index `g` reads input indices `2g` and `2g+1`, both at or above `g`.
+/// The fold is therefore a compaction: writes land at indices no higher than the
+/// reads they depend on, so one serial forward sweep could safely write in place.
+///
+/// Blocked parallelism breaks that.
+///
+/// Cut the output into blocks at `G_0 = 0 < G_1 < ...`:
+///
+/// ```text
+///     block 0 : writes [ 0,   G_1 )     reads [ 0,     2 G_1 )
+///     block 1 : writes [ G_1, G_2 )     reads [ 2 G_1, 2 G_2 )
+/// ```
+///
+/// Block 1 writes from `G_1`, and block 0 reads up to `2 G_1`.
+///
+/// Any non-empty first block has `G_1 < 2 G_1`, so those ranges always overlap.
+/// One task would be overwriting entries another task has yet to read.
+///
+/// A separate half-size destination removes the overlap outright.
+/// The pass then stays single and stays parallel.
+///
+/// # Arguments
+///
+/// - `evals` - evaluation table, before this binding.
+/// - `weights` - weight table, before this binding.
+///
+/// - `buffers` - destination buffers, resized here and traded with the tables.
+/// - `r` - challenge the round variable binds to.
+///
+/// # Returns
+///
+/// - `c_a` - the bound pair's round polynomial at 0.
+/// - `c_inf` - its leading coefficient.
+///
+/// # Performance
+///
+/// O(2^n), at the same multiply count as binding and measuring separately.
+/// What it saves is one pass over the bound tables.
+///
+/// # Panics
+///
+/// - The two tables must have the same length.
+/// - The length must be at least four and a multiple of four.
+///   The bound table then keeps the variable the message sums over.
+pub fn fold_and_round_coefficients_suffix<A, Ch>(
+    evals: &mut Poly<A>,
+    weights: &mut Poly<A>,
+    buffers: &mut FoldBuffers<A>,
+    r: Ch,
+) -> RoundMessage<A>
+where
+    A: Algebra<Ch> + Copy + Send + Sync,
+    Ch: Copy + Send + Sync,
+{
+    let message = bind_and_measure_pairs(
+        evals.as_slice(),
+        weights.as_slice(),
+        &mut buffers.evals,
+        &mut buffers.weights,
+        r,
+    );
+
+    // Trade places: the bound buffers become the tables, and the storage the tables
+    // had becomes the destination the next round writes into.
+    swap_storage(evals, &mut buffers.evals);
+    swap_storage(weights, &mut buffers.weights);
+
+    message
+}
+
+/// Hands a buffer to a table and takes the table's old storage as the buffer.
+///
+/// The old storage is twice the length of the buffer replacing it, so it always has
+/// room for the next round's output.
+#[inline]
+fn swap_storage<A>(table: &mut Poly<A>, buffer: &mut Vec<A>) {
+    let bound = core::mem::take(buffer);
+    *buffer = core::mem::replace(table, Poly::new(bound)).into_evals();
+}
+
+/// Gives a destination buffer the length one round writes.
+///
+/// A buffer handed back by the previous round is longer than the next one needs.
+/// The common case is therefore a length update and no allocation at all.
+///
+/// Growing happens once per sumcheck, on the round that first uses the buffer.
+/// Whatever the grown entries hold is overwritten before anything reads them, so only
+/// the cost of reaching the length matters.
+///
+/// Filling a large destination one entry at a time costs more than the pass it feeds.
+///
+/// The fill is spread across threads exactly when the round that follows is.
+/// One decision covers both, so there is no second threshold to keep in step.
+#[inline]
+fn resize_destination<A>(buffer: &mut Vec<A>, len: usize, threaded: bool)
+where
+    A: PrimeCharacteristicRing + Copy + Send + Sync,
+{
+    if buffer.len() >= len {
+        buffer.truncate(len);
+    } else if threaded {
+        *buffer = (0..len).into_par_iter().map(|_| A::ZERO).collect();
+    } else {
+        buffer.resize(len, A::ZERO);
+    }
+}
+
+/// The pass behind the binding above, over the raw tables.
+///
+/// The destinations are resized to the bound length and fully overwritten, so
+/// whatever they held before is never read.
+fn bind_and_measure_pairs<A, Ch>(
+    evals: &[A],
+    weights: &[A],
+    evals_out: &mut Vec<A>,
+    weights_out: &mut Vec<A>,
+    r: Ch,
+) -> RoundMessage<A>
+where
+    A: Algebra<Ch> + Copy + Send + Sync,
+    Ch: Copy + Send + Sync,
+{
+    // Precondition: paired tables, with a variable left over for the message.
+    //
+    // Zero is a multiple of four, so an empty pair would otherwise pass here and
+    // return a zero message instead of panicking.
+    assert_eq!(evals.len(), weights.len());
+    assert!(evals.len() >= 4 && evals.len().is_multiple_of(4));
+
+    // Binding halves the length.
+    let half = evals.len() / 2;
+
+    // The pass covers the whole table, not just the bound half.
+    //
+    // So the par-vs-serial split is gated on the whole table.
+    // That puts about as much work in one task as a measuring pass does at its own gate.
+    let threaded = evals.len() > PAR_THRESHOLD;
+
+    // Size the destinations to the bound length.
+    resize_destination(evals_out, half, threaded);
+    resize_destination(weights_out, half, threaded);
+
+    // Bound index positions one block writes before measuring them.
+    //
+    // A block keeps one bound face of each table hot across the two steps, where a
+    // prefix block keeps four half-apart faces, so the same byte budget buys twice
+    // as many positions.
+    //
+    // Twice a whole number of tiles is still a whole number of tiles, so no block
+    // ends mid-tile.
+    let block_len = 2 * fused_block::<A>();
+
+    // One block: bind its own slice of the destination, then measure it while hot.
+    let block = |e_in: &[A], w_in: &[A], e_out: &mut [A], w_out: &mut [A]| {
+        bind_pairs(e_out, e_in, r);
+        bind_pairs(w_out, w_in, r);
+        round_coefficients_pairs(e_out, w_out)
+    };
+
+    // Each destination block reads exactly the twice-as-long input block at the same
+    // position, and no block writes where another reads.
+    let (c_a, c_inf) = if threaded {
+        evals_out
+            .par_chunks_mut(block_len)
+            .zip(weights_out.par_chunks_mut(block_len))
+            .zip(evals.par_chunks(2 * block_len))
+            .zip(weights.par_chunks(2 * block_len))
+            .par_fold_reduce(
+                || (A::ZERO, A::ZERO),
+                |acc, (((e_out, w_out), e_in), w_in)| {
+                    round_reduce(acc, block(e_in, w_in, e_out, w_out))
+                },
+                round_reduce,
+            )
+    } else {
+        evals_out
+            .chunks_mut(block_len)
+            .zip(weights_out.chunks_mut(block_len))
+            .zip(evals.chunks(2 * block_len))
+            .zip(weights.chunks(2 * block_len))
+            .fold((A::ZERO, A::ZERO), |acc, (((e_out, w_out), e_in), w_in)| {
+                round_reduce(acc, block(e_in, w_in, e_out, w_out))
+            })
+    };
+
+    RoundMessage { c_a, c_inf }
+}
+
 /// Computes the round message for a suffix-binding sumcheck round.
 ///
 /// # Inputs
@@ -581,14 +920,6 @@ where
     let body_elems = body_pairs * 2;
     let (evals_main, evals_tail) = evals.split_at(body_elems);
     let (weights_main, weights_tail) = weights.split_at(body_elems);
-
-    #[inline(always)]
-    fn gather_pairs<T: Copy>(chunk: &[T]) -> ([T; K], [T; K]) {
-        // Layout: [t0, t1, t2, t3, ...]; even indices = "0", odd indices = "1".
-        let lo: [T; K] = core::array::from_fn(|i| chunk[2 * i]);
-        let hi: [T; K] = core::array::from_fn(|i| chunk[2 * i + 1]);
-        (lo, hi)
-    }
 
     let main: (A, A) = if evals.len() > PAR_THRESHOLD {
         evals_main
@@ -876,13 +1207,15 @@ impl VariableOrder {
 /// The tables lag by one binding for as long as a challenge is outstanding.
 ///
 /// Anything that reads the tables therefore applies the outstanding binding first.
-/// The arity is the one exception: it is a length, so subtracting the outstanding
-/// binding answers it exactly without touching the data.
 ///
-/// Holding the challenge in the prover rather than in a driver's local is what lets
-/// a caller that asks for one round at a time still get one pass per round.
-/// Such a caller has to interleave its own work between rounds, so it cannot ask for
-/// several at once.
+/// The arity is the one exception.
+/// It is a length, so subtracting the outstanding binding answers it exactly.
+///
+/// Keeping the challenge here rather than in a driver's local is what lets a caller
+/// that asks for one round at a time still get one pass per round.
+///
+/// Such a caller interleaves its own work between rounds.
+/// It cannot ask for several rounds at once.
 #[derive(Debug, Clone)]
 pub struct SumcheckProver<F: Field, EF: ExtensionField<F>> {
     /// Paired evaluation and weight polynomials for the quadratic sumcheck.
@@ -966,12 +1299,22 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// The slot is cleared here.
     /// The caller puts this round's own challenge back into it.
     pub(crate) fn measure_round(&mut self) -> (EF, EF) {
-        match self.outstanding.take() {
+        let message = match self.outstanding.take() {
             // A challenge is waiting, so bind and measure in one pass.
             Some(r) => self.poly.fold_round_coefficients(r),
             // Nothing waiting, so this is a plain measuring pass.
             None => self.poly.round_coefficients(),
-        }
+        };
+
+        // Invariant: the claim is the inner product of the pair this round measured.
+        //
+        // The claim describes the table this pass measured.
+        // The binding this pass absorbed is what brought the tables up to it.
+        //
+        // A stale table, or a binding that landed wrong, breaks the equality here.
+        debug_assert_eq!(self.sum, self.poly.dot_product());
+
+        message
     }
 
     /// Holds a challenge back for the next measuring pass to absorb.
@@ -1010,6 +1353,8 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// Leaves the evaluation side untouched, so downstream reductions can
     /// reuse it as the honest folded message.
     pub(crate) fn scale_weights_and_claim(&mut self, scale: EF) {
+        // Scaling every entry commutes with binding, so the order does not change the result.
+        // Settling first halves the number of entries to scale.
         self.settle();
         self.poly.scale_weights(scale);
         self.sum *= scale;
@@ -1401,6 +1746,136 @@ mod tests {
             prop_assert_eq!(got.c_a, want.c_a);
             prop_assert_eq!(got.c_inf, want.c_inf);
         }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_fold_and_round_coefficients_suffix_matches_bind_then_measure(
+            k in 2usize..=16,
+            seed in any::<u64>(),
+        ) {
+            // Invariant: the fused suffix pass is bind-then-measure, in one traversal.
+            //
+            //     two passes: bind the tables, then measure the bound pair
+            //     fused     : one pass writing a half-size destination and measuring it
+            //
+            // Both the bound tables and the message have to come out identical.
+            // A prover on the fused path would otherwise send a different transcript.
+            //
+            // Fixture state: 2^k paired random entries, one random challenge.
+            // The range straddles the 8-wide tiled body and the par-vs-serial split.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let n = 1usize << k;
+            let evals: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let r: EF = rng.random();
+
+            // Reference arm: bind both tables, then measure the bound pair.
+            let mut want_evals = Poly::new(evals.clone());
+            let mut want_weights = Poly::new(weights.clone());
+            want_evals.fix_suffix_var_mut(r);
+            want_weights.fix_suffix_var_mut(r);
+            let want = super::sumcheck_coefficients_suffix(
+                want_evals.as_slice(),
+                want_weights.as_slice(),
+            );
+
+            // Fused arm: one pass binds both tables and measures the bound pair.
+            let mut got_evals = Poly::new(evals);
+            let mut got_weights = Poly::new(weights);
+            let mut buffers = super::FoldBuffers::new();
+            let got = super::fold_and_round_coefficients_suffix(
+                &mut got_evals,
+                &mut got_weights,
+                &mut buffers,
+                r,
+            );
+
+            // The bound tables must agree entry for entry.
+            prop_assert_eq!(got_evals.as_slice(), want_evals.as_slice());
+            prop_assert_eq!(got_weights.as_slice(), want_weights.as_slice());
+
+            // And so must the two values the round sends.
+            prop_assert_eq!(got.c_a, want.c_a);
+            prop_assert_eq!(got.c_inf, want.c_inf);
+        }
+    }
+
+    #[test]
+    fn reused_fold_buffers_bind_every_suffix_round_correctly() {
+        // Invariant: one pair of buffers serves a whole sumcheck.
+        //
+        // The tables and the buffers trade places each round.
+        // A buffer therefore arrives holding entries from two rounds ago.
+        //
+        // Every destination entry is written before it is read.
+        // Those stale entries can never reach a round message.
+        //
+        // Fixture state: 2^15 paired entries, bound down to 4.
+        // The first rounds run the threaded branch, the last ones the serial branch.
+        //
+        //     round 1: tables 2^15 -> 2^14      buffers allocated
+        //     round 2: tables 2^14 -> 2^13      round-1 storage reused
+        //     ...
+        //     round 13: tables 4 -> 2           the shortest fusable table
+        const NUM_VARIABLES: usize = 15;
+
+        let mut rng = SmallRng::seed_from_u64(0xB0FFE7);
+        let evals = Poly::<EF>::rand(&mut rng, NUM_VARIABLES);
+        let weights = Poly::<EF>::rand(&mut rng, NUM_VARIABLES);
+
+        // Reference arm: bind on the spot, measure the bound pair separately.
+        let mut want_evals = evals.clone();
+        let mut want_weights = weights.clone();
+
+        // Arm under test: one pass per round, into buffers reused throughout.
+        let mut got_evals = evals;
+        let mut got_weights = weights;
+        let mut buffers = super::FoldBuffers::new();
+
+        // Stop with four entries left: below that the pass has no variable to measure.
+        for round in 0..NUM_VARIABLES - 1 {
+            let r: EF = rng.random();
+
+            want_evals.fix_suffix_var_mut(r);
+            want_weights.fix_suffix_var_mut(r);
+            let want =
+                super::sumcheck_coefficients_suffix(want_evals.as_slice(), want_weights.as_slice());
+
+            let got = super::fold_and_round_coefficients_suffix(
+                &mut got_evals,
+                &mut got_weights,
+                &mut buffers,
+                r,
+            );
+
+            assert_eq!(got_evals.as_slice(), want_evals.as_slice(), "round {round}");
+            assert_eq!(
+                got_weights.as_slice(),
+                want_weights.as_slice(),
+                "round {round}"
+            );
+            assert_eq!(got.c_a, want.c_a, "round {round}");
+            assert_eq!(got.c_inf, want.c_inf, "round {round}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn suffix_binding_rejects_a_pair_with_nothing_left_to_measure() {
+        // Invariant: a pair too short to leave a variable is rejected, not measured.
+        //
+        // Two entries bind down to one, and a one-entry table has nothing to sum over.
+        // Producing no tiles and reporting a zero message would look like a real round.
+        let mut evals = Poly::new(vec![EF::ONE; 2]);
+        let mut weights = Poly::new(vec![EF::ONE; 2]);
+        let mut buffers = super::FoldBuffers::new();
+        let _ = super::fold_and_round_coefficients_suffix(
+            &mut evals,
+            &mut weights,
+            &mut buffers,
+            EF::ONE,
+        );
     }
 
     #[test]

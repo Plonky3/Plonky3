@@ -370,11 +370,12 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::BinaryPcs;
+    use super::{BinaryPcs, Poly};
     use crate::error::BinaryPcsError;
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::proof::BinaryPcsProof;
-    use crate::test_util::{MyMmcs, challenger, mmcs, run_lifecycle};
+    use crate::prover::{BinaryPcsProverData, fold_rounds_binding_each_round, open_queries};
+    use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs, run_lifecycle};
 
     type F = BinaryField128;
 
@@ -405,6 +406,134 @@ mod tests {
 
         let mut verifier_challenger = challenger();
         pcs.verify(&commitment, &decoded, &mut verifier_challenger, protocol)
+            .unwrap();
+    }
+
+    /// Mirrors the shipped opening entry point, with the fold rounds driven through the
+    /// reference route that applies each round's binding on its own pass.
+    ///
+    /// Every other step is the shipped one, so the two proofs can only differ if a round
+    /// polynomial did.
+    fn open_binding_each_round(
+        pcs: &BinaryPcs<MyMmcs>,
+        mut prover_data: BinaryPcsProverData<MyMmcs>,
+        protocol: &OpeningProtocol,
+        challenger: &mut MyChallenger,
+    ) -> BinaryPcsProof<MyMmcs> {
+        // Opening claims are recorded exactly as `open` records them.
+        let evals: Vec<_> = protocol
+            .iter_openings()
+            .map(|(table_idx, batch)| prover_data.layout.eval(table_idx, batch, challenger))
+            .collect();
+
+        // Fold rounds through the reference route.
+        let (base_merkle_data, sumcheck_data, rounds, _randomness, final_codeword) =
+            fold_rounds_binding_each_round(prover_data, &pcs.config, &pcs.mmcs, challenger);
+
+        // Query phase is the shipped one.
+        let query_proofs = open_queries(
+            &pcs.config,
+            &pcs.mmcs,
+            challenger,
+            &base_merkle_data,
+            &rounds,
+        );
+
+        BinaryPcsProof {
+            sumcheck: sumcheck_data,
+            rounds: query_proofs.rounds,
+            base_opened_values: query_proofs.base_opened_values,
+            base_multi_proof: query_proofs.base_multi_proof,
+            final_codeword: Poly::new(final_codeword),
+            pow_witness: query_proofs.pow_witness,
+            evals,
+        }
+    }
+
+    #[test]
+    fn fusing_the_binding_into_the_measuring_pass_leaves_the_proof_byte_identical() {
+        // Invariant: how many passes compute a round polynomial never changes its value.
+        //
+        //     shipped  : round r measures and applies round r-1's binding in one pass
+        //     reference: round r measures, then a second pass applies round r's binding
+        //
+        // Both routes must send the same transcript, so the proof bytes must match.
+        //
+        // Fixture state: one random single-column table, opened at a transcript-sampled
+        // point, driven twice from identically seeded challengers.
+        //
+        // The grinding budget is zero, which is what makes the whole proof reproducible.
+        //
+        // A non-zero one searches its witness across threads and keeps whichever one a
+        // thread finds first.
+        //
+        // The witness, and every transcript draw after it, then varies run to run.
+        let num_variables = NUM_VARIABLES;
+        let params = BinaryPcsParams {
+            log_inv_rate: 2,
+            pow_bits: 0,
+            security_level: 40,
+        };
+
+        let mut rng = SmallRng::seed_from_u64(0x50FA);
+        let table = Table::rand(&mut rng, 1, num_variables);
+
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(num_variables, 1),
+            vec![OpeningBatch::new(vec![0], Vec::new())],
+        )]);
+
+        let config = BinaryPcsConfig::try_new(num_variables, params).unwrap();
+        let pcs = BinaryPcs::new(config, mmcs());
+
+        // Shipped route.
+        let mut got_challenger = challenger();
+        let (got_commitment, got_data) = pcs.commit(
+            SuffixProver::<F, F>::new_witness(vec![table.clone()], 0),
+            &mut got_challenger,
+        );
+        let got = pcs.open(got_data, protocol.clone(), &mut got_challenger);
+
+        // Reference route, from an identically seeded challenger.
+        let mut want_challenger = challenger();
+        let (want_commitment, want_data) = pcs.commit(
+            SuffixProver::<F, F>::new_witness(vec![table], 0),
+            &mut want_challenger,
+        );
+        let want = open_binding_each_round(&pcs, want_data, &protocol, &mut want_challenger);
+
+        // Round by round first, so a discrepancy is localised to the round that drifted.
+        assert_eq!(
+            got.sumcheck.num_rounds(),
+            want.sumcheck.num_rounds(),
+            "round counts"
+        );
+        for (round, (got_msg, want_msg)) in got
+            .sumcheck
+            .polynomial_evaluations()
+            .iter()
+            .zip(want.sumcheck.polynomial_evaluations())
+            .enumerate()
+        {
+            assert_eq!(got_msg, want_msg, "round {round} message");
+        }
+
+        // Then the whole proof, on the wire.
+        let got_bytes = postcard::to_allocvec(&got).unwrap();
+        let want_bytes = postcard::to_allocvec(&want).unwrap();
+        assert_eq!(got_bytes, want_bytes, "proof bytes");
+
+        // The transcripts must also be in the same state, which the proof bytes alone do
+        // not show: two challengers that diverged could still have produced equal proofs.
+        assert_eq!(
+            got_challenger.sample_algebra_element::<F>(),
+            want_challenger.sample_algebra_element::<F>(),
+            "transcript state after opening"
+        );
+
+        // And the proof both routes produced verifies.
+        assert_eq!(got_commitment, want_commitment);
+        pcs.verify(&got_commitment, &got, &mut challenger(), protocol)
             .unwrap();
     }
 
