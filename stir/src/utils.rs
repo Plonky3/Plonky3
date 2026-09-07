@@ -41,11 +41,10 @@ pub fn eval_poly_parallel<F: Field>(poly: &[F], point: F) -> F {
     // Each step waits on the previous multiply, so the loop has no instruction-level
     // parallelism to hide behind and runs slower than a stream of the same width.
     //
-    //     measured  : 2.7 ns per 4-byte coefficient
-    //     streaming : 1.2 ns for a read of the same width
-    //     -> one coefficient is charged as three
-
-    let chunk_size = min_task_len(poly.len(), 3 * size_of::<F>());
+    //     measured  : 2.7 ns per 4-byte coefficient -> 675 ps per byte
+    //     streaming :                                    100 ps per byte
+    //     -> one coefficient is charged as seven
+    let chunk_size = min_task_len(poly.len(), 7 * size_of::<F>());
     // A chunk spanning the whole polynomial means the split would never pay.
     if chunk_size >= poly.len() {
         return eval_poly(poly, point);

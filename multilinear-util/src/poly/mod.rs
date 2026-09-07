@@ -463,7 +463,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         // One item reads a high-half entry and rewrites the matching low-half entry.
         p0.par_iter_mut()
             .zip(p1.par_iter())
-            .with_min_task_bytes(2 * size_of::<A>())
+            .with_min_task_bytes(3 * size_of::<A>())
             .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * r);
 
         // Discard the second half; the first half now holds the folded result.
@@ -499,7 +499,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         // One item reads a high-half entry and rewrites the matching low-half entry.
         p0.par_iter_mut()
             .zip(p1.par_iter())
-            .with_min_task_bytes(2 * size_of::<A>())
+            .with_min_task_bytes(3 * size_of::<A>())
             .for_each(|(a0, &a1)| *a0 += a1);
 
         // Discard the second half; the first half now holds the summed result.
@@ -538,7 +538,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         // One item reads a high-half entry and rewrites the matching low-half entry.
         p0.par_iter_mut()
             .zip(p1.par_iter())
-            .with_min_task_bytes(2 * size_of::<A>())
+            .with_min_task_bytes(3 * size_of::<A>())
             .for_each(|(a0, &a1)| *a0 += a1 * r);
 
         // Discard the second half; the first half now holds the folded result.
@@ -962,6 +962,7 @@ pub(crate) mod test {
         ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField64, dot_product,
     };
     use p3_matrix::dense::RowMajorMatrixView;
+    #[cfg(feature = "parallel")]
     use p3_maybe_rayon::prelude::should_split;
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
@@ -1623,12 +1624,14 @@ pub(crate) mod test {
     #[test]
     fn test_compress_parallel_path() {
         // Fixture state: large enough that the fold really is cut across tasks.
-        //
-        // One item of the fold touches a pair of field elements.
-        // Asking the shared policy with that shape is what the fold itself asks.
         let num_evals = 1 << 16;
         let mid = num_evals / 2;
-        assert!(should_split(mid, 2 * size_of::<F>()));
+
+        // One item of the fold moves three field elements: two read, one rewritten.
+        // Asking the shared policy with that shape is what the fold itself asks.
+        // Only a build with a thread pool ever splits, so the arm is pinned there.
+        #[cfg(feature = "parallel")]
+        assert!(should_split(mid, 3 * size_of::<F>()));
         let p_left_0 = F::from_u64(1);
         let p_right_0 = F::from_usize(mid + 1);
         let p_left_1 = F::from_u64(2);
