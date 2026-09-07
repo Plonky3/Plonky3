@@ -20,12 +20,13 @@ use p3_challenger::{
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::QuinticTrinomialExtensionField;
-use p3_field::{BasedVectorSpace, ExtensionField, Field, TwoAdicField};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_stir::SecurityAssumption;
 use p3_stir::config::{StirConfig, StirParameters};
-use p3_stir::prover::prove_stir;
+use p3_stir::prover::{codeword_from_coeffs, prove_stir};
 use p3_stir::verifier::verify_stir;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::distr::{Distribution, StandardUniform};
@@ -213,9 +214,43 @@ fn bench_stir_koalabear_fold3(c: &mut Criterion) {
     );
 }
 
+/// Compare degree-aware dispatch with the full padded DFT on the same build and inputs.
+fn bench_codeword(c: &mut Criterion) {
+    let mut group = c.benchmark_group("stir_codeword");
+    group.sample_size(10);
+    let dft = Dft::default();
+    for (log_size, log_len) in [(12, 9), (18, 16), (18, 15), (18, 14), (18, 12), (18, 8)] {
+        let coeffs = random_poly::<Challenge>(log_len);
+        let shape = format!("domain{log_size}_degree{log_len}");
+        for full_dft in [false, true] {
+            let method = if full_dft { "full_dft" } else { "degree_aware" };
+            group.bench_function(BenchmarkId::new(method, &shape), |b| {
+                b.iter_batched(
+                    || coeffs.clone(),
+                    |mut coeffs| {
+                        if full_dft {
+                            coeffs.resize(1usize << log_size, Challenge::ZERO);
+                            dft.coset_dft_algebra_batch(
+                                RowMajorMatrix::new_col(coeffs),
+                                Val::GENERATOR,
+                            )
+                            .values
+                        } else {
+                            codeword_from_coeffs(&dft, coeffs, Val::GENERATOR, log_size)
+                        }
+                    },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_stir_koalabear_fold2,
     bench_stir_koalabear_fold3,
+    bench_codeword,
 );
 criterion_main!(benches);

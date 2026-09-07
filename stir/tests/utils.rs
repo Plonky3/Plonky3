@@ -24,6 +24,46 @@ fn ef(n: u64) -> EF {
     EF::from(f(n))
 }
 
+#[test]
+fn test_codeword_from_coeffs_matches_horner_across_shapes() {
+    use p3_field::TwoAdicField;
+
+    let dft = Radix2DitParallel::<F>::default();
+    let mut rng = SmallRng::seed_from_u64(0xdecaf);
+    for log_size in [0usize, 1, 4, 8] {
+        let size = 1usize << log_size;
+        // Cover empty/constant inputs, ragged lengths, both sides of the degree-aware
+        // crossover, a full domain, and truncation of coefficients beyond the domain.
+        for len in [
+            0,
+            1,
+            2,
+            3,
+            size / 16,
+            size / 8,
+            size / 8 + 1,
+            size,
+            size + 3,
+        ] {
+            let coeffs: Vec<EF> = (0..len).map(|_| rng.random()).collect();
+            for shift in [F::ZERO, F::ONE, F::GENERATOR, f(7)] {
+                let actual = codeword_from_coeffs(&dft, coeffs.clone(), shift, log_size);
+                assert_eq!(actual.len(), size);
+                let mut point = shift;
+                let generator = F::two_adic_generator(log_size);
+                for (i, value) in actual.into_iter().enumerate() {
+                    let expected = coeffs[..len.min(size)]
+                        .iter()
+                        .rev()
+                        .fold(EF::ZERO, |acc, &coeff| acc * point + coeff);
+                    assert_eq!(value, expected, "log_size={log_size}, len={len}, i={i}");
+                    point *= generator;
+                }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // eval_poly
 // ---------------------------------------------------------------------------

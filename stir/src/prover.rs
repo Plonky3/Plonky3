@@ -56,10 +56,8 @@ where
 {
     let initial_shift = F::GENERATOR;
     let log_initial_domain = config.log_starting_domain_size();
-    let initial_domain_size = 1 << log_initial_domain;
-    let mut coeffs = poly_coeffs;
-    coeffs.resize(initial_domain_size, EF::ZERO);
-    let initial_codeword = codeword_from_coeffs(dft, coeffs, initial_shift, log_initial_domain);
+    let initial_codeword =
+        codeword_from_coeffs(dft, poly_coeffs, initial_shift, log_initial_domain);
 
     prove_stir_from_codeword(config, initial_codeword, dft, challenger)
 }
@@ -270,7 +268,7 @@ where
 
         self.next_commit_codeword = codeword_from_coeffs(
             self.dft,
-            self.fold_coeffs.clone(),
+            self.truncated_fold_coeffs().to_vec(),
             self.next_shift,
             self.next_log_domain,
         );
@@ -1295,8 +1293,6 @@ where
         .zip(poly_coeffs)
         .map(|(config, coeffs)| {
             let log_initial_domain = config.log_starting_domain_size();
-            let mut coeffs = coeffs;
-            coeffs.resize(1 << log_initial_domain, EF::ZERO);
             codeword_from_coeffs(dft, coeffs, F::GENERATOR, log_initial_domain)
         })
         .collect();
@@ -1359,8 +1355,8 @@ where
     prove_stir_multi_inner(configs, initial_codewords, dft, challenger, false)
 }
 
-/// Evaluate two polynomials of at most `2^log_len` coefficients on the coset `shift * <g>` of
-/// size `2^log_size`, returning both codewords in **natural order**.
+/// Evaluate polynomials of at most `2^log_len` coefficients on the coset `shift * <g>` of
+/// size `2^log_size`, interleaving their codewords in **natural order**.
 ///
 /// A full-size DFT would spend all `log_size` butterfly layers on an input that is zero past
 /// its first `2^log_len` coefficients. Instead, split the coset into
@@ -1377,6 +1373,46 @@ where
 /// batched call, and each output row lands on a contiguous natural-order block.
 ///
 /// Coefficients past index `2^log_size` are ignored, matching evaluation of the truncation.
+fn eval_low_degree_on_coset<F, EF, Dft, const WIDTH: usize>(
+    dft: &Dft,
+    polys: [&[EF]; WIDTH],
+    shift: F,
+    log_size: usize,
+    log_len: usize,
+) -> Vec<EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + BasedVectorSpace<F>,
+    Dft: TwoAdicSubgroupDft<F>,
+{
+    debug_assert!(log_len <= log_size);
+    let size = 1usize << log_size;
+    let num_cosets = size >> log_len;
+    let generator = F::two_adic_generator(log_size);
+
+    // Row `c` holds the degree-`c` coefficients scaled by `(shift * g^a)^c`, which as
+    // `a` varies is the geometric sequence starting at `shift^c` with ratio `g^c`.
+    let mut scaled = EF::zero_vec(size * WIDTH);
+    scaled
+        .par_chunks_mut(WIDTH * num_cosets)
+        .enumerate()
+        .for_each(|(c, row)| {
+            let coeffs = polys.map(|poly| poly.get(c).copied().unwrap_or(EF::ZERO));
+            let ratio = generator.exp_u64(c as u64);
+            let mut scale = shift.exp_u64(c as u64);
+            for values in row.as_chunks_mut::<WIDTH>().0 {
+                for (value, &coeff) in values.iter_mut().zip(&coeffs) {
+                    *value = coeff * scale;
+                }
+                scale *= ratio;
+            }
+        });
+
+    dft.dft_algebra_batch(RowMajorMatrix::new(scaled, WIDTH * num_cosets))
+        .values
+}
+
+/// Evaluate a pair using the shared low-degree transform, then deinterleave the codewords.
 fn eval_low_degree_pair_on_coset<F, EF, Dft>(
     dft: &Dft,
     first: &[EF],
@@ -1390,32 +1426,9 @@ where
     EF: ExtensionField<F> + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
 {
-    debug_assert!(log_len <= log_size);
     let size = 1usize << log_size;
     let num_cosets = size >> log_len;
-    let generator = F::two_adic_generator(log_size);
-
-    // Row `c` holds the pair of degree-`c` coefficients scaled by `(shift * g^a)^c`, which as
-    // `a` varies is the geometric sequence starting at `shift^c` with ratio `g^c`.
-    let mut scaled = EF::zero_vec((1usize << log_len) * 2 * num_cosets);
-    scaled
-        .par_chunks_mut(2 * num_cosets)
-        .enumerate()
-        .for_each(|(c, row)| {
-            let first_c = first.get(c).copied().unwrap_or(EF::ZERO);
-            let second_c = second.get(c).copied().unwrap_or(EF::ZERO);
-            let ratio = generator.exp_u64(c as u64);
-            let mut scale = shift.exp_u64(c as u64);
-            for pair in row.as_chunks_mut::<2>().0 {
-                pair[0] = first_c * scale;
-                pair[1] = second_c * scale;
-                scale *= ratio;
-            }
-        });
-
-    let transformed = dft
-        .dft_algebra_batch(RowMajorMatrix::new(scaled, 2 * num_cosets))
-        .values;
+    let transformed = eval_low_degree_on_coset(dft, [first, second], shift, log_size, log_len);
 
     // Transform row `b` holds the evaluations at `i = a + num_cosets * b` for every `a`, i.e.
     // the natural-order block `[num_cosets * b, num_cosets * (b + 1))`.
@@ -1440,7 +1453,8 @@ where
 }
 
 /// Evaluate a polynomial (coefficients in `EF`) on a coset `shift * <g>` of size
-/// `2^log_size`, returning the codeword in **natural order**.
+/// `2^log_size`, returning the codeword in **natural order**. Coefficients beyond the domain
+/// size are truncated; shorter inputs are implicitly padded with zeros.
 pub fn codeword_from_coeffs<F, EF, Dft>(
     dft: &Dft,
     coeffs: Vec<EF>,
@@ -1452,7 +1466,12 @@ where
     EF: ExtensionField<F> + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
 {
-    let size = 1 << log_size;
+    let size = 1usize << log_size;
+    let log_len = log2_ceil_usize(coeffs.len().min(size).max(1));
+    // At low expansion ratios the full DFT avoids the cost of scaling a wide batch.
+    if log_size - log_len >= 3 {
+        return eval_low_degree_on_coset(dft, [&coeffs], shift, log_size, log_len);
+    }
     let mut padded = coeffs;
     padded.resize(size, EF::ZERO);
 
