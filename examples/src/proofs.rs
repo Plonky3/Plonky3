@@ -439,16 +439,18 @@ where
     );
 }
 
-/// Report the security level STIR's low-degree test was configured to target.
+/// Report the security level the low-degree test was configured to target.
 ///
-/// This is a PCS/LDT-level target, not the end-to-end STARK figure `report_parameter_security`
-/// prints for FRI: it excludes the DEEP-ALI, batching, and collision-resistance terms that
-/// figure folds in, so the two numbers are not directly comparable. Unlike FRI's `num_queries`,
-/// which the caller chooses and whose achieved security level is only knowable after the fact,
-/// every STIR round's query count and grinding difficulty is derived up front from
-/// `security_level`/`max_pow_bits`, so there is nothing left to measure about the low-degree
-/// test once the config exists — but there is no STIR counterpart here to the STARK-level
-/// figure `report_parameter_security` computes for FRI.
+/// This is a commitment-scheme-level target, not the end-to-end figure the FRI path prints.
+/// It excludes the DEEP-ALI, batching, and collision-resistance terms that figure folds in.
+/// The two numbers are therefore not comparable.
+///
+/// The FRI path has a query count the caller picks, whose level is known after the fact.
+/// Here every round's query count and grinding difficulty is derived from the target up front.
+/// Nothing about the low-degree test is left to measure once the config exists.
+///
+/// What is missing is the whole-proof figure, which needs a proximity regime the STARK-level
+/// accounting can consume.
 #[inline]
 pub fn report_stir_security_level(security_level: usize, max_pow_bits: usize) {
     println!(

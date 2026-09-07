@@ -324,6 +324,14 @@ fn main() {
             };
         }
         FieldOptions::Mersenne31 => {
+            // Mersenne31 has no two-adic subgroup, so it proves through the circle STARK.
+            // Reject the combination before any setup work rather than after it.
+            assert!(
+                args.pcs != PcsOptions::Stir,
+                "--pcs stir needs a two-adic field; Mersenne31 proves through the circle STARK. \
+                 Drop --pcs, or pick koala-bear or baby-bear."
+            );
+
             type EF = QM31;
 
             let proof_goal = match args.objective {
@@ -382,12 +390,6 @@ fn main() {
                     "Currently there are no available DFT options when using Mersenne31. Please remove the --discrete_fourier_transform flag."
                 ),
             };
-
-            if args.pcs == PcsOptions::Stir {
-                panic!(
-                    "STIR is only wired into the two-adic (KoalaBear/BabyBear) pipeline. Mersenne31 uses the circle STARK with FRI; remove --pcs or pick a two-adic field."
-                );
-            }
 
             match args.merkle_hash {
                 MerkleHashOptions::KeccakF => {
