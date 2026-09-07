@@ -16,7 +16,5 @@ pub use config::*;
 pub use hiding_pcs::*;
 pub use periodic::*;
 pub use proof::*;
-pub use transcript::{
-    FriShape, ProverTranscript, TranscriptFailure, VerifierTranscript, fri_shape,
-};
+pub use transcript::{FriShape, ProverTranscript, TranscriptFailure, VerifierTranscript};
 pub use two_adic_pcs::*;

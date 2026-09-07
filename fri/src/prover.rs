@@ -12,8 +12,8 @@ use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    BatchMultiOpening, CommitPhaseMultiStep, FriFoldingStrategy, FriParameters, FriProof,
-    ProverDataWithOpeningPoints, ProverTranscript, fri_shape,
+    BatchMultiOpening, CommitPhaseMultiStep, FriFoldingStrategy, FriParameters, FriProof, FriShape,
+    ProverDataWithOpeningPoints, ProverTranscript,
 };
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
@@ -160,7 +160,7 @@ where
         .iter()
         .map(|input| log2_strict_usize(input.len()))
         .collect();
-    let mut shape = fri_shape(
+    let mut shape = FriShape::new(
         params,
         &input_log_heights,
         log_global_max_height + folding.extra_query_index_bits(),

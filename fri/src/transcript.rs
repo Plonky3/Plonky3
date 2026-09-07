@@ -89,138 +89,140 @@ pub struct FriShape {
     pub max_log_arity: usize,
 }
 
-/// Derive the shape of one FRI run from its configuration.
-///
-/// # Arguments
-///
-/// - `params`: the protocol parameters.
-/// - `input_log_heights`: log-heights of the folding inputs, strictly decreasing.
-/// - `index_bits`: bit width of each query index.
-#[must_use]
-pub fn fri_shape<M>(
-    params: &FriParameters<M>,
-    input_log_heights: &[usize],
-    index_bits: usize,
-) -> FriShape {
-    FriShape {
-        // The schedule is a function of the heights and the parameters.
-        log_arities: fold_schedule(
-            input_log_heights,
-            params.log_blowup + params.log_final_poly_len,
-            params.max_log_arity,
-        ),
-        final_poly_len: params.final_poly_len(),
-        commit_pow_bits: params.commit_proof_of_work_bits,
-        query_pow_bits: params.query_proof_of_work_bits,
-        num_queries: params.num_queries,
-        index_bits,
-        log_blowup: params.log_blowup,
-        max_log_arity: params.max_log_arity,
+impl FriShape {
+    /// Derive the shape of one FRI run from its configuration.
+    ///
+    /// # Arguments
+    ///
+    /// - `params`: the protocol parameters.
+    /// - `input_log_heights`: log-heights of the folding inputs, strictly decreasing.
+    /// - `index_bits`: bit width of each query index.
+    #[must_use]
+    pub fn new<M>(
+        params: &FriParameters<M>,
+        input_log_heights: &[usize],
+        index_bits: usize,
+    ) -> Self {
+        Self {
+            // The schedule is a function of the heights and the parameters.
+            log_arities: fold_schedule(
+                input_log_heights,
+                params.log_blowup + params.log_final_poly_len,
+                params.max_log_arity,
+            ),
+            final_poly_len: params.final_poly_len(),
+            commit_pow_bits: params.commit_proof_of_work_bits,
+            query_pow_bits: params.query_proof_of_work_bits,
+            num_queries: params.num_queries,
+            index_bits,
+            log_blowup: params.log_blowup,
+            max_log_arity: params.max_log_arity,
+        }
     }
-}
 
-/// Describe the transcript of one FRI run.
-///
-/// # Panics
-///
-/// Never in practice.
-/// A flat sequence of leaf steps always passes structural validation.
-#[must_use]
-pub fn pattern<F, EF>(shape: &FriShape) -> InteractionPattern
-where
-    F: PrimeField64,
-    EF: ExtensionField<F>,
-{
-    // Up to three steps per commit round, then three closing steps.
-    let mut steps = Vec::with_capacity(3 * shape.log_arities.len() + 3);
+    /// Describe the transcript this shape fixes.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice.
+    /// A flat sequence of leaf steps always passes structural validation.
+    #[must_use]
+    pub fn pattern<F, EF>(&self) -> InteractionPattern
+    where
+        F: PrimeField64,
+        EF: ExtensionField<F>,
+    {
+        // Up to three steps per commit round, then three closing steps.
+        let mut steps = Vec::with_capacity(3 * self.log_arities.len() + 3);
 
-    for _ in &shape.log_arities {
-        // The commitment's encoding belongs to the commitment scheme.
-        steps.push(Interaction::opaque(
-            Hierarchy::Atomic,
-            Kind::Message,
-            COMMITMENT,
-            Length::Scalar,
-        ));
-
-        // Grinding sits between the commitment and the challenge it protects.
-        if shape.commit_pow_bits > 0 {
-            steps.push(Interaction::algebra::<F, F>(
+        for _ in &self.log_arities {
+            // The commitment's encoding belongs to the commitment scheme.
+            steps.push(Interaction::opaque(
                 Hierarchy::Atomic,
-                Kind::Pow,
-                COMMIT_POW,
-                Length::Fixed(shape.commit_pow_bits),
+                Kind::Message,
+                COMMITMENT,
+                Length::Scalar,
+            ));
+
+            // Grinding sits between the commitment and the challenge it protects.
+            if self.commit_pow_bits > 0 {
+                steps.push(Interaction::algebra::<F, F>(
+                    Hierarchy::Atomic,
+                    Kind::Pow,
+                    COMMIT_POW,
+                    Length::Fixed(self.commit_pow_bits),
+                ));
+            }
+
+            // The folding challenge collapses this round's arity.
+            steps.push(Interaction::algebra::<F, EF>(
+                Hierarchy::Atomic,
+                Kind::Challenge,
+                FOLD_CHALLENGE,
+                Length::Scalar,
             ));
         }
 
-        // The folding challenge collapses this round's arity.
+        // The final polynomial is sent in full, so it is one fixed-length step.
         steps.push(Interaction::algebra::<F, EF>(
             Hierarchy::Atomic,
-            Kind::Challenge,
-            FOLD_CHALLENGE,
-            Length::Scalar,
+            Kind::Message,
+            FINAL_POLY,
+            Length::Fixed(self.final_poly_len),
         ));
-    }
 
-    // The final polynomial is sent in full, so it is one fixed-length step.
-    steps.push(Interaction::algebra::<F, EF>(
-        Hierarchy::Atomic,
-        Kind::Message,
-        FINAL_POLY,
-        Length::Fixed(shape.final_poly_len),
-    ));
+        // Grinding here raises the cost of searching for favourable query indices.
+        if self.query_pow_bits > 0 {
+            steps.push(Interaction::algebra::<F, F>(
+                Hierarchy::Atomic,
+                Kind::Pow,
+                QUERY_POW,
+                Length::Fixed(self.query_pow_bits),
+            ));
+        }
 
-    // Grinding here raises the cost of searching for favourable query indices.
-    if shape.query_pow_bits > 0 {
-        steps.push(Interaction::algebra::<F, F>(
+        // Every index is drawn at the same width, so they form one step.
+        steps.push(Interaction::bits(
             Hierarchy::Atomic,
-            Kind::Pow,
-            QUERY_POW,
-            Length::Fixed(shape.query_pow_bits),
+            Kind::Challenge,
+            QUERY_INDICES,
+            self.index_bits,
+            Length::Fixed(self.num_queries),
         ));
+
+        InteractionPattern::new(steps).expect("a flat sequence of leaf steps is always well formed")
     }
 
-    // Every index is drawn at the same width, so they form one step.
-    steps.push(Interaction::bits(
-        Hierarchy::Atomic,
-        Kind::Challenge,
-        QUERY_INDICES,
-        shape.index_bits,
-        Length::Fixed(shape.num_queries),
-    ));
+    /// Bind the protocol identity, this shape, and the remaining parameters.
+    ///
+    /// A parameter that changes the step sequence is covered by the fingerprint.
+    /// The rest go in the instance label.
+    #[must_use]
+    pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
+    where
+        F: PrimeField64,
+        EF: ExtensionField<F>,
+    {
+        let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
 
-    InteractionPattern::new(steps).expect("a flat sequence of leaf steps is always well formed")
-}
+        // Blowup and arity cap leave the step sequence untouched.
+        // They still change what the protocol is, so they are bound here.
+        for value in [self.log_blowup, self.max_log_arity] {
+            separator.instance(&(value as u64).to_be_bytes());
+        }
 
-/// Bind the protocol identity, the shape, and the remaining parameters.
-///
-/// A parameter that changes the step sequence is covered by its fingerprint.
-/// The rest go in the instance label.
-#[must_use]
-pub fn domain_separator<F, EF>(shape: &FriShape) -> DomainSeparator<Alphabet<F>>
-where
-    F: PrimeField64,
-    EF: ExtensionField<F>,
-{
-    let mut separator = DomainSeparator::new(VERSION, NAME, pattern::<F, EF>(shape));
+        // The round count alone does not pin which arity each round folds by.
+        //
+        //     [3, 3, 2]  and  [2, 3, 3]
+        //
+        // Both have three rounds, both total eight, so both describe one shape.
+        // Binding the values gives the two runs distinct seeds.
+        for &log_arity in &self.log_arities {
+            separator.instance(&(log_arity as u64).to_be_bytes());
+        }
 
-    // Blowup and arity cap leave the step sequence untouched.
-    // They still change what the protocol is, so they are bound here.
-    for value in [shape.log_blowup, shape.max_log_arity] {
-        separator.instance(&(value as u64).to_be_bytes());
+        separator
     }
-
-    // The round count alone does not pin which arity each round folds by.
-    //
-    //     [3, 3, 2]  and  [2, 3, 3]
-    //
-    // Both have three rounds, both total eight, so both describe one shape.
-    // Binding the values gives the two runs distinct seeds.
-    for &log_arity in &shape.log_arities {
-        separator.instance(&(log_arity as u64).to_be_bytes());
-    }
-
-    separator
 }
 
 /// Prover-side transcript of one FRI run.
@@ -246,7 +248,7 @@ where
 {
     /// Seed the transcript from the shape.
     pub fn new(challenger: &'a mut C, shape: FriShape) -> Self {
-        let separator = domain_separator::<F, EF>(&shape);
+        let separator = shape.domain_separator::<F, EF>();
         Self {
             state: ProverState::new(challenger, &separator),
             shape,
@@ -339,7 +341,7 @@ where
 {
     /// Seed the transcript from the shape.
     pub fn new(challenger: &'a mut C, shape: FriShape) -> Self {
-        let separator = domain_separator::<F, EF>(&shape);
+        let separator = shape.domain_separator::<F, EF>();
         Self {
             state: VerifierState::new(challenger, &separator, &[]),
             shape,
@@ -493,7 +495,7 @@ mod tests {
     /// The first challenge a shape's seed produces.
     fn first_challenge(shape: &FriShape) -> F {
         let mut challenger = fresh_challenger();
-        let separator = domain_separator::<F, EF>(shape);
+        let separator = shape.domain_separator::<F, EF>();
         separator.seed(&mut challenger);
         challenger.sample()
     }

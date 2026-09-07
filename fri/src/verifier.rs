@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::{
     BatchMultiOpening, CommitPhaseMultiStep, CommitmentWithOpeningPoints, FriFoldingStrategy,
-    FriParameters, FriProof, TranscriptFailure, VerifierTranscript, fold_schedule, fri_shape,
+    FriParameters, FriProof, FriShape, TranscriptFailure, VerifierTranscript, fold_schedule,
 };
 
 #[derive(Debug, Error)]
@@ -440,7 +440,7 @@ where
     // FRI's, so seeding starts here.
     let mut transcript = VerifierTranscript::<Challenger, Val, Challenge>::new(
         challenger,
-        fri_shape(
+        FriShape::new(
             params,
             &input_log_heights,
             log_global_max_height + folding.extra_query_index_bits(),
