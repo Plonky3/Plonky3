@@ -12,6 +12,7 @@
 //! Pass `&[]` when only the baseline AIR + DEEP + LDT terms apply.
 
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 
 use crate::assumption::SecurityAssumption;
 use crate::error::ErrorBits;
@@ -113,11 +114,16 @@ pub fn proven_security(
 /// same radius the rest of the regime's terms (ALI/DEEP/LDT) are evaluated
 /// at, so the Johnson-bound branch is computed at `ldr_m` rather than the
 /// fixed `m = 10` WHIR safety choice.
+///
+/// `pow_bits` is [`GrindingSites::batch_combination`]: the grinding sited
+/// immediately before the batching challenge, which boosts this round and no
+/// other.
 fn batching_term(
     assumption: SecurityAssumption,
     shape: &InstanceShape,
     log_blowup: usize,
     ldr_m: Option<usize>,
+    pow_bits: usize,
 ) -> Option<SecurityTerm> {
     let num_functions = shape.num_batched_functions;
     if num_functions < 2 {
@@ -140,8 +146,38 @@ fn batching_term(
     };
     Some(SecurityTerm::new(
         BATCH_LABEL,
-        ErrorBits::from_log2(bits.max(0.0)),
+        boost(ErrorBits::from_log2(bits.max(0.0)), pow_bits),
     ))
+}
+
+/// Proximity-gap error of the opening-batching random linear combination in
+/// the conjectured regime, or `None` when fewer than two codewords are
+/// batched and the protocol samples no such challenge.
+///
+/// Uses [`SecurityAssumption::UniqueDecoding`]'s `(k − 1)·n / |F|` branch,
+/// which is the [BCI+20] Theorem 1.2 bound at list size 1 — the list size the
+/// conjectured regime assumes ([`list_size_conjectured`]). See
+/// [`conjectured_security_report`] for why this round is charged rather than
+/// omitted.
+///
+/// `pow_bits` is [`GrindingSites::batch_combination`], the grinding sited
+/// immediately before the batching challenge. It boosts this round in the
+/// conjectured regime for the same reason it boosts it in the proven one: the
+/// prover pays `2^pow_bits` per candidate challenge either way, and which
+/// proximity regime the analysis grades the round in does not change what the
+/// prover had to compute.
+fn conjectured_batching_term(
+    shape: &InstanceShape,
+    log_blowup: usize,
+    pow_bits: usize,
+) -> Option<SecurityTerm> {
+    batching_term(
+        SecurityAssumption::UniqueDecoding,
+        shape,
+        log_blowup,
+        None,
+        pow_bits,
+    )
 }
 
 /// Labeled term list for one proximity regime: ALI, DEEP, LDT, the optional
@@ -150,8 +186,10 @@ fn batching_term(
 /// [`RegimeReport::security_bits`]), matching [`proven_security_regime`] plus
 /// the batching term.
 ///
-/// `grinding.out_of_domain` boosts the DEEP term; the low-degree test's own
-/// sites are already folded into `ldt_error` by the [`LowDegreeTest`] impl.
+/// `grinding.out_of_domain` boosts the DEEP term and
+/// `grinding.batch_combination` the batch term (applied by the caller, which
+/// builds `batch`); the low-degree test's own sites are already folded into
+/// `ldt_error` by the [`LowDegreeTest`] impl.
 fn regime_report(
     regime: Regime,
     air: &StarkAirParams,
@@ -188,7 +226,10 @@ fn regime_report(
 /// (lookup arguments, custom DEEP variants, batched openings, …) into every
 /// regime; pass `&[]` for the baseline AIR + DEEP + LDT composite.
 ///
-/// [`SecurityReport::security_bits`] reproduces [`proven_security`]; the report
+/// [`SecurityReport::security_bits`] matches [`proven_security`] when `shape.num_batched_functions
+/// < 2`, i.e. when there is no batching term to make the two regimes' choice of `m` diverge (see
+/// [`LowDegreeTest::ldr_candidates`]); more generally it is at least as tight, since this report
+/// picks `m` from the same full composite it reports rather than from the LDT alone. The report
 /// additionally exposes which term binds in each regime.
 ///
 /// `grinding` sites the protocol's proof-of-work per error source; pass
@@ -209,24 +250,47 @@ pub fn proven_security_report<L: LowDegreeTest>(
         shape,
         list_size_udr(),
         udr_ldt,
-        batching_term(SecurityAssumption::UniqueDecoding, shape, log_blowup, None),
+        batching_term(
+            SecurityAssumption::UniqueDecoding,
+            shape,
+            log_blowup,
+            None,
+            grinding.batch_combination,
+        ),
         extras,
         grinding,
     );
 
-    let ldr = ldt.best_ldr(air, shape).map(|(m, ldr_ldt)| {
-        let list_size = list_size_ldr_m(log_blowup, m);
-        regime_report(
-            Regime::ListDecoding { m },
-            air,
-            shape,
-            list_size,
-            ldr_ldt,
-            batching_term(SecurityAssumption::JohnsonBound, shape, log_blowup, Some(m)),
-            extras,
-            grinding,
-        )
-    });
+    // Pick `m` by the composite rather than by the low-degree test alone. The
+    // batching term grows as `(m + 1/2)⁵`, so the LDT's own optimum can be far
+    // from the composite's; see `LowDegreeTest::ldr_candidates`.
+    let ldr = ldt
+        .ldr_candidates(air, shape)
+        .into_iter()
+        .map(|(m, ldr_ldt)| {
+            let list_size = list_size_ldr_m(log_blowup, m);
+            regime_report(
+                Regime::ListDecoding { m },
+                air,
+                shape,
+                list_size,
+                ldr_ldt,
+                batching_term(
+                    SecurityAssumption::JohnsonBound,
+                    shape,
+                    log_blowup,
+                    Some(m),
+                    grinding.batch_combination,
+                ),
+                extras,
+                grinding,
+            )
+        })
+        .max_by(|a, b| {
+            a.security_bits()
+                .partial_cmp(&b.security_bits())
+                .unwrap_or(Ordering::Equal)
+        });
 
     SecurityReport { udr, ldr }
 }
@@ -267,10 +331,12 @@ pub fn conjectured_security<L: LowDegreeTest>(
         grinding.out_of_domain,
     );
     let ldt_terms = ldt.conjectured_terms(shape);
-    let mut all: Vec<ErrorBits> = Vec::with_capacity(2 + ldt_terms.len() + extras.len());
+    let batch = conjectured_batching_term(shape, ldt.log_blowup(), grinding.batch_combination);
+    let mut all: Vec<ErrorBits> = Vec::with_capacity(3 + ldt_terms.len() + extras.len());
     all.push(ali);
     all.push(deep);
     all.extend(ldt_terms.iter().map(|t| t.bits));
+    all.extend(batch.map(|t| t.bits));
     all.extend_from_slice(extras);
     let algebraic = ErrorBits::min(&all);
     ErrorBits::from_log2(algebraic.bits().min(shape.collision_resistance as f64))
@@ -305,13 +371,29 @@ pub fn conjectured_security<L: LowDegreeTest>(
 /// of [`air::composition_error`] and [`deep::deep_ali_error`] at `list_size =
 /// 1`, since `log2(1) = 0`.
 ///
-/// # Not modeled
+/// # The batched-openings round
 ///
-/// The batched-openings random-linear-combination term
-/// ([`proven_security_report`]'s `batch-combination`) has no accepted
-/// conjectured analogue — the random-words heuristic bounds the distance
-/// distribution, not the proximity gap of the batching RLC — so it is omitted
-/// rather than guessed. A caller with a bound for it passes it via `extras`.
+/// The random-linear-combination that batches `shape.num_batched_functions`
+/// committed codewords into the single LDT instance is charged here, under the
+/// same conjecture the rest of this regime rests on: the [BCI+20] Theorem 1.2
+/// proximity-gap error `(k − 1)·n / |F|` assumed to hold up to list-decoding
+/// capacity at list size 1. That is [`SecurityAssumption::UniqueDecoding`]'s
+/// branch of [`SecurityAssumption::prox_gaps_error`], evaluated at the
+/// conjectured list size rather than a Johnson-bound one.
+///
+/// Charging it is what keeps this regime consistent with itself. The folding
+/// random-linear-combination of the low-degree test is the same kind of round,
+/// and [`crate::fri::conjectured_commit_phase_error`] already charges it at the
+/// same bound it uses in the proven regime, for the reason spelled out there:
+/// the conjecture removes the list-size multiplier, it does not assert that a
+/// bad combination challenge cannot exist. Dropping the opening RLC while
+/// keeping the folding RLC would overstate security for an instance that
+/// batches many codewords, which is every real STARK — a width-`w` AIR batches
+/// on the order of `2w` functions, not one.
+///
+/// A caller who prefers the more conservative capacity-bound form of the same
+/// round ([`SecurityAssumption::CapacityBound`], as WHIR and STIR grade it)
+/// passes it via `extras`; the minimum makes the tighter of the two bind.
 pub fn conjectured_security_report<L: LowDegreeTest>(
     ldt: &L,
     air: &StarkAirParams,
@@ -327,10 +409,12 @@ pub fn conjectured_security_report<L: LowDegreeTest>(
     );
 
     let ldt_terms = ldt.conjectured_terms(shape);
-    let mut terms = Vec::with_capacity(3 + ldt_terms.len() + extras.len());
+    let batch = conjectured_batching_term(shape, ldt.log_blowup(), grinding.batch_combination);
+    let mut terms = Vec::with_capacity(4 + ldt_terms.len() + extras.len());
     terms.push(SecurityTerm::new(ALI_LABEL, ali));
     terms.push(SecurityTerm::new(DEEP_LABEL, deep));
     terms.extend(ldt_terms);
+    terms.extend(batch);
     terms.extend_from_slice(extras);
     terms.push(SecurityTerm::new(
         COLLISION_LABEL,
@@ -358,6 +442,17 @@ mod tests {
             num_constraints: 1,
             max_constraint_degree: 2,
             max_combo: 2,
+        }
+    }
+
+    /// An instance that batches many codewords, over a field small enough to
+    /// keep the batching term in range of the other rounds rather than clamped
+    /// at the collision cap.
+    fn batched_shape() -> InstanceShape {
+        InstanceShape {
+            modulus_bits: 100,
+            num_batched_functions: 1 << 10,
+            ..shape()
         }
     }
 
@@ -596,6 +691,206 @@ mod tests {
         assert!(batch_term.bits.bits() < fixed_m_bits);
     }
 
+    /// A low-degree test that forwards to a [`crate::fri::FriRegime`] but
+    /// leaves [`LowDegreeTest::ldr_candidates`] at its default, so the
+    /// composite sees only the LDT's own optimum — the behaviour before that
+    /// hook existed.
+    struct LdtOnlyChoice(crate::fri::FriRegime);
+
+    impl LowDegreeTest for LdtOnlyChoice {
+        fn log_blowup(&self) -> usize {
+            self.0.log_blowup()
+        }
+
+        fn proven_error_udr(&self, air: &StarkAirParams, shape: &InstanceShape) -> ErrorBits {
+            self.0.proven_error_udr(air, shape)
+        }
+
+        fn best_ldr(
+            &self,
+            air: &StarkAirParams,
+            shape: &InstanceShape,
+        ) -> Option<(usize, ErrorBits)> {
+            self.0.best_ldr(air, shape)
+        }
+
+        fn conjectured_error(&self, shape: &InstanceShape) -> ErrorBits {
+            self.0.conjectured_error(shape)
+        }
+    }
+
+    /// A regime whose low-degree test can be pushed to a large proximity
+    /// parameter by grinding, which is what exposes the batching term's
+    /// `(m + 1/2)⁵` growth.
+    fn grindable_regime(commit_pow_bits: usize) -> crate::fri::FriRegime {
+        crate::fri::FriRegime {
+            log_blowup: 1,
+            num_queries: 64,
+            log_final_poly_len: 0,
+            max_log_arity: 2,
+            commit_pow_bits,
+            query_pow_bits: 20,
+        }
+    }
+
+    /// Choosing `m` by the composite is never worse than choosing it by the
+    /// low-degree test alone, and is strictly better once the batching term
+    /// binds: the LDT's optimum trades that term away for a gain worth less.
+    #[test]
+    fn proven_report_picks_m_by_the_composite_not_the_low_degree_test() {
+        let air = air();
+        let shape = batched_shape();
+
+        for commit_pow_bits in [0, 8, 16, 20, 24] {
+            let regime = grindable_regime(commit_pow_bits);
+            let composite =
+                proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+            let ldt_only = proven_security_report(
+                &LdtOnlyChoice(regime),
+                &air,
+                &shape,
+                &[],
+                &GrindingSites::NONE,
+            );
+
+            assert!(
+                composite.security_bits() >= ldt_only.security_bits() - 1e-9,
+                "composite choice lost to the LDT-only choice at commit_pow_bits {commit_pow_bits}: \
+                 {} < {}",
+                composite.security_bits(),
+                ldt_only.security_bits()
+            );
+        }
+
+        // The two genuinely differ here: the LDT-only choice takes a much
+        // larger `m` and the batching term collapses under it.
+        let regime = grindable_regime(0);
+        let composite = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+        let ldt_only = proven_security_report(
+            &LdtOnlyChoice(regime),
+            &air,
+            &shape,
+            &[],
+            &GrindingSites::NONE,
+        );
+        assert!(
+            composite.security_bits() > ldt_only.security_bits(),
+            "expected the composite choice to beat the LDT-only choice"
+        );
+    }
+
+    /// Commit-phase grinding must never lower the reported proven level.
+    ///
+    /// While `m` was chosen by the low-degree test alone it could: grinding
+    /// let the LDT tolerate a far larger `m`, and the batching term fell away
+    /// faster than the LDT term rose.
+    #[test]
+    fn commit_grinding_never_lowers_the_proven_level_when_openings_are_batched() {
+        let air = air();
+        let shape = batched_shape();
+
+        let mut previous = f64::NEG_INFINITY;
+        for commit_pow_bits in [0, 4, 8, 12, 16, 20, 24, 28] {
+            let regime = grindable_regime(commit_pow_bits);
+            let level = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE)
+                .security_bits();
+            assert!(
+                level >= previous - 1e-9,
+                "grinding {commit_pow_bits} bits lowered the level: {previous} -> {level}"
+            );
+            previous = level;
+        }
+    }
+
+    /// Grinding before the batching challenge is credited to the batch term,
+    /// bit for bit, in both proven regimes — and to no other term. The
+    /// "no other term" half is the point: the boost is applied where the
+    /// batching term is built, so wiring it to the wrong round would show up
+    /// as a neighbouring term moving instead.
+    #[test]
+    fn batch_grinding_lifts_only_the_batch_term() {
+        let regime = benchmark_regime();
+        let air = air();
+        // A small field keeps every term in range of the others, so a
+        // misdirected boost would be visible rather than clamped away.
+        let shape = InstanceShape {
+            modulus_bits: 100,
+            num_batched_functions: 1 << 10,
+            ..shape()
+        };
+        let ground = GrindingSites {
+            batch_combination: 12,
+            ..GrindingSites::NONE
+        };
+
+        let b0 = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+        let b12 = proven_security_report(&regime, &air, &shape, &[], &ground);
+
+        for (before, after) in
+            core::iter::once((&b0.udr, &b12.udr)).chain(b0.ldr.iter().zip(b12.ldr.iter()))
+        {
+            // Grinding can change which list-decoding radius maximises the
+            // composite, and every term carrying the regime's list size moves
+            // with it. The two reports are then not comparable term by term;
+            // what must still hold is that the level did not fall. The
+            // unique-decoding regime has no such freedom, so it always takes
+            // the strict branch below and pins where the boost was applied.
+            if before.regime != after.regime {
+                assert!(
+                    after.security_bits() >= before.security_bits() - 1e-12,
+                    "grinding lowered the level by moving the regime: {} -> {}",
+                    before.security_bits(),
+                    after.security_bits()
+                );
+                continue;
+            }
+
+            for (t0, t12) in before.terms().iter().zip(after.terms()) {
+                assert_eq!(t0.label, t12.label, "term order changed");
+                let expected = if t0.label == BATCH_LABEL {
+                    t0.bits.bits() + 12.0
+                } else {
+                    t0.bits.bits()
+                };
+                assert!(
+                    (t12.bits.bits() - expected).abs() < 1e-12,
+                    "{} moved to {} (expected {expected})",
+                    t0.label,
+                    t12.bits.bits()
+                );
+            }
+        }
+    }
+
+    /// With fewer than two functions there is no batching round to protect, so
+    /// grinding before a challenge the protocol never samples must buy nothing
+    /// rather than being credited to whatever term happens to bind.
+    #[test]
+    fn batch_grinding_buys_nothing_when_nothing_is_batched() {
+        let regime = benchmark_regime();
+        let air = air();
+        let shape = InstanceShape {
+            modulus_bits: 100,
+            num_batched_functions: 1,
+            ..shape()
+        };
+
+        let b0 = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+        let b32 = proven_security_report(
+            &regime,
+            &air,
+            &shape,
+            &[],
+            &GrindingSites {
+                batch_combination: 32,
+                ..GrindingSites::NONE
+            },
+        );
+
+        assert!((b32.security_bits() - b0.security_bits()).abs() < 1e-12);
+        assert!(b32.udr.terms().iter().all(|t| t.label != BATCH_LABEL));
+    }
+
     /// The conjectured report's attained bits equal the scalar
     /// `conjectured_security` for the same LDT, shape, and extras, and it is
     /// tagged as the conjectured regime.
@@ -641,6 +936,74 @@ mod tests {
         let ground_report = conjectured_security_report(&regime, &air, &shape, &[], &ground);
         let ground_scalar = conjectured_security(&regime, &air, &shape, &[], &ground);
         assert!((ground_report.security_bits() - ground_scalar.bits()).abs() < 1e-12);
+
+        // And with more than one batched codeword — the axis the two paths
+        // would diverge on if only one of them composed the batching round.
+        let batched = batched_shape();
+        let batched_report =
+            conjectured_security_report(&regime, &air, &batched, &[], &GrindingSites::NONE);
+        let batched_scalar =
+            conjectured_security(&regime, &air, &batched, &[], &GrindingSites::NONE);
+        assert!((batched_report.security_bits() - batched_scalar.bits()).abs() < 1e-12);
+    }
+
+    /// The opening-batching round is charged in the conjectured regime, and
+    /// only when the protocol samples such a challenge at all.
+    ///
+    /// Charging it is what keeps the regime consistent with its own low-degree
+    /// test: `fri::conjectured_commit_phase_error` already charges the folding
+    /// random linear combination, which is the same kind of round under the
+    /// same conjecture.
+    #[test]
+    fn conjectured_report_charges_the_batching_round() {
+        let regime = benchmark_regime();
+        let air = air();
+        let batched = batched_shape();
+        let unbatched = InstanceShape {
+            num_batched_functions: 1,
+            ..batched
+        };
+
+        let with_batch =
+            conjectured_security_report(&regime, &air, &batched, &[], &GrindingSites::NONE);
+        let without =
+            conjectured_security_report(&regime, &air, &unbatched, &[], &GrindingSites::NONE);
+
+        assert!(
+            with_batch.terms().iter().any(|t| t.label == BATCH_LABEL),
+            "batched openings must be charged"
+        );
+        assert!(
+            !without.terms().iter().any(|t| t.label == BATCH_LABEL),
+            "a protocol that batches nothing samples no such challenge"
+        );
+        assert!(
+            with_batch.security_bits() < without.security_bits(),
+            "the batching round must constrain the conjectured level: {} vs {}",
+            with_batch.security_bits(),
+            without.security_bits()
+        );
+    }
+
+    /// The conjectured level stays at or above the proven one for the same
+    /// instance, batching included: the conjecture drops the list-size
+    /// multiplier the proven regime pays, it does not add error.
+    #[test]
+    fn conjectured_stays_above_proven_when_openings_are_batched() {
+        let regime = benchmark_regime();
+        let air = air();
+        let shape = batched_shape();
+
+        let conjectured =
+            conjectured_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+        let proven = proven_security_report(&regime, &air, &shape, &[], &GrindingSites::NONE);
+
+        assert!(
+            conjectured.security_bits() >= proven.security_bits(),
+            "conjectured {} fell below proven {}",
+            conjectured.security_bits(),
+            proven.security_bits()
+        );
     }
 
     /// Conjectured mode decodes at list size 1, so ALI and DEEP carry no

@@ -107,6 +107,12 @@ impl SecurityAssumption {
             Self::UniqueDecoding => 0.,
 
             // By the JB, RS codes are (1 - sqrt(rho) - eta, (2*eta*sqrt(rho))^-1)-list decodable.
+            //
+            // This is the classical Johnson list size, used to grade WHIR and STIR.
+            // `crate::proximity::list_size_ldr_m` grades FRI with the tighter [BCSS25]
+            // Theorem 4.2 bound instead. Both are valid theorems for the same code at a matched
+            // radius, and are never co-evaluated for the same regime; this one is the more
+            // conservative of the two, so the difference is intentional, not a defect to unify.
             Self::JohnsonBound => {
                 let log_inv_sqrt_rate: f64 = log_inv_rate as f64 / 2.;
                 log_inv_sqrt_rate - (1. + log_eta)

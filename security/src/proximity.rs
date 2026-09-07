@@ -11,7 +11,7 @@
 //! - [2024/1553] On the Security of STARKs with FRI
 //! - [2025/2055] BCHKS25 Theorem 4.2
 
-use libm::{ceil, pow, sqrt};
+use libm::{floor, pow, sqrt};
 
 /// Performance cap on the proximity parameter `m` searched in LDR
 /// analyses. Matches Ethereum's `soundcalc`.
@@ -64,6 +64,11 @@ pub const fn list_size_conjectured() -> f64 {
 
 /// LDR list size: L⁺ = (m + 1/2)/√ρ. Matches `soundcalc`
 /// `johnson_bound::get_max_list_size` (explicit-m branch).
+///
+/// Uses the tighter [2025/2055] BCHKS25 Theorem 4.2 list size at the caller's
+/// explicit `m`, distinct from [`crate::assumption::SecurityAssumption::JohnsonBound`]'s
+/// classical Johnson bound at a fixed safety margin — the two are not
+/// interchangeable, see that variant's `list_size_bits_at_log_eta` doc.
 pub fn list_size_ldr_m(log_blowup: usize, m: usize) -> f64 {
     let rho = pow(2.0, -(log_blowup as f64));
     (m as f64 + 0.5) / sqrt(rho)
@@ -71,11 +76,23 @@ pub fn list_size_ldr_m(log_blowup: usize, m: usize) -> f64 {
 
 /// Largest proximity parameter `m` such that the η > 0 precondition of
 /// Theorem 1 in [2021/582] holds. Caller applies [`LDR_M_CAP`].
-pub fn compute_upper_m(trace_length: usize) -> usize {
+///
+/// `max_combo` accounts for the trace-side expansion from out-of-domain
+/// openings, matching [`alpha_udr`]'s `rho_plus`. The precondition is the
+/// strict inequality `m < X` where `X = 1 / (2 * (sqrt((h + max_combo) / h) - 1))`,
+/// so the admissible maximum is `floor(X)`, or `X - 1` on the non-generic
+/// chance that `X` is itself an integer.
+pub fn compute_upper_m(trace_length: usize, max_combo: usize) -> usize {
     if trace_length == 0 {
         return 0;
     }
     let h = trace_length as f64;
-    let ratio = (h + 2.0) / h;
-    ceil(1.0 / (2.0 * (sqrt(ratio) - 1.0))) as usize
+    let ratio = (h + max_combo as f64) / h;
+    let x = 1.0 / (2.0 * (sqrt(ratio) - 1.0));
+    let m = floor(x);
+    if m == x {
+        (m - 1.0) as usize
+    } else {
+        m as usize
+    }
 }

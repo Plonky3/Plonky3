@@ -49,7 +49,9 @@ const LARGE: AirVector = AirVector {
     max_message_width: 18,
 };
 
-const PARAM_ROWS: &[(u32, u32, u32, u32)] = &[(27, 17, 12, 4), (100, 0, 0, 0), (150, 31, 31, 31)];
+/// `(num_queries, query PoW, out-of-domain PoW, DEEP-composition PoW, folding PoW)`.
+const PARAM_ROWS: &[(u32, u32, u32, u32, u32)] =
+    &[(27, 17, 6, 12, 4), (100, 0, 0, 0, 0), (150, 31, 31, 31, 31)];
 
 /// Out-of-domain points referenced per column: `local` and `next` rotations.
 const OOD_MAX_COMBO: u32 = 2;
@@ -98,12 +100,15 @@ const fn cap(bits: f64) -> f64 {
 #[test]
 fn every_round_direction_and_tightness() {
     for air_vector in [&SMALL, &LARGE] {
-        for &(num_queries, query_pow_bits, deep_pow_bits, folding_pow_bits) in PARAM_ROWS {
+        for &(num_queries, query_pow_bits, ood_pow_bits, deep_pow_bits, folding_pow_bits) in
+            PARAM_ROWS
+        {
             let params = ProtocolParams {
                 log_blowup: LOG_BLOWUP,
                 log_folding_arity: LOG_FOLDING_ARITY,
                 num_queries,
                 query_pow_bits,
+                ood_pow_bits,
                 deep_pow_bits,
                 folding_pow_bits,
                 lookup_pow_bits: 0,
@@ -135,7 +140,7 @@ fn every_round_direction_and_tightness() {
                     check_query(&report, num_queries, query_pow_bits);
                     check_lookup(&report, air_vector, log_max_height);
                     check_composition(&report, air_vector);
-                    check_ood(&report, air_vector, max_combo, log_max_height);
+                    check_ood(&report, air_vector, max_combo, log_max_height, ood_pow_bits);
                     check_folding(&report, log_max_height, folding_pow_bits);
                     check_deep_composition(&report, air_vector, deep_pow_bits);
                 }
@@ -216,14 +221,24 @@ fn check_composition(report: &SecurityReport, air_vector: &AirVector) {
     );
 }
 
-fn check_ood(report: &SecurityReport, air_vector: &AirVector, max_combo: u32, log_max_height: u32) {
+fn check_ood(
+    report: &SecurityReport,
+    air_vector: &AirVector,
+    max_combo: u32,
+    log_max_height: u32,
+    ood_pow_bits: u32,
+) {
     let fixed_bits = term_bits(report, OUT_OF_DOMAIN_LABEL);
     let stark_air = StarkAirParams {
         num_constraints: air_vector.num_composed_constraints as usize,
         max_constraint_degree: air_vector.max_constraint_degree as usize,
         max_combo: max_combo as usize,
     };
-    let p3_bits = cap(deep::deep_ali_error(&stark_air, &f64_instance(log_max_height), 1.0).bits());
+    let p3_bits = cap(boost(
+        deep::deep_ali_error(&stark_air, &f64_instance(log_max_height), 1.0),
+        ood_pow_bits as usize,
+    )
+    .bits());
 
     assert!(
         fixed_bits <= p3_bits + TIGHT_TOL,
@@ -292,6 +307,7 @@ fn collision_term_is_the_cap() {
         log_folding_arity: LOG_FOLDING_ARITY,
         num_queries: 27,
         query_pow_bits: 17,
+        ood_pow_bits: 6,
         deep_pow_bits: 12,
         folding_pow_bits: 4,
         lookup_pow_bits: 0,
@@ -317,7 +333,7 @@ fn collision_term_is_the_cap() {
 
 proptest! {
     /// The grid above pins the parameter shape to a handful of vectors; this covers the whole
-    /// three-dimensional space the out-of-domain round is a function of.
+    /// four-dimensional space the out-of-domain round is a function of.
     ///
     /// A counterexample is by construction a shape whose fixed-point budget reports more bits than
     /// the scalar reference — a recursive verifier accepting a configuration the `f64` path
@@ -327,12 +343,14 @@ proptest! {
         max_constraint_degree in 1..=32u32,
         log_max_height in 0..=48u32,
         max_combo in 1..=16u32,
+        ood_pow_bits in 0..=32u32,
     ) {
         let params = ProtocolParams {
             log_blowup: LOG_BLOWUP,
             log_folding_arity: LOG_FOLDING_ARITY,
             num_queries: 27,
             query_pow_bits: 17,
+            ood_pow_bits,
             deep_pow_bits: 12,
             folding_pow_bits: 4,
             lookup_pow_bits: 0,
@@ -362,13 +380,16 @@ proptest! {
             max_constraint_degree: max_constraint_degree as usize,
             max_combo: max_combo as usize,
         };
-        let reference = deep::deep_ali_error(&stark_air, &f64_instance(log_max_height), 1.0);
+        let reference = boost(
+            deep::deep_ali_error(&stark_air, &f64_instance(log_max_height), 1.0),
+            ood_pow_bits as usize,
+        );
         let p3_bits = cap(reference.bits());
 
         prop_assert!(
             fixed_bits <= p3_bits + PROP_TOL,
             "ood: {fixed_bits} > {p3_bits} at d={max_constraint_degree} \
-             h={log_max_height} combo={max_combo}"
+             h={log_max_height} combo={max_combo} pow={ood_pow_bits}"
         );
     }
 }
