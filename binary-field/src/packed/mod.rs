@@ -26,6 +26,13 @@ pub(crate) use PackedGhash128 as Packing;
     any(target_feature = "avx2", target_feature = "avx512f")
 ))]
 pub use x86_64::PackedGhash128;
+// The lane wrappers and the quadword selectors, shared with the polynomial-basis slice kernels.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+))]
+pub(crate) use x86_64::{HIGH_BY_HIGH, HIGH_BY_LOW, LOW_BY_HIGH, LOW_BY_LOW, lanes};
 
 #[cfg(not(all(
     target_arch = "x86_64",
