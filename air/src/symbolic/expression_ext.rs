@@ -48,6 +48,13 @@ impl<F: Field, EF: ExtensionField<F>> SymLeaf for ExtLeaf<F, EF> {
         }
     }
 
+    fn degree_multiple_with_transition(&self, transition_degree: usize) -> usize {
+        match self {
+            Self::Base(e) => e.degree_multiple_with_transition(transition_degree),
+            _ => self.degree_multiple(),
+        }
+    }
+
     fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize {
         match self {
             Self::Base(e) => e.poly_degree(trace_len, periodic_periods),

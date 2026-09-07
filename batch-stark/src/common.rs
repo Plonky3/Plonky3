@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
-use p3_commit::Pcs;
+use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace};
 use p3_lookup::{InteractionSymbolicBuilder, LogUpGadget, Lookups};
 use p3_matrix::Matrix;
@@ -21,7 +21,7 @@ use p3_util::log2_strict_usize;
 
 use crate::config::{Challenge, Commitment, Domain, StarkGenericConfig as SGC};
 use crate::prover::StarkInstance;
-use crate::symbolic::get_log_num_quotient_chunks;
+use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 
 /// Per-instance metadata for a preprocessed trace that lives inside a
 /// global preprocessed commitment.
@@ -321,14 +321,15 @@ where
                 // Base trace length `N` (before any ZK extension), matching what the
                 // prover and verifier feed the degree model for this instance.
                 let trace_len = 1usize << (ext_db - is_zk);
+                let domain = pcs.natural_domain_for_degree(trace_len);
                 let unpacked = Lookups::<Val<SC>>::from_air::<SC::Challenge, A>(air);
 
                 // `log_chunks` fixes the quotient bucket: n_chunks = 2^log_chunks.
                 let log_chunks =
-                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                    get_log_num_quotient_chunks_for_domain::<_, SC::Challenge, A, _>(
                         air,
                         AirLayout::from_air(air),
-                        trace_len,
+                        domain,
                         &unpacked,
                         is_zk,
                         &lookup_gadget,
@@ -340,16 +341,21 @@ where
                 //  => d <= 2^log_chunks + 1 - is_zk
                 let free_budget = (1usize << log_chunks) + 1 - is_zk;
                 let budget = free_budget.max(override_budget);
-                let packed = unpacked.pack_same_bus(&lookup_gadget, budget);
+                let packed = unpacked.pack_same_bus_with_degree(budget, |lookup| {
+                    lookup_gadget.constraint_degree_with_transition(
+                        lookup,
+                        domain.transition_degree_multiple(),
+                    )
+                });
 
                 if override_budget <= free_budget {
                     // No deliberate override: the fold must not have moved the quotient bucket,
                     // exactly as before.
                     debug_assert_eq!(
-                        get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                        get_log_num_quotient_chunks_for_domain::<_, SC::Challenge, A, _>(
                             air,
                             AirLayout::from_air(air),
-                            trace_len,
+                            domain,
                             &packed,
                             is_zk,
                             &lookup_gadget,
@@ -365,10 +371,10 @@ where
                     // `StarkSecurityParams::new` states as a buildability condition; without
                     // this check nothing else on the prove or verify path detects a violation.
                     let packed_log_chunks =
-                        get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                        get_log_num_quotient_chunks_for_domain::<_, SC::Challenge, A, _>(
                             air,
                             AirLayout::from_air(air),
-                            trace_len,
+                            domain,
                             &packed,
                             is_zk,
                             &lookup_gadget,

@@ -4,8 +4,9 @@
 
 use alloc::vec::Vec;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, PrimeField64};
+use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
 use serde::{Deserialize, Serialize};
 
@@ -88,7 +89,7 @@ impl<F, EF> GenericDegreeProof<F, EF> {
         pow_bits: usize,
     ) -> Result<(Point<EF>, EF), GenericDegreeError>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {

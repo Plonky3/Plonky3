@@ -1,11 +1,58 @@
 //! STARK-specific quotient polynomial degree calculations.
 
 use p3_air::Air;
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_max_constraint_degree_extension};
+use p3_air::symbolic::{
+    AirLayout, SymbolicAirBuilder, get_all_symbolic_constraints,
+    get_max_constraint_degree_extension,
+};
+use p3_commit::PolynomialSpace;
 use p3_field::{ExtensionField, Field};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
+/// Size the quotient using the trace domain's transition-selector degree.
+///
+/// Two-adic domains retain the cached degree and hint fast paths. Circle uses
+/// full trace-space degrees for selectors and periodic columns. Its symbolic
+/// degree is checked even with a hint, since the hint does not encode how many
+/// transition factors occur in a constraint.
+pub fn get_log_num_quotient_chunks_for_domain<F, A>(
+    air: &A,
+    layout: AirLayout,
+    domain: impl PolynomialSpace<Val = F>,
+    is_zk: usize,
+) -> usize
+where
+    F: Field,
+    A: Air<SymbolicAirBuilder<F>>,
+{
+    let transition_degree = domain.transition_degree_multiple();
+    if transition_degree == 0 {
+        return get_log_num_quotient_chunks(air, layout, domain.size(), is_zk);
+    }
+
+    assert!(is_zk <= 1, "is_zk must be either 0 or 1");
+    let (base, extension) = get_all_symbolic_constraints::<F, F, A>(air, layout);
+    let degree = base
+        .iter()
+        .map(|c| c.degree_multiple_with_transition(transition_degree))
+        .chain(
+            extension
+                .iter()
+                .map(|c| c.degree_multiple_with_transition(transition_degree)),
+        )
+        .max()
+        .unwrap_or(0)
+        .max(air.max_constraint_degree().unwrap_or(0));
+
+    // Circle STARKs, section 5.3: an odd constraint degree d gives a quotient
+    // in the FFT subspace L^-_{(d-1)N}. For even d >= 4, rounding d-1 up to a
+    // power of two provides strict room; d <= 2 uses Circle's doubled disjoint
+    // domain. Thus the same chunk formula applies once d counts all selectors.
+    log2_ceil_usize((degree + is_zk).max(2) - 1)
+}
+
+/// Two-adic quotient sizing; use [`get_log_num_quotient_chunks_for_domain`] for other domains.
 #[instrument(skip_all, level = "debug")]
 pub fn get_log_num_quotient_chunks<F, A>(
     air: &A,
@@ -42,6 +89,7 @@ where
     get_log_quotient_degree_extension(air, layout, trace_len, is_zk)
 }
 
+/// Two-adic quotient sizing, including extension constraints.
 #[instrument(
     name = "infer log of base and extension constraint degree",
     skip_all,

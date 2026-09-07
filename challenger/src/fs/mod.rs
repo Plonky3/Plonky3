@@ -10,6 +10,7 @@ mod domain_separator;
 mod error;
 mod pattern;
 mod state;
+mod transcript_field;
 mod unit;
 
 pub use bound::TranscriptBound;
@@ -25,4 +26,5 @@ pub use pattern::{
     PatternState, TypeTag,
 };
 pub use state::{ProverState, VerifierState};
+pub use transcript_field::TranscriptField;
 pub use unit::{FieldUnit, Unit};

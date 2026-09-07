@@ -16,7 +16,7 @@ use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
 use crate::error::{InvalidProofShapeError, PeriodicColumnError, VerificationError};
-use crate::symbolic::get_log_num_quotient_chunks;
+use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 use crate::{
     AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder, observe_commitment,
@@ -337,8 +337,12 @@ where
     // measures trace columns as degree-`(N - 1)` polynomials and accounts for ZK
     // separately via `is_zk`.
     let base_degree = 1usize << base_degree_bits;
-    let log_num_quotient_chunks =
-        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, base_degree, config.is_zk());
+    let log_num_quotient_chunks = get_log_num_quotient_chunks_for_domain::<Val<SC>, A>(
+        air,
+        layout,
+        pcs.natural_domain_for_degree(base_degree),
+        config.is_zk(),
+    );
     let (_, num_quotient_chunks) = checked_log_size_sum(log_num_quotient_chunks, config.is_zk())
         .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,

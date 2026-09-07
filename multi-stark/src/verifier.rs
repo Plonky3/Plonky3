@@ -4,7 +4,6 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_field::PrimeField;
 use p3_sumcheck::PrescribedPointPcs;
 use thiserror::Error;
 
@@ -104,7 +103,6 @@ pub fn verify<'a, C, A>(
 ) -> Result<(), VerificationError<PcsError<C>>>
 where
     C: MultiStarkConfig,
-    C::Val: PrimeField,
     C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
     C::Challenger: FieldChallenger<C::Val>
         + GrindingChallenger<Witness = C::Val>

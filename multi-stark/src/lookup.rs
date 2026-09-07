@@ -21,7 +21,7 @@ use core::cmp::Reverse;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr};
 use p3_air::{Air, BaseAir, SymbolicExpression};
 use p3_challenger::FieldChallenger;
-use p3_field::{ExtensionField, Field, PackedValue, PrimeField};
+use p3_field::{ExtensionField, Field, PackedValue};
 use p3_lookup::{
     Challenges, InteractionSymbolicBuilder, Kind, Lookups, check_multiplicity_height_bound,
 };
@@ -121,6 +121,8 @@ impl<F: Field> LookupPlan<F> {
     ///
     /// Returns an error if the worst-case multiplicity sum reaches the field characteristic.
     /// A multiplicity could otherwise wrap around and forge a balanced bus.
+    /// Returns an error for active characteristic-two lookups: the counting argument and
+    /// fractional-GKR interpolation used here require an odd-characteristic field.
     ///
     /// # Panics
     ///
@@ -128,12 +130,8 @@ impl<F: Field> LookupPlan<F> {
     /// Panics if a lookup expression reads a periodic column.
     /// Panics if two declarations share a bus name but disagree on payload width.
     /// Panics if no declaration carries a payload element.
-    pub fn build<EF, A>(
-        airs: &[&A],
-        num_variables: &[usize],
-    ) -> Result<Option<Self>, p3_lookup::LookupError>
+    pub fn build<EF, A>(airs: &[&A], num_variables: &[usize]) -> Result<Option<Self>, LookupError>
     where
-        F: PrimeField,
         EF: ExtensionField<F>,
         A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
     {
@@ -145,6 +143,14 @@ impl<F: Field> LookupPlan<F> {
             .iter()
             .map(|&air| Lookups::from_air::<EF, _>(air))
             .collect::<Vec<_>>();
+        if F::ONE + F::ONE == F::ZERO
+            && lookups
+                .iter()
+                .flat_map(|lookups| lookups.iter())
+                .any(|lookup| !lookup.elements.is_empty())
+        {
+            return Err(LookupError::UnsupportedCharacteristic);
+        }
         for lookup in lookups.iter().flat_map(|lookups| lookups.iter()) {
             assert!(
                 lookup.flags.is_none(),
@@ -591,6 +597,9 @@ impl<EF: Field> ActiveLookupRuntime<EF> {
 /// Reasons the lookup phase rejects a proof.
 #[derive(Debug, Error)]
 pub enum LookupError {
+    /// The counting argument and fractional-GKR kernels do not support binary fields.
+    #[error("multi-STARK lookups do not support characteristic two")]
+    UnsupportedCharacteristic,
     /// An AIR declares a lookup, but the proof carries no reduction for it.
     #[error("lookup proof expected but absent")]
     MissingProof,
@@ -618,6 +627,7 @@ pub enum LookupError {
 ///
 /// Panics if the input slices disagree on length.
 /// Panics if the worst-case multiplicity sum reaches the field characteristic.
+/// Panics if a characteristic-two AIR declares an active lookup.
 /// Panics if a lookup-active trace is shorter than the prover's SIMD packing width.
 pub(crate) fn prove_lookup<F, EF, A, Challenger>(
     airs: &[&A],
@@ -627,7 +637,7 @@ pub(crate) fn prove_lookup<F, EF, A, Challenger>(
     challenger: &mut Challenger,
 ) -> (Option<FractionGkrProof<EF>>, LookupRuntime<EF>)
 where
-    F: PrimeField,
+    F: Field,
     EF: ExtensionField<F>,
     A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
     Challenger: FieldChallenger<F>,
@@ -645,7 +655,7 @@ where
         .map(|table| table.num_variables())
         .collect::<Vec<_>>();
     let Some(plan) = LookupPlan::build::<EF, A>(airs, &num_variables)
-        .expect("lookup multiplicity height bound must hold")
+        .expect("lookup field and multiplicity height bound must be supported")
     else {
         return (None, LookupRuntime::Inactive);
     };
@@ -694,6 +704,7 @@ where
 ///
 /// Returns an error when the proof and the AIRs disagree on whether a lookup exists.
 /// Returns an error when the worst-case multiplicity sum reaches the field characteristic.
+/// Returns an error when a characteristic-two AIR declares an active lookup.
 /// Returns an error when the reduction fails its own consistency checks.
 ///
 /// # Panics
@@ -706,7 +717,7 @@ pub(crate) fn verify_lookup<F, EF, A, Challenger>(
     challenger: &mut Challenger,
 ) -> Result<Option<AirLinkClaim<EF>>, LookupError>
 where
-    F: PrimeField,
+    F: Field,
     EF: ExtensionField<F>,
     A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
     Challenger: FieldChallenger<F>,
@@ -765,6 +776,37 @@ mod tests {
     type EF = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2BabyBear<16>;
     type Challenger = DuplexChallenger<F, Perm, 16, 8>;
+
+    struct BinaryLookupAir;
+
+    impl BaseAir<p3_binary_field::BinaryField128> for BinaryLookupAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB> Air<AB> for BinaryLookupAir
+    where
+        AB: AirBuilder<F = p3_binary_field::BinaryField128> + InteractionBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let value = builder.main().current_slice()[0];
+            // Provided-only declarations have zero query weight and pass the height
+            // bound. They still must not enter the unsupported binary lookup path.
+            builder.push_local_interaction([
+                (vec![value.into()], Count::provided(AB::Expr::ONE)),
+                (vec![value.into()], Count::provided(-AB::Expr::ONE)),
+            ]);
+        }
+    }
+
+    #[test]
+    fn binary_lookup_plan_is_rejected_even_without_query_weight() {
+        assert!(matches!(
+            LookupPlan::build::<p3_binary_field::BinaryField128, _>(&[&BinaryLookupAir], &[2]),
+            Err(LookupError::UnsupportedCharacteristic)
+        ));
+    }
 
     struct BalancedLookupAir;
 

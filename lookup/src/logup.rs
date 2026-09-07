@@ -106,6 +106,56 @@ impl LogUpGadget {
         Self {}
     }
 
+    /// Degree of the fraction-pin constraint, using the domain's transition degree.
+    ///
+    /// For `U * f - V`, the bound is `max(1 + deg(U), deg(V))`.
+    /// Each denominator factor contributes its combined-element degree; each
+    /// numerator term contributes its multiplicity and all other factors.
+    pub fn constraint_degree_with_transition<F: Field>(
+        &self,
+        lookup: &Lookup<F>,
+        transition_degree: usize,
+    ) -> usize {
+        assert!(lookup.multiplicities.len() == lookup.elements.len());
+        let degree =
+            |expr: &SymbolicExpression<F>| expr.degree_multiple_with_transition(transition_degree);
+
+        // Exclusive columns multiplex branches instead of multiplying denominators:
+        // D = sum(flag * (alpha - combine)) + (1 - sum(flag)), N = sum(flag * mult).
+        if let Some(flags) = &lookup.flags {
+            let deg_denom = flags
+                .iter()
+                .zip_eq(&lookup.elements)
+                .map(|(flag, elems)| degree(flag) + elems.iter().map(&degree).max().unwrap_or(0))
+                .chain(flags.iter().map(&degree))
+                .max()
+                .unwrap_or(0);
+            let deg_num = flags
+                .iter()
+                .zip_eq(&lookup.multiplicities)
+                .map(|(flag, m)| degree(flag) + degree(m))
+                .max()
+                .unwrap_or(0);
+            return (1 + deg_denom).max(deg_num);
+        }
+
+        let mut degs = Vec::with_capacity(lookup.elements.len());
+        let mut deg_sum = 0;
+        for elems in &lookup.elements {
+            let deg = elems.iter().map(&degree).max().unwrap_or(0);
+            degs.push(deg);
+            deg_sum += deg;
+        }
+        let deg_num = lookup
+            .multiplicities
+            .iter()
+            .zip(degs)
+            .map(|(m, deg)| degree(m) + deg_sum - deg)
+            .max()
+            .unwrap_or(0);
+        (1 + deg_sum).max(deg_num)
+    }
+
     /// Computes the combined elements for each tuple using the challenge `beta`:
     /// `combined_elements[i] = ∑_j elements[i][j] * β^(k-1-j), for a tuple of width k`
     fn combine_elements<AB, E>(
@@ -443,64 +493,7 @@ impl LookupProtocol for LogUpGadget {
     ///
     /// The constraint degree is then: `max(1 + deg(U_c), deg(V_c))`
     fn constraint_degree<F: Field>(&self, lookup: &Lookup<F>) -> usize {
-        assert!(lookup.multiplicities.len() == lookup.elements.len());
-
-        // Exclusive column: the multiplex takes the per-branch maximum degree.
-        //
-        //   D = sum_k flag_k * (alpha - combine_k) + (1 - sum_k flag_k)
-        //   N = sum_k flag_k * mult_k
-        //
-        // The challenges are constant.
-        // So combine_k has the degree of its widest element.
-        // Each branch then adds its flag's degree on top.
-        if let Some(flags) = &lookup.flags {
-            let deg_denom = flags
-                .iter()
-                .zip_eq(&lookup.elements)
-                .map(|(flag, elems)| {
-                    let elem_deg = elems.iter().map(|e| e.degree_multiple()).max().unwrap_or(0);
-                    flag.degree_multiple() + elem_deg
-                })
-                // The fallback term (1 - sum flag) carries only the flag degree.
-                .chain(flags.iter().map(SymbolicExpression::degree_multiple))
-                .max()
-                .unwrap_or(0);
-
-            let deg_num = flags
-                .iter()
-                .zip_eq(&lookup.multiplicities)
-                .map(|(flag, m)| flag.degree_multiple() + m.degree_multiple())
-                .max()
-                .unwrap_or(0);
-
-            return (1 + deg_denom).max(deg_num);
-        }
-
-        let n = lookup.multiplicities.len();
-
-        // Compute degrees in a single pass.
-        let mut degs = Vec::with_capacity(n);
-        let mut deg_sum = 0;
-        for elems in &lookup.elements {
-            let deg = elems
-                .iter()
-                .map(|elt| elt.degree_multiple())
-                .max()
-                .unwrap_or(0);
-            degs.push(deg);
-            deg_sum += deg;
-        }
-
-        // Compute 1 + degree(denominator).
-        let deg_denom_constr = 1 + deg_sum;
-
-        // Compute degree(numerator).
-        let deg_num = (0..n)
-            .map(|i| lookup.multiplicities[i].degree_multiple() + deg_sum - degs[i])
-            .max()
-            .unwrap_or(0);
-
-        deg_denom_constr.max(deg_num)
+        self.constraint_degree_with_transition(lookup, 0)
     }
 
     #[instrument(name = "generate lookup permutation", skip_all, level = "debug")]

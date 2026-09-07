@@ -1694,6 +1694,158 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
         .map_err(|e| format!("Verification failed: {:?}", e))
 }
 
+#[derive(Clone)]
+struct NonlinearTransitionAir {
+    degree_hint: Option<usize>,
+}
+
+impl<F> BaseAir<F> for NonlinearTransitionAir {
+    fn width(&self) -> usize {
+        1
+    }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        self.degree_hint
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for NonlinearTransitionAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice()[0];
+        let next = main.next_slice()[0];
+        builder.when_first_row().assert_eq(local, AB::Expr::TWO);
+        builder
+            .when_transition()
+            .assert_eq(next, local.into().cube() + AB::Expr::ONE);
+    }
+}
+
+fn check_circle_nonlinear_transition(with_hint: bool) {
+    let config = make_circle_config();
+    let airs = [
+        NonlinearTransitionAir {
+            degree_hint: with_hint.then_some(3),
+        },
+        NonlinearTransitionAir {
+            degree_hint: with_hint.then_some(3),
+        },
+    ];
+    let traces = [16, 32].map(|height| {
+        let mut value = CircleVal::TWO;
+        RowMajorMatrix::new_col(
+            (0..height)
+                .map(|_| {
+                    let current = value;
+                    value = value.cube() + CircleVal::ONE;
+                    current
+                })
+                .collect(),
+        )
+    });
+    let instances = airs
+        .iter()
+        .zip(&traces)
+        .map(|(air, trace)| StarkInstance {
+            air,
+            trace,
+            public_values: vec![],
+        })
+        .collect::<Vec<_>>();
+    let prover_data = ProverData::empty(airs.len());
+    let proof = prove_batch(&config, &instances, &prover_data);
+    assert!(
+        verify_batch(
+            &config,
+            &airs,
+            &proof,
+            &[vec![], vec![]],
+            &prover_data.common
+        )
+        .is_ok(),
+        "valid Circle transitions rejected (hint={with_hint})"
+    );
+}
+
+#[test]
+fn circle_nonlinear_transition_without_hint() {
+    check_circle_nonlinear_transition(false);
+}
+
+#[test]
+fn circle_nonlinear_transition_with_hint() {
+    check_circle_nonlinear_transition(true);
+}
+
+#[derive(Clone)]
+struct CircleTransitionLookupAir {
+    receive: bool,
+}
+
+impl<F> BaseAir<F> for CircleTransitionLookupAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        Some(0)
+    }
+}
+
+impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for CircleTransitionLookupAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let transition = builder.is_transition();
+        for &value in main.current_slice() {
+            builder.push_interaction(
+                "transition-payload",
+                [transition.clone() * value],
+                if self.receive { 1 } else { -1 },
+            );
+        }
+    }
+}
+
+#[test]
+fn circle_lookup_packing_preserves_quotient_budget() {
+    let config = make_circle_config();
+    let airs = [
+        CircleTransitionLookupAir { receive: true },
+        CircleTransitionLookupAir { receive: false },
+    ];
+    let trace = RowMajorMatrix::new(
+        (0..16)
+            .flat_map(|i| [CircleVal::from_u32(i), CircleVal::from_u32(i * i + 1)])
+            .collect(),
+        2,
+    );
+    let instances = airs
+        .iter()
+        .map(|air| StarkInstance {
+            air,
+            trace: &trace,
+            public_values: vec![],
+        })
+        .collect::<Vec<_>>();
+    let prover_data = ProverData::from_instances(&config, &instances);
+    for lookups in &prover_data.common.lookups {
+        // Each transition * payload has degree 2. Two such tuples would pin
+        // at degree 5 and exceed the unpacked degree-3 quotient bucket.
+        assert_eq!(lookups.len(), 2);
+    }
+    let proof = prove_batch(&config, &instances, &prover_data);
+    assert!(
+        verify_batch(
+            &config,
+            &airs,
+            &proof,
+            &[vec![], vec![]],
+            &prover_data.common
+        )
+        .is_ok()
+    );
+}
+
 type CompatCase<Config, V> = (
     Config,
     Vec<DemoAirWithLookups>,

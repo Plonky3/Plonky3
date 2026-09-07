@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
-use p3_field::{ExtensionField, Field, PrimeField};
+use p3_field::{ExtensionField, Field};
 use p3_sumcheck::PrescribedPointPcs;
 
 use crate::ProverInstances;
@@ -65,7 +65,6 @@ pub fn prove<'a, C, A>(
 ) -> MultiStarkProof<C>
 where
     C: MultiStarkConfig,
-    C::Val: PrimeField,
     C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
     C::Challenger: FieldChallenger<C::Val>
         + GrindingChallenger<Witness = C::Val>

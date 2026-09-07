@@ -21,7 +21,7 @@ use p3_commit::{Encoder, Mmcs};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::SumcheckData;
-use p3_sumcheck::layout::{Layout, Witness};
+use p3_sumcheck::layout::{Layout, Table, Witness};
 
 use crate::PcsLayout;
 use crate::fold::fold_codeword;
@@ -39,7 +39,9 @@ const FOLDING: usize = 0;
 /// Data produced by committing the base codeword: the layout used to build the residual
 /// sumcheck, and the base commitment's Merkle prover data.
 ///
-/// Opaque to callers, who receive it from `commit` and hand it back to `open`.
+/// Retains the source tables for AIR evaluation between `commit` and `open`.
+/// Cloning reuses the encoding and Merkle tree for another opening of the commitment.
+#[derive(Clone)]
 pub struct BinaryPcsProverData<MT: Mmcs<BinaryField128>> {
     /// The layout that ran the commit phase, carried forward to build the residual sumcheck
     /// and, later, to evaluate opening claims against the committed polynomial.
@@ -47,6 +49,13 @@ pub struct BinaryPcsProverData<MT: Mmcs<BinaryField128>> {
     /// The base codeword's Merkle prover data, needed to open base-round queries once the
     /// query phase samples its indices.
     pub(crate) merkle_data: MT::ProverData<DenseMatrix<BinaryField128>>,
+}
+
+impl<MT: Mmcs<BinaryField128>> BinaryPcsProverData<MT> {
+    /// Returns source table `id` retained by the committed layout.
+    pub fn table(&self, id: usize) -> &Table<BinaryField128> {
+        self.layout.table(id)
+    }
 }
 
 /// One folding round's prover-side output.

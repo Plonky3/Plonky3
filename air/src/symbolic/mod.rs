@@ -35,6 +35,11 @@ pub trait SymLeaf: Clone + core::fmt::Debug {
     /// Returns the degree multiple of this leaf.
     fn degree_multiple(&self) -> usize;
 
+    /// Degree multiple with a domain-specific weight for the transition selector.
+    fn degree_multiple_with_transition(&self, _transition_degree: usize) -> usize {
+        self.degree_multiple()
+    }
+
     /// Returns the exact polynomial degree of this leaf over a trace of length
     /// `trace_len`, given the period of each periodic column.
     fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize;
@@ -108,6 +113,19 @@ impl<A: SymLeaf> SymbolicExpr<A> {
         }
     }
 
+    /// Degree multiple counting each transition-selector factor with the given weight.
+    ///
+    /// Weight zero uses the cached two-adic degree. Weight one also counts Circle
+    /// transition selectors as full trace-space polynomials. Periodic columns
+    /// retain their full degree multiple: Circle's doubling map does not give
+    /// them the reduced degree of a two-adic periodic polynomial.
+    pub fn degree_multiple_with_transition(&self, transition_degree: usize) -> usize {
+        if transition_degree == 0 {
+            return self.degree_multiple();
+        }
+        self.degree_with(&|leaf| leaf.degree_multiple_with_transition(transition_degree))
+    }
+
     /// Returns the exact polynomial degree of this expression over a trace of
     /// length `trace_len`, given the period of each periodic column (indexed by
     /// periodic column index).
@@ -116,47 +134,50 @@ impl<A: SymLeaf> SymbolicExpr<A> {
     /// polynomial it is and accounts for the reduced degree of periodic columns,
     /// unlike the trace-size-independent [`Self::degree_multiple`].
     pub fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize {
+        self.degree_with(&|leaf| leaf.poly_degree(trace_len, periodic_periods))
+    }
+
+    fn degree_with(&self, leaf_degree: &impl Fn(&A) -> usize) -> usize {
         // The expression is a DAG: arithmetic nodes share `Arc` children, so a naive
         // recursion would revisit shared subtrees exponentially. Memoize on node
         // identity to keep this linear in the number of distinct nodes.
         let mut cache: BTreeMap<*const Self, usize> = BTreeMap::new();
-        self.poly_degree_memo(trace_len, periodic_periods, &mut cache)
+        self.degree_memo(leaf_degree, &mut cache)
     }
 
-    fn poly_degree_memo(
+    fn degree_memo(
         &self,
-        trace_len: usize,
-        periodic_periods: &[usize],
+        leaf_degree: &impl Fn(&A) -> usize,
         cache: &mut BTreeMap<*const Self, usize>,
     ) -> usize {
         match self {
-            Self::Leaf(a) => a.poly_degree(trace_len, periodic_periods),
-            Self::Add { x, y, .. } | Self::Sub { x, y, .. } => {
-                Self::child_poly_degree(x, trace_len, periodic_periods, cache).max(
-                    Self::child_poly_degree(y, trace_len, periodic_periods, cache),
-                )
-            }
-            Self::Neg { x, .. } => Self::child_poly_degree(x, trace_len, periodic_periods, cache),
+            Self::Leaf(a) => leaf_degree(a),
+            Self::Add { x, y, .. } | Self::Sub { x, y, .. } => Self::child_degree(
+                x,
+                leaf_degree,
+                cache,
+            )
+            .max(Self::child_degree(y, leaf_degree, cache)),
+            Self::Neg { x, .. } => Self::child_degree(x, leaf_degree, cache),
             Self::Mul { x, y, .. } => {
-                Self::child_poly_degree(x, trace_len, periodic_periods, cache)
-                    + Self::child_poly_degree(y, trace_len, periodic_periods, cache)
+                Self::child_degree(x, leaf_degree, cache)
+                    + Self::child_degree(y, leaf_degree, cache)
             }
         }
     }
 
     /// Degree of an `Arc`-shared child, looked up by pointer identity so each
     /// distinct node is evaluated at most once.
-    fn child_poly_degree(
+    fn child_degree(
         node: &Arc<Self>,
-        trace_len: usize,
-        periodic_periods: &[usize],
+        leaf_degree: &impl Fn(&A) -> usize,
         cache: &mut BTreeMap<*const Self, usize>,
     ) -> usize {
         let key = Arc::as_ptr(node);
         if let Some(&degree) = cache.get(&key) {
             return degree;
         }
-        let degree = node.poly_degree_memo(trace_len, periodic_periods, cache);
+        let degree = node.degree_memo(leaf_degree, cache);
         cache.insert(key, degree);
         degree
     }

@@ -18,7 +18,7 @@ use tracing::{debug_span, info_span, instrument};
 use crate::{
     Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData, Proof,
     ProverConstraintFolder, StarkGenericConfig, Val, get_constraint_layout,
-    get_log_num_quotient_chunks, observe_commitment,
+    get_log_num_quotient_chunks_for_domain, observe_commitment,
 };
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use crate::{VectorizedChallenge, VectorizedConstraintFolder, VectorizedVal};
@@ -157,7 +157,7 @@ where
     // Y_i's will be the `i`'th element of the next row and the Z_i's will be evaluations of
     // selector polynomials on the given row index.
     //
-    // When we convert to working with polynomials, the `X_i`'s and `Y_i`'s will be replaced by the
+    // For two-adic domains, the `X_i`'s and `Y_i`'s will be replaced by the
     // degree `N - 1` polynomials `T_i(x)` and `T_i(hx)` respectively. The selector polynomials are
     // a little more complicated, however.
     //
@@ -177,27 +177,29 @@ where
     //          C(x) = C(T_1(x), ..., T_w(x), T_1(hx), ... T_w(hx), S_1(x), S_2(x), S_3(x))
     // We get the constraint bound:
     //          deg(C(x)) <= deg(C) * (N - 1) + 1
-    // The `+1` is due to the `is_transition` selector which is not accounted for in `deg(C)`. Note
-    // that S_i^2 should never appear in a constraint as it should just be replaced by `S_i`.
+    // The `+1` assumes at most one `is_transition` factor per term. Circle instead
+    // counts each transition factor at full trace-space degree.
     //
     // For now in comments we assume that `deg(C) = 3` meaning `deg(C(x)) <= 3N - 2`
+
+    let pcs = config.pcs();
+    // Get the subgroup `H` of size `N`, or a standard-position twin coset for Circle.
+    let trace_domain = pcs.natural_domain_for_degree(degree);
 
     // From the degree of the constraint polynomial, compute the number
     // of quotient polynomials we will split Q(x) into. This is chosen to
     // always be a power of 2.
-    let log_num_quotient_chunks =
-        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, degree, config.is_zk());
+    let log_num_quotient_chunks = get_log_num_quotient_chunks_for_domain::<Val<SC>, A>(
+        air,
+        layout,
+        trace_domain,
+        config.is_zk(),
+    );
 
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
 
-    // Initialize the PCS and the Challenger.
-    let pcs = config.pcs();
+    // Initialize the Challenger.
     let mut challenger = config.initialise_challenger();
-
-    // Get the subgroup `H` of size `N`. We treat each column `T_i` of
-    // the trace as an evaluation vector of polynomials `T_i(x)` over `H`.
-    // (In the Circle STARK case `H` is instead a standard position twin coset of size `N`)
-    let trace_domain = pcs.natural_domain_for_degree(degree);
 
     // When ZK is enabled, we need to use an extended domain of size `2N` as we will
     // add random values to the trace.

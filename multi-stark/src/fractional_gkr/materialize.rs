@@ -608,7 +608,9 @@ pub(super) mod tests {
 
         assert!(matches!(
             result,
-            Err(p3_lookup::LookupError::MultiplicityHeightBoundExceeded { .. })
+            Err(crate::lookup::LookupError::MultiplicityHeightBound(
+                p3_lookup::LookupError::MultiplicityHeightBoundExceeded { .. }
+            ))
         ));
     }
 

@@ -8,7 +8,7 @@ use core::ops::Deref;
 use num_bigint::BigUint;
 use p3_air::symbolic::AirLayout;
 use p3_air::{Air, SymbolicExpression};
-use p3_field::{ExtensionField, Field, PrimeField};
+use p3_field::{ExtensionField, Field};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -247,6 +247,19 @@ impl<F: Field> Lookups<F> {
     /// - `max_degree` — the largest degree that leaves the quotient cost unchanged.
     #[must_use]
     pub fn pack_same_bus<LG: LookupProtocol>(self, gadget: &LG, max_degree: usize) -> Self {
+        self.pack_same_bus_with_degree(max_degree, |lookup| gadget.constraint_degree(lookup))
+    }
+
+    /// Like [`Self::pack_same_bus`], with a domain-aware fraction-pin degree bound.
+    ///
+    /// `constraint_degree` must upper-bound the merged lookup's fraction-pin degree
+    /// in the same units as `max_degree`.
+    #[must_use]
+    pub fn pack_same_bus_with_degree(
+        self,
+        max_degree: usize,
+        constraint_degree: impl Fn(&Lookup<F>) -> usize,
+    ) -> Self {
         // Locals keep their leading columns, untouched.
         let mut packed: Vec<Lookup<F>> = Vec::with_capacity(self.0.len());
         // Globals bucket by bus name, in first-appearance order.
@@ -290,7 +303,7 @@ impl<F: Field> Lookups<F> {
                         cur.multiplicities
                             .extend(member.multiplicities.iter().cloned());
 
-                        if gadget.constraint_degree(&cur) <= max_degree {
+                        if constraint_degree(&cur) <= max_degree {
                             // Within budget: keep the merge.
                             // Each tuple holds its own per-row query bound, so the bounds add.
                             cur.count_weight = cur
@@ -355,7 +368,7 @@ impl<F: Field> Lookups<F> {
 /// # Errors
 ///
 /// - When the weighted sum reaches the field characteristic.
-pub fn check_multiplicity_height_bound<F: PrimeField>(
+pub fn check_multiplicity_height_bound<F: Field>(
     lookups: &[Lookups<F>],
     heights: &[usize],
 ) -> Result<(), LookupError> {
