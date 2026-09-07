@@ -13,6 +13,9 @@ categories.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion.workspace = true
 
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
 [dependencies]
 p3-challenger.workspace = true
 p3-field.workspace = true
