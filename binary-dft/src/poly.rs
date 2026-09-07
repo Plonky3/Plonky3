@@ -127,6 +127,7 @@ fn convert_tile(tile: &mut [u128], conversion: impl Fn(u128) -> u128) {
 /// Where the two basis conversions ride, instead of taking a pass over the matrix each.
 ///
 /// A conversion is a pure per-element map, so it commutes with every butterfly ordering.
+///
 /// Applied where the schedule already holds the element in cache it costs the lookups alone,
 /// and no memory traffic at all.
 #[derive(Copy, Clone, Debug)]
@@ -196,15 +197,18 @@ const TILE_BYTES: usize = 32 * 1024;
 ///
 /// The tile is streamed rather than randomly addressed, so it need not fit in L1.
 /// What it must not do is spill out of the private cache level below the shared one.
+///
 /// A sweep of the fusion depth at width 16 puts the optimum at 64 KiB, which fuses 8 stages.
-/// A 1 MiB tile fuses 12 stages and runs a third slower.
 /// That is exactly the per-core private cache size of the machine the sweep ran on.
+///
+/// A 1 MiB tile fuses 12 stages and runs a third slower.
 const STAGING_BYTES: usize = 64 * 1024;
 
 /// The shape of one transform, and the two places its stage sequence is cut.
 ///
 /// A stage pairs rows a power of two apart, so the whole matrix has to be traversed once per
 /// stage unless a set of rows closed under several stages can be brought into cache.
+///
 /// There are two such sets, and one cut point each:
 ///
 /// ```text
@@ -243,6 +247,7 @@ impl Plan {
     ///
     /// Fusing a single stage would move the same bytes the stage moves on its own, plus the
     /// copy in and out of the staging tile, so one stage is left over rather than fused.
+    ///
     /// A staging tile too narrow to hold two rows leaves every stage over.
     const fn leftover(&self) -> usize {
         let above = self.log_n - self.local;
@@ -279,9 +284,12 @@ fn local_stage(
 
 /// Run the `depth` stages that a tile of `2^depth` consecutive rows holds.
 ///
-/// The tile is a radix-2 network on its rows: sub-layer `s` pairs rows `2^(depth-1-s)` apart
-/// and splits the tile into `2^s` blocks of `2^(depth-s)` rows, each block carrying one
-/// twiddle. Globally those blocks are the blocks `block * 2^s + g`, `g = 0 .. 2^s`, of stage
+/// The tile is a radix-2 network on its rows.
+///
+/// Sub-layer `s` pairs rows `2^(depth-1-s)` apart and splits the tile into `2^s` blocks of
+/// `2^(depth-s)` rows, each block carrying one twiddle.
+///
+/// Globally those blocks are the blocks `block * 2^s + g`, `g = 0 .. 2^s`, of stage
 /// `top - 1 - s`, so the twiddle walk starts at `block << s`.
 fn tile_stages(
     tile: &mut [u128],
@@ -343,8 +351,10 @@ struct Rows {
 }
 
 // SAFETY: the handle is a pointer and two lengths, with no interior mutability and no `Drop`,
-// so sending or sharing it moves no data. The only caller derives the row index of every task
-// from a bijection onto the row range, which is what makes concurrent use race-free.
+// so sending or sharing it moves no data.
+//
+// The only caller derives the row index of every task from a bijection onto the row range,
+// which is what makes concurrent use race-free.
 unsafe impl Send for Rows {}
 // SAFETY: see the `Send` implementation.
 unsafe impl Sync for Rows {}
@@ -354,9 +364,11 @@ impl Rows {
     /// matrix.
     ///
     /// The walk is increasing, so bounding its last row bounds all of them.
+    ///
     /// This runs once per tile rather than once per row, which is why it is a hard check and
-    /// not a debug one: a row index past the end would otherwise be a write past the end of
-    /// the matrix.
+    /// not a debug one.
+    ///
+    /// A row index past the end would otherwise be a write past the end of the matrix.
     ///
     /// # Panics
     /// Panics if the last row of the walk is at or beyond the row count.
@@ -376,8 +388,9 @@ impl Rows {
         self.check(first, stride, rows.len());
         for (k, row) in rows.enumerate() {
             // SAFETY: the bound above puts every row of the walk inside the matrix, and the
-            // tile is a separate allocation, so the two ranges cannot overlap. The row is a
-            // whole chunk, so it has room for exactly the elements copied into it.
+            // tile is a separate allocation, so the two ranges cannot overlap.
+            //
+            // The row is a whole chunk, so it has room for exactly the elements copied into it.
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     self.base.add((first + k * stride) * self.width),
@@ -411,31 +424,42 @@ impl Rows {
 /// Run stages `top - 1` down to `top - depth` through one staging tile per worker.
 ///
 /// Each of those stages pairs rows far apart, so on its own it reads and writes the whole
-/// matrix. The rows they touch split into small sets that are closed under all of them: with
-/// `S = 2^(top-depth)` and `offset < S`, the `2^depth` rows
+/// matrix.
+///
+/// The rows they touch split into small sets that are closed under all of them, so gathering
+/// one such set into a contiguous tile runs the whole group inside the cache.
+///
+/// The matrix is then read once and written once per group instead of once per stage.
+///
+/// # Algorithm
+///
+/// With `S = 2^(top-depth)` and `offset < S`, one such set is the `2^depth` rows
 ///
 /// ```text
 ///     row(k) = block * 2^top + offset + k * S ,     k = 0 .. 2^depth
 /// ```
 ///
-/// are closed because stage `top-1-s` pairs rows `2^(top-1-s) = 2^(depth-1-s) * S` apart,
-/// which is a distance of `2^(depth-1-s)` in `k`, inside the set for every `s < depth`.
-/// Gathering those rows into one contiguous tile therefore runs all `depth` stages on a
-/// working set that stays in cache, so the matrix is read once and written once for the
-/// group instead of once per stage.
+/// Stage `top-1-s` pairs rows `2^(top-1-s) = 2^(depth-1-s) * S` apart.
 ///
-/// The twiddle a sub-layer needs is the twiddle of the global block its pair lies in. For
-/// sub-layer `s` that block index is
+/// That is a distance of `2^(depth-1-s)` in `k`, which stays inside the set for every
+/// `s < depth`, so the set is closed.
+///
+/// # Twiddles
+///
+/// A sub-layer needs the twiddle of the global block its pair lies in.
+///
+/// For sub-layer `s` that block index is
 ///
 /// ```text
 ///     row(k) >> (top - s) = block * 2^s + (k >> (depth - s))
 /// ```
 ///
-/// because `row(k) >> (top-s) = block * 2^s + ((offset + k*S) >> (top-s))`, and writing
-/// `k = q * 2^(depth-s) + r` gives `offset + r * S < 2^(top-s)`, so only `q = k >> (depth-s)`
-/// survives the shift. That is precisely the block index a contiguous run of `2^(depth-s)`
-/// staged rows carries, which is why the tile runs as an ordinary radix-2 network whose
-/// twiddle walk starts at `block << s`.
+/// Writing `k = q * 2^(depth-s) + r` gives `offset + r * S < 2^(top-s)`, so only
+/// `q = k >> (depth-s)` survives the shift.
+///
+/// That is precisely the block index a contiguous run of `2^(depth-s)` staged rows carries.
+///
+/// So the tile runs as an ordinary radix-2 network whose twiddle walk starts at `block << s`.
 fn fused_stages(
     values: &mut [u128],
     plan: Plan,
@@ -469,9 +493,12 @@ fn fused_stages(
         let block = index >> (top - depth);
         let first = (block << top) + (index & (stride - 1));
         // SAFETY: `index` runs over `0..tiles` and `k` over `0..2^depth`, so
-        // `(block, offset, k) -> row(k)` is a mixed-radix decomposition of `0..2^log_n`:
-        // every row is inside the matrix and belongs to exactly one tile index, hence to
-        // exactly one task. The exclusive borrow of the matrix outlives the whole region.
+        // `(block, offset, k) -> row(k)` is a mixed-radix decomposition of `0..2^log_n`.
+        //
+        // Every row is inside the matrix and belongs to exactly one tile index, hence to
+        // exactly one task.
+        //
+        // The exclusive borrow of the matrix outlives the whole region.
         unsafe { rows.gather(first, stride, tile) };
         // The gather is the first read of every element when this is the first group of a
         // forward transform.
@@ -514,6 +541,7 @@ fn forward(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
     let leftover = plan.leftover();
 
     // Peel fused groups from the top stage downwards, each replacing `take` full passes.
+    //
     // The first group's gather is the first read of every element, so it carries the entry
     // conversion.
     let mut entry = fold.entry;
@@ -847,8 +875,10 @@ mod tests {
     #[test]
     fn every_cut_of_the_stage_sequence_matches_the_per_stage_schedule() {
         // Invariant: cutting the stage sequence into staging groups and a contiguous tile is
-        // a pure reordering of memory traffic. Every element must come out bit for bit what
-        // one full pass per stage produces, in both directions.
+        // a pure reordering of memory traffic.
+        //
+        // Every element must come out bit for bit what one full pass per stage produces, in
+        // both directions.
         //
         // The heights below are the branch boundaries of the cut:
         //
@@ -883,8 +913,9 @@ mod tests {
             }
         }
 
-        // The production cut points, at heights that put the interesting branch on each
-        // width. Fixture state, from the two cache budgets:
+        // The production cut points, at heights that put the interesting branch on each width.
+        //
+        // Fixture state, from the two cache budgets:
         //
         //     width  1 @ 2^10   local 10, depth 12   the tile is the whole transform
         //     width  3 @ 2^10   local  9, depth 10   one stage above the tile, unfused
