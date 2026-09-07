@@ -7,7 +7,35 @@ use crate::permutation::CryptographicPermutation;
 /// Instead it is only collision-resistant in hash-tree like settings where
 /// the preimage of a non-leaf node must consist of compression outputs.
 pub trait PseudoCompressionFunction<T, const N: usize>: Clone {
+    /// Number of independent compressions this implementation performs most efficiently in one call.
+    ///
+    /// One means every group is compressed on its own, which is the behaviour of a plain scalar permutation.
+    /// A vectorized implementation reports how many independent states its permutation advances at once.
+    /// Callers read this only to decide whether grouping compressions is worth the bookkeeping.
+    const LANES: usize = 1;
+
     fn compress(&self, input: [T; N]) -> T;
+
+    /// Compress a batch of input groups, one output per group.
+    ///
+    /// ```text
+    ///     inputs: [ grp_0 | grp_1 | ... | grp_{m-1} ]   m groups of N inputs
+    ///     out:    [ dig_0 | dig_1 | ... | dig_{m-1} ]   m outputs
+    /// ```
+    ///
+    /// The default compresses the groups one at a time.
+    /// An override exists purely to exploit vector hardware and must return the very same outputs.
+    ///
+    /// Groups beyond the shorter of the two slices are ignored, so the caller controls the count.
+    fn compress_many(&self, inputs: &[[T; N]], out: &mut [T])
+    where
+        T: Clone,
+    {
+        // Walk the groups in order so the outputs land in the caller's order.
+        for (output, group) in out.iter_mut().zip(inputs) {
+            *output = self.compress(group.clone());
+        }
+    }
 }
 
 /// An `N`-to-1 compression function.
@@ -64,8 +92,27 @@ where
     T: Clone,
     H: CryptographicHasher<T, [T; CHUNK]>,
 {
+    const LANES: usize = <H as CryptographicHasher<T, [T; CHUNK]>>::LANES;
+
     fn compress(&self, input: [[T; CHUNK]; N]) -> [T; CHUNK] {
         self.hasher.hash_iter(input.into_iter().flatten())
+    }
+
+    fn compress_many(&self, inputs: &[[[T; CHUNK]; N]], out: &mut [[T; CHUNK]]) {
+        // A group is `N` adjacent chunks of `CHUNK` items, so a run of groups is already one
+        // flat run of items with nothing between the groups:
+        //
+        //     inputs: [[c0 c1] [c2 c3] ...]  ->  flat: [c0 c1 c2 c3 ...]
+        //
+        // Flattening twice therefore hands the hasher exactly the concatenated preimages that
+        // the single-group path builds one group at a time, with no copying.
+        let messages = inputs.as_flattened().as_flattened();
+
+        // Each message is `N * CHUNK` items long, so the batch hasher can split them itself.
+        // Trim the input to the number of requested outputs to keep that split exact.
+        let requested = out.len().min(inputs.len());
+        self.hasher
+            .hash_many(&messages[..requested * N * CHUNK], &mut out[..requested]);
     }
 }
 

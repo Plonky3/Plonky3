@@ -243,6 +243,266 @@ pub(crate) fn select_arity_step<const N: usize>(
     if has_intermediate { 2 } else { N }
 }
 
+/// Output nodes below which a level is hashed on the calling thread.
+///
+/// A parallel dispatch costs a fixed amount per level, and the levels near the root hold so few
+/// nodes that the dispatch outweighs the hashing itself.
+/// Grouping messages is independent of threading, so a small level keeps the full vector width
+/// even while it runs on one thread.
+/// 1024 is the point where the two costs balance in practice: it still leaves tens of nodes per
+/// thread on a many-core machine, and every wider level fans out.
+const SERIAL_LEVEL_NODES: usize = 1024;
+
+/// Output nodes handed to one parallel task.
+///
+/// Matching the serial threshold keeps a task large enough to amortize the dispatch and small
+/// enough that its scratch buffers stay in the mid-level cache.
+const TASK_NODES: usize = 1024;
+
+/// Target size in bytes of the buffer holding one group of copied rows.
+///
+/// A batched hasher wants its messages back to back in memory, and a matrix only promises access
+/// one row at a time, so a group of rows is copied into a buffer first.
+/// 16 KiB keeps that buffer inside the first-level cache, so the hasher reads the rows back while
+/// they are still hot.
+const ROW_SCRATCH_BYTES: usize = 16 * 1024;
+
+/// Hash a run of rows from a set of equal-height matrices, several messages per hash call.
+///
+/// The message for a row is the concatenation of that row across every matrix, in matrix order,
+/// which is exactly what the unbatched path feeds its hasher one row at a time.
+///
+/// # Arguments
+/// - `h`: hasher applied to each row message.
+/// - `matrices`: matrices of equal height whose rows are concatenated.
+/// - `first_row`: index of the row whose digest lands in the first output slot.
+/// - `out`: one slot per consecutive row starting at that index.
+///
+/// # Panics
+/// Panics if any matrix is shorter than the requested row range.
+fn hash_rows_batched<F, W, H, M, const DIGEST_ELEMS: usize>(
+    h: &H,
+    matrices: &[&M],
+    first_row: usize,
+    out: &mut [[W; DIGEST_ELEMS]],
+) where
+    F: Clone + Send + Sync,
+    W: Send + Sync,
+    H: CryptographicHasher<F, [W; DIGEST_ELEMS]> + Sync,
+    M: Matrix<F>,
+{
+    // Bound the row range up front, since the copy loop below skips per-row bounds checks.
+    assert!(
+        matrices.iter().all(|m| m.height() >= first_row + out.len()),
+        "row range {}..{} exceeds a matrix height",
+        first_row,
+        first_row + out.len()
+    );
+
+    // A message spans one row of every matrix.
+    let total_width: usize = matrices.iter().map(|m| m.width()).sum();
+    let row_bytes = (total_width * size_of::<F>()).max(1);
+
+    // Fill as many whole lane groups as the scratch budget allows, and never fewer than one,
+    // so every hash call keeps the hasher's vector width busy.
+    let lanes = H::LANES;
+    let rows_per_call = (ROW_SCRATCH_BYTES / row_bytes / lanes).max(1) * lanes;
+
+    let hash_chunk = |base: usize, digests: &mut [[W; DIGEST_ELEMS]]| {
+        // One buffer per task, reused by every group inside it.
+        let mut scratch: Vec<F> = Vec::with_capacity(rows_per_call * total_width);
+
+        for (group, group_digests) in digests.chunks_mut(rows_per_call).enumerate() {
+            let first = base + group * rows_per_call;
+
+            // Lay the group's messages back to back: row by row, matrix by matrix.
+            scratch.clear();
+            for row in first..first + group_digests.len() {
+                for m in matrices {
+                    // SAFETY: the assertion above bounds every requested row by every height.
+                    let slice = unsafe { m.row_slice_unchecked(row) };
+                    scratch.extend_from_slice(&slice);
+                }
+            }
+
+            h.hash_many(&scratch, group_digests);
+        }
+    };
+
+    if out.len() <= SERIAL_LEVEL_NODES {
+        // Small level: one task would be shared by nobody, so skip the dispatch.
+        hash_chunk(first_row, out);
+    } else {
+        // Keep each task a whole number of groups so only the final group is ever short.
+        let task = rows_per_call * TASK_NODES.div_ceil(rows_per_call);
+        out.par_chunks_mut(task)
+            .enumerate()
+            .for_each(|(task_index, digests)| hash_chunk(first_row + task_index * task, digests));
+    }
+}
+
+/// Compress a run of already-grouped children, several groups per compression call.
+///
+/// # Arguments
+/// - `c`: compression function applied to each group.
+/// - `groups`: one array of `N` children per output node.
+/// - `out`: one slot per group.
+fn compress_groups_batched<T, C, const N: usize>(c: &C, groups: &[[T; N]], out: &mut [T])
+where
+    T: Clone + Send + Sync,
+    C: PseudoCompressionFunction<T, N> + Sync,
+{
+    if out.len() <= SERIAL_LEVEL_NODES {
+        // Small level: one task would be shared by nobody, so skip the dispatch.
+        c.compress_many(groups, out);
+    } else {
+        groups
+            .par_chunks(TASK_NODES)
+            .zip(out.par_chunks_mut(TASK_NODES))
+            .for_each(|(group_chunk, digest_chunk)| c.compress_many(group_chunk, digest_chunk));
+    }
+}
+
+/// Build the first digest layer with a hasher that hashes several messages per call.
+fn first_digest_layer_batched<F, W, H, M, const N: usize, const DIGEST_ELEMS: usize>(
+    h: &H,
+    tallest_matrices: &[&M],
+) -> Vec<[W; DIGEST_ELEMS]>
+where
+    F: Clone + Send + Sync,
+    W: Copy + Default + Send + Sync,
+    H: CryptographicHasher<F, [W; DIGEST_ELEMS]> + Sync,
+    M: Matrix<F>,
+{
+    // All of the tallest matrices share one height by construction.
+    let max_height = tallest_matrices[0].height();
+    let max_height_padded = padded_len(max_height, N);
+
+    // Slots past the real rows exist only so the next level can form whole groups.
+    let default_digest = [W::default(); DIGEST_ELEMS];
+    let mut digests = vec![default_digest; max_height_padded];
+
+    hash_rows_batched(h, tallest_matrices, 0, &mut digests[..max_height]);
+
+    digests
+}
+
+/// Fold one digest layer into the next with a compression function that compresses several
+/// groups per call.
+///
+/// A node's children sit next to each other in the layer below, so a run of `N` children is
+/// already the contiguous preimage of one parent and a run of parents is a contiguous run of
+/// those preimages:
+///
+/// ```text
+///     prev_layer: [ c_0 c_1 | c_2 c_3 | c_4 c_5 | ... ]     N = 2
+///                   \-----/   \-----/   \-----/
+///     out:            d_0       d_1       d_2       ...
+/// ```
+///
+/// Reading the layer as groups is therefore a reinterpretation of the same memory, with no
+/// transposition and no gathering.
+fn compress_batched<W, C, const N: usize, const DIGEST_ELEMS: usize>(
+    prev_layer: &[[W; DIGEST_ELEMS]],
+    c: &C,
+) -> Vec<[W; DIGEST_ELEMS]>
+where
+    W: Copy + Default + Send + Sync,
+    C: PseudoCompressionFunction<[W; DIGEST_ELEMS], N> + Sync,
+{
+    let next_len = prev_layer.len() / N;
+    let next_len_padded = padded_len(next_len, N);
+
+    let default_digest = [W::default(); DIGEST_ELEMS];
+    let mut next_digests = vec![default_digest; next_len_padded];
+
+    // Any trailing child that cannot complete a group takes no part in this level.
+    let (groups, _) = prev_layer[..next_len * N].as_chunks::<N>();
+    compress_groups_batched(c, groups, &mut next_digests[..next_len]);
+
+    next_digests
+}
+
+/// Fold one digest layer into the next and mix in rows of smaller matrices, batching both the
+/// compressions and the row hashes.
+///
+/// Each output node is built in three passes over the same chunk, so the intermediate buffers
+/// stay proportional to a task rather than to the whole level:
+///
+/// ```text
+///     pass 1: compress N children            -> folded
+///     pass 2: hash one row per output node    -> injected
+///     pass 3: compress [folded, injected]    -> out
+/// ```
+///
+/// Output nodes past the injected matrices' height get the default digest in place of a row
+/// digest, matching the unbatched path.
+fn compress_and_inject_batched<F, W, H, C, M, const N: usize, const DIGEST_ELEMS: usize>(
+    prev_layer: &[[W; DIGEST_ELEMS]],
+    matrices_to_inject: &[&M],
+    h: &H,
+    c: &C,
+) -> Vec<[W; DIGEST_ELEMS]>
+where
+    F: Clone + Send + Sync,
+    W: Copy + Default + Send + Sync,
+    H: CryptographicHasher<F, [W; DIGEST_ELEMS]> + Sync,
+    C: PseudoCompressionFunction<[W; DIGEST_ELEMS], N> + Sync,
+    M: Matrix<F>,
+{
+    // Rows are injected for the leading nodes only.
+    // The nodes past the injected matrices' height are pure compressions.
+    let inject_len = matrices_to_inject[0].height();
+    let raw_next = prev_layer.len() / N;
+    let next_len_padded = padded_len(raw_next, N);
+
+    let default_digest = [W::default(); DIGEST_ELEMS];
+    let mut next_digests = vec![default_digest; next_len_padded];
+
+    let (groups, _) = prev_layer[..raw_next * N].as_chunks::<N>();
+
+    let build = |base: usize,
+                 group_chunk: &[[[W; DIGEST_ELEMS]; N]],
+                 digest_chunk: &mut [[W; DIGEST_ELEMS]]| {
+        let count = digest_chunk.len();
+
+        // Pass 1: fold the children of every node in this chunk.
+        let mut folded = vec![default_digest; count];
+        c.compress_many(group_chunk, &mut folded);
+
+        // Pass 2: hash one row per node, for as many nodes as the matrices are tall.
+        let injected_count = count.min(inject_len.saturating_sub(base));
+        let mut injected = vec![default_digest; injected_count];
+        hash_rows_batched(h, matrices_to_inject, base, &mut injected);
+
+        // Pass 3: pair each folded digest with its row digest, padding the group to `N`.
+        let mut pairs = vec![[default_digest; N]; count];
+        for (node, pair) in pairs.iter_mut().enumerate() {
+            *pair = array::from_fn(|slot| match slot {
+                0 => folded[node],
+                1 if node < injected_count => injected[node],
+                _ => default_digest,
+            });
+        }
+        c.compress_many(&pairs, digest_chunk);
+    };
+
+    if raw_next <= SERIAL_LEVEL_NODES {
+        // Small level: one task would be shared by nobody, so skip the dispatch.
+        build(0, groups, &mut next_digests[..raw_next]);
+    } else {
+        groups
+            .par_chunks(TASK_NODES)
+            .zip(next_digests[..raw_next].par_chunks_mut(TASK_NODES))
+            .enumerate()
+            .for_each(|(task_index, (group_chunk, digest_chunk))| {
+                build(task_index * TASK_NODES, group_chunk, digest_chunk);
+            });
+    }
+
+    next_digests
+}
+
 /// Hash every row of the tallest matrices and build the first digest layer.
 ///
 /// This function is responsible for creating the first layer of Merkle digests,
@@ -277,6 +537,15 @@ where
         + Sync,
     M: Matrix<P::Value>,
 {
+    // A hasher that hashes several messages per call wants whole rows, not packed columns,
+    // so it takes a separate driver.
+    if <H as CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>>::LANES > 1 {
+        return first_digest_layer_batched::<P::Value, PW::Value, H, M, N, DIGEST_ELEMS>(
+            h,
+            tallest_matrices,
+        );
+    }
+
     // The number of rows to pack and hash together in one SIMD batch.
     let width = PW::WIDTH;
 
@@ -365,6 +634,21 @@ where
 {
     if matrices_to_inject.is_empty() {
         return compress::<PW, _, N, DIGEST_ELEMS>(prev_layer, step, c);
+    }
+
+    // The batched arm reads a node's children as one contiguous group, which only lines up
+    // when the level takes a full `N`-ary step.
+    // A binary bridge step keeps the packed arm.
+    if step == N
+        && <H as CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>>::LANES > 1
+        && <C as PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>>::LANES > 1
+    {
+        return compress_and_inject_batched::<P::Value, PW::Value, H, C, M, N, DIGEST_ELEMS>(
+            prev_layer,
+            matrices_to_inject,
+            h,
+            c,
+        );
     }
 
     let width = PW::WIDTH;
@@ -498,6 +782,13 @@ where
         + PseudoCompressionFunction<[P; DIGEST_ELEMS], N>
         + Sync,
 {
+    // Same reinterpretation rule as the injecting level.
+    // A full `N`-ary step makes a node's children one contiguous group, a binary bridge step
+    // does not.
+    if step == N && <C as PseudoCompressionFunction<[P::Value; DIGEST_ELEMS], N>>::LANES > 1 {
+        return compress_batched::<P::Value, C, N, DIGEST_ELEMS>(prev_layer, c);
+    }
+
     let width = P::WIDTH;
     let next_len = prev_layer.len() / step;
     let next_len_padded = padded_len(next_len, N);
@@ -541,8 +832,12 @@ where
 mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_field::Field;
+    use p3_keccak::Keccak256Hash;
     use p3_matrix::dense::RowMajorMatrix;
-    use p3_symmetric::{PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation};
+    use p3_symmetric::{
+        CompressionFunctionFromHasher, PaddingFreeSponge, PseudoCompressionFunction,
+        SerializingHasher, TruncatedPermutation,
+    };
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -565,6 +860,215 @@ mod tests {
             }
             output
         }
+    }
+
+    /// Tree shapes the batched and unbatched drivers must agree on, as matrix heights and width.
+    ///
+    /// Between them they cover every boundary the batching introduces:
+    /// - A tree of a single row, which has no level above the leaves at all.
+    /// - Odd heights, which leave a padding tail at the top of a level.
+    /// - Node counts that leave a partial final group in a hash call.
+    /// - Several matrices sharing the tallest height, so a leaf message spans two rows.
+    /// - A ragged height ladder, which forces injection levels.
+    /// - Levels wide enough to fan out across threads instead of staying serial.
+    /// - Rows long enough to make the sponge absorb more than one block.
+    const SHAPES: &[(&[usize], usize)] = &[
+        (&[1], 1),
+        (&[3], 4),
+        (&[13], 1),
+        (&[8, 8, 4], 3),
+        (&[17, 9, 5, 3], 2),
+        (&[1100], 1),
+        (&[2049, 1025, 513], 5),
+        (&[64], 135),
+    ];
+
+    /// A hasher and compressor pair that reports one lane, forcing the unbatched driver.
+    ///
+    /// Every digest it produces is the wrapped primitive's, so the two drivers are compared on
+    /// the same hash function and any difference is the driver's alone.
+    #[derive(Clone, Copy, Debug)]
+    struct Unbatched<T>(T);
+
+    impl<Item, Out, T> CryptographicHasher<Item, Out> for Unbatched<T>
+    where
+        Item: Clone,
+        T: CryptographicHasher<Item, Out>,
+    {
+        const LANES: usize = 1;
+
+        fn hash_iter<I>(&self, input: I) -> Out
+        where
+            I: IntoIterator<Item = Item>,
+        {
+            self.0.hash_iter(input)
+        }
+
+        fn hash_iter_slices<'a, I>(&self, input: I) -> Out
+        where
+            I: IntoIterator<Item = &'a [Item]>,
+            Item: 'a,
+        {
+            self.0.hash_iter_slices(input)
+        }
+    }
+
+    impl<T, Inner, const N: usize> PseudoCompressionFunction<T, N> for Unbatched<Inner>
+    where
+        Inner: PseudoCompressionFunction<T, N>,
+    {
+        const LANES: usize = 1;
+
+        fn compress(&self, input: [T; N]) -> T {
+            self.0.compress(input)
+        }
+    }
+
+    /// A byte hasher reporting three lanes, with no batched implementation of its own.
+    ///
+    /// Three is deliberately neither a power of two nor a divisor of any test height, so every
+    /// group the driver forms ends in a short remainder.
+    /// Leaving the batched hash at its default also isolates the driver: any disagreement comes
+    /// from how the driver assembles messages, not from a vectorized sponge.
+    #[derive(Clone, Copy, Debug)]
+    struct ThreeLaneMix;
+
+    impl CryptographicHasher<u8, [u8; 32]> for ThreeLaneMix {
+        const LANES: usize = 3;
+
+        fn hash_iter<I>(&self, input: I) -> [u8; 32]
+        where
+            I: IntoIterator<Item = u8>,
+        {
+            // A four-word state absorbing one byte per step, mixed with an odd multiplier and a
+            // rotation so that byte order and message length both change the result.
+            let mut state = [0x243f_6a88_85a3_08d3u64; 4];
+            let mut count = 0u64;
+            for byte in input {
+                let word = &mut state[(count % 4) as usize];
+                *word = word.rotate_left(11).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ u64::from(byte);
+                count += 1;
+            }
+
+            // Fold the length in so a truncated message cannot collide with a longer one.
+            state[0] ^= count.wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
+
+            let mut digest = [0u8; 32];
+            for (word, slot) in state.iter().zip(digest.as_chunks_mut::<8>().0) {
+                *slot = word.to_le_bytes();
+            }
+            digest
+        }
+    }
+
+    /// Build the same tree with both drivers and compare every node of every layer.
+    ///
+    /// Comparing whole layers rather than just the root pins where a divergence begins, and a
+    /// root match alone could hide two compensating errors at a lower level.
+    fn assert_drivers_agree<H, C, const N: usize>(h: &H, c: &C, heights: &[usize], width: usize)
+    where
+        H: CryptographicHasher<F, [u8; 32]> + Sync,
+        C: PseudoCompressionFunction<[u8; 32], N> + Sync,
+    {
+        // Fixture: one random matrix per requested height, all at the same width.
+        let mut rng = SmallRng::seed_from_u64(heights[0] as u64 * 1_000_003 + width as u64);
+        let leaves: Vec<RowMajorMatrix<F>> = heights
+            .iter()
+            .map(|&height| RowMajorMatrix::rand(&mut rng, height, width))
+            .collect();
+
+        let batched =
+            MerkleTree::<F, u8, RowMajorMatrix<F>, N, 32>::new::<F, u8, H, C>(h, c, leaves.clone());
+
+        let unbatched_h = Unbatched(h.clone());
+        let unbatched_c = Unbatched(c.clone());
+        let unbatched = MerkleTree::<F, u8, RowMajorMatrix<F>, N, 32>::new::<
+            F,
+            u8,
+            Unbatched<H>,
+            Unbatched<C>,
+        >(&unbatched_h, &unbatched_c, leaves);
+
+        assert_eq!(
+            batched.arity_schedule, unbatched.arity_schedule,
+            "arity schedule differs for heights {heights:?} width {width}"
+        );
+        assert_eq!(
+            batched.digest_layers.len(),
+            unbatched.digest_layers.len(),
+            "layer count differs for heights {heights:?} width {width}"
+        );
+        for (level, (left, right)) in batched
+            .digest_layers
+            .iter()
+            .zip(&unbatched.digest_layers)
+            .enumerate()
+        {
+            assert_eq!(
+                left, right,
+                "layer {level} differs for heights {heights:?} width {width}"
+            );
+        }
+        assert_eq!(batched.root(), unbatched.root());
+    }
+
+    #[test]
+    fn keccak_batched_tree_matches_unbatched_binary() {
+        // Binary arity is the configuration every byte-digest scheme in the workspace uses.
+        let h = SerializingHasher::new(Keccak256Hash);
+        let c = CompressionFunctionFromHasher::<_, 2, 32>::new(Keccak256Hash);
+
+        for &(heights, width) in SHAPES {
+            assert_drivers_agree::<_, _, 2>(&h, &c, heights, width);
+        }
+    }
+
+    #[test]
+    fn keccak_batched_tree_matches_unbatched_quaternary() {
+        // At arity four a level takes either a full four-to-one step, which the batched arm
+        // handles, or a binary bridge step before an injection, which falls back to the
+        // unbatched arm.
+        // Both must land on the same digests.
+        let h = SerializingHasher::new(Keccak256Hash);
+        let c = CompressionFunctionFromHasher::<_, 4, 32>::new(Keccak256Hash);
+
+        for &(heights, width) in SHAPES {
+            assert_drivers_agree::<_, _, 4>(&h, &c, heights, width);
+        }
+    }
+
+    #[test]
+    fn three_lane_batched_tree_matches_unbatched() {
+        // A lane count of three exercises the driver's group arithmetic away from the powers of
+        // two the vectorized sponges use.
+        let h = SerializingHasher::new(ThreeLaneMix);
+        let c = CompressionFunctionFromHasher::<_, 2, 32>::new(ThreeLaneMix);
+
+        for &(heights, width) in SHAPES {
+            assert_drivers_agree::<_, _, 2>(&h, &c, heights, width);
+        }
+    }
+
+    #[test]
+    fn keccak_tree_is_deterministic_across_builds() {
+        // Padding slots take part in the next level's compression, so an unwritten slot would
+        // show up as a root that changes between two builds of the same input.
+        let h = SerializingHasher::new(Keccak256Hash);
+        let c = CompressionFunctionFromHasher::<_, 2, 32>::new(Keccak256Hash);
+
+        let mut rng = SmallRng::seed_from_u64(7);
+        // Height 13 pads the leaf layer to 14 and every level above it to an even count.
+        let leaves = vec![RowMajorMatrix::<F>::rand(&mut rng, 13, 3)];
+
+        let first = MerkleTree::<F, u8, RowMajorMatrix<F>, 2, 32>::new::<F, u8, _, _>(
+            &h,
+            &c,
+            leaves.clone(),
+        );
+        let second =
+            MerkleTree::<F, u8, RowMajorMatrix<F>, 2, 32>::new::<F, u8, _, _>(&h, &c, leaves);
+
+        assert_eq!(first.digest_layers, second.digest_layers);
     }
 
     #[test]
