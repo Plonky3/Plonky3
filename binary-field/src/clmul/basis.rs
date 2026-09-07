@@ -19,6 +19,17 @@
 //! elimination over `GF(2)`. Both matrices are applied one byte at a time through the lookup
 //! tables built below.
 
+/// `GF(2^32)` as `GF(2)[x] / (x^32 + x^7 + x^3 + x^2 + 1)`.
+pub(super) const TAIL_32: u128 = 0x8d;
+
+const XI_32: [u128; 5] = [
+    0x54fd_1265,
+    0xee55_98fa,
+    0x7a9d_86c2,
+    0xc890_6c73,
+    0xe87a_3f19,
+];
+
 /// `GF(2^64)` as `GF(2)[x] / (x^64 + x^4 + x^3 + x + 1)`.
 pub(super) const TAIL_64: u128 = 0b1_1011;
 
@@ -88,6 +99,11 @@ const fn relations_hold(bits: usize, tail: u128, xi: &[u128]) -> bool {
     }
     true
 }
+
+const _: () = assert!(
+    relations_hold(32, TAIL_32, &XI_32),
+    "XI_32 violates the tower relations"
+);
 
 const _: () = assert!(
     relations_hold(64, TAIL_64, &XI_64),
@@ -226,6 +242,41 @@ const fn narrow(tables: &[[u128; 256]; 16]) -> [[u64; 256]; 8] {
         byte += 1;
     }
     narrowed
+}
+
+const fn narrow_32(tables: &[[u128; 256]; 16]) -> [[u32; 256]; 4] {
+    let mut result = [[0; 256]; 4];
+    let mut i = 0;
+    while i < 4 {
+        let mut j = 0;
+        while j < 256 {
+            result[i][j] = tables[i][j] as u32;
+            j += 1;
+        }
+        i += 1;
+    }
+    result
+}
+
+const COLUMNS_32: [u128; 128] = columns(32, TAIL_32, &XI_32);
+static TOWER_TO_POLY_32: [[u32; 256]; 4] = narrow_32(&byte_tables(&COLUMNS_32, 32));
+static POLY_TO_TOWER_32: [[u32; 256]; 4] = narrow_32(&byte_tables(&invert(&COLUMNS_32, 32), 32));
+
+#[inline]
+fn apply_32(tables: &[[u32; 256]; 4], value: u32) -> u32 {
+    tables.iter().enumerate().fold(0, |acc, (i, row)| {
+        acc ^ row[(value >> (8 * i)) as u8 as usize]
+    })
+}
+
+#[inline]
+pub(super) fn tower_to_poly_32(value: u32) -> u32 {
+    apply_32(&TOWER_TO_POLY_32, value)
+}
+
+#[inline]
+pub(super) fn poly_to_tower_32(value: u32) -> u32 {
+    apply_32(&POLY_TO_TOWER_32, value)
 }
 
 const COLUMNS_64: [u128; 128] = columns(64, TAIL_64, &XI_64);
@@ -413,6 +464,7 @@ mod tests {
 
     #[test]
     fn derivation_reproduces_the_generator_images() {
+        assert_eq!(derive_generator_images(32, TAIL_32, 5), XI_32.to_vec());
         assert_eq!(derive_generator_images(64, TAIL_64, 6), XI_64.to_vec());
         assert_eq!(derive_generator_images(128, TAIL_128, 7), XI_128.to_vec());
     }

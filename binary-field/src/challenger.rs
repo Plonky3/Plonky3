@@ -1,7 +1,7 @@
 //! A byte-sampling Fiat–Shamir challenger for the binary tower fields.
 
 use alloc::vec::Vec;
-use core::iter::{repeat, repeat_with};
+use core::iter::repeat;
 use core::marker::PhantomData;
 
 use p3_challenger::{
@@ -88,9 +88,11 @@ where
 
 impl<F: TowerLevel, Inner: CanObserve<u8>> CanObserve<F> for BinaryChallenger<F, Inner> {
     fn observe(&mut self, value: F) {
-        for byte in value.into_bytes() {
-            self.inner.observe(byte);
+        let mut bytes = [0; 16];
+        for (slot, byte) in bytes.iter_mut().zip(value.into_bytes()) {
+            *slot = byte;
         }
+        self.inner.observe_slice(&bytes[..F::NUM_BYTES]);
     }
 }
 
@@ -98,9 +100,7 @@ impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, u8, N>>
     for BinaryChallenger<F, Inner>
 {
     fn observe(&mut self, values: Hash<F, u8, N>) {
-        for value in values {
-            self.inner.observe(value);
-        }
+        self.inner.observe_slice(values.as_ref());
     }
 }
 
@@ -109,9 +109,7 @@ impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, [u8; N]>
 {
     fn observe(&mut self, cap: &MerkleCap<F, [u8; N]>) {
         for digest in cap.roots() {
-            for value in digest {
-                self.inner.observe(*value);
-            }
+            self.inner.observe_slice(digest);
         }
     }
 }
@@ -134,7 +132,11 @@ where
         let inner = &mut self.inner;
         // Every bit pattern is a field element, so reading `NUM_BYTES` uniform bytes per
         // basis coefficient samples uniformly from `EF`.
-        EF::from_basis_coefficients_fn(|_| F::from_le_byte_iter(repeat_with(|| inner.sample())))
+        EF::from_basis_coefficients_fn(|_| {
+            let mut bytes = [0; 16];
+            inner.sample_into_slice(&mut bytes[..F::NUM_BYTES]);
+            F::from_le_byte_iter(bytes.into_iter())
+        })
     }
 }
 
@@ -158,7 +160,8 @@ where
             bits < (usize::BITS as usize),
             "requested bit count must fit within a usize"
         );
-        let bytes: [u8; BITS_SAMPLE_BYTES] = self.inner.sample_array();
+        let mut bytes = [0; BITS_SAMPLE_BYTES];
+        self.inner.sample_into_slice(&mut bytes);
         let rand_u64 = u64::from_le_bytes(bytes);
         (rand_u64 & ((1u64 << bits) - 1)) as usize
     }
@@ -232,8 +235,15 @@ where
 
         let witness = (0..num_candidates)
             .into_par_iter()
-            .map(candidate)
-            .find_any(|witness| self.clone().check_witness(bits, *witness))
+            .map_init(
+                || self.clone(),
+                |worker, index| {
+                    worker.inner.clone_from(&self.inner);
+                    let witness = candidate(index);
+                    worker.check_witness(bits, witness).then_some(witness)
+                },
+            )
+            .find_map_any(core::convert::identity)
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
         witness
@@ -554,8 +564,9 @@ mod tests {
         // letting this exercise the real `grind` path instead of just its assertions.
         let mut challenger: BinaryChallenger<BinaryField128, AlwaysZeroInner> =
             BinaryChallenger::new(AlwaysZeroInner);
-        let witness = challenger.grind(56);
-        assert!(challenger.check_witness(56, witness));
+        let bits = 56.min(usize::BITS as usize - 1);
+        let witness = challenger.grind(bits);
+        assert!(challenger.check_witness(bits, witness));
     }
 
     #[test]

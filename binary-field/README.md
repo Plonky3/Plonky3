@@ -48,8 +48,12 @@ subfield `GF(2)`, so they carry the parity of their argument rather than its bit
 `from_u64(2)` is zero. `from_le_bytes` and `interpolation_node` are the bit-pattern
 constructors.
 
+`TowerLevel` exposes the tower structure and typed generator multiplication.
+
 The tower levels are unpacked: `Packing` is `Self` at every one of them, because a tower
-product is table lookups that no vector unit widens. Only `Ghash128` has a packing.
+product is table lookups that no vector unit widens. Only `Ghash128` has a packing; its
+polynomial slice kernels process independent SIMD products while preserving the scalar field
+layout.
 
 GHASH coordinates assign the coefficient of `x^i` to bit `i` of the backing integer.
 NIST GCM blocks assign `x^0` to the leftmost bit instead.
@@ -66,13 +70,29 @@ These operations are not constant-time and should not process secrets when cache
 Hardware GHASH inversion uses five precomputed maps, totaling 320 KiB of read-only tables.
 Software GHASH inversion uses the tower norm instead, and does not compile those tables.
 
-Backends are selected at compile time.
+Hardware dispatch is selected at compile time, so this `no_std` crate performs no CPU checks
+inside scalar arithmetic. `poly_basis::HAS_HARDWARE_CLMUL` describes that compiled choice.
+The default `aarch64-apple-darwin` target enables `aes` (including PMULL); generic AArch64 Linux
+and baseline x86-64 use the portable tower fallback.
+
 For a binary intended for the build machine, enable its instructions with:
 
 ```sh
 RUSTFLAGS="-C target-cpu=native" cargo test -p p3-binary-field -p p3-binary-dft
 ```
 
-A baseline build uses the software backend.
+For a binary deployed only to CPUs supporting the named feature:
+
+```sh
+RUSTFLAGS="-C target-feature=+aes" cargo build --release --target aarch64-unknown-linux-gnu
+RUSTFLAGS="-C target-feature=+pclmulqdq" cargo build --release --target x86_64-unknown-linux-gnu
+```
+
+Use the baseline target when distributing to heterogeneous CPUs. To exercise the portable
+AArch64 path explicitly:
+
+```sh
+CARGO_TARGET_DIR=target/portable RUSTFLAGS="-C target-feature=-aes" cargo test -p p3-binary-field --release
+```
 
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.

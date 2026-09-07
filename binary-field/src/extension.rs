@@ -15,7 +15,7 @@ use core::ops::{Add, Mul, Sub};
 use core::{ptr, slice};
 
 use p3_field::extension::HasFrobenius;
-use p3_field::op_assign_macros::{impl_add_base_field, impl_mul_base_field, impl_sub_base_field};
+use p3_field::op_assign_macros::{impl_add_base_field, impl_sub_base_field};
 use p3_field::{
     Algebra, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, Powers,
     PrimeCharacteristicRing,
@@ -40,7 +40,33 @@ macro_rules! binary_tower_extension {
 
         impl_add_base_field!($upper, $lower);
         impl_sub_base_field!($upper, $lower);
-        impl_mul_base_field!($upper, $lower);
+        impl Mul<$lower> for $upper {
+            type Output = Self;
+
+            #[inline]
+            fn mul(self, rhs: $lower) -> Self {
+                // These intermediate subfields need more coefficient products than the
+                // native full-width backend; the byte and quadratic subfields do not.
+                if crate::clmul::HAS_HARDWARE_CLMUL
+                    && <$upper>::BITS == 128
+                    && matches!(<$lower>::BITS, 16 | 32)
+                {
+                    return self * Self::from(rhs);
+                }
+                <Self as BasedVectorSpace<$lower>>::from_basis_coefficients_fn(|i| {
+                    <$lower>::from_repr((self.to_repr() >> (i * <$lower>::BITS)) as $lower_repr) * rhs
+                })
+            }
+        }
+
+        impl Mul<$upper> for $lower {
+            type Output = $upper;
+
+            #[inline]
+            fn mul(self, rhs: $upper) -> $upper {
+                rhs * self
+            }
+        }
 
         impl Algebra<$lower> for $upper {}
 
@@ -90,11 +116,11 @@ macro_rules! binary_tower_extension {
             /// A whole vector of elements is one contiguous run of coefficients, for the same
             /// reason a single element is, so the flattening is a single copy of the buffer.
             ///
-            /// The inverse direction is not symmetric, and `reconstitute_from_base` keeps the
-            /// default that builds a fresh buffer: a `Vec<$lower>` is allocated at `$lower`'s
-            /// alignment, which is weaker than `$upper`'s, and freeing an allocation under a
-            /// `Layout` whose alignment differs from the one it was made with is undefined
-            /// behaviour.
+            /// The inverse direction is not symmetric: a `Vec<$lower>` is allocated at `$lower`'s
+            /// alignment, which is weaker than `$upper`'s, so freeing it under a `Layout` whose
+            /// alignment differs from the one it was made with would be undefined behaviour.
+            /// `reconstitute_from_base` below instead copies into a freshly allocated buffer at
+            /// `$upper`'s own alignment.
             #[inline]
             fn flatten_to_base(vec: Vec<Self>) -> Vec<$lower> {
                 const {
@@ -141,6 +167,27 @@ macro_rules! binary_tower_extension {
                     }
                     Self::from_repr(repr)
                 })
+            }
+
+            #[cfg(target_endian = "little")]
+            #[inline]
+            fn reconstitute_from_base(vec: Vec<$lower>) -> Vec<Self> {
+                let dimension = <Self as BasedVectorSpace<$lower>>::DIMENSION;
+                assert_eq!(vec.len() % dimension, 0);
+                let len = vec.len() / dimension;
+                let mut result = Vec::<Self>::with_capacity(len);
+                // SAFETY: both transparent integer representations have no padding and every
+                // bit pattern is canonical. Copying bytes preserves the little-endian tower
+                // coefficients without changing the allocation's original alignment.
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        vec.as_ptr().cast::<u8>(),
+                        result.as_mut_ptr().cast::<u8>(),
+                        vec.len() * size_of::<$lower>(),
+                    );
+                    result.set_len(len);
+                }
+                result
             }
         }
 
@@ -269,6 +316,11 @@ mod tests {
             let dim = <$upper as BasedVectorSpace<$lower>>::DIMENSION;
             let coeffs = BasedVectorSpace::<$lower>::as_basis_coefficients_slice(&a);
             assert_eq!(coeffs.len(), dim);
+            for len in [0, 1, 19] {
+                let values = alloc::vec![a; len];
+                let flat = <$upper as BasedVectorSpace<$lower>>::flatten_to_base(values.clone());
+                assert_eq!(<$upper as BasedVectorSpace<$lower>>::reconstitute_from_base(flat), values);
+            }
 
             // `a = Σ coeffs[i] · basis[i]` is the defining property of a coordinate map.
             let recomposed = (0..dim)
@@ -299,6 +351,7 @@ mod tests {
             assert_eq!(a + s, a + s_up);
             assert_eq!(a - s, a - s_up);
             assert_eq!(a * s, a * s_up);
+            assert_eq!(s * a, a * s_up);
 
             let mut acc = a;
             acc += s;
@@ -565,6 +618,14 @@ mod tests {
 
         let back = <BinaryField128 as BasedVectorSpace<BinaryField8>>::reconstitute_from_base(flat);
         assert_eq!(back, elems);
+    }
+
+    #[test]
+    #[should_panic]
+    fn reconstitute_rejects_an_incomplete_element() {
+        let _ = <BinaryField128 as BasedVectorSpace<BinaryField64>>::reconstitute_from_base(
+            alloc::vec![BinaryField64::ONE],
+        );
     }
 
     /// Every byte of every `GF(2^8)` value survives a pack and an unpack.

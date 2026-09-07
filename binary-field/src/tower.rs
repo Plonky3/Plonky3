@@ -10,14 +10,16 @@
 //! half holds the `T_k`-coefficient of `1`, the high half the `T_k`-coefficient of `X_k`, and
 //! the splitting repeats down to the individual bits of `GF(2)`.
 
+use alloc::vec::Vec;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
+use core::mem::ManuallyDrop;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
 use p3_field::op_assign_macros::{
-    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_sub_assign, impl_sub_base_field, ring_sum,
+    impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_methods, impl_sub_assign,
+    impl_sub_base_field, ring_sum,
 };
 use p3_field::{Algebra, Field, Packable, PrimeCharacteristicRing, RawDataSerializable};
 use rand::Rng;
@@ -25,7 +27,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::clmul::{HAS_HARDWARE_CLMUL, mul_64, mul_128, square_64, square_128};
+use crate::clmul::{HAS_HARDWARE_CLMUL, mul_64, mul_128};
 use crate::{Gf2, tables};
 
 /// Seals [`TowerLevel`] against implementation outside this crate.
@@ -213,6 +215,14 @@ macro_rules! binary_tower_level {
                 let norm_inv = norm
                     .try_inverse()
                     .expect("the norm of a nonzero element is nonzero");
+                if HAS_HARDWARE_CLMUL && Self::BITS == 128 {
+                    let (lo, hi) = crate::clmul::mul_pair_64(
+                        (a0 + a1.mul_alpha()).to_repr() as u64,
+                        a1.to_repr() as u64,
+                        norm_inv.to_repr() as u64,
+                    );
+                    return Some(Self::from_repr(lo as $repr | ((hi as $repr) << (Self::BITS / 2))));
+                }
                 Some(Self::join((a0 + a1.mul_alpha()) * norm_inv, a1 * norm_inv))
             }
 
@@ -338,7 +348,75 @@ macro_rules! binary_tower_level {
 
             #[inline]
             fn square(&self) -> Self {
-                self.$square()
+                if Self::BITS >= 16 {
+                    Self::from_repr(match Self::BITS {
+                        16 => crate::linear::square_16(self.0 as u16) as $repr,
+                        32 => BinaryField32::from_repr(self.0 as u32).byte_square().to_repr() as $repr,
+                        64 => crate::linear::square_64(self.0 as u64) as $repr,
+                        128 => crate::linear::square_128(self.0 as u128) as $repr,
+                        _ => unreachable!(),
+                    })
+                } else {
+                    self.$square()
+                }
+            }
+
+            #[inline]
+            fn exp_power_of_2(&self, power_log: usize) -> Self {
+                let mut power = power_log % Self::BITS;
+                let mut value = *self;
+                // The nontrivial quadratic automorphism is X -> X + alpha.
+                if power >= Self::BITS / 2 {
+                    let (lo, hi) = value.split();
+                    value = Self::join(lo + hi.mul_alpha(), hi);
+                    power -= Self::BITS / 2;
+                }
+                if power == 1 {
+                    return value.square();
+                }
+                if Self::BITS >= 16 {
+                    Self::from_repr(match Self::BITS {
+                        16 => crate::linear::frobenius_16(value.0 as u16, power) as $repr,
+                        32 => crate::linear::frobenius_32(value.0 as u32, power) as $repr,
+                        64 => crate::linear::frobenius_64(value.0 as u64, power) as $repr,
+                        128 => crate::linear::frobenius_128(value.0 as u128, power) as $repr,
+                        _ => unreachable!(),
+                    })
+                } else {
+                    for _ in 0..power { value = value.square(); }
+                    value
+                }
+            }
+
+            #[inline]
+            fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+                if N == 0 { return Self::ZERO; }
+                if N == 1 { return u[0] * v[0]; }
+                if HAS_HARDWARE_CLMUL && Self::BITS == 32 {
+                    Self::from_repr(crate::clmul::dot_product_32(
+                        u.iter().zip(v).map(|(a, b)| (a.0 as u32, b.0 as u32)),
+                    ) as $repr)
+                } else if HAS_HARDWARE_CLMUL && Self::BITS == 64 {
+                    Self::from_repr(crate::clmul::dot_product_64(
+                        u.iter().zip(v).map(|(a, b)| (a.0 as u64, b.0 as u64)),
+                    ) as $repr)
+                } else if HAS_HARDWARE_CLMUL && Self::BITS == 128 {
+                    Self::from_repr(crate::clmul::dot_product_128(
+                        u.iter().zip(v).map(|(a, b)| (a.0 as u128, b.0 as u128)),
+                    ) as $repr)
+                } else {
+                    u.iter().zip(v).map(|(&a, &b)| a * b).sum()
+                }
+            }
+
+            #[inline]
+            fn zero_vec(len: usize) -> Vec<Self> {
+                let mut values = ManuallyDrop::new(alloc::vec![0 as $repr; len]);
+                // SAFETY: the transparent wrapper has exactly the integer's layout, and
+                // zero is canonical. The allocation retains its original size and alignment.
+                unsafe {
+                    Vec::from_raw_parts(values.as_mut_ptr().cast(), values.len(), values.capacity())
+                }
             }
 
             #[inline]
@@ -372,7 +450,17 @@ macro_rules! binary_tower_level {
             #[inline]
             fn try_sqrt(&self) -> Option<Self> {
                 // Squaring is the Frobenius, of order `BITS`, so `a^(2^(BITS - 1))` squares to `a`.
-                Some(self.exp_power_of_2(Self::BITS - 1))
+                if Self::BITS >= 16 {
+                    Some(Self::from_repr(match Self::BITS {
+                        16 => crate::linear::sqrt_16(self.0 as u16) as $repr,
+                        32 => crate::linear::sqrt_32(self.0 as u32) as $repr,
+                        64 => crate::linear::sqrt_64(self.0 as u64) as $repr,
+                        128 => crate::linear::sqrt_128(self.0 as u128) as $repr,
+                        _ => unreachable!(),
+                    }))
+                } else {
+                    Some(self.exp_power_of_2(Self::BITS - 1))
+                }
             }
 
             #[inline]
@@ -469,7 +557,24 @@ macro_rules! binary_tower_level {
 
         impl_add_base_field!($name, Gf2);
         impl_sub_base_field!($name, Gf2);
-        impl_mul_base_field!($name, Gf2);
+        impl Mul<Gf2> for $name {
+            type Output = Self;
+
+            #[inline]
+            #[allow(clippy::suspicious_arithmetic_impl)]
+            fn mul(self, rhs: Gf2) -> Self {
+                Self(self.0 & (0 as $repr).wrapping_sub(rhs.to_repr() as $repr))
+            }
+        }
+
+        impl Mul<$name> for Gf2 {
+            type Output = $name;
+
+            #[inline]
+            fn mul(self, rhs: $name) -> $name {
+                rhs * self
+            }
+        }
 
         impl Algebra<Gf2> for $name {}
     };
@@ -560,19 +665,30 @@ impl BinaryField8 {
         Self(tables::mul(self.0, rhs.0))
     }
 
-    /// Squaring through the `GF(2^8)` log and exponential tables.
+    /// Squaring through the direct `GF(2^8)` table.
     #[inline]
     const fn table_square(self) -> Self {
         Self(tables::square(self.0))
     }
 
-    /// Inversion through the `GF(2^8)` log and exponential tables.
+    /// Inversion through the direct `GF(2^8)` table.
     #[inline]
     const fn table_try_inverse(self) -> Option<Self> {
         match tables::try_inverse(self.0) {
             Some(inverse) => Some(Self(inverse)),
             None => None,
         }
+    }
+}
+
+impl BinaryField32 {
+    /// Square the two quadratic levels above GF256 using its compact byte table.
+    #[inline]
+    fn byte_square(self) -> Self {
+        let (a0, a1) = self.split();
+        let a0_sq = a0.reference_square();
+        let a1_sq = a1.reference_square();
+        Self::join(a0_sq + a1_sq, a1_sq.mul_alpha())
     }
 }
 
@@ -623,7 +739,7 @@ impl BinaryField64 {
     /// Squaring through the tower-basis matrix, which is a lookup table on every target.
     #[inline]
     fn table_square(self) -> Self {
-        Self(square_64(self.0))
+        Self(crate::clmul::square_64(self.0))
     }
 }
 
@@ -644,7 +760,7 @@ impl BinaryField128 {
     /// Squaring through the tower-basis matrix, which is a lookup table on every target.
     #[inline]
     fn table_square(self) -> Self {
-        Self(square_128(self.0))
+        Self(crate::clmul::square_128(self.0))
     }
 }
 
@@ -659,6 +775,90 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn zero_vectors_preserve_layout_and_support_growth() {
+        macro_rules! check {
+            ($field:ty) => {
+                for len in [0, 1, 33, 1024] {
+                    let mut values = <$field>::zero_vec(len);
+                    assert_eq!(values.len(), len);
+                    assert!(values.iter().all(|x| *x == <$field>::ZERO));
+                    values.push(<$field>::ONE);
+                    values.reserve(100);
+                    assert_eq!(values.pop(), Some(<$field>::ONE));
+                }
+            };
+        }
+        check!(BinaryField2);
+        check!(BinaryField4);
+        check!(BinaryField8);
+        check!(BinaryField16);
+        check!(BinaryField32);
+        check!(BinaryField64);
+        check!(BinaryField128);
+    }
+
+    #[test]
+    fn fused_dot_products_match_reference_for_arbitrary_lengths() {
+        fn check<const N: usize>() {
+            let u: [BinaryField128; N] = core::array::from_fn(|i| {
+                BinaryField128::from_repr(
+                    (i as u128 + 1).wrapping_mul(0xfeed_dead_beef_9876_0123_4567_cafe_dcba),
+                )
+            });
+            let v = core::array::from_fn(|i| u[N - 1 - i] + BinaryField128::ONE);
+            let expected = u
+                .iter()
+                .zip(&v)
+                .map(|(&a, &b)| a.reference_mul(b))
+                .sum::<BinaryField128>();
+            assert_eq!(BinaryField128::dot_product(&u, &v), expected);
+            let u32 = u.map(|x| BinaryField32::from_repr(x.to_repr() as u32));
+            let v32 = v.map(|x| BinaryField32::from_repr(x.to_repr() as u32));
+            assert_eq!(
+                BinaryField32::dot_product(&u32, &v32),
+                u32.iter()
+                    .zip(&v32)
+                    .map(|(&a, &b)| a.reference_mul(b))
+                    .sum()
+            );
+            let u = u.map(|x| BinaryField64::from_repr(x.to_repr() as u64));
+            let v = v.map(|x| BinaryField64::from_repr(x.to_repr() as u64));
+            assert_eq!(
+                BinaryField64::dot_product(&u, &v),
+                u.iter().zip(&v).map(|(&a, &b)| a.reference_mul(b)).sum()
+            );
+        }
+        check::<0>();
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<7>();
+        check::<16>();
+        check::<33>();
+        check::<128>();
+    }
+
+    #[test]
+    fn prime_subfield_scaling_is_selection() {
+        macro_rules! check {
+            ($field:ty, $value:expr) => {{
+                let x = <$field>::from_repr($value);
+                assert_eq!(x * Gf2::ZERO, <$field>::ZERO);
+                assert_eq!(Gf2::ZERO * x, <$field>::ZERO);
+                assert_eq!(x * Gf2::ONE, x);
+                assert_eq!(Gf2::ONE * x, x);
+            }};
+        }
+        check!(BinaryField2, 3);
+        check!(BinaryField4, 15);
+        check!(BinaryField8, 255);
+        check!(BinaryField16, 0xdead);
+        check!(BinaryField32, 0xdead_beef);
+        check!(BinaryField64, 0xdead_beef_cafe_8765);
+        check!(BinaryField128, 0xdead_beef_cafe_8765_0123_4567_89ab_cdef);
+    }
 
     /// The prime factors of `2^n − 1` for each level `n` of the tower.
     const FACTORS_2: [u128; 1] = [3];
@@ -1151,9 +1351,11 @@ mod tests {
         /// `reference_mul` recurses to the bottom of the tower without dispatching, so squaring
         /// through it is independent of every fast path.
         #[test]
-        fn square_agrees_with_the_reference_product(a in bf128(), b in bf64()) {
+        fn square_agrees_with_the_reference_product(a in bf128(), b in bf64(), c in any::<u32>()) {
             prop_assert_eq!(a.square(), a.reference_mul(a));
             prop_assert_eq!(b.square(), b.reference_mul(b));
+            let c = BinaryField32::from_repr(c);
+            prop_assert_eq!(c.square(), c.reference_mul(c));
         }
 
         #[test]

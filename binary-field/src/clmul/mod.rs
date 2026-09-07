@@ -9,7 +9,9 @@
 //!     map the result back
 //! ```
 //!
-//! Each backend supplies the same routines, and each has a portable definition to test against.
+//! The scalar kernels build on an architecture-specific `64 × 64 → 128` product and shared
+//! reductions. AArch64 batch kernels also keep the wider product and reduction in vector
+//! registers; every backend is checked against portable arithmetic.
 
 mod basis;
 mod sqrt;
@@ -58,9 +60,16 @@ mod x86_64;
 
 /// Whether the target has a carryless-multiply instruction.
 ///
-/// - The tower routes here only when it does, and takes its own recursion otherwise.
+/// The bit-serial fallback below keeps every routine in this module correct everywhere, but it
+/// is far slower than the recursive tower arithmetic:
+///
+/// - The tower routes here only when the instruction is really there, and takes its own
+///   recursion otherwise.
 /// - The polynomial-basis field has no such alternative and always routes here.
-/// - Most targets need `+pclmulqdq` / `+aes` asked for, or `-C target-cpu=native`.
+///
+/// This is a compile-time decision, and neither feature is in the baseline of most targets:
+/// `aarch64-apple-darwin` has `aes`, but generic AArch64 Linux and every `x86_64` target need
+/// `-C target-feature=+aes` / `+pclmulqdq` (or `-C target-cpu=native`) for the fast path.
 pub(crate) const HAS_HARDWARE_CLMUL: bool = cfg!(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
     all(target_arch = "aarch64", target_feature = "aes"),
@@ -150,7 +159,20 @@ pub(crate) fn mul_64(a: u64, b: u64) -> u64 {
     basis::poly_to_tower_64(reduce_64(product))
 }
 
-/// Multiplication in `GF(2^128)`, in the polynomial representation.
+/// Two products sharing the converted multiplier, as used by the quadratic norm inverse.
+#[inline]
+pub(crate) fn mul_pair_64(a: u64, b: u64, scalar: u64) -> (u64, u64) {
+    let scalar = basis::tower_to_poly_64(scalar);
+    let product = |value| {
+        basis::poly_to_tower_64(reduce_64(clmul_64x64(
+            basis::tower_to_poly_64(value),
+            scalar,
+        )))
+    };
+    (product(a), product(b))
+}
+
+/// Multiplication in `GF(2^128)`, taking and returning the polynomial representation.
 ///
 /// Assembled and folded in general-purpose registers, so the dependency chain stays short.
 #[inline]
@@ -173,6 +195,20 @@ pub(crate) use portable::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_s
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 pub(crate) use x86_64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
 
+/// Batch products favor instruction throughput over the latency of a dependent chain.
+#[inline]
+#[allow(clippy::missing_const_for_fn)]
+pub(crate) fn poly_mul_128_batch(a: u128, b: u128) -> u128 {
+    #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+    {
+        aarch64::poly_mul_128_batch(a, b)
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
+    {
+        poly_mul_128(a, b)
+    }
+}
+
 /// Multiplication in `GF(2^128)`, taking and returning the tower representation.
 ///
 /// The three changes of basis are sixteen dependent lookups each.
@@ -181,6 +217,38 @@ pub(crate) use x86_64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_squ
 pub(crate) fn mul_128(a: u128, b: u128) -> u128 {
     let product = composed_poly_mul_128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
     basis::poly_to_tower_128(product)
+}
+
+/// A narrow hardware consumer: independent dot-product terms amortize the basis changes.
+#[inline]
+pub(crate) fn dot_product_32(pairs: impl Iterator<Item = (u32, u32)>) -> u32 {
+    let product = pairs.fold(0u64, |sum, (a, b)| {
+        sum ^ clmul_64x64(
+            basis::tower_to_poly_32(a) as u64,
+            basis::tower_to_poly_32(b) as u64,
+        ) as u64
+    });
+    let fold = clmul_64x64(product >> 32, basis::TAIL_32 as u64) as u64;
+    let spill = clmul_64x64(fold >> 32, basis::TAIL_32 as u64) as u32;
+    basis::poly_to_tower_32(product as u32 ^ fold as u32 ^ spill)
+}
+
+/// Sum unreduced products before paying for one reduction and one output basis change.
+#[inline]
+pub(crate) fn dot_product_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
+    let product = pairs.fold(0, |sum, (a, b)| {
+        sum ^ clmul_64x64(basis::tower_to_poly_64(a), basis::tower_to_poly_64(b))
+    });
+    basis::poly_to_tower_64(reduce_64(product))
+}
+
+#[inline]
+pub(crate) fn dot_product_128(pairs: impl Iterator<Item = (u128, u128)>) -> u128 {
+    let (low, high) = pairs.fold((0, 0), |(low, high), (a, b)| {
+        let (lo, hi) = clmul_128x128(basis::tower_to_poly_128(a), basis::tower_to_poly_128(b));
+        (low ^ lo, high ^ hi)
+    });
+    basis::poly_to_tower_128(reduce_128(low, high))
 }
 
 /// Squaring in `GF(2^64)`, taking and returning the tower representation.
@@ -214,7 +282,7 @@ mod tests {
 
     use super::basis::{TAIL_64, TAIL_128, poly_mul};
     use crate::tower::TowerLevel;
-    use crate::{BinaryField64, BinaryField128};
+    use crate::{BinaryField32, BinaryField64, BinaryField128};
 
     /// Squaring in `GF(2^64)`, through the polynomial basis.
     ///
@@ -370,6 +438,14 @@ mod tests {
             let x = BinaryField128::from_repr(a);
             let y = BinaryField128::from_repr(b);
             prop_assert_eq!(super::mul_128(a, b), x.reference_mul(y).to_repr());
+            prop_assert_eq!(super::poly_mul_128_batch(a, b), poly_mul(a, b, 128, TAIL_128));
+        }
+
+        #[test]
+        fn narrow_dot_product_matches_reference(a: u32, b: u32, c: u32, d: u32) {
+            let expected = BinaryField32::from_repr(a).reference_mul(BinaryField32::from_repr(b))
+                + BinaryField32::from_repr(c).reference_mul(BinaryField32::from_repr(d));
+            prop_assert_eq!(super::dot_product_32([(a, b), (c, d)].into_iter()), expected.to_repr());
         }
 
         #[test]

@@ -9,6 +9,7 @@ mod clmul;
 mod extension;
 mod gf2;
 mod ghash;
+mod linear;
 mod packed;
 pub mod poly_basis;
 mod tables;
