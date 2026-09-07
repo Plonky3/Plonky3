@@ -114,6 +114,24 @@ fn constraint_degree_matches_formula() {
 }
 
 #[test]
+fn constraint_degree_counts_transition_payloads_multiplicities_and_flags() {
+    let transition = SymbolicExpression::<F>::Leaf(BaseLeaf::IsTransition);
+    let mut lookup = Lookup {
+        kind: Kind::Local,
+        elements: vec![vec![transition.clone().square()]],
+        multiplicities: vec![transition.exp_u64(5)],
+        count_weight: 1,
+        column: 0,
+        flags: None,
+    };
+    assert_eq!(LogUpGadget.constraint_degree(&lookup), 1);
+    assert_eq!(LogUpGadget.constraint_degree_with_transition(&lookup, 1), 5);
+    lookup.flags = Some(vec![transition]);
+    assert_eq!(LogUpGadget.constraint_degree(&lookup), 1);
+    assert_eq!(LogUpGadget.constraint_degree_with_transition(&lookup, 1), 6);
+}
+
+#[test]
 fn compute_combined_sum_terms_matches_definition() {
     // Single tuple with one element.
     //

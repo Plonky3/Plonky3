@@ -25,7 +25,7 @@ use crate::common::CommonData;
 use crate::config::{Challenge, Commitment, Domain, PcsError, StarkGenericConfig as SGC, Val};
 use crate::error::BatchVerificationError;
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof};
-use crate::symbolic::get_log_num_quotient_chunks;
+use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 use crate::transcript::BatchTranscript;
 
 /// What [`commitments_with_opening_points`] builds: the PCS opening argument itself — one
@@ -428,10 +428,10 @@ where
         };
         let log_num_chunks =
             info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
-                get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                get_log_num_quotient_chunks_for_domain::<_, SC::Challenge, A, _>(
                     air,
                     layout,
-                    1usize << base_db,
+                    pcs.natural_domain_for_degree(1usize << base_db),
                     &all_lookups[i],
                     config.is_zk(),
                     &lookup_gadget,

@@ -5,6 +5,7 @@ use p3_air::symbolic::{
     AirLayout, ConstraintLayout, SymbolicExpression, SymbolicExpressionExt,
     constraint_degree_from_poly_degree,
 };
+use p3_commit::PolynomialSpace;
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_lookup::{InteractionSymbolicBuilder, Lookup, LookupProtocol};
 use p3_util::log2_ceil_usize;
@@ -50,6 +51,54 @@ where
     builder.constraint_layout()
 }
 
+/// Quotient sizing using the domain's transition-selector degree.
+///
+/// Circle needs a full symbolic bound, including periodic columns and every
+/// transition-selector factor. A domain-independent hint alone cannot supply it.
+pub fn get_log_num_quotient_chunks_for_domain<F, EF, A, LG>(
+    air: &A,
+    layout: AirLayout,
+    domain: impl PolynomialSpace<Val = F>,
+    contexts: &[Lookup<F>],
+    is_zk: usize,
+    lookup_gadget: &LG,
+) -> usize
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
+    SymbolicExpressionExt<F, EF>: Algebra<EF>,
+    LG: LookupProtocol,
+{
+    let transition_degree = domain.transition_degree_multiple();
+    if transition_degree == 0 {
+        return get_log_num_quotient_chunks(
+            air,
+            layout,
+            domain.size(),
+            contexts,
+            is_zk,
+            lookup_gadget,
+        );
+    }
+    assert!(is_zk <= 1, "is_zk must be either 0 or 1");
+
+    let (base, extension) = get_symbolic_constraints(air, layout, contexts, lookup_gadget);
+    let degree = base
+        .iter()
+        .map(|c| c.degree_multiple_with_transition(transition_degree))
+        .chain(
+            extension
+                .iter()
+                .map(|c| c.degree_multiple_with_transition(transition_degree)),
+        )
+        .max()
+        .unwrap_or(0)
+        .max(air.max_constraint_degree().unwrap_or(0));
+    log2_ceil_usize((degree + is_zk).max(2) - 1)
+}
+
+/// Two-adic quotient sizing; use [`get_log_num_quotient_chunks_for_domain`] for other domains.
 pub fn get_log_num_quotient_chunks<F, EF, A, LG>(
     air: &A,
     layout: AirLayout,

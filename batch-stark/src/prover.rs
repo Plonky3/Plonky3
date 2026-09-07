@@ -30,7 +30,7 @@ use crate::common::ProverData;
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
 use crate::symbolic::{
-    get_constraint_layout, get_log_num_quotient_chunks, get_symbolic_constraints,
+    get_constraint_layout, get_log_num_quotient_chunks_for_domain, get_symbolic_constraints,
 };
 use crate::transcript::BatchTranscript;
 
@@ -191,10 +191,10 @@ where
             // Infer the log of the quotient polynomial degree from symbolic analysis.
             let lq_chunks =
                 info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
-                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                    get_log_num_quotient_chunks_for_domain::<_, SC::Challenge, A, _>(
                         air,
                         layout,
-                        degrees[i],
+                        pcs.natural_domain_for_degree(degrees[i]),
                         all_lookups[i],
                         config.is_zk(),
                         &lookup_gadget,
