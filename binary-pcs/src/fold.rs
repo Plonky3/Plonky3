@@ -187,9 +187,9 @@ fn fold_task(
 
     // Phase 2: fewer output slots left than one packed group holds.
     //
-    // A task's slot count is either a whole grain or the whole codeword's pair count, and both
-    // the grain and a power-of-two pair count are multiples of the width unless the codeword has
-    // fewer pairs than the width, so this runs only for a codeword of two or four symbols.
+    // A task's slot count is either a whole grain or the whole codeword's pair count.
+    // The grain covers whole groups, and a power-of-two pair count is a multiple of the width
+    // unless it is below it, so this runs only for a codeword with fewer pairs than the width.
     // Each leftover evaluates its own domain point, so it rests on no group alignment at all.
     //
     // Twice as many symbols are left as slots, so the leftovers pair up exactly and the
