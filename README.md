@@ -24,6 +24,8 @@ Fields:
   - [x] NEON
 - [x] Goldilocks
   - [x] ~128 bit extension field
+- [x] Binary tower fields GF(2) ⊂ GF(4) ⊂ … ⊂ GF(2^128)
+  - [x] GHASH polynomial-basis representation of GF(2^128), with SIMD packings
 
 Generalized vector commitment schemes
 - [x] generalized Merkle tree
@@ -31,14 +33,25 @@ Generalized vector commitment schemes
 Polynomial commitment schemes
 - [x] FRI-based PCS
 - [x] STIR-based PCS
+- [x] WHIR-based PCS
+- [x] Multilinear PCS over binary tower fields (Binius-style, additive-domain proximity)
 - [ ] tensor PCS
 - [ ] univariate-to-multivariate adapter
 - [ ] multivariate-to-univariate adapter
 
 PIOPs
 - [x] univariate STARK
-- [x] multivariate STARK
+- [x] multivariate STARK (SuperSpartan-style, over AIRs)
+- [x] batched STARK (shared PCS openings across multiple instances)
 - [ ] PLONK
+
+Interactive proof primitives
+- [x] Sumcheck (generic-degree, small-value optimization, HVZK masking, ring switching)
+- [x] LogUp lookup arguments (local and cross-AIR)
+- [x] Typed Fiat-Shamir transcript layer (DSFS / IETF draft)
+
+Security
+- [x] Composable soundness analysis for FRI/STIR/WHIR-based STARKs
 
 Codes
 - [x] Brakedown
@@ -50,6 +63,7 @@ Interpolation
 - [x] radix-2 Bowers FFT
 - [ ] four-step FFT
 - [x] Mersenne circle group FFT
+- [x] Additive NTT (Lin–Chung–Han transform) over binary tower fields
 
 Hashes
 - [x] Rescue
