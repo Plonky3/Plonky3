@@ -90,6 +90,7 @@ fn config() -> Config {
         log_final_poly_len: 3,
         max_log_arity: 2,
         num_queries: 40,
+        batch_proof_of_work_bits: 0,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 8,
         mmcs: challenge_mmcs,

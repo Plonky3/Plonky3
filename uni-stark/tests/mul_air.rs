@@ -4,7 +4,9 @@ use core::marker::PhantomData;
 use itertools::Itertools;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
+use p3_challenger::{
+    DuplexChallenger, GrindingChallenger, HashChallenger, SerializingChallenger32,
+};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_commit::testing::TrivialPcs;
@@ -119,7 +121,7 @@ fn do_test<SC: StarkGenericConfig>(
     log_height: usize,
 ) -> Result<(), impl Debug>
 where
-    SC::Challenger: Clone,
+    SC::Challenger: Clone + GrindingChallenger<Witness = Val<SC>>,
     StandardUniform: Distribution<Val<SC>>,
 {
     let trace = air.random_valid_trace(log_height, true);
@@ -213,6 +215,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         log_final_poly_len: 3,
         max_log_arity: 2,
         num_queries: 40,
+        batch_proof_of_work_bits: 0,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 8,
         mmcs: challenge_mmcs,
@@ -327,6 +330,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
         log_final_poly_len: 0,
         max_log_arity: 1,
         num_queries: 40,
+        batch_proof_of_work_bits: 0,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 8,
         mmcs: challenge_mmcs,

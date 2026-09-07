@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize};
     deserialize = "Witness: Deserialize<'de>, InputProof: Deserialize<'de>"
 ))]
 pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
+    /// Proof of work for the phase before the opening-batching challenge.
+    ///
+    /// Unlike the two witness sets below, this one is produced by the PCS
+    /// wrapped around FRI rather than by FRI itself: the challenge it protects
+    /// is sampled before the reduced openings FRI consumes even exist. It
+    /// rides along in this proof because that is where the verifier meets it —
+    /// [`crate::verifier::verify_fri`] checks it immediately before resampling
+    /// the same challenge.
+    pub batch_pow_witness: Witness,
     pub commit_phase_commits: Vec<M::Commitment>,
     pub commit_pow_witnesses: Vec<Witness>,
     /// Openings of the input commitments at every query index, one entry per

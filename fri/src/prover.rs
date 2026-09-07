@@ -40,7 +40,17 @@ use crate::{
 /// - `log_global_max_height`: The log of the maximum height of the input matrices.
 /// - `prover_data_with_opening_points`: A list of pairs of a batch commitment to a collection
 ///   of matrices and a list of points to open those matrices at.
+/// - `batch_pow_witness`: The proof of work the caller ground before sampling the challenge it
+///   used to batch `inputs`. FRI cannot produce this itself — that challenge is consumed in
+///   building `inputs`, so it is sampled before this function is called — but the verifier meets
+///   the witness inside [`crate::verifier::verify_fri`], so it travels in the proof this function
+///   assembles. Callers that batch nothing, and so sample no such challenge, pass
+///   `Challenger::Witness::ZERO` alongside `FriParameters::batch_proof_of_work_bits == 0`.
 #[instrument(name = "FRI prover", skip_all)]
+// The argument list is the protocol's own shape: the folding strategy, the parameters, the inputs,
+// the transcript, the instance height, the committed data, its MMCS, and the caller's batch witness.
+// Grouping any of them into a struct would only move the same fields behind another name.
+#[allow(clippy::too_many_arguments)]
 pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     folding: &Folding,
     params: &FriParameters<FriMmcs>,
@@ -53,6 +63,7 @@ pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
         InputMmcs::ProverData<RowMajorMatrix<Val>>,
     >],
     input_mmcs: &InputMmcs,
+    batch_pow_witness: Challenger::Witness,
 ) -> FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>
 where
     Val: TwoAdicField,
@@ -71,6 +82,7 @@ where
         log_global_max_height,
         prover_data_with_opening_points,
         input_mmcs,
+        batch_pow_witness,
         None,
     )
 }
@@ -94,6 +106,7 @@ pub(crate) fn prove_fri_with_schedule<Folding, Val, Challenge, InputMmcs, FriMmc
         InputMmcs::ProverData<RowMajorMatrix<Val>>,
     >],
     input_mmcs: &InputMmcs,
+    batch_pow_witness: Challenger::Witness,
     schedule: Option<Vec<usize>>,
 ) -> FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>
 where
@@ -109,6 +122,10 @@ where
     assert!(
         params.num_queries > 0,
         "num_queries must be at least 1 for FRI soundness"
+    );
+    assert!(
+        params.log_blowup > 0,
+        "log_blowup must be at least 1 for FRI soundness"
     );
     assert!(
         params.max_log_arity > 0,
@@ -193,6 +210,7 @@ where
     });
 
     FriProof {
+        batch_pow_witness,
         commit_phase_commits: commit_phase_result.commits,
         commit_pow_witnesses: commit_phase_result.pow_witnesses,
         input_openings,

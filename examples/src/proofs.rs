@@ -1,5 +1,7 @@
 use core::fmt::Debug;
 
+use p3_air::Air;
+use p3_air::symbolic::SymbolicAirBuilder;
 use p3_challenger::{DuplexChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
@@ -14,8 +16,8 @@ use p3_mersenne_31::{Mersenne31, QM31};
 use p3_stir::{SecurityAssumption, StirParameters, TwoAdicStirPcs};
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{
-    AirLayout, PcsError, Proof, StarkGenericConfig, StarkSecurityParams, VerificationError, prove,
-    verify,
+    AirLayout, OpeningShape, PcsError, Proof, StarkGenericConfig, StarkSecurityParams,
+    VerificationError, prove, verify,
 };
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
@@ -94,7 +96,7 @@ pub fn prove_monty31_keccak<
     F: PrimeField32 + TwoAdicField,
     EF: ExtensionField<F>,
     DFT: TwoAdicSubgroupDft<F>,
-    PG: ExampleHashAir<F, KeccakStarkConfig<F, EF, DFT>>,
+    PG: ExampleHashAir<F, KeccakStarkConfig<F, EF, DFT>> + Air<SymbolicAirBuilder<F, EF>>,
 >(
     proof_goal: &PG,
     dft: DFT,
@@ -108,13 +110,15 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
 
-    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+    let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
         128,
         2,
+        OpeningShape::new(),
+        fri_params.grinding_sites(),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
@@ -147,7 +151,8 @@ pub fn prove_monty31_poseidon2<
     DFT: TwoAdicSubgroupDft<F>,
     Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
-    PG: ExampleHashAir<F, Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>,
+    PG: ExampleHashAir<F, Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>
+        + Air<SymbolicAirBuilder<F, EF>>,
 >(
     proof_goal: &PG,
     dft: DFT,
@@ -162,13 +167,15 @@ where
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
-    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+    let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
         128,
         2,
+        OpeningShape::new(),
+        fri_params.grinding_sites(),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
@@ -302,7 +309,8 @@ where
 /// - The Proof Goal (Choice of Hash function and number of hashes to prove)
 #[inline]
 pub fn prove_m31_keccak<
-    PG: ExampleHashAir<Mersenne31, KeccakCircleStarkConfig<Mersenne31, QM31>>,
+    PG: ExampleHashAir<Mersenne31, KeccakCircleStarkConfig<Mersenne31, QM31>>
+        + Air<SymbolicAirBuilder<Mersenne31, QM31>>,
 >(
     proof_goal: &PG,
     num_hashes: usize,
@@ -314,13 +322,15 @@ pub fn prove_m31_keccak<
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = FriParameters::new_benchmark(challenge_mmcs);
-    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+    let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
         128,
         2,
+        OpeningShape::Circle,
+        fri_params.grinding_sites(),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
@@ -352,7 +362,8 @@ pub fn prove_m31_poseidon2<
     EF: ExtensionField<F>,
     Perm16: CryptographicPermutation<[F; 16]> + CryptographicPermutation<[F::Packing; 16]>,
     Perm24: CryptographicPermutation<[F; 24]> + CryptographicPermutation<[F::Packing; 24]>,
-    PG: ExampleHashAir<F, Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>,
+    PG: ExampleHashAir<F, Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>
+        + Air<SymbolicAirBuilder<F, EF>>,
 >(
     proof_goal: &PG,
     num_hashes: usize,
@@ -367,13 +378,15 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = FriParameters::new_benchmark(challenge_mmcs);
-    let security_params = StarkSecurityParams::from_air::<F, F, _>(
+    let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
         EF::bits(),
         128,
         2,
+        OpeningShape::Circle,
+        fri_params.grinding_sites(),
     );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);

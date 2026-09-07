@@ -103,17 +103,21 @@ pub const fn security_report(
         cap,
     );
 
-    // The out-of-domain point is rejection-sampled outside the trace and LDE domains but is not
-    // ground. A violated constraint leaves the DEEP-ALI identity a nonzero polynomial in that
-    // point of degree at most the larger of `max_constraint_degree · (height + max_combo − 1) +
-    // (height − 1)` (clearing the shared denominator lifts each of a constraint's degree-many
-    // trace factors by one per out-of-domain point referenced, and the quotient side contributes
-    // the rest) and `(c + 1) · height + max_combo − 1` (the degree Plonky3's own power-of-two
-    // quotient chunking induces, binding whenever `c` exceeds `max_constraint_degree`). Lifting
-    // evaluates the shorter AIRs at powers of the same point, so all of them pay the maximum
-    // height.
-    let out_of_domain =
-        out_of_domain_round(instance, air.max_constraint_degree, air.max_combo, cap);
+    // The out-of-domain point is rejection-sampled outside the trace and LDE domains. A violated
+    // constraint leaves the DEEP-ALI identity a nonzero polynomial in that point of degree at most
+    // the larger of `max_constraint_degree · (height + max_combo − 1) + (height − 1)` (clearing the
+    // shared denominator lifts each of a constraint's degree-many trace factors by one per
+    // out-of-domain point referenced, and the quotient side contributes the rest) and
+    // `(c + 1) · height + max_combo − 1` (the degree Plonky3's own power-of-two quotient chunking
+    // induces, binding whenever `c` exceeds `max_constraint_degree`). Lifting evaluates the
+    // shorter AIRs at powers of the same point, so all of them pay the maximum height.
+    let out_of_domain = out_of_domain_round(
+        instance,
+        air.max_constraint_degree,
+        air.max_combo,
+        params.ood_pow_bits,
+        cap,
+    );
 
     // The DEEP quotient batches every committed column and out-of-domain point by powers of two
     // further challenges, giving a univariate whose degree is the number of batched terms.
@@ -131,20 +135,26 @@ pub const fn security_report(
 
     // Per folding round the error is at most `(arity − 1) · (n + 1) / |E|`, worst at the first
     // round where the domain is largest. Doubling the coefficient absorbs the `+ 1`.
-    let folding = round(
-        FOLDING_LABEL,
-        instance,
-        2 * ((1u64 << params.log_folding_arity) - 1),
-        instance.log_max_height + params.log_blowup,
-        params.folding_pow_bits,
-        cap,
-    );
+    let folding = match folding_coefficient(params.log_folding_arity) {
+        Some(coefficient) => round(
+            FOLDING_LABEL,
+            instance,
+            coefficient,
+            instance.log_max_height.saturating_add(params.log_blowup),
+            params.folding_pow_bits,
+            cap,
+        ),
+        None => SecurityTerm::new(FOLDING_LABEL, 0),
+    };
 
     // Query sampling is the only round whose error is not a Schwartz-Zippel bound: it is the
     // random-words rate compounded over independent queries.
-    let query_bits = params.num_queries as u64
-        * fixed::bits_per_query(params.log_blowup, instance.field_bits)
-        + fixed::from_bits(params.query_pow_bits);
+    let query_bits = (params.num_queries as u64)
+        .saturating_mul(fixed::bits_per_query(
+            params.log_blowup,
+            instance.field_bits,
+        ))
+        .saturating_add(fixed::from_bits(params.query_pow_bits));
     let query = SecurityTerm::new(QUERY_LABEL, min(query_bits, cap));
 
     SecurityReport::new([
@@ -156,6 +166,24 @@ pub const fn security_report(
         query,
         SecurityTerm::new(COLLISION_LABEL, cap),
     ])
+}
+
+/// Coefficient `2 · (2^log_folding_arity − 1)` of the folding round, or `None` when the arity is
+/// too large to compute it without wrapping.
+///
+/// `2^63` is the last shift that does not itself overflow `u64`, and `2 · (2^63 − 1) = 2^64 − 2`
+/// still fits, so `log_folding_arity = 63` could be computed exactly; the cutoff at `63` is one
+/// notch more conservative than the arithmetic strictly requires, refusing the input a step early
+/// rather than relying on that margin. From `64` upwards a wrapped shift is the dangerous case
+/// rather than a merely wrong one: `1u64 << 64` masks to `1u64 << 0`, leaving the coefficient at
+/// zero, and [`round`] reads a zero coefficient as "the protocol has no such round" and reports it
+/// at the cap. The round would then vanish from the budget of a verifier compiled in release,
+/// where the shift does not panic. Reporting zero bits instead refuses the configuration loudly.
+const fn folding_coefficient(log_folding_arity: u32) -> Option<u64> {
+    if log_folding_arity >= u64::BITS - 1 {
+        return None;
+    }
+    Some(2 * ((1u64 << log_folding_arity) - 1))
 }
 
 /// Bounds one round whose error is `coefficient · 2^log_size / |E|`, crediting the grinding sited
@@ -210,13 +238,20 @@ const fn round(
 /// directly instead of decomposed into a coefficient and a log-size. This round is always charged
 /// — there is no "no such round" case to special-case at zero.
 ///
+/// `pow_bits` is the grinding sited immediately before the point is sampled, credited exactly as
+/// [`round`] credits its own: a prover hunting for a favourable point pays `2^pow_bits` per
+/// candidate. It is the only lever this round has, since both the degree and the height are fixed
+/// by the statement being proved.
+///
 /// A degenerate degree or point count clamps to one, which keeps `size ≥ 1` and so keeps
 /// [`fixed::ceil_log2`]'s zero-assert unreachable. A size too large to take the logarithm of is
-/// reported at zero bits rather than wrapped, since truncating it would understate the error.
+/// reported at zero bits rather than wrapped, since truncating it would understate the error; the
+/// grind is dropped with it rather than credited against an error this round could not bound.
 const fn out_of_domain_round(
     instance: &InstanceShape,
     max_constraint_degree: u32,
     max_combo: u32,
+    pow_bits: u32,
     cap: u64,
 ) -> SecurityTerm {
     if instance.log_max_height >= u64::BITS {
@@ -253,7 +288,7 @@ const fn out_of_domain_round(
     }
 
     let error = fixed::ceil_log2(size as u64);
-    let bits = instance.field_bits.saturating_sub(error);
+    let bits = instance.field_bits.saturating_sub(error) + fixed::from_bits(pow_bits);
 
     SecurityTerm::new(OUT_OF_DOMAIN_LABEL, min(bits, cap))
 }
@@ -275,6 +310,7 @@ mod tests {
             log_folding_arity: 2,
             num_queries: 27,
             query_pow_bits: 17,
+            ood_pow_bits: 0,
             deep_pow_bits: 12,
             folding_pow_bits: 4,
             lookup_pow_bits: 0,
@@ -338,6 +374,56 @@ mod tests {
         let after = ground.terms()[0];
         assert_eq!(before.label, LOOKUP_LABEL);
         assert_eq!(after.bits, before.bits + fixed::from_bits(8));
+    }
+
+    /// A folding arity too large to compute the round's coefficient must be reported at zero
+    /// bits, not silently dropped. The wrapped shift would leave the coefficient at zero, which
+    /// [`round`] reads as "no such round" and reports at the cap — and unlike debug, a release
+    /// build does not panic on the way there, so the round would simply disappear.
+    #[test]
+    fn absurd_folding_arity_reports_no_security_rather_than_the_cap() {
+        assert_eq!(folding_coefficient(2), Some(6));
+        assert_eq!(folding_coefficient(62), Some(u64::MAX - (1 << 63) - 1));
+        assert_eq!(folding_coefficient(63), None);
+        assert_eq!(folding_coefficient(u32::MAX), None);
+
+        let absurd = ProtocolParams {
+            log_folding_arity: 64,
+            ..params()
+        };
+        let report = security_report(&absurd, &instance(20), &air());
+        let folding = report
+            .terms()
+            .iter()
+            .find(|t| t.label == FOLDING_LABEL)
+            .expect("folding term is always present");
+
+        assert_eq!(folding.bits, 0, "folding round vanished into the cap");
+        assert_eq!(report.security_level(), 0);
+    }
+
+    /// Grinding before the out-of-domain point is credited to that round bit for bit, and to no
+    /// other. The "no other" half is the point: the round shares its `max_constraint_degree` and
+    /// `max_combo` inputs with nothing else, so a boost wired to the wrong term would surface as
+    /// a neighbouring round moving instead.
+    #[test]
+    fn ood_grinding_lifts_only_the_out_of_domain_round() {
+        let ungrounded = security_report(&params(), &instance(29), &air());
+        let grinding = ProtocolParams {
+            ood_pow_bits: 8,
+            ..params()
+        };
+        let ground = security_report(&grinding, &instance(29), &air());
+
+        for (before, after) in ungrounded.terms().iter().zip(ground.terms()) {
+            assert_eq!(before.label, after.label, "term order changed");
+            let expected = if before.label == OUT_OF_DOMAIN_LABEL {
+                before.bits + fixed::from_bits(8)
+            } else {
+                before.bits
+            };
+            assert_eq!(after.bits, expected, "{} moved", before.label);
+        }
     }
 
     /// No round may be reported above the transcript's own ceiling.
