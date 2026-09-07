@@ -728,11 +728,31 @@ where
 
         let inv_denoms = compute_inverse_denominators::<Val, Challenge>(&mats_and_points, &coset);
 
+        // Adjusted weights are consumed only on each matrix's native-height prefix. Track the
+        // longest such prefix separately per point; inverse denominators remain full-size for
+        // quotient construction below.
+        let mut point_max_native_height: LinearMap<Challenge, usize> = LinearMap::new();
+        for ((_, points), layout) in mats_and_points.iter().zip(&matrix_layouts) {
+            for (points_for_mat, &(log_native_h, _)) in points.iter().zip(layout) {
+                let h = 1usize << log_native_h;
+                for &point in points_for_mat {
+                    if let Some(existing) = point_max_native_height.get_mut(&point) {
+                        *existing = (*existing).max(h);
+                    } else {
+                        point_max_native_height.insert(point, h);
+                    }
+                }
+            }
+        }
+
         // Precompute adjusted barycentric weights once per opening point.
         // adjusted[i] = 1/(z - x_i) - 1/z, reused across all matrices opened at z.
         let adjusted_weights: LinearMap<Challenge, Vec<Challenge>> = inv_denoms
             .iter()
-            .map(|(point, denoms)| (*point, compute_adjusted_weights(*point, denoms)))
+            .map(|(point, denoms)| {
+                let h = *point_max_native_height.get(point).unwrap();
+                (*point, compute_adjusted_weights(*point, &denoms[..h]))
+            })
             .collect();
 
         let all_opened_values: OpenedValues<Challenge> = mats_and_points
