@@ -151,9 +151,9 @@ fn bench_verify(c: &mut Criterion) {
 }
 
 /// The per-pair form: one `domain_point` call per output symbol, exactly what `fold_pair`
-/// computes for a single query's verifier-side check. Benchmarked serially, alongside
-/// `fold_codeword`'s task-local XOR chain, so the two are compared under one measurement
-/// rather than one inferred from the other.
+/// computes for a single query's verifier-side check. Benchmarked serially, alongside the
+/// whole-codeword form, so the two are compared under one measurement rather than one inferred
+/// from the other.
 fn fold_codeword_per_pair(codeword: &[F], beta: F) -> Vec<F> {
     codeword
         .chunks(2)
@@ -163,8 +163,8 @@ fn fold_codeword_per_pair(codeword: &[F], beta: F) -> Vec<F> {
 }
 
 /// Folds a full base-round codeword (length `2^(num_variables + log_inv_rate)`) once, in both
-/// the chained and the per-pair form. This is the round every real proof spends the most time
-/// in. `fold_codeword` only borrows its input, so neither arm needs `iter_batched`'s per-call
+/// the whole-codeword and the per-pair form. This is the round every real proof spends the most
+/// time in. `fold_codeword` only borrows its input, so neither arm needs `iter_batched`'s per-call
 /// setup; `fold_codeword` produces half as many outputs as `codeword` has inputs, so per-output
 /// timing (not per-input-element) is what the ratio below is stated against.
 fn bench_fold_codeword(c: &mut Criterion) {
@@ -177,7 +177,7 @@ fn bench_fold_codeword(c: &mut Criterion) {
         let beta: F = rng.random();
 
         group.bench_with_input(
-            BenchmarkId::new("chained", num_variables),
+            BenchmarkId::new("codeword", num_variables),
             &codeword,
             |b, codeword| b.iter(|| fold_codeword(codeword, beta)),
         );
