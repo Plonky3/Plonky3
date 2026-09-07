@@ -7,10 +7,8 @@ use p3_commit::Encoder;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
-use crate::domain::domain_point;
 use crate::poly::PolyBasisNtt;
 use crate::traits::AdditiveNtt;
 
@@ -20,7 +18,7 @@ use crate::traits::AdditiveNtt;
 /// the evaluation of `f̂(Ŵ_0(x), …, Ŵ_{k−1}(x))` on `S_{k + log_inv_rate}`.
 ///
 /// The alphabet is `BinaryField128`, where [`PolyBasisNtt`] is the faster transform and falls
-/// back to [`LchNtt`](crate::LchNtt) on a target without a carryless multiply, so it is the default.
+/// back to the portable tower transform on a target without a carryless multiply, so it is the default.
 ///
 /// `F` is phantom: [`Encoder`] is only implemented below for `F = BinaryField128`, and stays
 /// that way as long as the alphabet is fixed (D9), so the parameter carries no other instance.
@@ -37,14 +35,13 @@ impl<Ntt: AdditiveNtt<BinaryField128> + Sync> Encoder<BinaryField128>
 {
     fn encode_batch(
         &self,
-        message: RowMajorMatrix<BinaryField128>,
+        mut message: RowMajorMatrix<BinaryField128>,
         log_inv_rate: usize,
     ) -> RowMajorMatrix<BinaryField128> {
         if log_inv_rate == 0 {
             return self.ntt.ntt_batch(message);
         }
 
-        let width = message.width();
         let len = message.values.len();
         let padded_len = u32::try_from(log_inv_rate)
             .ok()
@@ -54,30 +51,17 @@ impl<Ntt: AdditiveNtt<BinaryField128> + Sync> Encoder<BinaryField128>
             // what actually proves no bits were lost.
             .filter(|&padded| padded >> log_inv_rate == len)
             .expect("codeword length overflows usize");
-        let log_message_height = log2_strict_usize(message.height());
+        let _ = log2_strict_usize(message.height());
+        message.values.resize(padded_len, BinaryField128::ZERO);
+        self.ntt.ntt_batch_padded(message, log_inv_rate)
+    }
 
-        // Zero-padding to `S_{k+r}` and transforming the whole codeword leaves the appended
-        // `hi` coefficient half zero at every stage `j >= k`, so those butterflies only ever
-        // replicate `lo` — yet the carryless multiply against that zero still runs, `r` stages
-        // deep. The equivalent computation is `2^r` independent height-`2^k` transforms of the
-        // unpadded message, one per coset `c` of `S_k` in `S_{k+r}`, evaluated at
-        // `domain_point(c << k)`: every codeword row decomposes as `c*2^k + m` with
-        // `domain_point(c*2^k + m) = domain_point(c << k) + domain_point(m)`, and the padding
-        // rows never enter the computation at all. Each coset is independent, so they run in
-        // parallel; `shifted_ntt_batch` takes its message by value, so each needs its own copy.
-        let mut values = BinaryField128::zero_vec(padded_len);
-        values
-            .par_chunks_mut(len)
-            .enumerate()
-            .for_each(|(c, chunk)| {
-                let shift = domain_point::<BinaryField128>(c << log_message_height);
-                let coset = self
-                    .ntt
-                    .shifted_ntt_batch(RowMajorMatrix::new(message.values.clone(), width), shift);
-                chunk.copy_from_slice(&coset.values);
-            });
-
-        RowMajorMatrix::new(values, width)
+    fn encode_batch_padded(
+        &self,
+        message: RowMajorMatrix<BinaryField128>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField128> {
+        self.ntt.ntt_batch_padded(message, log_inv_rate)
     }
 }
 
@@ -147,6 +131,34 @@ mod tests {
     fn encode_batch_panics_when_the_codeword_length_overflows() {
         let message = RowMajorMatrix::new(vec![F::ZERO; 2], 1);
         let _ = AdditiveRsEncoder::<F>::default().encode_batch(message, usize::BITS as usize - 1);
+    }
+
+    #[test]
+    fn padded_encoding_matches_naive() {
+        for width in [1, 4, 16, 64] {
+            for rate in [0, 1, 2, 3] {
+                let mut mat = matrix(4, width, 13);
+                mat.values.resize(mat.values.len() << rate, F::ZERO);
+                let expected = NaiveAdditiveNtt::default().ntt_batch(mat.clone());
+                assert_eq!(
+                    AdditiveRsEncoder::<F>::default().encode_batch_padded(mat, rate),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic = "padding exceeds matrix height"]
+    fn padded_encoding_rejects_excessive_padding() {
+        let _ = AdditiveRsEncoder::<F>::default().encode_batch_padded(matrix(2, 4, 0), 3);
+    }
+
+    #[test]
+    #[should_panic]
+    fn padded_encoding_rejects_non_power_of_two_height() {
+        let mat = RowMajorMatrix::new(vec![F::ZERO; 12], 4);
+        let _ = AdditiveRsEncoder::<F>::default().encode_batch_padded(mat, 1);
     }
 
     proptest! {

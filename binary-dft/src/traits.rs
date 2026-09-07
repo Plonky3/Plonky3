@@ -1,6 +1,7 @@
 //! The additive NTT interface shared by the reference and fast transforms.
 
 use p3_binary_field::TowerLevel;
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 
 /// An additive NTT: evaluation of the novel polynomial basis on an `F_2`-linear subspace.
@@ -34,6 +35,20 @@ pub trait AdditiveNtt<F: TowerLevel> {
         self.shifted_ntt_batch(mat, F::ZERO)
     }
 
+    /// Transforms a matrix whose coefficient prefix has been padded with zero rows.
+    ///
+    /// The caller supplies `2^log_inv_rate` times the original height and must leave
+    /// every entry after that original prefix zero. Implementations may ignore that tail.
+    /// The default evaluates the full matrix; optimized implementations can skip zero work.
+    ///
+    /// # Panics
+    /// Panics for an invalid transform height or if the padding exceeds that height.
+    fn ntt_batch_padded(&self, mat: RowMajorMatrix<F>, log_inv_rate: usize) -> RowMajorMatrix<F> {
+        let log_n = p3_util::log2_strict_usize(mat.height());
+        assert!(log_inv_rate <= log_n, "padding exceeds matrix height");
+        self.ntt_batch(mat)
+    }
+
     /// Inverse of [`ntt_batch`](Self::ntt_batch).
     fn intt_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
         self.shifted_intt_batch(mat, F::ZERO)
@@ -58,6 +73,11 @@ pub trait AdditiveNtt<F: TowerLevel> {
         added_bits: usize,
         shift: F,
     ) -> RowMajorMatrix<F> {
+        let log_n = p3_util::log2_strict_usize(mat.height());
+        assert!(log_n <= 1 << F::LOG_BITS, "domain exceeds field dimension");
+        if added_bits == 0 {
+            return mat;
+        }
         let coeffs = self.shifted_intt_batch(mat, shift);
         let width = coeffs.width;
         let len = coeffs.values.len();
@@ -75,5 +95,39 @@ pub trait AdditiveNtt<F: TowerLevel> {
         let mut values = F::zero_vec(padded_len);
         values[..len].copy_from_slice(&coeffs.values);
         self.shifted_ntt_batch(RowMajorMatrix::new(values, width), shift)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_binary_field::BinaryField8;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::dense::RowMajorMatrix;
+
+    use super::AdditiveNtt;
+    use crate::LchNtt;
+
+    #[test]
+    fn identity_lde_preserves_input_allocation() {
+        let mat = RowMajorMatrix::new(vec![BinaryField8::ONE; 32], 4);
+        let ptr = mat.values.as_ptr();
+        let result = LchNtt::default().lde_batch(mat, 0);
+        assert_eq!(result.values.as_ptr(), ptr);
+        assert_eq!(result.values, vec![BinaryField8::ONE; 32]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn identity_lde_rejects_invalid_height() {
+        let _ = LchNtt::default().lde_batch(RowMajorMatrix::new(vec![BinaryField8::ONE; 3], 1), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn identity_lde_rejects_domain_above_field_dimension() {
+        let _ =
+            LchNtt::default().lde_batch(RowMajorMatrix::new(vec![BinaryField8::ONE; 512], 1), 0);
     }
 }
