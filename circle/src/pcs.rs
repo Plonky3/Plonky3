@@ -1235,6 +1235,29 @@ mod tests {
     }
 
     #[test]
+    fn reject_folding_cap_above_two() {
+        // Invariant: a cap above one is refused before any proof data is read.
+        //
+        // Circle folding halves the domain and nothing else.
+        // A larger cap once reached a bare assert deep in the query loop.
+        // That aborted on an honest proof as readily as on a forged one.
+        //
+        // Fixture state: a valid proof, then a cap of 3 on the verifier.
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+
+        let mut wide = pcs;
+        wide.fri_params.max_log_arity = 3;
+
+        let err = try_verify(&wide, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("a cap above one must be refused");
+
+        let FriError::UnsupportedFoldingCap { max_log_arity } = err else {
+            panic!("expected UnsupportedFoldingCap, got {err:?}");
+        };
+        assert_eq!(max_log_arity, 3);
+    }
+
+    #[test]
     fn reject_commit_pow_witness_count_mismatch() {
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
         let num_rounds = proof.fri_proof.commit_phase_commits.len();

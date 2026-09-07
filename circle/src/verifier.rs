@@ -41,6 +41,18 @@ where
         return Err(FriError::ZeroQueries);
     }
 
+    // Circle folding halves the domain and nothing else.
+    //
+    // Capping the arity at one forces every per-round arity to one.
+    // The pinned height sum then determines the schedule uniquely.
+    //
+    // A larger cap would let a proof declare an arity this fold cannot apply.
+    if params.max_log_arity != 1 {
+        return Err(FriError::UnsupportedFoldingCap {
+            max_log_arity: params.max_log_arity,
+        });
+    }
+
     // There must be exactly one commit-phase proof-of-work witness per round.
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
         return Err(FriError::CommitPowWitnessCountMismatch {
@@ -359,11 +371,9 @@ where
 
         // Fold the full sibling group down to a single evaluation using the random
         // challenge beta. Borrowing the row leaves it owned for the collector below.
-        // Circle PCS only ever folds by arity 2 (`CircleFriFolding::fold_row`
-        // asserts this too); the twiddle for this round was already precomputed for the
-        // whole query chain, so this is now pure arithmetic with no domain construction,
-        // scalar multiplication, or inversion left to do.
-        assert_eq!(log_arity, 1, "Circle PCS currently only supports arity 2");
+        //
+        // The cap is one on entry, so this is always a halving.
+        debug_assert_eq!(log_arity, 1, "circle folding is always a halving");
         folded_eval = fold_row_with_inv_twiddle(x_twiddle_inv[round], beta, evals.iter().copied());
 
         // Hand this query's group index and reconstructed row to the round's shared

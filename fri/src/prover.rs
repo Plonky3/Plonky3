@@ -14,7 +14,7 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     BatchMultiOpening, CommitPhaseMultiStep, FriFoldingStrategy, FriParameters, FriProof,
-    ProverDataWithOpeningPoints, compute_log_arity_for_round,
+    ProverDataWithOpeningPoints, fold_schedule,
 };
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
@@ -63,6 +63,48 @@ where
     Folding:
         FriFoldingStrategy<Val, Challenge, InputProof = Vec<BatchMultiOpening<Val, InputMmcs>>>,
 {
+    prove_fri_with_schedule(
+        folding,
+        params,
+        inputs,
+        challenger,
+        log_global_max_height,
+        prover_data_with_opening_points,
+        input_mmcs,
+        None,
+    )
+}
+
+/// Prove with a caller-supplied folding schedule.
+///
+/// An honest prover passes `None` and the schedule is derived.
+///
+/// A test passes `Some` to forge a schedule the verifier will not derive.
+/// Every commitment, opening and transcript value then agrees with the forgery.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prove_fri_with_schedule<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
+    folding: &Folding,
+    params: &FriParameters<FriMmcs>,
+    inputs: Vec<Vec<Challenge>>,
+    challenger: &mut Challenger,
+    log_global_max_height: usize,
+    prover_data_with_opening_points: &[ProverDataWithOpeningPoints<
+        '_,
+        Challenge,
+        InputMmcs::ProverData<RowMajorMatrix<Val>>,
+    >],
+    input_mmcs: &InputMmcs,
+    schedule: Option<Vec<usize>>,
+) -> FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>
+where
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Folding:
+        FriFoldingStrategy<Val, Challenge, InputProof = Vec<BatchMultiOpening<Val, InputMmcs>>>,
+{
     assert!(!inputs.is_empty());
     assert!(
         params.num_queries > 0,
@@ -97,7 +139,7 @@ where
     // themselves and the final polynomial.
     // Note that the challenger observes the commitments and the final polynomial inside this function so we don't
     // need to observe the output of this function here.
-    let commit_phase_result = commit_phase(folding, params, inputs, challenger);
+    let commit_phase_result = commit_phase(folding, params, inputs, challenger, schedule);
 
     // Bind the chosen folding arities into the transcript.
     for &log_arity in &commit_phase_result.log_arities {
@@ -195,6 +237,7 @@ fn commit_phase<Folding, Val, Challenge, M, Challenger>(
     params: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
+    schedule: Option<Vec<usize>>,
 ) -> CommitPhaseResult<Challenge, M, <Challenger as GrindingChallenger>::Witness>
 where
     Val: TwoAdicField,
@@ -208,28 +251,28 @@ where
         "max_log_arity must be at least 1 to guarantee folding progress"
     );
 
+    let log_final_height = params.log_blowup + params.log_final_poly_len;
+
+    // Derive the whole folding schedule before folding anything.
+    //
+    // The verifier derives the identical one from the committed heights.
+    // Nothing about it is read from the proof.
+    let log_arities = schedule.unwrap_or_else(|| {
+        let input_log_heights: Vec<usize> = inputs
+            .iter()
+            .map(|input| log2_strict_usize(input.len()))
+            .collect();
+        fold_schedule(&input_log_heights, log_final_height, params.max_log_arity)
+    });
+
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
     let mut data = vec![];
-    let mut log_arities = vec![];
     let mut pow_witnesses = vec![];
 
-    let log_final_height = params.log_blowup + params.log_final_poly_len;
-
-    while folded.len() > params.blowup() * params.final_poly_len() {
-        let log_current_height = log2_strict_usize(folded.len());
-        let next_input_log_height = inputs_iter.peek().map(|v| log2_strict_usize(v.len()));
-
-        //Compute the arity for this round
-        let log_arity = compute_log_arity_for_round(
-            log_current_height,
-            next_input_log_height,
-            log_final_height,
-            params.max_log_arity,
-        );
+    for &log_arity in &log_arities {
         let arity = 1 << log_arity;
-        log_arities.push(log_arity);
 
         // As folded is in bit reversed order, the evaluations at conjugate points are adjacent.
         // We reinterpret the vector as a matrix of width `arity`.
