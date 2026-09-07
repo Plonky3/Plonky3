@@ -118,14 +118,6 @@ where
         let half = EF::TWO.inverse();
         let mut aux_carry = aux_claim;
 
-        // A challenge is not applied on the spot.
-        // It is handed to the next round, which binds and measures in one pass.
-        //
-        // Everything the loop does between the two is scalar work.
-        // Assembling the round polynomial, the transcript, the grinding and the mask
-        // evaluation never read the tables.
-        let mut pending: Option<EF> = None;
-
         for (round_idx, mask) in masks.iter().enumerate() {
             let j = round_idx + 1;
             let mask_endpoints = mask[0].double() + mask[1..].iter().copied().sum::<EF>();
@@ -133,7 +125,11 @@ where
             aux_carry *= half;
 
             // Measure this round, absorbing whatever binding the last one left behind.
-            let (plain_c0, plain_c_inf) = self.measure_round(&mut pending);
+            //
+            // Everything the loop does between the two is scalar work.
+            // Assembling the round polynomial, the transcript, the grinding and the mask
+            // evaluation never read the tables.
+            let (plain_c0, plain_c_inf) = self.measure_round();
             // The aux carry enters only the transmitted constant slot; the
             // source-side fold below keeps the raw coefficients.
             let h = round_ctx.assemble(
@@ -162,16 +158,15 @@ where
 
             // Advance the claim now; the binding waits for the next round's pass.
             self.reduce_claim_with_coefficients(plain_c0, plain_c_inf, gamma);
-            pending = Some(gamma);
+            self.hold(gamma);
 
             rs.push(gamma);
         }
 
-        // The last challenge has no successor to fuse with.
-        // The weight scaling below reads the tables, so it binds here.
-        self.bind_pending(&mut pending);
-
         // Invariant: the claim is the inner product of the bound pair.
+        //
+        // The last challenge has no successor to fuse with, and the weight scaling
+        // below reads the tables, so this settles it.
         self.debug_assert_claim();
 
         self.scale_weights_and_claim(eps);
@@ -373,7 +368,7 @@ mod tests {
                 let mut zk_data = ZkSumcheckData::<F, EF>::default();
 
                 // Arm under test: the driver, which holds each binding back a round.
-                let handoff = SumcheckProver::new(build(), claimed_sum).into_zk_sumcheck(
+                let mut handoff = SumcheckProver::new(build(), claimed_sum).into_zk_sumcheck(
                     &mut zk_data,
                     &encoding,
                     &mmcs,
@@ -387,9 +382,10 @@ mod tests {
                 // Reference arm: replay the same challenges, binding each on the spot.
                 let mut reference = SumcheckProver::new(build(), claimed_sum);
                 for &gamma in handoff.randomness.iter() {
-                    let (c0, c_inf) = reference.measure_round(&mut None);
+                    let (c0, c_inf) = reference.measure_round();
                     reference.reduce_claim_with_coefficients(c0, c_inf, gamma);
-                    reference.bind_pending(&mut Some(gamma));
+                    reference.hold(gamma);
+                    reference.settle();
                 }
                 reference.scale_weights_and_claim(handoff.eps);
 
