@@ -3,8 +3,6 @@
 //! Run with `cargo run --release -p p3-multi-stark --example prove_binary_field`.
 //! The PCS is binding but not hiding; this example does not provide zero knowledge.
 
-use std::time::Instant;
-
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_binary_field::{BinaryChallenger, BinaryField128, TowerLevel};
 use p3_binary_pcs::{BinaryPcs, BinaryPcsConfig, BinaryPcsParams, BinaryPcsProverData};
@@ -18,6 +16,11 @@ use p3_multi_stark::{
 };
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+use tracing_forest::ForestLayer;
+use tracing_forest::util::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Registry};
 
 type F = BinaryField128;
 type Hash = SerializingHasher<Keccak256Hash>;
@@ -130,12 +133,19 @@ fn trace(log_height: usize) -> (Table<F>, [F; 3]) {
 }
 
 fn main() {
-    let log_height = 8;
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    Registry::default()
+        .with(env_filter)
+        .with(ForestLayer::default())
+        .init();
+
+    let log_height = 18;
     let config = config(log_height);
     let (table, public) = trace(log_height);
     let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
 
-    let start = Instant::now();
     let proof = prove(
         &config,
         ProverInstances::new(vec![ProverInstance::new(
@@ -147,11 +157,9 @@ fn main() {
         0,
         &mut challenger(),
     );
-    let proving_time = start.elapsed();
     let bytes = postcard::to_allocvec(&proof).unwrap();
     let proof: MultiStarkProof<Config> = postcard::from_bytes(&bytes).unwrap();
 
-    let start = Instant::now();
     verify(
         &config,
         VerifierInstances::new(vec![VerifierInstance::new(
@@ -166,11 +174,9 @@ fn main() {
     )
     .expect("binary AIR proof must verify");
     println!(
-        "Verified {} rows over GF(2^128) using BinaryPcs: {} bytes, prove {:?}, verify {:?}",
+        "Verified {} rows over GF(2^128) using BinaryPcs: {} bytes",
         1 << log_height,
         bytes.len(),
-        proving_time,
-        start.elapsed(),
     );
 }
 

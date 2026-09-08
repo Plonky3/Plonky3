@@ -70,6 +70,7 @@ pub(crate) struct RoundCommitment<MT: Mmcs<BinaryField128>> {
 /// needed to run the residual sumcheck and later open the base codeword's queries.
 ///
 /// `witness` must have `config.num_variables()` variables and be built at [`FOLDING`].
+#[tracing::instrument(name = "binary pcs commit", skip_all)]
 pub(crate) fn commit<E, MT, Ch>(
     config: &BinaryPcsConfig,
     encoder: &E,
@@ -123,6 +124,7 @@ where
 /// folded codeword.
 #[must_use]
 #[allow(clippy::type_complexity)]
+#[tracing::instrument(name = "binary pcs fold rounds", skip_all)]
 pub(crate) fn fold_rounds<MT, Ch>(
     prover_data: BinaryPcsProverData<MT>,
     config: &BinaryPcsConfig,
@@ -171,8 +173,10 @@ where
     let mut rounds: Vec<RoundCommitment<MT>> = Vec::with_capacity(num_fold_rounds - 1);
     let mut final_codeword = Vec::new();
     for round in 0..num_fold_rounds {
-        let challenge =
-            sumcheck.compute_sumcheck_polynomials(&mut sumcheck_data, challenger, 1, 0, None);
+        let _round_span = tracing::info_span!("fold round", round).entered();
+        let challenge = tracing::info_span!("sumcheck round").in_scope(|| {
+            sumcheck.compute_sumcheck_polynomials(&mut sumcheck_data, challenger, 1, 0, None)
+        });
         let beta = challenge.as_slice()[0];
         randomness.extend(&challenge);
 
@@ -184,10 +188,12 @@ where
         } else {
             &rounds[round - 1].merkle_data
         };
-        let folded = fold_codeword(&mmcs.get_matrices(source)[0].values, beta);
+        let folded = tracing::info_span!("fold codeword")
+            .in_scope(|| fold_codeword(&mmcs.get_matrices(source)[0].values, beta));
 
         if round + 1 < num_fold_rounds {
-            let (commitment, round_data) = mmcs.commit_matrix(RowMajorMatrix::new(folded, 1));
+            let (commitment, round_data) = tracing::info_span!("commit folded codeword")
+                .in_scope(|| mmcs.commit_matrix(RowMajorMatrix::new(folded, 1)));
             challenger.observe(commitment.clone());
             rounds.push(RoundCommitment {
                 commitment,
@@ -229,6 +235,7 @@ pub(crate) struct QueryProofs<MT: Mmcs<BinaryField128>> {
 /// last, whose codeword is never committed — it travels in the clear as the proof's
 /// `final_codeword` instead, so a Merkle path for it would only repeat what the verifier can
 /// already read directly.
+#[tracing::instrument(name = "binary pcs open queries", skip_all)]
 pub(crate) fn open_queries<MT, Ch>(
     config: &BinaryPcsConfig,
     mmcs: &MT,

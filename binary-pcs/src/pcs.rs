@@ -119,6 +119,7 @@ where
     /// point the fold challenges define, times the final codeword's (uniform) value equals the
     /// running sumcheck claim; `verify_query_paths` then ties every sampled query's fold chain
     /// to that same codeword.
+    #[tracing::instrument(name = "binary pcs verify", skip_all)]
     fn verify_opening<'p, Challenger>(
         &self,
         commitment: &MT::Commitment,
@@ -271,6 +272,7 @@ where
         commit(&self.config, &self.encoder, &self.mmcs, challenger, witness)
     }
 
+    #[tracing::instrument(name = "binary pcs open", skip_all)]
     fn open(
         &self,
         mut prover_data: Self::ProverData,
@@ -313,6 +315,7 @@ where
     /// This trait gives no Fiat-Shamir guarantee on its own: the caller must have bound
     /// `points` to the shared transcript (see [`PrescribedPointPcs`]'s own Fiat-Shamir /
     /// Soundness doc) before calling this method, exactly as it must before `verify_at`.
+    #[tracing::instrument(name = "binary pcs open", skip_all)]
     fn open_at(
         &self,
         mut prover_data: Self::ProverData,
