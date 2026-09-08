@@ -31,8 +31,31 @@ use serde::de::DeserializeOwned;
 struct Unstaged<H>(H);
 
 impl<T: Clone, Out, H: CryptographicHasher<T, Out>> CryptographicHasher<T, Out> for Unstaged<H> {
+    const LANES: usize = H::LANES;
+    const PREFER_CONTIGUOUS_INPUT: bool = false;
+
     fn hash_iter<I: IntoIterator<Item = T>>(&self, input: I) -> Out {
         self.0.hash_iter(input)
+    }
+
+    fn hash_iter_slices<'a, I>(&self, input: I) -> Out
+    where
+        I: IntoIterator<Item = &'a [T]>,
+        T: 'a,
+    {
+        self.0.hash_iter_slices(input)
+    }
+
+    fn hash_slice(&self, input: &[T]) -> Out {
+        self.0.hash_slice(input)
+    }
+
+    fn hash_item(&self, input: T) -> Out {
+        self.0.hash_item(input)
+    }
+
+    fn hash_many(&self, input: &[T], out: &mut [Out]) {
+        self.0.hash_many(input, out);
     }
 }
 

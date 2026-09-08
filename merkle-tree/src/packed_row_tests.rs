@@ -1,11 +1,13 @@
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use p3_baby_bear::BabyBear;
 use p3_commit::{BatchOpeningRef, Mmcs};
 use p3_field::Field;
 use p3_goldilocks::Goldilocks;
-use p3_keccak::{KeccakF, VECTOR_LEN};
+use p3_keccak::{Keccak256Hash, KeccakF, VECTOR_LEN};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_symmetric::{
@@ -24,9 +26,69 @@ use crate::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 struct Unstaged<H>(H);
 
 impl<T: Clone, Out, H: CryptographicHasher<T, Out>> CryptographicHasher<T, Out> for Unstaged<H> {
+    const LANES: usize = H::LANES;
+    const PREFER_CONTIGUOUS_INPUT: bool = false;
+
     fn hash_iter<I: IntoIterator<Item = T>>(&self, input: I) -> Out {
         self.0.hash_iter(input)
     }
+
+    fn hash_iter_slices<'a, I>(&self, input: I) -> Out
+    where
+        I: IntoIterator<Item = &'a [T]>,
+        T: 'a,
+    {
+        self.0.hash_iter_slices(input)
+    }
+
+    fn hash_slice(&self, input: &[T]) -> Out {
+        self.0.hash_slice(input)
+    }
+
+    fn hash_item(&self, input: T) -> Out {
+        self.0.hash_item(input)
+    }
+
+    fn hash_many(&self, input: &[T], out: &mut [Out]) {
+        self.0.hash_many(input, out);
+    }
+}
+
+#[test]
+fn unstaged_reference_preserves_batched_leaf_hashing() {
+    #[derive(Clone)]
+    struct CountBatches(Arc<AtomicUsize>);
+
+    impl CryptographicHasher<BabyBear, [u8; 32]> for CountBatches {
+        // Exercise batching even when the native Keccak implementation is scalar.
+        const LANES: usize = 3;
+
+        fn hash_iter<I: IntoIterator<Item = BabyBear>>(&self, input: I) -> [u8; 32] {
+            SerializingHasher::new(Keccak256Hash).hash_iter(input)
+        }
+
+        fn hash_many(&self, input: &[BabyBear], out: &mut [[u8; 32]]) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            SerializingHasher::new(Keccak256Hash).hash_many(input, out);
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hasher = CountBatches(calls.clone());
+    let compression = CompressionFunctionFromHasher::<_, 2, 32>::new(Keccak256Hash);
+    let original =
+        MerkleTreeMmcs::<BabyBear, u8, _, _, 2, 32>::new(hasher.clone(), compression.clone(), 0);
+    let reference =
+        MerkleTreeMmcs::<BabyBear, u8, _, _, 2, 32>::new(Unstaged(hasher), compression, 0);
+    let mut rng = SmallRng::seed_from_u64(73);
+    let matrices = vec![RowMajorMatrix::<BabyBear>::rand(&mut rng, 7, 5)];
+    let (cap, _) = original.commit(matrices.clone());
+    let expected_calls = calls.swap(0, Ordering::Relaxed);
+    let (reference_cap, _) = reference.commit(matrices);
+
+    assert_eq!(cap, reference_cap);
+    assert!(expected_calls > 0);
+    assert_eq!(calls.load(Ordering::Relaxed), expected_calls);
 }
 
 type Sponge = PaddingFreeSponge<KeccakF, 25, 17, 4>;
