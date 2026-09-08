@@ -15,7 +15,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_stir::config::{StirConfig, StirParameters};
+use p3_stir::config::{StirConfig, StirOptions, StirParameters};
 use p3_stir::proof::StirProof;
 use p3_stir::prover::{codeword_from_coeffs, prove_stir, prove_stir_from_external_codeword};
 use p3_stir::verifier::{verify_stir, verify_stir_with_external_initial};
@@ -166,6 +166,64 @@ mod babybear_stir {
     fn test_prove_verify_blowup1_fold2_degree8() {
         let (params, dft, challenger) = make_params(1, 2);
         do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
+    }
+
+    #[test]
+    fn early_stop_roundtrips_and_checks_final_coefficients() {
+        for (degree, starting_fold, cap, rounds, final_log) in [
+            (12, 2, 6, 2, 6),
+            (10, 3, 3, 2, 3),
+            (10, 3, 5, 1, 5),
+            (10, 3, usize::MAX, 0, 7),
+        ] {
+            let (mut params, dft, challenger) = make_params(1, 2);
+            params.log_starting_folding_factor = starting_fold;
+            let config = StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                degree,
+                params,
+                StirOptions {
+                    max_log_final_poly_len: Some(cap),
+                },
+            );
+            let mut rng = seeded_rng();
+            let poly: Vec<EF> = (0..1usize << degree).map(|_| rng.random()).collect();
+            let mut p_ch = challenger.clone();
+            let (mut proof, _) = prove_stir(&config, poly, &dft, &mut p_ch);
+            assert_eq!(proof.round_proofs.len(), rounds);
+            assert_eq!(proof.final_polynomial.len(), 1 << final_log);
+            let mut v_ch = challenger.clone();
+            verify_stir(&config, &proof, &mut v_ch).unwrap();
+            assert_eq!(
+                p_ch.sample_algebra_element::<EF>(),
+                v_ch.sample_algebra_element::<EF>()
+            );
+
+            *proof.final_polynomial.last_mut().unwrap() += EF::ONE;
+            assert!(verify_stir(&config, &proof, &mut challenger.clone()).is_err());
+        }
+    }
+
+    #[test]
+    fn early_stop_reduces_serialized_proof_size() {
+        let (params, dft, mut challenger) = make_params_full(1, 2, 80, 0);
+        let full = StirConfig::<F, EF, MyMmcs, Challenger>::new(14, params.clone());
+        let early = StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+            14,
+            params,
+            StirOptions {
+                max_log_final_poly_len: Some(6),
+            },
+        );
+        let mut rng = seeded_rng();
+        let poly: Vec<EF> = (0..1 << 14).map(|_| rng.random()).collect();
+        let (full_proof, _) = prove_stir(&full, poly.clone(), &dft, &mut challenger.clone());
+        let (early_proof, _) = prove_stir(&early, poly, &dft, &mut challenger.clone());
+        verify_stir(&full, &full_proof, &mut challenger.clone()).unwrap();
+        verify_stir(&early, &early_proof, &mut challenger).unwrap();
+        assert!(
+            postcard::to_allocvec(&early_proof).unwrap().len()
+                < postcard::to_allocvec(&full_proof).unwrap().len()
+        );
     }
 
     #[test]
@@ -3397,6 +3455,86 @@ mod babybear_stir_multi {
                 .iter()
                 .map(|&j| (0..arity).map(|l| codeword[j + l * fold_height]).collect())
                 .collect())
+        }
+    }
+
+    #[test]
+    fn early_stop_mixed_schedules_verify_with_committed_and_external_oracles() {
+        let (mut params, dft, challenger) = make_params(1, 2, 16, 0);
+        params.log_starting_folding_factor = 3;
+        let configs: Vec<_> = [(8, Some(4)), (6, Some(usize::MAX))]
+            .into_iter()
+            .map(|(degree, cap)| {
+                StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                    degree,
+                    params.clone(),
+                    StirOptions {
+                        max_log_final_poly_len: cap,
+                    },
+                )
+            })
+            .collect();
+        let config_refs: Vec<_> = configs.iter().collect();
+        assert_eq!(
+            configs.iter().map(|c| c.num_rounds()).collect::<Vec<_>>(),
+            vec![1, 0]
+        );
+        let mut rng = seeded_rng();
+        let polys: Vec<Vec<EF>> = [8, 6]
+            .map(|degree| (0..1 << degree).map(|_| rng.random()).collect())
+            .into();
+        let mut p_ch = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys.clone(), &dft, &mut p_ch);
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+        let mut v_ch = challenger.clone();
+        verify_stir_multi(&config_refs, &proofs, &mut v_ch).unwrap();
+        assert_eq!(
+            p_ch.sample_algebra_element::<EF>(),
+            v_ch.sample_algebra_element::<EF>()
+        );
+
+        let codewords: Vec<_> = configs
+            .iter()
+            .zip(polys)
+            .map(|(config, poly)| {
+                codeword_from_coeffs(&dft, poly, F::GENERATOR, config.log_starting_domain_size())
+            })
+            .collect();
+        let mut base = challenger;
+        for codeword in &codewords {
+            base.observe_algebra_slice(codeword);
+        }
+        let mut p_ch = base.clone();
+        let results = prove_stir_multi_from_external_codewords(
+            &config_refs,
+            codewords.clone(),
+            &dft,
+            &mut p_ch,
+        );
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+        let sources: Vec<_> = configs
+            .iter()
+            .zip(codewords)
+            .map(|(config, codeword)| {
+                let arity = 1 << config.log_starting_folding_factor;
+                let height = codeword.len() / arity;
+                external_fiber_source(codeword, arity, height)
+            })
+            .collect();
+        let outputs = verify_stir_multi_with_external_initial::<F, EF, MyMmcs, Challenger, (), _>(
+            &config_refs,
+            &proofs,
+            &mut base,
+            sources,
+        )
+        .unwrap();
+        assert_eq!(
+            p_ch.sample_algebra_element::<EF>(),
+            base.sample_algebra_element::<EF>()
+        );
+        for ((_, first), output) in results.iter().zip(outputs) {
+            assert_eq!(first.draws, output.first_round_draws);
+            assert_eq!(first.unique_sorted, output.first_round_indices);
         }
     }
 

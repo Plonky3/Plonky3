@@ -57,7 +57,9 @@ mod soundness;
 pub mod utils;
 pub mod verifier;
 
-pub use config::{Stage, StirConfig, StirConfigError, StirParameters, StirRoundConfig};
+pub use config::{
+    Stage, StirConfig, StirConfigError, StirOptions, StirParameters, StirRoundConfig,
+};
 pub use error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, StirError};
 pub use p3_security::whir::SecurityAssumption;
 pub use pcs::{DEFAULT_MAX_LOG_HEIGHT_SPREAD, StirCommitment, TwoAdicStirPcs};

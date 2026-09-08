@@ -86,7 +86,7 @@ use serde::{Deserialize, Serialize};
 use spin::RwLock;
 use tracing::instrument;
 
-use crate::config::{StirConfig, StirConfigError, StirParameters};
+use crate::config::{StirConfig, StirConfigError, StirOptions, StirParameters};
 use crate::error::{ProofShapeError, StirError};
 use crate::proof::StirProof;
 use crate::prover::prove_stir_multi_from_codewords;
@@ -313,6 +313,7 @@ pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> 
     dft: Dft,
     input_mmcs: InputMmcs,
     stir: StirParameters<StirMmcs>,
+    options: StirOptions,
     /// Maximum `h_max - h_min`, in octaves, among the native heights sharing one LDE domain.
     ///
     /// `0` puts every distinct native height on its own domain, so `Combine` never runs and
@@ -337,9 +338,25 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
             dft,
             input_mmcs,
             stir,
+            options: StirOptions::default(),
             max_log_height_spread: DEFAULT_MAX_LOG_HEIGHT_SPREAD,
             config_cache: Arc::new(RwLock::new(alloc::collections::BTreeMap::new())),
         }
+    }
+
+    /// Set the STIR prover/proof-size tradeoffs. Both prover and verifier must agree on
+    /// these options; they are not carried in the proof. Cached schedules are reset so
+    /// clones configured with other options retain their own derivations.
+    #[must_use]
+    pub fn with_options(mut self, options: StirOptions) -> Self {
+        self.options = options;
+        self.config_cache = Arc::new(RwLock::new(alloc::collections::BTreeMap::new()));
+        self
+    }
+
+    /// Options used to derive this PCS instance's STIR schedules.
+    pub const fn options(&self) -> StirOptions {
+        self.options
     }
 
     /// Override how wide a native-height spread may share one LDE domain.
@@ -449,13 +466,16 @@ where
         // derivation is idempotent, so a racing duplicate is harmless: the loser's `Arc` is
         // simply dropped in favour of whichever landed first.
         let config = Arc::new(match combine {
-            Some((num_classes, ell)) => StirConfig::try_new_with_combine(
+            Some((num_classes, ell)) => StirConfig::try_new_with_combine_and_options(
                 log_stir_degree,
                 self.stir.clone(),
                 num_classes,
                 ell,
+                self.options,
             )?,
-            None => StirConfig::try_new(log_stir_degree, self.stir.clone())?,
+            None => {
+                StirConfig::try_new_with_options(log_stir_degree, self.stir.clone(), self.options)?
+            }
         });
 
         let mut cache = self.config_cache.write();
@@ -2530,6 +2550,97 @@ mod tests {
 
         // One entry per distinct shape, so nothing aliased and nothing was inserted twice.
         assert_eq!(pcs.config_cache.read().len(), shapes.len());
+    }
+
+    #[test]
+    fn early_stop_options_keep_warm_clone_caches_and_proofs_independent() {
+        let (original, params) = test_pcs_and_params();
+        let shapes = [(8, None), (8, Some((2, 194)))];
+        for (degree, combine) in shapes {
+            assert_eq!(
+                original
+                    .get_or_compute_stir_config(degree, combine)
+                    .num_rounds(),
+                3
+            );
+        }
+        let options = crate::StirOptions {
+            max_log_final_poly_len: Some(4),
+        };
+        let early = original.clone().with_options(options);
+        assert_eq!(original.options(), crate::StirOptions::default());
+        assert_eq!(early.options(), options);
+        for (degree, combine) in shapes {
+            let expected = match combine {
+                Some((classes, ell)) => TestConfig::new_with_combine_and_options(
+                    degree,
+                    params.clone(),
+                    classes,
+                    ell,
+                    options,
+                ),
+                None => TestConfig::new_with_options(degree, params.clone(), options),
+            };
+            let actual = early.get_or_compute_stir_config(degree, combine);
+            assert_eq!(actual.num_rounds(), 1);
+            assert_eq!(
+                schedule_fingerprint(&actual),
+                schedule_fingerprint(&expected)
+            );
+            assert_eq!(
+                original
+                    .get_or_compute_stir_config(degree, combine)
+                    .num_rounds(),
+                3
+            );
+        }
+
+        // Exercise ordinary buckets separately, then merge height classes through Combine.
+        for spread in [0, 2] {
+            for pcs in [original.clone(), early.clone()] {
+                let pcs = pcs.with_max_log_height_spread(spread);
+                let mut rng = rand::rngs::SmallRng::seed_from_u64(314);
+                let perm = TestPerm::new_from_rng_128(&mut rng);
+                let mut base = TestChallenger::new(perm);
+                let domains: Vec<_> = [8, 6, 4]
+                    .map(|log_h| {
+                        <TestPcs as Pcs<EF, TestChallenger>>::natural_domain_for_degree(
+                            &pcs,
+                            1 << log_h,
+                        )
+                    })
+                    .into_iter()
+                    .collect();
+                let inputs: Vec<_> = domains
+                    .iter()
+                    .zip([8, 6, 4])
+                    .map(|(&domain, log_h)| {
+                        (
+                            domain,
+                            RowMajorMatrix::<TestVal>::rand(&mut rng, 1 << log_h, 2),
+                        )
+                    })
+                    .collect();
+                let (commit, data) = <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, inputs);
+                base.observe(commit.clone());
+                let zeta: EF = base.sample_algebra_element();
+                let (values, proof) = <TestPcs as Pcs<EF, TestChallenger>>::open(
+                    &pcs,
+                    vec![(&data, vec![vec![zeta]; 3])],
+                    &mut base.clone(),
+                );
+                let claims = vec![(
+                    commit,
+                    domains
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, domain)| (domain, vec![(zeta, values[0][i][0].clone())]))
+                        .collect(),
+                )];
+                <TestPcs as Pcs<EF, TestChallenger>>::verify(&pcs, claims, &proof, &mut base)
+                    .expect("ordinary and Combine proofs verify under their own options");
+            }
+        }
     }
 
     /// A prover that commits a perfectly low-degree codeword which is *not* the reduced

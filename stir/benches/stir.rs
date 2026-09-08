@@ -25,7 +25,7 @@ use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_stir::SecurityAssumption;
-use p3_stir::config::{StirConfig, StirParameters};
+use p3_stir::config::{StirConfig, StirOptions, StirParameters};
 use p3_stir::prover::{codeword_from_coeffs, prove_stir};
 use p3_stir::verifier::verify_stir;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -214,6 +214,52 @@ fn bench_stir_koalabear_fold3(c: &mut Criterion) {
     );
 }
 
+/// Measure optional proof-size tradeoffs at degree 2^18, including serialized bytes.
+fn bench_options(c: &mut Criterion) {
+    let (params, dft, challenger) = make_stir_env(2);
+    let poly = random_poly::<Challenge>(18);
+    let mut group = c.benchmark_group("stir_options");
+    group.sample_size(10);
+    for (name, options) in [
+        ("default", StirOptions::default()),
+        (
+            "final64",
+            StirOptions {
+                max_log_final_poly_len: Some(6),
+            },
+        ),
+    ] {
+        let config = StirConfig::<Val, Challenge, MyMmcs, Challenger>::new_with_options(
+            18,
+            params.clone(),
+            options,
+        );
+        let (proof, _) = prove_stir(&config, poly.clone(), &dft, &mut challenger.clone());
+        verify_stir(&config, &proof, &mut challenger.clone()).unwrap();
+        eprintln!(
+            "stir_options/{name}: rounds={}, final_coeffs={}, proof_bytes={}",
+            config.num_rounds(),
+            proof.final_polynomial.len(),
+            postcard::to_allocvec(&proof).unwrap().len()
+        );
+        group.bench_function(BenchmarkId::new("prove", name), |b| {
+            b.iter_batched(
+                || (challenger.clone(), poly.clone()),
+                |(mut ch, poly)| prove_stir(&config, poly, &dft, &mut ch),
+                BatchSize::LargeInput,
+            );
+        });
+        group.bench_function(BenchmarkId::new("verify", name), |b| {
+            b.iter_batched(
+                || challenger.clone(),
+                |mut ch| verify_stir(&config, &proof, &mut ch).unwrap(),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
 /// Compare degree-aware dispatch with the full padded DFT on the same build and inputs.
 fn bench_codeword(c: &mut Criterion) {
     let mut group = c.benchmark_group("stir_codeword");
@@ -252,5 +298,6 @@ criterion_group!(
     bench_stir_koalabear_fold2,
     bench_stir_koalabear_fold3,
     bench_codeword,
+    bench_options,
 );
 criterion_main!(benches);
