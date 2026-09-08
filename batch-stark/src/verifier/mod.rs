@@ -7,7 +7,7 @@ pub use data::VerifierData;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_air::{Air, BaseAir};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace};
+use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace, UnivariateStarkPcs};
 use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField};
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{
@@ -75,7 +75,7 @@ pub type OpeningArgumentWithQuotientDomains<SC> = (
 /// - per-instance counts agreeing across `airs`, opened values, public values, degree bits,
 ///   lookup terminals and lookups ([`InvalidProofShapeError::InstanceCountMismatch`]);
 /// - presence of the ZK randomization commitment and its per-instance opened values matching
-///   [`Pcs::ZK`], and each random opening's dimension;
+///   [`UnivariateStarkPcs::ZK`], and each random opening's dimension;
 /// - public-value counts, trace-width agreement (local and next) and the
 ///   `main_next_row_columns` presence rule;
 /// - quotient-chunk counts and per-chunk dimensions;
@@ -332,7 +332,10 @@ where
         coms_to_verify.push((permutation_commit, permutation_round));
     }
 
-    Ok((coms_to_verify, quotient_domains))
+    Ok((
+        coms_to_verify.into_iter().map(Into::into).collect(),
+        quotient_domains,
+    ))
 }
 
 #[instrument(skip_all)]

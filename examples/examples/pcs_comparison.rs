@@ -242,7 +242,13 @@ where
 
     let t = Instant::now();
     let opening_points = domains.iter().map(|_| vec![zeta]).collect();
-    let (openings, proof) = pcs.open(vec![(&prover_data, opening_points)], &mut prover_challenger);
+    let (openings, proof) = pcs.open(
+        vec![p3_commit::OpeningRequest {
+            prover_data: &prover_data,
+            points: opening_points,
+        }],
+        &mut prover_challenger,
+    );
     let open_ms = t.elapsed().as_millis();
     let values: Vec<_> = openings[0]
         .iter()
@@ -264,7 +270,7 @@ where
     let verify_us = median_verify_us(|| {
         let mut challenger = verifier_challenger.clone();
         pcs.verify(
-            vec![(commit.clone(), matrices_with_openings.clone())],
+            vec![(commit.clone(), matrices_with_openings.clone()).into()],
             &proof,
             &mut challenger,
         )

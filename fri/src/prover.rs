@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_commit::{Mmcs, OpeningRequest};
 use p3_dft::{Radix2DFTSmallBatch, TwoAdicSubgroupDft};
 use p3_field::{ExtensionField, Field, PrimeField64, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
@@ -453,18 +453,22 @@ where
     // as appropriate.
     prover_data_with_opening_points
         .iter()
-        .map(|(data, _)| {
-            let log_max_height = log2_strict_usize(mmcs.get_max_height(data));
-            let bits_reduced = log_global_max_height - log_max_height;
-            // If a matrix is smaller than global max height, we roll it into
-            // fri in a later round.
-            let reduced_indices: Vec<usize> =
-                indices.iter().map(|&index| index >> bits_reduced).collect();
-            let (opened_values, opening_proof) = mmcs.open_multi_batch(&reduced_indices, data);
-            BatchMultiOpening {
-                opened_values,
-                opening_proof,
-            }
-        })
+        .map(
+            |OpeningRequest {
+                 prover_data: data, ..
+             }| {
+                let log_max_height = log2_strict_usize(mmcs.get_max_height(data));
+                let bits_reduced = log_global_max_height - log_max_height;
+                // If a matrix is smaller than global max height, we roll it into
+                // fri in a later round.
+                let reduced_indices: Vec<usize> =
+                    indices.iter().map(|&index| index >> bits_reduced).collect();
+                let (opened_values, opening_proof) = mmcs.open_multi_batch(&reduced_indices, data);
+                BatchMultiOpening {
+                    opened_values,
+                    opening_proof,
+                }
+            },
+        )
         .collect()
 }

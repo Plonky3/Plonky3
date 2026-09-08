@@ -622,7 +622,7 @@ where
     let t = Instant::now();
     let (openings, proof) = <TwoAdicFriPcs<F, Dft, InMmcs, ChMmcs> as Pcs<EF, Ch>>::open(
         &rig.pcs,
-        data_and_points,
+        data_and_points.into_iter().map(Into::into).collect(),
         &mut prover_challenger,
     );
     let open_ms = t.elapsed().as_millis();
@@ -669,7 +669,7 @@ where
     let t = Instant::now();
     <TwoAdicFriPcs<F, Dft, InMmcs, ChMmcs> as Pcs<EF, Ch>>::verify(
         &rig.pcs,
-        claims,
+        claims.into_iter().map(Into::into).collect(),
         proof,
         &mut verifier_challenger,
     )

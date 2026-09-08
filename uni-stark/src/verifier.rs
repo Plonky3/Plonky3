@@ -7,7 +7,7 @@ use itertools::Itertools;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
 use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
@@ -531,8 +531,12 @@ where
         ));
     }
 
-    pcs.verify(coms_to_verify, opening_proof, &mut challenger)
-        .map_err(VerificationError::InvalidOpeningArgument)?;
+    pcs.verify(
+        coms_to_verify.into_iter().map(Into::into).collect(),
+        opening_proof,
+        &mut challenger,
+    )
+    .map_err(VerificationError::InvalidOpeningArgument)?;
 
     let quotient = recompose_quotient_from_chunks::<SC>(
         &quotient_chunks_domains,

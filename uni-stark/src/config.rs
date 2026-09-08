@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
 use p3_field::{ExtensionField, Field};
 
 pub type PcsError<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
@@ -43,7 +43,7 @@ pub type PackedChallenge<SC> =
 
 pub trait StarkGenericConfig: Clone {
     /// The [`Pcs`] implementation used to commit to trace polynomials.
-    type Pcs: Pcs<Self::Challenge, Self::Challenger>;
+    type Pcs: UnivariateStarkPcs<Self::Challenge, Self::Challenger>;
 
     /// The [`ExtensionField`] from which most random challenges are drawn.
     type Challenge: ExtensionField<Val<Self>>;
@@ -161,7 +161,7 @@ impl<Pcs: Clone, Challenge: Clone, Challenger: Clone> StarkConfig<Pcs, Challenge
 impl<Pcs, Challenge, Challenger> StarkGenericConfig for StarkConfig<Pcs, Challenge, Challenger>
 where
     Challenge: ExtensionField<<Pcs::Domain as PolynomialSpace>::Val> + Clone,
-    Pcs: p3_commit::Pcs<Challenge, Challenger> + Clone,
+    Pcs: p3_commit::UnivariateStarkPcs<Challenge, Challenger> + Clone,
     Challenger: FieldChallenger<<Pcs::Domain as PolynomialSpace>::Val>
         + CanObserve<Pcs::Commitment>
         + CanSample<Challenge>
@@ -185,5 +185,27 @@ where
 
     fn ood_proof_of_work_bits(&self) -> usize {
         self.ood_proof_of_work_bits
+    }
+}
+
+/// Commitment positions in the univariate STARK opening batch.
+///
+/// A hiding proof prepends a randomization commitment. The optional preprocessed
+/// commitment follows trace and quotient; batch STARK appends lookup commitments.
+#[derive(Clone, Copy, Debug)]
+pub struct StarkOpeningLayout {
+    pub trace: usize,
+    pub quotient: usize,
+    pub preprocessed: usize,
+}
+
+impl StarkOpeningLayout {
+    pub const fn new(is_zk: bool) -> Self {
+        let trace = is_zk as usize;
+        Self {
+            trace,
+            quotient: trace + 1,
+            preprocessed: trace + 2,
+        }
     }
 }

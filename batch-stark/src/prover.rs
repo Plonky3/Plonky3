@@ -9,7 +9,7 @@ use p3_air::DebugConstraintBuilder;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_air::{Air, RowWindow};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
 use p3_field::{
     Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
     PrimeField,
@@ -500,6 +500,7 @@ where
         transcript.grind_and_sample_zeta(config.ood_proof_of_work_bits());
 
     // Build the opening rounds and produce the FRI opening proof.
+    let opening_layout = p3_uni_stark::StarkOpeningLayout::new(SC::Pcs::ZK);
     let (opened_values, opening_proof) = {
         let mut rounds = Vec::new();
 
@@ -583,9 +584,12 @@ where
         }
 
         pcs.open_with_preprocessing(
-            rounds,
+            rounds.into_iter().map(Into::into).collect(),
             &mut transcript.challenger,
-            common.preprocessed.is_some(),
+            common
+                .preprocessed
+                .as_ref()
+                .map(|_| opening_layout.preprocessed),
         )
     };
 
@@ -593,13 +597,13 @@ where
 
     // Permutation round follows preprocessed (if present), else takes its slot.
     let permutation_idx = if common.preprocessed.is_some() {
-        SC::Pcs::PREPROCESSED_TRACE_IDX + 1
+        opening_layout.preprocessed + 1
     } else {
-        SC::Pcs::PREPROCESSED_TRACE_IDX
+        opening_layout.preprocessed
     };
 
     // Main trace opened values: one entry per instance.
-    let trace_values_for_mats = &opened_values[SC::Pcs::TRACE_IDX];
+    let trace_values_for_mats = &opened_values[opening_layout.trace];
     assert_eq!(trace_values_for_mats.len(), n_instances);
 
     let mut per_instance = Vec::with_capacity(n_instances);
@@ -608,7 +612,7 @@ where
     let preprocessed_openings = common
         .preprocessed
         .as_ref()
-        .map(|_| &opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX]);
+        .map(|_| &opened_values[opening_layout.preprocessed]);
 
     // Iterator over permutation opened values (one per instance with lookups).
     let is_lookup = permutation_commit_and_data.is_some();
@@ -620,7 +624,7 @@ where
     let mut permutation_values_for_mats = permutation_values_for_mats.iter();
 
     // Iterate over quotient chunk ranges to assemble per-instance opened values.
-    let mut quotient_openings_iter = opened_values[SC::Pcs::QUOTIENT_IDX].iter();
+    let mut quotient_openings_iter = opened_values[opening_layout.quotient].iter();
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
         // Optional randomization polynomial opening.
         let random = if opt_r_data.is_some() {

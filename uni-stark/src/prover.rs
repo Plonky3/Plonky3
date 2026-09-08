@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_symbolic_constraints};
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use p3_field::Field;
 use p3_field::{PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
@@ -378,6 +378,7 @@ where
     let is_random = opt_r_data.is_some();
     let main_next = !air.main_next_row_columns().is_empty();
     let pre_next = !air.preprocessed_next_row_columns().is_empty();
+    let opening_layout = crate::StarkOpeningLayout::new(SC::Pcs::ZK);
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
         let round1_points = if main_next {
@@ -400,12 +401,17 @@ where
             .into_iter()
             .chain([round1, round2])
             .chain(round3)
+            .map(Into::into)
             .collect();
 
-        pcs.open_with_preprocessing(rounds, &mut challenger, preprocessed_data_ref.is_some())
+        pcs.open_with_preprocessing(
+            rounds,
+            &mut challenger,
+            preprocessed_data_ref.map(|_| opening_layout.preprocessed),
+        )
     });
-    let trace_idx = SC::Pcs::TRACE_IDX;
-    let quotient_idx = SC::Pcs::QUOTIENT_IDX;
+    let trace_idx = opening_layout.trace;
+    let quotient_idx = opening_layout.quotient;
     let trace_local = opened_values[trace_idx][0][0].clone();
     let trace_next = if main_next {
         Some(opened_values[trace_idx][0][1].clone())
@@ -422,9 +428,9 @@ where
         None
     };
     let (preprocessed_local, preprocessed_next) = if preprocessed_width > 0 {
-        let local = Some(opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX][0][0].clone());
+        let local = Some(opened_values[opening_layout.preprocessed][0][0].clone());
         let next = if pre_next {
-            Some(opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX][0][1].clone())
+            Some(opened_values[opening_layout.preprocessed][0][1].clone())
         } else {
             None
         };

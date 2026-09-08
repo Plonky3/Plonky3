@@ -102,7 +102,10 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize, polynomial_lo
         let open_data = vec![(&prover_data, vec![vec![zeta]; num_evaluations])]; // open every chunk at zeta
 
         // Open all polynomials at zeta and produce the opening proof.
-        let (opened_values, opening_proof) = pcs.open(open_data, &mut challenger);
+        let (opened_values, opening_proof) = pcs.open(
+            open_data.into_iter().map(Into::into).collect(),
+            &mut challenger,
+        );
 
         // Return the commitment, opened values, opening proof and challenger.
         // The first three of these are always passed to the verifier. The
@@ -144,7 +147,10 @@ fn do_test_fri_ldt<R: Rng>(rng: &mut R, log_final_poly_len: usize, polynomial_lo
 
         // Verify the opening proof.
         let verification = pcs.verify(
-            commitments_with_opening_points,
+            commitments_with_opening_points
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             &opening_proof,
             &mut challenger,
         );
