@@ -10,6 +10,10 @@ keywords.workspace = true
 categories.workspace = true
 publish = false
 
+[package.metadata.plonky3]
+# This package contains host executables rather than an embedded library.
+embedded = false
+
 [dependencies]
 p3-air.workspace = true
 p3-blake3-air.workspace = true

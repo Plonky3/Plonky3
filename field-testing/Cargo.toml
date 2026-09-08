@@ -13,6 +13,10 @@ categories.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 criterion.workspace = true
 
+[package.metadata.plonky3]
+# Test helpers rely on host facilities and are not part of embedded coverage.
+embedded = false
+
 [dependencies]
 p3-dft.workspace = true
 p3-field.workspace = true
