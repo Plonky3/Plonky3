@@ -1,9 +1,8 @@
 //! The lookup protocol trait.
 
 use p3_air::{Air, PermutationAirBuilder};
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_uni_stark::{StarkGenericConfig, Val};
 
 use crate::types::{Lookup, LookupError, LookupTerminal};
 
@@ -88,17 +87,14 @@ pub trait LookupProtocol {
     /// - A trace matrix with the accumulator at column `0` and one fraction
     ///   column per declared lookup.
     /// - The AIR's terminal: `Some(_)` when any lookup is declared, `None` otherwise.
-    fn generate_permutation<SC: StarkGenericConfig>(
+    fn generate_permutation<F: Field, EF: ExtensionField<F>>(
         &self,
-        main: &RowMajorMatrix<Val<SC>>,
-        preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
-        public_values: &[Val<SC>],
-        lookups: &[Lookup<Val<SC>>],
-        challenges: &[SC::Challenge],
-    ) -> (
-        RowMajorMatrix<SC::Challenge>,
-        Option<LookupTerminal<SC::Challenge>>,
-    );
+        main: &RowMajorMatrix<F>,
+        preprocessed: &Option<RowMajorMatrix<F>>,
+        public_values: &[F],
+        lookups: &[Lookup<F>],
+        challenges: &[EF],
+    ) -> (RowMajorMatrix<EF>, Option<LookupTerminal<EF>>);
 
     /// Verify the cross-AIR sum of committed terminals is zero.
     ///

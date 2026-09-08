@@ -3,36 +3,18 @@ use std::sync::Arc;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
 use p3_air::{AirBuilder, WindowAccess};
-use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::DuplexChallenger;
-use p3_commit::ExtensionMmcs;
-use p3_dft::Radix2DitParallel;
+use p3_baby_bear::BabyBear;
+use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::TwoAdicFriPcs;
 use p3_lookup::LookupProtocol;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::traits::{Kind, Lookup};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::MerkleTreeMmcs;
-use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::StarkConfig;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
-type Perm = Poseidon2BabyBear<16>;
-type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
-type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-type ValMmcs =
-    MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress, 2, 8>;
-type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
-type Challenger = DuplexChallenger<F, Perm, 16, 8>;
-type Dft = Radix2DitParallel<F>;
-type MyPcs = TwoAdicFriPcs<F, Dft, ValMmcs, ChallengeMmcs>;
-type SC = StarkConfig<MyPcs, EF, Challenger>;
-
 /// Per-lookup column stride: `tuple_size` read keys, `tuple_size` provide keys, one selector.
 const fn cols_per_lookup(tuple_size: usize) -> usize {
     2 * tuple_size + 1
@@ -194,7 +176,7 @@ fn bench_generate_permutation(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    gadget.generate_permutation::<SC>(
+                    gadget.generate_permutation::<F, EF>(
                         &main_trace,
                         &None,
                         &[],
@@ -323,7 +305,7 @@ fn bench_exclusive_vs_additive(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    gadget.generate_permutation::<SC>(
+                    gadget.generate_permutation::<F, EF>(
                         &trace,
                         &None,
                         &[],
@@ -340,7 +322,7 @@ fn bench_exclusive_vs_additive(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    gadget.generate_permutation::<SC>(
+                    gadget.generate_permutation::<F, EF>(
                         &trace,
                         &None,
                         &[],

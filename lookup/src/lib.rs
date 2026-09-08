@@ -8,7 +8,6 @@ mod bus;
 mod challenges;
 mod count;
 pub mod debug_util;
-pub mod folder;
 pub mod logup;
 pub mod protocol;
 pub mod symbolic;

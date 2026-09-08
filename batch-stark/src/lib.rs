@@ -8,6 +8,7 @@ mod check_constraints;
 pub mod common;
 pub mod config;
 pub mod error;
+pub mod folder;
 pub mod proof;
 pub mod prover;
 pub mod security;
