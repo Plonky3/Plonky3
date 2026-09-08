@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
 use p3_field::{Algebra, BasedVectorSpace};
 use p3_lookup::{InteractionSymbolicBuilder, LogUpGadget, Lookups};
 use p3_matrix::Matrix;

@@ -1,7 +1,7 @@
 use itertools::{Itertools, izip};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger};
-use p3_commit::{ExtensionMmcs, Pcs, PolynomialSpace};
+use p3_commit::{ExtensionMmcs, Pcs, PolynomialSpace, UnivariateStarkPcs};
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{ExtensionField, Field};
@@ -65,7 +65,11 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
         .iter()
         .map(|log_degrees| vec![vec![zeta]; log_degrees.len()])
         .collect_vec();
-    let data_and_points = data_by_round.iter().zip(points_by_round).collect();
+    let data_and_points = data_by_round
+        .iter()
+        .zip(points_by_round)
+        .map(Into::into)
+        .collect();
     let (opening_by_round, proof) = pcs.open(data_and_points, &mut p_challenger);
     assert_eq!(opening_by_round.len(), num_rounds);
 
@@ -91,8 +95,15 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
     .collect_vec();
     assert_eq!(commits_and_claims_by_round.len(), num_rounds);
 
-    pcs.verify(commits_and_claims_by_round, &proof, &mut v_challenger)
-        .unwrap();
+    pcs.verify(
+        commits_and_claims_by_round
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        &proof,
+        &mut v_challenger,
+    )
+    .unwrap();
 }
 
 // Set it up so we create tests inside a module for each pcs, so we get nice error reports
@@ -242,7 +253,7 @@ mod babybear_fri_pcs {
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace.clone())]);
 
         let disjoint_domain = domain.create_disjoint_domain(degree);
-        let evals = <MyPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+        let evals = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_evaluations_on_domain(
             &pcs,
             &data,
             0,

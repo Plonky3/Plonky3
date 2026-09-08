@@ -128,7 +128,10 @@ fn bench_open(c: &mut Criterion) {
                 |(mut challenger, points)| {
                     <MyPcs as Pcs<Challenge, Challenger>>::open(
                         &pcs,
-                        vec![(&data, points)],
+                        vec![p3_commit::OpeningRequest {
+                            prover_data: &data,
+                            points,
+                        }],
                         &mut challenger,
                     )
                 },
@@ -155,7 +158,10 @@ fn bench_verify(c: &mut Criterion) {
         let points: Vec<Vec<Challenge>> = inputs.iter().map(|_| vec![zeta]).collect();
         let (opened, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
-            vec![(&data, points)],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points,
+            }],
             &mut p_challenger,
         );
 
@@ -178,7 +184,7 @@ fn bench_verify(c: &mut Criterion) {
                 |mut challenger| {
                     <MyPcs as Pcs<Challenge, Challenger>>::verify(
                         &pcs,
-                        vec![(commit.clone(), claims.clone())],
+                        vec![(commit.clone(), claims.clone()).into()],
                         &proof,
                         &mut challenger,
                     )

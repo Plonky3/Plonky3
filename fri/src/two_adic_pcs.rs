@@ -20,7 +20,10 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, OpenedValues, Pcs, PeriodicLdeTable};
+use p3_commit::{
+    CommitmentOpening, MatrixOpening, Mmcs, OpenedValues, OpeningRequest, Pcs, PeriodicLdeTable,
+    PointOpening, UnivariateStarkPcs,
+};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
@@ -76,15 +79,7 @@ impl<Val, Dft, InputMmcs, FriMmcs> TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> {
 
 /// The Prover Data associated to a commitment to a collection of matrices
 /// and a list of points to open each matrix at.
-pub type ProverDataWithOpeningPoints<'a, EF, ProverData> = (
-    // The matrices and auxiliary prover data
-    &'a ProverData,
-    // for each matrix,
-    Vec<
-        // points to open
-        Vec<EF>,
-    >,
-);
+pub type ProverDataWithOpeningPoints<'a, EF, ProverData> = OpeningRequest<'a, ProverData, EF>;
 
 // Re-exported so `p3_fri::CommitmentWithOpeningPoints` keeps naming the shape this PCS
 // verifies against; it is defined in `p3-commit` alongside `Pcs` so crates that build an
@@ -298,10 +293,8 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
-    type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchMultiOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
-    const ZK: bool = false;
 
     /// Get the unique subgroup `H` of size `|H| = degree`.
     ///
@@ -309,10 +302,6 @@ where
     /// This function will panic if `degree` is not a power of 2 or `degree > (1 << Val::TWO_ADICITY)`.
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
-    }
-
-    fn log_max_lde_height(&self) -> usize {
-        Val::TWO_ADICITY
     }
 
     /// Commit to a collection of evaluation matrices.
@@ -349,86 +338,6 @@ where
         self.mmcs.commit(ldes)
     }
 
-    fn get_quotient_ldes(
-        &self,
-        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
-        _num_chunks: usize,
-    ) -> Vec<RowMajorMatrix<Val>> {
-        evaluations
-            .into_iter()
-            .map(|(domain, evals)| {
-                assert_eq!(domain.size(), evals.height());
-                // coset_lde_batch converts from evaluations over `xH` to evaluations over `shift * x * K`.
-                // Hence, letting `shift = g/x` the output will be evaluations over `gK` as desired.
-                // When `x = g`, we could just use the standard LDE but currently this doesn't seem
-                // to give a meaningful performance boost.
-                let shift = Val::GENERATOR / domain.shift();
-                // Compute the LDE with blowup factor fri.log_blowup.
-                // We bit reverse as this is required by our implementation of the FRI protocol.
-                self.dft
-                    .coset_lde_batch(evals, self.fri.log_blowup, shift)
-                    .bit_reverse_rows()
-                    .to_row_major_matrix()
-            })
-            .collect()
-    }
-
-    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
-        // Opening assumes every committed matrix is an LDE at `self.fri.log_blowup` and recovers the
-        // underlying polynomial degree as `height >> log_blowup`. A matrix shorter than the blowup
-        // factor would silently yield a zero-height degree and a malformed proof, so reject it here.
-        let min_height = 1 << self.fri.log_blowup;
-        for lde in &ldes {
-            assert!(
-                lde.height() >= min_height,
-                "committed LDE height {} is smaller than the blowup factor {min_height}",
-                lde.height()
-            );
-        }
-        self.mmcs.commit(ldes)
-    }
-
-    /// Given the evaluations on a domain `gH`, return the evaluations on a different domain `g'K`.
-    ///
-    /// Arguments:
-    /// - `prover_data`: The prover data containing all committed evaluation matrices.
-    /// - `idx`: The index of the matrix containing the evaluations we want. These evaluations
-    ///   are assumed to be over the coset `gH` where `g = Val::GENERATOR`.
-    /// - `domain`: The domain `g'K` on which to get evaluations on.
-    ///
-    /// When `g' = g` (i.e. `Val::GENERATOR`) and `K` is a subgroup of `H`, this is a simple
-    /// truncation of the bit-reversed LDE. Otherwise, we recover the polynomial coefficients
-    /// from the committed LDE and re-evaluate on the requested domain.
-    fn get_evaluations_on_domain<'a>(
-        &self,
-        prover_data: &'a Self::ProverData,
-        idx: usize,
-        domain: Self::Domain,
-    ) -> Self::EvaluationsOnDomain<'a> {
-        let lde = self.mmcs.get_matrices(prover_data)[idx];
-        if domain.shift() == Val::GENERATOR && lde.height() >= domain.size() {
-            return lde.split_rows(domain.size()).0.as_cow().bit_reverse_rows();
-        }
-
-        // The committed LDE contains bit-reversed evaluations over `gH`.
-        // Un-bit-reverse, coset iDFT to recover coefficients, truncate to
-        // the original polynomial degree, then coset DFT onto the target domain.
-        let poly_height = lde.height() >> self.fri.log_blowup;
-        let lde_mat = lde.as_view().bit_reverse_rows().to_row_major_matrix();
-        let mut coeffs = self.dft.coset_idft_batch(lde_mat, Val::GENERATOR);
-        let width = coeffs.width();
-        coeffs.values.truncate(poly_height * width);
-        coeffs.values.resize(domain.size() * width, Val::ZERO);
-        let result = self
-            .dft
-            .coset_dft_batch(coeffs, domain.shift())
-            .bit_reverse_rows()
-            .to_row_major_matrix();
-        let result_width = result.width();
-
-        RowMajorMatrixCow::new(Cow::Owned(result.values), result_width).bit_reverse_rows()
-    }
-
     /// Open a batch of matrices at a collection of points.
     ///
     /// Returns the opened values along with a proof.
@@ -439,15 +348,7 @@ where
     fn open(
         &self,
         // For each multi-matrix commitment,
-        commitment_data_with_opening_points: Vec<(
-            // The matrices and auxiliary prover data
-            &Self::ProverData,
-            // for each matrix,
-            Vec<
-                // points to open
-                Vec<Challenge>,
-            >,
-        )>,
+        commitment_data_with_opening_points: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         /*
@@ -491,20 +392,25 @@ where
         // We extract those matrices to be able to refer to them directly.
         let mats_and_points = commitment_data_with_opening_points
             .iter()
-            .map(|(data, points)| {
-                let mats = self
-                    .mmcs
-                    .get_matrices(data)
-                    .into_iter()
-                    .map(|m| m.as_view())
-                    .collect_vec();
-                debug_assert_eq!(
-                    mats.len(),
-                    points.len(),
-                    "each matrix should have a corresponding set of evaluation points"
-                );
-                (mats, points)
-            })
+            .map(
+                |OpeningRequest {
+                     prover_data: data,
+                     points,
+                 }| {
+                    let mats = self
+                        .mmcs
+                        .get_matrices(data)
+                        .into_iter()
+                        .map(|m| m.as_view())
+                        .collect_vec();
+                    debug_assert_eq!(
+                        mats.len(),
+                        points.len(),
+                        "each matrix should have a corresponding set of evaluation points"
+                    );
+                    (mats, points)
+                },
+            )
             .collect_vec();
 
         // Find the maximum height and the maximum width of matrices in the batch.
@@ -734,16 +640,19 @@ where
         &self,
         // For each commitment:
         commitments_with_opening_points: Vec<
-            CommitmentWithOpeningPoints<Challenge, Self::Commitment, Self::Domain>,
+            CommitmentOpening<Challenge, Self::Commitment, Self::Domain>,
         >,
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         // Write all evaluations to challenger.
         // Need to ensure to do this in the same order as the prover.
-        for (_, round) in &commitments_with_opening_points {
-            for (_, mat) in round {
-                for (_, point) in mat {
+        for CommitmentOpening {
+            matrices: round, ..
+        } in &commitments_with_opening_points
+        {
+            for MatrixOpening { points: mat, .. } in round {
+                for PointOpening { values: point, .. } in mat {
                     challenger.observe_algebra_slice(point);
                 }
             }
@@ -761,6 +670,106 @@ where
         )?;
 
         Ok(())
+    }
+}
+
+impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> UnivariateStarkPcs<Challenge, Challenger>
+    for TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
+where
+    Val: TwoAdicField + PrimeField64,
+    Dft: TwoAdicSubgroupDft<Val>,
+    InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
+    FriMmcs: Mmcs<Challenge>,
+    Challenge: ExtensionField<Val>,
+    Challenger:
+        FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
+{
+    type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
+
+    const ZK: bool = false;
+
+    fn log_max_lde_height(&self) -> usize {
+        Val::TWO_ADICITY
+    }
+
+    fn get_quotient_ldes(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        _num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<Val>> {
+        evaluations
+            .into_iter()
+            .map(|(domain, evals)| {
+                assert_eq!(domain.size(), evals.height());
+                // coset_lde_batch converts from evaluations over `xH` to evaluations over `shift * x * K`.
+                // Hence, letting `shift = g/x` the output will be evaluations over `gK` as desired.
+                // When `x = g`, we could just use the standard LDE but currently this doesn't seem
+                // to give a meaningful performance boost.
+                let shift = Val::GENERATOR / domain.shift();
+                // Compute the LDE with blowup factor fri.log_blowup.
+                // We bit reverse as this is required by our implementation of the FRI protocol.
+                self.dft
+                    .coset_lde_batch(evals, self.fri.log_blowup, shift)
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
+            })
+            .collect()
+    }
+
+    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        // Opening assumes every committed matrix is an LDE at `self.fri.log_blowup` and recovers the
+        // underlying polynomial degree as `height >> log_blowup`. A matrix shorter than the blowup
+        // factor would silently yield a zero-height degree and a malformed proof, so reject it here.
+        let min_height = 1 << self.fri.log_blowup;
+        for lde in &ldes {
+            assert!(
+                lde.height() >= min_height,
+                "committed LDE height {} is smaller than the blowup factor {min_height}",
+                lde.height()
+            );
+        }
+        self.mmcs.commit(ldes)
+    }
+
+    /// Given the evaluations on a domain `gH`, return the evaluations on a different domain `g'K`.
+    ///
+    /// Arguments:
+    /// - `prover_data`: The prover data containing all committed evaluation matrices.
+    /// - `idx`: The index of the matrix containing the evaluations we want. These evaluations
+    ///   are assumed to be over the coset `gH` where `g = Val::GENERATOR`.
+    /// - `domain`: The domain `g'K` on which to get evaluations on.
+    ///
+    /// When `g' = g` (i.e. `Val::GENERATOR`) and `K` is a subgroup of `H`, this is a simple
+    /// truncation of the bit-reversed LDE. Otherwise, we recover the polynomial coefficients
+    /// from the committed LDE and re-evaluate on the requested domain.
+    fn get_evaluations_on_domain<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+        idx: usize,
+        domain: Self::Domain,
+    ) -> Self::EvaluationsOnDomain<'a> {
+        let lde = self.mmcs.get_matrices(prover_data)[idx];
+        if domain.shift() == Val::GENERATOR && lde.height() >= domain.size() {
+            return lde.split_rows(domain.size()).0.as_cow().bit_reverse_rows();
+        }
+
+        // The committed LDE contains bit-reversed evaluations over `gH`.
+        // Un-bit-reverse, coset iDFT to recover coefficients, truncate to
+        // the original polynomial degree, then coset DFT onto the target domain.
+        let poly_height = lde.height() >> self.fri.log_blowup;
+        let lde_mat = lde.as_view().bit_reverse_rows().to_row_major_matrix();
+        let mut coeffs = self.dft.coset_idft_batch(lde_mat, Val::GENERATOR);
+        let width = coeffs.width();
+        coeffs.values.truncate(poly_height * width);
+        coeffs.values.resize(domain.size() * width, Val::ZERO);
+        let result = self
+            .dft
+            .coset_dft_batch(coeffs, domain.shift())
+            .bit_reverse_rows()
+            .to_row_major_matrix();
+        let result_width = result.width();
+
+        RowMajorMatrixCow::new(Cow::Owned(result.values), result_width).bit_reverse_rows()
     }
 
     fn build_periodic_lde_table(

@@ -67,7 +67,10 @@ use p3_challenger::{
     CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
     SerializingChallenger32,
 };
-use p3_commit::{Mmcs, OpenedValues, Pcs};
+use p3_commit::{
+    CommitmentOpening, MatrixOpening, Mmcs, OpenedValues, OpeningRequest, Pcs, PointOpening,
+    UnivariateStarkPcs,
+};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
@@ -672,7 +675,7 @@ type BucketCombine<Challenge> = Option<(
 
 /// One commitment's prover data alongside the opening points of each of its matrices.
 type ProverDataWithPoints<'a, Val, InputMmcs, Challenge> =
-    (&'a StirProverData<Val, InputMmcs>, Vec<Vec<Challenge>>);
+    OpeningRequest<'a, StirProverData<Val, InputMmcs>, Challenge>;
 
 /// Everything `open` settles before STIR runs.
 struct PreparedOpen<Val, Challenge, StirMmcs, Challenger> {
@@ -720,14 +723,23 @@ where
         // Step 1: Compute evaluations at opening points using Lagrange interpolation.
         let mats_and_points: Vec<_> = commitment_data_with_opening_points
             .iter()
-            .map(|(data, points)| (lde_views(&self.input_mmcs, data), points))
+            .map(
+                |OpeningRequest {
+                     prover_data: data,
+                     points,
+                 }| (lde_views(&self.input_mmcs, data), points),
+            )
             .collect();
 
         // `(native height, group LDE height)` per matrix, in caller order: the first selects
         // the `Combine` class, the second selects which STIR instance that class feeds.
         let matrix_layouts: Vec<Vec<(usize, usize)>> = commitment_data_with_opening_points
             .iter()
-            .map(|(data, _)| data.matrix_layout())
+            .map(
+                |OpeningRequest {
+                     prover_data: data, ..
+                 }| data.matrix_layout(),
+            )
             .collect();
 
         let (global_max_height, global_max_width) = mats_and_points
@@ -1036,19 +1048,13 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = StirCommitment<InputMmcs::Commitment>;
     type ProverData = StirProverData<Val, InputMmcs>;
-    type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
+
     /// See `StirPcsProof`.
     type Proof = StirPcsProof<Val, Challenge, InputMmcs, StirMmcs>;
     type Error = StirError<StirMmcs::Error, InputMmcs::Error>;
 
-    const ZK: bool = false;
-
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
-    }
-
-    fn log_max_lde_height(&self) -> usize {
-        Val::TWO_ADICITY.saturating_sub(self.stir.log_blowup)
     }
 
     #[instrument(name = "STIR PCS commit", skip_all)]
@@ -1100,140 +1106,20 @@ where
         self.commit_groups(&plan, grouped, &log_native_heights)
     }
 
-    fn get_evaluations_on_domain<'a>(
-        &self,
-        prover_data: &'a Self::ProverData,
-        idx: usize,
-        domain: Self::Domain,
-    ) -> Self::EvaluationsOnDomain<'a> {
-        let (group_idx, idx_in_group) = prover_data.placement[idx];
-        let group = &prover_data.groups[group_idx];
-        let lde = self.input_mmcs.get_matrices(&group.data)[idx_in_group].as_view();
-        if domain.shift() == Val::GENERATOR && lde.height() >= domain.size() {
-            let width = lde.width();
-            let values: &'a [Val] = lde.values;
-            return RowMajorMatrixView::new(&values[..domain.size() * width], width)
-                .as_cow()
-                .bit_reverse_rows();
-        }
-        let poly_height = 1usize << group.log_native_heights[idx_in_group];
-        let width = lde.width();
-        // In bit-reversed order the first `poly_height` rows are the polynomial's values on
-        // the native-size GENERATOR-shifted sub-coset. Interpolate only those rows instead of
-        // the whole committed LDE and discarding the high zero coefficients afterwards.
-        let native_lde = RowMajorMatrixView::new(&lde.values[..poly_height * width], width)
-            .bit_reverse_rows()
-            .to_row_major_matrix();
-        let mut coeffs = self.dft.coset_idft_batch(native_lde, Val::GENERATOR);
-        coeffs.values.resize(domain.size() * width, Val::ZERO);
-        let result = self
-            .dft
-            .coset_dft_batch(coeffs, domain.shift())
-            .bit_reverse_rows()
-            .to_row_major_matrix();
-        let result_width = result.width();
-        RowMajorMatrixCow::new(Cow::Owned(result.values), result_width).bit_reverse_rows()
-    }
-
-    fn get_quotient_ldes(
-        &self,
-        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
-        _num_chunks: usize,
-    ) -> Vec<RowMajorMatrix<Val>> {
-        let min_height = 1usize << self.stir.log_starting_folding_factor;
-        evaluations
-            .into_iter()
-            .map(|(domain, evals)| {
-                assert!(
-                    evals.height() >= min_height,
-                    "STIR PCS quotient: matrix height {} is below 2^{} required by \
-                     log_starting_folding_factor = {}.",
-                    evals.height(),
-                    self.stir.log_starting_folding_factor,
-                    self.stir.log_starting_folding_factor,
-                );
-                let shift = Val::GENERATOR / domain.shift();
-                self.dft
-                    .coset_lde_batch(evals, self.stir.log_blowup, shift)
-                    .bit_reverse_rows()
-                    .to_row_major_matrix()
-            })
-            .collect()
-    }
-
-    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
-        let min_lde_height =
-            1usize << (self.stir.log_starting_folding_factor + self.stir.log_blowup);
-        assert!(
-            !ldes.is_empty(),
-            "STIR PCS: commit_ldes requires at least one matrix"
-        );
-        for lde in &ldes {
-            assert!(
-                lde.height() >= min_lde_height,
-                "STIR PCS: pre-computed LDE height {} is below 2^{} (= {}) required by \
-                 log_starting_folding_factor + log_blowup = {} + {}.",
-                lde.height(),
-                self.stir.log_starting_folding_factor + self.stir.log_blowup,
-                min_lde_height,
-                self.stir.log_starting_folding_factor,
-                self.stir.log_blowup,
-            );
-        }
-
-        // `ldes[i]` is already bit-reversed at `2^(native_i + log_blowup)`, GENERATOR-shifted
-        // (matching `get_quotient_ldes`'s output convention). Shorter ones are re-extended
-        // onto the shared domain sized to the tallest.
-        let log_native_heights: Vec<usize> = ldes
-            .iter()
-            .map(|lde| log2_strict_usize(lde.height()) - self.stir.log_blowup)
-            .collect();
-        let plan = self.plan_groups(&log_native_heights);
-
-        let grouped: Vec<_> = ldes
-            .into_iter()
-            .zip(&log_native_heights)
-            .zip(&plan.group_of_matrix)
-            .map(|((lde, &log_native_height), &group_idx)| {
-                let log_lde_height = plan.log_lde_heights[group_idx];
-                if lde.height() == 1usize << log_lde_height {
-                    lde
-                } else {
-                    // Recovering the polynomial and evaluating it on the wider coset is a
-                    // forward transform of its coefficients, zero-padded to the target size.
-                    // A second `lde` would instead read those coefficients back as evaluations
-                    // on a subgroup, and extend a different polynomial.
-                    let native_height = 1usize << log_native_height;
-                    let width = lde.width();
-                    let mut native_lde = lde;
-                    native_lde.values.truncate(native_height * width);
-                    let natural_native_lde = native_lde.bit_reverse_rows().to_row_major_matrix();
-                    let mut coeffs = self
-                        .dft
-                        .coset_idft_batch(natural_native_lde, Val::GENERATOR);
-                    coeffs
-                        .values
-                        .resize((1usize << log_lde_height) * width, Val::ZERO);
-                    self.dft
-                        .coset_dft_batch(coeffs, Val::GENERATOR)
-                        .bit_reverse_rows()
-                        .to_row_major_matrix()
-                }
-            })
-            .collect();
-        self.commit_groups(&plan, grouped, &log_native_heights)
-    }
-
     #[instrument(name = "STIR PCS open", skip_all)]
     fn open(
         &self,
-        commitment_data_with_opening_points: Vec<(&Self::ProverData, Vec<Vec<Challenge>>)>,
+        commitment_data_with_opening_points: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         let prepared = self.prepare_open(&commitment_data_with_opening_points, challenger);
         let prover_data: Vec<&Self::ProverData> = commitment_data_with_opening_points
             .iter()
-            .map(|(data, _)| *data)
+            .map(
+                |OpeningRequest {
+                     prover_data: data, ..
+                 }| *data,
+            )
             .collect();
         self.prove_buckets(&prover_data, prepared, challenger)
     }
@@ -1241,10 +1127,9 @@ where
     #[instrument(name = "STIR PCS verify", skip_all)]
     fn verify(
         &self,
-        commitments_with_opening_points: Vec<(
-            Self::Commitment,
-            Vec<(Self::Domain, Vec<(Challenge, Vec<Challenge>)>)>,
-        )>,
+        commitments_with_opening_points: Vec<
+            CommitmentOpening<Challenge, Self::Commitment, Self::Domain>,
+        >,
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
@@ -1255,12 +1140,23 @@ where
         // runs and therefore whether `r_comb` is drawn, so it has to be settled before the
         // transcript can fork on it. Depends only on the public claims (mirrors
         // `fri::verifier::FriError::MatrixWithoutOpeningPoints`).
-        for (commitment, domain_claims) in commitments_with_opening_points
-            .iter()
-            .enumerate()
-            .map(|(commit_idx, (_, domain_claims))| (commit_idx, domain_claims))
-        {
-            for (matrix, (_, point_claims)) in domain_claims.iter().enumerate() {
+        for (commitment, domain_claims) in commitments_with_opening_points.iter().enumerate().map(
+            |(
+                commit_idx,
+                CommitmentOpening {
+                    matrices: domain_claims,
+                    ..
+                },
+            )| (commit_idx, domain_claims),
+        ) {
+            for (
+                matrix,
+                MatrixOpening {
+                    points: point_claims,
+                    ..
+                },
+            ) in domain_claims.iter().enumerate()
+            {
                 if point_claims.is_empty() {
                     return Err(StirError::MatrixWithoutOpeningPoints { commitment, matrix });
                 }
@@ -1268,9 +1164,21 @@ where
         }
 
         // Observe all opened values to keep the transcript in sync.
-        for (_, domain_claims) in &commitments_with_opening_points {
-            for (_, point_claims) in domain_claims {
-                for (_, opened_vals) in point_claims {
+        for CommitmentOpening {
+            matrices: domain_claims,
+            ..
+        } in &commitments_with_opening_points
+        {
+            for MatrixOpening {
+                points: point_claims,
+                ..
+            } in domain_claims
+            {
+                for PointOpening {
+                    values: opened_vals,
+                    ..
+                } in point_claims
+                {
                     challenger.observe_algebra_slice(opened_vals);
                 }
             }
@@ -1285,20 +1193,26 @@ where
         // and fails the input opening check below.
         let plans: Vec<GroupPlan> = commitments_with_opening_points
             .iter()
-            .map(|(_, domain_claims)| {
-                let log_native_heights: Vec<usize> = domain_claims
-                    .iter()
-                    .map(|(domain, _)| log2_strict_usize(domain.size()))
-                    .collect();
-                self.plan_groups(&log_native_heights)
-            })
+            .map(
+                |CommitmentOpening {
+                     matrices: domain_claims,
+                     ..
+                 }| {
+                    let log_native_heights: Vec<usize> = domain_claims
+                        .iter()
+                        .map(|MatrixOpening { domain, .. }| log2_strict_usize(domain.size()))
+                        .collect();
+                    self.plan_groups(&log_native_heights)
+                },
+            )
             .collect();
 
         // SHAPE CHECK: one Merkle root per group of the layout the claims imply.
-        for (commit_idx, ((commitment, _), plan)) in commitments_with_opening_points
-            .iter()
-            .zip(&plans)
-            .enumerate()
+        for (commit_idx, (CommitmentOpening { commitment, .. }, plan)) in
+            commitments_with_opening_points
+                .iter()
+                .zip(&plans)
+                .enumerate()
         {
             if commitment.len() != plan.log_lde_heights.len() {
                 return Err(ProofShapeError::CommitmentRootCount {
@@ -1357,11 +1271,23 @@ where
 
         let global_max_width = commitments_with_opening_points
             .iter()
-            .flat_map(|(_, domain_claims)| {
-                domain_claims
-                    .iter()
-                    .flat_map(|(_, point_claims)| point_claims.iter().map(|(_, v)| v.len()))
-            })
+            .flat_map(
+                |CommitmentOpening {
+                     matrices: domain_claims,
+                     ..
+                 }| {
+                    domain_claims.iter().flat_map(
+                        |MatrixOpening {
+                             points: point_claims,
+                             ..
+                         }| {
+                            point_claims
+                                .iter()
+                                .map(|PointOpening { values: v, .. }| v.len())
+                        },
+                    )
+                },
+            )
             .max()
             .unwrap_or(0);
         let packed_alpha_powers =
@@ -1385,31 +1311,47 @@ where
         let point_data: Vec<Vec<Vec<(Challenge, Challenge)>>> = commitments_with_opening_points
             .iter()
             .zip(&matrix_lde_heights)
-            .map(|((_, domain_claims), lde_heights)| {
-                domain_claims
-                    .iter()
-                    .zip(lde_heights)
-                    .map(|((domain, point_claims), &log_lde_h)| {
-                        let key = (log_lde_h, log2_strict_usize(domain.size()));
-                        point_claims
-                            .iter()
-                            .map(|(_, vals)| {
-                                let count = class_num_reduced.entry(key).or_insert(0);
-                                let offset = alpha.exp_u64(*count as u64);
-                                *count += vals.len();
-
-                                let y_combined: Challenge = vals
+            .map(
+                |(
+                    CommitmentOpening {
+                        matrices: domain_claims,
+                        ..
+                    },
+                    lde_heights,
+                )| {
+                    domain_claims
+                        .iter()
+                        .zip(lde_heights)
+                        .map(
+                            |(
+                                MatrixOpening {
+                                    domain,
+                                    points: point_claims,
+                                },
+                                &log_lde_h,
+                            )| {
+                                let key = (log_lde_h, log2_strict_usize(domain.size()));
+                                point_claims
                                     .iter()
-                                    .zip(alpha_powers.iter())
-                                    .map(|(&y, &ap)| y * ap)
-                                    .sum();
+                                    .map(|PointOpening { values: vals, .. }| {
+                                        let count = class_num_reduced.entry(key).or_insert(0);
+                                        let offset = alpha.exp_u64(*count as u64);
+                                        *count += vals.len();
 
-                                (offset, y_combined)
-                            })
-                            .collect()
-                    })
-                    .collect()
-            })
+                                        let y_combined: Challenge = vals
+                                            .iter()
+                                            .zip(alpha_powers.iter())
+                                            .map(|(&y, &ap)| y * ap)
+                                            .sum();
+
+                                        (offset, y_combined)
+                                    })
+                                    .collect()
+                            },
+                        )
+                        .collect()
+                },
+            )
             .collect();
 
         // SHAPE CHECK: every bucket's input_openings has one slot per public commitment.
@@ -1439,13 +1381,23 @@ where
                 let mut native_heights: Vec<usize> = commitments_with_opening_points
                     .iter()
                     .zip(&matrix_lde_heights)
-                    .flat_map(|((_, domain_claims), lde_heights)| {
-                        domain_claims
-                            .iter()
-                            .zip(lde_heights)
-                            .filter(move |&(_, &log_lde_h)| log_lde_h == log_shared_h)
-                            .map(|((domain, _), _)| log2_strict_usize(domain.size()))
-                    })
+                    .flat_map(
+                        |(
+                            CommitmentOpening {
+                                matrices: domain_claims,
+                                ..
+                            },
+                            lde_heights,
+                        )| {
+                            domain_claims
+                                .iter()
+                                .zip(lde_heights)
+                                .filter(move |&(_, &log_lde_h)| log_lde_h == log_shared_h)
+                                .map(|(MatrixOpening { domain, .. }, _)| {
+                                    log2_strict_usize(domain.size())
+                                })
+                        },
+                    )
                     .collect();
                 native_heights.sort_unstable();
                 native_heights.dedup();
@@ -1534,14 +1486,29 @@ where
             let bucket_points: Vec<Challenge> = commitments_with_opening_points
                 .iter()
                 .zip(matrix_lde_heights.iter())
-                .flat_map(|((_, domain_claims), lde_heights)| {
-                    domain_claims
-                        .iter()
-                        .zip(lde_heights)
-                        .filter(move |&(_, &h)| h == log_h)
-                        .map(|(claim, _)| claim)
-                })
-                .flat_map(|(_, point_claims)| point_claims.iter().map(|(point, _)| *point))
+                .flat_map(
+                    |(
+                        CommitmentOpening {
+                            matrices: domain_claims,
+                            ..
+                        },
+                        lde_heights,
+                    )| {
+                        domain_claims
+                            .iter()
+                            .zip(lde_heights)
+                            .filter(move |&(_, &h)| h == log_h)
+                            .map(|(claim, _)| claim)
+                    },
+                )
+                .flat_map(
+                    |MatrixOpening {
+                         points: point_claims,
+                         ..
+                     }| {
+                        point_claims.iter().map(|PointOpening { point, .. }| *point)
+                    },
+                )
                 .fold(Vec::new(), |mut points, point| {
                     if !points.contains(&point) {
                         points.push(point);
@@ -1585,11 +1552,19 @@ where
             // A commitment feeds this bucket through at most one of its groups: the one
             // committed on this domain. Its other groups live in other trees at other heights
             // and belong to other buckets.
-            for (commit_idx, ((commitment, domain_claims), per_commit_opening)) in
-                commitments_with_opening_points
-                    .iter()
-                    .zip(input_openings.iter())
-                    .enumerate()
+            for (
+                commit_idx,
+                (
+                    CommitmentOpening {
+                        commitment,
+                        matrices: domain_claims,
+                    },
+                    per_commit_opening,
+                ),
+            ) in commitments_with_opening_points
+                .iter()
+                .zip(input_openings.iter())
+                .enumerate()
             {
                 let group_idx = group_indices[commit_idx];
 
@@ -1626,9 +1601,9 @@ where
                     .iter()
                     .map(|&idx| {
                         domain_claims[idx]
-                            .1
+                            .points
                             .first()
-                            .map(|(_, v)| v.len())
+                            .map(|PointOpening { values: v, .. }| v.len())
                             .expect("rejected up front in verify")
                     })
                     .collect();
@@ -1636,7 +1611,7 @@ where
                 let mat_class_indices: Vec<usize> = group_mats
                     .iter()
                     .map(|&idx| {
-                        let log_native_h = log2_strict_usize(domain_claims[idx].0.size());
+                        let log_native_h = log2_strict_usize(domain_claims[idx].domain.size());
                         native_heights
                             .iter()
                             .position(|&h| h == log_native_h)
@@ -1647,9 +1622,9 @@ where
                     .iter()
                     .map(|&idx| {
                         domain_claims[idx]
-                            .1
+                            .points
                             .iter()
-                            .map(|(point, _)| {
+                            .map(|PointOpening { point, .. }| {
                                 bucket_points
                                     .iter()
                                     .position(|p| p == point)
@@ -1779,6 +1754,155 @@ where
     }
 }
 
+impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> UnivariateStarkPcs<Challenge, Challenger>
+    for TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
+where
+    Val: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<Val>,
+    InputMmcs: Mmcs<Val, Error: Sync + Debug, Commitment: Send> + Sync,
+    InputMmcs::ProverData<RowMajorMatrix<Val>>: Send,
+    StirMmcs: Mmcs<Challenge>,
+    Challenge: ExtensionField<Val> + TwoAdicField + BasedVectorSpace<Val>,
+    Challenger: FieldChallenger<Val>
+        + CanObserve<InputMmcs::Commitment>
+        + CanObserve<StirMmcs::Commitment>
+        + GrindingChallenger<Witness = Val>
+        + CanSampleUniformBits<Val>
+        + Clone,
+{
+    type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
+
+    const ZK: bool = false;
+
+    fn log_max_lde_height(&self) -> usize {
+        Val::TWO_ADICITY.saturating_sub(self.stir.log_blowup)
+    }
+
+    fn get_evaluations_on_domain<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+        idx: usize,
+        domain: Self::Domain,
+    ) -> Self::EvaluationsOnDomain<'a> {
+        let (group_idx, idx_in_group) = prover_data.placement[idx];
+        let group = &prover_data.groups[group_idx];
+        let lde = self.input_mmcs.get_matrices(&group.data)[idx_in_group].as_view();
+        if domain.shift() == Val::GENERATOR && lde.height() >= domain.size() {
+            let width = lde.width();
+            let values: &'a [Val] = lde.values;
+            return RowMajorMatrixView::new(&values[..domain.size() * width], width)
+                .as_cow()
+                .bit_reverse_rows();
+        }
+        let poly_height = 1usize << group.log_native_heights[idx_in_group];
+        let width = lde.width();
+        // In bit-reversed order the first `poly_height` rows are the polynomial's values on
+        // the native-size GENERATOR-shifted sub-coset. Interpolate only those rows instead of
+        // the whole committed LDE and discarding the high zero coefficients afterwards.
+        let native_lde = RowMajorMatrixView::new(&lde.values[..poly_height * width], width)
+            .bit_reverse_rows()
+            .to_row_major_matrix();
+        let mut coeffs = self.dft.coset_idft_batch(native_lde, Val::GENERATOR);
+        coeffs.values.resize(domain.size() * width, Val::ZERO);
+        let result = self
+            .dft
+            .coset_dft_batch(coeffs, domain.shift())
+            .bit_reverse_rows()
+            .to_row_major_matrix();
+        let result_width = result.width();
+        RowMajorMatrixCow::new(Cow::Owned(result.values), result_width).bit_reverse_rows()
+    }
+
+    fn get_quotient_ldes(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
+        _num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<Val>> {
+        let min_height = 1usize << self.stir.log_starting_folding_factor;
+        evaluations
+            .into_iter()
+            .map(|(domain, evals)| {
+                assert!(
+                    evals.height() >= min_height,
+                    "STIR PCS quotient: matrix height {} is below 2^{} required by \
+                     log_starting_folding_factor = {}.",
+                    evals.height(),
+                    self.stir.log_starting_folding_factor,
+                    self.stir.log_starting_folding_factor,
+                );
+                let shift = Val::GENERATOR / domain.shift();
+                self.dft
+                    .coset_lde_batch(evals, self.stir.log_blowup, shift)
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
+            })
+            .collect()
+    }
+
+    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        let min_lde_height =
+            1usize << (self.stir.log_starting_folding_factor + self.stir.log_blowup);
+        assert!(
+            !ldes.is_empty(),
+            "STIR PCS: commit_ldes requires at least one matrix"
+        );
+        for lde in &ldes {
+            assert!(
+                lde.height() >= min_lde_height,
+                "STIR PCS: pre-computed LDE height {} is below 2^{} (= {}) required by \
+                 log_starting_folding_factor + log_blowup = {} + {}.",
+                lde.height(),
+                self.stir.log_starting_folding_factor + self.stir.log_blowup,
+                min_lde_height,
+                self.stir.log_starting_folding_factor,
+                self.stir.log_blowup,
+            );
+        }
+
+        // `ldes[i]` is already bit-reversed at `2^(native_i + log_blowup)`, GENERATOR-shifted
+        // (matching `get_quotient_ldes`'s output convention). Shorter ones are re-extended
+        // onto the shared domain sized to the tallest.
+        let log_native_heights: Vec<usize> = ldes
+            .iter()
+            .map(|lde| log2_strict_usize(lde.height()) - self.stir.log_blowup)
+            .collect();
+        let plan = self.plan_groups(&log_native_heights);
+
+        let grouped: Vec<_> = ldes
+            .into_iter()
+            .zip(&log_native_heights)
+            .zip(&plan.group_of_matrix)
+            .map(|((lde, &log_native_height), &group_idx)| {
+                let log_lde_height = plan.log_lde_heights[group_idx];
+                if lde.height() == 1usize << log_lde_height {
+                    lde
+                } else {
+                    // Recovering the polynomial and evaluating it on the wider coset is a
+                    // forward transform of its coefficients, zero-padded to the target size.
+                    // A second `lde` would instead read those coefficients back as evaluations
+                    // on a subgroup, and extend a different polynomial.
+                    let native_height = 1usize << log_native_height;
+                    let width = lde.width();
+                    let mut native_lde = lde;
+                    native_lde.values.truncate(native_height * width);
+                    let natural_native_lde = native_lde.bit_reverse_rows().to_row_major_matrix();
+                    let mut coeffs = self
+                        .dft
+                        .coset_idft_batch(natural_native_lde, Val::GENERATOR);
+                    coeffs
+                        .values
+                        .resize((1usize << log_lde_height) * width, Val::ZERO);
+                    self.dft
+                        .coset_dft_batch(coeffs, Val::GENERATOR)
+                        .bit_reverse_rows()
+                        .to_row_major_matrix()
+                }
+            })
+            .collect();
+        self.commit_groups(&plan, grouped, &log_native_heights)
+    }
+}
+
 /// One entry per distinct shared LDE height across every commitment's groups (descending). A
 /// commitment contributes to one entry per group it holds. Each entry holds:
 /// - the STIR IOP proof for that bucket, whose initial oracle is the bucket's reduced
@@ -1850,7 +1974,7 @@ fn positions_to_row_indices(positions: &[usize], log_h: usize) -> Vec<usize> {
 }
 
 /// One commitment's claims: per matrix, its domain and its `(point, values)` pairs.
-type CommitmentClaims<C, D, EF> = (C, Vec<(D, Vec<(EF, Vec<EF>)>)>);
+type CommitmentClaims<C, D, EF> = CommitmentOpening<EF, C, D>;
 
 /// Locate the claim that contributed `point`, as `(commitment, matrix, point)` indices.
 ///
@@ -1862,17 +1986,31 @@ fn locate_opening_point<C, D, EF: PartialEq>(
     commitments_with_opening_points
         .iter()
         .enumerate()
-        .flat_map(|(commitment, (_, domain_claims))| {
-            domain_claims
-                .iter()
-                .enumerate()
-                .flat_map(move |(matrix, (_, point_claims))| {
-                    point_claims
-                        .iter()
-                        .enumerate()
-                        .map(move |(slot, (claimed, _))| (commitment, matrix, slot, claimed))
-                })
-        })
+        .flat_map(
+            |(
+                commitment,
+                CommitmentOpening {
+                    matrices: domain_claims,
+                    ..
+                },
+            )| {
+                domain_claims.iter().enumerate().flat_map(
+                    move |(
+                        matrix,
+                        MatrixOpening {
+                            points: point_claims,
+                            ..
+                        },
+                    )| {
+                        point_claims.iter().enumerate().map(
+                            move |(slot, PointOpening { point: claimed, .. })| {
+                                (commitment, matrix, slot, claimed)
+                            },
+                        )
+                    },
+                )
+            },
+        )
         .find_map(|(commitment, matrix, slot, claimed)| {
             (claimed == point).then_some((commitment, matrix, slot))
         })
@@ -2627,17 +2765,26 @@ mod tests {
                 let zeta: EF = base.sample_algebra_element();
                 let (values, proof) = <TestPcs as Pcs<EF, TestChallenger>>::open(
                     &pcs,
-                    vec![(&data, vec![vec![zeta]; 3])],
+                    vec![OpeningRequest {
+                        prover_data: &data,
+                        points: vec![vec![zeta]; 3],
+                    }],
                     &mut base.clone(),
                 );
-                let claims = vec![(
-                    commit,
-                    domains
+                let claims = vec![CommitmentOpening {
+                    commitment: commit,
+                    matrices: domains
                         .into_iter()
                         .enumerate()
-                        .map(|(i, domain)| (domain, vec![(zeta, values[0][i][0].clone())]))
+                        .map(|(i, domain)| MatrixOpening {
+                            domain,
+                            points: vec![PointOpening {
+                                point: zeta,
+                                values: values[0][i][0].clone(),
+                            }],
+                        })
                         .collect(),
-                )];
+                }];
                 <TestPcs as Pcs<EF, TestChallenger>>::verify(&pcs, claims, &proof, &mut base)
                     .expect("ordinary and Combine proofs verify under their own options");
             }
@@ -2681,7 +2828,10 @@ mod tests {
                 let mut full_p = base.clone();
                 let (values, full_proof) = <TestPcs as Pcs<EF, TestChallenger>>::open(
                     &pcs,
-                    vec![(&data, vec![vec![zeta]; 3])],
+                    vec![OpeningRequest {
+                        prover_data: &data,
+                        points: vec![vec![zeta]; 3],
+                    }],
                     &mut full_p,
                 );
                 // Clone only after opening has warmed both ordinary and Combine schedules.
@@ -2692,20 +2842,29 @@ mod tests {
                 let mut compact_p = base.clone();
                 let (compact_values, compact_proof) = <TestPcs as Pcs<EF, TestChallenger>>::open(
                     &compact,
-                    vec![(&data, vec![vec![zeta]; 3])],
+                    vec![OpeningRequest {
+                        prover_data: &data,
+                        points: vec![vec![zeta]; 3],
+                    }],
                     &mut compact_p,
                 );
                 assert_eq!(values, compact_values);
                 let next: EF = full_p.sample_algebra_element();
                 assert_eq!(next, compact_p.sample_algebra_element::<EF>());
-                let claims = vec![(
-                    commit,
-                    domains
+                let claims = vec![CommitmentOpening {
+                    commitment: commit,
+                    matrices: domains
                         .into_iter()
                         .enumerate()
-                        .map(|(i, domain)| (domain, vec![(zeta, values[0][i][0].clone())]))
+                        .map(|(i, domain)| MatrixOpening {
+                            domain,
+                            points: vec![PointOpening {
+                                point: zeta,
+                                values: values[0][i][0].clone(),
+                            }],
+                        })
                         .collect::<Vec<_>>(),
-                )];
+                }];
                 for (pcs, proof) in [(&pcs, &full_proof), (&compact, &compact_proof)] {
                     let mut v_ch = base.clone();
                     <TestPcs as Pcs<EF, TestChallenger>>::verify(
@@ -2764,7 +2923,13 @@ mod tests {
         let zeta: EF = challenger.sample_algebra_element();
 
         let mut p_ch = challenger.clone();
-        let mut prepared = pcs.prepare_open(&[(&data, vec![vec![zeta]])], &mut p_ch);
+        let mut prepared = pcs.prepare_open(
+            &[OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
+            &mut p_ch,
+        );
         assert_eq!(prepared.initial_codewords.len(), 1);
 
         // A random polynomial of the same degree bound, evaluated on the same coset in the
@@ -2783,8 +2948,13 @@ mod tests {
             commit,
             vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
         )];
-        let err = <TestPcs as Pcs<EF, TestChallenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .expect_err("a low-degree oracle that is not the reduced opening must be rejected");
+        let err = <TestPcs as Pcs<EF, TestChallenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        )
+        .expect_err("a low-degree oracle that is not the reduced opening must be rejected");
         assert!(
             matches!(err, StirError::InitialOracleMismatch { log_height, .. } if log_height == log_lde),
             "expected InitialOracleMismatch, got {err:?}"
@@ -2817,7 +2987,13 @@ mod tests {
         let zeta: EF = challenger.sample_algebra_element();
 
         let mut p_ch = challenger.clone();
-        let mut prepared = pcs.prepare_open(&[(&data, vec![vec![zeta]])], &mut p_ch);
+        let mut prepared = pcs.prepare_open(
+            &[OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
+            &mut p_ch,
+        );
         assert_eq!(
             prepared.stir_configs[0].num_rounds(),
             0,
@@ -2838,8 +3014,13 @@ mod tests {
             commit,
             vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
         )];
-        let err = <TestPcs as Pcs<EF, TestChallenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .expect_err("a low-degree oracle that is not the reduced opening must be rejected");
+        let err = <TestPcs as Pcs<EF, TestChallenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        )
+        .expect_err("a low-degree oracle that is not the reduced opening must be rejected");
         assert!(
             matches!(err, StirError::InitialOracleMismatch { log_height, .. } if log_height == log_lde),
             "expected InitialOracleMismatch, got {err:?}"
@@ -2875,7 +3056,13 @@ mod tests {
 
         // The whole prover side, lanes included.
         let mut ch_full = base.clone();
-        let prepared = pcs.prepare_open(&[(&data, vec![vec![zeta]])], &mut ch_full);
+        let prepared = pcs.prepare_open(
+            &[OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
+            &mut ch_full,
+        );
         let log_arity0 = prepared.stir_configs[0].log_starting_folding_factor;
         let final_queries = prepared.stir_configs[0].final_queries;
         let _ = pcs.prove_buckets(&[&data], prepared, &mut ch_full);
@@ -2883,7 +3070,13 @@ mod tests {
         // The same transcript, stopped right after STIR so the lane draws can be replayed by
         // hand at both counts.
         let mut ch_draws = base;
-        let prepared = pcs.prepare_open(&[(&data, vec![vec![zeta]])], &mut ch_draws);
+        let prepared = pcs.prepare_open(
+            &[OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
+            &mut ch_draws,
+        );
         let PreparedOpen {
             stir_configs,
             initial_codewords,

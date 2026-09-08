@@ -2,7 +2,9 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{
+    CommitmentOpening, Mmcs, OpenedValues, OpeningRequest, Pcs, PolynomialSpace, UnivariateStarkPcs,
+};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField, batch_multiplicative_inverse};
@@ -104,26 +106,19 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
-    type EvaluationsOnDomain<'a> =
-        HorizontallyTruncated<Val, RowIndexMappedView<BitReversalPerm, RowMajorMatrixCow<'a, Val>>>;
+
     /// The first item contains the openings of the random polynomials added by this wrapper.
     /// The second item is the usual FRI proof.
     type Proof = (
         OpenedValues<Challenge>,
         FriProof<Challenge, FriMmcs, Val, Vec<BatchMultiOpening<Val, InputMmcs>>>,
     );
-    type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
-    const ZK: bool = true;
+    type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
             &self.inner, degree)
-    }
-
-    fn log_max_lde_height(&self) -> usize {
-        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::log_max_lde_height(
-            &self.inner)
     }
 
     fn commit(
@@ -152,6 +147,103 @@ where
             });
 
         Pcs::<Challenge, Challenger>::commit(&self.inner, randomized_evaluations)
+    }
+
+    fn open(
+        &self,
+        // For each round,
+        rounds: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
+        challenger: &mut Challenger,
+    ) -> (OpenedValues<Challenge>, Self::Proof) {
+        self.open_with_preprocessing(rounds, challenger, None)
+    }
+
+    fn verify(
+        &self,
+        // For each round:
+        mut rounds: Vec<CommitmentOpening<Challenge, Self::Commitment, Self::Domain>>,
+        proof: &Self::Proof,
+        challenger: &mut Challenger,
+    ) -> Result<(), Self::Error> {
+        let (opened_values_for_rand_cws, inner_proof) = proof;
+
+        // Proving split each opening into a public half and a hidden half.
+        // - The public half lives here.
+        // - The hidden half travels beside the proof as random codewords.
+        //
+        // Re-joining them gives the inner verifier the full openings it committed to.
+        //
+        //     public (per point):  [v_0, .., v_k]
+        //     hidden (per point):                [r_0, .., r_m]
+        //     merged:              [v_0, .., v_k,  r_0, .., r_m]
+        //
+        // Invariant: the halves nest identically by round, then matrix, then point.
+        // Each level's length is checked before merging.
+        // A mismatch returns a precise error instead of being truncated silently.
+
+        // Level 1: one set of random openings per round.
+        if opened_values_for_rand_cws.len() != rounds.len() {
+            return Err(FriError::HidingRandomOpeningRoundCountMismatch {
+                expected: rounds.len(),
+                got: opened_values_for_rand_cws.len(),
+            });
+        }
+        for (round_idx, (round, rand_round)) in rounds
+            .iter_mut()
+            .zip(opened_values_for_rand_cws.iter())
+            .enumerate()
+        {
+            // Level 2: one set per matrix in this round.
+            if rand_round.len() != round.matrices.len() {
+                return Err(FriError::HidingRandomOpeningMatrixCountMismatch {
+                    round: round_idx,
+                    expected: round.matrices.len(),
+                    got: rand_round.len(),
+                });
+            }
+            for (matrix_idx, (mat, rand_mat)) in
+                round.matrices.iter_mut().zip(rand_round.iter()).enumerate()
+            {
+                // Level 3: one set per opening point of this matrix.
+                if rand_mat.len() != mat.points.len() {
+                    return Err(FriError::HidingRandomOpeningPointCountMismatch {
+                        round: round_idx,
+                        matrix: matrix_idx,
+                        expected: mat.points.len(),
+                        got: rand_mat.len(),
+                    });
+                }
+                // Shapes agree: append the hidden values onto the public ones.
+                for (point, rand_point) in mat.points.iter_mut().zip(rand_mat.iter()) {
+                    point.values.extend(rand_point);
+                }
+            }
+        }
+        self.inner.verify(rounds, inner_proof, challenger)
+    }
+}
+
+impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger, R>
+    UnivariateStarkPcs<Challenge, Challenger> for HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R>
+where
+    Val: TwoAdicField + PrimeField64,
+    StandardUniform: Distribution<Val>,
+    Dft: TwoAdicSubgroupDft<Val>,
+    InputMmcs: Mmcs<Val, MultiProof: Sync, Error: Sync>,
+    FriMmcs: Mmcs<Challenge>,
+    Challenge: TwoAdicField + ExtensionField<Val>,
+    Challenger:
+        FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
+    R: CryptoRng + Send + Sync,
+{
+    type EvaluationsOnDomain<'a> =
+        HorizontallyTruncated<Val, RowIndexMappedView<BitReversalPerm, RowMajorMatrixCow<'a, Val>>>;
+
+    const ZK: bool = true;
+
+    fn log_max_lde_height(&self) -> usize {
+        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as UnivariateStarkPcs<Challenge, Challenger>>::log_max_lde_height(
+            &self.inner)
     }
 
     fn commit_preprocessing(
@@ -284,7 +376,7 @@ where
     }
 
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
-        Pcs::<Challenge, Challenger>::commit_ldes(&self.inner, ldes)
+        UnivariateStarkPcs::<Challenge, Challenger>::commit_ldes(&self.inner, ldes)
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -293,12 +385,11 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
-        let inner_evals = <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<
-            Challenge,
-            Challenger,
-        >>::get_evaluations_on_domain(
-            &self.inner, prover_data, idx, domain
-        );
+        let inner_evals =
+            <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as UnivariateStarkPcs<
+                Challenge,
+                Challenger,
+            >>::get_evaluations_on_domain(&self.inner, prover_data, idx, domain);
         let inner_width = inner_evals.width();
         // Truncate off the columns representing random codewords we added in `commit` above.
         // The unwrap is safe as inner_width - self.num_random_codewords <= inner_width.
@@ -311,50 +402,26 @@ where
         idx: usize,
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
-        let inner_evals = <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<
-            Challenge,
-            Challenger,
-        >>::get_evaluations_on_domain(
-            &self.inner, prover_data, idx, domain
-        );
+        let inner_evals =
+            <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as UnivariateStarkPcs<
+                Challenge,
+                Challenger,
+            >>::get_evaluations_on_domain(&self.inner, prover_data, idx, domain);
         let inner_width = inner_evals.width();
 
         HorizontallyTruncated::new(inner_evals, inner_width).unwrap()
     }
 
-    fn open(
-        &self,
-        // For each round,
-        rounds: Vec<(
-            &Self::ProverData,
-            // for each matrix,
-            Vec<
-                // points to open
-                Vec<Challenge>,
-            >,
-        )>,
-        challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
-        self.open_with_preprocessing(rounds, challenger, false)
-    }
-
     fn open_with_preprocessing(
         &self,
         // For each round,
-        rounds: Vec<(
-            &Self::ProverData,
-            // for each matrix,
-            Vec<
-                // points to open
-                Vec<Challenge>,
-            >,
-        )>,
+        rounds: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
-        is_preprocessing: bool,
+        preprocessed_commitment: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         let (mut inner_opened_values, inner_proof) =
             self.inner
-                .open_with_preprocessing(rounds, challenger, is_preprocessing);
+                .open_with_preprocessing(rounds, challenger, preprocessed_commitment);
         // inner_opened_values includes opened values for the random codewords. Those should be
         // hidden from our caller, so we split them off and store them in the proof.
         let opened_values_rand = inner_opened_values
@@ -367,12 +434,11 @@ where
                         opened_values_for_mat
                             .iter_mut()
                             .map(|opened_values_for_point| {
-                                let num_random_codewords =
-                                    if is_preprocessing && idx == <Self as Pcs<Challenge, Challenger>>::PREPROCESSED_TRACE_IDX {
-                                        0
-                                    } else {
-                                        self.num_random_codewords
-                                    };
+                                let num_random_codewords = if preprocessed_commitment == Some(idx) {
+                                    0
+                                } else {
+                                    self.num_random_codewords
+                                };
                                 let split = opened_values_for_point.len() - num_random_codewords;
                                 opened_values_for_point.drain(split..).collect()
                             })
@@ -383,84 +449,6 @@ where
             .collect();
 
         (inner_opened_values, (opened_values_rand, inner_proof))
-    }
-
-    fn verify(
-        &self,
-        // For each round:
-        mut rounds: Vec<(
-            Self::Commitment,
-            // for each matrix:
-            Vec<(
-                // its domain,
-                Self::Domain,
-                // for each point:
-                Vec<(
-                    // the point,
-                    Challenge,
-                    // values at the point
-                    Vec<Challenge>,
-                )>,
-            )>,
-        )>,
-        proof: &Self::Proof,
-        challenger: &mut Challenger,
-    ) -> Result<(), Self::Error> {
-        let (opened_values_for_rand_cws, inner_proof) = proof;
-
-        // Proving split each opening into a public half and a hidden half.
-        // - The public half lives here.
-        // - The hidden half travels beside the proof as random codewords.
-        //
-        // Re-joining them gives the inner verifier the full openings it committed to.
-        //
-        //     public (per point):  [v_0, .., v_k]
-        //     hidden (per point):                [r_0, .., r_m]
-        //     merged:              [v_0, .., v_k,  r_0, .., r_m]
-        //
-        // Invariant: the halves nest identically by round, then matrix, then point.
-        // Each level's length is checked before merging.
-        // A mismatch returns a precise error instead of being truncated silently.
-
-        // Level 1: one set of random openings per round.
-        if opened_values_for_rand_cws.len() != rounds.len() {
-            return Err(FriError::HidingRandomOpeningRoundCountMismatch {
-                expected: rounds.len(),
-                got: opened_values_for_rand_cws.len(),
-            });
-        }
-        for (round_idx, (round, rand_round)) in rounds
-            .iter_mut()
-            .zip(opened_values_for_rand_cws.iter())
-            .enumerate()
-        {
-            // Level 2: one set per matrix in this round.
-            if rand_round.len() != round.1.len() {
-                return Err(FriError::HidingRandomOpeningMatrixCountMismatch {
-                    round: round_idx,
-                    expected: round.1.len(),
-                    got: rand_round.len(),
-                });
-            }
-            for (matrix_idx, (mat, rand_mat)) in
-                round.1.iter_mut().zip(rand_round.iter()).enumerate()
-            {
-                // Level 3: one set per opening point of this matrix.
-                if rand_mat.len() != mat.1.len() {
-                    return Err(FriError::HidingRandomOpeningPointCountMismatch {
-                        round: round_idx,
-                        matrix: matrix_idx,
-                        expected: mat.1.len(),
-                        got: rand_mat.len(),
-                    });
-                }
-                // Shapes agree: append the hidden values onto the public ones.
-                for (point, rand_point) in mat.1.iter_mut().zip(rand_mat.iter()) {
-                    point.1.extend(rand_point);
-                }
-            }
-        }
-        self.inner.verify(rounds, inner_proof, challenger)
     }
 
     fn get_opt_randomization_poly_commitment(
@@ -491,7 +479,7 @@ where
         trace_domain: Self::Domain,
         quotient_domain: Self::Domain,
     ) -> p3_commit::PeriodicLdeTable<Val> {
-        Pcs::<Challenge, Challenger>::build_periodic_lde_table(
+        UnivariateStarkPcs::<Challenge, Challenger>::build_periodic_lde_table(
             &self.inner,
             periodic_cols,
             trace_domain,
@@ -551,7 +539,6 @@ mod tests {
     type MyPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, StdRng>;
     /// Same wrapper, left generic over the DFT backend.
     type HidingPcs<D> = HidingFriPcs<Val, D, ValMmcs, ChallengeMmcs, StdRng>;
-
     type Commitment = <ValMmcs as Mmcs<Val>>::Commitment;
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     /// Public opening claims (the `rounds` argument): per matrix, its domain and
@@ -627,8 +614,13 @@ mod tests {
         let mut p_challenger = Challenger::new(perm.clone());
         p_challenger.observe(&commitment);
         let zeta: Challenge = p_challenger.sample_algebra_element();
-        let (opened_values, proof) =
-            pcs.open(vec![(&prover_data, vec![vec![zeta]])], &mut p_challenger);
+        let (opened_values, proof) = pcs.open(
+            vec![OpeningRequest {
+                prover_data: &prover_data,
+                points: vec![vec![zeta]],
+            }],
+            &mut p_challenger,
+        );
 
         // Verifier: replay up to the point sample so a valid proof must pass.
         let mut v_challenger = Challenger::new(perm);
@@ -655,7 +647,70 @@ mod tests {
         proof: &Proof,
         challenger: &mut Challenger,
     ) -> Result<(), TestError> {
-        <MyPcs as Pcs<Challenge, Challenger>>::verify(pcs, claims, proof, challenger)
+        <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            pcs,
+            claims.into_iter().map(Into::into).collect(),
+            proof,
+            challenger,
+        )
+    }
+
+    #[test]
+    fn preprocessing_request_can_precede_hidden_requests() {
+        let (pcs, _, _, mut prover_challenger) = make_fixture();
+        let mut verifier_challenger = prover_challenger.clone();
+        let mut rng = SmallRng::seed_from_u64(17);
+        let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 16);
+        let (pre_commit, pre_data) =
+            <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::commit_preprocessing(
+                &pcs,
+                [(domain, RowMajorMatrix::<Val>::rand(&mut rng, 8, 3))],
+            );
+        let (trace_commit, trace_data) = <MyPcs as Pcs<Challenge, Challenger>>::commit(
+            &pcs,
+            [(domain, RowMajorMatrix::<Val>::rand(&mut rng, 8, 4))],
+        );
+        for challenger in [&mut prover_challenger, &mut verifier_challenger] {
+            challenger.observe(&pre_commit);
+            challenger.observe(&trace_commit);
+        }
+        let zeta: Challenge = prover_challenger.sample_algebra_element();
+        assert_eq!(zeta, verifier_challenger.sample_algebra_element());
+        let (values, proof) = pcs.open_with_preprocessing(
+            vec![
+                OpeningRequest {
+                    prover_data: &pre_data,
+                    points: vec![vec![zeta]],
+                },
+                OpeningRequest {
+                    prover_data: &trace_data,
+                    points: vec![vec![zeta]],
+                },
+            ],
+            &mut prover_challenger,
+            Some(0),
+        );
+        assert_eq!(values[0][0][0].len(), 3);
+        assert_eq!(values[1][0][0].len(), 4);
+        assert!(proof.0[0][0][0].is_empty());
+        assert_eq!(proof.0[1][0][0].len(), NUM_RANDOM_CODEWORDS);
+        pcs.verify(
+            vec![
+                (
+                    pre_commit,
+                    vec![(domain, vec![(zeta, values[0][0][0].clone())])],
+                )
+                    .into(),
+                (
+                    trace_commit,
+                    vec![(domain, vec![(zeta, values[1][0][0].clone())])],
+                )
+                    .into(),
+            ],
+            &proof,
+            &mut verifier_challenger,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -882,7 +937,7 @@ mod tests {
                 .collect_vec();
 
             let expected = expected_quotient_ldes(dft, &domains, &mats);
-            let fused = Pcs::<Challenge, Challenger>::get_quotient_ldes(
+            let fused = UnivariateStarkPcs::<Challenge, Challenger>::get_quotient_ldes(
                 &pcs,
                 domains.iter().copied().zip(mats).collect_vec(),
                 num_chunks,
