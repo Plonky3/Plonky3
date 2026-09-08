@@ -1136,17 +1136,6 @@ where
         + CanSampleUniformBits<F>,
     Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
 {
-    let num_rounds = config.num_rounds();
-
-    if proof.round_proofs.len() != num_rounds {
-        return Err(ProofShapeError::RoundCount {
-            instance: None,
-            expected: num_rounds,
-            got: proof.round_proofs.len(),
-        }
-        .into());
-    }
-
     // The initial oracle is either committed by STIR, or external and already bound by the
     // caller, in which case the proof must not carry a commitment at all.
     let initial_is_external = external_fibers.is_some();
