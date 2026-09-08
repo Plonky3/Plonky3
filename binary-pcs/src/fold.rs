@@ -187,6 +187,8 @@ fn group_steps<const W: usize>(num_pairs: usize) -> Vec<Ghash128> {
 /// # Panics
 ///
 /// Panics unless the task holds exactly two input symbols per output slot.
+///
+/// Panics in debug builds unless `start` is a multiple of the packing width.
 fn fold_task(
     start: usize,
     pairs: &[BinaryField128],
@@ -200,6 +202,18 @@ fn fold_task(
         pairs.len(),
         2 * out.len(),
         "a fold task must hold one pair per output symbol"
+    );
+
+    // Invariant: `start` is a multiple of the packing width.
+    //
+    // The lane-offset identity rests on `g AND k == 0` for a group start `g` and a lane `k`.
+    //
+    // A lane index only sets bits below `log2(WIDTH)`, so `g` must carry none of them.
+    //
+    // Group starts are `start + group * WIDTH`, so they inherit that from `start` alone.
+    debug_assert!(
+        start.is_multiple_of(WIDTH),
+        "a fold task must start on a packed group boundary"
     );
 
     // The challenge is the same in every lane, so it broadcasts once for the whole task.
