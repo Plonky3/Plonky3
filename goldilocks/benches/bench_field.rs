@@ -57,7 +57,10 @@ fn bench_field(c: &mut Criterion) {
     benchmark_mul_2exp::<F, REPS>(c, name, 63);
 
     benchmark_div_2exp::<F, REPS>(c, name, 1);
+    benchmark_div_2exp::<F, REPS>(c, name, 3);
+    benchmark_div_2exp::<F, REPS>(c, name, 5);
     benchmark_div_2exp::<F, REPS>(c, name, 10);
+    benchmark_div_2exp::<F, REPS>(c, name, 32);
 
     benchmark_neg_latency::<F, L_REPS>(c, name);
     benchmark_neg_throughput::<F, REPS>(c, name);

@@ -303,6 +303,18 @@ impl PrimeCharacteristicRing for Goldilocks {
         match exp {
             0 => *self,
             1 => self.halve(),
+            2..=32 => {
+                let lo = self.value & ((1u64 << exp) - 1);
+                let hi = self.value >> exp;
+
+                // Multiplying the expression below by 2^exp gives self.value modulo P,
+                // since 2^64 - 2^32 + 1 = P. Moreover, a < 2^64 and -P < a - b < P,
+                // so correcting a wrapping subtraction once produces a canonical result.
+                let a = hi + (lo << (32 - exp));
+                let b = lo << (64 - exp);
+                let (result, borrow) = a.overflowing_sub(b);
+                Self::new(result.wrapping_sub(Self::NEG_ORDER * u64::from(borrow)))
+            }
             _ => self.mul_2exp_u64(192 - exp),
         }
     }
@@ -787,6 +799,8 @@ mod tests {
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_64, test_two_adic_field,
     };
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
@@ -861,6 +875,48 @@ mod tests {
         assert_eq!(f.injective_exp_n().injective_exp_root_n(), f);
         assert_eq!(y.injective_exp_n().injective_exp_root_n(), y);
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
+    }
+
+    #[test]
+    fn div_2exp_matches_field_division_for_all_representatives() {
+        const EPSILON: u64 = (1 << 32) - 1;
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            EPSILON - 1,
+            EPSILON,
+            1 << 32,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX,
+        ];
+        const LARGE_EXPONENTS: [u64; 5] = [193, 384, 1 << 32, 1 << 63, u64::MAX];
+
+        let check = |raw: u64, exp: u64| {
+            let x = F::new(raw);
+            let divisor = F::TWO.exp_u64(exp % 192);
+            assert_eq!(
+                x.div_2exp_u64(exp),
+                x / divisor,
+                "raw = {raw:#018x}, exp = {exp}"
+            );
+        };
+
+        for raw in RAW_EDGES {
+            for exp in 0..=192 {
+                check(raw, exp);
+            }
+            for exp in LARGE_EXPONENTS {
+                check(raw, exp);
+            }
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0xD12_2E98);
+        for _ in 0..10_000 {
+            check(rng.random(), rng.random());
+        }
     }
 
     // Goldilocks has a redundant representation for both 0 and 1.
