@@ -141,10 +141,10 @@ where
         + GrindingChallenger<Witness = BinaryField128>
         + CanObserve<MT::Commitment>,
 {
-    fold_rounds_with(prover_data, config, mmcs, challenger, false)
+    fold_rounds_with::<false, MT, Ch>(prover_data, config, mmcs, challenger)
 }
 
-/// Drives the fold rounds, optionally applying each round's binding on the spot.
+/// Drives the fold rounds, applying each round's binding on the spot when asked.
 ///
 /// On the spot means two passes per round.
 /// The round reads its tables to measure, then a second pass applies the binding.
@@ -154,14 +154,16 @@ where
 ///
 /// The two produce the same round polynomials, so the tests can pin one against the
 /// other.
+///
+/// The choice is a const parameter, so a build that never asks for the two-pass route
+/// never compiles one.
 #[must_use]
 #[allow(clippy::type_complexity)]
-fn fold_rounds_with<MT, Ch>(
+fn fold_rounds_with<const BIND_EACH_ROUND: bool, MT, Ch>(
     prover_data: BinaryPcsProverData<MT>,
     config: &BinaryPcsConfig,
     mmcs: &MT,
     challenger: &mut Ch,
-    bind_each_round: bool,
 ) -> (
     MT::ProverData<DenseMatrix<BinaryField128>>,
     SumcheckData<BinaryField128, BinaryField128>,
@@ -212,7 +214,7 @@ where
 
         // The reference route: apply this round's binding now, rather than letting the
         // next round's measuring pass absorb it.
-        if bind_each_round {
+        if BIND_EACH_ROUND {
             sumcheck.settle();
         }
 
@@ -279,7 +281,7 @@ where
         + GrindingChallenger<Witness = BinaryField128>
         + CanObserve<MT::Commitment>,
 {
-    fold_rounds_with(prover_data, config, mmcs, challenger, true)
+    fold_rounds_with::<true, MT, Ch>(prover_data, config, mmcs, challenger)
 }
 
 /// The query phase's prover-side output: every opening `verifier::verify_query_paths` needs,
