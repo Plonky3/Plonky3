@@ -5,7 +5,9 @@
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_binary_field::{BinaryChallenger, BinaryField128, TowerLevel};
-use p3_binary_pcs::{BinaryPcs, BinaryPcsConfig, BinaryPcsParams, BinaryPcsProverData};
+use p3_binary_pcs::{
+    BinaryPcs, BinaryPcsConfig, BinaryPcsParams, BinaryPcsProverData, GroupedCodewordMmcs,
+};
 use p3_challenger::HashChallenger;
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
@@ -25,7 +27,8 @@ use tracing_subscriber::{EnvFilter, Registry};
 type F = BinaryField128;
 type Hash = SerializingHasher<Keccak256Hash>;
 type Compress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
-type Mmcs = p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash, Compress, 2, 32>;
+type MerkleMmcs = p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash, Compress, 2, 32>;
+type Mmcs = GroupedCodewordMmcs<MerkleMmcs>;
 type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 struct Config {
@@ -67,8 +70,14 @@ fn config(log_height: usize) -> Config {
         pow_bits: 0,
         security_level: 100,
     };
-    let pcs_config = BinaryPcsConfig::try_new(log_height + 1, params).unwrap();
-    let mmcs = Mmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
+    // Commit after up to three variable folds, with one coset per leaf.
+    // The final batch and its leaves shrink to the number of remaining variables.
+    let pcs_config = BinaryPcsConfig::try_new(log_height + 1, params)
+        .unwrap()
+        .try_with_folding(3.min(log_height + 1))
+        .unwrap();
+    let merkle = MerkleMmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
+    let mmcs = Mmcs::for_folding(merkle, &pcs_config);
     Config {
         pcs: BinaryPcs::new(pcs_config, mmcs),
     }

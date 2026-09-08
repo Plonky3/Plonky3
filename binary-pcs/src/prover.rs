@@ -6,7 +6,7 @@
 //! `Layout::into_sumcheck` consumes zero preprocessing rounds, leaving every one of the
 //! `num_variables` residual sumcheck rounds a folding round. Each round's challenge is used
 //! twice: it binds one multilinear variable, through [`PcsLayout`]'s evaluation-basis suffix
-//! binding, and it folds the codeword, through [`fold_codeword`], a Reed-Solomon codeword fold
+//! binding, and it folds the codeword, through [`fold_codeword_batch`], a Reed-Solomon codeword fold
 //! in the same basis (see `fold.rs`). The two stay in correspondence throughout: see
 //! `the_codeword_and_the_sumcheck_stay_in_lockstep` below, which drives the real `Layout`
 //! machinery and checks it, and `prefix_layout_does_not_stay_in_lockstep`, which checks that
@@ -24,10 +24,10 @@ use p3_sumcheck::SumcheckData;
 use p3_sumcheck::layout::{Layout, Table, Witness};
 
 use crate::PcsLayout;
-use crate::fold::fold_codeword;
+use crate::fold::fold_codeword_batch;
 use crate::params::BinaryPcsConfig;
 use crate::proof::RoundProof;
-use crate::verifier::{flat_pair_indices, sample_query_indices};
+use crate::verifier::{flat_coset_indices, sample_query_cosets};
 
 /// Preprocessing depth the commit phase lays out inside a committed row.
 ///
@@ -109,17 +109,16 @@ where
     )
 }
 
-/// Runs the residual sumcheck in lockstep with the codeword fold: one sumcheck round, one
-/// 2-to-1 fold, per iteration, with one Merkle commitment for every fold except the last —
-/// that fold's codeword is returned directly as the final codeword rather than committed, since
-/// its whole content already travels in the clear.
+/// Runs each residual sumcheck round before consuming its challenge in a codeword fold.
+/// Consecutive folds are fused into configured batches, with one commitment per batch except
+/// the last, whose entire codeword travels in the clear.
 ///
 /// The single grinding budget is spent once before the query phase, not here, so every round
 /// runs with `pow_bits = 0`.
 ///
 /// Returns the base commitment's Merkle prover data (handed back so the caller can still open
 /// base-round queries against it), the sumcheck transcript, one [`RoundCommitment`] per fold
-/// round except the last, the folding randomness in round order — `randomness.as_slice()[r]` is
+/// batch except the last, the folding randomness in round order — `randomness.as_slice()[r]` is
 /// round `r`'s challenge, matching what [`Layout::into_sumcheck`] returns — and the final
 /// folded codeword.
 #[must_use]
@@ -162,36 +161,29 @@ where
         "zero preprocessing depth commits a width-1 codeword"
     );
 
-    // One sumcheck round, one codeword fold, per iteration.
-    //
-    //     round r < last:  challenge beta_r -> fold 2-to-1 -> commit -> observe root
-    //     round r = last:  challenge beta_r -> fold 2-to-1 -> return in the clear
-    //
-    // The last fold's codeword is never committed.
-    // It travels in the proof as the final codeword instead.
-    let num_fold_rounds = config.num_fold_rounds();
-    let mut rounds: Vec<RoundCommitment<MT>> = Vec::with_capacity(num_fold_rounds - 1);
+    // Sumcheck messages/challenges remain sequential. Only batch boundaries materialize
+    // codewords and observe roots; the final batch is returned in the clear.
+    let num_batches = config.num_fold_batches();
+    let mut rounds: Vec<RoundCommitment<MT>> = Vec::with_capacity(num_batches - 1);
     let mut final_codeword = Vec::new();
-    for round in 0..num_fold_rounds {
-        let _round_span = tracing::info_span!("fold round", round).entered();
-        let challenge = tracing::info_span!("sumcheck round").in_scope(|| {
-            sumcheck.compute_sumcheck_polynomials(&mut sumcheck_data, challenger, 1, 0, None)
-        });
-        let beta = challenge.as_slice()[0];
-        randomness.extend(&challenge);
-
-        // Fold out of the previous round's Merkle leaves, never out of a copy of them.
-        // The commitment scheme already owns every codeword it committed.
-        // The fold allocates its own output, so this borrow ends before the push below.
-        let source = if round == 0 {
+    for (batch, (start, arity)) in config.fold_batches().enumerate() {
+        let _batch_span = tracing::info_span!("fold batch", batch, start, arity).entered();
+        let mut challenges = Vec::with_capacity(arity);
+        for round in start..start + arity {
+            let challenge = tracing::info_span!("sumcheck round", round).in_scope(|| {
+                sumcheck.compute_sumcheck_polynomials(&mut sumcheck_data, challenger, 1, 0, None)
+            });
+            challenges.push(challenge.as_slice()[0]);
+            randomness.extend(&challenge);
+        }
+        let source = if batch == 0 {
             &merkle_data
         } else {
-            &rounds[round - 1].merkle_data
+            &rounds[batch - 1].merkle_data
         };
         let folded = tracing::info_span!("fold codeword")
-            .in_scope(|| fold_codeword(&mmcs.get_matrices(source)[0].values, beta));
-
-        if round + 1 < num_fold_rounds {
+            .in_scope(|| fold_codeword_batch(&mmcs.get_matrices(source)[0].values, &challenges));
+        if batch + 1 < num_batches {
             let (commitment, round_data) = tracing::info_span!("commit folded codeword")
                 .in_scope(|| mmcs.commit_matrix(RowMajorMatrix::new(folded, 1)));
             challenger.observe(commitment.clone());
@@ -216,12 +208,12 @@ where
 /// The query phase's prover-side output: every opening `verifier::verify_query_paths` needs,
 /// plus the grinding witness.
 pub(crate) struct QueryProofs<MT: Mmcs<BinaryField128>> {
-    /// Openings of the base commitment: two width-1 rows per query — the pair's low- then
-    /// high-indexed symbol — in the order query indices were sampled.
+    /// Every symbol of each queried base coset, one width-1 row per symbol.
+    /// Cosets follow sampled query order; symbols inside a coset are ascending.
     pub base_opened_values: Vec<Vec<BinaryField128>>,
     /// Multiproof for the base commitment's queried rows.
     pub base_multi_proof: MT::MultiProof,
-    /// One [`RoundProof`] per intermediate folding round, i.e. every round except the last.
+    /// One [`RoundProof`] per intermediate fold batch, excluding the final batch.
     pub rounds: Vec<RoundProof<MT>>,
     /// Witness for the single grind before the query phase.
     pub pow_witness: BinaryField128,
@@ -229,9 +221,9 @@ pub(crate) struct QueryProofs<MT: Mmcs<BinaryField128>> {
 
 /// Runs the query phase: grinds the single proof-of-work witness, samples query indices from
 /// the base codeword's domain, then opens the base commitment and every intermediate
-/// folding-round commitment at the paired indices each sampled query needs.
+/// fold-batch commitment at all coset indices each sampled query needs.
 ///
-/// `rounds` is every [`RoundCommitment`] `fold_rounds` produced: one per fold round except the
+/// `rounds` is every [`RoundCommitment`] `fold_rounds` produced: one per fold batch except the
 /// last, whose codeword is never committed — it travels in the clear as the proof's
 /// `final_codeword` instead, so a Merkle path for it would only repeat what the verifier can
 /// already read directly.
@@ -251,25 +243,22 @@ where
 {
     assert_eq!(
         rounds.len(),
-        config.num_fold_rounds() - 1,
+        config.num_fold_batches() - 1,
         "rounds is the caller's own fold_rounds output, never proof-supplied data"
     );
 
     let pow_witness = challenger.grind(config.pow_bits());
 
-    let domain_size = config.domain_size();
-    let indices =
-        sample_query_indices::<_, BinaryField128>(domain_size, config.num_queries(), challenger);
-
-    let base_indices = flat_pair_indices(&indices, 0);
+    let indices = sample_query_cosets(config, challenger);
+    let base_indices = flat_coset_indices(&indices, 0, config.log_folding_factor());
     let (base_values, base_multi_proof) = mmcs.open_multi_batch(&base_indices, base_merkle_data);
     let base_opened_values = single_matrix_rows(base_values);
 
     let opened_rounds = rounds
         .iter()
-        .enumerate()
-        .map(|(r, round)| {
-            let round_indices = flat_pair_indices(&indices, r + 1);
+        .zip(config.fold_batches().skip(1))
+        .map(|(round, (start, arity))| {
+            let round_indices = flat_coset_indices(&indices, start, arity);
             let (values, multi_proof) = mmcs.open_multi_batch(&round_indices, &round.merkle_data);
             RoundProof {
                 commitment: round.commitment.clone(),
@@ -313,7 +302,8 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::{commit, fold_codeword, fold_rounds};
+    use super::{commit, fold_rounds};
+    use crate::fold::fold_codeword;
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::test_util::{challenger, mmcs};
 

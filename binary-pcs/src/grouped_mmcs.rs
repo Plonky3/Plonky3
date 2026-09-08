@@ -21,6 +21,7 @@ use thiserror::Error;
 pub struct GroupedCodewordMmcs<Inner> {
     inner: Inner,
     group_size: usize,
+    log_inv_rate: Option<usize>,
 }
 
 impl<Inner> GroupedCodewordMmcs<Inner> {
@@ -33,7 +34,26 @@ impl<Inner> GroupedCodewordMmcs<Inner> {
             group_size.is_power_of_two(),
             "group size must be a power of two"
         );
-        Self { inner, group_size }
+        Self {
+            inner,
+            group_size,
+            log_inv_rate: None,
+        }
+    }
+
+    /// Pack one full coset for the next fold batch, including a shorter final batch.
+    /// Prover and verifier must use the same validated PCS configuration.
+    pub const fn for_folding(inner: Inner, config: &crate::BinaryPcsConfig) -> Self {
+        Self {
+            inner,
+            group_size: 1 << config.log_folding_factor(),
+            log_inv_rate: Some(config.log_inv_rate()),
+        }
+    }
+
+    fn group_size_at(&self, height: usize) -> Option<usize> {
+        let message_len = height >> self.log_inv_rate.unwrap_or(0);
+        (message_len != 0).then(|| self.group_size.min(message_len))
     }
 }
 
@@ -114,7 +134,9 @@ impl<Inner: Mmcs<F>> Mmcs<F> for GroupedCodewordMmcs<Inner> {
             matrix.height().is_power_of_two(),
             "expected power-of-two length"
         );
-        let group_size = self.group_size.min(matrix.height());
+        let group_size = self
+            .group_size_at(matrix.height())
+            .expect("codeword shorter than rate expansion");
         self.inner
             .commit_matrix(GroupedCodeword { matrix, group_size })
     }
@@ -207,6 +229,7 @@ impl<Inner: Mmcs<F>> Mmcs<F> for GroupedCodewordMmcs<Inner> {
         if dim.width != 1 || !dim.height.is_power_of_two() {
             return Err(BadDimensions);
         }
+        let group_size = self.group_size_at(dim.height).ok_or(BadDimensions)?;
         if indices.len() != opened_values.len() {
             return Err(OpeningShape);
         }
@@ -223,7 +246,6 @@ impl<Inner: Mmcs<F>> Mmcs<F> for GroupedCodewordMmcs<Inner> {
                 return Err(ConflictingDuplicate);
             }
         }
-        let group_size = self.group_size.min(dim.height);
         let groups = group_indices(indices, group_size);
         // Check before allocating complete grouped rows. All groups are disjoint and inside
         // the validated codeword, so the product is bounded by dim.height.
@@ -321,6 +343,41 @@ mod tests {
                 proof.missing_symbols,
                 missing.into_iter().map(F::from_repr).collect::<Vec<_>>()
             );
+        }
+    }
+
+    #[test]
+    fn folding_schedule_sizes_leaves_for_the_next_actual_batch() {
+        use crate::{BinaryPcsConfig, BinaryPcsParams};
+        let config = BinaryPcsConfig::try_new(
+            6,
+            BinaryPcsParams {
+                log_inv_rate: 2,
+                security_level: 100,
+                pow_bits: 0,
+            },
+        )
+        .unwrap()
+        .try_with_folding(4)
+        .unwrap();
+        let grouped = GroupedCodewordMmcs::for_folding(mmcs(), &config);
+        for (len, width) in [(256, 16), (16, 4)] {
+            let values: Vec<_> = (0..len).map(|i| F::from_repr(i as u128)).collect();
+            let (root, data) = grouped.commit_matrix(RowMajorMatrix::new(values.clone(), 1));
+            let (expected, _) = mmcs().commit_matrix(RowMajorMatrix::new(values, width));
+            assert_eq!(root, expected);
+            let opening = grouped.open_batch(len - 1, &data);
+            grouped
+                .verify_batch(
+                    &root,
+                    &[Dimensions {
+                        height: len,
+                        width: 1,
+                    }],
+                    len - 1,
+                    (&opening).into(),
+                )
+                .unwrap();
         }
     }
 

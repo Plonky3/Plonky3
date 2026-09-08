@@ -10,7 +10,10 @@
 //! actually produced.
 
 use p3_binary_field::{BinaryChallenger, BinaryField128};
-use p3_binary_pcs::{BinaryPcs, BinaryPcsConfig, BinaryPcsError, BinaryPcsParams, BinaryPcsProof};
+use p3_binary_pcs::{
+    BinaryPcs, BinaryPcsConfig, BinaryPcsError, BinaryPcsParams, BinaryPcsProof,
+    GroupedCodewordMmcs,
+};
 use p3_challenger::{FieldChallenger, HashChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::PrimeCharacteristicRing;
@@ -32,6 +35,59 @@ type MyCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
 type MyMmcs = MerkleTreeMmcs<F, u8, MyHash, MyCompress, 2, 32>;
 type MyChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 type MyPcs = BinaryPcs<MyMmcs>;
+
+#[test]
+fn batched_folding_commits_only_batch_boundaries_and_verifies() {
+    for (num_variables, arity, expected_roots) in [(8, 3, 2), (7, 2, 3), (4, 4, 0)] {
+        let config = BinaryPcsConfig::try_new(num_variables, params(2, 0, 100))
+            .unwrap()
+            .try_with_folding(arity)
+            .unwrap();
+        let pcs = BinaryPcs::new(config, GroupedCodewordMmcs::for_folding(mmcs(), &config));
+        let mut rng = SmallRng::seed_from_u64(0xBA7C);
+        let table = Table::rand(&mut rng, 1, num_variables);
+        let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(num_variables, 1),
+            vec![OpeningBatch::new(vec![0], vec![0])],
+        )]);
+        let mut ch = challenger();
+        let (root, data) = pcs.commit(witness, &mut ch);
+        let proof = pcs.open(data, protocol.clone(), &mut ch);
+        assert_eq!(proof.rounds.len(), expected_roots);
+        assert_eq!(proof.sumcheck.num_rounds(), num_variables);
+        let bytes = postcard::to_allocvec(&proof).unwrap();
+        let decoded: BinaryPcsProof<GroupedCodewordMmcs<MyMmcs>> =
+            postcard::from_bytes(&bytes).unwrap();
+        pcs.verify(&root, &decoded, &mut challenger(), protocol.clone())
+            .unwrap();
+
+        // Authenticate every symbol in the coset, including those beyond the first pair.
+        let mut tampered = decoded.clone();
+        tampered.base_opened_values[(1 << arity) - 1][0] += F::ONE;
+        assert!(matches!(
+            pcs.verify(&root, &tampered, &mut challenger(), protocol.clone()),
+            Err(BinaryPcsError::MerkleFailed { round: 0, .. })
+        ));
+
+        let mut short_coset = decoded.clone();
+        short_coset.base_opened_values.pop();
+        assert!(matches!(
+            pcs.verify(&root, &short_coset, &mut challenger(), protocol.clone()),
+            Err(BinaryPcsError::OpeningCountMismatch { round: 0, .. })
+        ));
+
+        if !decoded.rounds.is_empty() {
+            let mut tampered = decoded;
+            // The final committed layer precedes a potentially shorter batch.
+            tampered.rounds.last_mut().unwrap().opened_values[0][0] += F::ONE;
+            assert!(matches!(
+                pcs.verify(&root, &tampered, &mut challenger(), protocol),
+                Err(BinaryPcsError::MerkleFailed { round, .. }) if round == expected_roots
+            ));
+        }
+    }
+}
 
 /// Default shape shared by every negative test: enough intermediate rounds
 /// (`num_fold_rounds - 1 == 7`) to truncate or permute, and `pow_bits > 0` so the grinding
@@ -436,6 +492,7 @@ fn permuted_round_commitments_are_rejected() {
 fn zero_claim_lifecycle(
     num_variables: usize,
     seed: u64,
+    log_folding_factor: usize,
 ) -> (
     MyPcs,
     <MyMmcs as Mmcs<F>>::Commitment,
@@ -455,6 +512,8 @@ fn zero_claim_lifecycle(
         num_variables,
         params(LOG_INV_RATE, POW_BITS, SECURITY_LEVEL),
     )
+    .unwrap()
+    .try_with_folding(log_folding_factor)
     .unwrap();
     let pcs = BinaryPcs::new(config, mmcs());
 
@@ -474,7 +533,7 @@ fn zero_claim_lifecycle(
 /// that ties the final codeword to the rounds committed before it, and it is what catches this.
 #[test]
 fn a_zero_claim_proof_with_a_uniformly_shifted_final_codeword_is_rejected_by_the_fold_chain() {
-    let (pcs, commitment, proof, protocol) = zero_claim_lifecycle(NUM_VARIABLES, 11);
+    let (pcs, commitment, proof, protocol) = zero_claim_lifecycle(NUM_VARIABLES, 11, 1);
 
     let mut honest_challenger = challenger();
     pcs.verify(
@@ -518,6 +577,26 @@ fn a_zero_claim_proof_with_a_uniformly_shifted_final_codeword_is_rejected_by_the
         matches!(err, BinaryPcsError::FoldMismatch { round, query: 0 } if round == NUM_VARIABLES),
         "expected FoldMismatch at round {NUM_VARIABLES} query 0, got {err:?}"
     );
+}
+
+/// With no opening claims, the sumcheck's final product check is vacuous. Batched query
+/// verification must still tie the uniform final word to the authenticated base cosets.
+#[test]
+fn batched_zero_claim_proofs_reject_a_shifted_final_codeword() {
+    for arity in [2, 3, NUM_VARIABLES] {
+        let (pcs, commitment, mut proof, protocol) =
+            zero_claim_lifecycle(NUM_VARIABLES, 0xBA7C, arity);
+        pcs.verify(&commitment, &proof, &mut challenger(), protocol.clone())
+            .unwrap();
+        for symbol in proof.final_codeword.as_mut_slice() {
+            *symbol += F::ONE;
+        }
+        let expected_round = NUM_VARIABLES.div_ceil(arity);
+        assert!(matches!(
+            pcs.verify(&commitment, &proof, &mut challenger(), protocol),
+            Err(BinaryPcsError::FoldMismatch { round, query: 0 }) if round == expected_round
+        ));
+    }
 }
 
 /// The different-commitment test desyncs the whole transcript, so `FinalCheck` fires long
