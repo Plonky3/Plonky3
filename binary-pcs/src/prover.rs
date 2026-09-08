@@ -240,11 +240,17 @@ where
         }
     }
 
-    // The last round's challenge stays unapplied, and is never applied.
+    // The last round's challenge is discarded rather than applied.
     //
-    // The codeword fold, not the sumcheck tables, is what carries the folded message
-    // forward, and the sumcheck goes out of scope here without anything else reading it.
-    // The final binding pass would therefore only compute a table nobody looks at.
+    // The codeword fold, not the sumcheck tables, carries the folded message forward.
+    // The sumcheck goes out of scope here with nothing else reading it.
+    // A final binding pass would only compute a table nobody looks at.
+    //
+    // A debug build applies it anyway, purely to check the claim against it.
+    // `settle` is where that check lives, so this is the last binding's only validation.
+    #[cfg(debug_assertions)]
+    sumcheck.settle();
+
     drop(sumcheck);
 
     (
