@@ -50,12 +50,17 @@
 
 extern crate alloc;
 
+// Only the transcript's unwind test reaches for `std`, and only where unwinding exists.
+#[cfg(all(test, panic = "unwind"))]
+extern crate std;
+
 pub mod config;
 pub mod error;
 pub mod pcs;
 pub mod proof;
 pub mod prover;
 mod soundness;
+pub mod transcript;
 pub mod utils;
 pub mod verifier;
 
@@ -66,4 +71,8 @@ pub use error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, St
 pub use p3_security::whir::SecurityAssumption;
 pub use pcs::{DEFAULT_MAX_LOG_HEIGHT_SPREAD, StirCommitment, TwoAdicStirPcs};
 pub use proof::{StirProof, StirQueryOpenings, StirRoundProof};
+pub use transcript::{
+    ProverTranscript, StirInstanceShape, StirRoundShape, StirShape, TranscriptFailure,
+    VerifierTranscript,
+};
 pub use verifier::StirVerifyOutputs;
