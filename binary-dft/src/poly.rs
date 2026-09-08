@@ -212,9 +212,14 @@ const STAGING_BYTES: usize = 64 * 1024;
 /// There are two such sets, and one cut point each:
 ///
 /// ```text
-///     stages log_n-1 .. local     rows spaced far apart, gathered into a staging tile
-///     stages local-1 .. 0         rows already adjacent, so a contiguous tile holds them
+///     stages log_n-1 .. local+leftover   rows far apart, gathered into a staging tile
+///     stages local+leftover-1 .. local   rows far apart, one plain full pass each
+///     stages local-1 .. 0                rows already adjacent, so a contiguous tile holds them
 /// ```
+///
+/// The middle band holds the stages a staging tile would not pay for.
+///
+/// It is one stage wide at most, unless the staging tile cannot hold two rows.
 ///
 /// The count of contiguous-tile stages never exceeds the count of stages there are.
 #[derive(Copy, Clone, Debug)]
