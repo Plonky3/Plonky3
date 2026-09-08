@@ -1,5 +1,6 @@
 //! STIR verifier implementation (Construction 5.2).
 
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
 use itertools::izip;
@@ -14,7 +15,7 @@ use crate::config::{StirConfig, StirRoundConfig};
 use crate::error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, StirError};
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
 use crate::utils::{
-    check_ans_interpolates, eval_poly, eval_poly_at_base, fold_domain_params,
+    check_ans_interpolates, eval_poly, eval_poly_at_base, fold_domain_params, interpolate_poly,
     lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points,
     vanishing_poly_from_roots,
 };
@@ -147,6 +148,86 @@ fn check_ans_length<EF, MmcsError, InputError>(
         .into());
     }
     Ok(())
+}
+
+/// Resolve the explicitly configured encoding before the original transcript observation.
+/// Reconstruction uses the prover's canonical representation, including `[ZERO]` for a
+/// zero interpolant through a nonempty set of points.
+fn resolve_ans_polynomial<'a, EF: Field, MmcsError, InputError>(
+    round: RoundLabel,
+    compact: bool,
+    transmitted: &'a [EF],
+    points: &[EF],
+    values: &[EF],
+) -> Result<Cow<'a, [EF]>, StirError<MmcsError, InputError>> {
+    if !compact {
+        check_ans_length(round, transmitted, points.len())?;
+        return Ok(Cow::Borrowed(transmitted));
+    }
+    if !transmitted.is_empty() {
+        return Err(ProofShapeError::UnexpectedAnsPolynomial {
+            round,
+            got: transmitted.len(),
+        }
+        .into());
+    }
+    // interpolate_poly asserts these preconditions. Keep malformed inputs fallible here.
+    if points.len() != values.len()
+        || points
+            .iter()
+            .enumerate()
+            .any(|(i, point)| points[..i].contains(point))
+    {
+        return Err(StirError::InvalidAnsConsistency { round });
+    }
+    Ok(Cow::Owned(interpolate_poly(points, values)))
+}
+
+#[cfg(test)]
+mod compact_answer_tests {
+    use p3_baby_bear::BabyBear as F;
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::*;
+
+    #[test]
+    fn compact_answers_reconstruct_canonical_zero_and_reject_invalid_nodes() {
+        let round = RoundLabel::Round(2);
+        assert!(
+            resolve_ans_polynomial::<F, (), ()>(round, true, &[], &[], &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            resolve_ans_polynomial::<F, (), ()>(round, true, &[], &[F::ONE], &[F::ZERO])
+                .unwrap()
+                .as_ref(),
+            &[F::ZERO]
+        );
+        for (points, values) in [
+            (&[F::ONE][..], &[][..]),
+            (&[F::ONE, F::ONE][..], &[F::ZERO, F::ZERO][..]),
+        ] {
+            assert!(matches!(
+                resolve_ans_polynomial::<F, (), ()>(round, true, &[], points, values),
+                Err(StirError::InvalidAnsConsistency {
+                    round: RoundLabel::Round(2)
+                })
+            ));
+        }
+        // The default representation still borrows the provided coefficients verbatim.
+        assert!(matches!(
+            resolve_ans_polynomial::<F, (), ()>(
+                round,
+                false,
+                &[F::ZERO, F::ZERO],
+                &[F::ZERO, F::ONE],
+                &[F::ZERO, F::ZERO]
+            )
+            .unwrap(),
+            Cow::Borrowed([F::ZERO, F::ZERO])
+        ));
+    }
 }
 
 /// Fetch an external initial oracle's queried fibers and lay them out in draw order.
@@ -613,24 +694,27 @@ where
     // Step 4: ans polynomial observation and consistency check.
     let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
 
-    // Ans interpolates |all_points| values, bounding its length. That bound is what makes the
-    // one-point check below bind.
-    let max_ans_len = all_points.len();
-    check_ans_length(RoundLabel::Round(round), &rp.ans_polynomial, max_ans_len)?;
+    let ans = resolve_ans_polynomial(
+        RoundLabel::Round(round),
+        config.options().compact_answers,
+        &rp.ans_polynomial,
+        &all_points,
+        &all_values,
+    )?;
 
     // Bind ans_poly into the transcript BEFORE rho. The interpolation identity is a one-point
     // check; observing Ans first means the prover commits to it before learning rho.
-    challenger.observe_algebra_slice(&rp.ans_polynomial);
+    challenger.observe_algebra_slice(&ans);
 
     let rho: EF = challenger.sample_algebra_element();
 
-    if !check_ans_interpolates(&rp.ans_polynomial, &all_points, &all_values, rho) {
+    if !check_ans_interpolates(&ans, &all_points, &all_values, rho) {
         return Err(StirError::InvalidAnsConsistency {
             round: RoundLabel::Round(round),
         });
     }
 
-    Ok(rv.finish(rp.ans_polynomial.clone(), &all_points))
+    Ok(rv.finish(ans.into_owned(), &all_points))
 }
 
 /// One instance's in-flight final round, advanced in the order the transcript demands.
@@ -1306,19 +1390,24 @@ where
             let rp = &proofs[i].round_proofs[local_r];
             let (all_points, all_values) = rv.all_points_and_values(&rp.ood_answers);
 
-            let max_ans_len = all_points.len();
-            check_ans_length(RoundLabel::Round(local_r), &rp.ans_polynomial, max_ans_len)?;
+            let ans = resolve_ans_polynomial(
+                RoundLabel::Round(local_r),
+                configs[i].options().compact_answers,
+                &rp.ans_polynomial,
+                &all_points,
+                &all_values,
+            )?;
 
-            challenger.observe_algebra_slice(&rp.ans_polynomial);
+            challenger.observe_algebra_slice(&ans);
             let rho: EF = challenger.sample_algebra_element();
 
-            if !check_ans_interpolates(&rp.ans_polynomial, &all_points, &all_values, rho) {
+            if !check_ans_interpolates(&ans, &all_points, &all_values, rho) {
                 return Err(StirError::InvalidAnsConsistency {
                     round: RoundLabel::Round(local_r),
                 });
             }
 
-            finishes.push((i, rv.finish(rp.ans_polynomial.clone(), &all_points)));
+            finishes.push((i, rv.finish(ans.into_owned(), &all_points)));
         }
 
         // Phase 5: touches no transcript state, so instance order no longer matters.

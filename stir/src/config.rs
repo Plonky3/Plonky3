@@ -105,6 +105,11 @@ pub struct StirOptions {
     /// starting fold. `None` retains the legacy schedule. Larger bounds save intermediate
     /// rounds at the cost of sending more final coefficients. An unreachable bound is rejected.
     pub max_log_final_poly_len: Option<usize>,
+
+    /// Omit answer-polynomial coefficients from the proof and reconstruct them in the
+    /// verifier. This saves proof bytes at the cost of verifier interpolation work and
+    /// temporary memory. The default sends coefficients; both sides must agree on this option.
+    pub compact_answers: bool,
 }
 
 /// Derived configuration for a single STIR round.
@@ -1103,6 +1108,7 @@ mod tests {
             params.max_pow_bits = 0;
             let options = StirOptions {
                 max_log_final_poly_len: cap,
+                ..Default::default()
             };
             let config = StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::new_with_options(
                 degree, params, options,
@@ -1120,6 +1126,7 @@ mod tests {
             params,
             StirOptions {
                 max_log_final_poly_len: Some(0),
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -1645,6 +1652,7 @@ mod tests {
                     },
                     StirOptions {
                         max_log_final_poly_len: cap,
+                        ..Default::default()
                     },
                 );
 

@@ -99,6 +99,10 @@ pub enum ProofShapeError {
         got: usize,
     },
 
+    /// Compact answers require an empty transmitted coefficient vector.
+    #[error("{round}: compact answers expect no transmitted ans coefficients, got {got}")]
+    UnexpectedAnsPolynomial { round: RoundLabel, got: usize },
+
     /// A committed oracle is read through a Merkle multi-opening the proof must supply.
     #[error("{round}: missing query openings")]
     MissingQueryOpenings { round: RoundLabel },

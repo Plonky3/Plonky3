@@ -2566,6 +2566,7 @@ mod tests {
         }
         let options = crate::StirOptions {
             max_log_final_poly_len: Some(4),
+            ..Default::default()
         };
         let early = original.clone().with_options(options);
         assert_eq!(original.options(), crate::StirOptions::default());
@@ -2639,6 +2640,100 @@ mod tests {
                 )];
                 <TestPcs as Pcs<EF, TestChallenger>>::verify(&pcs, claims, &proof, &mut base)
                     .expect("ordinary and Combine proofs verify under their own options");
+            }
+        }
+    }
+
+    #[test]
+    fn compact_answers_preserve_pcs_values_and_warm_clone_transcripts() {
+        for cap in [None, Some(4)] {
+            for spread in [0, 2] {
+                let (pcs, _) = test_pcs_and_params();
+                let options = StirOptions {
+                    max_log_final_poly_len: cap,
+                    ..Default::default()
+                };
+                let pcs = pcs.with_max_log_height_spread(spread).with_options(options);
+                let mut rng = rand::rngs::SmallRng::seed_from_u64(315);
+                let perm = TestPerm::new_from_rng_128(&mut rng);
+                let mut base = TestChallenger::new(perm);
+                let domains: Vec<_> = [8, 6, 4]
+                    .map(|log_h| {
+                        <TestPcs as Pcs<EF, TestChallenger>>::natural_domain_for_degree(
+                            &pcs,
+                            1 << log_h,
+                        )
+                    })
+                    .into();
+                let inputs: Vec<_> = domains
+                    .iter()
+                    .zip([8, 6, 4])
+                    .map(|(&domain, log_h)| {
+                        (
+                            domain,
+                            RowMajorMatrix::<TestVal>::rand(&mut rng, 1 << log_h, 2),
+                        )
+                    })
+                    .collect();
+                let (commit, data) = <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, inputs);
+                base.observe(commit.clone());
+                let zeta: EF = base.sample_algebra_element();
+                let mut full_p = base.clone();
+                let (values, full_proof) = <TestPcs as Pcs<EF, TestChallenger>>::open(
+                    &pcs,
+                    vec![(&data, vec![vec![zeta]; 3])],
+                    &mut full_p,
+                );
+                // Clone only after opening has warmed both ordinary and Combine schedules.
+                let compact = pcs.clone().with_options(StirOptions {
+                    compact_answers: true,
+                    ..options
+                });
+                let mut compact_p = base.clone();
+                let (compact_values, compact_proof) = <TestPcs as Pcs<EF, TestChallenger>>::open(
+                    &compact,
+                    vec![(&data, vec![vec![zeta]; 3])],
+                    &mut compact_p,
+                );
+                assert_eq!(values, compact_values);
+                let next: EF = full_p.sample_algebra_element();
+                assert_eq!(next, compact_p.sample_algebra_element::<EF>());
+                let claims = vec![(
+                    commit,
+                    domains
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, domain)| (domain, vec![(zeta, values[0][i][0].clone())]))
+                        .collect::<Vec<_>>(),
+                )];
+                for (pcs, proof) in [(&pcs, &full_proof), (&compact, &compact_proof)] {
+                    let mut v_ch = base.clone();
+                    <TestPcs as Pcs<EF, TestChallenger>>::verify(
+                        pcs,
+                        claims.clone(),
+                        proof,
+                        &mut v_ch,
+                    )
+                    .unwrap();
+                    assert_eq!(next, v_ch.sample_algebra_element::<EF>());
+                }
+                assert!(
+                    pcs.config_cache
+                        .read()
+                        .values()
+                        .all(|c| !c.options().compact_answers)
+                );
+                assert!(
+                    compact
+                        .config_cache
+                        .read()
+                        .values()
+                        .all(|c| c.options().compact_answers)
+                );
+                assert!(
+                    postcard::to_allocvec(&compact_proof).unwrap().len()
+                        < postcard::to_allocvec(&full_proof).unwrap().len()
+                );
             }
         }
     }

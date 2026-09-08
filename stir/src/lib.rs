@@ -20,10 +20,12 @@
 //! Several deliberate implementation choices differ from the construction stated in
 //! the paper:
 //!
-//! - **Prover-assisted Ans check.** The paper's verifier interpolates `Ans` itself. Here the
-//!   prover sends `Ans`, and the verifier checks it against the barycentric interpolant
+//! - **Prover-assisted Ans check.** The paper's verifier interpolates `Ans` itself. By default
+//!   the prover sends `Ans`, and the verifier checks it against the barycentric interpolant
 //!   through the round's points at a transcript-derived random point. Its Schwartz–Zippel
-//!   error is included explicitly in STIR's parameter validation.
+//!   error is included explicitly in STIR's parameter validation. [`StirOptions::compact_answers`]
+//!   omits the coefficients and reconstructs them in the verifier, preserving the transcript
+//!   and the existing check while trading verifier computation for fewer proof bytes.
 //! - **Fixed `s` schedule.** OOD sample count is fixed per the paper's recommended schedule
 //!   (`s = 1` for Johnson, `s = 2` for capacity); [`config::StirConfig::new`] does not search
 //!   for the smallest valid `s`.

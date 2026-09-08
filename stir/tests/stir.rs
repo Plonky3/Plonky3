@@ -183,6 +183,7 @@ mod babybear_stir {
                 params,
                 StirOptions {
                     max_log_final_poly_len: Some(cap),
+                    ..Default::default()
                 },
             );
             let mut rng = seeded_rng();
@@ -212,6 +213,7 @@ mod babybear_stir {
             params,
             StirOptions {
                 max_log_final_poly_len: Some(6),
+                ..Default::default()
             },
         );
         let mut rng = seeded_rng();
@@ -224,6 +226,106 @@ mod babybear_stir {
             postcard::to_allocvec(&early_proof).unwrap().len()
                 < postcard::to_allocvec(&full_proof).unwrap().len()
         );
+    }
+
+    #[test]
+    fn compact_answers_preserve_proofs_and_transcripts() {
+        for (degree, kind, cap) in [
+            (8, 0, None),
+            (8, 1, None),
+            (8, 2, None),
+            (3, 0, None),
+            (10, 0, Some(6)),
+        ] {
+            let (params, dft, challenger) = make_params(1, 2);
+            let options = StirOptions {
+                max_log_final_poly_len: cap,
+                ..Default::default()
+            };
+            let full = StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                degree,
+                params.clone(),
+                options,
+            );
+            let compact = StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                degree,
+                params,
+                StirOptions {
+                    compact_answers: true,
+                    ..options
+                },
+            );
+            let mut rng = seeded_rng();
+            let mut poly: Vec<EF> = (0..1 << degree).map(|_| rng.random()).collect();
+            if kind != 0 {
+                poly.fill(EF::ZERO);
+                if kind == 2 {
+                    poly[0] = EF::from_u64(7);
+                }
+            }
+            let mut full_p = challenger.clone();
+            let mut compact_p = challenger.clone();
+            let (full_proof, full_queries) = prove_stir(&full, poly.clone(), &dft, &mut full_p);
+            let (compact_proof, compact_queries) = prove_stir(&compact, poly, &dft, &mut compact_p);
+            assert_eq!(full_queries, compact_queries);
+            let mut full_v = challenger.clone();
+            let mut compact_v = challenger.clone();
+            verify_stir(&full, &full_proof, &mut full_v).unwrap();
+            verify_stir(&compact, &compact_proof, &mut compact_v).unwrap();
+            let next: EF = full_p.sample_algebra_element();
+            assert_eq!(next, compact_p.sample_algebra_element::<EF>());
+            assert_eq!(next, full_v.sample_algebra_element::<EF>());
+            assert_eq!(next, compact_v.sample_algebra_element::<EF>());
+
+            if kind == 1 {
+                assert!(
+                    full_proof
+                        .round_proofs
+                        .iter()
+                        .all(|r| r.ans_polynomial == [EF::ZERO])
+                );
+            }
+            let mut omitted = full_proof.clone();
+            for round in &mut omitted.round_proofs {
+                round.ans_polynomial.clear();
+            }
+            let full_bytes = postcard::to_allocvec(&full_proof).unwrap();
+            let compact_bytes = postcard::to_allocvec(&compact_proof).unwrap();
+            assert_eq!(compact_bytes, postcard::to_allocvec(&omitted).unwrap());
+            if compact.num_rounds() == 0 {
+                assert_eq!(compact_bytes, full_bytes);
+                continue;
+            }
+            assert!(compact_bytes.len() < full_bytes.len());
+            for coefficients in [
+                full_proof.round_proofs[0].ans_polynomial.clone(),
+                vec![EF::ONE],
+            ] {
+                let mut bad = compact_proof.clone();
+                let got = coefficients.len();
+                bad.round_proofs[0].ans_polynomial = coefficients;
+                let err = verify_stir(&compact, &bad, &mut challenger.clone()).unwrap_err();
+                assert_eq!(
+                    shape_of(err),
+                    ProofShapeError::UnexpectedAnsPolynomial {
+                        round: RoundLabel::Round(0),
+                        got
+                    }
+                );
+            }
+            if degree == 8 && kind == 0 {
+                let mut bad = compact_proof.clone();
+                bad.round_proofs[0].ood_answers[0] += EF::ONE;
+                assert!(verify_stir(&compact, &bad, &mut challenger.clone()).is_err());
+                let mut bad = compact_proof;
+                bad.round_proofs[0]
+                    .query_openings
+                    .as_mut()
+                    .unwrap()
+                    .row_evals[0][0] += EF::ONE;
+                assert!(verify_stir(&compact, &bad, &mut challenger.clone()).is_err());
+            }
+        }
     }
 
     #[test]
@@ -3470,6 +3572,7 @@ mod babybear_stir_multi {
                     params.clone(),
                     StirOptions {
                         max_log_final_poly_len: cap,
+                        ..Default::default()
                     },
                 )
             })
@@ -3535,6 +3638,148 @@ mod babybear_stir_multi {
         for ((_, first), output) in results.iter().zip(outputs) {
             assert_eq!(first.draws, output.first_round_draws);
             assert_eq!(first.unique_sorted, output.first_round_indices);
+        }
+    }
+
+    #[test]
+    fn compact_answers_support_mixed_configs_and_external_oracles() {
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        let full_configs: Vec<_> = [(10, None), (8, Some(4)), (6, Some(usize::MAX))]
+            .into_iter()
+            .map(|(degree, cap)| {
+                StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                    degree,
+                    params.clone(),
+                    StirOptions {
+                        max_log_final_poly_len: cap,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let configs: Vec<_> = full_configs
+            .iter()
+            .zip([true, false, true])
+            .map(|(full, compact_answers)| {
+                StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                    full.log_starting_degree,
+                    params.clone(),
+                    StirOptions {
+                        compact_answers,
+                        ..full.options()
+                    },
+                )
+            })
+            .collect();
+        let full_refs: Vec<_> = full_configs.iter().collect();
+        let config_refs: Vec<_> = configs.iter().collect();
+        let mut rng = seeded_rng();
+        let polys: Vec<Vec<EF>> = configs
+            .iter()
+            .map(|config| {
+                (0..1 << config.log_starting_degree)
+                    .map(|_| rng.random())
+                    .collect()
+            })
+            .collect();
+        let codewords: Vec<_> = configs
+            .iter()
+            .zip(&polys)
+            .map(|(config, poly)| {
+                codeword_from_coeffs(
+                    &dft,
+                    poly.clone(),
+                    F::GENERATOR,
+                    config.log_starting_domain_size(),
+                )
+            })
+            .collect();
+
+        for external in [false, true] {
+            let mut base = challenger.clone();
+            if external {
+                for codeword in &codewords {
+                    base.observe_algebra_slice(codeword);
+                }
+            }
+            let prove = |refs: &[&StirConfig<F, EF, MyMmcs, Challenger>], ch: &mut Challenger| {
+                if external {
+                    prove_stir_multi_from_external_codewords(refs, codewords.clone(), &dft, ch)
+                } else {
+                    prove_stir_multi(refs, polys.clone(), &dft, ch)
+                }
+            };
+            let verify = |refs: &[&StirConfig<F, EF, MyMmcs, Challenger>],
+                          proofs: &[&StirProof<EF, MyMmcs, F>],
+                          ch: &mut Challenger| {
+                if external {
+                    let sources: Vec<_> = configs
+                        .iter()
+                        .zip(&codewords)
+                        .map(|(config, codeword)| {
+                            let arity = 1 << config.log_starting_folding_factor;
+                            external_fiber_source(codeword.clone(), arity, codeword.len() / arity)
+                        })
+                        .collect();
+                    verify_stir_multi_with_external_initial::<F, EF, MyMmcs, Challenger, (), _>(
+                        refs, proofs, ch, sources,
+                    )
+                } else {
+                    verify_stir_multi(refs, proofs, ch)
+                }
+            };
+            let mut full_p = base.clone();
+            let mut compact_p = base.clone();
+            let full = prove(&full_refs, &mut full_p);
+            let mixed = prove(&config_refs, &mut compact_p);
+            let mut full_v = base.clone();
+            let mut compact_v = base.clone();
+            let full_outputs = verify(
+                &full_refs,
+                &full.iter().map(|(p, _)| p).collect::<Vec<_>>(),
+                &mut full_v,
+            )
+            .unwrap();
+            let mixed_outputs = verify(
+                &config_refs,
+                &mixed.iter().map(|(p, _)| p).collect::<Vec<_>>(),
+                &mut compact_v,
+            )
+            .unwrap();
+            let next: EF = full_p.sample_algebra_element();
+            assert_eq!(next, compact_p.sample_algebra_element::<EF>());
+            assert_eq!(next, full_v.sample_algebra_element::<EF>());
+            assert_eq!(next, compact_v.sample_algebra_element::<EF>());
+            for (i, ((full_proof, full_queries), (mixed_proof, mixed_queries))) in
+                full.iter().zip(&mixed).enumerate()
+            {
+                assert_eq!(full_queries, mixed_queries);
+                assert_eq!(
+                    full_outputs[i].first_round_draws,
+                    mixed_outputs[i].first_round_draws
+                );
+                assert_eq!(mixed_queries.draws, mixed_outputs[i].first_round_draws);
+                let mut expected = full_proof.clone();
+                if configs[i].options().compact_answers {
+                    for round in &mut expected.round_proofs {
+                        round.ans_polynomial.clear();
+                    }
+                }
+                assert_eq!(
+                    postcard::to_allocvec(&expected).unwrap(),
+                    postcard::to_allocvec(mixed_proof).unwrap()
+                );
+            }
+            let mut bad: Vec<_> = mixed.into_iter().map(|(proof, _)| proof).collect();
+            bad[0].round_proofs[1].ans_polynomial = vec![EF::ONE];
+            let err = verify(&config_refs, &bad.iter().collect::<Vec<_>>(), &mut base).unwrap_err();
+            assert_eq!(
+                shape_of(err),
+                ProofShapeError::UnexpectedAnsPolynomial {
+                    round: RoundLabel::Round(1),
+                    got: 1
+                }
+            );
         }
     }
 

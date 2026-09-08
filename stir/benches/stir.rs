@@ -226,6 +226,21 @@ fn bench_options(c: &mut Criterion) {
             "final64",
             StirOptions {
                 max_log_final_poly_len: Some(6),
+                ..Default::default()
+            },
+        ),
+        (
+            "compact",
+            StirOptions {
+                compact_answers: true,
+                ..Default::default()
+            },
+        ),
+        (
+            "final64_compact",
+            StirOptions {
+                max_log_final_poly_len: Some(6),
+                compact_answers: true,
             },
         ),
     ] {

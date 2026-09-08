@@ -613,7 +613,11 @@ where
             folding_pow_witness,
             ood_answers,
             pow_witness,
-            ans_polynomial: finish.ans_poly,
+            ans_polynomial: if config.options().compact_answers {
+                Vec::new()
+            } else {
+                finish.ans_poly
+            },
             query_openings,
         },
         next_oracle: finish.next_oracle,
@@ -1179,7 +1183,11 @@ where
                 folding_pow_witness,
                 ood_answers: p.ood_answers,
                 pow_witness,
-                ans_polynomial: finish.ans_poly,
+                ans_polynomial: if configs[i].options().compact_answers {
+                    Vec::new()
+                } else {
+                    finish.ans_poly
+                },
                 query_openings: p.query_openings,
             });
             if r == offset(i) {
