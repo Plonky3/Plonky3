@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_challenger::GrindingChallenger;
+use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
@@ -18,8 +18,8 @@ use tracing::instrument;
 use crate::error::{InvalidProofShapeError, PeriodicColumnError, VerificationError};
 use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 use crate::{
-    AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
-    VerifierConstraintFolder, observe_commitment,
+    AirLayout, Com, Commitments, Domain, PcsError, PreprocessedVerifierKey, Proof,
+    StarkGenericConfig, StarkShape, StarkVerifierTranscript, Val, VerifierConstraintFolder,
 };
 
 /// Reject periodic columns the verifier cannot evaluate over the trace domain.
@@ -269,6 +269,136 @@ where
     }
 }
 
+/// Everything the opening argument needs, once the out-of-domain point is known.
+struct OpeningClaims<SC: StarkGenericConfig> {
+    /// The AIR's periodic columns evaluated at the out-of-domain point.
+    periodic_values: Vec<SC::Challenge>,
+    /// One entry per commitment, with the points and values of each of its matrices.
+    claims: Vec<CommitmentWithOpeningPoints<SC::Challenge, Com<SC>, Domain<SC>>>,
+}
+
+/// Assemble the claims the opening argument has to answer at `zeta`.
+///
+/// Every rejection reachable here happens while a transcript driver is live.
+///
+/// The caller therefore carries this result past the driver rather than returning it.
+/// A driver dropped mid-pattern panics, and a panic during an unwind aborts the process.
+///
+/// # Arguments
+///
+/// - `air`: the AIR being verified, read for its periodic columns and its next-row usage.
+/// - `commitments`: the commitments the proof carries.
+/// - `opened_values`: the claimed evaluations the proof carries.
+/// - `preprocessed_commit`: the preprocessed commitment, when the width in force is positive.
+/// - `trace_domain`: the domain every committed matrix is defined over.
+/// - `init_trace_domain`: the trace domain before any zero-knowledge extension.
+/// - `randomized_quotient_chunks_domains`: one domain per committed quotient chunk.
+/// - `zeta`: the out-of-domain point.
+///
+/// # Errors
+///
+/// - `zeta` landed inside the trace domain, where the selector inverse is undefined.
+/// - The AIR declares a periodic column the trace domain cannot evaluate.
+/// - The domain cannot compute the next point algebraically.
+/// - A randomization opening is absent under a zero-knowledge PCS.
+/// - The quotient openings do not pair one for one with the quotient chunk domains.
+#[allow(clippy::too_many_arguments)]
+fn prepare_opening_claims<SC, A>(
+    air: &A,
+    commitments: &Commitments<Com<SC>>,
+    opened_values: &crate::proof::OpenedValues<SC::Challenge>,
+    preprocessed_commit: Option<Com<SC>>,
+    trace_domain: Domain<SC>,
+    init_trace_domain: Domain<SC>,
+    randomized_quotient_chunks_domains: &[Domain<SC>],
+    zeta: SC::Challenge,
+) -> Result<OpeningClaims<SC>, VerificationError<PcsError<SC>>>
+where
+    SC: StarkGenericConfig,
+    A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+{
+    // The opening at zeta divides by the vanishing polynomial of the trace domain.
+    // Reject any zeta on the domain, where that polynomial is zero and the inverse panics.
+    // Honest Fiat-Shamir sampling reaches this only with probability |H| / |EF|.
+    if init_trace_domain.vanishing_poly_at_point(zeta).is_zero() {
+        return Err(VerificationError::OodPointInDomain);
+    }
+
+    // Periodic columns are AIR logic; a malformed one must error, not panic.
+    let periodic_columns = air.periodic_columns();
+    check_periodic_column_lengths(&periodic_columns, init_trace_domain.size())?;
+
+    let periodic_values: Vec<SC::Challenge> =
+        init_trace_domain.evaluate_periodic_columns_at(&periodic_columns, zeta);
+
+    let zeta_next = init_trace_domain
+        .next_point(zeta)
+        .ok_or(VerificationError::NextPointUnavailable)?;
+
+    // A randomization commitment is present exactly when the PCS is zero-knowledge.
+    // The caller has already checked that, so this branch only unpacks it.
+    let mut claims = if let Some(random_commit) = &commitments.random {
+        let random_values = opened_values
+            .random
+            .as_ref()
+            .ok_or(VerificationError::RandomizationError)?;
+        vec![(
+            random_commit.clone(),
+            vec![(trace_domain, vec![(zeta, random_values.clone())])],
+        )]
+    } else {
+        vec![]
+    };
+
+    let trace_round = {
+        let mut trace_points = vec![(zeta, opened_values.trace_local.clone())];
+        if !air.main_next_row_columns().is_empty() {
+            trace_points.push((
+                zeta_next,
+                opened_values
+                    .trace_next
+                    .clone()
+                    .expect("checked in shape validation"),
+            ));
+        }
+        (
+            commitments.trace.clone(),
+            vec![(trace_domain, trace_points)],
+        )
+    };
+
+    claims.extend(vec![
+        trace_round,
+        (
+            commitments.quotient_chunks.clone(),
+            // Check the commitment on the randomized domains.
+            zip_eq(
+                randomized_quotient_chunks_domains.iter(),
+                &opened_values.quotient_chunks,
+                VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
+                    air: 0,
+                }),
+            )?
+            .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
+            .collect_vec(),
+        ),
+    ]);
+
+    // Add the preprocessed commitment when the AIR declares preprocessed columns.
+    if let Some(preprocessed_commit) = preprocessed_commit {
+        let mut pre_points = vec![(zeta, opened_values.preprocessed_local.clone().unwrap())];
+        if !air.preprocessed_next_row_columns().is_empty() {
+            pre_points.push((zeta_next, opened_values.preprocessed_next.clone().unwrap()));
+        }
+        claims.push((preprocessed_commit, vec![(trace_domain, pre_points)]));
+    }
+
+    Ok(OpeningClaims {
+        periodic_values,
+        claims,
+    })
+}
+
 #[instrument(skip_all)]
 pub fn verify<SC, A>(
     config: &SC,
@@ -349,7 +479,6 @@ where
             maximum: usize::BITS as usize - 1,
             got: log_num_quotient_chunks.saturating_add(config.is_zk()),
         })?;
-    let mut challenger = config.initialise_challenger();
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> config.is_zk());
 
     let (quotient_domain_log_size, quotient_domain_size) =
@@ -393,7 +522,6 @@ where
     }
 
     let main_next = !air.main_next_row_columns().is_empty();
-    let pre_next = !air.preprocessed_next_row_columns().is_empty();
     let trace_next_ok = if main_next {
         opened_values
             .trace_next
@@ -415,124 +543,81 @@ where
         return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch.into());
     }
 
-    // Observe the instance.
-    challenger.observe(Val::<SC>::from_usize(degree_bits));
-    challenger.observe(Val::<SC>::from_usize(base_degree_bits));
-    challenger.observe(Val::<SC>::from_usize(preprocessed_width));
-    // TODO: Might be best practice to include other instance data here in the transcript, like some
-    // encoding of the AIR. This protects against transcript collisions between distinct instances.
-    // Practically speaking though, the only related known attack is from failing to include public
-    // values. It's not clear if failing to include other instance data could enable a transcript
-    // collision, since most such changes would completely change the set of satisfying witnesses.
-    observe_commitment::<SC>(&mut challenger, commitments.trace.clone());
-    if preprocessed_width > 0 {
-        observe_commitment::<SC>(
-            &mut challenger,
-            preprocessed_commit.as_ref().unwrap().clone(),
-        );
-    }
-    challenger.observe_slice(public_values);
+    // A preprocessed commitment is bound only when the width in force is positive.
+    let preprocessed_commit = preprocessed_commit.filter(|_| preprocessed_width > 0);
 
-    // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
-    // into a single polynomial.
+    // Describe the transcript before replaying it.
+    //
+    // Every number comes from the configuration and from the AIR, never from the proof.
+    // The two the proof does supply, both trace heights, are validated above first.
+    let mut challenger = config.initialise_challenger();
+    let mut transcript = StarkVerifierTranscript::<SC::Challenger, Val<SC>, SC::Challenge>::new(
+        &mut challenger,
+        StarkShape::new::<Val<SC>, A>(
+            air,
+            preprocessed_width,
+            degree_bits,
+            base_degree_bits,
+            num_quotient_chunks,
+            SC::Pcs::ZK,
+            config.ood_proof_of_work_bits(),
+        ),
+    );
+
+    // Replay both committed traces and the public values, then redraw the batching challenge.
     //
     // Soundness Error: n/|EF| where n is the number of constraints.
-    let alpha = challenger.sample_algebra_element();
-    observe_commitment::<SC>(&mut challenger, commitments.quotient_chunks.clone());
+    let alpha = transcript.constraint_phase::<Com<SC>>(
+        commitments.trace.clone(),
+        preprocessed_commit.clone(),
+        public_values,
+    )?;
 
-    // We've already checked that commitments.random is present if and only if ZK is enabled.
-    // Observe the random commitment if it is present.
-    if let Some(r_commit) = commitments.random.clone() {
-        observe_commitment::<SC>(&mut challenger, r_commit);
-    }
-
-    // Check the proof of work guarding the out-of-domain point, then sample it.
+    // Replay the quotient commitment and the grind, then redraw the out-of-domain point.
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has
     // degree `d`, plus `ood_proof_of_work_bits` from the grind checked here.
-    if !challenger.check_witness(config.ood_proof_of_work_bits(), *ood_pow_witness) {
-        return Err(VerificationError::InvalidOodPowWitness);
-    }
-    let zeta: SC::Challenge = challenger.sample_algebra_element();
+    let zeta = transcript.ood_phase::<Com<SC>>(
+        commitments.quotient_chunks.clone(),
+        commitments.random.clone(),
+        *ood_pow_witness,
+    )?;
 
-    // The opening at zeta divides by the vanishing polynomial of the trace domain.
-    // Reject any zeta on the domain, where that polynomial is zero and the inverse panics.
-    // Honest Fiat-Shamir sampling reaches this only with probability |H| / |EF|.
-    if init_trace_domain.vanishing_poly_at_point(zeta).is_zero() {
-        return Err(VerificationError::OodPointInDomain);
-    }
+    // Invariant: no early return may cross the span from here to the driver's `finish`.
+    //
+    //     prepare   -> a Result, carried rather than returned
+    //     delegate  -> Begin, opening argument, End, on any outcome
+    //     finish    -> every described step replayed
+    //     rejection -> propagated afterwards, never across a live driver
+    //
+    // Dropping a driver that has not replayed its pattern panics.
+    // A panic raised while an error unwinds aborts the process instead of reporting it.
+    let prepared = prepare_opening_claims::<SC, A>(
+        air,
+        commitments,
+        opened_values,
+        preprocessed_commit,
+        trace_domain,
+        init_trace_domain,
+        &randomized_quotient_chunks_domains,
+        zeta,
+    );
 
-    // Periodic columns are AIR logic; a malformed one must error, not panic.
-    let periodic_columns = air.periodic_columns();
-    check_periodic_column_lengths(&periodic_columns, init_trace_domain.size())?;
+    // Run the opening argument inside the bracket, lending it the sponge.
+    let checked: Result<_, VerificationError<PcsError<SC>>> = transcript.delegate(|challenger| {
+        let OpeningClaims {
+            periodic_values,
+            claims,
+        } = prepared?;
+        pcs.verify(claims, opening_proof, challenger)
+            .map_err(VerificationError::InvalidOpeningArgument)?;
+        Ok(periodic_values)
+    });
 
-    let periodic_values: Vec<SC::Challenge> =
-        init_trace_domain.evaluate_periodic_columns_at(&periodic_columns, zeta);
+    // Every described step has now been replayed.
+    transcript.finish();
 
-    let zeta_next = init_trace_domain
-        .next_point(zeta)
-        .ok_or(VerificationError::NextPointUnavailable)?;
-
-    // We've already checked that commitments.random and opened_values.random are present if and only if ZK is enabled.
-    let mut coms_to_verify = if let Some(random_commit) = &commitments.random {
-        let random_values = opened_values
-            .random
-            .as_ref()
-            .ok_or(VerificationError::RandomizationError)?;
-        vec![(
-            random_commit.clone(),
-            vec![(trace_domain, vec![(zeta, random_values.clone())])],
-        )]
-    } else {
-        vec![]
-    };
-    let trace_round = {
-        let mut trace_points = vec![(zeta, opened_values.trace_local.clone())];
-        if main_next {
-            trace_points.push((
-                zeta_next,
-                opened_values
-                    .trace_next
-                    .clone()
-                    .expect("checked in shape validation"),
-            ));
-        }
-        (
-            commitments.trace.clone(),
-            vec![(trace_domain, trace_points)],
-        )
-    };
-    coms_to_verify.extend(vec![
-        trace_round,
-        (
-            commitments.quotient_chunks.clone(),
-            // Check the commitment on the randomized domains.
-            zip_eq(
-                randomized_quotient_chunks_domains.iter(),
-                &opened_values.quotient_chunks,
-                VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
-                    air: 0,
-                }),
-            )?
-            .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
-            .collect_vec(),
-        ),
-    ]);
-
-    // Add preprocessed commitment verification if present
-    if preprocessed_width > 0 {
-        let mut pre_points = vec![(zeta, opened_values.preprocessed_local.clone().unwrap())];
-        if pre_next {
-            pre_points.push((zeta_next, opened_values.preprocessed_next.clone().unwrap()));
-        }
-        coms_to_verify.push((
-            preprocessed_commit.unwrap(),
-            vec![(trace_domain, pre_points)],
-        ));
-    }
-
-    pcs.verify(coms_to_verify, opening_proof, &mut challenger)
-        .map_err(VerificationError::InvalidOpeningArgument)?;
+    let periodic_values = checked?;
 
     let quotient = recompose_quotient_from_chunks::<SC>(
         &quotient_chunks_domains,
