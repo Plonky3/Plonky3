@@ -290,8 +290,32 @@ def add_target_feature(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--target-feature",
         default=None,
-        help="target features to append to RUSTFLAGS, e.g. +avx2,+vpclmulqdq or -sha3",
+        help="target features to pin, joined with an equals sign: --target-feature=+avx2",
     )
+
+
+def attach_leading_minus_values(argv: Sequence[str]) -> list[str]:
+    """Join a value that starts with a minus onto the option it belongs to.
+
+    A feature is disabled by prefixing it with a minus, and the argument parser reads such a
+    value as another option instead.
+
+    Rewriting the pair into the equals form lets both spellings work, so a leg that turns a
+    feature off is not a special case for the caller to remember.
+    """
+    joined = []
+    argv = list(argv)
+    index = 0
+    while index < len(argv):
+        argument = argv[index]
+        takes_value = argument == "--target-feature" and index + 1 < len(argv)
+        if takes_value and argv[index + 1].startswith("-"):
+            joined.append(f"{argument}={argv[index + 1]}")
+            index += 2
+            continue
+        joined.append(argument)
+        index += 1
+    return joined
 
 
 def parser() -> argparse.ArgumentParser:
@@ -343,38 +367,88 @@ def display(command: Sequence[str]) -> str:
     return shlex.join(command)
 
 
+# Separator Cargo uses inside the encoded flag variables, one unit per argument.
+ENCODED_SEPARATOR = "\x1f"
+
+
+def append_compiler_flag(
+    environment: dict[str, str], plain: str, encoded: str, flag: Sequence[str]
+) -> str:
+    """Put one compiler flag where Cargo will read it, and name the variable used.
+
+    Cargo ignores the plain variable whenever the encoded one is set.
+
+    So the flag has to follow whichever variable the caller chose, or it is silently dropped.
+
+    The flag is appended, never merged into an existing setting.
+
+    For a target feature that is what makes the request effective, since the last setting of
+    a given feature is the one that takes effect.
+    """
+    if encoded in environment:
+        current = environment[encoded]
+        units = current.split(ENCODED_SEPARATOR) if current else []
+        environment[encoded] = ENCODED_SEPARATOR.join([*units, *flag])
+        return encoded
+    current = environment.get(plain, "")
+    environment[plain] = " ".join([current, *flag]).strip()
+    return plain
+
+
 def command_environment(
     command: Sequence[str], target_feature: str | None = None
-) -> dict[str, str] | None:
-    """The environment one command runs under, or nothing to inherit the caller's unchanged.
+) -> tuple[dict[str, str] | None, list[str]]:
+    """The environment one command runs under, plus the variables it changed.
 
-    Target features reach the compiler through `RUSTFLAGS`, never through the argv.
+    Nothing is returned as the environment when the command inherits the caller's unchanged.
+
+    Target features reach a compiler through its flag variable, never through the argv.
 
     That is how the CI legs pin them, and it is what decides `cfg(target_feature = ..)`.
 
-    They are appended to whatever the caller already set.
+    A doctest is compiled by the documentation tool, not by the ordinary one.
 
-    So a leg that exports `-C debuginfo=0` keeps it.
+    So a feature has to reach both, or the library gets it while its doctests keep the
+    baseline values.
     """
-    rustdoc = command[:3] == ["cargo", "+stable", "doc"]
-    if not rustdoc and not target_feature:
-        return None
+    # Documentation tests and the documentation build are the two commands the
+    # documentation tool compiles, so both need its own flag variable.
+    doc_build = command[:3] == ["cargo", "+stable", "doc"]
+    doctest = command[:2] == ["cargo", "test"] and "--doc" in command
+
+    if not doc_build and not target_feature:
+        return None, []
+
     environment = os.environ.copy()
+    touched = []
+
     if target_feature:
-        flag = f"-C target-feature={target_feature}"
-        current = environment.get("RUSTFLAGS", "")
-        if flag not in current:
-            environment["RUSTFLAGS"] = f"{current} {flag}".strip()
-    if rustdoc:
-        deny_broken_links = "-D rustdoc::broken_intra_doc_links"
-        current = environment.get("RUSTDOCFLAGS", "")
-        if deny_broken_links not in current:
-            environment["RUSTDOCFLAGS"] = f"{current} {deny_broken_links}".strip()
-    return environment
+        flag = ["-C", f"target-feature={target_feature}"]
+        touched.append(
+            append_compiler_flag(environment, "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", flag)
+        )
+        if doc_build or doctest:
+            touched.append(
+                append_compiler_flag(
+                    environment, "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", flag
+                )
+            )
+
+    if doc_build:
+        deny = ["-D", "rustdoc::broken_intra_doc_links"]
+        name = append_compiler_flag(
+            environment, "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", deny
+        )
+        if name not in touched:
+            touched.append(name)
+
+    return environment, touched
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = parser().parse_args(argv)
+    args = parser().parse_args(
+        attach_leading_minus_values(sys.argv[1:] if argv is None else argv)
+    )
     args.workspace_root = args.workspace_root.resolve()
     try:
         commands = commands_for(args)
@@ -383,16 +457,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         return error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
     # Only the subcommands that compile or run Rust accept target features.
     target_feature = getattr(args, "target_feature", None)
-    if target_feature:
-        print(f"+ RUSTFLAGS += -C target-feature={target_feature}", flush=True)
     for command in commands:
+        environment, touched = command_environment(command, target_feature)
+        # Announce where the requested feature landed, so a dry run shows the real variable.
+        if target_feature:
+            for name in touched:
+                print(f"+ {name} += -C target-feature={target_feature}", flush=True)
         print(f"+ {display(command)}", flush=True)
         if not args.dry_run:
             try:
                 completed = subprocess.run(
                     command,
                     cwd=args.workspace_root,
-                    env=command_environment(command, target_feature),
+                    env=environment,
                     check=False,
                 )
             except OSError as error:

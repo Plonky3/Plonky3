@@ -376,9 +376,9 @@ class CargoMetadataTests(unittest.TestCase):
 
 
 class TargetFeatureTests(unittest.TestCase):
-    def test_target_feature_reaches_rustflags_and_not_the_argv(self):
-        # A leg pins its features through RUSTFLAGS, since that is what decides
-        # cfg(target_feature = ..).
+    def test_target_feature_reaches_the_flags_and_not_the_argv(self):
+        # A leg pins its features through the compiler's flag variable, since that is what
+        # decides cfg(target_feature = ..).
         #
         # The argv must therefore stay identical to the unpinned command.
         for command, expected in [
@@ -388,52 +388,127 @@ class TargetFeatureTests(unittest.TestCase):
         ]:
             with self.subTest(command=command[0]):
                 plain = _run_dry(command)
-                pinned = _run_dry([*command, "--target-feature", "+avx2,+vpclmulqdq"])
+                pinned = _run_dry([*command, "--target-feature=+avx2,+vpclmulqdq"])
                 self.assertTrue(
                     any(line.startswith(f"+ {expected}") for line in plain), plain
                 )
                 self.assertEqual(
-                    [line for line in pinned if not line.startswith("+ RUSTFLAGS")],
-                    plain,
-                )
-                self.assertIn(
-                    "+ RUSTFLAGS += -C target-feature=+avx2,+vpclmulqdq", pinned
+                    [line for line in pinned if "target-feature" not in line], plain
                 )
 
-    def test_target_feature_appends_to_an_existing_rustflags(self):
-        # CI already exports -C debuginfo=0, so the append must not replace it.
+    def test_a_leading_minus_value_is_accepted_in_both_spellings(self):
+        # Turning a feature off spells the value with a leading minus.
+        #
+        # Both the joined and the separated spelling must reach the compiler.
+        joined = _run_dry(["test", "--package", "p3-keccak", "--target-feature=-sha3"])
+        separated = _run_dry(["test", "--package", "p3-keccak", "--target-feature", "-sha3"])
+        self.assertEqual(joined, separated)
+        self.assertIn("+ RUSTFLAGS += -C target-feature=-sha3", joined)
+
+    def test_a_requested_feature_outranks_an_inherited_disable(self):
+        # The last setting of a feature is the one that takes effect.
+        #
+        #     inherited : +avx2,-avx2   -> avx2 off
+        #     appended  : +avx2         -> avx2 on
+        #
+        # So the flag is appended rather than matched against what is already there.
         import check  # noqa: PLC0415
 
-        environment = {"RUSTFLAGS": "-C debuginfo=0"}
-        with unittest.mock.patch.dict(os.environ, environment, clear=True):
-            resolved = check.command_environment(["cargo", "build"], "+avx2")
-        self.assertEqual(resolved["RUSTFLAGS"], "-C debuginfo=0 -C target-feature=+avx2")
+        with unittest.mock.patch.dict(
+            os.environ, {"RUSTFLAGS": "-C target-feature=+avx2,-avx2"}, clear=True
+        ):
+            environment, _ = check.command_environment(["cargo", "build"], "+avx2")
+        self.assertTrue(environment["RUSTFLAGS"].endswith("-C target-feature=+avx2"))
 
-    def test_target_feature_append_is_idempotent(self):
-        # The workflow's own Set flags step may already have pinned the same leg.
+    def test_an_inherited_plain_variable_is_preserved(self):
+        # CI already exports a debug-info setting, so the append must not replace it.
         import check  # noqa: PLC0415
 
-        environment = {"RUSTFLAGS": "-C debuginfo=0 -C target-feature=+avx2"}
-        with unittest.mock.patch.dict(os.environ, environment, clear=True):
-            resolved = check.command_environment(["cargo", "build"], "+avx2")
-        self.assertEqual(resolved["RUSTFLAGS"], "-C debuginfo=0 -C target-feature=+avx2")
+        with unittest.mock.patch.dict(
+            os.environ, {"RUSTFLAGS": "-C debuginfo=0"}, clear=True
+        ):
+            environment, touched = check.command_environment(["cargo", "build"], "+avx2")
+        self.assertEqual(
+            environment["RUSTFLAGS"], "-C debuginfo=0 -C target-feature=+avx2"
+        )
+        self.assertEqual(touched, ["RUSTFLAGS"])
+
+    def test_the_encoded_variable_is_used_when_the_caller_set_it(self):
+        # Cargo ignores the plain variable whenever the encoded one is set.
+        #
+        # Writing the plain one there would announce a feature that never reaches rustc.
+        import check  # noqa: PLC0415
+
+        encoded = f"-C{check.ENCODED_SEPARATOR}debuginfo=0"
+        with unittest.mock.patch.dict(
+            os.environ, {"CARGO_ENCODED_RUSTFLAGS": encoded}, clear=True
+        ):
+            environment, touched = check.command_environment(["cargo", "build"], "+sve2")
+        self.assertEqual(
+            environment["CARGO_ENCODED_RUSTFLAGS"].split(check.ENCODED_SEPARATOR),
+            ["-C", "debuginfo=0", "-C", "target-feature=+sve2"],
+        )
+        self.assertNotIn("RUSTFLAGS", environment)
+        self.assertEqual(touched, ["CARGO_ENCODED_RUSTFLAGS"])
+
+    def test_a_doctest_pins_the_documentation_compiler_too(self):
+        # Doctests are compiled by the documentation tool, not the ordinary one.
+        #
+        # Without its own flag variable the library gets the feature and its doctests do not.
+        import check  # noqa: PLC0415
+
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            environment, touched = check.command_environment(
+                ["cargo", "test", "--doc"], "+sve2"
+            )
+        self.assertEqual(environment["RUSTFLAGS"], "-C target-feature=+sve2")
+        self.assertEqual(environment["RUSTDOCFLAGS"], "-C target-feature=+sve2")
+        self.assertEqual(touched, ["RUSTFLAGS", "RUSTDOCFLAGS"])
+
+    def test_a_doctest_uses_the_encoded_documentation_variable_when_set(self):
+        import check  # noqa: PLC0415
+
+        encoded = f"-C{check.ENCODED_SEPARATOR}debuginfo=0"
+        with unittest.mock.patch.dict(
+            os.environ, {"CARGO_ENCODED_RUSTDOCFLAGS": encoded}, clear=True
+        ):
+            environment, _ = check.command_environment(
+                ["cargo", "test", "--doc"], "+sve2"
+            )
+        self.assertEqual(
+            environment["CARGO_ENCODED_RUSTDOCFLAGS"].split(check.ENCODED_SEPARATOR),
+            ["-C", "debuginfo=0", "-C", "target-feature=+sve2"],
+        )
+        self.assertNotIn("RUSTDOCFLAGS", environment)
 
     def test_no_target_feature_inherits_the_environment_unchanged(self):
         import check  # noqa: PLC0415
 
-        self.assertIsNone(check.command_environment(["cargo", "build"], None))
+        self.assertEqual(check.command_environment(["cargo", "build"], None), (None, []))
 
-    def test_docs_still_deny_broken_links_alongside_a_target_feature(self):
+    def test_docs_deny_broken_links_alongside_a_target_feature(self):
         import check  # noqa: PLC0415
 
         with unittest.mock.patch.dict(os.environ, {}, clear=True):
-            resolved = check.command_environment(
+            environment, _ = check.command_environment(
                 ["cargo", "+stable", "doc"], "+avx2"
             )
-        self.assertEqual(resolved["RUSTFLAGS"], "-C target-feature=+avx2")
         self.assertEqual(
-            resolved["RUSTDOCFLAGS"], "-D rustdoc::broken_intra_doc_links"
+            environment["RUSTDOCFLAGS"],
+            "-C target-feature=+avx2 -D rustdoc::broken_intra_doc_links",
         )
+
+    def test_docs_deny_broken_links_with_no_target_feature(self):
+        import check  # noqa: PLC0415
+
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            environment, touched = check.command_environment(
+                ["cargo", "+stable", "doc"], None
+            )
+        self.assertEqual(
+            environment["RUSTDOCFLAGS"], "-D rustdoc::broken_intra_doc_links"
+        )
+        self.assertEqual(touched, ["RUSTDOCFLAGS"])
 
 
 def _run_dry(command):

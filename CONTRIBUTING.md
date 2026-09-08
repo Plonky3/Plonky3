@@ -28,10 +28,10 @@ Run `python3 scripts/check.py full` before opening a pull request. It covers the
 | --- | --- | --- |
 | `fast` | Check all host targets without running them | `--package NAME`, `--parallel` |
 | `full` | Run all routine host checks | none |
-| `test` | Run tests through `cargo-nextest` | `--package NAME`, `--parallel`, `--target-feature FEATURES` |
-| `doctest` | Run Rust documentation tests | `--package NAME`, `--parallel`, `--target-feature FEATURES` |
+| `test` | Run tests through `cargo-nextest` | `--package NAME`, `--parallel`, `--target-feature=FEATURES` |
+| `doctest` | Run Rust documentation tests | `--package NAME`, `--parallel`, `--target-feature=FEATURES` |
 | `lint` | Run all CI script/lint/doc/format checks | `--check scripts\|sort\|toml\|deps\|clippy\|docs\|fmt` |
-| `architecture` | Compile all targets for a non-runnable target | `--target TARGET`, `--parallel`, `--target-feature FEATURES` |
+| `architecture` | Compile all targets for a non-runnable target | `--target TARGET`, `--parallel`, `--target-feature=FEATURES` |
 | `embedded` | Build every eligible workspace library with `--lib` | `--target TARGET` |
 | `wasm` | Run the wasm compile and SIMD smoke recipes | `--step build\|test\|smoke\|bench\|merkle` |
 | `bench` | Execute every benchmark body once, excluding the large `p3-dft` sweep | none |
@@ -40,13 +40,21 @@ Run `python3 scripts/check.py full` before opening a pull request. It covers the
 
 `architecture` is a compile-only command. CI uses `test` and `doctest` only on architectures whose runner can execute the selected instructions, and uses `architecture` for AVX-512, VPCLMULQDQ, and SVE2 coverage where runner hardware is not guaranteed.
 
-Target features decide `cfg(target_feature = ..)`, so a leg that pins them compiles different code. `--target-feature` reaches the compiler through `RUSTFLAGS`, appended to whatever the caller already exports, and leaves the argv unchanged. Pass the same string the CI leg uses, or the command compiles the baseline feature set instead of the one it names:
+Target features decide `cfg(target_feature = ..)`, so a leg that pins them compiles different code.
+
+Pass the same string the CI leg uses, joined with an equals sign, or the command compiles the baseline feature set instead of the one it names:
 
 ```bash
-python3 scripts/check.py architecture --target x86_64-unknown-linux-gnu --target-feature +avx512f
-python3 scripts/check.py test --target-feature +avx2
-python3 scripts/check.py test --package p3-keccak --target-feature -sha3
+python3 scripts/check.py architecture --target x86_64-unknown-linux-gnu --target-feature=+avx512f
+python3 scripts/check.py test --target-feature=+avx2
+python3 scripts/check.py test --package p3-keccak --target-feature=-sha3
 ```
+
+The features reach the compiler through its flag variable, never through the argv, and are appended to whatever the caller already exports.
+
+Cargo ignores `RUSTFLAGS` whenever `CARGO_ENCODED_RUSTFLAGS` is set, so the flag follows whichever variable is active.
+
+Doctests are compiled by the documentation tool rather than the ordinary one, so `doctest` pins its flag variable as well.
 
 The embedded package list comes from `cargo metadata`. Every workspace package with a library target is included unless its manifest declares:
 
