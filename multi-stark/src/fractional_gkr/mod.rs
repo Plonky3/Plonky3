@@ -12,12 +12,14 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) mod materialize;
 mod prover;
+pub mod transcript;
 mod verifier;
 
 #[cfg(test)]
 mod test;
 
 pub use prover::prove_fractional_gkr;
+pub use transcript::FractionGkrShape;
 /// Verification errors and the verifier for a fractional-GKR proof.
 pub use verifier::{FractionGkrError, verify_fractional_gkr};
 

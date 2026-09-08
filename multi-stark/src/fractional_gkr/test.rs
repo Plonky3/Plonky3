@@ -151,6 +151,88 @@ fn rejects_the_wrong_layer_shape() {
 }
 
 #[test]
+fn rejects_a_layer_carrying_the_wrong_round_count() {
+    // Layer `i` proves a sum over `i` variables, so layer 3 owes exactly 3 round polynomials.
+    //
+    //     described:   3
+    //     proof holds: 2   -> rejected before the transcript exists
+    //
+    // The check has to happen first. The driver panics on a step it was never
+    // described with, and a panic there would land on top of the drop-time check.
+    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(11), 6);
+    let mut prover_challenger = fresh_challenger();
+    let (mut proof, _) = prove_fractional_gkr(
+        &Fraction {
+            n: numer,
+            d: PolyMaybePacked::Scalar(denom),
+        },
+        &mut prover_challenger,
+    );
+    proof.layers[3].round_polys.pop();
+
+    let mut verifier_challenger = fresh_challenger();
+    assert_eq!(
+        verify_fractional_gkr::<F, EF, _>(&proof, 6, &mut verifier_challenger),
+        Err(FractionGkrError::InvalidRoundCount {
+            layer: 3,
+            expected: 3,
+            actual: 2,
+        })
+    );
+}
+
+#[test]
+fn rejects_a_variable_count_the_prover_never_ran() {
+    // Both sides derive the variable count from their own plan, never from the proof.
+    //
+    // A verifier holding a different one seeds a different sponge, so the two
+    // never share a challenge. The layer count catches this first.
+    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(12), 6);
+    let mut prover_challenger = fresh_challenger();
+    let (proof, _) = prove_fractional_gkr(
+        &Fraction {
+            n: numer,
+            d: PolyMaybePacked::Scalar(denom),
+        },
+        &mut prover_challenger,
+    );
+
+    let mut verifier_challenger = fresh_challenger();
+    assert_eq!(
+        verify_fractional_gkr::<F, EF, _>(&proof, 5, &mut verifier_challenger),
+        Err(FractionGkrError::InvalidLayerCount {
+            expected: 5,
+            actual: 6,
+        })
+    );
+}
+
+#[test]
+fn the_reduction_leaves_both_sponges_in_the_same_state() {
+    // Completeness at the seam: whatever runs after the reduction sees one shared state.
+    //
+    // The driver seeds on construction and absorbs on every step, so a prover
+    // and a verifier that agree step for step must agree here too.
+    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(13), 5);
+    let mut prover_challenger = fresh_challenger();
+    let (proof, _) = prove_fractional_gkr(
+        &Fraction {
+            n: numer,
+            d: PolyMaybePacked::Scalar(denom),
+        },
+        &mut prover_challenger,
+    );
+
+    let mut verifier_challenger = fresh_challenger();
+    verify_fractional_gkr::<F, EF, _>(&proof, 5, &mut verifier_challenger)
+        .expect("an honest reduction verifies");
+
+    let prover_next: EF = prover_challenger.sample_algebra_element();
+    let verifier_next: EF = verifier_challenger.sample_algebra_element();
+    assert_eq!(prover_next, verifier_next);
+}
+
+#[test]
 fn test_gkr_identities() {
     let mut rng = SmallRng::seed_from_u64(1);
 
