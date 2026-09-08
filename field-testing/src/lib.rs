@@ -965,17 +965,19 @@ pub fn test_self_algebra_mixed_dot_product<R: PrimeCharacteristicRing + Eq + Cop
     check_len!(0);
     check_len!(1);
 
-    // 2, 4 and 8 fall exactly on the balanced-tree cases of the summation helper.
+    // 2 through 8 are each a hand-written arm of `sum_array` and of `MontyField31::dot_product`.
     check_len!(2);
+    check_len!(3);
     check_len!(4);
+    check_len!(5);
+    check_len!(6);
+    check_len!(7);
     check_len!(8);
 
-    // 3, 5 and 13 are not powers of two, so they exercise the ragged tail of the tree.
-    check_len!(3);
-    check_len!(5);
+    // 13 sits past the last hand-written arm, so it takes the chunk-plus-remainder path.
     check_len!(13);
 
-    // 64 is long enough to cross the chunked path of the summation helper.
+    // 64 has an arm of its own in the packed dot products.
     check_len!(64);
 }
 
