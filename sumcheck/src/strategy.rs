@@ -634,16 +634,19 @@ where
 /// One pair of buffers serves every round of a sumcheck.
 ///
 /// A round writes its bound tables into the buffers, then the two trade places.
-/// The storage a round hands over is twice as long as the buffer it receives, so
-/// every later round finds a destination already long enough.
 ///
 /// ```text
-///     round 1:  tables 2^n     buffers  0        -> allocate 2^{n-1}
-///     round 2:  tables 2^{n-1} buffers 2^n       -> truncate to 2^{n-2}
-///     round 3:  tables 2^{n-2} buffers 2^{n-1}   -> truncate to 2^{n-3}
+///     round 1:  tables 2^n     buffers  0        -> destination 2^{n-1}
+///     round 2:  tables 2^{n-1} buffers 2^n       -> destination 2^{n-2}
+///     round 3:  tables 2^{n-2} buffers 2^{n-1}   -> destination 2^{n-3}
 /// ```
 ///
-/// One allocation per sumcheck side, not one per round.
+/// The two slots alternate and every round halves, so the storage a round hands over
+/// is four times the length the next round writes.
+///
+/// `resize_destination` releases an overshoot that large rather than hold it.
+/// The footprint therefore follows the tables down, instead of pinning the first
+/// round's full-size allocation until the pair drops.
 #[derive(Debug, Clone)]
 pub struct FoldBuffers<A> {
     /// Destination for the bound evaluation table.
@@ -771,8 +774,9 @@ where
 
 /// Hands a buffer to a table and takes the table's old storage as the buffer.
 ///
-/// The old storage is twice the length of the buffer replacing it, so it always has
-/// room for the next round's output.
+/// The old storage is twice the length of the buffer replacing it.
+/// The next round writes a quarter of it, so `resize_destination` decides whether that
+/// much room is worth keeping.
 #[inline]
 fn swap_storage<A>(table: &mut Poly<A>, buffer: &mut Vec<A>) {
     let bound = core::mem::take(buffer);
@@ -781,29 +785,43 @@ fn swap_storage<A>(table: &mut Poly<A>, buffer: &mut Vec<A>) {
 
 /// Gives a destination buffer the length one round writes.
 ///
-/// A buffer handed back by the previous round is longer than the next one needs.
-/// The common case is therefore a length update and no allocation at all.
+/// A buffer handed back by an earlier round is longer than this round needs.
+/// Keeping the whole of it is what turns a reused buffer into retained memory:
 ///
-/// Growing happens once per sumcheck, on the round that first uses the buffer.
-/// Whatever the grown entries hold is overwritten before anything reads them, so only
-/// the cost of reaching the length matters.
+/// ```text
+///     capacity <= 2 * len : length update, nothing allocated
+///     capacity >  2 * len : released, then a fresh `len`-entry allocation
+/// ```
 ///
-/// Filling a large destination one entry at a time costs more than the pass it feeds.
+/// Two is the smallest factor that still lets a buffer survive one halving, which
+/// is the reuse the swap is built around.
 ///
-/// The fill is spread across threads exactly when the round that follows is.
-/// One decision covers both, so there is no second threshold to keep in step.
+/// The first round hands over storage four times the next destination, so that round
+/// is the one whose full-size allocation is released rather than held to the end.
+///
+/// Footprint per side is then the live table plus at most twice its length:
+///
+/// ```text
+///     after round i:  table 2^{n-i}  +  buffer <= 2^{n-i+1}
+/// ```
+///
+/// A replacement comes from `zero_vec`, which takes pages the allocator has already
+/// zeroed instead of filling them from userspace.
+/// Every entry is overwritten before anything reads it, so the values do not matter.
 #[inline]
-fn resize_destination<A>(buffer: &mut Vec<A>, len: usize, threaded: bool)
+fn resize_destination<A>(buffer: &mut Vec<A>, len: usize)
 where
-    A: PrimeCharacteristicRing + Copy + Send + Sync,
+    A: PrimeCharacteristicRing,
 {
-    if buffer.len() >= len {
+    // Reuse: the buffer already covers this round and does not overshoot it badly.
+    if buffer.len() >= len && buffer.capacity() <= 2 * len {
         buffer.truncate(len);
-    } else if threaded {
-        *buffer = (0..len).into_par_iter().map(|_| A::ZERO).collect();
-    } else {
-        buffer.resize(len, A::ZERO);
+        return;
     }
+
+    // Released before the replacement is asked for, so the two never coexist.
+    drop(core::mem::take(buffer));
+    *buffer = A::zero_vec(len);
 }
 
 /// The pass behind the binding above, over the raw tables.
@@ -838,8 +856,8 @@ where
     let threaded = evals.len() > PAR_THRESHOLD;
 
     // Size the destinations to the bound length.
-    resize_destination(evals_out, half, threaded);
-    resize_destination(weights_out, half, threaded);
+    resize_destination(evals_out, half);
+    resize_destination(weights_out, half);
 
     // Bound index positions one block writes before measuring them.
     //
@@ -1811,11 +1829,15 @@ mod tests {
         // Every destination entry is written before it is read.
         // Those stale entries can never reach a round message.
         //
+        // The footprint is checked alongside the values.
+        // A buffer never holds more than twice the live table, so what the pair retains
+        // halves with the rounds rather than staying at the first round's size.
+        //
         // Fixture state: 2^15 paired entries, bound down to 4.
         // The first rounds run the threaded branch, the last ones the serial branch.
         //
-        //     round 1: tables 2^15 -> 2^14      buffers allocated
-        //     round 2: tables 2^14 -> 2^13      round-1 storage reused
+        //     round 1: tables 2^15 -> 2^14      buffers sized
+        //     round 2: tables 2^14 -> 2^13      round-1 storage handed back
         //     ...
         //     round 13: tables 4 -> 2           the shortest fusable table
         const NUM_VARIABLES: usize = 15;
@@ -1857,6 +1879,20 @@ mod tests {
             );
             assert_eq!(got.c_a, want.c_a, "round {round}");
             assert_eq!(got.c_inf, want.c_inf, "round {round}");
+
+            // The buffer now holds the storage the table just handed over.
+            // Keeping more than twice the live table would pin memory no round reaches.
+            let live = got_evals.as_slice().len();
+            assert!(
+                buffers.evals.capacity() <= 2 * live,
+                "round {round}: evals buffer holds {} for a table of {live}",
+                buffers.evals.capacity()
+            );
+            assert!(
+                buffers.weights.capacity() <= 2 * live,
+                "round {round}: weights buffer holds {} for a table of {live}",
+                buffers.weights.capacity()
+            );
         }
     }
 
