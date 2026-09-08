@@ -135,6 +135,7 @@ fn bench_large_integer_conversion(c: &mut Criterion) {
 
 fn bench_packedfield(c: &mut Criterion) {
     let name = type_name::<<F as Field>::Packing>().to_string();
+    type PF = <F as Field>::Packing;
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.
     const REPS: usize = 100;
@@ -154,7 +155,18 @@ fn bench_packedfield(c: &mut Criterion) {
     benchmark_dot_array::<<F as Field>::Packing, 5>(c, &name);
     benchmark_dot_array::<<F as Field>::Packing, 6>(c, &name);
 
-    type PF = <F as Field>::Packing;
+    benchmark_sum_array::<PF, 3, 100>(c, &name);
+    benchmark_sum_array::<PF, 4, 100>(c, &name);
+    benchmark_sum_array::<PF, 5, 100>(c, &name);
+    benchmark_sum_array::<PF, 6, 100>(c, &name);
+    benchmark_sum_array::<PF, 7, 100>(c, &name);
+    benchmark_sum_array::<PF, 8, 100>(c, &name);
+    benchmark_sum_array::<PF, 12, 100>(c, &name);
+    benchmark_sum_array::<PF, 16, 100>(c, &name);
+    benchmark_sum_array::<PF, 32, 100>(c, &name);
+    benchmark_sum_array::<PF, 64, 100>(c, &name);
+    benchmark_sum_array::<PF, 129, 100>(c, &name);
+
     benchmark_chunked_linear_combination::<F, PF, 100>(c, &name);
 
     benchmark_mixed_dot_array::<PF, F, 1>(c, &name);

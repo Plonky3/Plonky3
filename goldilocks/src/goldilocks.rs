@@ -859,7 +859,7 @@ const fn from_unusual_int(int: i64) -> Goldilocks {
 #[cfg(test)]
 mod tests {
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::tonelli_shanks_two_adic;
+    use p3_field::{PackedValue, tonelli_shanks_two_adic};
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_64, test_two_adic_field,
     };
@@ -870,6 +870,81 @@ mod tests {
 
     type F = Goldilocks;
     type EF = BinomialExtensionField<F, 5>;
+
+    /// Compare every packed lane with an independent full-u64 sum modulo the field order.
+    /// This avoids using the scalar Goldilocks sum as the oracle because it also delays reduction.
+    #[test]
+    fn packed_sum_array_matches_full_u64_oracle() {
+        type PF = <F as Field>::Packing;
+
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            (1 << 32) - 1,
+            1 << 32,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+
+        fn check<const N: usize>(values: &[u64]) {
+            type PF = <F as Field>::Packing;
+
+            assert_eq!(values.len(), PF::WIDTH * N);
+            let input: [PF; N] =
+                core::array::from_fn(|term| PF::from_fn(|lane| F::new(values[lane * N + term])));
+            let actual = PF::sum_array::<N>(&input);
+
+            for lane in 0..PF::WIDTH {
+                let expected = (values[lane * N..(lane + 1) * N]
+                    .iter()
+                    .map(|&value| u128::from(value))
+                    .sum::<u128>()
+                    % u128::from(P)) as u64;
+                assert_eq!(
+                    actual.as_slice()[lane].as_canonical_u64(),
+                    expected,
+                    "N={N}, lane={lane}"
+                );
+            }
+        }
+
+        macro_rules! check_length {
+            ($rng:ident, $n:literal, $random_cases:literal) => {{
+                let edge_values = (0..PF::WIDTH * $n)
+                    .map(|index| RAW_EDGES[index % RAW_EDGES.len()])
+                    .collect::<Vec<_>>();
+                check::<$n>(&edge_values);
+                check::<$n>(&[u64::MAX; PF::WIDTH * $n]);
+
+                for _ in 0..$random_cases {
+                    let values = (0..PF::WIDTH * $n)
+                        .map(|_| $rng.random::<u64>())
+                        .collect::<Vec<_>>();
+                    check::<$n>(&values);
+                }
+            }};
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x5A_0B17_5EED);
+        check_length!(rng, 0, 16);
+        check_length!(rng, 1, 16);
+        check_length!(rng, 2, 16);
+        check_length!(rng, 3, 16);
+        check_length!(rng, 4, 16);
+        check_length!(rng, 5, 16);
+        check_length!(rng, 6, 16);
+        check_length!(rng, 7, 16);
+        check_length!(rng, 8, 16);
+        check_length!(rng, 12, 16);
+        check_length!(rng, 16, 16);
+        check_length!(rng, 32, 16);
+        check_length!(rng, 64, 8);
+        check_length!(rng, 129, 4);
+    }
 
     #[test]
     fn deserialize_rejects_non_canonical_encodings() {
