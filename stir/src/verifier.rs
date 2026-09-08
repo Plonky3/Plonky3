@@ -130,10 +130,26 @@ fn single_matrix_opened_values<EF>(row_evals: &[Vec<EF>]) -> Vec<Vec<&[EF]>> {
         .collect()
 }
 
-/// Reject an `Ans` polynomial longer than the round's degree bound allows.
+/// Bound a transmitted answer polynomial at both ends.
 ///
-/// `Ans` interpolates `max_ans_len` points, so its degree is below that. A shorter polynomial
-/// is legitimate: the prover may strip trailing zeros.
+/// The polynomial interpolates the round's out-of-domain and query points.
+///
+/// Its degree therefore sits below the number of those nodes.
+///
+/// A shorter polynomial is legitimate.
+///
+/// A prover may strip trailing zero coefficients.
+///
+/// Stripping never reaches the empty vector while a node remains:
+///
+/// ```text
+///     one node    ->  the interpolant is a constant
+///     that zero   ->  a single zero coefficient, not an empty vector
+/// ```
+///
+/// So an empty vector is the compact encoding rather than a stripped one.
+///
+/// Accepting it here would leave the two encodings separated by the transcript alone.
 fn check_ans_length<EF, MmcsError, InputError>(
     round: RoundLabel,
     ans_polynomial: &[EF],
@@ -144,6 +160,13 @@ fn check_ans_length<EF, MmcsError, InputError>(
             round,
             maximum: max_ans_len,
             got: ans_polynomial.len(),
+        }
+        .into());
+    }
+    if ans_polynomial.is_empty() && max_ans_len > 0 {
+        return Err(ProofShapeError::MissingAnsPolynomial {
+            round,
+            nodes: max_ans_len,
         }
         .into());
     }
@@ -227,6 +250,58 @@ mod compact_answer_tests {
             .unwrap(),
             Cow::Borrowed([F::ZERO, F::ZERO])
         ));
+    }
+
+    #[test]
+    fn the_default_representation_rejects_the_compact_encoding() {
+        let round = RoundLabel::Round(2);
+
+        // Invariant: the default encoding always carries at least one coefficient.
+        //
+        //     default  ->  [c_0, c_1, ...]   the interpolant itself
+        //     compact  ->  []                rebuilt from the opened values
+        //
+        // Fixture state: two nodes to interpolate, so the interpolant is not empty.
+        //
+        // Mutation: send the compact encoding to a default-mode reader.
+        assert!(matches!(
+            resolve_ans_polynomial::<F, (), ()>(
+                round,
+                false,
+                &[],
+                &[F::ONE, F::TWO],
+                &[F::ZERO, F::ZERO]
+            ),
+            Err(StirError::InvalidProofShape(
+                ProofShapeError::MissingAnsPolynomial {
+                    round: RoundLabel::Round(2),
+                    nodes: 2
+                }
+            ))
+        ));
+
+        // Fixture state: one node holding zero, so the interpolant is the zero constant.
+        //
+        //     []        ->  the zero polynomial
+        //     [ZERO]    ->  the zero polynomial
+        //
+        // Both spell the same virtual oracle, so the shape is all that separates them.
+        assert!(matches!(
+            resolve_ans_polynomial::<F, (), ()>(round, false, &[], &[F::ONE], &[F::ZERO]),
+            Err(StirError::InvalidProofShape(
+                ProofShapeError::MissingAnsPolynomial {
+                    round: RoundLabel::Round(2),
+                    nodes: 1
+                }
+            ))
+        ));
+
+        // Fixture state: no nodes at all, so the empty vector is the only encoding there is.
+        assert!(
+            resolve_ans_polynomial::<F, (), ()>(round, false, &[], &[], &[])
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 
