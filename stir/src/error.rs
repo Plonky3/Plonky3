@@ -103,6 +103,14 @@ pub enum ProofShapeError {
     #[error("{round}: compact answers expect no transmitted ans coefficients, got {got}")]
     UnexpectedAnsPolynomial { round: RoundLabel, got: usize },
 
+    /// The default representation sends the answer polynomial itself.
+    ///
+    /// An interpolant through at least one node always carries a coefficient.
+    ///
+    /// An empty vector is the compact encoding, which is a different protocol.
+    #[error("{round}: ans polynomial is empty, expected at least one coefficient")]
+    MissingAnsPolynomial { round: RoundLabel, nodes: usize },
+
     /// A committed oracle is read through a Merkle multi-opening the proof must supply.
     #[error("{round}: missing query openings")]
     MissingQueryOpenings { round: RoundLabel },

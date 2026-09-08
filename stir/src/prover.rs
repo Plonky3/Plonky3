@@ -1475,7 +1475,15 @@ where
     Dft: TwoAdicSubgroupDft<F>,
 {
     let size = 1usize << log_size;
-    let log_len = log2_ceil_usize(coeffs.len().min(size).max(1));
+    // Floor the transform at two rows, then cap it at the coset.
+    //
+    // Why the floor: a constant is already exact over one variable.
+    //   The second row reads past the coefficients and contributes zero.
+    //   So the floor changes no result, and no backend is handed a single-row matrix.
+    //
+    // Why the cap: a single-point coset has no room for that floor.
+    //   The expansion measured below would otherwise wrap.
+    let log_len = log2_ceil_usize(coeffs.len().min(size).max(2)).min(log_size);
     // At low expansion ratios the full DFT avoids the cost of scaling a wide batch.
     if log_size - log_len >= 3 {
         return eval_low_degree_on_coset(dft, [&coeffs], shift, log_size, log_len);
