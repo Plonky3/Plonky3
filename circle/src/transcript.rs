@@ -42,8 +42,9 @@
 //!     committed leaf  =  reduced opening - lambda * v_n(P)
 //! ```
 //!
-//! The verifier recomputes that leaf and authenticates it against the first-layer
-//! commitment, which the transcript does bind, so a forged lambda cannot survive.
+//! The verifier recomputes that leaf and authenticates it.
+//! What it authenticates against is the first-layer commitment, which the seed does bind.
+//! A forged lambda therefore cannot survive.
 //!
 //! # Soundness
 //!
@@ -68,6 +69,7 @@ use p3_challenger::{CanObserve, CanSample, CanSampleBits, GrindingChallenger};
 use p3_field::{ExtensionField, PrimeField64};
 use p3_fri::FriParameters;
 use p3_fri::verifier::PowPhase;
+use thiserror::Error;
 
 use crate::point::Point;
 
@@ -120,6 +122,36 @@ type Alphabet<F> = FieldUnit<F>;
 ///
 /// The two travel together because the transcript binds them together.
 pub type OpeningClaim<'a, EF> = (Point<EF>, &'a [EF]);
+
+/// A described transcript step the proof failed to satisfy.
+///
+/// A Circle PCS proof carries one grinding witness per commit round.
+/// It carries one more for the query indices.
+///
+/// Those counts are checked before the transcript is seeded.
+/// A described grinding step therefore always has a witness to replay it.
+/// Only the strength of that witness can still fail here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum CircleTranscriptFailure {
+    /// A grinding witness did not produce the zero bits its step requires.
+    #[error("invalid proof-of-work witness for the {phase} phase: {bits} bits required")]
+    PowWitness {
+        /// Grinding phase whose step rejected the witness.
+        phase: PowPhase,
+        /// Difficulty that step requires, in bits.
+        bits: usize,
+    },
+}
+
+impl CircleTranscriptFailure {
+    /// Grinding phase whose step rejected the witness.
+    #[must_use]
+    pub const fn phase(&self) -> PowPhase {
+        match self {
+            Self::PowWitness { phase, .. } => *phase,
+        }
+    }
+}
 
 /// Numbers that fix the transcript of one Circle PCS run.
 ///
@@ -342,8 +374,11 @@ impl CirclePcsShape {
     ///
     /// # Returns
     ///
-    /// A prefix code: the batch count, then each batch's matrix count, then each
-    /// matrix's point count, every entry a big-endian `u64`.
+    /// A prefix code, every entry a big-endian `u64`.
+    ///
+    /// ```text
+    ///     [batch count][per batch: matrix count][per matrix: point count]
+    /// ```
     ///
     /// Reading it back is unambiguous, so two distinct nestings never collide.
     fn opening_layout(&self) -> Vec<u8> {
@@ -538,8 +573,8 @@ where
     /// # Panics
     ///
     /// Never in practice.
-    /// The shape and the claims are derived from the same caller-supplied statement,
-    /// so a described width and a supplied width cannot differ.
+    /// The shape and the claims come from the same caller-supplied statement.
+    /// A described width and a supplied width therefore cannot differ.
     pub fn batch_phase<'c, I>(&mut self, claims: I) -> EF
     where
         I: IntoIterator<Item = OpeningClaim<'c, EF>>,
@@ -581,7 +616,11 @@ where
     /// # Errors
     ///
     /// When the witness misses the difficulty the commit phase requires.
-    pub fn commit_round<Com>(&mut self, commitment: Com, witness: F) -> Result<EF, PowPhase>
+    pub fn commit_round<Com>(
+        &mut self,
+        commitment: Com,
+        witness: F,
+    ) -> Result<EF, CircleTranscriptFailure>
     where
         Com: Clone,
         C: CanObserve<Com>,
@@ -591,7 +630,10 @@ where
         if self.shape.commit_pow_bits > 0 {
             self.state
                 .observe_pow(COMMIT_POW, self.shape.commit_pow_bits, witness)
-                .map_err(|_| PowPhase::CommitPhase)?;
+                .map_err(|_| CircleTranscriptFailure::PowWitness {
+                    phase: PowPhase::CommitPhase,
+                    bits: self.shape.commit_pow_bits,
+                })?;
         }
 
         Ok(self
@@ -605,14 +647,21 @@ where
     /// # Errors
     ///
     /// When the witness misses the difficulty the query phase requires.
-    pub fn query_phase(&mut self, final_poly: EF, witness: F) -> Result<Vec<usize>, PowPhase> {
+    pub fn query_phase(
+        &mut self,
+        final_poly: EF,
+        witness: F,
+    ) -> Result<Vec<usize>, CircleTranscriptFailure> {
         self.state
             .observe_extension::<F, EF, FieldToFieldCodec<F>>(FINAL_POLY, &final_poly);
 
         if self.shape.query_pow_bits > 0 {
             self.state
                 .observe_pow(QUERY_POW, self.shape.query_pow_bits, witness)
-                .map_err(|_| PowPhase::Query)?;
+                .map_err(|_| CircleTranscriptFailure::PowWitness {
+                    phase: PowPhase::Query,
+                    bits: self.shape.query_pow_bits,
+                })?;
         }
 
         Ok(self
@@ -857,7 +906,13 @@ mod tests {
             .expect_err("a witness that misses the difficulty must error");
 
         // The rejection released the completeness check, so the driver drops quietly.
-        assert_eq!(err, PowPhase::CommitPhase);
+        assert_eq!(
+            err,
+            CircleTranscriptFailure::PowWitness {
+                phase: PowPhase::CommitPhase,
+                bits: 8,
+            }
+        );
     }
 
     #[test]
@@ -877,7 +932,13 @@ mod tests {
             .query_phase(EF::ONE, F::ZERO)
             .expect_err("a witness that misses the difficulty must error");
 
-        assert_eq!(err, PowPhase::Query);
+        assert_eq!(
+            err,
+            CircleTranscriptFailure::PowWitness {
+                phase: PowPhase::Query,
+                bits: 8,
+            }
+        );
     }
 
     #[test]
