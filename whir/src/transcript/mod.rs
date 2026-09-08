@@ -50,7 +50,7 @@ pub mod zk;
 use alloc::vec::Vec;
 
 use p3_challenger::fs::{
-    DomainSeparator, FieldUnit, Hierarchy, Interaction, InteractionPattern, Kind, Length,
+    DomainSeparator, FieldUnit, Hierarchy, Interaction, InteractionPattern, Kind, Length, Unit,
 };
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
@@ -126,11 +126,6 @@ pub const fn query_draws(folded_domain_size: usize, num_queries: usize) -> usize
     }
 }
 
-/// Append one chunk holding a single number to the instance label.
-fn bind_number<U: p3_challenger::fs::Unit>(separator: &mut DomainSeparator<U>, value: usize) {
-    separator.instance(&(value as u64).to_be_bytes());
-}
-
 /// Bind the folding strategy: its variant, then the numbers it carries.
 ///
 /// The derived schedule alone does not identify the strategy.
@@ -141,25 +136,26 @@ fn bind_number<U: p3_challenger::fs::Unit>(separator: &mut DomainSeparator<U>, v
 ///
 /// Both derive the same schedule, so both describe one step sequence.
 /// Binding the variant keeps the two configurations on distinct seeds.
-fn bind_folding_factor<U: p3_challenger::fs::Unit>(
-    separator: &mut DomainSeparator<U>,
-    factor: &FoldingFactor,
-) {
+fn bind_folding_factor<U: Unit>(separator: &mut DomainSeparator<U>, factor: &FoldingFactor) {
+    // Discriminant first, so two variants carrying the same numbers stay distinct.
     match factor {
         FoldingFactor::Constant(f) => {
-            bind_number(separator, 0);
-            bind_number(separator, *f);
+            separator
+                .instance(&0u64.to_be_bytes())
+                .instance(&(*f as u64).to_be_bytes());
         }
         FoldingFactor::ConstantFromSecondRound(first, rest) => {
-            bind_number(separator, 1);
-            bind_number(separator, *first);
-            bind_number(separator, *rest);
+            separator
+                .instance(&1u64.to_be_bytes())
+                .instance(&(*first as u64).to_be_bytes())
+                .instance(&(*rest as u64).to_be_bytes());
         }
         FoldingFactor::PerRound(factors) => {
-            bind_number(separator, 2);
-            bind_number(separator, factors.len());
+            separator
+                .instance(&2u64.to_be_bytes())
+                .instance(&(factors.len() as u64).to_be_bytes());
             for &f in factors {
-                bind_number(separator, f);
+                separator.instance(&(f as u64).to_be_bytes());
             }
         }
     }
@@ -496,20 +492,20 @@ impl WhirShape {
         let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
 
         // The whole soundness statement is phrased in these numbers.
-        bind_number(&mut separator, self.num_variables);
+        separator.instance(&(self.num_variables as u64).to_be_bytes());
         // The commitment phase draws its samples before the described run starts.
-        bind_number(&mut separator, self.commitment_ood_samples);
-        bind_number(&mut separator, self.security_level);
-        bind_number(&mut separator, self.pow_budget);
-        bind_number(&mut separator, self.starting_log_inv_rate);
-        bind_number(&mut separator, self.soundness_type as usize);
+        separator.instance(&(self.commitment_ood_samples as u64).to_be_bytes());
+        separator.instance(&(self.security_level as u64).to_be_bytes());
+        separator.instance(&(self.pow_budget as u64).to_be_bytes());
+        separator.instance(&(self.starting_log_inv_rate as u64).to_be_bytes());
+        separator.instance(&(self.soundness_type as u64).to_be_bytes());
 
         bind_folding_factor(&mut separator, &self.folding_factor);
 
         // Each round commits at its own rate, and the rate sets that round's distance.
-        bind_number(&mut separator, self.rounds.len());
+        separator.instance(&(self.rounds.len() as u64).to_be_bytes());
         for round in &self.rounds {
-            bind_number(&mut separator, round.log_inv_rate);
+            separator.instance(&(round.log_inv_rate as u64).to_be_bytes());
         }
 
         separator
