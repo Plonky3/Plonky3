@@ -285,6 +285,39 @@ def add_package_and_parallel(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--parallel", action="store_true", help="enable the parallel feature")
 
 
+def add_target_feature(parser: argparse.ArgumentParser) -> None:
+    """Accept the target features a CI leg pins, so the same leg is reproducible locally."""
+    parser.add_argument(
+        "--target-feature",
+        default=None,
+        help="target features to pin, joined with an equals sign: --target-feature=+avx2",
+    )
+
+
+def attach_leading_minus_values(argv: Sequence[str]) -> list[str]:
+    """Join a value that starts with a minus onto the option it belongs to.
+
+    A feature is disabled by prefixing it with a minus, and the argument parser reads such a
+    value as another option instead.
+
+    Rewriting the pair into the equals form lets both spellings work, so a leg that turns a
+    feature off is not a special case for the caller to remember.
+    """
+    joined = []
+    argv = list(argv)
+    index = 0
+    while index < len(argv):
+        argument = argv[index]
+        takes_value = argument == "--target-feature" and index + 1 < len(argv)
+        if takes_value and argv[index + 1].startswith("-"):
+            joined.append(f"{argument}={argv[index + 1]}")
+            index += 2
+            continue
+        joined.append(argument)
+        index += 1
+    return joined
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--dry-run", action="store_true", help="print commands without running them")
@@ -301,8 +334,10 @@ def parser() -> argparse.ArgumentParser:
     subparsers.add_parser("full", help="run all host checks used by CI")
     test = subparsers.add_parser("test", help="run tests with cargo-nextest")
     add_package_and_parallel(test)
+    add_target_feature(test)
     doctest = subparsers.add_parser("doctest", help="run Rust documentation tests")
     add_package_and_parallel(doctest)
+    add_target_feature(doctest)
     lint = subparsers.add_parser("lint", help="run formatting, lint, dependency and doc checks")
     lint.add_argument("--check", choices=LINT_COMMANDS, help="run one lint check")
     architecture = subparsers.add_parser(
@@ -310,6 +345,7 @@ def parser() -> argparse.ArgumentParser:
     )
     architecture.add_argument("--target", required=True)
     architecture.add_argument("--parallel", action="store_true")
+    add_target_feature(architecture)
     embedded = subparsers.add_parser(
         "embedded", help="build metadata-selected libraries for an embedded target"
     )
@@ -331,34 +367,121 @@ def display(command: Sequence[str]) -> str:
     return shlex.join(command)
 
 
-def command_environment(command: Sequence[str]) -> dict[str, str] | None:
-    if command[:3] != ["cargo", "+stable", "doc"]:
-        return None
+# Separator Cargo uses inside the encoded flag variables, one unit per argument.
+ENCODED_SEPARATOR = "\x1f"
+
+
+def append_compiler_flag(
+    environment: dict[str, str], plain: str, encoded: str, flag: Sequence[str]
+) -> str:
+    """Put one compiler flag where Cargo will read it, and name the variable used.
+
+    Cargo ignores the plain variable whenever the encoded one is set.
+
+    So the flag has to follow whichever variable the caller chose, or it is silently dropped.
+
+    The flag is appended, never merged into an existing setting.
+
+    For a target feature that is what makes the request effective, since the last setting of
+    a given feature is the one that takes effect.
+    """
+    if encoded in environment:
+        current = environment[encoded]
+        units = current.split(ENCODED_SEPARATOR) if current else []
+        environment[encoded] = ENCODED_SEPARATOR.join([*units, *flag])
+        return encoded
+    current = environment.get(plain, "")
+    environment[plain] = " ".join([current, *flag]).strip()
+    return plain
+
+
+def command_environment(
+    command: Sequence[str], target_feature: str | None = None
+) -> tuple[dict[str, str] | None, list[str]]:
+    """The environment one command runs under, plus the variables it changed.
+
+    Nothing is returned as the environment when the command inherits the caller's unchanged.
+
+    Target features reach a compiler through its flag variable, never through the argv.
+
+    That is how the CI legs pin them, and it is what decides `cfg(target_feature = ..)`.
+
+    A doctest is compiled by the documentation tool, not by the ordinary one.
+
+    So a feature has to reach both, or the library gets it while its doctests keep the
+    baseline values.
+    """
+    # Documentation tests and the documentation build are the two commands the
+    # documentation tool compiles, so both need its own flag variable.
+    doc_build = command[:3] == ["cargo", "+stable", "doc"]
+    doctest = command[:2] == ["cargo", "test"] and "--doc" in command
+
+    if not doc_build and not target_feature:
+        return None, []
+
     environment = os.environ.copy()
-    deny_broken_links = "-D rustdoc::broken_intra_doc_links"
-    current = environment.get("RUSTDOCFLAGS", "")
-    if deny_broken_links not in current:
-        environment["RUSTDOCFLAGS"] = f"{current} {deny_broken_links}".strip()
-    return environment
+    touched = []
+
+    if target_feature:
+        flag = ["-C", f"target-feature={target_feature}"]
+        touched.append(
+            append_compiler_flag(environment, "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", flag)
+        )
+        if doc_build or doctest:
+            touched.append(
+                append_compiler_flag(
+                    environment, "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", flag
+                )
+            )
+
+    if doc_build:
+        deny = ["-D", "rustdoc::broken_intra_doc_links"]
+        name = append_compiler_flag(
+            environment, "RUSTDOCFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", deny
+        )
+        if name not in touched:
+            touched.append(name)
+
+    return environment, touched
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = parser().parse_args(argv)
+    args = parser().parse_args(
+        attach_leading_minus_values(sys.argv[1:] if argv is None else argv)
+    )
     args.workspace_root = args.workspace_root.resolve()
     try:
         commands = commands_for(args)
     except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
+    # Only the subcommands that compile or run Rust accept target features.
+    target_feature = getattr(args, "target_feature", None)
     for command in commands:
+        environment, touched = command_environment(command, target_feature)
+        # Announce where the requested feature landed, so a dry run shows the real variable.
+        if target_feature:
+            for name in touched:
+                print(f"+ {name} += -C target-feature={target_feature}", flush=True)
         print(f"+ {display(command)}", flush=True)
         if not args.dry_run:
-            completed = subprocess.run(
-                command,
-                cwd=args.workspace_root,
-                env=command_environment(command),
-                check=False,
-            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=args.workspace_root,
+                    env=environment,
+                    check=False,
+                )
+            except OSError as error:
+                # A missing tool is a prerequisite the contributor has not installed yet.
+                #
+                # Name it, rather than ending a long run in a stack trace.
+                print(
+                    f"error: {command[0]} not found ({error}); "
+                    "see CONTRIBUTING.md for the required tools",
+                    file=sys.stderr,
+                )
+                return 127
             if completed.returncode:
                 return completed.returncode
     return 0
