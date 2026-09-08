@@ -22,8 +22,8 @@ use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use p3_whir::{
-    DomainSeparator, FoldingFactor, ProtocolParameters, SecurityAssumption,
-    VerifierError as WhirVerifierError, WhirConfig, WhirProver,
+    FoldingFactor, ProtocolParameters, SecurityAssumption, VerifierError as WhirVerifierError,
+    WhirConfig, WhirProver,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -135,13 +135,11 @@ fn config_for_stacked(stacked_num_variables: usize) -> WhirConfigForTest {
     }
 }
 
-/// A challenger seeded with the same domain separator on both proof and verify sides.
-fn challenger(config: &WhirConfigForTest) -> MyChallenger {
-    let mut challenger = MyChallenger::new(perm());
-    let mut ds = DomainSeparator::new(vec![]);
-    config.pcs.add_domain_separator::<8>(&mut ds);
-    ds.observe_domain_separator(&mut challenger);
-    challenger
+/// A fresh challenger.
+///
+/// The scheme seeds its own transcript when it opens.
+fn challenger() -> MyChallenger {
+    MyChallenger::new(perm())
 }
 
 const NUM_COLS: usize = 2;
@@ -288,7 +286,7 @@ fn prove_verify_fibonacci_roundtrips() {
     let airs = [&FibAir];
 
     // Fibonacci has no preprocessed trace, so setup yields empty keys.
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -299,7 +297,7 @@ fn prove_verify_fibonacci_roundtrips() {
             &pis,
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     verify(
@@ -307,7 +305,7 @@ fn prove_verify_fibonacci_roundtrips() {
         VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, log_height, &pis)]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .expect("honest Fibonacci proof must verify");
 }
@@ -324,7 +322,7 @@ fn prove_verify_lookup_roundtrips_through_pcs() {
     let air = LocalPermutationLookupAir;
     let trace = permutation_trace(n);
     let config = config_for(log_height, air.width());
-    let (pk, vk) = setup(&config, &[&air], &mut challenger(&config));
+    let (pk, vk) = setup(&config, &[&air], &mut challenger());
 
     let proof = prove(
         &config,
@@ -335,7 +333,7 @@ fn prove_verify_lookup_roundtrips_through_pcs() {
             &[],
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
     // A lookup-declaring AIR must produce a reduction section in the proof.
     assert!(proof.lookup.is_some());
@@ -345,7 +343,7 @@ fn prove_verify_lookup_roundtrips_through_pcs() {
         VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .expect("honest lookup proof must verify through the trace PCS opening");
 }
@@ -366,7 +364,7 @@ fn prove_verify_mixed_height_lookups_roundtrip_through_pcs() {
     let trace_b = permutation_trace(height_b);
     let stacked_num_variables = log2_ceil_usize(2 * height_a + 2 * height_b);
     let config = config_for_stacked(stacked_num_variables);
-    let (pk, vk) = setup(&config, &[&air, &air], &mut challenger(&config));
+    let (pk, vk) = setup(&config, &[&air, &air], &mut challenger());
 
     let proof = prove(
         &config,
@@ -375,7 +373,7 @@ fn prove_verify_mixed_height_lookups_roundtrip_through_pcs() {
             ProverInstance::new(&air, Table::new(trace_b.transpose()), &pk, &[]),
         ]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     verify(
@@ -386,7 +384,7 @@ fn prove_verify_mixed_height_lookups_roundtrip_through_pcs() {
         ]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .expect("mixed-height lookup proof must open each trace at its own PCS suffix");
 }
@@ -404,7 +402,7 @@ fn prove_verify_batched_fibonacci_roundtrips() {
     let config = batch_config_for(log_height, NUM_COLS, 2);
     let airs = [&air, &air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -413,7 +411,7 @@ fn prove_verify_batched_fibonacci_roundtrips() {
             ProverInstance::new(&air, Table::new(trace_b.transpose()), &pk, &pis_b),
         ]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     assert!(proof.preprocessed_opening.is_none());
@@ -426,7 +424,7 @@ fn prove_verify_batched_fibonacci_roundtrips() {
         ]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .expect("honest batched Fibonacci proof must verify");
 }
@@ -462,7 +460,7 @@ fn prove_verify_mixed_height_fibonacci_roundtrips() {
     let airs = [&air, &air];
 
     // One setup, then one proof binding both traces under a shared commitment.
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -471,7 +469,7 @@ fn prove_verify_mixed_height_fibonacci_roundtrips() {
             ProverInstance::new(&air, Table::new(trace_b.transpose()), &pk, &pis_b),
         ]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     // Both instances verify against the shared proof, each at its own height.
@@ -483,7 +481,7 @@ fn prove_verify_mixed_height_fibonacci_roundtrips() {
         ]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .expect("honest mixed-height batched proof must verify");
 }
@@ -513,7 +511,7 @@ fn verify_rejects_violated_constraint_in_shorter_table() {
     let config = config_for_stacked(log2_ceil_usize(cells));
     let airs = [&air, &air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -522,7 +520,7 @@ fn verify_rejects_violated_constraint_in_shorter_table() {
             ProverInstance::new(&air, Table::new(trace_b.transpose()), &pk, &pis_b),
         ]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     let err = verify(
@@ -533,7 +531,7 @@ fn verify_rejects_violated_constraint_in_shorter_table() {
         ]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .unwrap_err();
     assert!(
@@ -555,7 +553,7 @@ fn verify_rejects_tampered_opening() {
     let config = config_for(log_height, NUM_COLS);
     let airs = [&FibAir];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let mut proof = prove(
         &config,
@@ -566,7 +564,7 @@ fn verify_rejects_tampered_opening() {
             &pis,
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     // Mutation: shift the first claimed current-row value by one field element.
@@ -584,7 +582,7 @@ fn verify_rejects_tampered_opening() {
         VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, log_height, &pis)]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .unwrap_err();
     match err {
@@ -608,7 +606,7 @@ fn verify_rejects_violated_constraint() {
     let config = config_for(log_height, NUM_COLS);
     let airs = [&FibAir];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -619,7 +617,7 @@ fn verify_rejects_violated_constraint() {
             &pis,
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     // Expected rejection: the zerocheck closes on a nonzero constraint value.
@@ -628,7 +626,7 @@ fn verify_rejects_violated_constraint() {
         VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, log_height, &pis)]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .unwrap_err();
     assert!(
@@ -650,7 +648,7 @@ fn verify_rejects_tampered_public_values() {
     let config = config_for(log_height, NUM_COLS);
     let airs = [&FibAir];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -661,7 +659,7 @@ fn verify_rejects_tampered_public_values() {
             &pis,
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     // Mutation: shift the claimed output by one field element.
@@ -678,7 +676,7 @@ fn verify_rejects_tampered_public_values() {
         )]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .unwrap_err();
     match err {
@@ -719,7 +717,7 @@ fn read_fixture(path: &str) -> std::io::Result<Vec<u8>> {
 fn verify_whir_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let (config, _, pis, log_height) = whir_compat_case();
     let airs = [&FibAir];
-    let (_, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (_, vk) = setup(&config, &airs, &mut challenger());
 
     let proof_bytes = read_fixture(WHIR_FIXTURE).expect(
         "Missing fixture. Run: cargo test -p p3-multi-stark --test whir_fibonacci -- --ignored",
@@ -731,7 +729,7 @@ fn verify_whir_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
         VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, log_height, &pis)]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )?;
     Ok(())
 }
@@ -742,7 +740,7 @@ fn generate_whir_fixture() -> Result<(), Box<dyn std::error::Error>> {
     // Regen: cargo test -p p3-multi-stark --test whir_fibonacci -- --ignored
     let (config, trace, pis, _) = whir_compat_case();
     let airs = [&FibAir];
-    let (pk, _) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, _) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -753,7 +751,7 @@ fn generate_whir_fixture() -> Result<(), Box<dyn std::error::Error>> {
             &pis,
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     let bytes = postcard::to_allocvec(&proof)?;
