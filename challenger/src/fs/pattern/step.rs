@@ -98,7 +98,10 @@ pub enum Length {
 ///
 /// Two protocols over two different 31-bit primes must not share a seed.
 /// Neither must a step that is an `F` in one protocol and a degree-4 element in the other.
+///
+/// A new encoding is a new variant, so downstream matches stay open.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[non_exhaustive]
 pub enum TypeTag {
     /// Structural marker; carries no value.
     Marker,
