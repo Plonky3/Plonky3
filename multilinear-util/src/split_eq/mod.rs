@@ -44,26 +44,48 @@ use crate::poly::{Poly, PolyView};
 /// ```
 const MUL_ACC_BYTES: usize = 3;
 
-/// Extension widths one base-by-extension multiply-accumulate is charged as.
+/// Extension widths one base-by-extension multiply-accumulate is charged as, per lane.
 ///
 /// A base element times an extension weight is a handful of base multiplies, where two
 /// extension elements cost the square of that, so it earns a smaller charge.
 ///
-/// Measured per multiplied element, across the contractions that take a base polynomial:
+/// Measured per element multiplied one at a time, across the contractions that take a
+/// base polynomial:
 ///
 /// ```text
-///     x86-64, scalar packing  : 1.3 to 3.7 ns
-///     aarch64, NEON packing   : 0.65 to 2.2 ns
+///     x86-64, scalar packing  : 1.3 to 5.5 ns
 ///     two widths at 100 ps    : 3.2 ns
 /// ```
 ///
-/// Machine and packing width move the real cost about 3x either way, so no charge here
-/// lands inside the factor of two the byte rate usually holds to.
-///
-/// Two widths is set from the upper group, because the two errors are not symmetric:
-/// charging low leaves a loop whole that wanted splitting, and charging high splits one
-/// that did not, which is the direction that has produced every measured regression here.
+/// This prices one lane, so a kernel that multiplies several at once divides by that
+/// count through `base_mul_acc_bytes`.
+/// SIMD scales the arithmetic a body does, and not the bytes it moves.
 const BASE_MUL_ACC_BYTES: usize = 2;
+
+/// Bytes one item is charged for multiply-accumulating `count` base elements.
+///
+/// # Arguments
+///
+/// * `count` - base elements one item multiplies
+/// * `lanes` - base elements the kernel multiplies per instruction
+///
+/// Leaving `lanes` out of the charge overprices a vectorized kernel by the packing width,
+/// which is unsafe in both directions the cost model has:
+///
+/// ```text
+///     the gate drops by that factor    ->  a loop splits on 1 / lanes of the work it needs
+///     a task's budget buys 1 / lanes   ->  the split walks back toward one item per task
+/// ```
+///
+/// Break-even for a loop that only just crosses the gate is an overcharge of 1.56, since
+/// `0.625 us / 1.56` is the 0.4 us a dispatch costs per worker.
+/// Undercharging instead leaves such a loop whole, and cannot cut a split one below one
+/// task per worker.
+///
+/// The charge rounds up, so no item is ever priced at nothing and left looking free.
+const fn base_mul_acc_bytes<EF>(count: usize, lanes: usize) -> usize {
+    (BASE_MUL_ACC_BYTES * count * size_of::<EF>()).div_ceil(lanes)
+}
 
 /// Factored eq polynomial table for scale * eq(z, .).
 ///
@@ -129,6 +151,27 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         &self.eq1
     }
 
+    /// Base elements the prefix folds multiply per instruction.
+    ///
+    /// Every prefix fold runs `acc[j] += w * chunk[j]` over one inner block.
+    /// That loop vectorizes whichever way the suffix-half table is stored.
+    ///
+    /// The packing width is what the target vectorizes base-field arithmetic at.
+    const FOLD_LANES: usize = F::Packing::WIDTH;
+
+    /// Base elements the eq1-dot kernels multiply per instruction.
+    ///
+    /// `dot_with_base` reads the base chunk as packed elements only when the suffix-half
+    /// table is packed.
+    /// A scalar table dots one element at a time.
+    const fn dot_lanes(&self) -> usize {
+        if self.eq1.is_packed() {
+            F::Packing::WIDTH
+        } else {
+            1
+        }
+    }
+
     /// Evaluates a base-field polynomial against the factored eq table.
     ///
     /// Computes:
@@ -155,7 +198,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         poly.as_slice()
             .par_chunks(cs)
             .zip_eq(self.eq0.as_slice().par_iter())
-            .with_min_task_bytes(BASE_MUL_ACC_BYTES * cs * size_of::<EF>())
+            .with_min_task_bytes(base_mul_acc_bytes::<EF>(cs, self.dot_lanes()))
             .map(|(chunk, &w0)| self.eq1.dot_with_base(chunk) * w0)
             .sum::<EF>()
     }
@@ -315,7 +358,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // Only a loop worth splitting pays for the per-task accumulators a split needs.
         if !should_split(
             self.eq0.num_evals(),
-            BASE_MUL_ACC_BYTES * size_outer * size_of::<EF>()
+            base_mul_acc_bytes::<EF>(size_outer, Self::FOLD_LANES)
                 + 2 * (1 << k_inner) * size_of::<EF>(),
         ) {
             // Sequential: accumulate each eq0 chunk into a shared output buffer.
@@ -375,7 +418,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // The sequential pass accumulates into one shared buffer, which no split can do.
         if !should_split(
             self.eq0.num_evals(),
-            BASE_MUL_ACC_BYTES * size_outer * size_of::<EF>()
+            base_mul_acc_bytes::<EF>(size_outer, Self::FOLD_LANES)
                 + 2 * (1 << k_inner) * size_of::<EF::ExtensionPacking>(),
         ) {
             let mut out = Poly::<EF::ExtensionPacking>::zero(k_inner);
@@ -444,7 +487,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         let suffix_rows = 1 << self.num_variables();
         out.par_iter_mut()
             .zip(poly.as_slice().par_chunks(suffix_rows))
-            .with_min_task_bytes(BASE_MUL_ACC_BYTES * suffix_rows * size_of::<EF>())
+            .with_min_task_bytes(base_mul_acc_bytes::<EF>(suffix_rows, self.dot_lanes()))
             .for_each(|(out, chunk)| {
                 *out = self.eq1.compress_suffix_dot(chunk, &self.eq0);
             });
@@ -497,7 +540,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             .as_slice()
             .par_iter()
             .zip_eq(evals[1..].par_chunks(cs))
-            .with_min_task_bytes(BASE_MUL_ACC_BYTES * cs * size_of::<EF>())
+            .with_min_task_bytes(base_mul_acc_bytes::<EF>(cs, self.dot_lanes()))
             .map(|(&w0, chunk)| self.eq1.dot_with_base_shifted(chunk) * w0)
             .sum::<EF>();
 
@@ -540,7 +583,8 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // Only a loop worth splitting pays to rebuild each boundary from its own index.
         if !should_split(
             self.eq0.num_evals(),
-            BASE_MUL_ACC_BYTES * size_outer * size_of::<EF>() + 2 * inner_size * size_of::<EF>(),
+            base_mul_acc_bytes::<EF>(size_outer, Self::FOLD_LANES)
+                + 2 * inner_size * size_of::<EF>(),
         ) {
             // Sequential pass threads a carry across outer chunks.
             // The shift means each prefix row also receives its predecessor's
@@ -634,7 +678,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // A block is priced by its multiply-accumulates, which cost far more than its reads.
         out.par_iter_mut()
             .zip_eq(poly.as_slice().par_chunks(suffix_rows))
-            .with_min_task_bytes(BASE_MUL_ACC_BYTES * suffix_rows * size_of::<EF>())
+            .with_min_task_bytes(base_mul_acc_bytes::<EF>(suffix_rows, self.dot_lanes()))
             .for_each(|(out, chunk)| {
                 // Drop the first suffix row so row y reads its predecessor y - 1,
                 // then split the prefix-half weights across the suffix sub-blocks.
@@ -1103,30 +1147,35 @@ mod tests {
         // This pins the boundary-rebuilding arm at a shape that splits on a wide pool.
         let mut rng = SmallRng::seed_from_u64(0xB0117);
         let split_vars = 8;
-        let inner_vars = 12;
-        let point = Point::<EF>::rand(&mut rng, split_vars);
-        let poly = Poly::<F>::rand(&mut rng, split_vars + inner_vars);
 
-        // Fixture state: the shape the contraction hands to the shared policy.
-        //
-        //     prefix blocks : 2^(split_vars / 2)                    = 16
-        //     block width   : 2^(split_vars + inner_vars) / blocks  = 2^16
-        //     accumulator   : 2^inner_vars, read and written once per block
         // A pool of one worker never splits, so there is no second arm to reach.
         // That covers a serial build and a single-vCPU runner alike.
         if current_num_threads() == 1 {
             return;
         }
 
+        // Fixture state: the shape the contraction hands to the shared policy.
+        //
+        //     prefix blocks : 2^(split_vars / 2)
+        //     block width   : 2^(split_vars + inner_vars) / prefix blocks
+        //     accumulator   : 2^inner_vars, read and written once per block
         let prefix_blocks = 1 << (split_vars / 2);
-        let size_outer = poly.num_evals() / prefix_blocks;
-        let item_bytes = BASE_MUL_ACC_BYTES * size_outer * size_of::<EF>()
-            + 2 * (1 << inner_vars) * size_of::<EF>();
-        assert!(
-            should_split(prefix_blocks, item_bytes),
-            "shape no longer splits on a pool of {} workers",
-            current_num_threads()
-        );
+        let item_bytes = |inner_vars: usize| {
+            let size_outer = (1 << (split_vars + inner_vars)) / prefix_blocks;
+            base_mul_acc_bytes::<EF>(size_outer, SplitEq::<F, EF>::FOLD_LANES)
+                + 2 * (1 << inner_vars) * size_of::<EF>()
+        };
+
+        // The gate scales with the pool and the charge scales down with the packing
+        // width, so no fixed shape splits on every host.
+        // Grow the inner block until this one does.
+        let mut inner_vars = 12;
+        while !should_split(prefix_blocks, item_bytes(inner_vars)) {
+            inner_vars += 1;
+        }
+
+        let point = Point::<EF>::rand(&mut rng, split_vars);
+        let poly = Poly::<F>::rand(&mut rng, split_vars + inner_vars);
 
         // The split arm must still agree with the dense reference.
         let expected = compress_prefix_shifted_poly_reference(&poly, &point);
