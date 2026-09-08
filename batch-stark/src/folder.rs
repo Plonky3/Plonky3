@@ -1,14 +1,13 @@
 use alloc::vec::Vec;
 
 use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder, RowWindow};
+use p3_lookup::{Count, InteractionBuilder};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{
     PackedChallenge, PackedVal, ProverConstraintFolder, StarkGenericConfig, Val,
     VerifierConstraintFolder,
 };
-
-use p3_lookup::{Count, InteractionBuilder};
 
 pub struct ProverConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
     pub inner: ProverConstraintFolder<'a, SC>,
