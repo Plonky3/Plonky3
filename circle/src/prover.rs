@@ -15,10 +15,11 @@ use crate::{CircleCommitPhaseMultiStep, CircleFriProof};
 
 /// Run the Circle-FRI low-degree test over the reduced openings.
 ///
-/// Every commitment, grinding witness and challenge passes through `transcript`,
-/// which the caller seeded and continues to own.
+/// Every commitment, grinding witness and challenge passes through the transcript.
+/// The caller seeded it, owns it, and closes it once this returns.
 ///
-/// Arguments:
+/// # Arguments
+///
 /// - `folding`: the Circle folding strategy.
 /// - `params`: the parameters for this FRI instance.
 /// - `inputs`: the folding inputs, sorted descending by length.
@@ -120,7 +121,8 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>, Witness> {
 
 /// Fold the inputs down to a constant, committing to every intermediate codeword.
 ///
-/// Arguments:
+/// # Arguments
+///
 /// - `folding`: the Circle folding strategy.
 /// - `params`: the parameters for this FRI instance.
 /// - `inputs`: the folding inputs, sorted descending by length.

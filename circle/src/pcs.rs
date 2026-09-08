@@ -8,7 +8,7 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, OpenedValues, Pcs, PeriodicLdeTable, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field, PrimeField64, batch_multiplicative_inverse, dot_product};
-use p3_fri::verifier::{FriError, PowPhase};
+use p3_fri::verifier::FriError;
 use p3_fri::{BatchMultiOpening, FriFoldingStrategy, FriParameters};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
@@ -29,7 +29,9 @@ use crate::folding::{
 };
 use crate::point::{Point, compute_lagrange_den_batched};
 use crate::prover::prove;
-use crate::transcript::{CirclePcsShape, CircleProverTranscript, CircleVerifierTranscript};
+use crate::transcript::{
+    CirclePcsShape, CircleProverTranscript, CircleTranscriptFailure, CircleVerifierTranscript,
+};
 use crate::verifier::{validate_proof_shape, verify_queries};
 use crate::{
     CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, build_periodic_lde_table_circle,
@@ -161,8 +163,8 @@ struct ReplayedChallenges<EF> {
 ///
 /// # Overview
 ///
-/// Every step the shape describes is played here, in one pass, before any
-/// arithmetic reads a challenge.
+/// Every step the shape describes is played here, in one pass.
+/// Nothing downstream reads a challenge before this returns.
 ///
 /// The driver is borrowed, so the caller decides whether to finalise or abort it.
 ///
@@ -184,7 +186,7 @@ fn replay_transcript<Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     transcript: &mut CircleVerifierTranscript<'_, Challenger, Val, Challenge>,
     rounds: &[CommitmentWithClaims<Val, Challenge, InputMmcs::Commitment>],
     proof: &CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Val>,
-) -> Result<ReplayedChallenges<Challenge>, PowPhase>
+) -> Result<ReplayedChallenges<Challenge>, CircleTranscriptFailure>
 where
     Val: ComplexExtendable + PrimeField64,
     Challenge: ExtensionField<Val>,
@@ -744,8 +746,9 @@ where
         //
         //     H_claim = max claimed log_n + log_blowup
         //
-        // Nothing below reads a height from the proof, so a forged round count cannot
-        // widen a query index or shorten the fold chain.
+        // Nothing below reads a height from the proof.
+        // A forged round count therefore cannot widen a query index.
+        // Nor can it shorten the fold chain.
         let log_global_max_height = rounds
             .iter()
             .flat_map(|(_, mats)| {
@@ -803,10 +806,11 @@ where
 
         // Invariant: the driver is released on both exits of this span.
         //
-        //     Ok  -> `finish` consumes it and runs the completeness check
-        //     Err -> `abort` releases that check so the rejection travels alone
+        //     Ok  -> the driver is closed, which runs its completeness check
+        //     Err -> that check is released, so the rejection travels alone
         //
-        // Nothing between the two branches can return early, so no path drops it live.
+        // Nothing between the two branches can return early.
+        // No path therefore drops a driver that is still mid-pattern.
         let ReplayedChallenges {
             alpha,
             bivariate_beta,
@@ -817,9 +821,9 @@ where
                 transcript.finish();
                 challenges
             }
-            Err(phase) => {
+            Err(failure) => {
                 transcript.abort();
-                return Err(FriError::InvalidPowWitness(phase));
+                return Err(FriError::InvalidPowWitness(failure.phase()));
             }
         };
 
@@ -1804,10 +1808,15 @@ mod tests {
 
     // Soundness by mutation, one test per value the transcript absorbs.
     //
-    // Every one of them moves a challenge the rest of the run depends on, so the
-    // rejection can surface as a failed grinding replay or as a diverged fold. Both
-    // are rejections; asserting the exact variant would pin an accident of the
-    // fixture rather than the property, so these tests assert only that.
+    // Every one of them moves a challenge the rest of the run depends on.
+    // The rejection then surfaces at whichever check meets the new challenge first:
+    //
+    //     a grinding replay that no longer clears its difficulty
+    //     a fold chain that no longer lands on the claimed constant
+    //     a Merkle check against a redrawn query index
+    //
+    // Which of the three lands first is an accident of the fixture.
+    // These tests assert the rejection and not the variant.
 
     #[test]
     fn reject_tampered_opening_point() {
