@@ -78,13 +78,13 @@ Hashes
 
 ## Binary-field example
 
-The [binary AIR example](multi-stark/examples/prove_binary_field.rs) proves a nonlinear
+The [binary AIR example](configs/examples/prove_binary_field.rs) proves a nonlinear
 recurrence over `BinaryField128` using the multilinear STARK prover and `BinaryPcs`,
 with Keccak Merkle commitments and a binary challenger. It serializes the proof and
 verifies it with a fresh transcript:
 
 ```bash
-cargo run --release -p p3-multi-stark --example prove_binary_field
+cargo run --release -p p3-configs --features binary --example prove_binary_field
 ```
 
 This example is not zero knowledge. Characteristic-two LogUp lookups are unsupported

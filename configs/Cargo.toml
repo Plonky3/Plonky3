@@ -1,0 +1,65 @@
+[package]
+name = "p3-configs"
+description = "Supported, explicitly parameterized Plonky3 proof configurations."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+baby-bear = ["dep:p3-baby-bear", "dep:p3-dft", "dep:p3-fri", "dep:p3-uni-stark"]
+koala-bear = ["dep:p3-koala-bear", "dep:p3-dft", "dep:p3-fri", "dep:p3-uni-stark"]
+binary = [
+    "dep:p3-binary-field",
+    "dep:p3-binary-pcs",
+    "dep:p3-keccak",
+    "dep:p3-multi-stark",
+    "dep:p3-sumcheck",
+]
+parallel = [
+    "p3-dft?/parallel",
+    "p3-fri?/parallel",
+    "p3-uni-stark?/parallel",
+    "p3-binary-pcs?/parallel",
+    "p3-multi-stark?/parallel",
+    "p3-merkle-tree/parallel",
+]
+
+[dependencies]
+p3-baby-bear = { workspace = true, optional = true }
+p3-binary-field = { workspace = true, optional = true }
+p3-binary-pcs = { workspace = true, optional = true }
+p3-challenger.workspace = true
+p3-commit.workspace = true
+p3-dft = { workspace = true, optional = true }
+p3-field.workspace = true
+p3-fri = { workspace = true, optional = true }
+p3-keccak = { workspace = true, optional = true }
+p3-koala-bear = { workspace = true, optional = true }
+p3-merkle-tree.workspace = true
+p3-multi-stark = { workspace = true, optional = true }
+p3-sumcheck = { workspace = true, optional = true }
+p3-symmetric.workspace = true
+p3-uni-stark = { workspace = true, optional = true }
+
+[dev-dependencies]
+p3-air.workspace = true
+p3-matrix.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
+
+[[example]]
+name = "prove_prime_fields"
+required-features = ["baby-bear", "koala-bear"]
+test = true
+
+[[example]]
+name = "prove_binary_field"
+required-features = ["binary"]
+test = true
+
+[lints]
+workspace = true

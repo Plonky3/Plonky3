@@ -13,6 +13,7 @@ members = [
     "challenger",
     "circle",
     "commit",
+    "configs",
     "dft",
     "examples",
     "field",
@@ -116,6 +117,7 @@ p3-bn254 = { path = "bn254", version = "0.7.0" }
 p3-challenger = { path = "challenger", version = "0.7.0" }
 p3-circle = { path = "circle", version = "0.7.0" }
 p3-commit = { path = "commit", version = "0.7.0" }
+p3-configs = { path = "configs", version = "0.7.0" }
 p3-dft = { path = "dft", version = "0.7.0" }
 p3-examples = { path = "examples", version = "0.3.0" }
 p3-field = { path = "field", version = "0.7.0" }
@@ -134,6 +136,7 @@ p3-mersenne-31 = { path = "mersenne-31", version = "0.7.0" }
 p3-monolith = { path = "monolith", version = "0.7.0" }
 p3-monolith-air = { path = "monolith-air", version = "0.7.0" }
 p3-monty-31 = { path = "monty-31", version = "0.7.0" }
+p3-multi-stark = { path = "multi-stark", version = "0.7.0" }
 p3-multilinear-util = { path = "multilinear-util", version = "0.7.0" }
 p3-poseidon1 = { path = "poseidon1", version = "0.7.0" }
 p3-poseidon1-air = { path = "poseidon1-air", version = "0.7.0" }

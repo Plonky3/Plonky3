@@ -1,81 +1,33 @@
 //! A complete AIR proof over GF(2^128), with the additive-domain binary PCS.
 //!
-//! Run with `cargo run --release -p p3-multi-stark --example prove_binary_field`.
+//! Run with `cargo run --release -p p3-configs --features binary --example prove_binary_field`.
 //! The PCS is binding but not hiding; this example does not provide zero knowledge.
 
 use std::time::Instant;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
-use p3_binary_field::{BinaryChallenger, BinaryField128, TowerLevel};
-use p3_binary_pcs::{BinaryPcs, BinaryPcsConfig, BinaryPcsParams, BinaryPcsProverData};
-use p3_challenger::HashChallenger;
-use p3_keccak::Keccak256Hash;
-use p3_matrix::dense::RowMajorMatrix;
-use p3_multi_stark::config::MultiStarkConfig;
-use p3_multi_stark::{
+use p3_binary_field::TowerLevel;
+use p3_configs::binary::{self, BinaryPcsConfig, BinaryPcsParams, Challenger, Config, Val as F};
+use p3_configs::multi_stark::{
     MultiStarkProof, ProverInstance, ProverInstances, VerifierInstance, VerifierInstances, prove,
     setup, verify,
 };
-use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
-
-type F = BinaryField128;
-type Hash = SerializingHasher<Keccak256Hash>;
-type Compress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
-type Mmcs = p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash, Compress, 2, 32>;
-type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
-
-struct Config {
-    pcs: BinaryPcs<Mmcs>,
-}
-
-impl MultiStarkConfig for Config {
-    type Val = F;
-    type Challenge = F;
-    type Challenger = Challenger;
-    type Pcs = BinaryPcs<Mmcs>;
-
-    fn pcs(&self) -> &Self::Pcs {
-        &self.pcs
-    }
-
-    fn min_num_variables(&self) -> usize {
-        // The binary PCS folds at least one variable and does not pad individual tables.
-        1
-    }
-
-    fn build_witness(&self, tables: Vec<Table<F>>) -> Witness<F> {
-        SuffixProver::<F, F>::new_witness(tables, 0)
-    }
-
-    fn committed_table<'a>(
-        &self,
-        prover_data: &'a BinaryPcsProverData<Mmcs>,
-        table_index: usize,
-    ) -> &'a Table<F> {
-        prover_data.table(table_index)
-    }
-}
+use p3_matrix::dense::RowMajorMatrix;
+use p3_sumcheck::layout::Table;
 
 fn config(log_height: usize) -> Config {
     // Two trace columns add one variable to the stacked polynomial.
+    // This is an example PCS target, not an end-to-end security claim.
     let params = BinaryPcsParams {
         log_inv_rate: 2,
         pow_bits: 0,
         security_level: 100,
     };
-    let pcs_config = BinaryPcsConfig::try_new(log_height + 1, params).unwrap();
-    let mmcs = Mmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
-    Config {
-        pcs: BinaryPcs::new(pcs_config, mmcs),
-    }
+    Config::new(BinaryPcsConfig::try_new(log_height + 1, params).unwrap())
 }
 
 fn challenger() -> Challenger {
-    Challenger::from_hasher(
-        b"p3-multi-stark-binary-recurrence-v1".to_vec(),
-        Keccak256Hash,
-    )
+    binary::challenger(b"p3-multi-stark-binary-recurrence-v1")
 }
 
 /// A nonlinear recurrence: (a, b) -> (b, a * b + a).
@@ -177,9 +129,10 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use p3_binary_pcs::{BinaryPcsError, BinaryPcsProof};
+    use p3_configs::binary::Mmcs;
+    use p3_configs::multi_stark::config::{MultiStarkConfig, PcsError};
+    use p3_configs::multi_stark::{VerificationError, VerifyingKey};
     use p3_field::PrimeCharacteristicRing;
-    use p3_multi_stark::config::PcsError;
-    use p3_multi_stark::{VerificationError, VerifyingKey};
 
     use super::*;
 
@@ -256,6 +209,24 @@ mod tests {
     }
 
     #[test]
+    fn rejects_changed_transcript_domain() {
+        let fixture = Fixture::new(3, 0);
+        let result = verify(
+            &fixture.config,
+            VerifierInstances::new(vec![VerifierInstance::new(
+                &RecurrenceAir,
+                &fixture.vk,
+                fixture.log_height,
+                &fixture.public,
+            )]),
+            &fixture.proof,
+            fixture.pow_bits,
+            &mut binary::challenger(b"different-application-v1"),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn rejects_changed_sumcheck_polynomial() {
         let mut fixture = Fixture::new(3, 0);
         fixture.proof.sumcheck.round_polys[0][0] += F::ONE;
@@ -318,22 +289,22 @@ mod tests {
         )]);
         let expected = table.clone();
         let (commitment, data) = config
-            .pcs
+            .pcs()
             .commit(config.build_witness(vec![table]), &mut challenger());
         for seed in [b"first opening".as_slice(), b"second opening".as_slice()] {
             use p3_challenger::CanObserve;
 
-            let mut prover = Challenger::from_hasher(seed.to_vec(), Keccak256Hash);
+            let mut prover = binary::challenger(seed);
             prover.observe(commitment.clone());
             let cloned = data.clone();
             for (actual, expected) in cloned.table(0).iter_polys().zip(expected.iter_polys()) {
                 assert_eq!(actual, expected);
             }
             let proof: BinaryPcsProof<Mmcs> =
-                config.pcs.open(cloned, protocol.clone(), &mut prover);
-            let mut verifier = Challenger::from_hasher(seed.to_vec(), Keccak256Hash);
+                config.pcs().open(cloned, protocol.clone(), &mut prover);
+            let mut verifier = binary::challenger(seed);
             config
-                .pcs
+                .pcs()
                 .verify(&commitment, &proof, &mut verifier, protocol.clone())
                 .unwrap();
         }
@@ -372,36 +343,7 @@ mod tests {
         .unwrap();
     }
 
-    /// Uses the same PCS arity for equally wide main and preprocessed tables.
-    struct PreprocessedConfig(Config);
-
-    impl MultiStarkConfig for PreprocessedConfig {
-        type Val = F;
-        type Challenge = F;
-        type Challenger = Challenger;
-        type Pcs = BinaryPcs<Mmcs>;
-
-        fn pcs(&self) -> &Self::Pcs {
-            self.0.pcs()
-        }
-        fn preprocessed_pcs(&self) -> &Self::Pcs {
-            self.0.pcs()
-        }
-        fn min_num_variables(&self) -> usize {
-            self.0.min_num_variables()
-        }
-        fn build_witness(&self, tables: Vec<Table<F>>) -> Witness<F> {
-            self.0.build_witness(tables)
-        }
-        fn committed_table<'a>(
-            &self,
-            data: &'a BinaryPcsProverData<Mmcs>,
-            index: usize,
-        ) -> &'a Table<F> {
-            self.0.committed_table(data, index)
-        }
-    }
-
+    // One preprocessed column against two main columns exercises distinct PCS arities.
     struct PreprocessedAir;
 
     impl BaseAir<F> for PreprocessedAir {
@@ -412,12 +354,12 @@ mod tests {
             3
         }
         fn preprocessed_width(&self) -> usize {
-            2
+            1
         }
         fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
             let (table, _) = trace(3);
-            let columns = table.iter_polys().flatten().copied().collect();
-            Some(RowMajorMatrix::new(columns, 8).transpose())
+            let column = table.iter_polys().next().unwrap().to_vec();
+            Some(RowMajorMatrix::new(column, 1))
         }
     }
 
@@ -426,17 +368,12 @@ mod tests {
             RecurrenceAir.eval(builder);
             let main = builder.main();
             let preprocessed = builder.preprocessed();
-            let local = [
-                preprocessed.current_slice()[0],
-                preprocessed.current_slice()[1],
-            ];
-            let next = [preprocessed.next_slice()[0], preprocessed.next_slice()[1]];
-            for column in 0..2 {
-                builder.assert_eq(main.current_slice()[column], local[column]);
-                builder
-                    .when_transition()
-                    .assert_eq(main.next_slice()[column], next[column]);
-            }
+            let local = preprocessed.current_slice()[0];
+            let next = preprocessed.next_slice()[0];
+            builder.assert_eq(main.current_slice()[0], local);
+            builder
+                .when_transition()
+                .assert_eq(main.next_slice()[0], next);
         }
     }
 
@@ -444,7 +381,12 @@ mod tests {
     fn binary_preprocessed_key_is_reusable_and_openings_are_checked() {
         use p3_challenger::CanObserve;
 
-        let config = PreprocessedConfig(config(3));
+        let params = BinaryPcsParams {
+            log_inv_rate: 2,
+            pow_bits: 0,
+            security_level: 100,
+        };
+        let config = config(3).with_preprocessed(BinaryPcsConfig::try_new(3, params).unwrap());
         let (pk, vk) = setup(&config, &[&PreprocessedAir], &mut challenger());
         for seed in [2, 3] {
             let fresh = || {
@@ -464,7 +406,7 @@ mod tests {
                 0,
                 &mut fresh(),
             );
-            let check = |proof: &MultiStarkProof<PreprocessedConfig>| {
+            let check = |proof: &MultiStarkProof<Config>| {
                 verify(
                     &config,
                     VerifierInstances::new(vec![VerifierInstance::new(
