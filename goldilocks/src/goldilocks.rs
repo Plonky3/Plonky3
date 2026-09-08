@@ -17,7 +17,6 @@ use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField64, RawDataSerializable, TwoAdicField, UniformSamplingField,
     impl_raw_serializable_primefield64, quotient_map_large_iint, quotient_map_small_int,
-    tonelli_shanks_two_adic,
 };
 use p3_util::{branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
@@ -413,6 +412,18 @@ impl RawDataSerializable for Goldilocks {
     impl_raw_serializable_primefield64!();
 }
 
+/// Compute `x^(2^31 - 1)` using a fixed addition chain.
+#[inline(always)]
+fn exp_2_31_minus_1(x: Goldilocks) -> Goldilocks {
+    let x3 = x.square() * x;
+    let x7 = x3.square() * x;
+    let x63 = x7.exp_power_of_2(3) * x7;
+    let x4095 = x63.exp_power_of_2(6) * x63;
+    let x24 = x4095.exp_power_of_2(12) * x4095;
+    let x30 = x24.exp_power_of_2(6) * x63;
+    x30.square() * x
+}
+
 impl Field for Goldilocks {
     #[cfg(all(
         target_arch = "x86_64",
@@ -467,7 +478,40 @@ impl Field for Goldilocks {
 
     #[inline]
     fn try_sqrt(&self) -> Option<Self> {
-        tonelli_shanks_two_adic(*self)
+        // Zero is its own square root and would otherwise break Tonelli-Shanks.
+        if self.is_zero() {
+            return Some(Self::ZERO);
+        }
+
+        // Goldilocks has `p - 1 = (2^32 - 1) * 2^32`, so the initial
+        // Tonelli-Shanks exponent is `(2^32 - 2) / 2 = 2^31 - 1`.
+        let u = exp_2_31_minus_1(*self);
+        let mut r = u * *self;
+        let mut t = r * u;
+        let mut m = 32;
+
+        while t != Self::ONE {
+            // Find the least i with t^(2^i) = 1. If no such i is below m,
+            // t has order 2^m and the input is a quadratic non-residue.
+            let mut i = 0;
+            let mut t2i = t;
+            while t2i != Self::ONE {
+                t2i = t2i.square();
+                i += 1;
+                if i == m {
+                    return None;
+                }
+            }
+
+            // The current correction is the (i + 1)-th two-adic generator:
+            // G_m^(2^(m-i-1)) = G_(i+1), and its square is G_i. Since
+            // i < m <= 32, both table indices are always in range.
+            r *= Self::TWO_ADIC_GENERATORS[i + 1];
+            t *= Self::TWO_ADIC_GENERATORS[i];
+            m = i;
+        }
+
+        Some(r)
     }
 }
 
@@ -815,6 +859,7 @@ const fn from_unusual_int(int: i64) -> Goldilocks {
 #[cfg(test)]
 mod tests {
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::tonelli_shanks_two_adic;
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_64, test_two_adic_field,
     };
@@ -965,6 +1010,41 @@ mod tests {
         }
 
         let mut rng = SmallRng::seed_from_u64(0x128_51C0);
+        for _ in 0..10_000 {
+            check(rng.random());
+        }
+    }
+
+    #[test]
+    fn sqrt_matches_generic_tonelli_shanks_for_arbitrary_representatives() {
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            (1 << 32) - 1,
+            1 << 32,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+
+        let check = |raw: u64| {
+            let input = F::new(raw);
+            let expected = tonelli_shanks_two_adic(input);
+            let actual = input.try_sqrt();
+            assert_eq!(actual.is_some(), expected.is_some(), "raw = {raw:#018x}");
+            if let Some(root) = actual {
+                assert_eq!(root.square(), input, "raw = {raw:#018x}");
+            }
+        };
+
+        for raw in RAW_EDGES {
+            check(raw);
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x5A7_C0DE);
         for _ in 0..10_000 {
             check(rng.random());
         }

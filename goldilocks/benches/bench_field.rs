@@ -21,6 +21,30 @@ use rand::{RngExt, SeedableRng};
 
 type F = Goldilocks;
 
+fn benchmark_sqrt_varied<const N: usize>(c: &mut Criterion) {
+    let mut rng = SmallRng::seed_from_u64(0x5A7_C0DE + N as u64);
+    let residues: [F; N] = core::array::from_fn(|_| rng.random::<F>().square());
+    let raw_inputs: [F; N] = core::array::from_fn(|_| F::new(rng.random()));
+
+    c.bench_function(&format!("Goldilocks sqrt varied residues/{N}"), |b| {
+        let mut index = 0;
+        b.iter(|| {
+            let input = black_box(residues[index]);
+            index = (index + 1) % N;
+            black_box(input.try_sqrt())
+        });
+    });
+
+    c.bench_function(&format!("Goldilocks sqrt varied raw/{N}"), |b| {
+        let mut index = 0;
+        b.iter(|| {
+            let input = black_box(raw_inputs[index]);
+            index = (index + 1) % N;
+            black_box(input.try_sqrt())
+        });
+    });
+}
+
 fn bench_field(c: &mut Criterion) {
     let name = "Goldilocks";
     const REPS: usize = 200;
@@ -29,6 +53,8 @@ fn bench_field(c: &mut Criterion) {
     benchmark_square::<F>(c, name);
     benchmark_inv::<F>(c, name);
     benchmark_sqrt::<F>(c, name);
+    benchmark_sqrt_varied::<256>(c);
+    benchmark_sqrt_varied::<1024>(c);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
 
     benchmark_sum_array::<F, 4, REPS>(c, name);
