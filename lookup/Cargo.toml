@@ -25,8 +25,8 @@ thiserror.workspace = true
 tracing = { workspace = true }
 
 [dev-dependencies]
-p3-baby-bear = { path = "../baby-bear" }
 criterion.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
 rand.workspace = true
 serde_json.workspace = true
 
