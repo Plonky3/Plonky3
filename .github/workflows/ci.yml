@@ -134,35 +134,35 @@ jobs:
 
       - name: Test
         if: ${{ !matrix.compile_only && !matrix.parallel }}
-        run: cargo nextest run
+        run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check.py test
 
       - name: Test doctests
         if: ${{ !matrix.compile_only && !matrix.parallel }}
         # nextest doesn't run doctests, so cover them with plain `cargo test`.
-        run: cargo test --doc
+        run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check.py doctest
 
       - name: Test with parallel
         if: ${{ !matrix.compile_only && matrix.parallel }}
-        run: cargo nextest run --features parallel
+        run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check.py test --parallel
 
       - name: Test with parallel doctests
         if: ${{ !matrix.compile_only && matrix.parallel }}
-        run: cargo test --doc --features parallel
+        run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check.py doctest --parallel
 
       - name: Build
         if: ${{ matrix.compile_only && !matrix.parallel }}
         # Keep target-feature RUSTFLAGS off host build scripts and proc macros.
-        run: cargo build --target ${{ matrix.target }} --all-targets
+        run: python3 scripts/check.py architecture --target ${{ matrix.target }}
 
       - name: Build with parallel
         if: ${{ matrix.compile_only && matrix.parallel }}
-        run: cargo build --target ${{ matrix.target }} --all-targets --features parallel
+        run: python3 scripts/check.py architecture --target ${{ matrix.target }} --parallel
 
       - name: Test keccak (aarch64, no SHA3)
         if: ${{ matrix.os == 'macos-latest' && !matrix.parallel }}
         env:
           RUSTFLAGS: -C debuginfo=0 -C target-feature=-sha3
-        run: cargo nextest run -p p3-keccak
+        run: python3 scripts/check.py test --package p3-keccak
 
   check_embedded:
     name: Build embedded
@@ -182,55 +182,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # NB: We omit, p3-field-testing, and p3-examples as they currently depend on std
-      # and hence don't compile on the given target.
+      # Library packages are discovered through Cargo metadata. Host-only packages
+      # explicitly opt out with `package.metadata.plonky3.embedded = false`.
       - name: Build
-        run: |
-          cargo build --verbose --target ${{ env.target }} -p p3-air
-          cargo build --verbose --target ${{ env.target }} -p p3-baby-bear
-          cargo build --verbose --target ${{ env.target }} -p p3-batch-stark
-          cargo build --verbose --target ${{ env.target }} -p p3-binary-dft
-          cargo build --verbose --target ${{ env.target }} -p p3-binary-field
-          cargo build --verbose --target ${{ env.target }} -p p3-blake3
-          cargo build --verbose --target ${{ env.target }} -p p3-blake3-air
-          cargo build --verbose --target ${{ env.target }} -p p3-bn254
-          cargo build --verbose --target ${{ env.target }} -p p3-challenger
-          cargo build --verbose --target ${{ env.target }} -p p3-circle
-          cargo build --verbose --target ${{ env.target }} -p p3-commit
-          cargo build --verbose --target ${{ env.target }} -p p3-dft
-          cargo build --verbose --target ${{ env.target }} -p p3-field
-          cargo build --verbose --target ${{ env.target }} -p p3-fri
-          # `--lib` here because p3-goldilocks has host-only bins that require std and would otherwise fail
-          cargo build --verbose --target ${{ env.target }} -p p3-goldilocks --lib
-          cargo build --verbose --target ${{ env.target }} -p p3-keccak
-          cargo build --verbose --target ${{ env.target }} -p p3-keccak-air
-          cargo build --verbose --target ${{ env.target }} -p p3-koala-bear
-          cargo build --verbose --target ${{ env.target }} -p p3-lookup
-          cargo build --verbose --target ${{ env.target }} -p p3-matrix
-          cargo build --verbose --target ${{ env.target }} -p p3-maybe-rayon
-          cargo build --verbose --target ${{ env.target }} -p p3-mds
-          cargo build --verbose --target ${{ env.target }} -p p3-merkle-tree
-          cargo build --verbose --target ${{ env.target }} -p p3-mersenne-31
-          cargo build --verbose --target ${{ env.target }} -p p3-monolith
-          cargo build --verbose --target ${{ env.target }} -p p3-monolith-air
-          cargo build --verbose --target ${{ env.target }} -p p3-monty-31
-          cargo build --verbose --target ${{ env.target }} -p p3-multi-stark
-          cargo build --verbose --target ${{ env.target }} -p p3-multilinear-util
-          cargo build --verbose --target ${{ env.target }} -p p3-poseidon1
-          cargo build --verbose --target ${{ env.target }} -p p3-poseidon1-air
-          cargo build --verbose --target ${{ env.target }} -p p3-poseidon2
-          cargo build --verbose --target ${{ env.target }} -p p3-poseidon2-air
-          cargo build --verbose --target ${{ env.target }} -p p3-rescue
-          cargo build --verbose --target ${{ env.target }} -p p3-sha256
-          cargo build --verbose --target ${{ env.target }} -p p3-sha256-air
-          cargo build --verbose --target ${{ env.target }} -p p3-security
-          cargo build --verbose --target ${{ env.target }} -p p3-stir
-          cargo build --verbose --target ${{ env.target }} -p p3-sumcheck
-          cargo build --verbose --target ${{ env.target }} -p p3-symmetric
-          cargo build --verbose --target ${{ env.target }} -p p3-uni-stark
-          cargo build --verbose --target ${{ env.target }} -p p3-util
-          cargo build --verbose --target ${{ env.target }} -p p3-whir
-          cargo build --verbose --target ${{ env.target }} -p p3-zk-codes
+        run: python3 scripts/check.py embedded --target ${{ env.target }}
 
   check_wasm32_simd128:
     name: Test wasm32 simd128
@@ -261,15 +216,15 @@ jobs:
           tar -xJf /tmp/wasmtime.tar.xz -C "$HOME"
           echo "$HOME/wasmtime-${WASMTIME_VERSION}-x86_64-linux" >> "$GITHUB_PATH"
       - name: Build p3-goldilocks for wasm32-unknown-unknown
-        run: cargo build --verbose --target ${{ env.build_target }} -p p3-goldilocks
+        run: python3 scripts/check.py wasm --step build --build-target ${{ env.build_target }}
       - name: Run wasm32+simd128 SIMD tests under wasmtime
-        run: cargo test --release --target ${{ env.run_target }} -p p3-goldilocks --lib wasm32_simd128
+        run: python3 scripts/check.py wasm --step test --run-target ${{ env.run_target }}
       - name: Run wasm_smoke under wasmtime
-        run: cargo run --release --target ${{ env.run_target }} --bin wasm_smoke -p p3-goldilocks
+        run: python3 scripts/check.py wasm --step smoke --run-target ${{ env.run_target }}
       - name: Run wasm_bench under wasmtime
-        run: cargo run --release --target ${{ env.run_target }} --bin wasm_bench -p p3-goldilocks
+        run: python3 scripts/check.py wasm --step bench --run-target ${{ env.run_target }}
       - name: Run wasm_merkle_bench under wasmtime
-        run: cargo run --release --target ${{ env.run_target }} --example wasm_merkle_bench -p p3-goldilocks
+        run: python3 scripts/check.py wasm --step merkle --run-target ${{ env.run_target }}
 
   lint:
     name: Formatting and Clippy
@@ -296,24 +251,27 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Test repository command interface
+        run: python3 scripts/check.py lint --check scripts
+
       - name: Sort Cargo.toml
-        run: cargo +stable sort --workspace --grouped --check
+        run: python3 scripts/check.py lint --check sort
 
       - name: Check TOML formatting
-        run: taplo fmt --check
+        run: python3 scripts/check.py lint --check toml
 
       # `--with-metadata` resolves each manifest through cargo.
       # Only that resolution makes dev-dependencies visible to the scan.
       - name: Unused dependencies
-        run: cargo machete --with-metadata
+        run: python3 scripts/check.py lint --check deps
 
       - name: Clippy
-        run: cargo +stable clippy --all-targets -- -D warnings
+        run: python3 scripts/check.py lint --check clippy
 
       - name: Docs
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
-        run: cargo +stable doc --no-deps --workspace --document-private-items
+        run: python3 scripts/check.py lint --check docs
 
       - name: Format
-        run: cargo +nightly fmt --all -- --check
+        run: python3 scripts/check.py lint --check fmt

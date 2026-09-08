@@ -45,10 +45,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Test WHIR exhaustive sweep
-        run: cargo test -p p3-whir pcs::tests::test_whir_end_to_end_exhaustive -- --ignored --exact
+        run: python3 scripts/check.py whir-exhaustive
 
       - name: Test WHIR exhaustive sweep with parallel
-        run: cargo test -p p3-whir --features parallel pcs::tests::test_whir_end_to_end_exhaustive -- --ignored --exact
+        run: python3 scripts/check.py whir-exhaustive --parallel
 
   binary_pcs_large_configuration:
     name: binary-pcs 2^16 round trip
@@ -68,4 +68,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Test the 2^16 round trip
-        run: cargo test -p p3-binary-pcs --release --test end_to_end large_configuration_2_16_round_trips -- --ignored --exact
+        run: python3 scripts/check.py binary-large

@@ -29,4 +29,4 @@ jobs:
       # field x algorithm x size sweep produces thousands of benchmark ids that
       # make even a single pass too slow.
       - name: Run each benchmark once
-        run: cargo bench --workspace --exclude p3-dft --features parallel -- --test
+        run: python3 scripts/check.py bench
