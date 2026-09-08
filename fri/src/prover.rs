@@ -39,12 +39,10 @@ use crate::{
 /// - `log_global_max_height`: The log of the maximum height of the input matrices.
 /// - `prover_data_with_opening_points`: A list of pairs of a batch commitment to a collection
 ///   of matrices and a list of points to open those matrices at.
-/// - `batch_pow_witness`: The proof of work the caller ground before sampling the challenge it
-///   used to batch `inputs`. FRI cannot produce this itself — that challenge is consumed in
-///   building `inputs`, so it is sampled before this function is called — but the verifier meets
-///   the witness inside [`crate::verifier::verify_fri`], so it travels in the proof this function
-///   assembles. Callers that batch nothing, and so sample no such challenge, pass
-///   `Challenger::Witness::ZERO` alongside `FriParameters::batch_proof_of_work_bits == 0`.
+/// - `batch_pow_witness`: The proof of work guarding the challenge that batched the inputs.
+///   That challenge is consumed in building the inputs, so it is drawn before this call.
+///   The witness still travels in the proof assembled here, which is the proof the caller ships.
+///   A caller that batches nothing passes a zero witness and a zero difficulty.
 #[instrument(name = "FRI prover", skip_all)]
 // The argument list is the protocol's own shape: the folding strategy, the parameters, the inputs,
 // the transcript, the instance height, the committed data, its MMCS, and the caller's batch witness.

@@ -99,6 +99,19 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         &self.challenger
     }
 
+    /// Mutable access to the underlying challenger.
+    ///
+    /// A component that lends its sponge to a sub-protocol reaches it through here.
+    /// The sub-protocol seeds its own driver from the state this one has reached.
+    ///
+    /// Nothing this returns is validated against the pattern.
+    ///
+    /// Bracket the region with the begin and end markers.
+    /// The delegation is then recorded even though its steps belong to the callee.
+    pub const fn challenger_mut(&mut self) -> &mut C {
+        &mut self.challenger
+    }
+
     /// Number of wire bytes still ahead of the cursor.
     pub const fn remaining_narg(&self) -> usize {
         self.narg.len() - self.cursor
