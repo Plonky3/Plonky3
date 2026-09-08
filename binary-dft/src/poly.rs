@@ -204,6 +204,26 @@ const TILE_BYTES: usize = 32 * 1024;
 /// A 1 MiB tile fuses 12 stages and runs a third slower.
 const STAGING_BYTES: usize = 64 * 1024;
 
+/// Bytes a row must carry before a staging tile is worth gathering it into.
+///
+/// A gather and a scatter address one row at a time, and the rows they address are a power of
+/// two apart, so each one pulls and pushes at least a whole cache line.
+///
+/// A row shorter than a line therefore moves a line's worth of traffic to move a fraction of
+/// a line's worth of data:
+///
+/// ```text
+///     16 bytes per row    one quarter of a 64-byte line is useful
+///     64 bytes per row    a whole line is useful
+/// ```
+///
+/// At one element per row that waste outweighs the full passes the fusion removes, so such a
+/// shape keeps the plain per-stage passes instead.
+///
+/// This is the smallest line size the supported targets have, so it is the point past which no
+/// target wastes more than half of a line.
+const STAGED_ROW_BYTES: usize = 64;
+
 /// The shape of one transform, and the two places its stage sequence is cut.
 ///
 /// A stage pairs rows a power of two apart, so the whole matrix has to be traversed once per
@@ -231,6 +251,8 @@ struct Plan {
     /// Bottom stages that run to completion inside one contiguous tile of rows.
     local: usize,
     /// Long-stride stages that one staging tile fuses into a single pass over the matrix.
+    ///
+    /// Zero when a row is too narrow for a gather to move whole cache lines.
     depth: usize,
 }
 
@@ -240,11 +262,18 @@ impl Plan {
         let element = core::mem::size_of::<u128>();
         let tile_rows = (TILE_BYTES / element / width).max(1);
         let staging_rows = (STAGING_BYTES / element / width).max(1);
+        // A gather moves whole cache lines whatever the row length, so a row below the line
+        // size wastes more traffic than the fused passes save.
+        let row_fills_a_line = element * width >= STAGED_ROW_BYTES;
         Self {
             width,
             log_n,
             local: log2_floor_usize(tile_rows).min(log_n),
-            depth: log2_floor_usize(staging_rows),
+            depth: if row_fills_a_line {
+                log2_floor_usize(staging_rows)
+            } else {
+                0
+            },
         }
     }
 
@@ -979,12 +1008,12 @@ mod tests {
         //
         // Fixture state, from the two cache budgets:
         //
-        //     width    1 @ 2^10   local 10, depth 12   the tile is the whole transform
-        //     width    3 @ 2^10   local  9, depth 10   one stage above the tile, unfused
-        //     width   16 @ 2^10   local  7, depth  8   one group of three stages
-        //     width   64 @ 2^10   local  5, depth  6   one group of five stages
-        //     width  512 @ 2^8    local  2, depth  3   two groups of three stages
-        //     width 1024 @ 2^7    local  1, depth  2   three groups of two stages
+        //     width    1 @ 2^10   local 10, depth 0   the tile is the whole transform
+        //     width    3 @ 2^10   local  9, depth 0   rows under a line, so nothing fuses
+        //     width   16 @ 2^10   local  7, depth 8   one group of three stages
+        //     width   64 @ 2^10   local  5, depth 6   one group of five stages
+        //     width  512 @ 2^8    local  2, depth 3   two groups of three stages
+        //     width 1024 @ 2^7    local  1, depth 2   three groups of two stages
         for (width, log_n) in [(1, 10), (3, 10), (16, 10), (64, 10), (512, 8), (1024, 7)] {
             let plan = Plan::new(width, log_n);
             for inverse in [false, true] {
