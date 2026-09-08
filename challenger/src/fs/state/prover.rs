@@ -89,6 +89,19 @@ impl<C, U: Unit> ProverState<C, U> {
         &self.challenger
     }
 
+    /// Mutable access to the underlying challenger.
+    ///
+    /// A component that lends its sponge to a sub-protocol reaches it through here.
+    /// The sub-protocol seeds its own driver from the state this one has reached.
+    ///
+    /// Nothing this returns is validated against the pattern.
+    ///
+    /// Bracket the region with the begin and end markers.
+    /// The delegation is then recorded even though its steps belong to the callee.
+    pub const fn challenger_mut(&mut self) -> &mut C {
+        &mut self.challenger
+    }
+
     /// Read-only access to the bytes buffered for the proof so far.
     pub fn narg(&self) -> &[u8] {
         &self.narg
