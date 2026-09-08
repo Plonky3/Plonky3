@@ -232,9 +232,11 @@ pub(crate) mod lanes {
 
 use lanes::WIDTH;
 
-// The register is the production backend of the shared algebra in `super::split`.
+// The register is the production backend of the shared split-multiplier algebra.
 //
-// Every method is one intrinsic, so the generic code monomorphizes to the same instructions.
+// Every method is one intrinsic.
+//
+// So the generic code monomorphizes to the instructions a hand-written kernel would emit.
 impl Lanes for lanes::Reg {
     #[inline(always)]
     fn zero() -> Self {
