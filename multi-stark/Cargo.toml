@@ -38,7 +38,6 @@ p3-baby-bear = { path = "../baby-bear" }
 p3-binary-field.workspace = true
 p3-blake3-air.workspace = true
 p3-dft.workspace = true
-p3-keccak.workspace = true
 p3-merkle-tree.workspace = true
 p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true

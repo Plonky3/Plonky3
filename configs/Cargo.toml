@@ -9,10 +9,18 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[package.metadata.plonky3.ci]
+test-features = ["baby-bear", "koala-bear", "binary"]
+
 [features]
 default = []
 baby-bear = ["dep:p3-baby-bear", "dep:p3-dft", "dep:p3-fri", "dep:p3-uni-stark"]
-koala-bear = ["dep:p3-koala-bear", "dep:p3-dft", "dep:p3-fri", "dep:p3-uni-stark"]
+koala-bear = [
+    "dep:p3-koala-bear",
+    "dep:p3-dft",
+    "dep:p3-fri",
+    "dep:p3-uni-stark",
+]
 binary = [
     "dep:p3-binary-field",
     "dep:p3-binary-pcs",
