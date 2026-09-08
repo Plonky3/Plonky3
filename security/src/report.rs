@@ -19,6 +19,9 @@ pub const DEEP_LABEL: &str = "deep-ali";
 /// Label for the low-degree-test term, when an implementation reports its
 /// phases as one already-composed bound.
 ///
+/// Also used for the legacy FRI query-only estimate in
+/// [`crate::stark::legacy_security_report`], which omits the folding round.
+///
 /// # Asymmetry with the conjectured path
 ///
 /// The proven path reports this single label while the conjectured path
@@ -68,6 +71,11 @@ pub enum Regime {
     /// list-decoding capacity, at list size 1. See
     /// [`crate::proximity::list_size_conjectured`].
     Conjectured,
+    /// Legacy conjectured regime using the pre-random-words ethSTARK
+    /// query bound. For FRI this omits the folding round; see
+    /// [`crate::fri::legacy_conjectured_error`] and
+    /// [`crate::stark::legacy_security_report`].
+    Legacy,
 }
 
 /// Full soundness breakdown within a single proximity regime.
@@ -78,7 +86,8 @@ pub enum Regime {
 /// proof.
 ///
 /// This is also the top-level output of
-/// [`crate::stark::conjectured_security_report`], which has a single regime
+/// [`crate::stark::conjectured_security_report`] and
+/// [`crate::stark::legacy_security_report`], which each have a single regime
 /// and therefore no [`SecurityReport`] envelope to maximize over.
 #[derive(Clone, Debug, Serialize)]
 pub struct RegimeReport {

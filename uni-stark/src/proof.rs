@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use p3_commit::Pcs;
 use serde::{Deserialize, Serialize};
 
-use crate::security::{ConjecturedSecurity, ProvenSecurity, StarkSecurityParams};
+use crate::security::{ConjecturedSecurity, LegacySecurity, ProvenSecurity, StarkSecurityParams};
 use crate::{Com, StarkGenericConfig, Val};
 
 type PcsProof<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
@@ -26,6 +26,13 @@ pub struct Proof<SC: StarkGenericConfig> {
 }
 
 impl<SC: StarkGenericConfig> Proof<SC> {
+    /// Legacy conjectured security level (in bits).
+    ///
+    /// See [`LegacySecurity`].
+    pub fn legacy_security(&self, params: &StarkSecurityParams) -> LegacySecurity {
+        LegacySecurity::compute_from_params(params, self.degree_bits)
+    }
+
     /// Conjectured security level (in bits).
     ///
     /// See [`ConjecturedSecurity`].

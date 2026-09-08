@@ -433,12 +433,16 @@ where
 
 /// Report the security parameter of the proof.
 ///
-/// Prints the conjectured and proven security levels.
+/// Prints the legacy conjectured, conjectured, and proven security levels.
 #[inline]
 pub fn report_parameter_security<SC>(proof: &Proof<SC>, security_params: &StarkSecurityParams)
 where
     SC: StarkGenericConfig,
 {
+    println!(
+        "Legacy conjectured security: {} bits",
+        proof.legacy_security(security_params).security_bits
+    );
     println!(
         "Conjectured security: {} bits",
         proof.conjectured_security(security_params).security_bits

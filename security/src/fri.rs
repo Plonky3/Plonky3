@@ -1,6 +1,7 @@
 //! FRI low-degree-test soundness.
 //!
 //! Conjectured regime: random-words bound, [2025/2010] §1.5.
+//! Legacy regime: pre-random-words ethSTARK query bound, [2021/582].
 //! Proven regime: round-by-round, [2024/1553] Theorems 2 & 3, with the
 //! BCHKS25 LDR commit bound ([2025/2055] Theorem 4.2). Cross-checked
 //! against Ethereum's `soundcalc`.
@@ -72,6 +73,10 @@ impl LowDegreeTest for FriRegime {
         conjectured_error(self, shape)
     }
 
+    fn legacy_conjectured_error(&self, _shape: &InstanceShape) -> Option<ErrorBits> {
+        Some(legacy_conjectured_error(self))
+    }
+
     fn conjectured_terms(&self, shape: &InstanceShape) -> Vec<SecurityTerm> {
         let mut terms = vec![SecurityTerm::new(
             LDT_QUERY_LABEL,
@@ -114,6 +119,8 @@ pub fn conjectured_error(regime: &FriRegime, shape: &InstanceShape) -> ErrorBits
 /// account for the commit-phase folding round covered by
 /// [`conjectured_commit_phase_error`]; kept for callers that specifically
 /// want the older, simpler heuristic bound.
+/// Use [`crate::stark::legacy_security_report`] to compose it with the
+/// AIR, DEEP-ALI, batching, extra, and commitment-collision terms.
 pub const fn legacy_conjectured_error(regime: &FriRegime) -> ErrorBits {
     ErrorBits::from_log2((regime.log_blowup * regime.num_queries + regime.query_pow_bits) as f64)
 }

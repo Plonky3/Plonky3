@@ -5,6 +5,8 @@
 //!
 //! The conjectured counterpart ([`conjectured_security_report`]) composes the
 //! same sources in the single random-words regime, where the list size is 1.
+//! [`legacy_security_report`] instead uses the LDT's legacy heuristic while
+//! retaining the same non-LDT terms.
 //!
 //! Extra protocol-specific error terms (lookup arguments, custom DEEP
 //! variants, batched openings, …) are passed through `extras: &[ErrorBits]`
@@ -421,6 +423,68 @@ pub fn conjectured_security_report<L: LowDegreeTest>(
         ErrorBits::from_log2(shape.collision_resistance as f64),
     ));
     RegimeReport::new(Regime::Conjectured, terms)
+}
+
+/// Composite legacy conjectured bits. Scalar mirror of
+/// [`legacy_security_report`], with the same terms and grinding sites.
+/// Returns `None` when the low-degree test does not support the legacy regime.
+pub fn legacy_security<L: LowDegreeTest>(
+    ldt: &L,
+    air: &StarkAirParams,
+    shape: &InstanceShape,
+    extras: &[ErrorBits],
+    grinding: &GrindingSites,
+) -> Option<ErrorBits> {
+    let ldt_error = ldt.legacy_conjectured_error(shape)?;
+    let list_size = list_size_conjectured();
+    let ali = air::composition_error(air.num_constraints, list_size, shape.modulus_bits);
+    let deep = boost(
+        deep::deep_ali_error(air, shape, list_size),
+        grinding.out_of_domain,
+    );
+    let batch = conjectured_batching_term(shape, ldt.log_blowup(), grinding.batch_combination);
+    let mut all = Vec::with_capacity(4 + extras.len());
+    all.push(ali);
+    all.push(deep);
+    all.push(ldt_error);
+    all.extend(batch.map(|t| t.bits));
+    all.extend_from_slice(extras);
+    let algebraic = ErrorBits::min(&all);
+    Some(ErrorBits::from_log2(
+        algebraic.bits().min(shape.collision_resistance as f64),
+    ))
+}
+
+/// Composite report using the legacy conjectured LDT bound.
+///
+/// Uses [`LowDegreeTest::legacy_conjectured_error`] under [`Regime::Legacy`].
+/// For FRI this is `num_queries * log_blowup + query_pow_bits`, without the
+/// random-words correction or the commit-phase folding term. This is an
+/// opt-in historical heuristic, not a proven soundness bound.
+///
+/// Only the LDT bound changes: ALI and DEEP-ALI still use list size 1, and
+/// batching, `extras`, grinding outside the LDT, and the commitment-collision
+/// cap are composed as in [`conjectured_security_report`]. Thus this is a
+/// STARK composite using the legacy LDT estimate, rather than the bare FRI
+/// formula. Returns `None` when the LDT does not support the legacy regime.
+pub fn legacy_security_report<L: LowDegreeTest>(
+    ldt: &L,
+    air: &StarkAirParams,
+    shape: &InstanceShape,
+    extras: &[SecurityTerm],
+    grinding: &GrindingSites,
+) -> Option<RegimeReport> {
+    let ldt_error = ldt.legacy_conjectured_error(shape)?;
+    Some(regime_report(
+        Regime::Legacy,
+        air,
+        shape,
+        list_size_conjectured(),
+        ldt_error,
+        conjectured_batching_term(shape, ldt.log_blowup(), grinding.batch_combination),
+        extras,
+        grinding,
+    ))
 }
 
 #[cfg(test)]
@@ -889,6 +953,106 @@ mod tests {
 
         assert!((b32.security_bits() - b0.security_bits()).abs() < 1e-12);
         assert!(b32.udr.terms().iter().all(|t| t.label != BATCH_LABEL));
+    }
+
+    /// Legacy reporting retains the ethSTARK query formula without adding
+    /// the random-words correction or the FRI folding round.
+    #[test]
+    fn legacy_report_uses_ethstark_query_bound() {
+        let regime = benchmark_regime();
+        let report =
+            legacy_security_report(&regime, &air(), &shape(), &[], &GrindingSites::NONE).unwrap();
+
+        assert_eq!(report.regime, Regime::Legacy);
+        assert_eq!(report.security_bits(), 116.0);
+        assert_eq!(report.binding().label, LDT_LABEL);
+        assert_eq!(report.terms().len(), 4);
+        assert_eq!(
+            legacy_security(&regime, &air(), &shape(), &[], &GrindingSites::NONE)
+                .unwrap()
+                .bits(),
+            116.0,
+        );
+
+        // Over this smaller field the modern folding term would bind below
+        // DEEP-ALI. Legacy omits it, leaving DEEP at 96 - log2(3 * 2^20 + 1).
+        let small_shape = InstanceShape {
+            modulus_bits: 96,
+            ..shape()
+        };
+        let small =
+            legacy_security_report(&regime, &air(), &small_shape, &[], &GrindingSites::NONE)
+                .unwrap();
+        assert_eq!(small.binding().label, DEEP_LABEL);
+        assert_eq!(small.security_bits() as usize, 74);
+        assert_eq!(
+            legacy_security(&regime, &air(), &small_shape, &[], &GrindingSites::NONE)
+                .unwrap()
+                .bits(),
+            small.security_bits(),
+        );
+    }
+
+    #[test]
+    fn legacy_report_preserves_composite_caps_and_grinding() {
+        let regime = benchmark_regime();
+        let air = air();
+        let shape = InstanceShape {
+            modulus_bits: 100,
+            num_batched_functions: 1025,
+            ..shape()
+        };
+        let cases = [
+            (GrindingSites::NONE, 128, None, BATCH_LABEL, 69),
+            (
+                GrindingSites {
+                    batch_combination: 8,
+                    ..GrindingSites::NONE
+                },
+                128,
+                None,
+                BATCH_LABEL,
+                77,
+            ),
+            (
+                GrindingSites {
+                    batch_combination: 20,
+                    out_of_domain: 8,
+                    ..GrindingSites::NONE
+                },
+                128,
+                None,
+                DEEP_LABEL,
+                86,
+            ),
+            (GrindingSites::NONE, 64, None, COLLISION_LABEL, 64),
+            (GrindingSites::NONE, 128, Some(40.0), "extra", 40),
+        ];
+        for (grinding, collision_resistance, extra, label, bits) in cases {
+            let shape = InstanceShape {
+                collision_resistance,
+                ..shape
+            };
+            let extras: Vec<_> = extra.into_iter().map(ErrorBits::from_log2).collect();
+            let terms: Vec<_> = extras
+                .iter()
+                .map(|&bits| SecurityTerm::new("extra", bits))
+                .collect();
+            let report = legacy_security_report(&regime, &air, &shape, &terms, &grinding).unwrap();
+            let scalar = legacy_security(&regime, &air, &shape, &extras, &grinding).unwrap();
+            assert_eq!(report.binding().label, label);
+            assert_eq!(report.security_bits() as usize, bits);
+            assert_eq!(scalar.bits(), report.security_bits());
+        }
+    }
+
+    #[test]
+    fn legacy_report_requires_explicit_ldt_support() {
+        let ldt = LdtOnlyChoice(benchmark_regime());
+        assert!(
+            legacy_security_report(&ldt, &air(), &shape(), &[], &GrindingSites::NONE).is_none()
+        );
+        assert!(legacy_security(&ldt, &air(), &shape(), &[], &GrindingSites::NONE).is_none());
     }
 
     /// The conjectured report's attained bits equal the scalar
