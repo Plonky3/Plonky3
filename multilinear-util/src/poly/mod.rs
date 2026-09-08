@@ -1622,18 +1622,22 @@ pub(crate) mod test {
 
     #[test]
     fn test_compress_parallel_path() {
-        // Fixture state: large enough that the fold really is cut across tasks.
-        let num_evals = 1 << 16;
-        let mid = num_evals / 2;
-
         // One item of the fold moves three field elements: two read, one rewritten.
         // Asking the shared policy with that shape is what the fold itself asks.
+        let item_bytes = 3 * size_of::<F>();
+
+        // The gate scales with the pool, so no fixed length reaches the split arm on
+        // every host:
         //
-        // A pool of one worker never splits, so the arm only exists above that.
-        // That covers a serial build and a single-vCPU runner alike.
-        if current_num_threads() > 1 {
-            assert!(should_split(mid, 3 * size_of::<F>()));
+        //     mid * item_bytes * 100 ps  >=  0.625 us * threads
+        //
+        // Grow the fixture until it clears that gate, whatever the pool turns out to be.
+        // A pool of one worker never splits, which is what a serial build reports.
+        let mut num_evals = 1 << 16;
+        while current_num_threads() > 1 && !should_split(num_evals / 2, item_bytes) {
+            num_evals *= 2;
         }
+        let mid = num_evals / 2;
         let p_left_0 = F::from_u64(1);
         let p_right_0 = F::from_usize(mid + 1);
         let p_left_1 = F::from_u64(2);
