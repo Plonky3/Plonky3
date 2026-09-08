@@ -22,6 +22,7 @@ use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
+#[cfg(any(target_feature = "sve2", test))]
 use super::utils::EPSILON;
 use crate::{Goldilocks, P};
 
@@ -401,59 +402,42 @@ unsafe fn mul_reduce_dual_asm(a0: u64, b0: u64, a1: u64, b1: u64) -> (u64, u64) 
             "umulh {hi0}, {a0}, {b0}",
             "umulh {hi1}, {a1}, {b1}",
 
-            // hi_hi = hi >> 32
-            "lsr   {hi_hi0}, {hi0}, #32",
-            "lsr   {hi_hi1}, {hi1}, #32",
-
-            // tmp = lo - hi_hi (with borrow handling)
-            "subs  {tmp0}, {lo0}, {hi_hi0}",
+            // lo -= hi >> 32, minus EPSILON on borrow.
+            "subs  {lo0}, {lo0}, {hi0}, lsr #32",
             "csetm {adj0:w}, cc",
-            "subs  {tmp1}, {lo1}, {hi_hi1}",
+            "subs  {lo1}, {lo1}, {hi1}, lsr #32",
             "csetm {adj1:w}, cc",
-            "sub   {tmp0}, {tmp0}, {adj0}",
-            "sub   {tmp1}, {tmp1}, {adj1}",
+            "sub   {lo0}, {lo0}, {adj0}",
+            "sub   {lo1}, {lo1}, {adj1}",
 
-            // hi_lo = hi & EPSILON
-            "and   {hi_lo0}, {hi0}, {epsilon}",
-            "and   {hi_lo1}, {hi1}, {epsilon}",
+            // Zero-extend hi_lo without another input register for EPSILON.
+            "mov   {hi0:w}, {hi0:w}",
+            "mov   {hi1:w}, {hi1:w}",
 
             // hi_lo_eps = (hi_lo << 32) - hi_lo (avoids multiply)
-            "lsl   {t0}, {hi_lo0}, #32",
-            "lsl   {t1}, {hi_lo1}, #32",
-            "sub   {hi_lo_eps0}, {t0}, {hi_lo0}",
-            "sub   {hi_lo_eps1}, {t1}, {hi_lo1}",
+            "lsl   {adj0}, {hi0}, #32",
+            "lsl   {adj1}, {hi1}, #32",
+            "sub   {hi0}, {adj0}, {hi0}",
+            "sub   {hi1}, {adj1}, {hi1}",
 
-            // result = tmp + hi_lo_eps (with overflow handling)
-            "adds  {result0}, {tmp0}, {hi_lo_eps0}",
+            // result = lo + hi_lo_eps (with overflow handling)
+            "adds  {lo0}, {lo0}, {hi0}",
             "csetm {adj0:w}, cs",
-            "adds  {result1}, {tmp1}, {hi_lo_eps1}",
+            "adds  {lo1}, {lo1}, {hi1}",
             "csetm {adj1:w}, cs",
-            "add   {result0}, {result0}, {adj0}",
-            "add   {result1}, {result1}, {adj1}",
+            "add   {lo0}, {lo0}, {adj0}",
+            "add   {lo1}, {lo1}, {adj1}",
 
             a0 = in(reg) a0,
             b0 = in(reg) b0,
             a1 = in(reg) a1,
             b1 = in(reg) b1,
-            epsilon = in(reg) EPSILON,
-            lo0 = out(reg) _,
-            lo1 = out(reg) _,
+            lo0 = out(reg) result0,
+            lo1 = out(reg) result1,
             hi0 = out(reg) _,
             hi1 = out(reg) _,
-            hi_hi0 = out(reg) _,
-            hi_hi1 = out(reg) _,
-            tmp0 = out(reg) _,
-            tmp1 = out(reg) _,
-            hi_lo0 = out(reg) _,
-            hi_lo1 = out(reg) _,
-            t0 = out(reg) _,
-            t1 = out(reg) _,
-            hi_lo_eps0 = out(reg) _,
-            hi_lo_eps1 = out(reg) _,
             adj0 = out(reg) _,
             adj1 = out(reg) _,
-            result0 = out(reg) result0,
-            result1 = out(reg) result1,
             options(pure, nomem, nostack),
         );
     }
@@ -484,9 +468,26 @@ fn square(x: uint64x2_t) -> uint64x2_t {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::PrimeCharacteristicRing;
     use p3_field_testing::test_packed_field;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::{Goldilocks, PackedGoldilocksNeon, WIDTH};
+
+    const MUL_EDGE: [u64; 11] = [
+        0,
+        1,
+        2,
+        0xFFFF_FFFE,
+        0xFFFF_FFFF,
+        0x1_0000_0000,
+        0x8000_0000_0000_0000,
+        super::P - 1,
+        super::P,
+        super::P + 1,
+        u64::MAX,
+    ];
 
     const SPECIAL_VALS: [Goldilocks; WIDTH] =
         Goldilocks::new_array([0xFFFF_FFFF_0000_0000, 0xFFFF_FFFF_FFFF_FFFF]);
@@ -507,6 +508,80 @@ mod tests {
         &[super::ONES],
         crate::PackedGoldilocksNeon(super::SPECIAL_VALS)
     );
+
+    fn mul_reduce_reference(a: u64, b: u64) -> u64 {
+        let product = (a as u128) * (b as u128);
+        let lo = product as u64;
+        let hi = (product >> 64) as u64;
+
+        let (lo, borrow) = lo.overflowing_sub(hi >> 32);
+        let lo = lo.wrapping_sub(u64::from(borrow) * super::EPSILON);
+        let hi_lo = hi & 0xFFFF_FFFF;
+        let hi_lo_epsilon = (hi_lo << 32) - hi_lo;
+        let (result, overflow) = lo.overflowing_add(hi_lo_epsilon);
+        result.wrapping_add(u64::from(overflow) * super::EPSILON)
+    }
+
+    fn check_mul_and_square(a: [u64; WIDTH], b: [u64; WIDTH]) {
+        let lhs = PackedGoldilocksNeon(Goldilocks::new_array(a));
+        let rhs = PackedGoldilocksNeon(Goldilocks::new_array(b));
+
+        let mul = lhs * rhs;
+        let square = lhs.square();
+        for lane in 0..WIDTH {
+            let mul_raw = mul.0[lane].value;
+            let square_raw = square.0[lane].value;
+            let expected_mul = mul_reduce_reference(a[lane], b[lane]);
+            let expected_square = mul_reduce_reference(a[lane], a[lane]);
+            assert_eq!(
+                mul_raw, expected_mul,
+                "mul lane {lane}: a={:#x}, b={:#x}",
+                a[lane], b[lane]
+            );
+            assert_eq!(
+                square_raw, expected_square,
+                "square lane {lane}: a={:#x}",
+                a[lane]
+            );
+            assert_eq!(
+                mul_raw % super::P,
+                ((a[lane] as u128 * b[lane] as u128) % super::P as u128) as u64,
+                "mul residue lane {lane}: a={:#x}, b={:#x}",
+                a[lane],
+                b[lane]
+            );
+            assert_eq!(
+                square_raw % super::P,
+                ((a[lane] as u128 * a[lane] as u128) % super::P as u128) as u64,
+                "square residue lane {lane}: a={:#x}",
+                a[lane]
+            );
+        }
+    }
+
+    #[test]
+    fn mul_and_square_full_range_edges() {
+        for &a0 in &MUL_EDGE {
+            for &b0 in &MUL_EDGE {
+                for &a1 in &MUL_EDGE {
+                    for &b1 in &MUL_EDGE {
+                        check_mul_and_square([a0, a1], [b0, b1]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mul_and_square_full_range_random() {
+        let mut rng = SmallRng::seed_from_u64(0xD0A1_1A0E);
+        for _ in 0..100_000 {
+            check_mul_and_square(
+                [rng.random::<u64>(), rng.random::<u64>()],
+                [rng.random::<u64>(), rng.random::<u64>()],
+            );
+        }
+    }
 }
 
 #[cfg(test)]
