@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -252,6 +253,78 @@ class CargoMetadataTests(unittest.TestCase):
             [
                 "+ cargo nextest run --features parallel",
                 "+ cargo nextest run -p p3-featured --features backend-a,backend-b,parallel",
+            ],
+        )
+
+    def test_targeted_feature_package_runs_after_empty_baseline(self):
+        with tempfile.TemporaryDirectory() as temp:
+            self.make_workspace(temp)
+            root = Path(temp)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            capture = root / "commands.txt"
+            real_cargo = shutil.which("cargo")
+            self.assertIsNotNone(real_cargo)
+            fake = bin_dir / "cargo"
+            fake.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/bin/sh
+                    if [ "$1" = metadata ]; then exec "$REAL_CARGO" "$@"; fi
+                    printf '%s\\n' "$*" >> "$CHECK_CAPTURE"
+                    case " $* " in
+                      *" --features "*) exit 0 ;;
+                      *" --no-tests warn "*) exit 0 ;;
+                      *) exit 4 ;;
+                    esac
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+            (bin_dir / "cargo.bat").write_text(
+                textwrap.dedent(
+                    """\
+                    @echo off
+                    if "%1"=="metadata" (
+                      "%REAL_CARGO%" %*
+                      exit /b %errorlevel%
+                    )
+                    echo %*>>"%CHECK_CAPTURE%"
+                    echo %* | findstr /c:"--features" >nul && exit /b 0
+                    echo %* | findstr /c:"--no-tests warn" >nul && exit /b 0
+                    exit /b 4
+                    """
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+            env["REAL_CARGO"] = real_cargo
+            env["CHECK_CAPTURE"] = str(capture)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--workspace-root",
+                    str(root),
+                    "test",
+                    "--package",
+                    "p3-featured",
+                ],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            commands = capture.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            commands,
+            [
+                "nextest run -p p3-featured --no-tests warn",
+                "nextest run -p p3-featured --features backend-a,backend-b",
             ],
         )
 

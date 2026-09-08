@@ -107,8 +107,12 @@ def test_commands(
         base = ["cargo", "test", "--doc"]
     else:
         base = ["cargo", "nextest", "run"]
-    commands = [base + package_args(package) + feature_args(parallel)]
-    for name, features in package_test_features(metadata, package, parallel):
+    feature_runs = package_test_features(metadata, package, parallel)
+    baseline = base + package_args(package) + feature_args(parallel)
+    if package and feature_runs and not doctest:
+        baseline += ["--no-tests", "warn"]
+    commands = [baseline]
+    for name, features in feature_runs:
         commands.append(base + ["-p", name, "--features", features])
     return commands
 
