@@ -1,38 +1,52 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::{Itertools, izip};
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::ExtensionField;
 use p3_field::extension::ComplexExtendable;
-use p3_fri::verifier::{FriError, PowPhase};
+use p3_field::{ExtensionField, Field};
+use p3_fri::verifier::FriError;
 use p3_fri::{FriFoldingStrategy, FriParameters};
 use p3_matrix::Dimensions;
 
 use crate::folding::{fold_row_with_inv_twiddle, query_x_twiddles_inv};
 use crate::{CircleCommitPhaseMultiStep, CircleFriProof};
 
-/// Arguments:
-/// - `open_inputs`: checks every input commitment's shared multi-opening and returns,
-///   for each query, its reduced openings sorted by height descending.
-pub fn verify<Folding, Val, Challenge, M, Challenger>(
-    folding: &Folding,
+/// Check every length a Circle-FRI proof declares against the configured run.
+///
+/// # Overview
+///
+/// Nothing here reads a challenge, and nothing here is described by the transcript.
+///
+/// It runs before the transcript is seeded, so a proof of the wrong shape is
+/// rejected without a driver ever being constructed.
+///
+/// # Arguments
+///
+/// - `params`: the parameters for this FRI instance.
+/// - `proof`: the proof whose declared lengths are being checked.
+/// - `num_commit_rounds`: the round count the configuration fixes.
+///
+/// # Returns
+///
+/// The per-round log-arity schedule, one entry per commit round.
+///
+/// # Errors
+///
+/// - The instance is vacuous: no queries, or rate 1.
+/// - The folding cap is one this verifier cannot fold with.
+/// - The proof declares a round count the configuration does not fix.
+/// - A per-round list does not carry one entry per round, or one entry per query.
+/// - A round declares an arity outside `1..=max_log_arity`.
+pub(crate) fn validate_proof_shape<Challenge, M, Witness, InputProof, InputErr>(
     params: &FriParameters<M>,
-    proof: &CircleFriProof<Challenge, M, Challenger::Witness, Folding::InputProof>,
-    challenger: &mut Challenger,
-    open_inputs: impl FnOnce(
-        &[usize],
-        &Folding::InputProof,
-    ) -> Result<Vec<Vec<(usize, Challenge)>>, Folding::InputError>,
-) -> Result<(), FriError<M::Error, Folding::InputError>>
+    proof: &CircleFriProof<Challenge, M, Witness, InputProof>,
+    num_commit_rounds: usize,
+) -> Result<Vec<usize>, FriError<M::Error, InputErr>>
 where
-    Val: ComplexExtendable,
-    Challenge: ExtensionField<Val>,
+    Challenge: Field,
     M: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
-    Folding: FriFoldingStrategy<Val, Challenge>,
+    InputErr: core::fmt::Debug,
 {
     // Reject a vacuous instance before any transcript work.
     // With zero queries the per-query loop never runs.
@@ -58,53 +72,32 @@ where
         });
     }
 
+    // The round count is fixed by the claimed heights, not by the proof.
+    //
+    //     H_claim = max claimed log_n + log_blowup
+    //     rounds  = H_claim - 1 - log_blowup      (the first layer takes one bit)
+    //
+    // Reporting the heights rather than the counts keeps the error comparable
+    // with the one the query phase would have raised.
+    if proof.commit_phase_commits.len() != num_commit_rounds {
+        return Err(FriError::GlobalMaxHeightMismatch {
+            expected: num_commit_rounds + params.log_blowup + 1,
+            got: proof.commit_phase_commits.len() + params.log_blowup + 1,
+        });
+    }
+
     // There must be exactly one commit-phase proof-of-work witness per round.
-    if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
+    if proof.commit_pow_witnesses.len() != num_commit_rounds {
         return Err(FriError::CommitPowWitnessCountMismatch {
-            expected: proof.commit_phase_commits.len(),
+            expected: num_commit_rounds,
             got: proof.commit_pow_witnesses.len(),
         });
     }
 
-    // Phase 1: Derive folding challenges
-    //
-    // In Circle-FRI, the verifier must produce one random challenge (beta)
-    // per commit-phase round. Each commitment is observed into the Fiat-Shamir
-    // transcript, the round's PoW witness is checked, then a challenge is sampled.
-    // This yields exactly as many betas as there are commit-phase rounds.
-    let betas: Vec<Challenge> = proof
-        .commit_phase_commits
-        .iter()
-        .zip(&proof.commit_pow_witnesses)
-        .map(|(comm, witness)| {
-            // Absorb this round's commitment into the transcript.
-            challenger.observe(comm.clone());
-            // Check the per-round grinding witness before sampling the challenge.
-            if !challenger.check_witness(params.commit_proof_of_work_bits, *witness) {
-                return Err(FriError::InvalidPowWitness(PowPhase::CommitPhase));
-            }
-            // Squeeze a field-extension element to use as the folding challenge.
-            Ok(challenger.sample_algebra_element())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Absorb the prover's claimed constant polynomial into the transcript.
-    // After all folding rounds, the result should reduce to this constant.
-    challenger.observe_algebra_element(proof.final_poly);
-
-    // Phase 2: Structural shape checks
-    //
-    // Before doing any expensive cryptographic work, validate that the proof
-    // has the right shape. A malicious prover could submit too few (or too
-    // many) round openings, mismatched query counts, or an invalid arity
-    // schedule. Catching these early avoids wasted work and gives precise
-    // error variants.
-
     // One commit-phase opening set per commitment.
-    let expected_rounds = proof.commit_phase_commits.len();
-    if proof.commit_phase_openings.len() != expected_rounds {
+    if proof.commit_phase_openings.len() != num_commit_rounds {
         return Err(FriError::CommitPhaseOpeningsCountMismatch {
-            expected: expected_rounds,
+            expected: num_commit_rounds,
             got: proof.commit_phase_openings.len(),
         });
     }
@@ -154,14 +147,52 @@ where
         }
     }
 
-    // Verify proof-of-work: a grinding witness that the prover must compute
-    // to raise the cost of brute-forcing query positions.
-    if !challenger.check_witness(params.query_proof_of_work_bits, proof.pow_witness) {
-        return Err(FriError::InvalidPowWitness(PowPhase::Query));
-    }
+    Ok(log_arities)
+}
 
-    // Phase 3: Query verification
-    //
+/// Check every query's fold chain against the commit-phase commitments.
+///
+/// # Overview
+///
+/// This pass reads no challenge from a sponge.
+///
+/// The caller replayed the transcript, closed it, and hands the results here.
+/// Everything below is arithmetic and Merkle work over already-validated shapes.
+///
+/// # Arguments
+///
+/// - `folding`: the Circle folding strategy.
+/// - `params`: the parameters for this FRI instance.
+/// - `proof`: the proof being checked.
+/// - `betas`: the folding challenge of each round, redrawn from the transcript.
+/// - `indices`: the query indices, redrawn from the transcript.
+/// - `log_arities`: the validated schedule, one entry per round.
+/// - `open_inputs`: checks every input commitment's shared multi-opening and returns,
+///   for each query, its reduced openings sorted by height descending.
+///
+/// # Errors
+///
+/// - An input opening fails its own check.
+/// - A fold chain lands on a value the claimed constant does not match.
+/// - A reconstructed row fails the round's shared authentication.
+pub(crate) fn verify_queries<Folding, Val, Challenge, M, Witness>(
+    folding: &Folding,
+    params: &FriParameters<M>,
+    proof: &CircleFriProof<Challenge, M, Witness, Folding::InputProof>,
+    betas: &[Challenge],
+    indices: &[usize],
+    log_arities: &[usize],
+    open_inputs: impl FnOnce(
+        &[usize],
+        &Folding::InputProof,
+    ) -> Result<Vec<Vec<(usize, Challenge)>>, Folding::InputError>,
+) -> Result<(), FriError<M::Error, Folding::InputError>>
+where
+    Val: ComplexExtendable,
+    Challenge: ExtensionField<Val>,
+    M: Mmcs<Challenge>,
+    Folding: FriFoldingStrategy<Val, Challenge>,
+{
     // The initial evaluation domain has size 2^{log_max_height}, where
     // log_max_height = sum(log_arities) + log_blowup.
     // Each folding round reduces the domain by 2^{log_arity_i}, so after
@@ -169,44 +200,24 @@ where
     let total_log_reduction: usize = log_arities.iter().sum();
     let log_max_height = total_log_reduction + params.log_blowup;
 
-    // Invariant: the query-index width fits the circle group of order 2^CIRCLE_TWO_ADICITY.
-    //
-    //     num_index_bits = sum(log_arities) + log_blowup + extra_query_index_bits
-    //     field order    = 2^CIRCLE_TWO_ADICITY - 1   (one short of the group order)
-    //     => a width of CIRCLE_TWO_ADICITY bits is unsampleable
-    //
-    // A malformed arity schedule inflates the round count, hence the width.
-    let num_index_bits = log_max_height + folding.extra_query_index_bits();
-    if num_index_bits >= Val::CIRCLE_TWO_ADICITY {
-        return Err(FriError::GlobalMaxHeightTooLarge {
-            log_global_max_height: num_index_bits,
-            two_adicity: Val::CIRCLE_TWO_ADICITY,
-        });
-    }
-
-    // Sample every query index. The transcript is identical to sampling one
-    // index per query proof: nothing is observed between samples.
-    let indices: Vec<usize> = iter::repeat_with(|| challenger.sample_bits(num_index_bits))
-        .take(params.num_queries)
-        .collect();
-
     // Check the input commitments' shared multi-openings and reduce each query's
     // opened rows to (log_height, evaluation) pairs sorted by height descending.
     let reduced_openings =
-        open_inputs(&indices, &proof.input_openings).map_err(FriError::InputError)?;
+        open_inputs(indices, &proof.input_openings).map_err(FriError::InputError)?;
 
     // Walk every query's fold chain (pure arithmetic), reconstructing the full
     // evaluation row the prover committed to at each round. The rows are
     // authenticated afterwards, one shared check per round.
+    let num_rounds = log_arities.len();
     let mut group_indices_by_round: Vec<Vec<usize>> =
-        vec![Vec::with_capacity(params.num_queries); expected_rounds];
+        vec![Vec::with_capacity(params.num_queries); num_rounds];
     // `rows_by_round[round][query]` holds the opened rows of the round's single
     // committed matrix, in the `opened_values[query][matrix]` shape that the
     // multi-opening verification expects.
     let mut rows_by_round: Vec<Vec<Vec<Vec<Challenge>>>> =
-        vec![Vec::with_capacity(params.num_queries); expected_rounds];
+        vec![Vec::with_capacity(params.num_queries); num_rounds];
 
-    for (query, (&index, ro)) in izip!(&indices, reduced_openings).enumerate() {
+    for (query, (&index, ro)) in izip!(indices, reduced_openings).enumerate() {
         // Sanity check: reduced openings must arrive in strictly descending
         // height order so they are folded in at the correct domain sizes.
         debug_assert!(
@@ -225,8 +236,8 @@ where
             params,
             query,
             top_level_index,
-            &betas,
-            &log_arities,
+            betas,
+            log_arities,
             &proof.commit_phase_openings,
             ro,
             log_max_height,
@@ -251,7 +262,7 @@ where
             .commit_phase_commits
             .iter()
             .zip(&proof.commit_phase_openings),
-        &log_arities
+        log_arities
     )
     .enumerate()
     {
