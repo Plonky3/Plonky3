@@ -818,6 +818,20 @@ mod tests {
     /// ```
     const CUTS: [(usize, usize); 4] = [(2, 3), (2, 0), (0, 3), (1, 1)];
 
+    /// Cuts and heights whose staging groups number three or more, with the group depths
+    /// each one produces:
+    ///
+    /// ```text
+    ///     (0, 3, 8)   3 + 3 + 2       a short last group, no contiguous tile
+    ///     (0, 3, 9)   3 + 3 + 3       three groups of full depth
+    ///     (1, 2, 8)   2 + 2 + 2       three groups and a one-stage leftover
+    ///     (0, 2, 8)   2 + 2 + 2 + 2   four groups of full depth
+    /// ```
+    ///
+    /// The staging loop reseeds its twiddle walk and its conversion flag on every turn, so
+    /// only a third turn shows that the reseeding is not accidentally right for two.
+    const DEEP_CUTS: [(usize, usize, usize); 4] = [(0, 3, 8), (0, 3, 9), (1, 2, 8), (0, 2, 8)];
+
     /// Widths that cover a single element per row, an odd row, and rows of several elements.
     const WIDTHS: [usize; 4] = [1, 3, 16, 64];
 
@@ -897,21 +911,21 @@ mod tests {
         )
     }
 
-    #[test]
-    fn every_cut_of_the_stage_sequence_matches_the_per_stage_schedule() {
-        // Invariant: cutting the stage sequence into staging groups and a contiguous tile is
-        // a pure reordering of memory traffic.
-        //
-        // Every element must come out bit for bit what one full pass per stage produces, in
-        // both directions.
-        //
-        // The heights below are the branch boundaries of the cut:
-        //
-        //     local            nothing above the tile, so the tile is the whole transform
-        //     local + 1        one stage above the tile, which is left unfused
-        //     local + depth    one full staging group
-        //     local + depth+1  a full group and a one-stage leftover
-        //     2*local + depth  several groups and several tiles
+    /// One plan per branch of the cut, at every width.
+    ///
+    /// The synthetic heights are the branch boundaries of the cut:
+    ///
+    /// ```text
+    ///     local            nothing above the tile, so the tile is the whole transform
+    ///     local + 1        one stage above the tile, which is left unfused
+    ///     local + depth    one full staging group
+    ///     local + depth+1  a full group and a one-stage leftover
+    ///     2*local + depth  several groups and several tiles
+    /// ```
+    ///
+    /// The deep cuts then carry the heights that need three or more groups.
+    fn cut_plans() -> Vec<Plan> {
+        let mut plans = Vec::new();
         for (local, depth) in CUTS {
             for log_n in [
                 local,
@@ -921,20 +935,43 @@ mod tests {
                 2 * local + depth,
             ] {
                 for width in WIDTHS {
-                    let plan = Plan {
+                    plans.push(Plan {
                         width,
                         log_n,
                         local: local.min(log_n),
                         depth,
-                    };
-                    for inverse in [false, true] {
-                        let mut expected = coefficients(log_n, width);
-                        let mut actual = expected.clone();
-                        per_stage_schedule(&mut expected, width, log_n, test_shift(), inverse);
-                        scheduled(&mut actual, plan, inverse, NONE);
-                        assert_eq!(actual, expected, "{plan:?} inverse={inverse}");
-                    }
+                    });
                 }
+            }
+        }
+        for (local, depth, log_n) in DEEP_CUTS {
+            for width in WIDTHS {
+                plans.push(Plan {
+                    width,
+                    log_n,
+                    local,
+                    depth,
+                });
+            }
+        }
+        plans
+    }
+
+    #[test]
+    fn every_cut_of_the_stage_sequence_matches_the_per_stage_schedule() {
+        // Invariant: cutting the stage sequence into staging groups and a contiguous tile is
+        // a pure reordering of memory traffic.
+        //
+        // Every element must come out bit for bit what one full pass per stage produces, in
+        // both directions.
+        for plan in cut_plans() {
+            let Plan { width, log_n, .. } = plan;
+            for inverse in [false, true] {
+                let mut expected = coefficients(log_n, width);
+                let mut actual = expected.clone();
+                per_stage_schedule(&mut expected, width, log_n, test_shift(), inverse);
+                scheduled(&mut actual, plan, inverse, NONE);
+                assert_eq!(actual, expected, "{plan:?} inverse={inverse}");
             }
         }
 
@@ -942,12 +979,13 @@ mod tests {
         //
         // Fixture state, from the two cache budgets:
         //
-        //     width  1 @ 2^10   local 10, depth 12   the tile is the whole transform
-        //     width  3 @ 2^10   local  9, depth 10   one stage above the tile, unfused
-        //     width 16 @ 2^10   local  7, depth  8   one group of three stages
-        //     width 64 @ 2^10   local  5, depth  6   one group of five stages
-        //     width 512 @ 2^8   local  2, depth  3   two groups of three stages
-        for (width, log_n) in [(1, 10), (3, 10), (16, 10), (64, 10), (512, 8)] {
+        //     width    1 @ 2^10   local 10, depth 12   the tile is the whole transform
+        //     width    3 @ 2^10   local  9, depth 10   one stage above the tile, unfused
+        //     width   16 @ 2^10   local  7, depth  8   one group of three stages
+        //     width   64 @ 2^10   local  5, depth  6   one group of five stages
+        //     width  512 @ 2^8    local  2, depth  3   two groups of three stages
+        //     width 1024 @ 2^7    local  1, depth  2   three groups of two stages
+        for (width, log_n) in [(1, 10), (3, 10), (16, 10), (64, 10), (512, 8), (1024, 7)] {
             let plan = Plan::new(width, log_n);
             for inverse in [false, true] {
                 let mut expected = coefficients(log_n, width);
@@ -968,47 +1006,35 @@ mod tests {
         // The cut points decide which phase carries it — a staging group's gather, a
         // staging group's scatter, the contiguous tile, or a pass of its own — so the same
         // set of cuts as the schedule test runs here.
-        for (local, depth) in CUTS {
-            for log_n in [
-                local,
-                local + 1,
-                local + depth,
-                local + depth + 1,
-                2 * local + depth,
-            ] {
-                for width in WIDTHS {
-                    let plan = Plan {
-                        width,
-                        log_n,
-                        local: local.min(log_n),
-                        depth,
-                    };
-                    for inverse in [false, true] {
-                        let input = coefficients(log_n, width);
+        //
+        // A run of three or more groups is what shows that the entry conversion rides the
+        // first group only and the exit conversion the last group only.
+        for plan in cut_plans() {
+            let Plan { width, log_n, .. } = plan;
+            for inverse in [false, true] {
+                let input = coefficients(log_n, width);
 
-                        // Conversion in, then the schedule.
-                        let mut expected = input.clone();
-                        super::convert(&mut expected, super::into_poly);
-                        scheduled(&mut expected, plan, inverse, NONE);
-                        let mut actual = input.clone();
-                        scheduled(&mut actual, plan, inverse, Fold::ENTRY);
-                        assert_eq!(actual, expected, "entry {plan:?} inverse={inverse}");
+                // Conversion in, then the schedule.
+                let mut expected = input.clone();
+                super::convert(&mut expected, super::into_poly);
+                scheduled(&mut expected, plan, inverse, NONE);
+                let mut actual = input.clone();
+                scheduled(&mut actual, plan, inverse, Fold::ENTRY);
+                assert_eq!(actual, expected, "entry {plan:?} inverse={inverse}");
 
-                        // Conversion in, the schedule, conversion out.
-                        super::convert(&mut expected, super::into_tower);
-                        let mut actual = input.clone();
-                        scheduled(&mut actual, plan, inverse, Fold::BOTH);
-                        assert_eq!(actual, expected, "both {plan:?} inverse={inverse}");
+                // Conversion in, the schedule, conversion out.
+                super::convert(&mut expected, super::into_tower);
+                let mut actual = input.clone();
+                scheduled(&mut actual, plan, inverse, Fold::BOTH);
+                assert_eq!(actual, expected, "both {plan:?} inverse={inverse}");
 
-                        // The schedule, then conversion out.
-                        let mut expected = input.clone();
-                        scheduled(&mut expected, plan, inverse, NONE);
-                        super::convert(&mut expected, super::into_tower);
-                        let mut actual = input;
-                        scheduled(&mut actual, plan, inverse, Fold::EXIT);
-                        assert_eq!(actual, expected, "exit {plan:?} inverse={inverse}");
-                    }
-                }
+                // The schedule, then conversion out.
+                let mut expected = input.clone();
+                scheduled(&mut expected, plan, inverse, NONE);
+                super::convert(&mut expected, super::into_tower);
+                let mut actual = input;
+                scheduled(&mut actual, plan, inverse, Fold::EXIT);
+                assert_eq!(actual, expected, "exit {plan:?} inverse={inverse}");
             }
         }
     }
