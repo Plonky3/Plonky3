@@ -623,13 +623,15 @@ impl LookupProtocol for LogUpGadget {
 
         // One item is a whole chunk of denominators inverted, not a chunk of writes.
         //
-        // Each denominator costs an amortized inversion and a handful of multiplies, so
-        // the chunk is priced the same way the batch inversion routine prices its own:
+        // Each denominator costs an amortized inversion and a handful of multiplies.
+        //
+        // So the chunk is priced the way the batch inversion routine prices its own:
         //
         //     one inverted element -> five element widths
         //
-        // That still exceeds the per-task budget, so the floor bottoms at one chunk per
-        // task, which is where an unfloored loop already sits.
+        // That still exceeds the per-task budget.
+        //
+        // So the floor bottoms at one chunk per task, where an unfloored loop already sits.
         aux_trace
             .par_chunks_mut(CHUNK_SIZE * width)
             .zip(row_totals.par_chunks_mut(CHUNK_SIZE))

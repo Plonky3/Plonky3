@@ -1626,8 +1626,9 @@ pub(crate) mod test {
         // Asking the shared policy with that shape is what the fold itself asks.
         let item_bytes = 3 * size_of::<F>();
 
-        // The gate scales with the pool, so no fixed length reaches the split arm on
-        // every host:
+        // The gate scales with the pool.
+        //
+        // So no fixed length reaches the split arm on every host:
         //
         //     mid * item_bytes * 100 ps  >=  0.625 us * threads
         //

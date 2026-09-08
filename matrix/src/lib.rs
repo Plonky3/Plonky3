@@ -494,8 +494,9 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         //
         // One item is one matrix row plus the vector entry it is weighted by.
         //
-        // The floor collapses the split to a single chunk when the matrix is too small
-        // to be worth handing to another worker.
+        // The floor collapses the split to a single chunk on a small matrix.
+        //
+        // Below that size the work is not worth handing to another worker.
         let row_bytes = packed_width * size_of::<T::Packing>() + size_of::<FieldArray<EF, N>>();
         let chunk_rows = height
             .div_ceil((4 * current_num_threads()).clamp(1, height.max(1)))

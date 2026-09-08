@@ -38,8 +38,11 @@ pub fn eval_poly<F: Field>(poly: &[F], point: F) -> F {
 pub fn eval_poly_parallel<F: Field>(poly: &[F], point: F) -> F {
     // One item is one coefficient folded into a running accumulator.
     //
-    // Each step waits on the previous multiply, so the loop has no instruction-level
-    // parallelism to hide behind and runs slower than a stream of the same width.
+    // Each step waits on the previous multiply.
+    //
+    // So the loop has no instruction-level parallelism to hide behind.
+    //
+    // It runs slower than a stream of the same width.
     //
     //     measured  : 2.7 ns per 4-byte coefficient -> 675 ps per byte
     //     streaming :                                    100 ps per byte

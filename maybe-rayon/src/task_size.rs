@@ -96,8 +96,9 @@ const PICOS_PER_BYTE: u64 = 100;
 /// How much real work that is depends on how closely a body matches the rate.
 /// A narrow-field fold is priced about 1.6x high, so its gate sits nearer one dispatch.
 ///
-/// Both dispatch figures come from large pools, and the rule is extrapolated through the
-/// origin down to two workers, which is not measured.
+/// Both dispatch figures come from large pools.
+///
+/// The rule is extrapolated through the origin down to two workers, which is not measured.
 const MIN_PARALLEL_PICOS_PER_WORKER: u64 = 625_000;
 
 /// Time one task holds once a loop does split, in picoseconds.
@@ -282,8 +283,9 @@ pub fn should_split(len: usize, item_bytes: usize) -> bool {
 pub trait TaskSizeExt: IndexedParallelIterator {
     /// Floors the split for a loop whose item is a single element of the named type.
     ///
-    /// A body moving several elements per item charges for all of them, through the
-    /// byte-counted adapter instead.
+    /// A body moving several elements per item charges for all of them.
+    ///
+    /// Such a body asks through the byte-counted adapter instead.
     #[inline]
     fn with_min_task<T>(self) -> impl IndexedParallelIterator<Item = Self::Item>
     where
@@ -400,8 +402,9 @@ mod tests {
         let floor = min_task_len_with(B, T, len, 4);
         assert!(len / floor > T);
 
-        // Just past the parallel budget the cap does not bind, and one task per worker
-        // is the coarsest split made.
+        // Just past the parallel budget the cap does not bind.
+        //
+        // One task per worker is then the coarsest split made.
         //
         //     50001 items worth 20.0 us, over 32 workers = 625 ns per task
         let len = 50_001;
@@ -472,8 +475,9 @@ mod tests {
     fn should_split_agrees_with_the_floor() {
         // Invariant: the predicate is exactly the question the floor already answers.
         //
-        // Read through the public entry points, so this holds whatever the host pool is
-        // and whichever feature configuration the crate was built in.
+        // Read through the public entry points.
+        //
+        // So this holds on any host pool, in either feature configuration.
         for len in [0usize, 1, 2, 1023, 1 << 10, 1 << 20] {
             for item_bytes in [1usize, 4, 16, 256, 1 << 20] {
                 assert_eq!(
@@ -486,8 +490,9 @@ mod tests {
 
     /// A build without rayon reports one worker, so no loop is ever worth splitting.
     ///
-    /// This pins the behaviour the call sites rely on to stay on their in-place and
-    /// short-circuiting arms when the crate is built serially.
+    /// A serial build keeps every call site on its in-place, short-circuiting arm.
+    ///
+    /// This pins that behaviour, which those call sites rely on.
     #[cfg(not(feature = "parallel"))]
     #[test]
     fn a_serial_build_never_splits() {
