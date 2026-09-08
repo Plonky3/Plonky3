@@ -22,7 +22,6 @@ use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::prover::WhirProver;
 use p3_whir::pcs::zk::{HidingWhirPcs, ZkParameters, ZkWhirConfig};
@@ -114,10 +113,7 @@ fn bench_plain(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
     group.bench_function(BenchmarkId::new("plain", num_variables), |b| {
         b.iter_batched(
             || {
-                let mut ch = challenger();
-                let mut ds = DomainSeparator::new(vec![]);
-                pcs.add_domain_separator::<8>(&mut ds);
-                ds.observe_domain_separator(&mut ch);
+                let ch = challenger();
                 let witness = PrefixProver::<F, EF>::new_witness(vec![table.clone()], FOLDING);
                 (ch, witness)
             },
@@ -151,13 +147,7 @@ fn bench_zk(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
 
     group.bench_function(BenchmarkId::new("zk", num_variables), |b| {
         b.iter_batched(
-            || {
-                let mut ch = challenger();
-                let mut ds = DomainSeparator::new(vec![]);
-                pcs.add_domain_separator::<8>(&mut ds);
-                ds.observe_domain_separator(&mut ch);
-                (ch, witness.clone())
-            },
+            || (challenger(), witness.clone()),
             |(mut ch, witness)| {
                 let (_, data) = pcs.commit(witness, &mut ch);
                 pcs.open(data, points.clone(), &mut ch)
@@ -179,9 +169,6 @@ fn report_proof_sizes(num_variables: usize) {
         vec![OpeningBatch::new(vec![0], Vec::new())],
     )]);
     let mut ch = challenger();
-    let mut ds = DomainSeparator::new(vec![]);
-    pcs.add_domain_separator::<8>(&mut ds);
-    ds.observe_domain_separator(&mut ch);
     let witness = PrefixProver::<F, EF>::new_witness(vec![table], FOLDING);
     let (_, data) = pcs.commit(witness, &mut ch);
     let plain_proof = pcs.open(data, protocol, &mut ch);
@@ -205,9 +192,6 @@ fn report_proof_sizes(num_variables: usize) {
     let witness = Poly::<F>::rand(&mut rng, num_variables);
     let points = vec![Point::<EF>::rand(&mut rng, num_variables)];
     let mut ch = challenger();
-    let mut ds = DomainSeparator::new(vec![]);
-    pcs.add_domain_separator::<8>(&mut ds);
-    ds.observe_domain_separator(&mut ch);
     let (_, data) = pcs.commit(witness, &mut ch);
     let zk_proof = pcs.open(data, points, &mut ch);
     let zk_size = postcard::to_allocvec(&zk_proof).unwrap().len();
@@ -259,9 +243,6 @@ fn bench_octic_zk_open_no_pow(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     let mut ch = challenger();
-                    let mut ds = DomainSeparator::new(vec![]);
-                    pcs.add_domain_separator::<8>(&mut ds);
-                    ds.observe_domain_separator(&mut ch);
                     let (_, data) = pcs.commit(witness.clone(), &mut ch);
                     (ch, data)
                 },

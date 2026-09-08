@@ -289,11 +289,6 @@ where
             return Err(VerifierError::InvalidPowWitness);
         }
 
-        // Transcript checkpoint after PoW.
-        if round_index < self.n_rounds() {
-            challenger.sample();
-        }
-
         // Sample STIR query positions.
         let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F>(
             params.domain_size,

@@ -18,7 +18,6 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_sumcheck::layout::{Layout as _, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{
     DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
 };
@@ -200,9 +199,6 @@ fn main() {
 
     // Phase 1: Commitment (DFT encoding + Merkle tree + OOD sampling).
     let mut prover_challenger = challenger.clone();
-    let mut domainsep = DomainSeparator::new(vec![]);
-    pcs.add_domain_separator::<8>(&mut domainsep);
-    domainsep.observe_domain_separator(&mut prover_challenger);
     let time = Instant::now();
     let (commitment, prover_data) =
         <MyPcs as MultilinearPcs<EF, MyChallenger>>::commit(&pcs, witness, &mut prover_challenger);
@@ -226,11 +222,8 @@ fn main() {
         .len() as f64
         / 1024.0;
 
-    // Verifier: independent transcript from the same domain separator.
+    // Verifier: an independent transcript starting from the same challenger.
     let mut verifier_challenger = challenger;
-    let mut domainsep = DomainSeparator::new(vec![]);
-    pcs.add_domain_separator::<8>(&mut domainsep);
-    domainsep.observe_domain_separator(&mut verifier_challenger);
 
     // Phase 3: Verification (sumcheck checks + Merkle proof verification).
     let verif_time = Instant::now();

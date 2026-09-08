@@ -21,7 +21,6 @@ use super::base_case::BaseCaseZkError;
 use super::config::{ZkParameters, ZkWhirConfig};
 use super::proof::ZkWhirProof;
 use super::verifier::ZkVerifierError;
-use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption};
 use crate::pcs::proof::QueryOpenings;
 
@@ -149,7 +148,7 @@ impl Setup {
     /// Runs the honest commit / open phases on a caller-chosen statement.
     fn prove_with(self, witness: Poly<F>, points: Vec<Point<EF>>) -> Proven {
         let pcs = self.pcs();
-        let mut prover_challenger = separated_challenger(&pcs);
+        let mut prover_challenger = fresh_challenger();
         let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
         let proof = pcs.open(prover_data, points.clone(), &mut prover_challenger);
         Proven {
@@ -194,7 +193,7 @@ struct Proven {
 impl Proven {
     /// Replays verification against the stored statement.
     fn verify(&self) -> Result<(), ZkVerifierError> {
-        let mut challenger = separated_challenger(&self.pcs);
+        let mut challenger = fresh_challenger();
         self.pcs.verify(
             &self.commitment,
             &self.proof,
@@ -204,14 +203,11 @@ impl Proven {
     }
 }
 
-/// Fresh challenger seeded with the protocol's domain separator.
-fn separated_challenger(pcs: &TestZkPcs) -> MyChallenger {
-    let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
-    let mut challenger = MyChallenger::new(perm);
-    let mut separator = DomainSeparator::new(vec![]);
-    pcs.add_domain_separator::<8>(&mut separator);
-    separator.observe_domain_separator(&mut challenger);
-    challenger
+/// Fresh challenger.
+///
+/// The scheme seeds its own transcript when it opens.
+fn fresh_challenger() -> MyChallenger {
+    MyChallenger::new(Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1)))
 }
 
 #[test]

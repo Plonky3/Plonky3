@@ -68,7 +68,6 @@ use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_ceil_usize;
-use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::prover::WhirProver;
 use rand::SeedableRng;
@@ -103,9 +102,6 @@ type FriPcsTy = TwoAdicFriPcs<F, Dft, ValMmcs, ChallengeMmcs>;
 type StirPcsTy = TwoAdicStirPcs<F, Dft, ValMmcs, ChallengeMmcs, EF, Challenger>;
 type WhirLayout = SuffixProver<F, EF>;
 type WhirPcsTy = WhirProver<EF, F, Dft, ValMmcs, Challenger, WhirLayout>;
-
-/// Number of base-field elements per Merkle digest for this hash backend.
-const DIGEST_ELEMS: usize = 8;
 
 /// Command-line arguments for the PCS comparison.
 #[derive(Parser, Debug)]
@@ -291,11 +287,9 @@ fn run_whir(
     pcs: &WhirPcsTy,
     witness: <WhirPcsTy as MultilinearPcs<EF, Challenger>>::Witness,
     protocol: &OpeningProtocol,
-    domain_separator: &DomainSeparator<EF, F>,
     base_challenger: &Challenger,
 ) -> ProtocolReport {
     let mut prover_challenger = base_challenger.clone();
-    domain_separator.observe_domain_separator(&mut prover_challenger);
 
     let t = Instant::now();
     let (commitment, prover_data) =
@@ -311,8 +305,7 @@ fn run_whir(
     );
     let open_ms = t.elapsed().as_millis();
 
-    let mut verifier_challenger = base_challenger.clone();
-    domain_separator.observe_domain_separator(&mut verifier_challenger);
+    let verifier_challenger = base_challenger.clone();
 
     let verify_us = median_verify_us(|| {
         let mut challenger = verifier_challenger.clone();
@@ -521,16 +514,7 @@ fn main() {
         let dft = Dft::new(1 << config.max_fft_size());
         let pcs = WhirPcsTy::new(config, dft, val_mmcs.clone());
 
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<DIGEST_ELEMS>(&mut domain_separator);
-
-        reports.push(run_whir(
-            &pcs,
-            witness,
-            &protocol,
-            &domain_separator,
-            &base_challenger,
-        ));
+        reports.push(run_whir(&pcs, witness, &protocol, &base_challenger));
     }
 
     // Multi-table run: three tables batched into one commitment, with log heights
@@ -688,16 +672,7 @@ fn main() {
         let dft = Dft::new(1 << config.max_fft_size());
         let pcs = WhirPcsTy::new(config, dft, val_mmcs);
 
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<DIGEST_ELEMS>(&mut domain_separator);
-
-        multi_reports.push(run_whir(
-            &pcs,
-            witness,
-            &protocol,
-            &domain_separator,
-            &base_challenger,
-        ));
+        multi_reports.push(run_whir(&pcs, witness, &protocol, &base_challenger));
     }
 
     print_report(

@@ -68,7 +68,6 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::proof::PcsProof;
 use p3_whir::pcs::prover::WhirProver;
@@ -276,8 +275,6 @@ struct WhirRig<MT: Mmcs<F>, Ch> {
     witness: Witness<F>,
     /// Public opening schedule: one common point opening every column.
     protocol: OpeningProtocol,
-    /// Domain separator used for both prover and verifier transcripts.
-    domain_separator: DomainSeparator<EF, F>,
     /// Base challenger; both prover and verifier clone from this.
     challenger: Ch,
 }
@@ -366,16 +363,10 @@ where
     // Bundle config, FFT engine, and Merkle backend into the PCS.
     let pcs = WhirPcsTy::<MT, Ch>::new(config, dft, mmcs);
 
-    // Domain separator: encodes the protocol shape into the transcript so challenges
-    // are bound to this exact configuration.
-    let mut domain_separator = DomainSeparator::new(vec![]);
-    pcs.add_domain_separator::<DIGEST_ELEMS>(&mut domain_separator);
-
     WhirRig {
         pcs,
         witness,
         protocol,
-        domain_separator,
         challenger: base_challenger,
     }
 }
@@ -393,10 +384,8 @@ where
     MT: WhirMmcs,
     Ch: WhirChallenger<MT>,
 {
-    // Fresh prover challenger seeded with the domain separator.
+    // Fresh prover challenger. The scheme seeds its own transcript when it opens.
     let mut prover_challenger = rig.challenger.clone();
-    rig.domain_separator
-        .observe_domain_separator(&mut prover_challenger);
 
     // Phase 1: commit (DFT + Merkle + OOD samples).
     let t = Instant::now();
@@ -432,8 +421,6 @@ where
 {
     // Each verification call starts from a fresh transcript clone.
     let mut verifier_challenger = rig.challenger.clone();
-    rig.domain_separator
-        .observe_domain_separator(&mut verifier_challenger);
 
     let t = Instant::now();
     <WhirPcsTy<MT, Ch> as MultilinearPcs<EF, Ch>>::verify(
@@ -692,7 +679,7 @@ mod poseidon1 {
     pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
     pub type Challenger = DuplexChallenger<F, Perm16, 16, 8>;
 
-    /// Number of base-field elements per digest, used to size the domain separator.
+    /// Number of base-field elements per digest.
     pub const DIGEST_ELEMS: usize = 8;
 
     /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
@@ -726,7 +713,7 @@ mod poseidon2 {
     pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
     pub type Challenger = DuplexChallenger<F, Perm16, 16, 8>;
 
-    /// Number of base-field elements per digest, used to size the domain separator.
+    /// Number of base-field elements per digest.
     pub const DIGEST_ELEMS: usize = 8;
 
     /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
@@ -772,7 +759,7 @@ mod blake3 {
     pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
     pub type Challenger = SerializingChallenger32<F, HashChallenger<u8, Blake3, 32>>;
 
-    /// Number of bytes per digest, used to size the domain separator.
+    /// Number of bytes per digest.
     pub const DIGEST_ELEMS: usize = 32;
 
     /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
