@@ -244,8 +244,15 @@ pub enum ExternalSourceError {
 #[derive(Debug, Error, PartialEq)]
 pub enum StirError<MmcsError, InputError = ()> {
     /// A proof-of-work witness failed verification.
-    #[error("{round}: invalid proof-of-work witness")]
-    InvalidPowWitness { round: RoundLabel },
+    #[error("{round}: {stage} proof-of-work witness clears fewer than {bits} bits")]
+    InvalidPowWitness {
+        /// Round whose grinding site rejected the witness.
+        round: RoundLabel,
+        /// Site inside that round the grind guards.
+        stage: GrindStage,
+        /// Difficulty the site requires, in bits.
+        bits: usize,
+    },
 
     /// A Merkle multi-opening proof failed for a round's queries.
     #[error("{round}: invalid MMCS opening proof")]
@@ -313,7 +320,9 @@ impl<E, IE> StirError<E, IE> {
     /// Map the `InputError` variant to a different type.
     pub fn map_input_err<IE2>(self, f: impl FnOnce(IE) -> IE2) -> StirError<E, IE2> {
         match self {
-            Self::InvalidPowWitness { round } => StirError::InvalidPowWitness { round },
+            Self::InvalidPowWitness { round, stage, bits } => {
+                StirError::InvalidPowWitness { round, stage, bits }
+            }
             Self::InvalidMmcsProof { round, source } => {
                 StirError::InvalidMmcsProof { round, source }
             }
