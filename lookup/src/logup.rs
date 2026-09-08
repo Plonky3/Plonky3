@@ -749,7 +749,7 @@ impl LookupProtocol for LogUpGadget {
                                     numerator += flag * mult;
                                     let term =
                                         alpha - combine_tuple::<F, EF>(elts, powers, &row_ctx);
-                                    denom += term * EF::from(flag);
+                                    denom += term * flag;
                                 }
 
                                 // - at most one flag fires, so the boolean flags sum to 0 or 1.
@@ -760,7 +760,7 @@ impl LookupProtocol for LogUpGadget {
 
                                 // Fallback: an all-inactive row gets denominator 1.
                                 // Its fraction is then 0.
-                                denom += EF::from(F::ONE - flag_sum);
+                                denom += F::ONE - flag_sum;
                                 local_denoms[offset] = denom;
                                 local_mults[offset] = numerator;
                                 offset += 1;
