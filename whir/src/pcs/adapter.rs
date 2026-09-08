@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
@@ -61,7 +62,7 @@ where
 impl<EF, F, Dft, MT, Challenger, L> MultilinearPcs<EF, Challenger>
     for WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + PrimeField64 + Ord,
+    F: TwoAdicField + PrimeField64 + TranscriptField + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     MT: Mmcs<F>,
@@ -215,7 +216,7 @@ where
 impl<EF, F, Dft, MT, Challenger, L> PrescribedPointPcs<EF, Challenger>
     for WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + PrimeField64 + Ord,
+    F: TwoAdicField + PrimeField64 + TranscriptField + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     MT: Mmcs<F>,

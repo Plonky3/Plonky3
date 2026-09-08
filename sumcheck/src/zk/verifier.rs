@@ -147,7 +147,10 @@ where
             challenger.observe_algebra_slice(wire);
 
             if pow_bits > 0 && !challenger.check_witness(pow_bits, zk_data.pow_witnesses[j_idx]) {
-                return Err(SumcheckError::InvalidPowWitness);
+                return Err(SumcheckError::InvalidPowWitness {
+                    round: j_idx,
+                    difficulty: pow_bits,
+                });
             }
 
             let gamma_j: EF = challenger.sample_algebra_element();
@@ -413,7 +416,7 @@ mod tests {
         );
 
         assert!(
-            matches!(result, Err(SumcheckError::InvalidPowWitness)),
+            matches!(result, Err(SumcheckError::InvalidPowWitness { .. })),
             "verifier accepted a forged PoW witness in binding {binding:?}; got {result:?}",
         );
     }

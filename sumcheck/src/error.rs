@@ -5,27 +5,57 @@ use thiserror::Error;
 pub enum SumcheckError {
     /// The proof contains a different number of rounds than expected.
     #[error("Sumcheck round count mismatch: expected {expected}, got {actual}")]
-    RoundCountMismatch { expected: usize, actual: usize },
+    RoundCountMismatch {
+        /// Round count the configuration fixes.
+        expected: usize,
+        /// Round count the proof carries.
+        actual: usize,
+    },
 
     /// The proof is missing sumcheck data when rounds > 0.
     #[error("Missing sumcheck data for {expected_rounds} expected rounds")]
-    MissingSumcheckData { expected_rounds: usize },
+    MissingSumcheckData {
+        /// Round count the configuration fixes.
+        expected_rounds: usize,
+    },
 
     /// Proof-of-work witness verification failed.
-    #[error("Invalid proof-of-work witness")]
-    InvalidPowWitness,
+    #[error("Sumcheck round {round}: pow witness does not meet {difficulty} bits")]
+    InvalidPowWitness {
+        /// Round whose challenge the rejected grinding step guards.
+        round: usize,
+        /// Difficulty in bits that the step requires.
+        difficulty: usize,
+    },
+
+    /// Grinding is enabled but a round carries no witness to replay its step with.
+    #[error("Sumcheck round {round}: missing the pow witness for {difficulty} bits")]
+    MissingPowWitness {
+        /// Round whose challenge the absent grinding step guards.
+        round: usize,
+        /// Difficulty in bits that the step requires.
+        difficulty: usize,
+    },
 
     /// The proof carries fewer PoW witnesses than sumcheck rounds.
     #[error("Sumcheck PoW witness count mismatch: expected {expected}, got {actual}")]
-    PowWitnessCountMismatch { expected: usize, actual: usize },
+    PowWitnessCountMismatch {
+        /// Witness count the configuration fixes.
+        expected: usize,
+        /// Witness count the proof carries.
+        actual: usize,
+    },
 
     /// HVZK sumcheck: a per-round wire payload had the wrong number of field
     /// elements. Each round must carry `max(ℓ_zk - 1, 2)` elements (after the
     /// linear coefficient is skipped per Lemma 6.4 / paper §6).
     #[error("HVZK round {round}: wire size mismatch, expected {expected}, got {actual}")]
     WireSizeMismatch {
+        /// Round index where the mismatch was found.
         round: usize,
+        /// Element count the configuration fixes.
         expected: usize,
+        /// Element count the proof carries.
         actual: usize,
     },
 
@@ -34,7 +64,12 @@ pub enum SumcheckError {
     /// configuration mismatch between prover and verifier before the wire
     /// shape check.
     #[error("HVZK ell_zk mismatch: expected {expected}, got {actual}")]
-    EllZkMismatch { expected: usize, actual: usize },
+    EllZkMismatch {
+        /// Mask code message length the configuration fixes.
+        expected: usize,
+        /// Mask code message length the proof carries.
+        actual: usize,
+    },
 
     /// An opening claim's evaluations do not match the requested column shape.
     ///
@@ -44,10 +79,15 @@ pub enum SumcheckError {
         "Opening shape mismatch for table {table_idx}: requested {expected_current} current and {expected_next} next, got {actual_current} current and {actual_next} next"
     )]
     OpeningShapeMismatch {
+        /// Table whose opening claim was rejected.
         table_idx: usize,
+        /// Current-column count the request fixes.
         expected_current: usize,
+        /// Next-column count the request fixes.
         expected_next: usize,
+        /// Current-column count the claim carries.
         actual_current: usize,
+        /// Next-column count the claim carries.
         actual_next: usize,
     },
 }
