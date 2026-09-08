@@ -177,28 +177,72 @@ impl Algebra<Goldilocks> for PackedGoldilocksNeon {
 }
 
 /// `Σ a[i]·f[i]` with delayed reduction: 128-bit products accumulate unreduced
-/// per lane, and a single 192-bit reduction runs at the end. Coefficients
+/// per lane, and a single vector reduction runs at the end. Coefficients
 /// broadcast via `ld1rd`; products via SVE2 vector 64-bit `mul`/`umulh`.
 ///
 /// The loop keeps four per-lane accumulators: `lo` (Σ products mod 2^64), `hi`
 /// (Σ high halves mod 2^64), and exact wrap counts for each (`lo_w`, `hi_w`;
-/// both ≤ N, so they cannot themselves wrap). Folding `lo_w` into `hi` with
-/// checked scalar arithmetic afterwards makes the accumulation exact for any
-/// `N` and any inputs — no probabilistic carry argument.
+/// both < the chunk length). Chunks contain at most `u32::MAX` products, so the
+/// carry above bit 127 is at most `u32::MAX - 1` and its final `c << 32` fold
+/// cannot overflow.
 ///
-/// All loads, stores, and pointer steps are fixed to the low two lanes
-/// (`ptrue vl2`, 16-byte steps), so the routine is correct at any SVE vector
-/// length; wider lanes are loaded as zero and never stored.
+/// All loads and pointer steps are fixed to the low two lanes (`ptrue vl2`,
+/// 16-byte packed steps and 8-byte scalar steps), so the routine is correct at
+/// any SVE vector length; wider lanes are loaded as zero and ignored.
 #[cfg(target_feature = "sve2")]
 #[inline]
 fn sve2_mixed_dot_delayed<const N: usize>(
     a: &[PackedGoldilocksNeon; N],
     f: &[Goldilocks; N],
 ) -> PackedGoldilocksNeon {
+    sve2_mixed_dot_delayed_with_chunk_limit(a, f, u32::MAX as usize)
+}
+
+#[cfg(target_feature = "sve2")]
+#[inline]
+fn sve2_mixed_dot_delayed_with_chunk_limit<const N: usize>(
+    a: &[PackedGoldilocksNeon; N],
+    f: &[Goldilocks; N],
+    chunk_limit: usize,
+) -> PackedGoldilocksNeon {
     if N == 0 {
         return PackedGoldilocksNeon::ZERO;
     }
-    let mut acc = [0u64; 8]; // [lo, hi, hi_wraps, lo_wraps] × 2 lanes
+    assert!((1..=u32::MAX as usize).contains(&chunk_limit));
+
+    if N <= chunk_limit {
+        // SAFETY: Both arrays contain N readable elements and N is nonzero and
+        // bounded by u32::MAX.
+        return unsafe { sve2_mixed_dot_chunk(a, f) };
+    }
+
+    let mut chunks = a.chunks(chunk_limit).zip(f.chunks(chunk_limit));
+    let (first_a, first_f) = chunks.next().expect("N is nonzero");
+    // SAFETY: `chunks` produces equally sized, nonempty chunks no longer than
+    // `chunk_limit`, which is bounded by u32::MAX above.
+    let mut sum = unsafe { sve2_mixed_dot_chunk(first_a, first_f) };
+    for (a_chunk, f_chunk) in chunks {
+        // SAFETY: Same invariants as the first chunk.
+        sum += unsafe { sve2_mixed_dot_chunk(a_chunk, f_chunk) };
+    }
+    sum
+}
+
+/// Accumulate one chunk of products without intermediate field reductions.
+///
+/// # Safety
+///
+/// Both slices must have the same nonzero length, at most `u32::MAX`.
+#[cfg(target_feature = "sve2")]
+#[inline]
+unsafe fn sve2_mixed_dot_chunk(
+    a: &[PackedGoldilocksNeon],
+    f: &[Goldilocks],
+) -> PackedGoldilocksNeon {
+    let lo: uint64x2_t;
+    let hi_raw: uint64x2_t;
+    let hi_wraps: uint64x2_t;
+    let lo_wraps: uint64x2_t;
     unsafe {
         core::arch::asm!(
             "ptrue p7.d, vl2",
@@ -222,58 +266,49 @@ fn sve2_mixed_dot_delayed<const N: usize>(
             "add   {fp}, {fp}, #8",
             "subs  {cnt}, {cnt}, #1",
             "b.ne  2b",
-            "st1d  {{ z0.d }}, p7, [{op}]",
-            "add   {op}, {op}, #16",
-            "st1d  {{ z1.d }}, p7, [{op}]",
-            "add   {op}, {op}, #16",
-            "st1d  {{ z2.d }}, p7, [{op}]",
-            "add   {op}, {op}, #16",
-            "st1d  {{ z3.d }}, p7, [{op}]",
             ap = inout(reg) a.as_ptr() as *const u64 => _,
             fp = inout(reg) f.as_ptr() as *const u64 => _,
-            op = inout(reg) acc.as_mut_ptr() => _,
-            cnt = inout(reg) N => _,
-            out("v0") _, out("v1") _, out("v2") _, out("v3") _, out("v4") _,
+            cnt = inout(reg) a.len() => _,
+            out("v0") lo,
+            out("v1") hi_raw,
+            out("v2") hi_wraps,
+            out("v3") lo_wraps,
+            out("v4") _,
             out("v5") _, out("v6") _, out("v7") _, out("v31") _,
             out("p1") _, out("p2") _, out("p7") _,
-            options(nostack),
+            options(readonly, nostack),
         );
     }
-    PackedGoldilocksNeon::from_fn(|lane| {
-        let (lo, hi_raw) = (acc[lane], acc[2 + lane]);
-        let (hi_wraps, lo_wraps) = (acc[4 + lane], acc[6 + lane]);
-        let (hi, c) = hi_raw.overflowing_add(lo_wraps);
-        reduce192(lo, hi, hi_wraps + c as u64)
-    })
+    PackedGoldilocksNeon::from_vector(reduce_sve2_dot_accumulators(lo, hi_raw, hi_wraps, lo_wraps))
 }
 
-/// Reduce `carry·2^128 + hi·2^64 + lo` to a Goldilocks element, using
-/// `2^64 ≡ ε` and `2^128 ≡ ε² ≡ P − 2^32 (mod P)` — two shift-epsilon folds,
-/// no 128-bit division.
-#[cfg(target_feature = "sve2")]
+/// Reduce the four exact accumulator limbs for one bounded SVE2 dot chunk.
+///
+/// The caller must ensure the resulting top carry is at most
+/// `u32::MAX - 1`; `sve2_mixed_dot_chunk` establishes this via its length cap.
+#[cfg(any(target_feature = "sve2", test))]
 #[inline]
-fn reduce192(lo: u64, hi: u64, carry: u64) -> Goldilocks {
-    const EPS2_MOD_P: u64 = P - (1 << 32); // ε² mod P
-    // Fold hi: t ≡ hi·2^64 + lo (mod P), t < 2^96.
-    let t = (hi as u128) * (EPSILON as u128) + lo as u128;
-    let (t_lo, t_hi) = (t as u64, (t >> 64) as u64); // t_hi ≤ ε
-    // r ≡ t_hi·2^64 + t_lo (mod P); t_hi·ε ≤ ε², so the wrap fix cannot re-wrap.
-    let (mut r, c) = t_lo.overflowing_add(t_hi * EPSILON);
-    if c {
-        r = r.wrapping_add(EPSILON);
+fn reduce_sve2_dot_accumulators(
+    lo: uint64x2_t,
+    hi_raw: uint64x2_t,
+    hi_wraps: uint64x2_t,
+    lo_wraps: uint64x2_t,
+) -> uint64x2_t {
+    unsafe {
+        use core::arch::aarch64::vcgtq_u64;
+
+        // Fold the low-word wraps into the high word. A true comparison mask
+        // is all ones, so subtracting it adds the possible extra top carry.
+        let hi = vaddq_u64(hi_raw, lo_wraps);
+        let extra = vcgtq_u64(hi_raw, hi);
+        let carry = vsubq_u64(hi_wraps, extra);
+
+        let reduced = reduce128_vector(lo, hi);
+        // 2^128 ≡ -2^32 (mod P). The chunk bound makes this correction < P.
+        let correction = core::arch::aarch64::vshlq_n_u64::<32>(carry);
+        let borrow = vcgtq_u64(correction, reduced);
+        vsubq_u64(vsubq_u64(reduced, correction), vshrq_n_u64::<32>(borrow))
     }
-    // Fold carry the same way via carry·2^128 ≡ carry·(ε² mod P). Here
-    // u_hi ≤ carry, so the wrap fix cannot re-wrap while carry < 2^32 − 1
-    // (callers pass carry ≤ N + 1, a slice length).
-    debug_assert!(carry < (1 << 32) - 1, "reduce192 carry bound violated");
-    let u = (carry as u128) * (EPS2_MOD_P as u128) + r as u128;
-    let (u_lo, u_hi) = (u as u64, (u >> 64) as u64);
-    let (mut v, c2) = u_lo.overflowing_add(u_hi * EPSILON);
-    if c2 {
-        v = v.wrapping_add(EPSILON);
-    }
-    // v is a valid, not necessarily canonical, representative.
-    Goldilocks::new(v)
 }
 
 impl_packed_value!(PackedGoldilocksNeon, Goldilocks, WIDTH);
@@ -339,7 +374,6 @@ pub(crate) fn halve(input: uint64x2_t) -> uint64x2_t {
 #[inline]
 fn mul(x: uint64x2_t, y: uint64x2_t) -> uint64x2_t {
     unsafe {
-        use core::arch::aarch64::{vcgtq_u64, vmlal_n_u32, vmovn_u64, vsraq_n_u64};
         use core::arch::asm;
         let lo: uint64x2_t;
         let hi: uint64x2_t;
@@ -353,19 +387,26 @@ fn mul(x: uint64x2_t, y: uint64x2_t) -> uint64x2_t {
             options(pure, nomem, nostack),
         );
 
-        // Reduction with the plonky2-NEON idioms: `vmlal_n_u32` folds hi_lo·ε into
-        // the accumulator in one op; `vsraq` (mask ≫ 32 = ε) applies each rare
-        // wraparound correction in one op. ~9 vector ops vs 13 for the naive form.
-        // t1 = lo − hi_hi, minus ε on per-lane borrow (2^64 ≡ ε mod P).
+        reduce128_vector(lo, hi)
+    }
+}
+
+/// Reduce `hi·2^64 + lo` using the established vector Goldilocks fold.
+#[cfg(any(target_feature = "sve2", test))]
+#[inline(always)]
+fn reduce128_vector(lo: uint64x2_t, hi: uint64x2_t) -> uint64x2_t {
+    unsafe {
+        use core::arch::aarch64::{vcgtq_u64, vmlal_n_u32, vmovn_u64, vsraq_n_u64};
+
+        // `vmlal_n_u32` folds hi_lo·ε into the accumulator in one op; `vsraq`
+        // (mask ≫ 32 = ε) applies each rare wraparound correction in one op.
         let hi_hi = vshrq_n_u64::<32>(hi);
         let borrow = vcgtq_u64(hi_hi, lo);
         let t1 = vsubq_u64(vsubq_u64(lo, hi_hi), vshrq_n_u64::<32>(borrow));
-        // res = t1 + hi_lo·ε via widening multiply-accumulate.
         let hi_lo32 = vmovn_u64(hi);
         let res = vmlal_n_u32(t1, hi_lo32, EPSILON as u32);
-        // += ε on per-lane overflow (res wrapped iff res < t1).
-        let ovf = vcgtq_u64(t1, res);
-        vsraq_n_u64::<32>(res, ovf)
+        let overflow = vcgtq_u64(t1, res);
+        vsraq_n_u64::<32>(res, overflow)
     }
 }
 
@@ -656,11 +697,118 @@ mod mixed_dot_tests {
         case::<1>(1);
         case::<2>(2);
         case::<3>(3);
+        case::<4>(4);
         case::<5>(5);
+        case::<6>(6);
+        case::<16>(16);
         case::<63>(63);
         case::<64>(64);
         case::<65>(65);
         case::<129>(129);
+    }
+
+    fn reduce_accumulators_ref(lo: u64, hi_raw: u64, hi_wraps: u64, lo_wraps: u64) -> u64 {
+        const P128: u128 = P as u128;
+        let two64 = (u64::MAX as u128 + 1) % P128;
+        let two128 = two64 * two64 % P128;
+        let limbs = [
+            lo as u128 % P128,
+            (hi_raw as u128 % P128) * two64 % P128,
+            (lo_wraps as u128 % P128) * two64 % P128,
+            (hi_wraps as u128 % P128) * two128 % P128,
+        ];
+        limbs.into_iter().fold(0, |sum, limb| (sum + limb) % P128) as u64
+    }
+
+    fn check_vector_reducer(
+        lo: [u64; WIDTH],
+        hi_raw: [u64; WIDTH],
+        hi_wraps: [u64; WIDTH],
+        lo_wraps: [u64; WIDTH],
+    ) {
+        let got = PackedGoldilocksNeon::from_vector(reduce_sve2_dot_accumulators(
+            unsafe { core::mem::transmute::<[u64; WIDTH], uint64x2_t>(lo) },
+            unsafe { core::mem::transmute::<[u64; WIDTH], uint64x2_t>(hi_raw) },
+            unsafe { core::mem::transmute::<[u64; WIDTH], uint64x2_t>(hi_wraps) },
+            unsafe { core::mem::transmute::<[u64; WIDTH], uint64x2_t>(lo_wraps) },
+        ));
+        for lane in 0..WIDTH {
+            assert_eq!(
+                got.as_slice()[lane].as_canonical_u64(),
+                reduce_accumulators_ref(lo[lane], hi_raw[lane], hi_wraps[lane], lo_wraps[lane]),
+                "lane {lane}: lo={:#x} hi_raw={:#x} hi_wraps={:#x} lo_wraps={:#x}",
+                lo[lane],
+                hi_raw[lane],
+                hi_wraps[lane],
+                lo_wraps[lane]
+            );
+        }
+    }
+
+    #[test]
+    fn sve2_dot_reducer_matches_weighted_limb_reference() {
+        const MAX_CARRY: u64 = (1 << 32) - 2;
+        for &lo in &EDGE {
+            for &hi in &EDGE {
+                for &carry in &[0, 1, MAX_CARRY] {
+                    check_vector_reducer([lo, hi], [hi, lo], [carry, carry], [0, 0]);
+                }
+            }
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x5E2_D07);
+        for _ in 0..100_000 {
+            check_vector_reducer(
+                [rng.random(), rng.random()],
+                [rng.random(), rng.random()],
+                [
+                    (rng.random::<u32>() as u64) % MAX_CARRY,
+                    (rng.random::<u32>() as u64) % MAX_CARRY,
+                ],
+                [
+                    (rng.random::<u32>() as u64) % (MAX_CARRY + 1),
+                    (rng.random::<u32>() as u64) % (MAX_CARRY + 1),
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn sve2_dot_reducer_handles_hi_fold_overflow() {
+        const MAX_CARRY: u64 = (1 << 32) - 2;
+        check_vector_reducer(
+            [0, u64::MAX],
+            [u64::MAX, u64::MAX - 5],
+            [0, MAX_CARRY - 1],
+            [1, 10],
+        );
+    }
+
+    #[cfg(target_feature = "sve2")]
+    #[test]
+    fn sve2_mixed_dot_forced_small_chunks_match_reference() {
+        fn case<const N: usize>(seed: u64) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let a: [PackedGoldilocksNeon; N] = core::array::from_fn(|_| {
+                PackedGoldilocksNeon(Goldilocks::new_array([rng.random(), rng.random()]))
+            });
+            let f: [Goldilocks; N] = core::array::from_fn(|_| Goldilocks::new(rng.random()));
+            let got = sve2_mixed_dot_delayed_with_chunk_limit(&a, &f, 3);
+            for lane in 0..WIDTH {
+                assert_eq!(
+                    got.as_slice()[lane].as_canonical_u64(),
+                    dot_ref(&a, &f, lane),
+                    "lane {lane}, N={N}"
+                );
+            }
+        }
+
+        case::<0>(0);
+        case::<1>(1);
+        case::<2>(2);
+        case::<3>(3);
+        case::<4>(4);
+        case::<7>(7);
     }
 
     proptest! {
@@ -680,42 +828,6 @@ mod mixed_dot_tests {
                     dot_ref(&packed, &coeffs, lane)
                 );
             }
-        }
-    }
-
-    #[cfg(target_feature = "sve2")]
-    #[test]
-    fn reduce192_matches_reference() {
-        fn reference(lo: u64, hi: u64, carry: u64) -> u64 {
-            const P128: u128 = P as u128;
-            let two64 = (u64::MAX as u128 + 1) % P128;
-            let two128 = two64 * two64 % P128;
-            let total =
-                lo as u128 % P128 + (hi as u128) * two64 % P128 + (carry as u128) * two128 % P128;
-            (total % P128) as u64
-        }
-
-        let mut rng = SmallRng::seed_from_u64(0x192);
-        for _ in 0..100_000 {
-            let (lo, hi): (u64, u64) = (rng.random(), rng.random());
-            // Callers pass carry ≤ N + 1; test the documented domain boundary.
-            let carry = rng.random::<u64>() % ((1 << 32) - 1);
-            assert_eq!(
-                reduce192(lo, hi, carry).as_canonical_u64(),
-                reference(lo, hi, carry),
-                "lo={lo:#x} hi={hi:#x} carry={carry:#x}"
-            );
-        }
-        for &(lo, hi, carry) in &[
-            (0, 0, 0),
-            (u64::MAX, u64::MAX, (1 << 32) - 2),
-            (P, P, 1),
-            (u64::MAX, 0, 0),
-        ] {
-            assert_eq!(
-                reduce192(lo, hi, carry).as_canonical_u64(),
-                reference(lo, hi, carry)
-            );
         }
     }
 }
