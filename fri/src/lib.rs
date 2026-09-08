@@ -3,6 +3,10 @@
 
 extern crate alloc;
 
+// Only the transcript's unwind test reaches for `std`, and only where unwinding exists.
+#[cfg(all(test, panic = "unwind"))]
+extern crate std;
+
 mod config;
 mod hiding_pcs;
 mod periodic;

@@ -98,6 +98,7 @@ impl FriShape {
     /// - `params`: the protocol parameters.
     /// - `input_log_heights`: log-heights of the folding inputs, strictly decreasing.
     /// - `index_bits`: bit width of each query index.
+    ///
     #[must_use]
     pub fn new<M>(
         params: &FriParameters<M>,
@@ -461,6 +462,8 @@ pub enum TranscriptFailure {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    #[cfg(panic = "unwind")]
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::{CanSample, DuplexChallenger};
@@ -517,6 +520,31 @@ mod tests {
         let ascending = first_challenge(&shape_with(vec![2, 3, 3]));
 
         assert_ne!(descending, ascending);
+    }
+
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn a_panic_inside_a_live_prover_transcript_unwinds() {
+        // Fixture state: a run described with one round, so the transcript is mid-pattern.
+        let mut challenger = fresh_challenger();
+
+        // Mutation: the caller panics between the first round and `finish`.
+        //
+        // `RowMajorMatrix::new`, the `.pop().unwrap()` on the committed matrices,
+        // and any caller-supplied `Mmcs` or `FriFoldingStrategy` callback all sit here.
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            let mut transcript =
+                ProverTranscript::<Ch, F, EF>::new(&mut challenger, shape_with(vec![1]));
+            let _beta = transcript.commit_round([F::ONE; 8]);
+            panic!("folding strategy panicked");
+        }));
+
+        // The completeness check yields, so the caller's panic is what escapes.
+        let payload = caught.expect_err("the caller's panic must unwind out of the scope");
+        assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some("folding strategy panicked")
+        );
     }
 
     #[test]
