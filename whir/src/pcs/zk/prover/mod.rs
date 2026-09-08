@@ -284,7 +284,7 @@ where
                 ood_answers.push(answer);
             }
 
-            // PoW, transcript checkpoint, STIR queries on the previous oracle.
+            // PoW, then STIR queries on the previous oracle.
             //
             //     pow_bits = 0  ->  no grind, zero witness on the wire
             let pow_witness = if round_params.pow_bits > 0 {
@@ -292,7 +292,6 @@ where
             } else {
                 F::ZERO
             };
-            challenger.sample();
             let stir_indexes = get_challenge_stir_queries::<Challenger, F>(
                 round_params.domain_size,
                 folding,

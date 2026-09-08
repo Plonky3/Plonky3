@@ -238,13 +238,12 @@ where
                 rho_points.push(rho);
             }
 
-            // PoW, transcript checkpoint, STIR queries on the previous oracle.
+            // PoW, then STIR queries on the previous oracle.
             if round_params.pow_bits > 0
                 && !challenger.check_witness(round_params.pow_bits, round_proof.pow_witness)
             {
                 return Err(ZkVerifierError::InvalidPowWitness { round });
             }
-            challenger.sample();
             let stir_indexes = get_challenge_stir_queries::<Challenger, F>(
                 round_params.domain_size,
                 folding,
