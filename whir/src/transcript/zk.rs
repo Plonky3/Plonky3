@@ -39,7 +39,7 @@
 use alloc::vec::Vec;
 
 use p3_challenger::fs::{
-    DomainSeparator, Hierarchy, Interaction, InteractionPattern, Kind, Length,
+    DomainSeparator, Hierarchy, Interaction, InteractionPattern, Kind, Length, Unit,
 };
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
@@ -47,7 +47,7 @@ use p3_util::log2_strict_usize;
 
 use super::{
     Alphabet, FOLD_CHALLENGE, INITIAL_BATCHING, OOD_ANSWER, OOD_POINT, QUERY_INDICES, QUERY_POW,
-    ROUND_BATCHING, bind_folding_factor, bind_number, query_draws,
+    ROUND_BATCHING, bind_folding_factor, query_draws,
 };
 use crate::parameters::{FoldingFactor, SecurityAssumption};
 use crate::pcs::zk::{MaskCodeShape, MaskGroupShape, ZkWhirConfig};
@@ -563,31 +563,31 @@ impl ZkWhirShape {
         let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
 
         // The plain WHIR statement, bound exactly as the plain pipeline binds it.
-        bind_number(&mut separator, self.num_variables);
+        separator.instance(&(self.num_variables as u64).to_be_bytes());
         for value in self.unreplayed_plain {
-            bind_number(&mut separator, value);
+            separator.instance(&(value as u64).to_be_bytes());
         }
-        bind_number(&mut separator, self.security_level);
-        bind_number(&mut separator, self.pow_budget);
-        bind_number(&mut separator, self.starting_log_inv_rate);
-        bind_number(&mut separator, self.soundness_type as usize);
+        separator.instance(&(self.security_level as u64).to_be_bytes());
+        separator.instance(&(self.pow_budget as u64).to_be_bytes());
+        separator.instance(&(self.starting_log_inv_rate as u64).to_be_bytes());
+        separator.instance(&(self.soundness_type as u64).to_be_bytes());
         bind_folding_factor(&mut separator, &self.folding_factor);
-        bind_number(&mut separator, self.rounds.len());
+        separator.instance(&(self.rounds.len() as u64).to_be_bytes());
         for round in &self.rounds {
-            bind_number(&mut separator, round.log_inv_rate);
+            separator.instance(&(round.log_inv_rate as u64).to_be_bytes());
         }
 
         // The hiding overlay: mask geometry and every randomness budget.
-        bind_number(&mut separator, self.ell_zk);
-        bind_number(&mut separator, self.mask_log_inv_rate);
-        bind_number(&mut separator, self.mask_queries);
+        separator.instance(&(self.ell_zk as u64).to_be_bytes());
+        separator.instance(&(self.mask_log_inv_rate as u64).to_be_bytes());
+        separator.instance(&(self.mask_queries as u64).to_be_bytes());
         bind_mask_code(&mut separator, &self.sumcheck_mask);
         for round in &self.rounds {
             bind_mask_code(&mut separator, &round.switch_mask);
         }
-        bind_number(&mut separator, self.oracle_randomness.len());
+        separator.instance(&(self.oracle_randomness.len() as u64).to_be_bytes());
         for &budget in &self.oracle_randomness {
-            bind_number(&mut separator, budget);
+            separator.instance(&(budget as u64).to_be_bytes());
         }
 
         separator
@@ -595,13 +595,10 @@ impl ZkWhirShape {
 }
 
 /// Bind one mask code's three lengths, each as its own chunk.
-fn bind_mask_code<U: p3_challenger::fs::Unit>(
-    separator: &mut DomainSeparator<U>,
-    code: &MaskCodeShape,
-) {
-    bind_number(separator, code.message_len);
-    bind_number(separator, code.randomness_len);
-    bind_number(separator, code.domain_size);
+fn bind_mask_code<U: Unit>(separator: &mut DomainSeparator<U>, code: &MaskCodeShape) {
+    separator.instance(&(code.message_len as u64).to_be_bytes());
+    separator.instance(&(code.randomness_len as u64).to_be_bytes());
+    separator.instance(&(code.domain_size as u64).to_be_bytes());
 }
 
 #[cfg(test)]
