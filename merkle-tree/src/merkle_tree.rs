@@ -386,12 +386,14 @@ fn hash_rows_batched<F, W, H, M, const DIGEST_ELEMS: usize>(
             let first = base + group * rows_per_call;
 
             // Lay the group's messages back to back: row by row, matrix by matrix.
+            //
+            // Extending from the row iterator keeps this allocation free for every `Matrix`.
+            // Asking for the row as a slice would let an impl materialize one Vec per row.
             scratch.clear();
             for row in first..first + group_digests.len() {
                 for m in matrices {
                     // SAFETY: the assertion above bounds every requested row by every height.
-                    let slice = unsafe { m.row_slice_unchecked(row) };
-                    scratch.extend_from_slice(&slice);
+                    scratch.extend(unsafe { m.row_unchecked(row) });
                 }
             }
 
@@ -944,6 +946,9 @@ mod tests {
     ///
     /// - Levels wide enough to fan out across threads instead of staying serial.
     /// - Rows long enough to make the sponge absorb more than one block.
+    ///
+    /// - A row too wide to group, which the serializing hasher must hash one row at a time.
+    ///   2100 `BabyBear` columns are 8400 bytes, past that hasher's 8 KiB group budget.
     const SHAPES: &[(&[usize], usize)] = &[
         (&[1], 1),
         (&[3], 4),
@@ -953,6 +958,7 @@ mod tests {
         (&[1100], 1),
         (&[2049, 1025, 513], 5),
         (&[64], 135),
+        (&[3], 2100),
     ];
 
     /// A hasher and compressor pair that reports one lane, forcing the unbatched driver.
