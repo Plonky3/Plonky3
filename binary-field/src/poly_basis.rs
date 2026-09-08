@@ -79,7 +79,7 @@ pub fn butterfly_forward(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
     poly_slice::butterfly_forward(lo, hi, scalar);
 }
 
-/// Undo the forward butterfly with the same scalar.
+/// Undo [`butterfly_forward`] with the same scalar.
 ///
 /// # Panics
 /// Panics if the slice lengths differ.

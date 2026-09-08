@@ -9,8 +9,14 @@ use crate::clmul;
 /// Multiply every element of a slice by the same scalar.
 #[inline]
 pub(crate) fn scale(values: &mut [u128], scalar: u128) {
-    // The packed kernel reports how many leading elements it covered, zero where it is absent.
-    let packed = wide::scale(values, scalar);
+    // Below one register there is nothing to pack, so the call boundary buys nothing.
+    //
+    // Otherwise the packed kernel reports how many leading elements it covered.
+    let packed = if values.len() < wide::WIDTH {
+        0
+    } else {
+        wide::scale(values, scalar)
+    };
 
     // Whatever is left over costs one carryless multiply per element.
     for value in &mut values[packed..] {
@@ -21,7 +27,14 @@ pub(crate) fn scale(values: &mut [u128], scalar: u128) {
 /// Send `(lo, hi)` to `(lo + scalar*hi, lo + (scalar + 1)*hi)`, element by element.
 #[inline]
 pub(crate) fn butterfly_forward(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
-    let packed = wide::butterfly_forward(lo, hi, scalar);
+    // Invariant: the two halves are paired element for element, so a mismatch drops work.
+    debug_assert_eq!(lo.len(), hi.len(), "butterfly lengths differ");
+
+    let packed = if lo.len() < wide::WIDTH {
+        0
+    } else {
+        wide::butterfly_forward(lo, hi, scalar)
+    };
 
     for (lo, hi) in lo[packed..].iter_mut().zip(&mut hi[packed..]) {
         // The scaled upper half lands in the lower one first.
@@ -31,10 +44,17 @@ pub(crate) fn butterfly_forward(lo: &mut [u128], hi: &mut [u128], scalar: u128) 
     }
 }
 
-/// Undo the forward butterfly with the same scalar.
+/// Undo [`butterfly_forward`] with the same scalar.
 #[inline]
 pub(crate) fn butterfly_inverse(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
-    let packed = wide::butterfly_inverse(lo, hi, scalar);
+    // Invariant: the two halves are paired element for element, so a mismatch drops work.
+    debug_assert_eq!(lo.len(), hi.len(), "butterfly lengths differ");
+
+    let packed = if lo.len() < wide::WIDTH {
+        0
+    } else {
+        wide::butterfly_inverse(lo, hi, scalar)
+    };
 
     for (lo, hi) in lo[packed..].iter_mut().zip(&mut hi[packed..]) {
         // Undo the second step of the forward pass, recovering the old upper half.
@@ -51,7 +71,8 @@ pub(crate) fn butterfly_inverse(lo: &mut [u128], hi: &mut [u128], scalar: u128) 
     any(target_feature = "avx2", target_feature = "avx512f")
 ))]
 mod wide {
-    use crate::packed::lanes::{self, WIDTH};
+    use crate::packed::lanes;
+    pub(super) use crate::packed::lanes::WIDTH;
     use crate::packed::split::SplitScalar;
 
     /// Scale a prefix of the slice, returning the number of elements it covered.
@@ -64,10 +85,6 @@ mod wide {
         // Splitting into fixed-size blocks hands the tail back and needs no bounds check.
         let (blocks, _) = values.as_chunks_mut::<WIDTH>();
 
-        // Below one full register there is no lane loop for the companion to amortize over.
-        if blocks.is_empty() {
-            return 0;
-        }
         let split = SplitScalar::new(scalar);
 
         for block in blocks.iter_mut() {
@@ -93,9 +110,6 @@ mod wide {
 
         // Pairing stops at the shorter side, so that is what the count has to report.
         let blocks = lo.len().min(hi.len());
-        if blocks == 0 {
-            return 0;
-        }
         let split = SplitScalar::new(scalar);
 
         for (lo, hi) in lo.iter_mut().zip(hi.iter_mut()) {
@@ -124,9 +138,6 @@ mod wide {
 
         // Pairing stops at the shorter side, so that is what the count has to report.
         let blocks = lo.len().min(hi.len());
-        if blocks == 0 {
-            return 0;
-        }
         let split = SplitScalar::new(scalar);
 
         for (lo, hi) in lo.iter_mut().zip(hi.iter_mut()) {
@@ -154,6 +165,9 @@ mod wide {
     any(target_feature = "avx2", target_feature = "avx512f")
 )))]
 mod wide {
+    /// A width no slice can reach, so every dispatch above takes the scalar path outright.
+    pub(super) const WIDTH: usize = usize::MAX;
+
     /// Reports that no element was scaled.
     #[inline]
     pub(super) const fn scale(_values: &mut [u128], _scalar: u128) -> usize {
@@ -204,6 +218,12 @@ mod tests {
     /// ```
     const CORNERS: [u128; 7] = [0, 1, u128::MAX, 1 << 127, 1 << 64, (1u128 << 64) - 1, 0x87];
 
+    /// Guard elements placed after the payload, one full register of the widest build.
+    const SENTINELS: usize = 4;
+
+    /// What those elements hold, which no product of the inputs below can reproduce.
+    const SENTINEL: u128 = 0x5a5a_5a5a_5a5a_5a5a_5a5a_5a5a_5a5a_5a5a;
+
     /// A slice whose elements share no structure with one another.
     fn sample(len: usize) -> Vec<u128> {
         (0..len)
@@ -211,16 +231,30 @@ mod tests {
             .collect()
     }
 
-    /// The same values, preceded by enough zeros to start the payload mid-allocation.
+    /// The same values, walled off from the rest of the allocation on both sides.
     ///
     /// One register load covers several elements.
     ///
-    /// Shifting the payload therefore walks the prefix across every alignment it can have.
-    fn shifted(values: &[u128], offset: usize) -> Vec<u128> {
-        let mut buffer = Vec::with_capacity(offset + values.len());
+    /// Leading zeros therefore walk the payload across every alignment it can have.
+    ///
+    /// Trailing sentinels catch a store that ran a whole register past the end.
+    fn padded(values: &[u128], offset: usize) -> Vec<u128> {
+        let mut buffer = Vec::with_capacity(offset + values.len() + SENTINELS);
         buffer.extend(core::iter::repeat_n(0, offset));
         buffer.extend_from_slice(values);
+        buffer.extend(core::iter::repeat_n(SENTINEL, SENTINELS));
         buffer
+    }
+
+    /// The payload of such a buffer, once both walls are confirmed intact.
+    fn payload(buffer: &[u128], offset: usize, len: usize) -> Result<&[u128], TestCaseError> {
+        // Nothing may have run off the front.
+        prop_assert!(buffer[..offset].iter().all(|&v| v == 0));
+
+        // Nothing may have run off the back either.
+        prop_assert!(buffer[offset + len..].iter().all(|&v| v == SENTINEL));
+
+        Ok(&buffer[offset..offset + len])
     }
 
     /// Scaling, one element at a time through the scalar backend.
@@ -257,37 +291,51 @@ mod tests {
     ///
     /// Reports failure rather than panicking, so the sweep and the random cases can share it.
     fn kernels_agree(values: &[u128], scalar: u128, offset: usize) -> Result<(), TestCaseError> {
+        let len = values.len();
+
         // The second operand of the butterflies, reversed so the two slices differ.
         let other: Vec<u128> = values.iter().rev().copied().collect();
 
         // Scaling: the packed prefix and the scalar tail must together match the scalar loop.
-        let mut scaled = shifted(values, offset);
-        super::scale(&mut scaled[offset..], scalar);
-        prop_assert_eq!(&scaled[offset..], &reference_scale(values, scalar)[..]);
-
-        // The zeros ahead of the payload pin down that no access ran off the front.
-        prop_assert!(scaled[..offset].iter().all(|&v| v == 0));
+        let mut scaled = padded(values, offset);
+        super::scale(&mut scaled[offset..offset + len], scalar);
+        prop_assert_eq!(
+            payload(&scaled, offset, len)?,
+            &reference_scale(values, scalar)[..]
+        );
 
         // Forward butterfly over two distinct slices, both at the same offset.
-        let mut lo = shifted(values, offset);
-        let mut hi = shifted(&other, offset);
-        super::butterfly_forward(&mut lo[offset..], &mut hi[offset..], scalar);
+        let mut lo = padded(values, offset);
+        let mut hi = padded(&other, offset);
+        super::butterfly_forward(
+            &mut lo[offset..offset + len],
+            &mut hi[offset..offset + len],
+            scalar,
+        );
         let (want_lo, want_hi) = reference_forward(values, &other, scalar);
-        prop_assert_eq!(&lo[offset..], &want_lo[..]);
-        prop_assert_eq!(&hi[offset..], &want_hi[..]);
+        prop_assert_eq!(payload(&lo, offset, len)?, &want_lo[..]);
+        prop_assert_eq!(payload(&hi, offset, len)?, &want_hi[..]);
 
         // The inverse kernel applied to the forward output must return the input.
-        super::butterfly_inverse(&mut lo[offset..], &mut hi[offset..], scalar);
-        prop_assert_eq!(&lo[offset..], values);
-        prop_assert_eq!(&hi[offset..], &other[..]);
+        super::butterfly_inverse(
+            &mut lo[offset..offset + len],
+            &mut hi[offset..offset + len],
+            scalar,
+        );
+        prop_assert_eq!(payload(&lo, offset, len)?, values);
+        prop_assert_eq!(payload(&hi, offset, len)?, &other[..]);
 
         // The inverse kernel on its own, against its own scalar loop.
-        let mut lo = shifted(values, offset);
-        let mut hi = shifted(&other, offset);
-        super::butterfly_inverse(&mut lo[offset..], &mut hi[offset..], scalar);
+        let mut lo = padded(values, offset);
+        let mut hi = padded(&other, offset);
+        super::butterfly_inverse(
+            &mut lo[offset..offset + len],
+            &mut hi[offset..offset + len],
+            scalar,
+        );
         let (want_lo, want_hi) = reference_inverse(values, &other, scalar);
-        prop_assert_eq!(&lo[offset..], &want_lo[..]);
-        prop_assert_eq!(&hi[offset..], &want_hi[..]);
+        prop_assert_eq!(payload(&lo, offset, len)?, &want_lo[..]);
+        prop_assert_eq!(payload(&hi, offset, len)?, &want_hi[..]);
 
         Ok(())
     }
