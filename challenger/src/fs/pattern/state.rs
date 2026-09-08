@@ -6,6 +6,7 @@ use core::marker::PhantomData;
 use super::Pattern;
 use super::sequence::InteractionPattern;
 use super::step::{Hierarchy, Interaction, Kind};
+use crate::fs::drop_check_may_panic;
 use crate::fs::unit::Unit;
 
 /// Records a transcript pattern step by step, validating as it goes.
@@ -126,8 +127,11 @@ impl<U: Unit> PatternState<U> {
 
 impl<U: Unit> Drop for PatternState<U> {
     fn drop(&mut self) {
-        // Loud failure surfaces forgot-to-finalize bugs.
-        assert!(self.finalized, "Dropped unfinalized pattern recorder.");
+        // A panic already unwinding owns the failure, and a second one would abort.
+        if drop_check_may_panic() {
+            // Loud failure surfaces forgot-to-finalize bugs.
+            assert!(self.finalized, "Dropped unfinalized pattern recorder.");
+        }
     }
 }
 

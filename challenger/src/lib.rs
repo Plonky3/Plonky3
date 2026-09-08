@@ -3,6 +3,14 @@
 
 extern crate alloc;
 
+// Why: a drop-time check must not panic while another panic unwinds.
+//
+//     unwinding exists  ->  `std` links  ->  `thread::panicking()` is observable
+//
+// A target without unwinding aborts on the first panic, so no second one can follow it.
+#[cfg(panic = "unwind")]
+extern crate std;
+
 mod duplex_challenger;
 pub mod fs;
 mod grinding_challenger;

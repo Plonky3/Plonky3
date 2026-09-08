@@ -5,7 +5,6 @@ use core::marker::PhantomData;
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
 
-use crate::fs::TranscriptField;
 use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::{
     Codec, ExtensionFieldCodec, bound_byte_width, decode_field_be_canonical, decode_len_be,
@@ -16,7 +15,8 @@ use crate::fs::error::TranscriptError;
 use crate::fs::pattern::{Hierarchy, Interaction, Kind, Label, Length, Pattern, PatternPlayer};
 use crate::fs::state::assert_challenge_security;
 use crate::fs::unit::Unit;
-use crate::{CanObserve, GrindingChallenger};
+use crate::fs::{TranscriptField, drop_check_may_panic};
+use crate::{CanObserve, CanSampleBits, GrindingChallenger};
 
 /// Drives a verifier-side transcript in lockstep with a recorded pattern.
 ///
@@ -38,6 +38,9 @@ use crate::{CanObserve, GrindingChallenger};
 /// A read that returns an error releases the check.
 /// The caller is expected to reject the proof.
 /// The structured error must reach them, not a drop-time panic on top of it.
+///
+/// A panic already unwinding releases it too, whichever code raised that panic.
+/// Panicking on top of one would abort the process instead.
 pub struct VerifierState<'a, C, U: Unit = u8> {
     /// Underlying sponge, seeded identically to the prover.
     challenger: C,
@@ -53,10 +56,13 @@ pub struct VerifierState<'a, C, U: Unit = u8> {
 
 impl<C, U: Unit> Drop for VerifierState<'_, C, U> {
     fn drop(&mut self) {
+        // A panic already unwinding owns the failure, and a second one would abort.
+        // Caller code runs inside a live scope, so that panic need not be ours.
+        if !drop_check_may_panic() {
+            return;
+        }
+
         // Loud failure surfaces a verifier that never ran its final checks.
-        //
-        // Failing reads and pattern panics both mark the player aborted first,
-        // so this never fires while another failure unwinds.
         if !self.player.is_finalized() {
             let steps = self.player.remaining();
             let bytes = self.remaining_narg();
@@ -302,6 +308,52 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
             });
         }
         Ok(())
+    }
+
+    /// Replay a value the challenger knows how to encode, carried by the caller.
+    ///
+    /// The value is prover-chosen, so it is untrusted.
+    /// Binding it stops the prover choosing it after seeing the next challenge.
+    ///
+    /// Its width is not bound here.
+    /// The component that owns the value rejects a wrong-shaped one.
+    pub fn observe_opaque<T>(&mut self, label: Label, value: T) -> TranscriptBound<T>
+    where
+        T: Clone,
+        C: CanObserve<T>,
+    {
+        // Validate: the next pattern step is an opaque message.
+        self.player.interact(Interaction::opaque(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Scalar,
+        ));
+        // The challenger owns the encoding, so hand the value over whole.
+        self.challenger.observe(value.clone());
+        TranscriptBound::wrap(value)
+    }
+
+    /// Sample `count` challenges of `width` uniform bits, in lockstep with the prover.
+    pub fn challenge_bits(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleBits<usize>,
+    {
+        self.player.interact(Interaction::bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        (0..count)
+            .map(|_| TranscriptBound::wrap(self.challenger.sample_bits(width)))
+            .collect()
     }
 
     /// Replay a public-scalar step by absorbing the caller-supplied value.
@@ -745,6 +797,8 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    #[cfg(panic = "unwind")]
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
@@ -895,6 +949,27 @@ mod tests {
 
         let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let _ = v.next_scalar::<F, ByteCodec>("msg").expect("legal scalar");
+    }
+
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn a_panic_inside_a_live_verifier_scope_unwinds() {
+        // Fixture state: a driver holding one unreplayed step, so its drop check is armed.
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"unwind", one_msg_pattern());
+        let narg = [0u8; 4];
+
+        // Mutation: caller-supplied code panics mid-run, as an `Mmcs` callback could.
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            let _v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
+            panic!("caller panic inside the live scope");
+        }));
+
+        // The drop check yields to the panic in flight, so the caller's failure survives.
+        let payload = caught.expect_err("the caller's panic must unwind out of the scope");
+        assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some("caller panic inside the live scope")
+        );
     }
 
     #[test]

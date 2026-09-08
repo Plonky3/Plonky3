@@ -1,20 +1,19 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_dft::{Radix2DFTSmallBatch, TwoAdicSubgroupDft};
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, PrimeField64, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    BatchMultiOpening, CommitPhaseMultiStep, FriFoldingStrategy, FriParameters, FriProof,
-    ProverDataWithOpeningPoints, fold_schedule,
+    BatchMultiOpening, CommitPhaseMultiStep, FriFoldingStrategy, FriParameters, FriProof, FriShape,
+    ProverDataWithOpeningPoints, ProverTranscript,
 };
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
@@ -63,14 +62,15 @@ pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
         InputMmcs::ProverData<RowMajorMatrix<Val>>,
     >],
     input_mmcs: &InputMmcs,
-    batch_pow_witness: Challenger::Witness,
-) -> FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>
+    batch_pow_witness: Val,
+) -> FriProof<Challenge, FriMmcs, Val, Folding::InputProof>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Challenger:
+        FieldChallenger<Val> + GrindingChallenger<Witness = Val> + CanObserve<FriMmcs::Commitment>,
     Folding:
         FriFoldingStrategy<Val, Challenge, InputProof = Vec<BatchMultiOpening<Val, InputMmcs>>>,
 {
@@ -108,13 +108,14 @@ pub(crate) fn prove_fri_with_schedule<Folding, Val, Challenge, InputMmcs, FriMmc
     input_mmcs: &InputMmcs,
     batch_pow_witness: Challenger::Witness,
     schedule: Option<Vec<usize>>,
-) -> FriProof<Challenge, FriMmcs, Challenger::Witness, Folding::InputProof>
+) -> FriProof<Challenge, FriMmcs, Val, Folding::InputProof>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Challenger:
+        FieldChallenger<Val> + GrindingChallenger<Witness = Val> + CanObserve<FriMmcs::Commitment>,
     Folding:
         FriFoldingStrategy<Val, Challenge, InputProof = Vec<BatchMultiOpening<Val, InputMmcs>>>,
 {
@@ -151,39 +152,45 @@ where
         assert!(log_min_height > params.log_final_poly_len + params.log_blowup);
     }
 
-    // Continually fold the inputs down until the polynomial degree reaches final_poly_degree.
-    // Returns a vector of commitments to the intermediate stage polynomials, the intermediate stage polynomials
-    // themselves and the final polynomial.
-    // Note that the challenger observes the commitments and the final polynomial inside this function so we don't
-    // need to observe the output of this function here.
-    let commit_phase_result = commit_phase(folding, params, inputs, challenger, schedule);
-
-    // Bind the chosen folding arities into the transcript.
-    for &log_arity in &commit_phase_result.log_arities {
-        challenger.observe(Val::from_usize(log_arity));
-    }
-
-    // Produce a proof of work witness before receiving any query challenges.
-    // This helps to prevent grinding attacks.
-    let pow_witness = challenger.grind(params.query_proof_of_work_bits);
-
-    // Sample num_queries indexes to check.
-    // The probability that no two FRI indices are equal (ignoring extra query index bits) is:
-    // (Grabbed this from wikipedia page on the birthday problem)
-    // N!/(N^{num_queries} * (N - num_queries)!) ~ (1 - 1/N)^{num_queries * (num_queries - 1)/2}
-    //                                           ~ (1 - num_queries^2/2N)
-    // Here N = 2^log_global_max_height.
-    // With num_queries = 100, N = 2^20, this is 0.995 so there is a .5% chance of a collision.
-    // Due to this, security conscious users may want to set num_queries a little higher than the
-    // theoretical minimum.
+    // Describe the transcript before running it.
     //
-    // Sampling all indices in one block leaves the transcript identical to sampling
-    // them one query at a time: nothing is observed between samples.
-    let indices: Vec<usize> = iter::repeat_with(|| {
-        challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits())
-    })
-    .take(params.num_queries)
-    .collect();
+    // Every number comes from the parameters and the input heights.
+    // The verifier builds the identical description from its own configuration.
+    let input_log_heights: Vec<usize> = inputs
+        .iter()
+        .map(|input| log2_strict_usize(input.len()))
+        .collect();
+    let index_bits = log_global_max_height + folding.extra_query_index_bits();
+
+    // A forged schedule stands in for the derived one, so no derivation runs.
+    //
+    // `fold_schedule` asserts strictly decreasing heights.
+    // Inputs of equal length clear this function's own sort check but not that one.
+    //
+    // Folding, the described transcript and the proof all agree with whichever wins.
+    let shape = schedule.map_or_else(
+        || FriShape::new(params, &input_log_heights, index_bits),
+        |log_arities| FriShape::with_schedule(params, log_arities, index_bits),
+    );
+
+    // Folding walks the described schedule, so the two cannot drift apart.
+    let log_arities = shape.log_arities.clone();
+
+    let mut transcript = ProverTranscript::<Challenger, Val, Challenge>::new(challenger, shape);
+
+    // Fold the inputs down until the degree reaches the final polynomial's.
+    // Every commitment and folding challenge passes through the transcript.
+    let commit_phase_result = commit_phase(folding, params, inputs, &log_arities, &mut transcript);
+
+    // Bind the final polynomial, grind, and draw every query index.
+    //
+    // Indices are drawn in one block, so the birthday bound applies.
+    // At 100 queries over 2^20 positions, two collide about 0.5% of the time.
+    let (indices, pow_witness) = transcript.query_phase(&commit_phase_result.final_poly);
+    let pow_witness = pow_witness.unwrap_or(Val::ZERO);
+
+    // Every described step has now been played.
+    transcript.finish();
 
     let (input_openings, commit_phase_openings) = info_span!("query phase").in_scope(|| {
         // Openings of the inputs and of every commit-phase codeword at all
@@ -248,20 +255,22 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>, Witness> {
 /// - `inputs`: The evaluation vectors of the polynomials. These must be sorted in descending order of length and each
 ///   evaluation vector must be in bit reversed order. This function assumes that commitments to these vectors
 ///   have already been produced and observed by the challenger.
-/// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
+/// - `log_arities`: The log2 of the arity each round folds by, in round order.
+/// - `transcript`: The described transcript every commitment and challenge passes through.
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<Folding, Val, Challenge, M, Challenger>(
     folding: &Folding,
     params: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
-    challenger: &mut Challenger,
-    schedule: Option<Vec<usize>>,
-) -> CommitPhaseResult<Challenge, M, <Challenger as GrindingChallenger>::Witness>
+    log_arities: &[usize],
+    transcript: &mut ProverTranscript<'_, Challenger, Val, Challenge>,
+) -> CommitPhaseResult<Challenge, M, Val>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
+    Challenger:
+        FieldChallenger<Val> + GrindingChallenger<Witness = Val> + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
     assert!(
@@ -269,45 +278,27 @@ where
         "max_log_arity must be at least 1 to guarantee folding progress"
     );
 
-    let log_final_height = params.log_blowup + params.log_final_poly_len;
-
-    // Derive the whole folding schedule before folding anything.
-    //
-    // The verifier derives the identical one from the committed heights.
-    // Nothing about it is read from the proof.
-    let log_arities = schedule.unwrap_or_else(|| {
-        let input_log_heights: Vec<usize> = inputs
-            .iter()
-            .map(|input| log2_strict_usize(input.len()))
-            .collect();
-        fold_schedule(&input_log_heights, log_final_height, params.max_log_arity)
-    });
-
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
     let mut data = vec![];
     let mut pow_witnesses = vec![];
 
-    for &log_arity in &log_arities {
+    for &log_arity in log_arities {
         let arity = 1 << log_arity;
 
         // As folded is in bit reversed order, the evaluations at conjugate points are adjacent.
         // We reinterpret the vector as a matrix of width `arity`.
         let leaves = RowMajorMatrix::new(folded, arity);
 
-        // Commit to these evaluations and observe the commitment.
+        // Commit to these evaluations.
         let (commit, prover_data) = params.mmcs.commit_matrix(leaves);
-        challenger.observe(commit.clone());
+
+        // One call binds the commitment, grinds, and draws the folding challenge.
+        let (beta, witness) = transcript.commit_round(commit.clone());
         commits.push(commit);
-
-        // Produce a proof of work witness after observing the commitment and
-        // before the Fiat-Shamir batching challenge.
-        let pow_witness = challenger.grind(params.commit_proof_of_work_bits);
-        pow_witnesses.push(pow_witness);
-
-        // Get the Fiat-Shamir challenge for this round.
-        let beta: Challenge = challenger.sample_algebra_element();
+        // A zero difficulty still occupies a slot, keeping the proof shape fixed.
+        pow_witnesses.push(witness.unwrap_or(Val::ZERO));
 
         // We passed ownership of `leaves` to the MMCS, so get a reference to it
         let leaves = params.mmcs.get_matrices(&prover_data).pop().unwrap();
@@ -338,13 +329,10 @@ where
     let final_poly = debug_span!("idft final poly")
         .in_scope(|| Radix2DFTSmallBatch::default().idft_algebra(folded));
 
-    // Observe all coefficients of the final polynomial.
-    challenger.observe_algebra_slice(&final_poly);
-
     CommitPhaseResult {
         commits,
         data,
-        log_arities,
+        log_arities: log_arities.to_vec(),
         pow_witnesses,
         final_poly,
     }

@@ -5,7 +5,6 @@ use core::marker::PhantomData;
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
 
-use crate::fs::TranscriptField;
 use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::{
     Codec, ExtensionFieldCodec, bound_byte_width, encode_field_be, encode_len_be,
@@ -14,7 +13,8 @@ use crate::fs::domain_separator::DomainSeparator;
 use crate::fs::pattern::{Hierarchy, Interaction, Kind, Label, Length, Pattern, PatternPlayer};
 use crate::fs::state::assert_challenge_security;
 use crate::fs::unit::Unit;
-use crate::{CanObserve, GrindingChallenger};
+use crate::fs::{TranscriptField, drop_check_may_panic};
+use crate::{CanObserve, CanSampleBits, GrindingChallenger};
 
 /// Drives a prover-side transcript in lockstep with a recorded pattern.
 ///
@@ -33,6 +33,9 @@ use crate::{CanObserve, GrindingChallenger};
 ///
 /// On drop without [`Self::finalize`], to surface a transcript that was
 /// abandoned halfway through.
+///
+/// A panic already unwinding releases the check.
+/// Panicking on top of one aborts the process instead of reporting anything.
 pub struct ProverState<C, U: Unit = u8> {
     /// Underlying sponge that absorbs prover messages and yields challenges.
     challenger: C,
@@ -46,10 +49,13 @@ pub struct ProverState<C, U: Unit = u8> {
 
 impl<C, U: Unit> Drop for ProverState<C, U> {
     fn drop(&mut self) {
+        // A panic already unwinding owns the failure, and a second one would abort.
+        // Caller code runs inside a live scope, so that panic need not be ours.
+        if !drop_check_may_panic() {
+            return;
+        }
+
         // Loud failure surfaces a transcript abandoned before finalisation.
-        //
-        // Every path that panics or bails marks the player aborted first,
-        // so this check never fires during cleanup of another failure.
         if !self.player.is_finalized() {
             let remaining = self.player.remaining();
             // Release the player's own drop check so this panic stays single.
@@ -385,6 +391,63 @@ impl<C, U: Unit> ProverState<C, U> {
             .collect()
     }
 
+    /// Absorb a value the challenger knows how to encode, carried by the caller.
+    ///
+    /// # When to use this
+    ///
+    /// A commitment is the usual case.
+    /// Its width lives in the commitment scheme's configuration, not here.
+    ///
+    /// # What is bound
+    ///
+    /// The value's content, through the challenger's own encoding.
+    /// Its width is not, so two runs differing only in that share a fingerprint.
+    ///
+    /// Bind such widths through the instance label where a protocol can see them.
+    pub fn observe_opaque<T>(&mut self, label: Label, value: T) -> TranscriptBound<T>
+    where
+        T: Clone,
+        C: CanObserve<T>,
+    {
+        // Validate: the next pattern step is an opaque message.
+        self.player.interact(Interaction::opaque(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Scalar,
+        ));
+        // The challenger owns the encoding, so hand the value over whole.
+        self.challenger.observe(value.clone());
+        TranscriptBound::wrap(value)
+    }
+
+    /// Sample `count` challenges of `width` uniform bits under one step.
+    ///
+    /// The width travels in the step.
+    /// A verifier drawing narrower indices fails the shape check.
+    ///
+    /// Nothing is absorbed between draws, so one step describes them all.
+    pub fn challenge_bits(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleBits<usize>,
+    {
+        self.player.interact(Interaction::bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        (0..count)
+            .map(|_| TranscriptBound::wrap(self.challenger.sample_bits(width)))
+            .collect()
+    }
+
     /// Absorb a fixed-length byte string as a prover message.
     ///
     /// The dominant prover message in this repository is a digest.
@@ -634,6 +697,8 @@ impl<C, U: Unit> ProverState<C, U> {
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
+    #[cfg(panic = "unwind")]
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
@@ -1313,6 +1378,27 @@ mod tests {
         // The failure path releases the drop-time check, so this panic stays single.
         let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
         p.add_hint_bounded("auth", &[0u8; 5], 4);
+    }
+
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn a_panic_inside_a_live_prover_scope_unwinds() {
+        // Fixture state: a driver holding two unplayed steps, so its drop check is armed.
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"unwind", small_pattern());
+
+        // Mutation: the caller panics mid-run, exactly as `RowMajorMatrix::new` would.
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
+            p.add_scalars::<F, ByteCodec>("msgs", &[F::ONE, F::ONE, F::ONE]);
+            panic!("caller panic inside the live scope");
+        }));
+
+        // The drop check yields to the panic in flight, so the caller's failure survives.
+        let payload = caught.expect_err("the caller's panic must unwind out of the scope");
+        assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some("caller panic inside the live scope")
+        );
     }
 
     #[test]
