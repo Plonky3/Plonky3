@@ -16,7 +16,8 @@ use thiserror::Error;
 
 use crate::{
     BatchMultiOpening, CommitPhaseMultiStep, CommitmentWithOpeningPoints, FriFoldingStrategy,
-    FriParameters, FriProof, FriShape, TranscriptFailure, VerifierTranscript, fold_schedule,
+    FriParameters, FriProof, FriShape, PcsTranscriptFailure, TranscriptFailure, VerifierTranscript,
+    fold_schedule,
 };
 
 #[derive(Debug, Error)]
@@ -41,6 +42,19 @@ where
     },
     #[error("commit PoW witness count mismatch: expected {expected}, got {got}")]
     CommitPowWitnessCountMismatch { expected: usize, got: usize },
+    /// One claimed opening carries a count the PCS transcript was not described with.
+    ///
+    /// Both sides derive that count from the claims the verifier was handed.
+    /// Reaching this means the description and the claims came from different inputs.
+    #[error("opening {opening}: claimed evaluation count mismatch: expected {expected}, got {got}")]
+    ClaimedEvaluationCountMismatch {
+        /// Position of the opening in commitment, matrix and point order.
+        opening: usize,
+        /// Claimed-evaluation count the run was described with.
+        expected: usize,
+        /// Claimed-evaluation count the caller supplied.
+        got: usize,
+    },
     #[error("final polynomial length mismatch: expected {expected}, got {got}")]
     FinalPolyLengthMismatch { expected: usize, got: usize },
     /// The instance is configured with zero queries.
@@ -197,6 +211,8 @@ where
 pub enum PowPhase {
     /// Guards the challenge batching the openings into one FRI instance
     /// (`FriParameters::batch_proof_of_work_bits`).
+    ///
+    /// Replayed by the commitment scheme wrapped around the low-degree test.
     Batch,
     /// Guards one commit-phase folding challenge
     /// (`FriParameters::commit_proof_of_work_bits`).
@@ -233,6 +249,31 @@ where
     }
 }
 
+impl<CommitMmcsErr, InputError> From<PcsTranscriptFailure> for FriError<CommitMmcsErr, InputError>
+where
+    CommitMmcsErr: core::fmt::Debug,
+    InputError: core::fmt::Debug,
+{
+    fn from(failure: PcsTranscriptFailure) -> Self {
+        match failure {
+            // A witness that is absent and one that is too weak fail the same step.
+            PcsTranscriptFailure::PowWitness { .. }
+            | PcsTranscriptFailure::MissingPowWitness { .. } => {
+                Self::InvalidPowWitness(PowPhase::Batch)
+            }
+            PcsTranscriptFailure::ClaimedEvaluationCount {
+                opening,
+                expected,
+                got,
+            } => Self::ClaimedEvaluationCountMismatch {
+                opening,
+                expected,
+                got,
+            },
+        }
+    }
+}
+
 /// A chain of FRI input openings allowing a verifier to check a sequence of
 /// FRI folds and rolls. The first element of each pair indicates the round of
 /// fri in which the input should be rolled in. The second element is the opening.
@@ -247,6 +288,12 @@ pub type FriOpenings<F> = Vec<(usize, F)>;
 /// - `challenger`: The Fiat-Shamir challenger.
 /// - `commitments_with_opening_points`: A vector of joint commitments to collections of matrices
 ///   and openings of those matrices at a collection of points.
+/// - `alpha`: The challenge batching every claimed opening into one low-degree claim.
+///   The caller draws it, against a transcript that binds the claims it batches.
+///   This function runs inside a bracket the caller opens around it.
+// The argument list is the protocol's own shape.
+// Grouping any of it into a struct would move the same fields behind another name.
+#[allow(clippy::too_many_arguments)]
 pub fn verify_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     folding: &Folding,
     params: &FriParameters<FriMmcs>,
@@ -258,6 +305,7 @@ pub fn verify_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
         TwoAdicMultiplicativeCoset<Val>,
     >],
     input_mmcs: &InputMmcs,
+    alpha: Challenge,
 ) -> Result<(), FriError<FriMmcs::Error, InputMmcs::Error>>
 where
     Val: TwoAdicField + PrimeField64,
@@ -296,23 +344,16 @@ where
         return Err(FriError::NoCommittedMatrices);
     }
 
-    // Check the proof of work guarding the batch combination challenge. The prover ground this
-    // after committing to every claimed evaluation and before learning `alpha`, so a prover
-    // searching for a favourable `alpha` pays `2^batch_proof_of_work_bits` per attempt.
-    if !challenger.check_witness(params.batch_proof_of_work_bits, proof.batch_pow_witness) {
-        return Err(FriError::InvalidPowWitness(PowPhase::Batch));
-    }
-
-    // Generate the Batch combination challenge
+    // The batching challenge arrives from the caller, drawn against the caller's transcript.
+    //
     // Soundness Error: `|f|/|EF|` where `|f|` is the number of different functions of the form
     // `(f(zeta) - fi(x))/(zeta - x)` which need to be checked.
     // Explicitly, `|f|` is `commitments_with_opening_points.flatten().flatten().len()`
     // (i.e counting the number (point, claimed_evaluation) pairs).
     //
-    // Grinding sited immediately above adds `batch_proof_of_work_bits` to this round's
-    // round-by-round error; `p3_security::GrindingSites::batch_combination` is where the
-    // soundness model credits it.
-    let alpha: Challenge = challenger.sample_algebra_element();
+    // The grinding step the caller plays immediately before drawing it adds
+    // `batch_proof_of_work_bits` to this round's round-by-round error;
+    // `p3_security::GrindingSites::batch_combination` is where the soundness model credits it.
 
     // One commit-phase opening set per commitment.
     let expected_rounds = proof.commit_phase_commits.len();
@@ -1094,8 +1135,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        CommitmentWithOpeningPoints, FriParameters, TwoAdicFriFolding, TwoAdicFriFoldingForMmcs,
-        TwoAdicFriPcs,
+        CommitmentWithOpeningPoints, FriParameters, PcsShape, PcsVerifierTranscript,
+        TwoAdicFriFolding, TwoAdicFriFoldingForMmcs, TwoAdicFriPcs,
     };
 
     type Val = BabyBear;
@@ -1120,9 +1161,11 @@ mod tests {
         input_mmcs: ValMmcs,
         /// A valid proof produced by a real prover run.
         proof: Proof,
-        /// Fiat-Shamir challenger already advanced past the opened-values
-        /// observation step, ready for the verification entry point.
+        /// Fiat-Shamir challenger already advanced past the PCS phase,
+        /// ready for the verification entry point.
         challenger: Challenger,
+        /// The batching challenge that phase drew, which the PCS hands to FRI.
+        alpha: Challenge,
         /// Commitment and opening-point data the verifier checks against.
         commitments_with_opening_points: Vec<
             CommitmentWithOpeningPoints<
@@ -1267,23 +1310,53 @@ mod tests {
             vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
         )];
 
-        // Feed the opened evaluations into the verifier challenger.
-        // This is the last transcript step before FRI verification begins.
-        for (_, round) in &cwop {
-            for (_, mat) in round {
-                for (_, point) in mat {
-                    v_challenger.observe_algebra_slice(point);
-                }
-            }
-        }
+        // Replay the PCS phase: bind the claims, replay the grind, draw the batching challenge.
+        // This is the last transcript work before FRI verification begins.
+        let alpha = replay_pcs_phase(
+            &fri_params,
+            &mut v_challenger,
+            &cwop,
+            proof.batch_pow_witness,
+        );
 
         TestFixture {
             fri_params,
             input_mmcs,
             proof,
             challenger: v_challenger,
+            alpha,
             commitments_with_opening_points: cwop,
         }
+    }
+
+    /// Advance a verifier challenger through the PCS phase and hand back its challenge.
+    ///
+    /// The driver seeds itself, replays the claims, replays the grind, and draws `alpha`.
+    /// Its delegation bracket records no sponge operation.
+    /// So the state left here is exactly the one the PCS lends to `verify_fri`.
+    fn replay_pcs_phase(
+        params: &FriParameters<ChallengeMmcs>,
+        challenger: &mut Challenger,
+        cwop: &[CommitmentWithOpeningPoints<
+            Challenge,
+            <ValMmcs as Mmcs<Val>>::Commitment,
+            TwoAdicMultiplicativeCoset<Val>,
+        >],
+        batch_pow_witness: Val,
+    ) -> Challenge {
+        let mut transcript = PcsVerifierTranscript::<Challenger, Val, Challenge>::new(
+            challenger,
+            PcsShape::from_claims(params, cwop),
+        );
+        transcript
+            .claimed_openings(cwop)
+            .expect("the claims describe their own shape");
+        let alpha = transcript
+            .batch_phase(Some(batch_pow_witness))
+            .expect("the fixture's witness meets the difficulty it was ground at");
+        transcript.delegate(|_| ());
+        transcript.finish();
+        alpha
     }
 
     /// Convenience wrapper that constructs the folding strategy and
@@ -1298,9 +1371,10 @@ mod tests {
             TwoAdicMultiplicativeCoset<Val>,
         >],
         input_mmcs: &ValMmcs,
+        alpha: Challenge,
     ) -> Result<(), TestError> {
         let folding: Folding = TwoAdicFriFolding(PhantomData);
-        verify_fri(&folding, params, proof, challenger, cwop, input_mmcs)
+        verify_fri(&folding, params, proof, challenger, cwop, input_mmcs, alpha)
     }
 
     #[test]
@@ -1327,6 +1401,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         );
         assert!(
             result.is_ok(),
@@ -1368,6 +1443,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject a tampered shared node");
 
@@ -1390,6 +1466,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         );
         assert!(result.is_ok(), "valid proof should pass: {result:?}");
     }
@@ -1421,6 +1498,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject mismatched commit-phase opening count");
 
@@ -1456,6 +1534,7 @@ mod tests {
             &mut challenger,
             &cwop,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject a matrix opened at zero points");
 
@@ -1494,6 +1573,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject a round that does not open every query");
 
@@ -1532,6 +1612,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with extra PoW witness");
 
@@ -1564,6 +1645,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with wrong final polynomial length");
 
@@ -1598,6 +1680,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject an input batch that does not open every query");
 
@@ -1647,6 +1730,7 @@ mod tests {
             &mut challenger,
             &empty_cwop,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with no committed polynomials");
 
@@ -1681,6 +1765,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with wrong number of sibling values");
 
@@ -1714,6 +1799,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject invalid log_arity");
 
@@ -1792,19 +1878,19 @@ mod tests {
             commitment,
             vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
         )];
-        for (_, round) in &cwop {
-            for (_, mat) in round {
-                for (_, point) in mat {
-                    v_challenger.observe_algebra_slice(point);
-                }
-            }
-        }
+        let alpha = replay_pcs_phase(
+            &fri_params,
+            &mut v_challenger,
+            &cwop,
+            proof.batch_pow_witness,
+        );
 
         TestFixture {
             fri_params,
             input_mmcs,
             proof,
             challenger: v_challenger,
+            alpha,
             commitments_with_opening_points: cwop,
         }
     }
@@ -1844,6 +1930,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("a forged fold schedule must be rejected");
 
@@ -1869,6 +1956,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect("an honest non-uniform schedule must verify");
     }
@@ -1911,6 +1999,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject a reordered fold schedule");
 
@@ -1977,6 +2066,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("undershoot must be rejected before input opening");
 
@@ -2024,6 +2114,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("overshoot must be rejected before commit-phase verification");
 
@@ -2071,6 +2162,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("height above two-adicity must be rejected");
 
@@ -2111,6 +2203,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with extra input batch");
 
@@ -2148,6 +2241,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with missing opened-values entry");
 
@@ -2196,6 +2290,7 @@ mod tests {
             &mut challenger,
             &cwop,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with extra claimed evaluation");
 
@@ -2238,6 +2333,7 @@ mod tests {
             &mut challenger,
             &cwop,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject opened rows narrower than the claimed width");
 
@@ -2421,62 +2517,12 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with invalid PoW witness");
 
         match err {
             FriError::InvalidPowWitness(PowPhase::CommitPhase) => {}
-            other => panic!("wrong error variant: {other:?}"),
-        }
-    }
-
-    /// The batch witness is checked before the batching challenge is sampled,
-    /// so raising the required difficulty past what the prover ground must be
-    /// rejected — and must be attributed to the batch phase, not to one of the
-    /// other two witnesses the proof also carries.
-    #[test]
-    fn reject_insufficient_batch_pow() {
-        let f = make_test_fixture();
-        let mut params = f.fri_params.clone();
-        params.batch_proof_of_work_bits = 20;
-
-        let mut challenger = f.challenger.clone();
-        let err = run_verify_fri(
-            &params,
-            &f.proof,
-            &mut challenger,
-            &f.commitments_with_opening_points,
-            &f.input_mmcs,
-        )
-        .expect_err("should reject a proof whose batch PoW is too weak");
-
-        match err {
-            FriError::InvalidPowWitness(PowPhase::Batch) => {}
-            other => panic!("wrong error variant: {other:?}"),
-        }
-    }
-
-    /// A tampered batch witness is rejected even at the difficulty the proof
-    /// was produced with, which is what makes the grind binding rather than
-    /// decorative: the witness must actually satisfy the PoW predicate.
-    #[test]
-    fn reject_tampered_batch_pow_witness() {
-        let f = make_test_fixture();
-        let mut proof = f.proof.clone();
-        proof.batch_pow_witness += Val::ONE;
-
-        let mut challenger = f.challenger.clone();
-        let err = run_verify_fri(
-            &f.fri_params,
-            &proof,
-            &mut challenger,
-            &f.commitments_with_opening_points,
-            &f.input_mmcs,
-        )
-        .expect_err("should reject a tampered batch PoW witness");
-
-        match err {
-            FriError::InvalidPowWitness(PowPhase::Batch) => {}
             other => panic!("wrong error variant: {other:?}"),
         }
     }
@@ -2501,6 +2547,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with corrupted commit-phase Merkle proof");
 
@@ -2530,6 +2577,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with corrupted input Merkle proof");
 
@@ -2588,6 +2636,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("zero-query instance must be rejected");
 
@@ -2616,6 +2665,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("zero-blowup instance must be rejected");
 

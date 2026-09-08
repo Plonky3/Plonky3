@@ -12,12 +12,13 @@ use serde::{Deserialize, Serialize};
 pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
     /// Proof of work for the phase before the opening-batching challenge.
     ///
-    /// Unlike the two witness sets below, this one is produced by the PCS
-    /// wrapped around FRI rather than by FRI itself: the challenge it protects
-    /// is sampled before the reduced openings FRI consumes even exist. It
-    /// rides along in this proof because that is where the verifier meets it —
-    /// [`crate::verifier::verify_fri`] checks it immediately before resampling
-    /// the same challenge.
+    /// This witness belongs to the commitment scheme wrapped around the low-degree test.
+    ///
+    /// The challenge it guards is drawn before the reduced openings even exist.
+    /// The two witness sets below guard challenges drawn inside the low-degree test.
+    ///
+    /// It travels in this proof because that is where the verifier meets it.
+    /// The replay happens outside the bracket the low-degree test runs in.
     pub batch_pow_witness: Witness,
     pub commit_phase_commits: Vec<M::Commitment>,
     pub commit_pow_witnesses: Vec<Witness>,
@@ -57,11 +58,10 @@ impl<F: Field, M: Mmcs<F>> CommitPhaseMultiStep<F, M> {
     ///
     /// Returns `None` when `log_arity` is zero or exceeds `max_log_arity`.
     ///
-    /// Every field of this struct deserializes straight from an untrusted proof, so this is
-    /// the guard that turns a proof-controlled `log_arity` into a schedule entry usable by
-    /// [`crate::verifier::fold_query`]. It is public for that reason: a caller replaying the
-    /// fold chain outside [`crate::verifier::verify_fri`] must derive its `log_arities`
-    /// through this method.
+    /// Every field of this struct deserializes straight from an untrusted proof.
+    ///
+    /// This is the guard that turns a proof-controlled arity into a usable schedule entry.
+    /// It is public so a caller replaying the fold chain derives its schedule the same way.
     #[inline]
     pub fn checked_log_arity(&self, max_log_arity: usize) -> Option<usize> {
         let log_arity = self.log_arity as usize;

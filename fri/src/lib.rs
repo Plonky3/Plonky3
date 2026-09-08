@@ -9,6 +9,7 @@ extern crate std;
 
 mod config;
 mod hiding_pcs;
+mod pcs_transcript;
 mod periodic;
 mod proof;
 pub mod prover;
@@ -18,6 +19,9 @@ pub mod verifier;
 
 pub use config::*;
 pub use hiding_pcs::*;
+pub use pcs_transcript::{
+    PcsProverTranscript, PcsShape, PcsTranscriptFailure, PcsVerifierTranscript,
+};
 pub use periodic::*;
 pub use proof::*;
 pub use transcript::{FriShape, ProverTranscript, TranscriptFailure, VerifierTranscript};

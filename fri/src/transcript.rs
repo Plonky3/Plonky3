@@ -36,6 +36,7 @@ use p3_challenger::fs::{
 };
 use p3_challenger::{CanObserve, CanSample, CanSampleBits, GrindingChallenger};
 use p3_field::{ExtensionField, PrimeField64};
+use thiserror::Error;
 
 use crate::verifier::PowPhase;
 use crate::{FriParameters, fold_schedule};
@@ -470,13 +471,16 @@ where
 ///
 /// Only the two grinding steps a FRI run replays are reachable here.
 /// The one guarding the batching challenge is drawn before the run starts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum TranscriptFailure {
     /// A grinding witness did not meet the difficulty its step requires.
+    #[error("{0} phase PoW witness does not meet the required difficulty")]
     PowWitness(PowPhase),
     /// A described grinding step arrived with no witness to replay it.
+    #[error("{0} phase PoW step arrived with no witness")]
     MissingPowWitness(PowPhase),
     /// The final polynomial carries a coefficient count the run never described.
+    #[error("final polynomial length mismatch: expected {expected}, got {got}")]
     FinalPolyLen {
         /// Coefficient count the run was described with.
         expected: usize,
