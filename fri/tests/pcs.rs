@@ -107,10 +107,13 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
     .unwrap();
 }
 
-// The column constants differ across commitments and matrices, so a backend that
-// reorders a batch cannot accidentally satisfy the expected openings.
-fn shared_opening_contract<Val, Challenge, Challenger, P>((pcs, challenger): &(P, Challenger))
-where
+// Add distinct constants to point-dependent basis polynomials, so neither point nor
+// matrix reordering can accidentally satisfy the expected openings.
+fn shared_opening_contract<Val, Challenge, Challenger, P>(
+    (pcs, challenger): &(P, Challenger),
+    basis: impl Fn(Val) -> [Val; 3],
+    extension_basis: impl Fn(Challenge) -> [Challenge; 3],
+) where
     P: Pcs<Challenge, Challenger>,
     P::Domain: PolynomialSpace<Val = Val>,
     Val: Field,
@@ -127,19 +130,28 @@ where
                 .iter()
                 .zip(heights)
                 .map(|(columns, height)| {
-                    let row: Vec<_> = columns.iter().map(|&v| Val::from_u64(v)).collect();
-                    (
-                        pcs.natural_domain_for_degree(height),
-                        RowMajorMatrix::new(row.repeat(height), row.len()),
-                    )
+                    let domain = pcs.natural_domain_for_degree(height);
+                    let mut x = domain.first_point();
+                    let mut values = Vec::new();
+                    for _ in 0..height {
+                        values.extend(
+                            columns
+                                .iter()
+                                .zip(basis(x))
+                                .map(|(&v, b)| b + Val::from_u64(v)),
+                        );
+                        x = domain.next_point(x).unwrap();
+                    }
+                    (domain, RowMajorMatrix::new(values, columns.len()))
                 })
                 .collect()
         })
         .collect();
-    assert_pcs_opening_contract(pcs, challenger, &rounds, |round, matrix, _point| {
+    assert_pcs_opening_contract(pcs, challenger, &rounds, |round, matrix, point| {
         constants[round][matrix]
             .iter()
-            .map(|&v| Challenge::from_u64(v))
+            .zip(extension_basis(point))
+            .map(|(&v, b)| b + Challenge::from_u64(v))
             .collect()
     });
 }
@@ -150,7 +162,7 @@ macro_rules! make_tests_for_pcs {
     ($p:expr) => {
         #[test]
         fn shared_opening_contract() {
-            $crate::shared_opening_contract(&$p);
+            $crate::shared_opening_contract(&$p, super::contract_basis, super::contract_basis);
         }
 
         #[test]
@@ -222,6 +234,10 @@ mod babybear_fri_pcs {
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
     type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 
+    fn contract_basis<F: Field>(point: F) -> [F; 3] {
+        [point, point.square(), point.exp_const_u64::<3>()]
+    }
+
     fn get_pcs(log_blowup: usize) -> (MyPcs, Challenger) {
         let perm = Perm::new_from_rng_128(&mut seeded_rng());
         let hash = MyHash::new(perm.clone());
@@ -279,7 +295,7 @@ mod babybear_fri_pcs {
     }
 
     #[test]
-    fn shared_contract_preserves_opening_point_order() {
+    fn shared_contract_finds_point_dependent_matrix_in_later_commitment() {
         let (pcs, challenger) = get_pcs(1);
         let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 8);
         let mut x = domain.first_point();
@@ -293,15 +309,36 @@ mod babybear_fri_pcs {
             &pcs,
             &challenger,
             &[
-                vec![(domain, matrix.clone()), (domain, matrix.clone())],
-                vec![(domain, matrix)],
+                vec![(
+                    domain,
+                    RowMajorMatrix::new([Val::from_u64(2), Val::from_u64(7)].repeat(8), 2),
+                )],
+                vec![(domain, matrix.clone()), (domain, matrix)],
             ],
-            |_, _, point| {
-                vec![
-                    point + Challenge::from_u64(2),
-                    point.square() + Challenge::from_u64(7),
-                ]
+            |round, _, point| {
+                if round == 0 {
+                    vec![Challenge::from_u64(2), Challenge::from_u64(7)]
+                } else {
+                    vec![
+                        point + Challenge::from_u64(2),
+                        point.square() + Challenge::from_u64(7),
+                    ]
+                }
             },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "fixture needs a point-dependent column")]
+    fn shared_contract_rejects_constant_fixture() {
+        let (pcs, challenger) = get_pcs(1);
+        let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 8);
+        let matrix = RowMajorMatrix::new(vec![Val::from_u64(2); 8], 1);
+        assert_pcs_opening_contract(
+            &pcs,
+            &challenger,
+            &[vec![(domain, matrix.clone()), (domain, matrix)]],
+            |_, _, _| vec![Challenge::from_u64(2)],
         );
     }
 
@@ -367,6 +404,15 @@ mod m31_fri_pcs {
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
     type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+
+    fn contract_basis<F: Field>(point: F) -> [F; 3] {
+        // Domain iteration and opening points use the projective-line parameter t.
+        // The circle basis contains y, x and xy, not powers of t.
+        let inv_denom = (F::ONE + point.square()).inverse();
+        let x = (F::ONE - point.square()) * inv_denom;
+        let y = point.double() * inv_denom;
+        [y, x, x * y]
+    }
 
     fn get_pcs(log_blowup: usize) -> (Pcs, Challenger) {
         let byte_hash = ByteHash {};

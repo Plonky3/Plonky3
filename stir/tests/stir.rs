@@ -2054,6 +2054,12 @@ mod babybear_pcs {
         use p3_commit::testing::assert_pcs_opening_contract;
 
         let (pcs, challenger) = get_pcs();
+        if log_degrees.len() == 1 {
+            // Preserve the isolated schedules on random full-degree inputs. The shared
+            // batched contract needs a nonempty commitment after removing a matrix.
+            round_trip_under(&pcs, &challenger, log_degrees, &[3]);
+            return;
+        }
         let matrices: Vec<_> = log_degrees
             .iter()
             .enumerate()
@@ -2069,10 +2075,12 @@ mod babybear_pcs {
                         x.square() + Val::from_usize(2 + matrix_index),
                         x + Val::from_usize(7 + matrix_index),
                         Val::from_usize(23 + matrix_index),
+                        // Reach the degree bound while keeping the expected value independent.
+                        x.exp_u64((domain.size() - 1) as u64),
                     ]);
                     x = domain.next_point(x).unwrap();
                 }
-                (domain, RowMajorMatrix::new(values, 3))
+                (domain, RowMajorMatrix::new(values, 4))
             })
             .collect();
         assert_pcs_opening_contract(&pcs, &challenger, &[matrices], |_, matrix_index, point| {
@@ -2080,6 +2088,7 @@ mod babybear_pcs {
                 point.square() + Challenge::from_usize(2 + matrix_index),
                 point + Challenge::from_usize(7 + matrix_index),
                 Challenge::from_usize(23 + matrix_index),
+                point.exp_u64(((1usize << log_degrees[matrix_index]) - 1) as u64),
             ]
         });
     }

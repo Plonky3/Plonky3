@@ -18,8 +18,9 @@ Implementations live in `p3-merkle-tree` (Mmcs), `p3-fri`, `p3-circle` and
 `testing::assert_pcs_opening_contract` exercises real transparent backends with
 caller-supplied matrices and independently computed expected values. It checks
 batched opening order, honest verification, transcript agreement, and rejection
-of modified values and missing matrix/column claims. FRI, Circle, and STIR use
-this helper alongside their backend-specific tests.
+of swapped point fields, modified values and missing matrix/column claims. Fixtures
+must include a multi-matrix commitment and point-dependent expected values. FRI,
+Circle, and STIR use this helper alongside their backend-specific tests.
 
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.
 

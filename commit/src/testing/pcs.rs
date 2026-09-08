@@ -20,9 +20,10 @@ use crate::{
 /// Two points are sampled after absorbing all commitments. Their order alternates between
 /// matrices, exercising the association of commitments, matrices, points and columns. After
 /// honest verification, the next prover and verifier challenge must agree. Fresh copies of the
-/// verifier transcript also check rejection of a changed value, a missing column and a missing
-/// matrix. Backend-specific proof mutations and serialization fixtures belong in the caller's
-/// tests.
+/// verifier transcript also check rejection of swapped point fields, changed first and last
+/// values, a missing column and a missing matrix. Value and shape mutations may also change the
+/// backend's transcript; the point swap preserves the values and their observation order.
+/// Backend-specific proof mutations and serialization fixtures belong in the caller's tests.
 ///
 /// Intended for transparent backends with a fixed matrix/column opening shape, such as FRI,
 /// Circle and STIR. Hiding backends may use a different preprocessing/opening protocol.
@@ -30,9 +31,10 @@ use crate::{
 /// # Panics
 ///
 /// Panics on any failed contract check. The fixture must contain at least one commitment,
-/// every commitment must contain a matrix, and every matrix must have at least one column
-/// and the height required by its domain. The supplied transcript must yield two distinct,
-/// valid opening points for the backend.
+/// every commitment must contain a matrix, and at least one commitment must contain two matrices.
+/// Every matrix must have at least one column and the height required by its domain. The supplied
+/// transcript must yield two distinct, valid opening points for the backend, and at least one
+/// matrix must have different expected values at those points.
 #[allow(clippy::type_complexity)]
 pub fn assert_pcs_opening_contract<P, Challenge, Challenger>(
     pcs: &P,
@@ -52,6 +54,10 @@ pub fn assert_pcs_opening_contract<P, Challenge, Challenger>(
             assert_eq!(domain.size(), matrix.height(), "fixture domain height");
         }
     }
+    let multi_matrix_round = rounds
+        .iter()
+        .position(|round| round.len() >= 2)
+        .expect("fixture needs a commitment with at least two matrices");
 
     let (commitments, prover_data): (Vec<_>, Vec<_>) = rounds
         .iter()
@@ -67,6 +73,15 @@ pub fn assert_pcs_opening_contract<P, Challenge, Challenger>(
         points[0], points[1],
         "fixture needs distinct opening points"
     );
+    let (point_dependent_round, point_dependent_matrix) = rounds
+        .iter()
+        .enumerate()
+        .find_map(|(r, round)| {
+            (0..round.len())
+                .find(|&m| expected(r, m, points[0]) != expected(r, m, points[1]))
+                .map(|m| (r, m))
+        })
+        .expect("fixture needs a point-dependent column to test opening-point association");
     let opening_points: Vec<Vec<Vec<Challenge>>> = rounds
         .iter()
         .enumerate()
@@ -146,12 +161,36 @@ pub fn assert_pcs_opening_contract<P, Challenge, Challenger>(
         "prover and verifier transcript after opening"
     );
 
+    // These backends observe values, not point fields. Keep those values in place so this
+    // false claim must be rejected by the opening check rather than transcript divergence.
+    let mut swapped_points = claims.clone();
+    let matrix_points =
+        &mut swapped_points[point_dependent_round].matrices[point_dependent_matrix].points;
+    let (first, rest) = matrix_points.split_at_mut(1);
+    core::mem::swap(&mut first[0].point, &mut rest[0].point);
+    assert!(
+        pcs.verify(swapped_points, &proof, &mut opening_transcript.clone())
+            .is_err(),
+        "swapped opening points with unchanged values must be rejected"
+    );
+
     let mut wrong_value = claims.clone();
     wrong_value[0].matrices[0].points[0].values[0] += Challenge::ONE;
     assert!(
         pcs.verify(wrong_value, &proof, &mut opening_transcript.clone())
             .is_err(),
-        "changed claimed value must be rejected"
+        "changed first claimed value must be rejected"
+    );
+
+    let mut wrong_last_value = claims.clone();
+    let last_round = wrong_last_value.last_mut().unwrap();
+    let last_matrix = last_round.matrices.last_mut().unwrap();
+    let last_point = last_matrix.points.last_mut().unwrap();
+    *last_point.values.last_mut().unwrap() += Challenge::ONE;
+    assert!(
+        pcs.verify(wrong_last_value, &proof, &mut opening_transcript.clone())
+            .is_err(),
+        "changed last claimed value must be rejected"
     );
 
     let mut missing_column = claims.clone();
@@ -163,7 +202,7 @@ pub fn assert_pcs_opening_contract<P, Challenge, Challenger>(
     );
 
     let mut missing_matrix = claims;
-    missing_matrix[0].matrices.pop();
+    missing_matrix[multi_matrix_round].matrices.pop();
     assert!(
         pcs.verify(missing_matrix, &proof, &mut opening_transcript)
             .is_err(),
