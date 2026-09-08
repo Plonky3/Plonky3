@@ -2,7 +2,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, CanSample, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PrimeField64};
 
 pub type PcsError<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenge,
@@ -21,21 +21,6 @@ pub type Com<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenger,
 >>::Commitment;
 
-/// Absorb a commitment into the transcript.
-///
-/// The prover and verifier pin `GrindingChallenger<Witness = Val<SC>>` so they
-/// can grind before the out-of-domain point. That puts a second source of
-/// `CanObserve<Val<SC>>` in scope, and `challenger.observe(commitment)` then
-/// fails to resolve — method-call syntax has no way to name which `CanObserve`
-/// impl is meant. This helper carries no grinding bound, so inside it the
-/// choice is unambiguous.
-pub(crate) fn observe_commitment<SC: StarkGenericConfig>(
-    challenger: &mut SC::Challenger,
-    commitment: Com<SC>,
-) {
-    challenger.observe(commitment);
-}
-
 pub type PackedVal<SC> = <Val<SC> as Field>::Packing;
 
 pub type PackedChallenge<SC> =
@@ -43,7 +28,14 @@ pub type PackedChallenge<SC> =
 
 pub trait StarkGenericConfig: Clone {
     /// The [`Pcs`] implementation used to commit to trace polynomials.
-    type Pcs: UnivariateStarkPcs<Self::Challenge, Self::Challenger>;
+    ///
+    /// Its domain's base field is the alphabet the transcript sponge speaks.
+    /// A prime field below `2^64` is what that layer knows how to encode and absorb.
+    type Pcs: UnivariateStarkPcs<
+            Self::Challenge,
+            Self::Challenger,
+            Domain: PolynomialSpace<Val: PrimeField64>,
+        >;
 
     /// The [`ExtensionField`] from which most random challenges are drawn.
     type Challenge: ExtensionField<Val<Self>>;
@@ -160,6 +152,7 @@ impl<Pcs: Clone, Challenge: Clone, Challenger: Clone> StarkConfig<Pcs, Challenge
 
 impl<Pcs, Challenge, Challenger> StarkGenericConfig for StarkConfig<Pcs, Challenge, Challenger>
 where
+    <Pcs::Domain as PolynomialSpace>::Val: PrimeField64,
     Challenge: ExtensionField<<Pcs::Domain as PolynomialSpace>::Val> + Clone,
     Pcs: p3_commit::UnivariateStarkPcs<Challenge, Challenger> + Clone,
     Challenger: FieldChallenger<<Pcs::Domain as PolynomialSpace>::Val>

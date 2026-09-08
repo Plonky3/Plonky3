@@ -12,6 +12,7 @@ mod prover;
 mod security;
 mod sub_builder;
 mod symbolic;
+mod transcript;
 mod verifier;
 
 pub use config::*;
@@ -24,4 +25,5 @@ pub use prover::*;
 pub use security::*;
 pub use sub_builder::*;
 pub use symbolic::*;
+pub use transcript::*;
 pub use verifier::*;

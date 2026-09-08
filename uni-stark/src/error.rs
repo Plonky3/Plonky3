@@ -5,6 +5,8 @@ use alloc::string::String;
 
 use thiserror::Error;
 
+use crate::StarkTranscriptFailure;
+
 /// Specific reasons why a proof's shape is invalid.
 #[derive(Debug, Error)]
 pub enum InvalidProofShapeError {
@@ -157,7 +159,27 @@ where
     /// The proof of work guarding the out-of-domain point is invalid.
     ///
     /// Either the witness was forged, or the prover and verifier disagree on
-    /// [`crate::StarkGenericConfig::ood_proof_of_work_bits`].
+    /// the configured number of out-of-domain grinding bits.
     #[error("invalid proof-of-work witness for the out-of-domain point")]
     InvalidOodPowWitness,
+}
+
+impl<PcsErr> From<StarkTranscriptFailure> for VerificationError<PcsErr>
+where
+    PcsErr: core::fmt::Debug,
+{
+    fn from(failure: StarkTranscriptFailure) -> Self {
+        match failure {
+            // A preprocessed commitment that disagrees with the width in force.
+            StarkTranscriptFailure::MissingPreprocessedCommitment { .. }
+            | StarkTranscriptFailure::UnexpectedPreprocessedCommitment => {
+                InvalidProofShapeError::PreprocessedVerifierKeyInconsistency.into()
+            }
+            // A randomization commitment that disagrees with the PCS's zero-knowledge setting.
+            StarkTranscriptFailure::MissingRandomCommitment
+            | StarkTranscriptFailure::UnexpectedRandomCommitment => Self::RandomizationError,
+            // The grind guarding the out-of-domain point.
+            StarkTranscriptFailure::OodPowWitness { .. } => Self::InvalidOodPowWitness,
+        }
+    }
 }
