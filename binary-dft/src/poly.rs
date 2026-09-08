@@ -688,10 +688,15 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .into_iter()
             .map(BinaryField128::to_repr)
             .collect();
-        // A coset transform converts its own copy of the message, so the copies move
-        // tower-basis rows and no conversion pass is needed at either end.
         let plan = Plan::new(width, log_message);
         let (message, tail) = values.split_at_mut(len);
+        // Every coset starts from a copy of the message, so one conversion of the message
+        // alone serves all `2^log_inv_rate` of them.
+        //
+        // Converting each copy instead would repeat the sixteen dependent lookups per element
+        // once per coset, for nothing.
+        convert(message, into_poly);
+        // Only the conversion back is left, and each coset's contiguous tile carries its own.
         if len >= 2 * BUTTERFLY_GRAIN * p3_maybe_rayon::prelude::current_num_threads() {
             // Keep large coefficient copies next to evaluation so the copied data
             // is still hot, including when only one worker is available.
@@ -701,15 +706,15 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
                     chunk,
                     plan,
                     domain_point((c + 1) << log_message),
-                    Fold::BOTH,
+                    Fold::EXIT,
                 );
             });
-            forward(message, plan, BinaryField128::ZERO, Fold::BOTH);
+            forward(message, plan, BinaryField128::ZERO, Fold::EXIT);
         } else {
             // Small cosets can run together after all coefficient copies are made.
             for_chunks(tail, len, 1, |(_, chunk)| chunk.copy_from_slice(message));
             for_chunks(&mut values, len, log_message, |(c, chunk)| {
-                forward(chunk, plan, domain_point(c << log_message), Fold::BOTH);
+                forward(chunk, plan, domain_point(c << log_message), Fold::EXIT);
             });
         }
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
