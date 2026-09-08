@@ -12,7 +12,9 @@ use p3_challenger::{
 use p3_commit::{ExtensionMmcs, Mmcs, Pcs};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{
+    BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField,
+};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_stir::config::{StirConfig, StirOptions, StirParameters};
@@ -58,7 +60,7 @@ fn do_test_stir_prove_verify<F, EF, Dft, M, Challenger>(
     challenger_template: &Challenger,
     log_degree: usize,
 ) where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF> + Clone,
@@ -562,7 +564,8 @@ mod babybear_stir {
         assert!(
             matches!(
                 err,
-                StirError::InvalidPowWitness { round } if round == RoundLabel::Round(round_with_pow)
+                StirError::InvalidPowWitness { round, .. }
+                    if round == RoundLabel::Round(round_with_pow)
             ),
             "{err:?}"
         );
@@ -589,7 +592,8 @@ mod babybear_stir {
         assert!(
             matches!(
                 err,
-                StirError::InvalidPowWitness { round } if round == RoundLabel::Round(round_with_pow)
+                StirError::InvalidPowWitness { round, .. }
+                    if round == RoundLabel::Round(round_with_pow)
             ),
             "expected InvalidPowWitness in round {round_with_pow}, got {err:?}"
         );
@@ -615,7 +619,8 @@ mod babybear_stir {
             matches!(
                 err,
                 StirError::InvalidPowWitness {
-                    round: RoundLabel::Final
+                    round: RoundLabel::Final,
+                    ..
                 }
             ),
             "{err:?}"
@@ -1139,6 +1144,12 @@ mod babybear_stir {
 
     #[test]
     fn test_overlong_ans_polynomial_rejected() {
+        // The transcript describes the answer step with the loosest cap a round can reach:
+        // one point per OOD sample plus one per query draw, before any of them collide.
+        //
+        //     described cap = num_ood_samples + num_queries = 2 + 21 = 23
+        //
+        // A proof above that cap is rejected before the run is described at all.
         let err = shape_error_after(|proof| {
             proof.round_proofs[0].ans_polynomial.resize(1024, EF::ONE);
         });
@@ -1146,9 +1157,33 @@ mod babybear_stir {
             err,
             ProofShapeError::AnsPolynomialTooLong {
                 round: RoundLabel::Round(0),
-                maximum: 20,
+                maximum: 23,
                 got: 1024,
             }
+        );
+    }
+
+    #[test]
+    fn test_ans_polynomial_above_the_dedup_bound_rejected() {
+        // Below the described cap but above the round's actual point count.
+        //
+        // The draw settles how many query indices collide.
+        //
+        // So this bound is only known once the round has run, and the rejection lands
+        // mid-transcript, where the verifier has to release its completeness check first.
+        let err = shape_error_after(|proof| {
+            proof.round_proofs[0].ans_polynomial.resize(22, EF::ONE);
+        });
+        assert!(
+            matches!(
+                err,
+                ProofShapeError::AnsPolynomialTooLong {
+                    round: RoundLabel::Round(0),
+                    maximum,
+                    got: 22,
+                } if maximum < 22
+            ),
+            "unexpected error: {err:?}"
         );
     }
 
@@ -2915,8 +2950,8 @@ mod babybear_pcs {
             ProofShapeError::InputOpenedRowCount {
                 log_height: log_d + 1,
                 commitment: 0,
-                expected: 18,
-                got: 17,
+                expected: 17,
+                got: 16,
             }
         );
     }
@@ -3958,7 +3993,8 @@ mod babybear_stir_multi {
         assert!(
             matches!(
                 err,
-                StirError::InvalidPowWitness { round } if round == RoundLabel::Round(round_with_pow)
+                StirError::InvalidPowWitness { round, .. }
+                    if round == RoundLabel::Round(round_with_pow)
             ),
             "{err:?}"
         );

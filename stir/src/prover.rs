@@ -12,7 +12,8 @@ use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingC
 use p3_commit::Mmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
+    BasedVectorSpace, ExtensionField, Field, PrimeField64, TwoAdicField,
+    batch_multiplicative_inverse,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -21,9 +22,10 @@ use tracing::instrument;
 
 use crate::config::StirConfig;
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
+use crate::transcript::{ProverTranscript, StirShape};
 use crate::utils::{
-    eval_poly_at_base, eval_poly_parallel, fold_codeword, fold_domain_params, fold_poly_coeffs,
-    interpolate_poly, next_domain_shift, sample_ood_points, vanishing_poly_from_roots,
+    OodFilter, eval_poly_at_base, eval_poly_parallel, fold_codeword, fold_domain_params,
+    fold_poly_coeffs, interpolate_poly, next_domain_shift, vanishing_poly_from_roots,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -45,7 +47,7 @@ pub fn prove_stir<F, EF, Dft, M, Challenger>(
     challenger: &mut Challenger,
 ) -> (StirProof<EF, M, Challenger::Witness>, Vec<usize>)
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -87,7 +89,7 @@ pub fn prove_stir_from_external_codeword<F, EF, Dft, M, Challenger>(
     challenger: &mut Challenger,
 ) -> (StirProof<EF, M, Challenger::Witness>, Vec<usize>)
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -112,7 +114,7 @@ pub fn prove_stir_from_codeword<F, EF, Dft, M, Challenger>(
     challenger: &mut Challenger,
 ) -> (StirProof<EF, M, Challenger::Witness>, Vec<usize>)
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -192,7 +194,7 @@ struct RoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
 
 impl<'a, F, EF, Dft, M, Challenger> RoundProver<'a, F, EF, Dft, M, Challenger>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -524,14 +526,14 @@ fn prove_round<F, EF, Dft, M, Challenger>(
     config: &StirConfig<F, EF, M, Challenger>,
     round: usize,
     dft: &Dft,
-    challenger: &mut Challenger,
+    transcript: &mut ProverTranscript<'_, Challenger, F, EF>,
     current_oracle: &Oracle<EF>,
     current_shift: F,
     current_log_domain: usize,
     current_commit_data: Option<&M::ProverData<RowMajorMatrix<EF>>>,
 ) -> RoundOutput<F, EF, M, Challenger::Witness>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -546,41 +548,26 @@ where
     let mut state = RoundProver::new(config, round, dft, current_shift, current_log_domain);
 
     // Step 1: fold. Derive gamma after folding PoW.
-    let folding_pow_witness = challenger.grind(rc.folding_pow_bits);
-    let gamma: EF = challenger.sample_algebra_element();
+    let folding_pow_witness = transcript.folding_pow(round);
+    let gamma = transcript.fold_challenge();
 
     let new_commit =
         state.fold_and_commit(current_oracle, current_shift, current_log_domain, gamma);
-    challenger.observe(new_commit.clone());
+    transcript.fold_commitment(new_commit.clone());
 
     // Step 2: OOD sampling.
-    let ood_points = sample_ood_points(
-        challenger,
-        state.ood_excluded_domains(current_shift, current_log_domain),
-        rc.num_ood_samples,
-    );
+    let filter = OodFilter::new(state.ood_excluded_domains(current_shift, current_log_domain));
+    let ood_points = transcript.ood_points(round, 0, &filter);
     let ood_answers = state.ood_answers(ood_points).to_vec();
-    challenger.observe_algebra_slice(&ood_answers);
+    transcript.ood_answers(&ood_answers);
 
     // Step 3: query-phase PoW. It protects the immediately following combination challenge
     // and query indices. It does not strengthen the earlier OOD samples or the later Ans
     // challenge, which is separated from this grind by prover-controlled messages.
-    let pow_witness = challenger.grind(rc.pow_bits);
+    let pow_witness = transcript.query_pow(round);
 
     // Step 4: Query sampling.
-    let r_comb: EF = challenger.sample_algebra_element();
-
-    let query_indices: Vec<usize> = (0..rc.num_queries)
-        .map(|_| {
-            // `RESAMPLE = true`: the challenger loops on field-side rejection internally,
-            // so this `expect` is unreachable for every challenger in this workspace.
-            // Unbiased sampling is required because `sample_bits` carries a per-draw modular
-            // bias of `2^fold_log_domain / |F|`, which is non-negligible over 31-bit fields.
-            challenger
-                .sample_uniform_bits::<true>(state.fold_log_domain)
-                .expect("RESAMPLE = true: rejection loops internally, never errors")
-        })
-        .collect();
+    let (r_comb, query_indices) = transcript.query_phase(round, 0);
     state.record_queries(query_indices);
 
     // One shared, pruned multi-opening proof for every query drawn this round. Absent when
@@ -597,11 +584,10 @@ where
     // Step 4: Answer polynomial and its consistency challenge.
     // Bind ans_poly into the transcript BEFORE rho is sampled — otherwise a malicious prover
     // could fit Ans to satisfy the interpolation identity at a known rho.
-    challenger.observe_algebra_slice(state.answer_poly());
-
-    // Sample and discard the Ans-consistency challenge so the transcript state
-    // stays consistent with the verifier.
-    let _rho: EF = challenger.sample_algebra_element();
+    //
+    // The challenge itself is a described step, so both sides play it whether or not
+    // either reads its value.
+    transcript.answer_phase(round, 0, state.answer_poly());
 
     // Step 5: Construction 5.2 — derive the next virtual witness
     // f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}) in coefficient form.
@@ -649,7 +635,6 @@ struct FinalRoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
 
     current_shift: F,
     current_log_domain: usize,
-    final_new_log_domain: usize,
     final_new_shift: F,
 
     final_poly: Vec<EF>,
@@ -660,7 +645,7 @@ struct FinalRoundProver<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
 
 impl<'a, F, EF, Dft, M, Challenger> FinalRoundProver<'a, F, EF, Dft, M, Challenger>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -674,14 +659,13 @@ where
         current_log_domain: usize,
     ) -> Self {
         let final_log_arity = config.final_log_folding_factor();
-        let (final_new_log_domain, final_new_shift) =
+        let (_final_new_log_domain, final_new_shift) =
             fold_domain_params(current_shift, current_log_domain, final_log_arity);
         Self {
             config,
             dft,
             current_shift,
             current_log_domain,
-            final_new_log_domain,
             final_new_shift,
             final_poly: Vec::new(),
             query_indices: Vec::new(),
@@ -772,14 +756,14 @@ struct FinalRoundFinish<EF: Field> {
 fn prove_final_round<F, EF, Dft, M, Challenger>(
     config: &StirConfig<F, EF, M, Challenger>,
     dft: &Dft,
-    challenger: &mut Challenger,
+    transcript: &mut ProverTranscript<'_, Challenger, F, EF>,
     current_oracle: &Oracle<EF>,
     current_shift: F,
     current_log_domain: usize,
     current_commit_data: Option<&M::ProverData<RowMajorMatrix<EF>>>,
 ) -> FinalRoundOutput<EF, M, Challenger::Witness>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -791,21 +775,15 @@ where
     let final_arity = 1usize << config.final_log_folding_factor();
     let mut state = FinalRoundProver::new(config, dft, current_shift, current_log_domain);
 
-    let final_folding_pow_witness = challenger.grind(config.final_folding_pow_bits);
-    let final_gamma: EF = challenger.sample_algebra_element();
+    let final_folding_pow_witness = transcript.final_folding_pow();
+    let final_gamma = transcript.final_fold_challenge();
 
     let final_poly = state.fold_and_derive(current_oracle, final_gamma);
-    challenger.observe_algebra_slice(final_poly);
+    transcript.final_polynomial(final_poly);
 
-    let final_pow_witness = challenger.grind(config.final_pow_bits);
+    let final_pow_witness = transcript.final_pow();
 
-    let mut final_query_indices = Vec::with_capacity(config.final_queries);
-    for _ in 0..config.final_queries {
-        let j = challenger
-            .sample_uniform_bits::<true>(state.final_new_log_domain)
-            .expect("RESAMPLE = true: rejection loops internally, never errors");
-        final_query_indices.push(j);
-    }
+    let final_query_indices = transcript.final_query_indices(0);
     state.record_queries(final_query_indices);
 
     let final_query_openings = current_commit_data
@@ -839,7 +817,7 @@ fn prove_stir_inner<F, EF, Dft, M, Challenger>(
     commit_initial: bool,
 ) -> (StirProof<EF, M, Challenger::Witness>, Vec<usize>)
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -858,6 +836,14 @@ where
         "initial STIR codeword length must match the configured starting domain"
     );
 
+    // Describe the transcript before running it.
+    //
+    // A single run is the batch of size one, so both paths share one description.
+    let mut transcript = ProverTranscript::<Challenger, F, EF>::new(
+        challenger,
+        StirShape::single(config, commit_initial),
+    );
+
     // Commit before moving the codeword into the round state, avoiding a full clone.
     let (initial_commit, initial_data) = if commit_initial {
         let (commit, data) = commit_as_fiber_matrix(
@@ -865,7 +851,7 @@ where
             &initial_codeword,
             config.log_starting_folding_factor,
         );
-        challenger.observe(commit.clone());
+        transcript.initial_commitment(commit.clone());
         (Some(commit), Some(data))
     } else {
         (None, None)
@@ -888,7 +874,7 @@ where
             config,
             round,
             dft,
-            challenger,
+            &mut transcript,
             &current_oracle,
             current_shift,
             current_log_domain,
@@ -910,12 +896,15 @@ where
     let final_output = prove_final_round(
         config,
         dft,
-        challenger,
+        &mut transcript,
         &current_oracle,
         current_shift,
         current_log_domain,
         current_commit_data.as_ref(),
     );
+
+    // Every described step has now been played.
+    transcript.finish();
 
     // When there are no intermediate rounds the final queries target the
     // initial codeword.  Expose them for PCS input binding.
@@ -983,7 +972,7 @@ fn prove_stir_multi_inner<F, EF, Dft, M, Challenger>(
     commit_initial: bool,
 ) -> StirMultiOutput<EF, M, Challenger::Witness>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -999,6 +988,17 @@ where
         "one initial codeword per instance"
     );
 
+    // Describe the transcript before running it.
+    //
+    // Every number comes from the configurations, and the containers below record
+    // which instances are active at each global round.
+    let shape = StirShape::new(configs, commit_initial);
+    let max_m = shape.max_rounds();
+    // Right-alignment offsets, read off the shape before it moves into the driver.
+    let offsets: Vec<usize> = (0..b).map(|i| shape.offset(i)).collect();
+    let offset = |i: usize| offsets[i];
+    let mut transcript = ProverTranscript::<Challenger, F, EF>::new(challenger, shape);
+
     let mut states: Vec<MultiInstanceState<F, EF, M>> = Vec::with_capacity(b);
     for (i, codeword) in initial_codewords.into_iter().enumerate() {
         let log_initial_domain = configs[i].log_starting_domain_size();
@@ -1013,7 +1013,7 @@ where
                 &codeword,
                 configs[i].log_starting_folding_factor,
             );
-            challenger.observe(commit.clone());
+            transcript.initial_commitment(commit.clone());
             (Some(commit), Some(data))
         } else {
             (None, None)
@@ -1030,19 +1030,11 @@ where
         });
     }
 
-    let max_m = configs.iter().map(|c| c.num_rounds()).max().unwrap_or(0);
-    let offset = |i: usize| max_m - configs[i].num_rounds();
-
     for r in 0..max_m {
         let active: Vec<usize> = (0..b).filter(|&i| offset(i) <= r).collect();
 
         // [grind folding_pow_bits], shared across every active instance's local round.
-        let shared_folding_bits = active
-            .iter()
-            .map(|&i| configs[i].round_configs[r - offset(i)].folding_pow_bits)
-            .max()
-            .expect("`active` is non-empty for r < max_m");
-        let folding_pow_witness = challenger.grind(shared_folding_bits);
+        let folding_pow_witness = transcript.folding_pow(r);
 
         // Phase 1: per-instance folding challenge, fold, commit, and absorb the commitment.
         struct Phase1<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
@@ -1060,14 +1052,14 @@ where
                     states[i].shift,
                     states[i].log_domain,
                 );
-                let gamma: EF = challenger.sample_algebra_element();
+                let gamma = transcript.fold_challenge();
                 let commit = rp.fold_and_commit(
                     &states[i].oracle,
                     states[i].shift,
                     states[i].log_domain,
                     gamma,
                 );
-                challenger.observe(commit.clone());
+                transcript.fold_commitment(commit.clone());
                 Phase1 { rp, commit }
             })
             .collect();
@@ -1082,15 +1074,12 @@ where
             .iter()
             .zip(phase1)
             .map(|(&i, p)| {
-                let rc = &configs[i].round_configs[r - offset(i)];
                 let mut rp = p.rp;
-                let ood_points = sample_ood_points(
-                    challenger,
-                    rp.ood_excluded_domains(states[i].shift, states[i].log_domain),
-                    rc.num_ood_samples,
-                );
+                let filter =
+                    OodFilter::new(rp.ood_excluded_domains(states[i].shift, states[i].log_domain));
+                let ood_points = transcript.ood_points(r, i, &filter);
                 let ood_answers = rp.ood_answers(ood_points).to_vec();
-                challenger.observe_algebra_slice(&ood_answers);
+                transcript.ood_answers(&ood_answers);
                 Phase2 {
                     rp,
                     commit: p.commit,
@@ -1100,12 +1089,7 @@ where
             .collect();
 
         // [grind pow_bits], shared across every active instance's local round.
-        let shared_pow_bits = active
-            .iter()
-            .map(|&i| configs[i].round_configs[r - offset(i)].pow_bits)
-            .max()
-            .expect("`active` is non-empty for r < max_m");
-        let pow_witness = challenger.grind(shared_pow_bits);
+        let pow_witness = transcript.query_pow(r);
 
         // Phase 3: per-instance combination challenge, query sampling, and query openings.
         struct Phase3<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
@@ -1119,16 +1103,8 @@ where
             .iter()
             .zip(phase2)
             .map(|(&i, p)| {
-                let rc = &configs[i].round_configs[r - offset(i)];
                 let mut rp = p.rp;
-                let r_comb: EF = challenger.sample_algebra_element();
-                let query_indices: Vec<usize> = (0..rc.num_queries)
-                    .map(|_| {
-                        challenger
-                            .sample_uniform_bits::<true>(rp.fold_log_domain)
-                            .expect("RESAMPLE = true: rejection loops internally, never errors")
-                    })
-                    .collect();
+                let (r_comb, query_indices) = transcript.query_phase(r, i);
                 rp.record_queries(query_indices);
 
                 let query_openings = states[i]
@@ -1159,12 +1135,12 @@ where
             query_openings: Option<StirQueryOpenings<EF, M>>,
             r_comb: EF,
         }
-        let phase4: Vec<Phase4<'_, F, EF, Dft, M, Challenger>> = phase3
-            .into_iter()
-            .map(|p| {
+        let phase4: Vec<Phase4<'_, F, EF, Dft, M, Challenger>> = active
+            .iter()
+            .zip(phase3)
+            .map(|(&i, p)| {
                 let mut rp = p.rp;
-                challenger.observe_algebra_slice(rp.answer_poly());
-                let _rho: EF = challenger.sample_algebra_element();
+                transcript.answer_phase(r, i, rp.answer_poly());
                 Phase4 {
                     rp,
                     commit: p.commit,
@@ -1202,36 +1178,24 @@ where
     }
 
     // Final round: every instance reaches it on this same global step (right-alignment).
-    let shared_final_folding_bits = configs
-        .iter()
-        .map(|c| c.final_folding_pow_bits)
-        .max()
-        .unwrap_or(0);
-    let final_folding_pow_witness = challenger.grind(shared_final_folding_bits);
+    let final_folding_pow_witness = transcript.final_folding_pow();
 
     let mut final_provers: Vec<FinalRoundProver<'_, F, EF, Dft, M, Challenger>> =
         Vec::with_capacity(b);
     for i in 0..b {
         let mut frp = FinalRoundProver::new(configs[i], dft, states[i].shift, states[i].log_domain);
-        let final_gamma: EF = challenger.sample_algebra_element();
+        let final_gamma = transcript.final_fold_challenge();
         let final_poly = frp.fold_and_derive(&states[i].oracle, final_gamma);
-        challenger.observe_algebra_slice(final_poly);
+        transcript.final_polynomial(final_poly);
         final_provers.push(frp);
     }
 
-    let shared_final_pow_bits = configs.iter().map(|c| c.final_pow_bits).max().unwrap_or(0);
-    let final_pow_witness = challenger.grind(shared_final_pow_bits);
+    let final_pow_witness = transcript.final_pow();
 
     let mut results = Vec::with_capacity(b);
     for (i, mut frp) in final_provers.into_iter().enumerate() {
         let final_arity = 1usize << configs[i].final_log_folding_factor();
-        let query_indices: Vec<usize> = (0..configs[i].final_queries)
-            .map(|_| {
-                challenger
-                    .sample_uniform_bits::<true>(frp.final_new_log_domain)
-                    .expect("RESAMPLE = true: rejection loops internally, never errors")
-            })
-            .collect();
+        let query_indices = transcript.final_query_indices(i);
         frp.record_queries(query_indices);
 
         let final_query_openings = states[i]
@@ -1267,6 +1231,9 @@ where
         ));
     }
 
+    // Every described step has now been played.
+    transcript.finish();
+
     results
 }
 
@@ -1282,7 +1249,7 @@ pub fn prove_stir_multi<F, EF, Dft, M, Challenger>(
     challenger: &mut Challenger,
 ) -> StirMultiOutput<EF, M, Challenger::Witness>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -1320,7 +1287,7 @@ pub fn prove_stir_multi_from_codewords<F, EF, Dft, M, Challenger>(
     challenger: &mut Challenger,
 ) -> StirMultiOutput<EF, M, Challenger::Witness>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -1351,7 +1318,7 @@ pub fn prove_stir_multi_from_external_codewords<F, EF, Dft, M, Challenger>(
     challenger: &mut Challenger,
 ) -> StirMultiOutput<EF, M, Challenger::Witness>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
@@ -1389,7 +1356,7 @@ fn eval_low_degree_on_coset<F, EF, Dft, const WIDTH: usize>(
     log_len: usize,
 ) -> Vec<EF>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
 {
@@ -1430,7 +1397,7 @@ fn eval_low_degree_pair_on_coset<F, EF, Dft>(
     log_len: usize,
 ) -> (Vec<EF>, Vec<EF>)
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
 {
@@ -1470,7 +1437,7 @@ pub fn codeword_from_coeffs<F, EF, Dft>(
     log_size: usize,
 ) -> Vec<EF>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
 {
@@ -1496,7 +1463,7 @@ where
 /// refactors.
 pub fn coeffs_from_codeword<F, EF, Dft>(dft: &Dft, codeword: &[EF], shift: F) -> Vec<EF>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
 {
