@@ -332,7 +332,46 @@ const TASK_NODES: usize = 1024;
 ///
 /// 16 KiB keeps that buffer inside the first-level cache, so the hasher reads the rows back
 /// while they are still hot.
+///
+/// This is a target rather than a cap.
+///
+/// A group is rounded up to a whole lane group.
+///
+/// One row is staged however wide it is.
+///
+/// So the buffer reaches `max(this, lanes * row bytes)`:
+///
+/// ```text
+///     narrow rows        : many whole lane groups fit, the target holds
+///     row near the target: one lane group, up to `lanes` times the target
+///     row past it        : one lane group of very wide rows
+/// ```
+///
+/// Idle lanes cost a whole permutation each.
+///
+/// That is far more than the cache level the larger buffer gives up.
+///
+/// So occupancy wins over residency wherever the two disagree.
 const ROW_SCRATCH_BYTES: usize = 16 * 1024;
+
+/// Rows one hash call stages, from the byte target and the hasher's lane count.
+///
+/// The count is a whole number of lane groups, so no permutation runs partly idle.
+///
+/// # Returns
+///
+/// A count in `1..`, staging at most `max(target, lanes * row_bytes)` bytes.
+///
+/// A row at or past the target yields one lane group.
+///
+/// That is the smallest count keeping every lane busy.
+fn rows_per_call(row_bytes: usize, lanes: usize) -> usize {
+    // A hasher reporting no lanes still hashes one message at a time.
+    let lanes = lanes.max(1);
+
+    // Whole lane groups inside the target, and one group when none fits.
+    (ROW_SCRATCH_BYTES / row_bytes / lanes).max(1) * lanes
+}
 
 /// Hash a run of rows from a set of equal-height matrices, several messages per hash call.
 ///
@@ -373,10 +412,8 @@ fn hash_rows_batched<F, W, H, M, const DIGEST_ELEMS: usize>(
     let total_width: usize = matrices.iter().map(|m| m.width()).sum();
     let row_bytes = (total_width * size_of::<F>()).max(1);
 
-    // Fill as many whole lane groups as the scratch budget allows, and never fewer than one,
-    // so every hash call keeps the hasher's vector width busy.
-    let lanes = H::LANES;
-    let rows_per_call = (ROW_SCRATCH_BYTES / row_bytes / lanes).max(1) * lanes;
+    // Fill as many whole lane groups as the byte target allows, and never fewer than one.
+    let rows_per_call = rows_per_call(row_bytes, H::LANES);
 
     let hash_chunk = |base: usize, digests: &mut [[W; DIGEST_ELEMS]]| {
         // One buffer per task, reused by every group inside it.
@@ -1371,5 +1408,54 @@ mod tests {
             &compress,
             vec![empty_mat],
         );
+    }
+
+    #[test]
+    fn a_staged_group_is_lane_aligned_and_bounded() {
+        // Invariant: a group is a whole number of lane groups, so no permutation runs idle.
+        //
+        // Invariant: it stages at most `max(target, lanes * row_bytes)` bytes.
+        //
+        // The second bound is the price of the first.
+        // A row at or past the target still needs one full lane group staged.
+        for lanes in [0usize, 1, 2, 4, 8, 16] {
+            for row_bytes in [
+                1usize,
+                64,
+                ROW_SCRATCH_BYTES / 8,
+                ROW_SCRATCH_BYTES / 2 - 1,
+                ROW_SCRATCH_BYTES - 1,
+                ROW_SCRATCH_BYTES,
+                ROW_SCRATCH_BYTES + 1,
+                4 * ROW_SCRATCH_BYTES,
+            ] {
+                let rows = rows_per_call(row_bytes, lanes);
+                let effective = lanes.max(1);
+
+                assert!(rows >= 1, "lanes={lanes} row_bytes={row_bytes}");
+                assert_eq!(
+                    rows % effective,
+                    0,
+                    "lanes={lanes} row_bytes={row_bytes} rows={rows}"
+                );
+                assert!(
+                    rows * row_bytes <= ROW_SCRATCH_BYTES.max(effective * row_bytes),
+                    "lanes={lanes} row_bytes={row_bytes} staged {} bytes",
+                    rows * row_bytes
+                );
+            }
+        }
+
+        // Narrow rows: many whole lane groups fit and the target holds.
+        //
+        //     16 KiB / 64 B = 256 rows, over 8 lanes = 32 whole groups
+        assert_eq!(rows_per_call(64, 8), 256);
+        assert!(rows_per_call(64, 8) * 64 <= ROW_SCRATCH_BYTES);
+
+        // A row past the target still stages one whole lane group.
+        assert_eq!(rows_per_call(ROW_SCRATCH_BYTES + 1, 8), 8);
+
+        // A hasher reporting no lanes is treated as one message at a time.
+        assert_eq!(rows_per_call(64, 0), rows_per_call(64, 1));
     }
 }
