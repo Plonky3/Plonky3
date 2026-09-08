@@ -34,7 +34,7 @@
 use alloc::vec::Vec;
 
 use p3_binary_dft::domain_point;
-use p3_binary_field::{BinaryField128, Ghash128};
+use p3_binary_field::{BinaryField128, Ghash128, TowerLevel};
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_maybe_rayon::prelude::*;
 
@@ -56,8 +56,9 @@ const FOLD_GRAIN: usize = 1 << 10;
 
 // A task's first output index is a multiple of the grain.
 //
-// The lane-offset identity below needs that index to be a multiple of the packing width, so the
-// grain must cover whole packed groups.
+// The lane-offset identity below needs that index to be a multiple of the packing width.
+//
+// So the grain must cover whole packed groups.
 const _: () = assert!(
     FOLD_GRAIN.is_multiple_of(WIDTH),
     "the fold grain must be a whole number of packed groups"
@@ -123,18 +124,65 @@ pub fn fold_pair(
 ///     domain_point(2 * (g + k)) = domain_point(2 * g) + domain_point(2 * k)
 /// ```
 ///
-/// The second term depends on the lane alone, so the whole fold needs one evaluation per group
-/// plus this vector, built once.
+/// The second term depends on the lane alone, so the whole fold needs one group base plus this
+/// vector, built once.
+///
 fn lane_offsets() -> Packed {
     // Lane `k` carries `domain_point(2 * k)`, the offset from its group's first domain point.
     Packed::from_fn(|lane| domain_point(lane << 1))
 }
 
+/// The exclusive-or step from one packed group's first domain point to the next.
+///
+/// # Algorithm
+///
+/// Group `G` opens at output index `G * W`, so it opens at doubled index `G << L`:
+///
+/// ```text
+///     L = log2(2 * W)
+///     base(G) = domain_point(G << L) = sum_r bit_r(G) * v_{L + r}
+/// ```
+///
+/// That map is `F_2`-linear in the bits of `G`, hence additive over exclusive-or.
+///
+/// Stepping from `G - 1` to `G` flips exactly bits `0 ..= k`, for `k = G.trailing_zeros()`:
+///
+/// ```text
+///     (G - 1) XOR G = 2^(k + 1) - 1
+/// ```
+///
+/// Consecutive group bases therefore differ by the basis vectors those bits select:
+///
+/// ```text
+///     base(G) = base(G - 1) + sum_{r <= k} v_{L + r}
+/// ```
+///
+/// Entry `k` is that sum, so a group past the first costs one exclusive-or, not a `domain_point`.
+fn group_steps<const W: usize>(num_pairs: usize) -> Vec<Ghash128> {
+    // A group strides `W` output indices, hence `2 * W` domain indices.
+    let log_stride = (2 * W).trailing_zeros() as usize;
+
+    // Group indices run below `num_pairs / W`, so one entry per bit of that count is enough.
+    let levels = (num_pairs / W).next_power_of_two().trailing_zeros() as usize;
+
+    let mut step = Ghash128::ZERO;
+    (0..levels)
+        .map(|level| {
+            step += Ghash128::cantor_basis(log_stride + level);
+            step
+        })
+        .collect()
+}
+
 /// Fold the pairs one parallel task owns.
 ///
 /// `start` is the output index the task's first pair produces.
-/// It is a multiple of the grain, hence of the packing width, which is what lets whole groups
-/// share a single domain evaluation.
+///
+/// It is a multiple of the grain, hence of the packing width.
+///
+/// That alignment is what lets a group share one domain point across its lanes.
+///
+/// `group_steps` walks the group bases, so the task evaluates the domain exactly once.
 ///
 /// # Panics
 ///
@@ -145,6 +193,7 @@ fn fold_task(
     out: &mut [BinaryField128],
     beta: Ghash128,
     lane_offsets: Packed,
+    group_steps: &[Ghash128],
 ) {
     // Every output slot consumes one pair, so the task's two slices are locked together.
     assert_eq!(
@@ -164,16 +213,24 @@ fn fold_task(
     // Output index the remainder starts at, relative to the task.
     let tail_offset = slot_groups.len() * WIDTH;
 
+    // Where the task's first group sits among all the codeword's groups.
+    let first_group = start / WIDTH;
+
+    // The task's only domain evaluation, opening the walk over its groups.
+    let mut base: Ghash128 = domain_point(start << 1);
+
     // Phase 1: whole packed groups.
     //
     //     block  : [ lo_0 hi_0 | lo_1 hi_1 | ... | lo_{W-1} hi_{W-1} ]   2 * WIDTH symbols
     //     slots  : [ out_0     | out_1     | ... | out_{W-1}         ]       WIDTH symbols
     for (group, (slots, block)) in slot_groups.iter_mut().zip(symbol_blocks).enumerate() {
-        // Output index lane 0 of this group produces, a multiple of the width.
-        let first = start + group * WIDTH;
+        // Advance the walk to this group's first domain point.
+        if group != 0 {
+            base += group_steps[(first_group + group).trailing_zeros() as usize];
+        }
 
-        // One domain evaluation for the group, plus the constant per-lane offsets.
-        let x = Packed::broadcast(domain_point(first << 1)) + lane_offsets;
+        // That base is lane 0's domain point, and the offsets carry the rest of the lanes.
+        let x = Packed::broadcast(base) + lane_offsets;
 
         // Cross into the polynomial basis while gathering the lanes.
         // The change of basis is additive, so the sums formed below are the same either side.
@@ -220,10 +277,11 @@ fn fold_task(
 /// Each parallel task owns a contiguous run of output symbols and the pairs feeding them, so no
 /// two tasks touch the same symbol on either side.
 ///
-/// Within a task one domain evaluation serves a whole packed group.
+/// A task evaluates the domain once, then advances it by one exclusive-or per packed group.
 ///
-/// Evaluating per symbol instead is the right shape for a single query, but over a whole
-/// codeword it would recompute that value once per output symbol.
+/// Evaluating per symbol instead is the right shape for a single query.
+///
+/// Over a whole codeword it would recompute that value once per output symbol.
 ///
 /// # Panics
 ///
@@ -245,6 +303,7 @@ pub fn fold_codeword(codeword: &[BinaryField128], beta: BinaryField128) -> Vec<B
     // The challenge crosses into the polynomial basis once for the whole codeword.
     let beta_poly = Ghash128::from(beta);
     let offsets = lane_offsets();
+    let steps = group_steps::<WIDTH>(num_pairs);
 
     // Zeroed here and fully overwritten below, so the allocation is handed out already blank
     // rather than assembled from one vector per task.
@@ -258,7 +317,7 @@ pub fn fold_codeword(codeword: &[BinaryField128], beta: BinaryField128) -> Vec<B
         .zip(codeword.par_chunks(2 * FOLD_GRAIN))
         .enumerate()
         .for_each(|(task, (out, pairs))| {
-            fold_task(task * FOLD_GRAIN, pairs, out, beta_poly, offsets);
+            fold_task(task * FOLD_GRAIN, pairs, out, beta_poly, offsets, &steps);
         });
 
     folded
