@@ -72,7 +72,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PrimeCharacteristicRing,
-    PrimeField32, TwoAdicField, batch_multiplicative_inverse,
+    PrimeField32, PrimeField64, TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -438,7 +438,7 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
 impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
     TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     Challenge: ExtensionField<Val>,
     StirMmcs: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger<Witness = Val>,
@@ -691,7 +691,7 @@ struct PreparedOpen<Val, Challenge, StirMmcs, Challenger> {
 impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
     TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     Dft: TwoAdicSubgroupDft<Val>,
     InputMmcs: Mmcs<Val, Error: Sync + Debug, Commitment: Send> + Sync,
     InputMmcs::ProverData<RowMajorMatrix<Val>>: Send,
@@ -1020,7 +1020,7 @@ where
 impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
     for TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     Dft: TwoAdicSubgroupDft<Val>,
     InputMmcs: Mmcs<Val, Error: Sync + Debug, Commitment: Send> + Sync,
     InputMmcs::ProverData<RowMajorMatrix<Val>>: Send,
@@ -1929,7 +1929,7 @@ fn combined_bucket_codeword<Val, Challenge, Challenger>(
     challenger: &mut Challenger,
 ) -> Vec<Challenge>
 where
-    Val: TwoAdicField,
+    Val: TwoAdicField + PrimeField64,
     Challenge: ExtensionField<Val> + TwoAdicField,
     Challenger: FieldChallenger<Val>,
 {

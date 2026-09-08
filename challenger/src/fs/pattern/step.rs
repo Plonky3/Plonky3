@@ -148,6 +148,18 @@ pub enum TypeTag {
         /// Number of bits the challenge spans.
         width: usize,
     },
+    /// A challenge drawn as `width` bits with no modular bias.
+    ///
+    /// Reducing one field element modulo `2^width` is biased by `2^width / p`.
+    /// Over a 31-bit prime and a 20-bit index that bias is `2^-11`, not a rounding detail.
+    ///
+    /// A rejection sampler removes it at the cost of an unpredictable number of draws.
+    /// The two draws answer the same question with different distributions.
+    /// So they are different shapes, and the fingerprint separates them.
+    UniformBits {
+        /// Number of bits the challenge spans.
+        width: usize,
+    },
 }
 
 /// Compile-time identifier of a step.
@@ -245,6 +257,27 @@ impl Interaction {
             kind,
             label,
             type_tag: TypeTag::Bits { width },
+            type_name: type_name::<usize>(),
+            length,
+        }
+    }
+
+    /// Build a challenge step drawn as `width` bits with no modular bias.
+    ///
+    /// The biased constructor above records a different tag for the same width.
+    #[must_use]
+    pub fn uniform_bits(
+        hierarchy: Hierarchy,
+        kind: Kind,
+        label: Label,
+        width: usize,
+        length: Length,
+    ) -> Self {
+        Self {
+            hierarchy,
+            kind,
+            label,
+            type_tag: TypeTag::UniformBits { width },
             type_name: type_name::<usize>(),
             length,
         }
@@ -388,6 +421,7 @@ impl Display for TypeTag {
             Self::BinaryTower { bits, degree } => write!(f, "BinaryTower({bits}^{degree})"),
             Self::Opaque => write!(f, "Opaque"),
             Self::Bits { width } => write!(f, "Bits({width})"),
+            Self::UniformBits { width } => write!(f, "UniformBits({width})"),
         }
     }
 }
@@ -497,6 +531,27 @@ mod tests {
 
         assert_eq!(format!("{wide:#}"), "Atomic Challenge 1 q Scalar Bits(20)");
         assert_ne!(format!("{wide:#}"), format!("{narrow:#}"));
+    }
+
+    #[test]
+    fn a_biased_bit_draw_and_an_unbiased_one_are_different_shapes() {
+        // Fixture state: the same label, the same width, the same count.
+        //
+        // Only the sampling rule differs, and the soundness argument rests on it.
+        let biased = Interaction::bits(Hierarchy::Atomic, Kind::Challenge, "q", 20, Length::Scalar);
+        let unbiased =
+            Interaction::uniform_bits(Hierarchy::Atomic, Kind::Challenge, "q", 20, Length::Scalar);
+
+        assert_eq!(
+            format!("{unbiased:#}"),
+            "Atomic Challenge 1 q Scalar UniformBits(20)"
+        );
+        assert_ne!(format!("{biased:#}"), format!("{unbiased:#}"));
+
+        // The width still reaches the fingerprint, exactly as it does for a biased draw.
+        let narrower =
+            Interaction::uniform_bits(Hierarchy::Atomic, Kind::Challenge, "q", 19, Length::Scalar);
+        assert_ne!(format!("{unbiased:#}"), format!("{narrower:#}"));
     }
 
     #[test]

@@ -7,16 +7,18 @@ use itertools::izip;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
+    BasedVectorSpace, ExtensionField, Field, PrimeField64, TwoAdicField,
+    batch_multiplicative_inverse,
 };
 use p3_matrix::Dimensions;
 
 use crate::config::{StirConfig, StirRoundConfig};
 use crate::error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, StirError};
 use crate::proof::{StirProof, StirQueryOpenings, StirRoundProof};
+use crate::transcript::{StirShape, VerifierTranscript};
 use crate::utils::{
-    check_ans_interpolates, eval_poly, eval_poly_at_base, fold_domain_params, interpolate_poly,
-    lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c, sample_ood_points,
+    OodFilter, check_ans_interpolates, eval_poly, eval_poly_at_base, fold_domain_params,
+    interpolate_poly, lagrange_interpolate_at, next_domain_shift, reduce_mod_x_pow_minus_c,
     vanishing_poly_from_roots,
 };
 
@@ -58,7 +60,7 @@ fn materialize_virtual_fiber<F, EF>(
     prev_ctx: Option<&VirtualRoundContext<EF>>,
 ) -> Option<Vec<EF>>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
 {
     let Some(ctx) = prev_ctx else {
@@ -167,6 +169,98 @@ fn check_ans_length<EF, MmcsError, InputError>(
         return Err(ProofShapeError::MissingAnsPolynomial {
             round,
             nodes: max_ans_len,
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// Require the initial-oracle commitment to be present exactly when STIR commits it.
+///
+/// ```text
+///     committed by STIR  ->  the proof carries a commitment
+///     external           ->  the proof carries none
+/// ```
+fn check_initial_commitment<Com, MmcsError, InputError>(
+    commitment: &Option<Com>,
+    is_external: bool,
+) -> Result<(), StirError<MmcsError, InputError>> {
+    match (commitment, is_external) {
+        (Some(_), false) | (None, true) => Ok(()),
+        (Some(_), true) => Err(ProofShapeError::UnexpectedInitialCommitment.into()),
+        (None, false) => Err(ProofShapeError::MissingInitialCommitment.into()),
+    }
+}
+
+/// Reject every proof length the transcript is described with, before describing it.
+///
+/// The described lengths are configured numbers, never proof data.
+/// A proof carrying a different one is rejected here rather than part-way through a replay.
+///
+/// The per-round `Ans` cap is the loosest one the round can reach.
+/// The exact bound depends on how many query draws collided, which the draw settles.
+///
+/// # Arguments
+///
+/// - `config`: the instance's configuration.
+/// - `proof`: the proof whose lengths are checked.
+/// - `instance`: the batch position, used only to label a round-count failure.
+///
+/// # Errors
+///
+/// - The round count differs from the configured one.
+/// - A round's out-of-domain answer count differs from the configured one.
+/// - A round's transmitted answer polynomial is longer than its point set can be.
+/// - A round's transmitted answer polynomial is empty where the default encoding is in use.
+/// - The final polynomial's coefficient count differs from the configured one.
+fn check_described_lengths<F, EF, M, Challenger, IE>(
+    config: &StirConfig<F, EF, M, Challenger>,
+    proof: &StirProof<EF, M, Challenger::Witness>,
+    instance: Option<usize>,
+) -> Result<(), StirError<M::Error, IE>>
+where
+    F: TwoAdicField + PrimeField64,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+{
+    if proof.round_proofs.len() != config.num_rounds() {
+        return Err(ProofShapeError::RoundCount {
+            instance,
+            expected: config.num_rounds(),
+            got: proof.round_proofs.len(),
+        }
+        .into());
+    }
+
+    for (round, rp) in proof.round_proofs.iter().enumerate() {
+        let rc = &config.round_configs[round];
+        if rp.ood_answers.len() != rc.num_ood_samples {
+            return Err(ProofShapeError::OodAnswerCount {
+                round: RoundLabel::Round(round),
+                expected: rc.num_ood_samples,
+                got: rp.ood_answers.len(),
+            }
+            .into());
+        }
+        // `Ans` interpolates one point per OOD sample and at most one per query draw.
+        //
+        // The compact encoding transmits no coefficients at all, so it is checked by
+        // the resolution step rather than against a cap it deliberately sits below.
+        if !config.options().compact_answers {
+            check_ans_length(
+                RoundLabel::Round(round),
+                &rp.ans_polynomial,
+                rc.num_ood_samples + rc.num_queries,
+            )?;
+        }
+    }
+
+    let expected = config.final_poly_len();
+    if proof.final_polynomial.len() != expected {
+        return Err(ProofShapeError::FinalPolynomialLength {
+            expected,
+            got: proof.final_polynomial.len(),
         }
         .into());
     }
@@ -451,7 +545,7 @@ fn query_fold_value<F, EF, MmcsErr, InputErr>(
     query: usize,
 ) -> Result<EF, StirError<MmcsErr, InputErr>>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
 {
     let subgroup_points: Vec<F> = fiber_step
@@ -507,7 +601,7 @@ struct RoundVerifier<F, EF: Field> {
 
 impl<F, EF> RoundVerifier<F, EF>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
 {
     /// Fix the round's domain geometry. Touches no transcript state.
@@ -675,7 +769,7 @@ fn verify_round<F, EF, M, Challenger, IE, Src>(
     config: &StirConfig<F, EF, M, Challenger>,
     round: usize,
     rp: &StirRoundProof<EF, M, F>,
-    challenger: &mut Challenger,
+    transcript: &mut VerifierTranscript<'_, Challenger, F, EF>,
     current_shift: F,
     current_log_domain: usize,
     prev_ctx: Option<&VirtualRoundContext<EF>>,
@@ -684,7 +778,7 @@ fn verify_round<F, EF, M, Challenger, IE, Src>(
     commitment: Option<&M::Commitment>,
 ) -> Result<RoundVerifyOutput<F, EF>, StirError<M::Error, IE>>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F>
@@ -697,59 +791,32 @@ where
     let mut rv = RoundVerifier::<F, EF>::new(rc, current_shift, current_log_domain);
 
     // Step 1: folding PoW, folding challenge gamma, and folded-oracle commitment.
-    if !challenger.check_witness(rc.folding_pow_bits, rp.folding_pow_witness) {
-        return Err(StirError::InvalidPowWitness {
-            round: RoundLabel::Round(round),
-        });
-    }
+    transcript.folding_pow(round, rp.folding_pow_witness)?;
 
-    let gamma: EF = challenger.sample_algebra_element();
-    challenger.observe(rp.commitment.clone());
+    let gamma = transcript.fold_challenge();
+    transcript.fold_commitment(rp.commitment.clone());
     // Mirror the prover: fold at coset coordinates via `gamma / current_shift`
     // (`fold_fiber` interpolates at subgroup coordinates).
     rv.set_gamma(gamma, current_shift);
 
     // Step 2: OOD sampling and answer observation.
-    if rp.ood_answers.len() != rc.num_ood_samples {
-        return Err(ProofShapeError::OodAnswerCount {
-            round: RoundLabel::Round(round),
-            expected: rc.num_ood_samples,
-            got: rp.ood_answers.len(),
-        }
-        .into());
-    }
-
-    rv.ood_points = sample_ood_points(
-        challenger,
-        rv.excluded_domains(current_shift, current_log_domain),
-        rc.num_ood_samples,
-    );
-
-    challenger.observe_algebra_slice(&rp.ood_answers);
+    //
+    // The answer count is checked against the configuration before the transcript starts.
+    let filter = OodFilter::new(rv.excluded_domains(current_shift, current_log_domain));
+    rv.ood_points = transcript.ood_points(round, 0, &filter);
+    transcript.ood_answers(round, 0, &rp.ood_answers)?;
 
     // Step 3: query-phase PoW. It protects only the immediately following combination
     // challenge and query indices; configuration soundness gives no PoW credit to the
     // earlier OOD samples or the later Ans challenge.
-    if !challenger.check_witness(rc.pow_bits, rp.pow_witness) {
-        return Err(StirError::InvalidPowWitness {
-            round: RoundLabel::Round(round),
-        });
-    }
+    transcript.query_pow(round, rp.pow_witness)?;
 
     // Step 4: combination challenge, query sampling, and fiber verification.
-    let r_comb: EF = challenger.sample_algebra_element();
+    //
+    // Step 4a: every query index is drawn first, in draw order.
+    // Merkle verification is deferred to a single shared multi-opening check below.
+    let (r_comb, query_indices) = transcript.query_phase(round, 0);
     rv.r_comb = r_comb;
-
-    // Step 4a: sample every query index first, in draw order, mirroring the prover's
-    // unbiased-sampling policy so the Fiat-Shamir transcript stays in sync. Merkle
-    // verification is deferred to a single shared multi-opening check below.
-    let mut query_indices: Vec<usize> = Vec::with_capacity(rc.num_queries);
-    for _ in 0..rc.num_queries {
-        let j = challenger
-            .sample_uniform_bits::<true>(rv.fold_log_domain)
-            .expect("RESAMPLE = true: rejection loops internally, never errors");
-        query_indices.push(j);
-    }
 
     // Step 4b/4c: obtain this round's oracle rows and fold each query against the current
     // virtual oracle.
@@ -779,9 +846,7 @@ where
 
     // Bind ans_poly into the transcript BEFORE rho. The interpolation identity is a one-point
     // check; observing Ans first means the prover commits to it before learning rho.
-    challenger.observe_algebra_slice(&ans);
-
-    let rho: EF = challenger.sample_algebra_element();
+    let rho = transcript.answer_phase(round, 0, &ans)?;
 
     if !check_ans_interpolates(&ans, &all_points, &all_values, rho) {
         return Err(StirError::InvalidAnsConsistency {
@@ -804,7 +869,7 @@ struct FinalRoundVerifier<F, EF: Field> {
 
 impl<F, EF> FinalRoundVerifier<F, EF>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
 {
     /// Fix the final round's domain geometry. Touches no transcript state.
@@ -921,7 +986,7 @@ fn verify_final_round<F, EF, M, Challenger, IE, Src>(
     config: &StirConfig<F, EF, M, Challenger>,
     proof: &StirProof<EF, M, F>,
     num_rounds: usize,
-    challenger: &mut Challenger,
+    transcript: &mut VerifierTranscript<'_, Challenger, F, EF>,
     current_shift: F,
     current_log_domain: usize,
     prev_ctx: Option<&VirtualRoundContext<EF>>,
@@ -930,7 +995,7 @@ fn verify_final_round<F, EF, M, Challenger, IE, Src>(
     commitment: Option<&M::Commitment>,
 ) -> Result<(FirstRoundPairs<EF>, Vec<usize>), StirError<M::Error, IE>>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F>
@@ -945,44 +1010,19 @@ where
         current_log_domain,
     );
 
-    if !challenger.check_witness(
-        config.final_folding_pow_bits,
-        proof.final_folding_pow_witness,
-    ) {
-        return Err(StirError::InvalidPowWitness {
-            round: RoundLabel::Final,
-        });
-    }
+    transcript.final_folding_pow(proof.final_folding_pow_witness)?;
 
-    let final_gamma: EF = challenger.sample_algebra_element();
+    let final_gamma = transcript.final_fold_challenge();
     fv.set_gamma(final_gamma, current_shift);
 
-    let expected_final_len = config.final_poly_len();
-    if proof.final_polynomial.len() != expected_final_len {
-        return Err(ProofShapeError::FinalPolynomialLength {
-            expected: expected_final_len,
-            got: proof.final_polynomial.len(),
-        }
-        .into());
-    }
+    // The coefficient count is checked against the configuration before the transcript starts.
+    transcript.final_polynomial(0, &proof.final_polynomial)?;
 
-    challenger.observe_algebra_slice(&proof.final_polynomial);
+    transcript.final_pow(proof.final_pow_witness)?;
 
-    if !challenger.check_witness(config.final_pow_bits, proof.final_pow_witness) {
-        return Err(StirError::InvalidPowWitness {
-            round: RoundLabel::Final,
-        });
-    }
-
-    // Sample every final-round query index first, deferring Merkle verification to a single
-    // shared multi-opening check below.
-    let mut final_indices: Vec<usize> = Vec::with_capacity(config.final_queries);
-    for _ in 0..config.final_queries {
-        let j = challenger
-            .sample_uniform_bits::<true>(fv.final_new_log_domain)
-            .expect("RESAMPLE = true: rejection loops internally, never errors");
-        final_indices.push(j);
-    }
+    // Every final-round query index is drawn first, deferring Merkle verification to a
+    // single shared multi-opening check below.
+    let final_indices = transcript.final_query_indices(0);
 
     fv.fetch_and_check(
         config,
@@ -1030,7 +1070,7 @@ pub fn verify_stir<F, EF, M, Challenger>(
     challenger: &mut Challenger,
 ) -> Result<StirVerifyOutputs<EF>, StirError<M::Error>>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F>
@@ -1068,7 +1108,7 @@ pub fn verify_stir_with_external_initial<F, EF, M, Challenger, IE>(
     initial_fibers: impl FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
 ) -> Result<StirVerifyOutputs<EF>, StirError<M::Error, IE>>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F>
@@ -1087,7 +1127,7 @@ fn verify_stir_inner<F, EF, M, Challenger, IE, Src>(
     external_fibers: Option<Src>,
 ) -> Result<StirVerifyOutputs<EF>, StirError<M::Error, IE>>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F>
@@ -1107,16 +1147,67 @@ where
         .into());
     }
 
-    // The initial oracle is either committed by STIR — in which case its commitment enters the
-    // transcript here — or external, in which case the caller has already bound it and the
-    // proof must not carry a commitment at all.
+    // The initial oracle is either committed by STIR, or external and already bound by the
+    // caller, in which case the proof must not carry a commitment at all.
+    let initial_is_external = external_fibers.is_some();
+    check_initial_commitment(&proof.initial_commitment, initial_is_external)?;
+
+    // Every length the transcript is described with is a configured number.
+    // A proof carrying a different one is rejected before the description is built.
+    check_described_lengths(config, proof, None)?;
+
+    let mut transcript = VerifierTranscript::<Challenger, F, EF>::new(
+        challenger,
+        StirShape::single(config, !initial_is_external),
+    );
+
+    // Single release point for the driver's completeness check.
+    //
+    //     Ok  -> every described step was replayed -> finalize
+    //     Err -> the proof is rejected             -> abort, then hand the error on
+    //
+    // Every `?` below the replay call travels through this match, so no path can drop
+    // an unfinalised driver.
+    match verify_stir_replay(config, proof, &mut transcript, external_fibers) {
+        Ok(outputs) => {
+            transcript.finish();
+            Ok(outputs)
+        }
+        Err(err) => {
+            transcript.abort();
+            Err(err)
+        }
+    }
+}
+
+/// Replay one instance's whole transcript, from the initial oracle to the final queries.
+///
+/// Every early return lands back in the caller.
+///
+/// That caller releases the driver's completeness check before handing the failure on.
+fn verify_stir_replay<F, EF, M, Challenger, IE, Src>(
+    config: &StirConfig<F, EF, M, Challenger>,
+    proof: &StirProof<EF, M, Challenger::Witness>,
+    transcript: &mut VerifierTranscript<'_, Challenger, F, EF>,
+    external_fibers: Option<Src>,
+) -> Result<StirVerifyOutputs<EF>, StirError<M::Error, IE>>
+where
+    F: TwoAdicField + PrimeField64,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+    Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
+{
+    let num_rounds = config.num_rounds();
     let mut external_fibers = external_fibers;
     let initial_is_external = external_fibers.is_some();
-    match (&proof.initial_commitment, initial_is_external) {
-        (Some(commitment), false) => challenger.observe(commitment.clone()),
-        (None, true) => {}
-        (Some(_), true) => return Err(ProofShapeError::UnexpectedInitialCommitment.into()),
-        (None, false) => return Err(ProofShapeError::MissingInitialCommitment.into()),
+
+    // A committed initial oracle is bound before any challenge depends on it.
+    if let Some(commitment) = &proof.initial_commitment {
+        transcript.initial_commitment(commitment.clone());
     }
 
     // Initial domain shift is always F::GENERATOR; round_configs[0].domain_shift mirrors it
@@ -1146,7 +1237,7 @@ where
             config,
             round,
             rp,
-            challenger,
+            transcript,
             current_shift,
             current_log_domain,
             prev_ctx.as_ref(),
@@ -1168,7 +1259,7 @@ where
         config,
         proof,
         num_rounds,
-        challenger,
+        transcript,
         current_shift,
         current_log_domain,
         prev_ctx.as_ref(),
@@ -1204,7 +1295,7 @@ pub fn verify_stir_multi<F, EF, M, Challenger>(
     challenger: &mut Challenger,
 ) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error>>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F>
@@ -1232,7 +1323,7 @@ pub fn verify_stir_multi_with_external_initial<F, EF, M, Challenger, IE, Src>(
     initial_fibers: Vec<Src>,
 ) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error, IE>>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F>
@@ -1259,7 +1350,7 @@ pub(crate) fn verify_stir_multi_inner<F, EF, M, Challenger, IE, Src>(
     external_fibers: Option<Vec<Src>>,
 ) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error, IE>>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F>
@@ -1284,19 +1375,19 @@ where
         return Ok(Vec::new());
     }
 
+    let initial_is_external = external_fibers.is_some();
+
+    // Every length the transcript is described with is a configured number.
+    // A proof carrying a different one is rejected before the description is built.
     for i in 0..b {
-        if proofs[i].round_proofs.len() != configs[i].num_rounds() {
-            return Err(ProofShapeError::RoundCount {
-                instance: Some(i),
-                expected: configs[i].num_rounds(),
-                got: proofs[i].round_proofs.len(),
-            }
-            .into());
-        }
+        check_initial_commitment(&proofs[i].initial_commitment, initial_is_external)?;
+        check_described_lengths(configs[i], proofs[i], Some(i))?;
     }
 
-    let initial_is_external = external_fibers.is_some();
-    let mut external_fibers: Vec<Option<Src>> = match external_fibers {
+    // A shared grind is checked once, so every active instance must carry the same witness.
+    check_replicated_witnesses(configs, proofs)?;
+
+    let external_fibers: Vec<Option<Src>> = match external_fibers {
         None => (0..b).map(|_| None).collect(),
         Some(sources) => {
             if sources.len() != b {
@@ -1310,17 +1401,135 @@ where
         }
     };
 
-    // The initial oracle is either committed by STIR — in which case its commitment enters the
-    // transcript here — or external, in which case the caller has already bound it and every
-    // proof must carry no commitment at all.
+    let mut transcript = VerifierTranscript::<Challenger, F, EF>::new(
+        challenger,
+        StirShape::new(configs, !initial_is_external),
+    );
+
+    // Single release point for the driver's completeness check.
+    //
+    //     Ok  -> every described step was replayed -> finalize
+    //     Err -> the proof is rejected             -> abort, then hand the error on
+    //
+    // Every `?` inside the replay travels through this match, so no path can drop an
+    // unfinalised driver.
+    match verify_stir_multi_replay(configs, proofs, &mut transcript, external_fibers) {
+        Ok(outputs) => {
+            transcript.finish();
+            Ok(outputs)
+        }
+        Err(err) => {
+            transcript.abort();
+            Err(err)
+        }
+    }
+}
+
+/// Require every active instance's replicated grinding witness to agree.
+///
+/// One grind covers a whole site.
+///
+/// So the copies in each instance's proof slot must match before the check runs.
+///
+/// # Errors
+///
+/// When two active instances disagree about a site's witness.
+fn check_replicated_witnesses<F, EF, M, Challenger, IE>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    proofs: &[&StirProof<EF, M, Challenger::Witness>],
+) -> Result<(), StirError<M::Error, IE>>
+where
+    F: TwoAdicField + PrimeField64,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+{
+    let b = configs.len();
+    let max_m = configs.iter().map(|c| c.num_rounds()).max().unwrap_or(0);
+    let offset = |i: usize| max_m - configs[i].num_rounds();
+
+    for r in 0..max_m {
+        let active: Vec<usize> = (0..b).filter(|&i| offset(i) <= r).collect();
+        for (stage, witness) in [(GrindStage::Folding, true), (GrindStage::Query, false)] {
+            let witnesses: Vec<F> = active
+                .iter()
+                .map(|&i| {
+                    let rp = &proofs[i].round_proofs[r - offset(i)];
+                    if witness {
+                        rp.folding_pow_witness
+                    } else {
+                        rp.pow_witness
+                    }
+                })
+                .collect();
+            if witnesses.windows(2).any(|w| w[0] != w[1]) {
+                return Err(ProofShapeError::ReplicatedWitnessMismatch {
+                    round: RoundLabel::Round(r),
+                    stage,
+                }
+                .into());
+            }
+        }
+    }
+
+    for (stage, witnesses) in [
+        (
+            GrindStage::Folding,
+            proofs
+                .iter()
+                .map(|p| p.final_folding_pow_witness)
+                .collect::<Vec<F>>(),
+        ),
+        (
+            GrindStage::Query,
+            proofs
+                .iter()
+                .map(|p| p.final_pow_witness)
+                .collect::<Vec<F>>(),
+        ),
+    ] {
+        if witnesses.windows(2).any(|w| w[0] != w[1]) {
+            return Err(ProofShapeError::ReplicatedWitnessMismatch {
+                round: RoundLabel::Final,
+                stage,
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Replay a whole batch's transcript, from the initial oracles to the final queries.
+///
+/// Every early return lands back in the caller.
+///
+/// That caller releases the driver's completeness check before handing the failure on.
+fn verify_stir_multi_replay<F, EF, M, Challenger, IE, Src>(
+    configs: &[&StirConfig<F, EF, M, Challenger>],
+    proofs: &[&StirProof<EF, M, Challenger::Witness>],
+    transcript: &mut VerifierTranscript<'_, Challenger, F, EF>,
+    external_fibers: Vec<Option<Src>>,
+) -> Result<Vec<StirVerifyOutputs<EF>>, StirError<M::Error, IE>>
+where
+    F: TwoAdicField + PrimeField64,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+    M: Mmcs<EF>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
+    Src: FnOnce(&[usize]) -> Result<Vec<Vec<EF>>, StirError<M::Error, IE>>,
+{
+    let b = configs.len();
+    let mut external_fibers = external_fibers;
+    let initial_is_external = external_fibers.iter().any(Option::is_some);
+
+    // A committed initial oracle is bound before any challenge depends on it.
     let mut shifts = Vec::with_capacity(b);
     let mut log_domains = Vec::with_capacity(b);
     for i in 0..b {
-        match (&proofs[i].initial_commitment, initial_is_external) {
-            (Some(commitment), false) => challenger.observe(commitment.clone()),
-            (None, true) => {}
-            (Some(_), true) => return Err(ProofShapeError::UnexpectedInitialCommitment.into()),
-            (None, false) => return Err(ProofShapeError::MissingInitialCommitment.into()),
+        if let Some(commitment) = &proofs[i].initial_commitment {
+            transcript.initial_commitment(commitment.clone());
         }
         shifts.push(F::GENERATOR);
         log_domains.push(configs[i].log_starting_domain_size());
@@ -1347,95 +1556,40 @@ where
             })
             .collect();
 
-        // [grind folding_pow_bits]: every active instance's replicated witness must agree.
-        let folding_witnesses: Vec<F> = active
-            .iter()
-            .map(|&i| proofs[i].round_proofs[r - offset(i)].folding_pow_witness)
-            .collect();
-        if folding_witnesses.windows(2).any(|w| w[0] != w[1]) {
-            return Err(ProofShapeError::ReplicatedWitnessMismatch {
-                round: RoundLabel::Round(r),
-                stage: GrindStage::Folding,
-            }
-            .into());
-        }
-        let shared_folding_bits = active
-            .iter()
-            .map(|&i| configs[i].round_configs[r - offset(i)].folding_pow_bits)
-            .max()
-            .expect("`active` is non-empty for r < max_m");
-        if !challenger.check_witness(shared_folding_bits, folding_witnesses[0]) {
-            return Err(StirError::InvalidPowWitness {
-                round: RoundLabel::Round(r),
-            });
-        }
+        // [grind folding_pow_bits], shared across every active instance's local round.
+        //
+        // The replicated copies were compared before the transcript started, so the first
+        // one stands for all of them.
+        let folding_witness =
+            proofs[active[0]].round_proofs[r - offset(active[0])].folding_pow_witness;
+        transcript.folding_pow(r, folding_witness)?;
 
         // Phase 1: per-instance folding challenge and commitment absorb.
         for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
-            let gamma: EF = challenger.sample_algebra_element();
-            challenger.observe(proofs[i].round_proofs[r - offset(i)].commitment.clone());
+            let gamma = transcript.fold_challenge();
+            transcript.fold_commitment(proofs[i].round_proofs[r - offset(i)].commitment.clone());
             rv.set_gamma(gamma, shifts[i]);
         }
 
         // Phase 2: per-instance OOD sampling and answer absorb.
         for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
             let local_r = r - offset(i);
-            let rc = &configs[i].round_configs[local_r];
             let rp = &proofs[i].round_proofs[local_r];
-            if rp.ood_answers.len() != rc.num_ood_samples {
-                return Err(ProofShapeError::OodAnswerCount {
-                    round: RoundLabel::Round(local_r),
-                    expected: rc.num_ood_samples,
-                    got: rp.ood_answers.len(),
-                }
-                .into());
-            }
-            rv.ood_points = sample_ood_points(
-                challenger,
-                rv.excluded_domains(shifts[i], log_domains[i]),
-                rc.num_ood_samples,
-            );
-            challenger.observe_algebra_slice(&rp.ood_answers);
+            let filter = OodFilter::new(rv.excluded_domains(shifts[i], log_domains[i]));
+            rv.ood_points = transcript.ood_points(r, i, &filter);
+            transcript.ood_answers(r, i, &rp.ood_answers)?;
         }
 
-        // [grind pow_bits]: every active instance's replicated witness must agree.
-        let query_witnesses: Vec<F> = active
-            .iter()
-            .map(|&i| proofs[i].round_proofs[r - offset(i)].pow_witness)
-            .collect();
-        if query_witnesses.windows(2).any(|w| w[0] != w[1]) {
-            return Err(ProofShapeError::ReplicatedWitnessMismatch {
-                round: RoundLabel::Round(r),
-                stage: GrindStage::Query,
-            }
-            .into());
-        }
-        let shared_pow_bits = active
-            .iter()
-            .map(|&i| configs[i].round_configs[r - offset(i)].pow_bits)
-            .max()
-            .expect("`active` is non-empty for r < max_m");
-        if !challenger.check_witness(shared_pow_bits, query_witnesses[0]) {
-            return Err(StirError::InvalidPowWitness {
-                round: RoundLabel::Round(r),
-            });
-        }
+        // [grind pow_bits], shared across every active instance's local round.
+        let query_witness = proofs[active[0]].round_proofs[r - offset(active[0])].pow_witness;
+        transcript.query_pow(r, query_witness)?;
 
         // Phase 3: per-instance combination challenge, query sampling, and fiber
         // materialization/folding.
         for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
             let local_r = r - offset(i);
-            let rc = &configs[i].round_configs[local_r];
-            let r_comb: EF = challenger.sample_algebra_element();
+            let (r_comb, query_indices) = transcript.query_phase(r, i);
             rv.r_comb = r_comb;
-
-            let mut query_indices: Vec<usize> = Vec::with_capacity(rc.num_queries);
-            for _ in 0..rc.num_queries {
-                let j = challenger
-                    .sample_uniform_bits::<true>(rv.fold_log_domain)
-                    .expect("RESAMPLE = true: rejection loops internally, never errors");
-                query_indices.push(j);
-            }
 
             let commitment = if local_r == 0 {
                 proofs[i].initial_commitment.as_ref()
@@ -1473,8 +1627,7 @@ where
                 &all_values,
             )?;
 
-            challenger.observe_algebra_slice(&ans);
-            let rho: EF = challenger.sample_algebra_element();
+            let rho = transcript.answer_phase(r, i, &ans)?;
 
             if !check_ans_interpolates(&ans, &all_points, &all_values, rho) {
                 return Err(StirError::InvalidAnsConsistency {
@@ -1496,25 +1649,10 @@ where
     }
 
     // Final round: every instance reaches it on this same global step (right-alignment).
-    let final_folding_witnesses: Vec<F> =
-        proofs.iter().map(|p| p.final_folding_pow_witness).collect();
-    if final_folding_witnesses.windows(2).any(|w| w[0] != w[1]) {
-        return Err(ProofShapeError::ReplicatedWitnessMismatch {
-            round: RoundLabel::Final,
-            stage: GrindStage::Folding,
-        }
-        .into());
-    }
-    let shared_final_folding_bits = configs
-        .iter()
-        .map(|c| c.final_folding_pow_bits)
-        .max()
-        .unwrap_or(0);
-    if !challenger.check_witness(shared_final_folding_bits, final_folding_witnesses[0]) {
-        return Err(StirError::InvalidPowWitness {
-            round: RoundLabel::Final,
-        });
-    }
+    //
+    // The replicated copies were compared before the transcript started, so the first one
+    // stands for all of them.
+    transcript.final_folding_pow(proofs[0].final_folding_pow_witness)?;
 
     let mut fvs: Vec<FinalRoundVerifier<F, EF>> = (0..b)
         .map(|i| {
@@ -1527,43 +1665,18 @@ where
         .collect();
 
     for i in 0..b {
-        let final_gamma: EF = challenger.sample_algebra_element();
+        let final_gamma = transcript.final_fold_challenge();
         fvs[i].set_gamma(final_gamma, shifts[i]);
 
-        let expected_final_len = configs[i].final_poly_len();
-        if proofs[i].final_polynomial.len() != expected_final_len {
-            return Err(ProofShapeError::FinalPolynomialLength {
-                expected: expected_final_len,
-                got: proofs[i].final_polynomial.len(),
-            }
-            .into());
-        }
-        challenger.observe_algebra_slice(&proofs[i].final_polynomial);
+        // The coefficient count is checked against the configuration before the
+        // transcript starts.
+        transcript.final_polynomial(i, &proofs[i].final_polynomial)?;
     }
 
-    let final_query_witnesses: Vec<F> = proofs.iter().map(|p| p.final_pow_witness).collect();
-    if final_query_witnesses.windows(2).any(|w| w[0] != w[1]) {
-        return Err(ProofShapeError::ReplicatedWitnessMismatch {
-            round: RoundLabel::Final,
-            stage: GrindStage::Query,
-        }
-        .into());
-    }
-    let shared_final_pow_bits = configs.iter().map(|c| c.final_pow_bits).max().unwrap_or(0);
-    if !challenger.check_witness(shared_final_pow_bits, final_query_witnesses[0]) {
-        return Err(StirError::InvalidPowWitness {
-            round: RoundLabel::Final,
-        });
-    }
+    transcript.final_pow(proofs[0].final_pow_witness)?;
 
     for i in 0..b {
-        let mut final_indices: Vec<usize> = Vec::with_capacity(configs[i].final_queries);
-        for _ in 0..configs[i].final_queries {
-            let j = challenger
-                .sample_uniform_bits::<true>(fvs[i].final_new_log_domain)
-                .expect("RESAMPLE = true: rejection loops internally, never errors");
-            final_indices.push(j);
-        }
+        let final_indices = transcript.final_query_indices(i);
 
         let commitment = if configs[i].num_rounds() == 0 {
             proofs[i].initial_commitment.as_ref()

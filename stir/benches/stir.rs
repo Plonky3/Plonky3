@@ -20,7 +20,9 @@ use p3_challenger::{
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::QuinticTrinomialExtensionField;
-use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{
+    BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField,
+};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
@@ -89,7 +91,7 @@ fn bench_prove<F, EF, M, D, C>(
     log_degrees: &[usize],
     group_name: &str,
 ) where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF> + Clone,
     D: TwoAdicSubgroupDft<F>,
@@ -130,7 +132,7 @@ fn bench_verify<F, EF, M, D, C>(
     log_degrees: &[usize],
     group_name: &str,
 ) where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF> + Clone,
     D: TwoAdicSubgroupDft<F>,

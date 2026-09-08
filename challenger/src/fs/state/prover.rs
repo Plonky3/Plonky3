@@ -14,7 +14,7 @@ use crate::fs::pattern::{Hierarchy, Interaction, Kind, Label, Length, Pattern, P
 use crate::fs::state::assert_challenge_security;
 use crate::fs::unit::Unit;
 use crate::fs::{TranscriptField, drop_check_may_panic};
-use crate::{CanObserve, CanSampleBits, GrindingChallenger};
+use crate::{CanObserve, CanSampleBits, CanSampleUniformBits, GrindingChallenger};
 
 /// Drives a prover-side transcript in lockstep with a recorded pattern.
 ///
@@ -391,6 +391,72 @@ impl<C, U: Unit> ProverState<C, U> {
             .collect()
     }
 
+    /// Absorb a variable-length list of extension messages the caller carries itself.
+    ///
+    /// # Overview
+    ///
+    /// The list holds at most `max` values, and `max` is what the pattern records.
+    ///
+    /// The actual count is bound into the sponge as a big-endian prefix before any value.
+    ///
+    /// ```text
+    ///     absorb: [the count in W bytes][each value through the codec]
+    /// ```
+    ///
+    /// The prefix keeps the transcript prefix-free.
+    ///
+    /// No shorter run of this step is then a prefix of a longer one.
+    ///
+    /// Nothing is written to the wire, so the caller's own proof carries the values.
+    ///
+    /// # When to use this
+    ///
+    /// A list whose length is settled by the run rather than by the configuration.
+    /// An interpolant through a deduplicated point set is the case that matters.
+    ///
+    /// # Panics
+    ///
+    /// When the supplied slice is longer than `max`.
+    pub fn observe_extensions_bounded<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        values: &[EF],
+        max: usize,
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: TranscriptField,
+        EF: Field + BasedVectorSpace<F>,
+        C: CanObserve<U::Item>,
+        Cdc: Codec<C, F>,
+    {
+        // Caller bug: absorbing more than the cap would diverge from the recorded pattern.
+        if values.len() > max {
+            self.fail(format_args!(
+                "message length {} exceeds declared maximum {max}",
+                values.len(),
+            ));
+        }
+        // Validate: the next pattern step is a bounded list of extension messages.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Bounded(max),
+        ));
+        // Prefix width is deterministic on both sides from the recorded bound.
+        let width = bound_byte_width(max);
+        let len_bytes = encode_len_be(values.len(), width);
+        // Count first, then the values, so a short run cannot prefix a long one.
+        U::observe_bytes(&mut self.challenger, &len_bytes[..width]);
+        values
+            .iter()
+            .map(|v| {
+                ExtensionFieldCodec::<F, EF, Cdc>::observe(&mut self.challenger, v);
+                TranscriptBound::wrap(*v)
+            })
+            .collect()
+    }
+
     /// Absorb a value the challenger knows how to encode, carried by the caller.
     ///
     /// # When to use this
@@ -446,6 +512,113 @@ impl<C, U: Unit> ProverState<C, U> {
         (0..count)
             .map(|_| TranscriptBound::wrap(self.challenger.sample_bits(width)))
             .collect()
+    }
+
+    /// Sample `count` challenges of `width` bits with no modular bias, under one step.
+    ///
+    /// # Overview
+    ///
+    /// The biased draw reduces one sponge output modulo `2^width`.
+    ///
+    /// Its distance from uniform is `2^width / p`, which a 31-bit prime makes visible.
+    ///
+    /// This one rejects an output that would bias the result and draws again.
+    ///
+    /// # Shape
+    ///
+    /// The step records the width and the count, exactly as the biased draw does.
+    /// Its tag differs, so the two cannot be confused at the same position.
+    ///
+    /// The number of sponge outputs a draw consumes is not part of the shape.
+    /// It is not known when the pattern is built, and both sides consume the same one.
+    ///
+    /// # Panics
+    ///
+    /// Never for a challenger that rejects internally, which is what `RESAMPLE = true` asks for.
+    pub fn challenge_uniform_bits<W>(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleUniformBits<W>,
+    {
+        self.player.interact(Interaction::uniform_bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        (0..count)
+            .map(|_| {
+                TranscriptBound::wrap(
+                    self.challenger
+                        .sample_uniform_bits::<true>(width)
+                        .expect("RESAMPLE = true: rejection loops internally, never errors"),
+                )
+            })
+            .collect()
+    }
+
+    /// Sample `count` extension challenges the caller's predicate accepts, under one step.
+    ///
+    /// # Overview
+    ///
+    /// A candidate is drawn and shown to `accept` alongside the values already kept.
+    ///
+    /// It is then either kept or discarded.
+    ///
+    /// ```text
+    ///     draw -> accept? -> keep     until `count` values are kept
+    ///                     -> discard
+    /// ```
+    ///
+    /// # When to use this
+    ///
+    /// A challenge constrained to avoid a set the protocol fixes in advance.
+    /// An out-of-domain point that must miss every evaluation domain is the case that matters.
+    ///
+    /// # Shape
+    ///
+    /// The step records the count, not the number of candidates it took to reach it.
+    /// That number depends on the sponge, so no pattern built before the run can hold it.
+    ///
+    /// The predicate is not recorded either.
+    /// Two runs whose predicates differ share a fingerprint.
+    ///
+    /// So bind whatever shapes the predicate through the instance label.
+    ///
+    /// # Panics
+    ///
+    /// Never returns if `accept` rejects every value in the field.
+    pub fn challenge_extensions_rejecting<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        count: usize,
+        mut accept: impl FnMut(&EF, &[EF]) -> bool,
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: TranscriptField,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        assert_challenge_security::<C, F, Cdc>();
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            Length::Fixed(count),
+        ));
+        let mut kept: Vec<EF> = Vec::with_capacity(count);
+        while kept.len() < count {
+            let candidate = ExtensionFieldCodec::<F, EF, Cdc>::sample(&mut self.challenger);
+            if accept(&candidate, &kept) {
+                kept.push(candidate);
+            }
+        }
+        kept.into_iter().map(TranscriptBound::wrap).collect()
     }
 
     /// Absorb a fixed-length byte string as a prover message.
