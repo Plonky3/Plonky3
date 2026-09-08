@@ -74,7 +74,7 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     ///
     /// # Panics
     ///
-    /// Panics if the input length is not a whole multiple of the number of requested digests.
+    /// Panics if the batch is ragged: the input length must be a whole multiple of the digest count.
     fn hash_many(&self, input: &[Item], out: &mut [Out]) {
         // No digests requested means there is nothing to read from the input.
         if out.is_empty() {
@@ -103,5 +103,71 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
         for (digest, message) in out.iter_mut().zip(input.chunks_exact(len)) {
             *digest = self.hash_slice(message);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+    use core::array;
+
+    use crate::CryptographicHasher;
+
+    /// A byte hasher whose digest carries both a running fold and the message length.
+    ///
+    /// The multiplier makes the digest order sensitive.
+    /// The counter makes a message of a different length impossible to collide with.
+    #[derive(Clone)]
+    struct Fold;
+
+    impl CryptographicHasher<u8, [u8; 2]> for Fold {
+        fn hash_iter<I>(&self, input: I) -> [u8; 2]
+        where
+            I: IntoIterator<Item = u8>,
+        {
+            let mut acc = 0u8;
+            let mut count = 0u8;
+            for byte in input {
+                acc = acc.wrapping_mul(31).wrapping_add(byte);
+                count = count.wrapping_add(1);
+            }
+            [acc, count]
+        }
+    }
+
+    #[test]
+    fn hash_many_matches_hashing_each_message_alone() {
+        // Four messages of three bytes, laid out back to back.
+        let input: [u8; 12] = array::from_fn(|i| i as u8);
+
+        let mut batched = [[0u8; 2]; 4];
+        Fold.hash_many(&input, &mut batched);
+
+        let expected: [[u8; 2]; 4] = array::from_fn(|i| Fold.hash_slice(&input[3 * i..][..3]));
+        assert_eq!(batched, expected);
+    }
+
+    #[test]
+    fn hash_many_of_zero_length_messages_hashes_the_empty_message() {
+        // No input with digests requested means every message is empty.
+        let mut out = vec![[1u8; 2]; 3];
+        Fold.hash_many(&[], &mut out);
+
+        assert_eq!(out, vec![Fold.hash_slice(&[]); 3]);
+    }
+
+    #[test]
+    fn hash_many_reads_nothing_when_no_digests_are_requested() {
+        // A message length cannot be derived from zero digests, so the input is left untouched
+        // instead of tripping the multiple check on a length that divides nothing.
+        Fold.hash_many(&[1, 2, 3], &mut []);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be a whole multiple")]
+    fn hash_many_rejects_ragged_input() {
+        // Five bytes cannot split into two equal messages.
+        let mut out = [[0u8; 2]; 2];
+        Fold.hash_many(&[1, 2, 3, 4, 5], &mut out);
     }
 }
