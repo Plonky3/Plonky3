@@ -394,7 +394,7 @@ mod tests {
         for tables in [&TOWER_TO_POLY_128, &POLY_TO_TOWER_128] {
             for byte in 0..16 {
                 for value in 0..256u128 {
-                    let input = (u128::MAX & !(255 << (8 * byte))) | (value << (8 * byte));
+                    let input = !(255u128 << (8 * byte)) | (value << (8 * byte));
                     let expected = tables.iter().enumerate().fold(0, |acc, (i, table)| {
                         acc ^ table[(input >> (8 * i)) as u8 as usize]
                     });
