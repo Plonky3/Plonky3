@@ -19,9 +19,6 @@ pub const DEEP_LABEL: &str = "deep-ali";
 /// Label for the low-degree-test term, when an implementation reports its
 /// phases as one already-composed bound.
 ///
-/// Also used for the legacy FRI query-only estimate in
-/// [`crate::stark::legacy_security_report`], which omits the folding round.
-///
 /// # Asymmetry with the conjectured path
 ///
 /// The proven path reports this single label while the conjectured path

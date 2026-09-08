@@ -28,6 +28,9 @@ pub struct Proof<SC: StarkGenericConfig> {
 impl<SC: StarkGenericConfig> Proof<SC> {
     /// Legacy conjectured security level (in bits).
     ///
+    /// For historical comparison only: this may exceed [`ConjecturedSecurity`]
+    /// and is not a soundness bound. Do not use it to size deployment parameters.
+    ///
     /// See [`LegacySecurity`].
     pub fn legacy_security(&self, params: &StarkSecurityParams) -> LegacySecurity {
         LegacySecurity::compute_from_params(params, self.degree_bits)

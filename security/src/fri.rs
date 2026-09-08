@@ -1,7 +1,7 @@
 //! FRI low-degree-test soundness.
 //!
 //! Conjectured regime: random-words bound, [2025/2010] §1.5.
-//! Legacy regime: pre-random-words ethSTARK query bound, [2021/582].
+//! Legacy regime: historical pre-random-words ethSTARK query estimate, [2021/582].
 //! Proven regime: round-by-round, [2024/1553] Theorems 2 & 3, with the
 //! BCHKS25 LDR commit bound ([2025/2055] Theorem 4.2). Cross-checked
 //! against Ethereum's `soundcalc`.
@@ -111,14 +111,18 @@ pub fn conjectured_error(regime: &FriRegime, shape: &InstanceShape) -> ErrorBits
     ErrorBits::from_log2(bits)
 }
 
-/// Legacy conjectured low-degree-test soundness (ethSTARK
-/// [2021/582](https://eprint.iacr.org/2021/582), pre-random-words).
+/// Historical FRI query-error estimate (ethSTARK
+/// [2021/582](https://eprint.iacr.org/2021/582) §5.10.1, pre-random-words).
 ///
-/// `b = num_queries · log_blowup + query_pow`. Predates the random-words
-/// correction in [`conjectured_error`] ([2025/2010] §1.5) and does not
-/// account for the commit-phase folding round covered by
-/// [`conjectured_commit_phase_error`]; kept for callers that specifically
-/// want the older, simpler heuristic bound.
+/// `b = num_queries · log_blowup + query_pow` is `-log2(2^-zeta * eps_1)`:
+/// the paper's FRI query error `eps_1 = rho^s`, boosted by grinding. It does
+/// not reproduce the paper's total-error `lambda`, whose Eq. (19) includes
+/// the one-bit union-bound loss from Eq. (18). The composite below instead
+/// takes the round-by-round minimum over its terms.
+///
+/// This omits the random-words correction in [`conjectured_error`] and the
+/// folding round in [`conjectured_commit_phase_error`]. It is for historical
+/// comparison, not a soundness bound or a guide to deployment parameters.
 /// Use [`crate::stark::legacy_security_report`] to compose it with the
 /// AIR, DEEP-ALI, batching, extra, and commitment-collision terms.
 pub const fn legacy_conjectured_error(regime: &FriRegime) -> ErrorBits {
@@ -500,17 +504,20 @@ mod tests {
         );
     }
 
-    /// `legacy_conjectured_error` reproduces the pre-random-words ethSTARK
-    /// formula exactly: `num_queries * log_blowup + query_pow`.
+    /// ethSTARK §5.10.1 uses R = 2, zeta = 20, and s = 31/41/55 for
+    /// lambda = 80/100/128. These are the boosted query terms, before the
+    /// paper's pre-query cap and one-bit union-bound loss.
     #[test]
-    fn legacy_conjectured_error_matches_ethstark_formula() {
-        let regime = benchmark_regime();
-        let bits = legacy_conjectured_error(&regime).bits();
-        assert_eq!(
-            bits,
-            (regime.num_queries * regime.log_blowup + regime.query_pow_bits) as f64
-        );
-        assert_eq!(bits, 116.0);
+    fn legacy_conjectured_error_matches_ethstark_query_vectors() {
+        for (num_queries, expected) in [(31, 82.0), (41, 102.0), (55, 130.0)] {
+            let regime = FriRegime {
+                log_blowup: 2,
+                num_queries,
+                query_pow_bits: 20,
+                ..benchmark_regime()
+            };
+            assert_eq!(legacy_conjectured_error(&regime).bits(), expected);
+        }
     }
 
     #[test]

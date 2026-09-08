@@ -22,8 +22,8 @@ use crate::grinding::{GrindingSites, boost};
 use crate::ldt::LowDegreeTest;
 use crate::proximity::{list_size_conjectured, list_size_ldr_m, list_size_udr};
 use crate::report::{
-    ALI_LABEL, BATCH_LABEL, COLLISION_LABEL, DEEP_LABEL, LDT_LABEL, Regime, RegimeReport,
-    SecurityReport, SecurityTerm,
+    ALI_LABEL, BATCH_LABEL, COLLISION_LABEL, DEEP_LABEL, LDT_LABEL, LDT_QUERY_LABEL, Regime,
+    RegimeReport, SecurityReport, SecurityTerm,
 };
 use crate::shape::{InstanceShape, StarkAirParams};
 use crate::{air, deep};
@@ -191,13 +191,13 @@ fn conjectured_batching_term(
 /// `grinding.out_of_domain` boosts the DEEP term and
 /// `grinding.batch_combination` the batch term (applied by the caller, which
 /// builds `batch`); the low-degree test's own sites are already folded into
-/// `ldt_error` by the [`LowDegreeTest`] impl.
+/// `ldt_term` by the [`LowDegreeTest`] impl.
 fn regime_report(
     regime: Regime,
     air: &StarkAirParams,
     shape: &InstanceShape,
     list_size: f64,
-    ldt_error: ErrorBits,
+    ldt_term: SecurityTerm,
     batch: Option<SecurityTerm>,
     extras: &[SecurityTerm],
     grinding: &GrindingSites,
@@ -210,7 +210,7 @@ fn regime_report(
     let mut terms = Vec::with_capacity(5 + extras.len());
     terms.push(SecurityTerm::new(ALI_LABEL, ali));
     terms.push(SecurityTerm::new(DEEP_LABEL, deep));
-    terms.push(SecurityTerm::new(LDT_LABEL, ldt_error));
+    terms.push(ldt_term);
     terms.extend(batch);
     terms.extend_from_slice(extras);
     terms.push(SecurityTerm::new(
@@ -251,7 +251,7 @@ pub fn proven_security_report<L: LowDegreeTest>(
         air,
         shape,
         list_size_udr(),
-        udr_ldt,
+        SecurityTerm::new(LDT_LABEL, udr_ldt),
         batching_term(
             SecurityAssumption::UniqueDecoding,
             shape,
@@ -276,7 +276,7 @@ pub fn proven_security_report<L: LowDegreeTest>(
                 air,
                 shape,
                 list_size,
-                ldr_ldt,
+                SecurityTerm::new(LDT_LABEL, ldr_ldt),
                 batching_term(
                     SecurityAssumption::JohnsonBound,
                     shape,
@@ -455,18 +455,26 @@ pub fn legacy_security<L: LowDegreeTest>(
     ))
 }
 
-/// Composite report using the legacy conjectured LDT bound.
+/// Composite report using the historical legacy LDT estimate.
 ///
 /// Uses [`LowDegreeTest::legacy_conjectured_error`] under [`Regime::Legacy`].
 /// For FRI this is `num_queries * log_blowup + query_pow_bits`, without the
 /// random-words correction or the commit-phase folding term. This is an
-/// opt-in historical heuristic, not a proven soundness bound.
+/// opt-in historical heuristic, not a soundness bound or a guide to deployment
+/// parameters. It may exceed the conjectured report; shared caps can make them equal.
+///
+/// The FRI term reproduces ethSTARK §5.10.1's query error `eps_1`, boosted by
+/// grinding. This composite uses the round-by-round minimum convention of
+/// [2024/1553](https://eprint.iacr.org/2024/1553) §2, not ethSTARK's total-error
+/// `lambda`: Eq. (18) adds the pre-query and boosted query errors, and Eq. (19)
+/// includes the resulting union-bound loss of one bit. No such `-1` is applied here.
 ///
 /// Only the LDT bound changes: ALI and DEEP-ALI still use list size 1, and
 /// batching, `extras`, grinding outside the LDT, and the commitment-collision
-/// cap are composed as in [`conjectured_security_report`]. Thus this is a
-/// STARK composite using the legacy LDT estimate, rather than the bare FRI
-/// formula. Returns `None` when the LDT does not support the legacy regime.
+/// cap are composed as in [`conjectured_security_report`]. ALI and DEEP charge the
+/// actual constraint count and identity degree through [`air::composition_error`]
+/// and [`deep::deep_ali_error`], rather than ethSTARK's flat `log2|K|` pre-query cap.
+/// Returns `None` when the LDT does not support the legacy regime.
 pub fn legacy_security_report<L: LowDegreeTest>(
     ldt: &L,
     air: &StarkAirParams,
@@ -480,7 +488,7 @@ pub fn legacy_security_report<L: LowDegreeTest>(
         air,
         shape,
         list_size_conjectured(),
-        ldt_error,
+        SecurityTerm::new(LDT_QUERY_LABEL, ldt_error),
         conjectured_batching_term(shape, ldt.log_blowup(), grinding.batch_combination),
         extras,
         grinding,
@@ -489,8 +497,9 @@ pub fn legacy_security_report<L: LowDegreeTest>(
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
-    use crate::report::LDT_QUERY_LABEL;
 
     fn shape() -> InstanceShape {
         InstanceShape {
@@ -558,7 +567,7 @@ mod tests {
             &air,
             &shape,
             list_size,
-            ldt,
+            SecurityTerm::new(LDT_LABEL, ldt),
             None,
             &[SecurityTerm::new("extra", extra)],
             &GrindingSites::NONE,
@@ -965,7 +974,7 @@ mod tests {
 
         assert_eq!(report.regime, Regime::Legacy);
         assert_eq!(report.security_bits(), 116.0);
-        assert_eq!(report.binding().label, LDT_LABEL);
+        assert_eq!(report.binding().label, LDT_QUERY_LABEL);
         assert_eq!(report.terms().len(), 4);
         assert_eq!(
             legacy_security(&regime, &air(), &shape(), &[], &GrindingSites::NONE)
@@ -1053,6 +1062,64 @@ mod tests {
             legacy_security_report(&ldt, &air(), &shape(), &[], &GrindingSites::NONE).is_none()
         );
         assert!(legacy_security(&ldt, &air(), &shape(), &[], &GrindingSites::NONE).is_none());
+    }
+
+    proptest! {
+        /// Legacy stays above both modern reports, including degenerate inputs.
+        /// The random-words estimate can be more conservative than the proven bound
+        /// over tiny fields, so the three-way order is asserted for fields of at least
+        /// 32 bits; every generated LDE fits within 28 bits.
+        #[test]
+        fn fri_legacy_report_stays_above_modern_reports(
+            fri in (0usize..=4, 0usize..=64, 0usize..=32, 0usize..=4, 0usize..=24, 0usize..=24),
+            instance in (0usize..=24, 0usize..=256, 0usize..=160, 0usize..=64),
+            air_shape in (0usize..=64, 0usize..=16, 0usize..=4),
+            grinding in (0usize..=24, 0usize..=24),
+            extra in proptest::option::of(0usize..=160),
+        ) {
+            let (log_blowup, num_queries, log_final_poly_len, max_log_arity, commit_pow_bits, query_pow_bits) = fri;
+            let regime = crate::fri::FriRegime {
+                log_blowup,
+                num_queries,
+                log_final_poly_len,
+                max_log_arity,
+                commit_pow_bits,
+                query_pow_bits,
+            };
+            let (log_trace_length, modulus_bits, collision_resistance, num_batched_functions) = instance;
+            let shape = InstanceShape {
+                log_trace_length,
+                modulus_bits,
+                collision_resistance,
+                num_batched_functions,
+            };
+            let (num_constraints, max_constraint_degree, max_combo) = air_shape;
+            let air = StarkAirParams {
+                num_constraints,
+                max_constraint_degree,
+                max_combo,
+            };
+            let grinding = GrindingSites {
+                out_of_domain: grinding.0,
+                batch_combination: grinding.1,
+                ..GrindingSites::NONE
+            };
+            let extras: Vec<_> = extra.into_iter()
+                .map(|bits| SecurityTerm::new("extra", ErrorBits::from_log2(bits as f64)))
+                .collect();
+
+            let legacy = legacy_security_report(&regime, &air, &shape, &extras, &grinding)
+                .unwrap().security_bits();
+            let conjectured = conjectured_security_report(&regime, &air, &shape, &extras, &grinding)
+                .security_bits();
+            let proven = proven_security_report(&regime, &air, &shape, &extras, &grinding)
+                .security_bits();
+            prop_assert!(legacy >= conjectured);
+            prop_assert!(legacy >= proven);
+            if modulus_bits >= 32 {
+                prop_assert!(conjectured >= proven);
+            }
+        }
     }
 
     /// The conjectured report's attained bits equal the scalar

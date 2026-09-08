@@ -480,13 +480,16 @@ impl ConjecturedSecurity {
     }
 }
 
-/// Legacy conjectured security level using the pre-random-words ethSTARK
-/// FRI bound: `num_queries * log_blowup + query_pow_bits`.
+/// Historical security estimate using the pre-random-words ethSTARK
+/// FRI query formula: `num_queries * log_blowup + query_pow_bits`.
 ///
 /// The STARK composite still includes AIR composition, DEEP-ALI, batched
 /// openings, and the commitment-collision cap. The FRI folding round and its
 /// commit-phase grinding are omitted by this historical heuristic. See
 /// [`legacy_security_report`].
+///
+/// For historical comparison only: this may exceed [`ConjecturedSecurity`]
+/// and is not a soundness bound. Do not use it to size deployment parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LegacySecurity {
     pub security_bits: usize,
@@ -678,6 +681,16 @@ mod tests {
         assert_eq!(
             LegacySecurity::compute_from_params(&params, 20).security_bits,
             82
+        );
+    }
+
+    #[test]
+    fn legacy_security_rejects_an_unrepresentable_trace_length() {
+        let params = benchmark_high_arity_params(252);
+        // Proof::legacy_security passes the deserialized degree_bits through here.
+        assert_eq!(
+            LegacySecurity::compute_from_params(&params, 64).security_bits,
+            0
         );
     }
 
