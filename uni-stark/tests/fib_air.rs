@@ -129,8 +129,8 @@ type Dft = Radix2DitParallel<Val>;
 type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
 type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
-const TWO_ADIC_FIXTURE: &str = "tests/fixtures/uni_stark_two_adic_v1.postcard";
-const CIRCLE_FIXTURE: &str = "tests/fixtures/uni_stark_circle_v1.postcard";
+const TWO_ADIC_FIXTURE: &str = "tests/fixtures/uni_stark_two_adic_v0_8_0.postcard";
+const CIRCLE_FIXTURE: &str = "tests/fixtures/uni_stark_circle_v0_8_0.postcard";
 
 fn make_two_adic_config(log_final_poly_len: usize) -> MyConfig {
     let mut rng = SmallRng::seed_from_u64(1);
