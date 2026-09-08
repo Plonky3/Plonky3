@@ -10,11 +10,17 @@ keywords.workspace = true
 categories.workspace = true
 
 [package.metadata.plonky3.ci]
-test-features = ["baby-bear", "koala-bear", "binary"]
+test-features = ["baby-bear", "koala-bear", "goldilocks", "binary"]
 
 [features]
 default = []
 baby-bear = ["dep:p3-baby-bear", "dep:p3-dft", "dep:p3-fri", "dep:p3-uni-stark"]
+goldilocks = [
+    "dep:p3-goldilocks",
+    "dep:p3-dft",
+    "dep:p3-fri",
+    "dep:p3-uni-stark",
+]
 koala-bear = [
     "dep:p3-koala-bear",
     "dep:p3-dft",
@@ -46,6 +52,7 @@ p3-commit.workspace = true
 p3-dft = { workspace = true, optional = true }
 p3-field.workspace = true
 p3-fri = { workspace = true, optional = true }
+p3-goldilocks = { workspace = true, optional = true }
 p3-keccak = { workspace = true, optional = true }
 p3-koala-bear = { workspace = true, optional = true }
 p3-merkle-tree.workspace = true
@@ -61,7 +68,6 @@ postcard = { workspace = true, features = ["alloc"] }
 
 [[example]]
 name = "prove_prime_fields"
-required-features = ["baby-bear", "koala-bear"]
 test = true
 
 [[example]]

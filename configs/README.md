@@ -1,14 +1,15 @@
 # Supported configurations
 
 Optional, statically dispatched Plonky3 configurations. Enable `baby-bear`,
-`koala-bear`, or `binary`; no backend is enabled by default. The crate uses
-`no_std` plus `alloc`. The optional `parallel` feature enables Rayon-backed
+`koala-bear`, `goldilocks`, or `binary`; no backend is enabled by default.
+The crate uses `no_std` plus `alloc`. The optional `parallel` feature enables Rayon-backed
 parallelism in the selected backends.
 
 | Feature / module | Supported stack | Entry point |
 | --- | --- | --- |
 | `baby-bear` / `baby_bear` | BabyBear, quartic binomial extension, two-adic FRI | `baby_bear::new(FriParameters<()>, cap_height)` |
 | `koala-bear` / `koala_bear` | KoalaBear, quartic binomial extension, two-adic FRI | `koala_bear::new(FriParameters<()>, cap_height)` |
+| `goldilocks` / `goldilocks` | Goldilocks, quadratic binomial extension, two-adic FRI | `goldilocks::new(FriParameters<()>, cap_height)` |
 | `binary` / `binary` | GF(2^128), additive-domain binary PCS, Keccak-256 | `binary::Config::new(BinaryPcsConfig)` |
 
 Each module exposes concrete `Val`, `Challenge`, `Challenger`, `Mmcs`, `Pcs`
@@ -17,13 +18,19 @@ introduces no common prover trait or dynamic dispatch.
 
 ## Prime-field proofs
 
-The prime stacks use the field crates' deterministic
+The BabyBear and KoalaBear stacks use the field crates' deterministic
 `default_babybear_poseidon2_16/24` and `default_koalabear_poseidon2_16/24`
 permutations. These use the checked-in, Grain-LFSR-generated round constants
 published in `baby-bear/src/poseidon2.rs` and `koala-bear/src/poseidon2.rs`;
 no seeded or runtime-random permutation parameters are selected. Both stacks
 use a width-24/rate-16/output-8 sponge, width-16 compression of two eight-field
 digests, a width-24/rate-16 duplex challenger, and `Radix2DitParallel` DFT.
+
+Goldilocks uses the deterministic `default_goldilocks_poseidon2_8/12`
+permutations and their checked-in Grain-LFSR constants in
+`goldilocks/src/poseidon2.rs`. Its sponge is width-12/rate-8/output-4,
+compression combines two four-field digests at width 8, and its duplex
+challenger is width-12/rate-8. It also uses `Radix2DitParallel` DFT.
 
 Pass an explicit `FriParameters<()>`: blowup, final polynomial length, maximum
 folding arity, query count and all three FRI grinding settings remain your
@@ -40,11 +47,12 @@ a separate verifier configuration from the same parameters.
 
 ```sh
 cargo run -p p3-configs --features baby-bear,koala-bear --example prove_prime_fields
+cargo run -p p3-configs --features goldilocks --example prove_prime_fields
 ```
 
-The example proves an eight-row Fibonacci AIR over each field, serializes the
-proof using postcard, verifies with fresh state, and rejects changed public
-inputs. Its inexpensive parameters are for demonstration only.
+The example proves an eight-row Fibonacci AIR over each enabled prime field,
+serializes the proof using postcard, verifies with fresh state, and rejects
+changed public inputs. Its inexpensive parameters are for demonstration only.
 
 ## Binary multilinear proofs
 
