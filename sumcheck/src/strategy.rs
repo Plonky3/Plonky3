@@ -1275,8 +1275,10 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// Applies an outstanding binding, so the tables are current with the claim.
     ///
     /// Every reader of the tables starts here.
-    /// One settling step is the whole discipline: a reader that skipped it would
-    /// silently see the tables one round behind.
+    /// A reader that skipped it would silently see the tables one round behind.
+    ///
+    /// A debug build checks the claim against the pair this binding produced.
+    /// That is the only place a held binding is ever validated.
     ///
     /// Idempotent, and free when nothing is outstanding.
     pub fn settle(&mut self) {
@@ -1355,15 +1357,6 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// The binding itself is left to the caller.
     pub(crate) fn reduce_claim_with_coefficients(&mut self, c0: EF, c_inf: EF, gamma: EF) {
         self.sum = extrapolate_01inf(c0, self.sum - c0, c_inf, gamma);
-    }
-
-    /// Asserts that the claim is the inner product of the current pair.
-    ///
-    /// Applies an outstanding binding first, so the assertion is against the pair
-    /// the claim describes rather than the pair one round behind it.
-    pub(crate) fn debug_assert_claim(&mut self) {
-        self.settle();
-        debug_assert_eq!(self.sum, self.poly.dot_product());
     }
 
     /// Applies a scalar to the weight side and the matching residual claim.

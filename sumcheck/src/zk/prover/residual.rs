@@ -163,12 +163,10 @@ where
             rs.push(gamma);
         }
 
-        // Invariant: the claim is the inner product of the bound pair.
+        // The last challenge has no successor to fuse with.
         //
-        // The last challenge has no successor to fuse with, and the weight scaling
-        // below reads the tables, so this settles it.
-        self.debug_assert_claim();
-
+        // The weight scaling below reads the tables, so it settles the binding on the
+        // way in, and its own settling step checks the claim against what it bound.
         self.scale_weights_and_claim(eps);
 
         ZkSumcheckHandoff {
