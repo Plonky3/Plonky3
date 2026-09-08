@@ -28,9 +28,17 @@ const PAR_THRESHOLD: usize = 1 << 14;
 
 /// Tile size for the chunked round-coefficient kernel.
 ///
-/// On Monty-31 packings, hand-written delayed-reduction primitives exist for tile sizes `2, 4, 5, 8`;
+/// Monty-31 spells out a single-reduction dot product per tile size, and the set depends on the target:
 ///
-/// `8` is the deepest available on every supported target.
+/// ```text
+///     scalar          2, 3, 4, 5, 6, 7, 8
+///     AVX2, AVX-512   2, 3, 4, 64
+///     NEON            2, 3, 4, 5, 8, 64
+/// ```
+///
+/// So `8` is a single-reduction tile on scalar and on NEON.
+/// On AVX2 and AVX-512 it falls back to two length-4 tiles plus a packed add, hence two reductions.
+/// Binary fields fold the modulus once at any tile size, so the choice is free there.
 ///
 /// - Larger overruns the integer-multiply pipeline depth;
 /// - Smaller dilutes the delayed-reduction win.
@@ -47,9 +55,11 @@ const K: usize = 8;
 ///     leading  += sum_i  (w_hi[i] - w_lo[i]) * (e_hi[i] - e_lo[i])
 /// ```
 ///
-/// where `lo`, `hi` are the two faces of the active variable. Each sum is
-/// one delayed-reduction dot product over `K` pairs, collapsing `K`
-/// widening multiplies into one Montgomery reduce per output coordinate.
+/// where `lo`, `hi` are the two faces of the active variable.
+///
+/// Each sum is one dot product over `K` pairs, reduced as late as the target permits.
+/// A binary field folds the modulus once for the whole sum.
+/// A Monty-31 packing reduces once on NEON, and twice on AVX2 or AVX-512 (see `K`).
 #[inline(always)]
 fn chunk_round_step<B, A>(e_lo: &[B; K], e_hi: &[B; K], w_lo: &[A; K], w_hi: &[A; K]) -> (A, A)
 where
