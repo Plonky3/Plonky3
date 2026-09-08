@@ -99,6 +99,11 @@ pub enum ProofShapeError {
         got: usize,
     },
 
+    /// Non-compact answers require coefficients when interpolation points are present.
+    /// Even the zero polynomial must be transmitted as at least `[ZERO]`.
+    #[error("{round}: missing ans polynomial coefficients")]
+    MissingAnsPolynomial { round: RoundLabel },
+
     /// Compact answers require an empty transmitted coefficient vector.
     #[error("{round}: compact answers expect no transmitted ans coefficients, got {got}")]
     UnexpectedAnsPolynomial { round: RoundLabel, got: usize },

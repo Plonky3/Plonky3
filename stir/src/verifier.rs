@@ -161,6 +161,9 @@ fn resolve_ans_polynomial<'a, EF: Field, MmcsError, InputError>(
     values: &[EF],
 ) -> Result<Cow<'a, [EF]>, StirError<MmcsError, InputError>> {
     if !compact {
+        if transmitted.is_empty() && !points.is_empty() {
+            return Err(ProofShapeError::MissingAnsPolynomial { round }.into());
+        }
         check_ans_length(round, transmitted, points.len())?;
         return Ok(Cow::Borrowed(transmitted));
     }
@@ -191,13 +194,33 @@ mod compact_answer_tests {
     use super::*;
 
     #[test]
+    fn full_answers_reject_missing_coefficients() {
+        let error = resolve_ans_polynomial::<F, (), ()>(
+            RoundLabel::Round(2),
+            false,
+            &[],
+            &[F::ONE],
+            &[F::ZERO],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            StirError::InvalidProofShape(ProofShapeError::MissingAnsPolynomial {
+                round: RoundLabel::Round(2)
+            })
+        ));
+    }
+
+    #[test]
     fn compact_answers_reconstruct_canonical_zero_and_reject_invalid_nodes() {
         let round = RoundLabel::Round(2);
-        assert!(
-            resolve_ans_polynomial::<F, (), ()>(round, true, &[], &[], &[])
-                .unwrap()
-                .is_empty()
-        );
+        for compact in [false, true] {
+            assert!(
+                resolve_ans_polynomial::<F, (), ()>(round, compact, &[], &[], &[])
+                    .unwrap()
+                    .is_empty()
+            );
+        }
         assert_eq!(
             resolve_ans_polynomial::<F, (), ()>(round, true, &[], &[F::ONE], &[F::ZERO])
                 .unwrap()

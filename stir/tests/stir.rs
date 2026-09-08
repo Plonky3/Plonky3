@@ -297,6 +297,13 @@ mod babybear_stir {
                 continue;
             }
             assert!(compact_bytes.len() < full_bytes.len());
+            let err = verify_stir(&full, &compact_proof, &mut challenger.clone()).unwrap_err();
+            assert_eq!(
+                shape_of(err),
+                ProofShapeError::MissingAnsPolynomial {
+                    round: RoundLabel::Round(0)
+                }
+            );
             for coefficients in [
                 full_proof.round_proofs[0].ans_polynomial.clone(),
                 vec![EF::ONE],
@@ -3770,6 +3777,18 @@ mod babybear_stir_multi {
                     postcard::to_allocvec(mixed_proof).unwrap()
                 );
             }
+            let err = verify(
+                &full_refs,
+                &mixed.iter().map(|(proof, _)| proof).collect::<Vec<_>>(),
+                &mut base.clone(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                shape_of(err),
+                ProofShapeError::MissingAnsPolynomial {
+                    round: RoundLabel::Round(0)
+                }
+            );
             let mut bad: Vec<_> = mixed.into_iter().map(|(proof, _)| proof).collect();
             bad[0].round_proofs[1].ans_polynomial = vec![EF::ONE];
             let err = verify(&config_refs, &bad.iter().collect::<Vec<_>>(), &mut base).unwrap_err();

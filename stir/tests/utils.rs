@@ -1,7 +1,7 @@
 //! Unit tests for STIR polynomial arithmetic utilities.
 
 use p3_baby_bear::BabyBear;
-use p3_dft::Radix2DitParallel;
+use p3_dft::{Radix2DFTSmallBatch, Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_stir::prover::{codeword_from_coeffs, coeffs_from_codeword};
@@ -26,9 +26,17 @@ fn ef(n: u64) -> EF {
 
 #[test]
 fn test_codeword_from_coeffs_matches_horner_across_shapes() {
+    check_codeword_from_coeffs_matches_horner_across_shapes(&Radix2DitParallel::<F>::default());
+}
+
+#[test]
+fn test_codeword_from_coeffs_small_batch_matches_horner_across_shapes() {
+    check_codeword_from_coeffs_matches_horner_across_shapes(&Radix2DFTSmallBatch::<F>::default());
+}
+
+fn check_codeword_from_coeffs_matches_horner_across_shapes(dft: &impl TwoAdicSubgroupDft<F>) {
     use p3_field::TwoAdicField;
 
-    let dft = Radix2DitParallel::<F>::default();
     let mut rng = SmallRng::seed_from_u64(0xdecaf);
     for log_size in [0usize, 1, 4, 8] {
         let size = 1usize << log_size;
@@ -47,7 +55,7 @@ fn test_codeword_from_coeffs_matches_horner_across_shapes() {
         ] {
             let coeffs: Vec<EF> = (0..len).map(|_| rng.random()).collect();
             for shift in [F::ZERO, F::ONE, F::GENERATOR, f(7)] {
-                let actual = codeword_from_coeffs(&dft, coeffs.clone(), shift, log_size);
+                let actual = codeword_from_coeffs(dft, coeffs.clone(), shift, log_size);
                 assert_eq!(actual.len(), size);
                 let mut point = shift;
                 let generator = F::two_adic_generator(log_size);
