@@ -285,6 +285,15 @@ def add_package_and_parallel(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--parallel", action="store_true", help="enable the parallel feature")
 
 
+def add_target_feature(parser: argparse.ArgumentParser) -> None:
+    """Accept the target features a CI leg pins, so the same leg is reproducible locally."""
+    parser.add_argument(
+        "--target-feature",
+        default=None,
+        help="target features to append to RUSTFLAGS, e.g. +avx2,+vpclmulqdq or -sha3",
+    )
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--dry-run", action="store_true", help="print commands without running them")
@@ -301,8 +310,10 @@ def parser() -> argparse.ArgumentParser:
     subparsers.add_parser("full", help="run all host checks used by CI")
     test = subparsers.add_parser("test", help="run tests with cargo-nextest")
     add_package_and_parallel(test)
+    add_target_feature(test)
     doctest = subparsers.add_parser("doctest", help="run Rust documentation tests")
     add_package_and_parallel(doctest)
+    add_target_feature(doctest)
     lint = subparsers.add_parser("lint", help="run formatting, lint, dependency and doc checks")
     lint.add_argument("--check", choices=LINT_COMMANDS, help="run one lint check")
     architecture = subparsers.add_parser(
@@ -310,6 +321,7 @@ def parser() -> argparse.ArgumentParser:
     )
     architecture.add_argument("--target", required=True)
     architecture.add_argument("--parallel", action="store_true")
+    add_target_feature(architecture)
     embedded = subparsers.add_parser(
         "embedded", help="build metadata-selected libraries for an embedded target"
     )
@@ -331,14 +343,33 @@ def display(command: Sequence[str]) -> str:
     return shlex.join(command)
 
 
-def command_environment(command: Sequence[str]) -> dict[str, str] | None:
-    if command[:3] != ["cargo", "+stable", "doc"]:
+def command_environment(
+    command: Sequence[str], target_feature: str | None = None
+) -> dict[str, str] | None:
+    """The environment one command runs under, or nothing to inherit the caller's unchanged.
+
+    Target features reach the compiler through `RUSTFLAGS`, never through the argv.
+
+    That is how the CI legs pin them, and it is what decides `cfg(target_feature = ..)`.
+
+    They are appended to whatever the caller already set.
+
+    So a leg that exports `-C debuginfo=0` keeps it.
+    """
+    rustdoc = command[:3] == ["cargo", "+stable", "doc"]
+    if not rustdoc and not target_feature:
         return None
     environment = os.environ.copy()
-    deny_broken_links = "-D rustdoc::broken_intra_doc_links"
-    current = environment.get("RUSTDOCFLAGS", "")
-    if deny_broken_links not in current:
-        environment["RUSTDOCFLAGS"] = f"{current} {deny_broken_links}".strip()
+    if target_feature:
+        flag = f"-C target-feature={target_feature}"
+        current = environment.get("RUSTFLAGS", "")
+        if flag not in current:
+            environment["RUSTFLAGS"] = f"{current} {flag}".strip()
+    if rustdoc:
+        deny_broken_links = "-D rustdoc::broken_intra_doc_links"
+        current = environment.get("RUSTDOCFLAGS", "")
+        if deny_broken_links not in current:
+            environment["RUSTDOCFLAGS"] = f"{current} {deny_broken_links}".strip()
     return environment
 
 
@@ -350,15 +381,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
+    # Only the subcommands that compile or run Rust accept target features.
+    target_feature = getattr(args, "target_feature", None)
+    if target_feature:
+        print(f"+ RUSTFLAGS += -C target-feature={target_feature}", flush=True)
     for command in commands:
         print(f"+ {display(command)}", flush=True)
         if not args.dry_run:
-            completed = subprocess.run(
-                command,
-                cwd=args.workspace_root,
-                env=command_environment(command),
-                check=False,
-            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=args.workspace_root,
+                    env=command_environment(command, target_feature),
+                    check=False,
+                )
+            except OSError as error:
+                # A missing tool is a prerequisite the contributor has not installed yet.
+                #
+                # Name it, rather than ending a long run in a stack trace.
+                print(
+                    f"error: {command[0]} not found ({error}); "
+                    "see CONTRIBUTING.md for the required tools",
+                    file=sys.stderr,
+                )
+                return 127
             if completed.returncode:
                 return completed.returncode
     return 0

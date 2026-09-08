@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import os
 from pathlib import Path
 import shlex
@@ -10,7 +11,10 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import unittest.mock
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 SCRIPT = Path(__file__).with_name("check.py")
 REPO = SCRIPT.parent.parent
@@ -344,11 +348,105 @@ class CargoMetadataTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("p3-examples", result.stdout)
-        self.assertNotIn("p3-field-testing", result.stdout)
-        self.assertIn("p3-binary-pcs", result.stdout)
+        # Pin the exclusions as a set, not a sample.
+        #
+        # A manifest opting out would otherwise shrink embedded coverage silently.
+        #
+        # Nothing in the test diff would say that a crate stopped being checked.
+        selected = {
+            shlex.split(line)[shlex.split(line).index("-p") + 1]
+            for line in result.stdout.splitlines()
+        }
+        members = subprocess.run(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+            cwd=REPO,
+            text=True,
+            stdout=subprocess.PIPE,
+            check=True,
+        )
+        library_members = {
+            package["name"]
+            for package in json.loads(members.stdout)["packages"]
+            if any("lib" in target["kind"] for target in package["targets"])
+        }
+        self.assertEqual(library_members - selected, {"p3-examples", "p3-field-testing"})
+        self.assertIn("p3-binary-pcs", selected)
         for line in result.stdout.splitlines():
             self.assertTrue(line.endswith(" --lib"), line)
+
+
+class TargetFeatureTests(unittest.TestCase):
+    def test_target_feature_reaches_rustflags_and_not_the_argv(self):
+        # A leg pins its features through RUSTFLAGS, since that is what decides
+        # cfg(target_feature = ..).
+        #
+        # The argv must therefore stay identical to the unpinned command.
+        for command, expected in [
+            (["architecture", "--target", "x86_64-unknown-linux-gnu"], "cargo build"),
+            (["test"], "cargo nextest run"),
+            (["doctest"], "cargo test --doc"),
+        ]:
+            with self.subTest(command=command[0]):
+                plain = _run_dry(command)
+                pinned = _run_dry([*command, "--target-feature", "+avx2,+vpclmulqdq"])
+                self.assertTrue(
+                    any(line.startswith(f"+ {expected}") for line in plain), plain
+                )
+                self.assertEqual(
+                    [line for line in pinned if not line.startswith("+ RUSTFLAGS")],
+                    plain,
+                )
+                self.assertIn(
+                    "+ RUSTFLAGS += -C target-feature=+avx2,+vpclmulqdq", pinned
+                )
+
+    def test_target_feature_appends_to_an_existing_rustflags(self):
+        # CI already exports -C debuginfo=0, so the append must not replace it.
+        import check  # noqa: PLC0415
+
+        environment = {"RUSTFLAGS": "-C debuginfo=0"}
+        with unittest.mock.patch.dict(os.environ, environment, clear=True):
+            resolved = check.command_environment(["cargo", "build"], "+avx2")
+        self.assertEqual(resolved["RUSTFLAGS"], "-C debuginfo=0 -C target-feature=+avx2")
+
+    def test_target_feature_append_is_idempotent(self):
+        # The workflow's own Set flags step may already have pinned the same leg.
+        import check  # noqa: PLC0415
+
+        environment = {"RUSTFLAGS": "-C debuginfo=0 -C target-feature=+avx2"}
+        with unittest.mock.patch.dict(os.environ, environment, clear=True):
+            resolved = check.command_environment(["cargo", "build"], "+avx2")
+        self.assertEqual(resolved["RUSTFLAGS"], "-C debuginfo=0 -C target-feature=+avx2")
+
+    def test_no_target_feature_inherits_the_environment_unchanged(self):
+        import check  # noqa: PLC0415
+
+        self.assertIsNone(check.command_environment(["cargo", "build"], None))
+
+    def test_docs_still_deny_broken_links_alongside_a_target_feature(self):
+        import check  # noqa: PLC0415
+
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            resolved = check.command_environment(
+                ["cargo", "+stable", "doc"], "+avx2"
+            )
+        self.assertEqual(resolved["RUSTFLAGS"], "-C target-feature=+avx2")
+        self.assertEqual(
+            resolved["RUSTDOCFLAGS"], "-D rustdoc::broken_intra_doc_links"
+        )
+
+
+def _run_dry(command):
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--workspace-root", str(REPO), "--dry-run", *command],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.splitlines()
+
 
 if __name__ == "__main__":
     unittest.main()
