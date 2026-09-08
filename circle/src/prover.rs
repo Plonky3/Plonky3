@@ -1,39 +1,57 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::iter;
 
 use itertools::{Itertools, izip};
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSample, CanSampleBits, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PrimeField64};
 use p3_fri::{FriFoldingStrategy, FriParameters, compute_log_arity_for_round};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
 
+use crate::transcript::CircleProverTranscript;
 use crate::{CircleCommitPhaseMultiStep, CircleFriProof};
 
-/// Arguments:
+/// Run the Circle-FRI low-degree test over the reduced openings.
+///
+/// Every commitment, grinding witness and challenge passes through the transcript.
+/// The caller seeded it, owns it, and closes it once this returns.
+///
+/// # Arguments
+///
+/// - `folding`: the Circle folding strategy.
+/// - `params`: the parameters for this FRI instance.
+/// - `inputs`: the folding inputs, sorted descending by length.
+/// - `transcript`: the described transcript this run plays into.
 /// - `open_inputs`: opens every input commitment at all query indices at once,
 ///   so the shared authentication paths can be deduplicated.
 #[instrument(name = "FRI prover", skip_all)]
-pub fn prove<Folding, Val, Challenge, M, Challenger>(
+pub(crate) fn prove<Folding, Val, Challenge, M, Challenger>(
     folding: &Folding,
     params: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
-    challenger: &mut Challenger,
+    transcript: &mut CircleProverTranscript<'_, Challenger, Val, Challenge>,
     open_inputs: impl FnOnce(&[usize]) -> Folding::InputProof,
-) -> CircleFriProof<Challenge, M, Challenger::Witness, Folding::InputProof>
+) -> CircleFriProof<Challenge, M, Val, Folding::InputProof>
 where
-    Val: Field,
+    Val: PrimeField64,
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
+    Challenger: CanObserve<Val>
+        + CanSample<Val>
+        + CanSampleBits<usize>
+        + GrindingChallenger<Witness = Val>
+        + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
-    assert!(
-        params.max_log_arity > 0,
-        "max_log_arity must be at least 1 to guarantee folding progress"
+    // Circle folding halves the domain and nothing else.
+    //
+    // The transcript is described with a round count derived from that.
+    // A larger cap would make the described run and the played one disagree.
+    assert_eq!(
+        params.max_log_arity, 1,
+        "Circle-FRI folds two points at a time, so max_log_arity must be 1"
     );
 
     // A zero-query instance performs no low-degree spot checks.
@@ -57,19 +75,13 @@ where
             .all(|(l, r)| l.len() >= r.len())
     );
 
-    let log_max_height = log2_strict_usize(inputs[0].len());
+    let commit_phase_result = commit_phase(folding, params, inputs, transcript);
 
-    let commit_phase_result = commit_phase(folding, params, inputs, challenger);
-
-    let pow_witness = challenger.grind(params.query_proof_of_work_bits);
-
-    // Sampling every index in one block leaves the transcript identical to sampling
-    // them one query at a time: nothing is observed between samples.
-    let indices: Vec<usize> = iter::repeat_with(|| {
-        challenger.sample_bits(log_max_height + folding.extra_query_index_bits())
-    })
-    .take(params.num_queries)
-    .collect();
+    // Bind the final constant, grind, and draw every query index.
+    //
+    // Indices are drawn in one block, so the birthday bound applies.
+    let (indices, pow_witness) = transcript.query_phase(commit_phase_result.final_poly);
+    let pow_witness = pow_witness.unwrap_or(Val::ZERO);
 
     let (input_openings, commit_phase_openings) = info_span!("query phase").in_scope(|| {
         // Openings of the inputs and of every commit-phase codeword at all queried
@@ -107,25 +119,32 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>, Witness> {
     final_poly: F,
 }
 
+/// Fold the inputs down to a constant, committing to every intermediate codeword.
+///
+/// # Arguments
+///
+/// - `folding`: the Circle folding strategy.
+/// - `params`: the parameters for this FRI instance.
+/// - `inputs`: the folding inputs, sorted descending by length.
+/// - `transcript`: the described transcript every commitment and challenge passes through.
 #[instrument(name = "commit phase", skip_all)]
 fn commit_phase<Folding, Val, Challenge, M, Challenger>(
     folding: &Folding,
     params: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
-    challenger: &mut Challenger,
-) -> CommitPhaseResult<Challenge, M, Challenger::Witness>
+    transcript: &mut CircleProverTranscript<'_, Challenger, Val, Challenge>,
+) -> CommitPhaseResult<Challenge, M, Val>
 where
-    Val: Field,
+    Val: PrimeField64,
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
+    Challenger: CanObserve<Val>
+        + CanSample<Val>
+        + CanSampleBits<usize>
+        + GrindingChallenger<Witness = Val>
+        + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
-    assert!(
-        params.max_log_arity > 0,
-        "max_log_arity must be at least 1 to guarantee folding progress"
-    );
-
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
@@ -152,11 +171,12 @@ where
 
         let leaves = RowMajorMatrix::new(folded, arity);
         let (commit, prover_data) = params.mmcs.commit_matrix(leaves);
-        challenger.observe(commit.clone());
 
-        pow_witnesses.push(challenger.grind(params.commit_proof_of_work_bits));
+        // One call binds the commitment, grinds, and draws the folding challenge.
+        let (beta, witness) = transcript.commit_round(commit.clone());
+        // A zero difficulty still occupies a slot, keeping the proof shape fixed.
+        pow_witnesses.push(witness.unwrap_or(Val::ZERO));
 
-        let beta: Challenge = challenger.sample_algebra_element();
         // We passed ownership of `current` to the MMCS, so get a reference to it
         let leaves = params.mmcs.get_matrices(&prover_data).pop().unwrap();
         folded = folding.fold_matrix(beta, log_arity, leaves.as_view());
@@ -175,7 +195,6 @@ where
     for x in folded {
         assert_eq!(x, final_poly);
     }
-    challenger.observe_algebra_element(final_poly);
 
     CommitPhaseResult {
         commits,
