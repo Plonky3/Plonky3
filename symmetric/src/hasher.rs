@@ -61,8 +61,8 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
 
     /// Hash a batch of equal-length messages, one digest per message.
     ///
-    /// All messages sit back to back in a single slice, so the common message length is
-    /// the input length divided by the number of requested digests:
+    /// All messages sit back to back in a single slice.
+    /// The common message length is the input length divided by the digest count:
     ///
     /// ```text
     ///     input: [ msg_0 | msg_1 | ... | msg_{m-1} ]   m * len items

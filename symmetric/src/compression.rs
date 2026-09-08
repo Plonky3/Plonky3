@@ -100,13 +100,13 @@ where
     }
 
     fn compress_many(&self, inputs: &[[[T; CHUNK]; N]], out: &mut [[T; CHUNK]]) {
-        // A group is `N` adjacent chunks of `CHUNK` items, so a run of groups is already one
-        // flat run of items with nothing between the groups:
+        // A group is `N` adjacent chunks of `CHUNK` items.
+        // A run of groups is therefore already one flat run of items:
         //
         //     inputs: [[c0 c1] [c2 c3] ...]  ->  flat: [c0 c1 c2 c3 ...]
         //
-        // Flattening twice therefore hands the hasher exactly the concatenated preimages that
-        // the single-group path builds one group at a time, with no copying.
+        // Flattening twice hands the hasher the concatenated preimages directly.
+        // No copying is needed.
         let messages = inputs.as_flattened().as_flattened();
 
         // Each message is `N * CHUNK` items long, so the batch hasher can split them itself.

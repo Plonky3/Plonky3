@@ -99,8 +99,8 @@ impl CryptographicPermutation<[u8; 200]> for KeccakF {}
 
 /// Byte rate of the Keccak-256 sponge.
 ///
-/// The permutation holds 1600 bits and the security target reserves twice the 256-bit digest
-/// as capacity, which leaves 1088 bits, exactly 136 bytes, absorbed per permutation.
+/// Capacity is twice the 256-bit digest, taken out of the 1600-bit permutation.
+/// That leaves 1088 bits, exactly 136 bytes, absorbed per permutation.
 const RATE: usize = (1600 - 2 * 256) / 8;
 
 /// Digest length of Keccak-256 in bytes.
@@ -149,8 +149,8 @@ fn absorb_into_lane(state: &mut [[u64; VECTOR_LEN]; 25], lane: usize, block: &[u
 ///                     offset                 rate - 1
 /// ```
 ///
-/// A message ending one byte short of the rate puts both marks in the same byte, and since both
-/// are applied by exclusive-or that byte simply becomes `0x81`, which is what the rule requires.
+/// A message ending one byte short of the rate puts both marks in the same byte.
+/// Exclusive-or makes that byte `0x81`, exactly what the rule requires.
 #[inline]
 fn pad_lane(state: &mut [[u64; VECTOR_LEN]; 25], lane: usize, offset: usize) {
     debug_assert!(offset < RATE);
@@ -233,22 +233,20 @@ impl CryptographicHasher<u8, [u8; 32]> for Keccak256Hash {
             return;
         }
 
-        // A message of `len` bytes fills this many whole rate blocks, leaving a shorter final
-        // block that carries the padding, possibly empty when the length divides the rate.
+        // Whole rate blocks are absorbed in lockstep, then one shorter final block.
+        // That final block carries the padding and is empty when the length divides the rate.
         let full_blocks = len / RATE;
         let final_block = len % RATE;
 
         // One message per lane per permutation.
-        // The last group may be short and simply leaves the unused lanes at their initial
-        // state, whose digests are never read.
+        // A short last group leaves the unused lanes at their initial state, never read.
         for (messages, digests) in input
             .chunks(len * VECTOR_LEN)
             .zip(out.chunks_mut(VECTOR_LEN))
         {
             let mut state = [[0u64; VECTOR_LEN]; 25];
 
-            // Absorb the whole blocks in lockstep: every lane contributes its block, then the
-            // single vectorized permutation advances all of the sponges together.
+            // Every lane contributes its block, then one permutation advances all the sponges.
             for block in 0..full_blocks {
                 for (lane, message) in messages.chunks_exact(len).enumerate() {
                     absorb_into_lane(&mut state, lane, &message[block * RATE..][..RATE]);
@@ -283,6 +281,7 @@ mod tests {
     /// Every message length that changes the shape of the absorb loop.
     ///
     /// The block boundaries are the interesting ones:
+    ///
     /// - A length one short of the rate folds both padding marks into a single byte.
     /// - A length that is an exact multiple of the rate pads a block carrying no message bytes.
     const SHAPE_LENGTHS: [usize; 14] = [
@@ -319,8 +318,8 @@ mod tests {
 
     #[test]
     fn hash_many_matches_scalar_across_block_shapes() {
-        // Batch sizes below, at, and above one full lane group, so the final short group is
-        // exercised at every lane count the target might compile to.
+        // Batch sizes below, at, and above one full lane group.
+        // The final short group is then exercised at every lane count the target compiles to.
         let counts: Vec<usize> = (1..=2 * VECTOR_LEN + 1).collect();
 
         for len in SHAPE_LENGTHS {
@@ -342,8 +341,8 @@ mod tests {
 
     #[test]
     fn hash_many_splits_input_by_digest_count() {
-        // The message length is derived from the input length divided by the digest count, so
-        // 64 bytes and 4 digests must be read as four adjacent 16-byte messages.
+        // The message length is the input length divided by the digest count.
+        // 64 bytes and 4 digests therefore read as four adjacent 16-byte messages.
         let messages: Vec<u8> = (0..64).map(|i| i as u8).collect();
 
         // 4 messages of 16 bytes each.
@@ -358,8 +357,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "must be a whole multiple")]
     fn hash_many_rejects_ragged_input() {
-        // 5 bytes cannot split into 2 equal messages, so the contract is violated up front
-        // rather than producing digests over silently misaligned message boundaries.
+        // 5 bytes cannot split into 2 equal messages.
+        // The contract fails up front rather than misaligning message boundaries.
         let mut digests = [[0u8; 32]; 2];
         Keccak256Hash.hash_many(&[1, 2, 3, 4, 5], &mut digests);
     }
