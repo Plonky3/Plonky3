@@ -1,3 +1,5 @@
+mod pcs;
+
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -9,6 +11,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
+pub use pcs::assert_pcs_opening_contract;
 use serde::{Deserialize, Serialize};
 
 use crate::{

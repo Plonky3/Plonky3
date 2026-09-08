@@ -2050,60 +2050,47 @@ mod babybear_pcs {
     }
 
     fn do_test_pcs(log_degrees: &[usize]) {
-        #[allow(unused_imports)]
-        use p3_commit::Pcs as _;
+        use p3_commit::PolynomialSpace;
+        use p3_commit::testing::assert_pcs_opening_contract;
 
-        let (pcs, challenger_template) = get_pcs();
-        let mut rng = seeded_rng();
-
-        let mut p_challenger = challenger_template.clone();
-
-        // Commit: one round with multiple matrices.
-        let domains_and_polys: Vec<_> = log_degrees
+        let (pcs, challenger) = get_pcs();
+        if log_degrees.len() == 1 {
+            // Preserve the isolated schedules on random full-degree inputs. The shared
+            // batched contract needs a nonempty commitment after removing a matrix.
+            round_trip_under(&pcs, &challenger, log_degrees, &[3]);
+            return;
+        }
+        let matrices: Vec<_> = log_degrees
             .iter()
-            .map(|&log_d| {
-                let d = 1 << log_d;
-                let width = 3;
-                (
-                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, d),
-                    RowMajorMatrix::<Val>::rand(&mut rng, d, width),
-                )
+            .enumerate()
+            .map(|(matrix_index, &log_degree)| {
+                let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                    &pcs,
+                    1 << log_degree,
+                );
+                let mut x = domain.first_point();
+                let mut values = Vec::new();
+                for _ in 0..domain.size() {
+                    values.extend([
+                        x.square() + Val::from_usize(2 + matrix_index),
+                        x + Val::from_usize(7 + matrix_index),
+                        Val::from_usize(23 + matrix_index),
+                        // Reach the degree bound while keeping the expected value independent.
+                        x.exp_u64((domain.size() - 1) as u64),
+                    ]);
+                    x = domain.next_point(x).unwrap();
+                }
+                (domain, RowMajorMatrix::new(values, 4))
             })
             .collect();
-
-        let (commit, data) =
-            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
-        observe_commitment(&mut p_challenger, &commit);
-
-        let zeta: Challenge = p_challenger.sample_algebra_element();
-
-        let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
-        let data_and_points = vec![(&data, points)];
-        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
-            &pcs,
-            data_and_points.into_iter().map(Into::into).collect(),
-            &mut p_challenger,
-        );
-
-        // Verify.
-        let mut v_challenger = challenger_template;
-        observe_commitment(&mut v_challenger, &commit);
-        let v_zeta: Challenge = v_challenger.sample_algebra_element();
-        assert_eq!(v_zeta, zeta);
-
-        let claims: Vec<_> = domains_and_polys
-            .iter()
-            .zip(opening_values.first().unwrap().iter())
-            .map(|((domain, _), mat_openings)| (*domain, vec![(zeta, mat_openings[0].clone())]))
-            .collect();
-
-        <MyPcs as Pcs<Challenge, Challenger>>::verify(
-            &pcs,
-            vec![(commit, claims).into()],
-            &proof,
-            &mut v_challenger,
-        )
-        .unwrap_or_else(|e| panic!("PCS verification failed: {e:?}"));
+        assert_pcs_opening_contract(&pcs, &challenger, &[matrices], |_, matrix_index, point| {
+            vec![
+                point.square() + Challenge::from_usize(2 + matrix_index),
+                point + Challenge::from_usize(7 + matrix_index),
+                Challenge::from_usize(23 + matrix_index),
+                point.exp_u64(((1usize << log_degrees[matrix_index]) - 1) as u64),
+            ]
+        });
     }
 
     #[test]

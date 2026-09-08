@@ -10,10 +10,17 @@ Key items:
 - `Mmcs` — "Mixed Matrix Commitment Scheme", a vector-commitment abstraction over batches of matrices of differing heights
 - `PolynomialSpace` and `TwoAdicMultiplicativeCoset` — evaluation-domain abstractions
 - `periodic` — periodic-column evaluation helpers
-- `testing` — mock instantiations for downstream tests
+- `testing` (the opt-in `test-utils` feature) — mock instantiations and shared PCS contract checks for downstream tests
 
 Implementations live in `p3-merkle-tree` (Mmcs), `p3-fri`, `p3-circle` and
 `p3-whir` (Pcs).
+
+`testing::assert_pcs_opening_contract` exercises real transparent backends with
+caller-supplied matrices and independently computed expected values. It checks
+batched opening order, honest verification, transcript agreement, and rejection
+of swapped point fields, modified values and missing matrix/column claims. Fixtures
+must include a multi-matrix commitment and point-dependent expected values. FRI,
+Circle, and STIR use this helper alongside their backend-specific tests.
 
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.
 
