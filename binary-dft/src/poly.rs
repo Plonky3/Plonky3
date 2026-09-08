@@ -386,23 +386,31 @@ impl Rows {
 
     /// Copy the rows `first`, `first + stride`, ... into consecutive rows of the tile.
     ///
+    /// The tile is emptied first and then grown one row at a time.
+    ///
+    /// So it holds no element the walk did not write.
+    ///
+    /// And a worker never has to zero a tile it is about to overwrite in full.
+    ///
+    /// A tile whose capacity already covers the walk grows without reallocating.
+    ///
     /// # Safety
     /// No other live task may address any of the rows the walk names.
-    unsafe fn gather(&self, first: usize, stride: usize, tile: &mut [u128]) {
-        let rows = tile.chunks_exact_mut(self.width);
-        self.check(first, stride, rows.len());
-        for (k, row) in rows.enumerate() {
+    unsafe fn gather(&self, first: usize, stride: usize, rows: usize, tile: &mut Vec<u128>) {
+        self.check(first, stride, rows);
+        tile.clear();
+        for k in 0..rows {
             // SAFETY: the bound above puts every row of the walk inside the matrix, and the
-            // tile is a separate allocation, so the two ranges cannot overlap.
+            // exclusive borrow the base pointer came from outlives the task.
             //
-            // The row is a whole chunk, so it has room for exactly the elements copied into it.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
+            // No other live task addresses this row, so nothing can write it during the read.
+            let row = unsafe {
+                core::slice::from_raw_parts(
                     self.base.add((first + k * stride) * self.width),
-                    row.as_mut_ptr(),
                     self.width,
-                );
-            }
+                )
+            };
+            tile.extend_from_slice(row);
         }
     }
 
@@ -504,7 +512,10 @@ fn fused_stages(
         // exactly one task.
         //
         // The exclusive borrow of the matrix outlives the whole region.
-        unsafe { rows.gather(first, stride, tile) };
+        unsafe { rows.gather(first, stride, 1 << depth, tile) };
+        // Invariant: every element of the tile comes from the walk the gather just ran, so
+        // nothing below reads an element the gather did not write.
+        debug_assert_eq!(tile.len(), tile_len, "the gather left the tile short");
         // The gather is the first read of every element when this is the first group of a
         // forward transform.
         if convert_basis && !inverse {
@@ -523,7 +534,11 @@ fn fused_stages(
 
     // One staging tile per worker, not per task: a task is a few tens of microseconds of
     // work and the tile is tens of kilobytes.
-    let new_tile = || alloc::vec![0u128; tile_len];
+    //
+    // The tile is capacity only, with no initialized elements: the gather grows it from
+    // empty, so no worker spends bandwidth zeroing tens of kilobytes it is about to
+    // overwrite in full.
+    let new_tile = || Vec::with_capacity(tile_len);
     if use_parallel(len.saturating_mul(depth)) {
         (0..tiles).into_par_iter().for_each_init(new_tile, task);
     } else {
