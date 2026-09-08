@@ -277,7 +277,7 @@ mod tests {
             );
         }
 
-        let mut rng = SmallRng::seed_from_u64(0x4D_D5_32_64);
+        let mut rng = SmallRng::seed_from_u64(0x4DD5_3264);
         for _ in 0..32 {
             let input32 = Goldilocks::new_array(rng.random());
             let input64 = Goldilocks::new_array(rng.random());

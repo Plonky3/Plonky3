@@ -51,7 +51,7 @@ fn bench_quintic_extension(c: &mut Criterion) {
 }
 
 fn bench_cubic_frobenius(c: &mut Criterion) {
-    let mut rng = SmallRng::seed_from_u64(0xF0B3_1A5);
+    let mut rng = SmallRng::seed_from_u64(0x0F0B_31A5);
     let inputs: [EF3; 64] = core::array::from_fn(|_| rng.random());
     c.bench_function(
         "CubicTrinomialExtensionField<Goldilocks> frobenius (varying inputs)",
@@ -68,7 +68,7 @@ fn bench_cubic_frobenius(c: &mut Criterion) {
 }
 
 fn bench_cubic_inverse(c: &mut Criterion) {
-    let mut rng = SmallRng::seed_from_u64(0x1A2B_125);
+    let mut rng = SmallRng::seed_from_u64(0x01A2_B125);
     let inputs: [EF3; 64] = core::array::from_fn(|_| rng.random());
     c.bench_function(
         "CubicTrinomialExtensionField<Goldilocks> inverse (varying inputs)",

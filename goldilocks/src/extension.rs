@@ -271,7 +271,7 @@ mod test_cubic_trinomial_extension {
             }
         }
 
-        let mut rng = SmallRng::seed_from_u64(0xF0B3_1A5);
+        let mut rng = SmallRng::seed_from_u64(0x0F0B_31A5);
         for _ in 0..128 {
             let x = EF::new([
                 F::new(rng.random()),
