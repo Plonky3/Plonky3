@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_symbolic_constraints};
 use p3_air::{Air, RowWindow};
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::GrindingChallenger;
 use p3_commit::{Pcs, PolynomialSpace};
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use p3_field::Field;
@@ -16,9 +16,9 @@ use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData, Proof,
-    ProverConstraintFolder, StarkGenericConfig, Val, get_constraint_layout,
-    get_log_num_quotient_chunks_for_domain, observe_commitment,
+    Com, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData,
+    Proof, ProverConstraintFolder, StarkGenericConfig, StarkProverTranscript, StarkShape, Val,
+    get_constraint_layout, get_log_num_quotient_chunks_for_domain,
 };
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use crate::{VectorizedChallenge, VectorizedConstraintFolder, VectorizedVal};
@@ -222,27 +222,24 @@ where
         .map(|pp| (pp.commitment.clone(), &pp.prover_data))
         .unzip();
 
-    // Observe the instance.
-    // degree < 2^255 so we can safely cast log_degree to a u8.
-    challenger.observe(Val::<SC>::from_u8(log_ext_degree as u8));
-    challenger.observe(Val::<SC>::from_u8(log_degree as u8));
-    challenger.observe(Val::<SC>::from_usize(preprocessed_width));
-    // TODO: Might be best practice to include other instance data here; see verifier comment.
+    // Describe the transcript before running it.
+    //
+    // Every number comes from the configuration and from the AIR, never from a proof.
+    // The verifier builds the identical description from its own copies of both.
+    let mut transcript = StarkProverTranscript::<SC::Challenger, Val<SC>, SC::Challenge>::new(
+        &mut challenger,
+        StarkShape::new::<Val<SC>, A>(
+            air,
+            preprocessed_width,
+            log_ext_degree,
+            log_degree,
+            num_quotient_chunks,
+            SC::Pcs::ZK,
+            config.ood_proof_of_work_bits(),
+        ),
+    );
 
-    // Observe the Merkle root of the trace commitment.
-    observe_commitment::<SC>(&mut challenger, trace_commit.clone());
-    if preprocessed_width > 0 {
-        observe_commitment::<SC>(
-            &mut challenger,
-            preprocessed_commit.as_ref().unwrap().clone(),
-        );
-    }
-
-    // Observe the public input values.
-    challenger.observe_slice(public_values);
-
-    // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
-    // into a single polynomial.
+    // Bind both committed traces and the public values, then draw the batching challenge.
     //
     // Soundness Error:
     // If a prover is malicious, we can find a row `i` such that some of the constraints
@@ -252,16 +249,17 @@ where
     // This is a polynomial of degree n, so it has at most n roots. Thus the probability of this
     // occurring for a given trace and set of constraints is n/|EF|.
     //
-    // Currently, we do not observe data about the constraint polynomials directly. In particular
-    // a prover could take a trace and fiddle around with the AIR it claims to satisfy without
-    // changing this sample alpha.
+    // The AIR's shape reaches the seed through the transcript's own description.
+    // A wider trace or another quotient chunk count therefore draws a different alpha.
     //
-    // In particular this means that a malicious prover could create a custom AIR for a given trace
-    // such that equation (1) holds. However, such AIRs would need to be very specific and
-    // so such tampering should be obvious to spot. The verifier needs to check the AIR anyway to
-    // confirm that satisfying it indeed proves what the prover claims. Hence this should not be
-    // a soundness issue.
-    let alpha: SC::Challenge = challenger.sample_algebra_element();
+    // What the seed does not carry is the constraint polynomials themselves.
+    // A prover may claim another AIR of the same shape without moving this sample.
+    // The verifier evaluates the AIR it holds, so checking that AIR is its job regardless.
+    let alpha = transcript.constraint_phase::<Com<SC>>(
+        trace_commit.clone(),
+        preprocessed_commit.filter(|_| preprocessed_width > 0),
+        public_values,
+    );
 
     // A domain large enough to uniquely identify the quotient polynomial.
     // This domain must be contained in the domain over which `trace_data` is defined.
@@ -323,7 +321,6 @@ where
     //          - quotient_data.leaves is a pair of matrices containing the `q_i0(x)` and `q_i1(x)`.
     let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
         .in_scope(|| pcs.commit_quotient(quotient_domain, quotient_flat, num_quotient_chunks));
-    observe_commitment::<SC>(&mut challenger, quotient_commit.clone());
 
     // If zk is enabled, we generate random extension field values of the size of the randomized trace. If `n` is the degree of the initial trace,
     // then the randomized trace has degree `2n`. To randomize the FRI batch polynomial, we then need an extension field random polynomial of degree `2n -1`.
@@ -350,11 +347,7 @@ where
         random: opt_r_commit.clone(),
     };
 
-    if let Some(r_commit) = opt_r_commit {
-        observe_commitment::<SC>(&mut challenger, r_commit);
-    }
-
-    // Get an out-of-domain point to open our values at.
+    // Bind the quotient chunks and any randomization polynomial, grind, then draw the point.
     //
     // Soundness Error:
     // This sample will be used to check the equality: `C(X) = ZH(X)Q(X)`. If a prover is malicious
@@ -369,8 +362,10 @@ where
     // Grinding before the sample makes each attempt at a favourable `zeta` cost
     // `2^ood_proof_of_work_bits` work, adding that many bits to the round's error above. `dN/|EF|`
     // is fixed by the AIR and the trace height, so this grind is the only parameter that moves it.
-    let ood_pow_witness = challenger.grind(config.ood_proof_of_work_bits());
-    let zeta: SC::Challenge = challenger.sample_algebra_element();
+    let (zeta, ood_pow_witness) =
+        transcript.ood_phase::<Com<SC>>(commitments.quotient_chunks.clone(), opt_r_commit);
+    // A zero difficulty still occupies a slot in the proof, keeping its shape fixed.
+    let ood_pow_witness = ood_pow_witness.unwrap_or(Val::<SC>::ZERO);
     let zeta_next = trace_domain
         .next_point(zeta)
         .expect("domain should support next_point operation");
@@ -402,8 +397,17 @@ where
             .chain(round3)
             .collect();
 
-        pcs.open_with_preprocessing(rounds, &mut challenger, preprocessed_data_ref.is_some())
+        // Run the opening argument inside the bracket, lending it the sponge.
+        //
+        // It seeds its own description from the sponge state reached here.
+        transcript.delegate(|challenger| {
+            pcs.open_with_preprocessing(rounds, challenger, preprocessed_data_ref.is_some())
+        })
     });
+
+    // Every described step has now been played.
+    transcript.finish();
+
     let trace_idx = SC::Pcs::TRACE_IDX;
     let quotient_idx = SC::Pcs::QUOTIENT_IDX;
     let trace_local = opened_values[trace_idx][0][0].clone();
