@@ -215,25 +215,20 @@ impl core::fmt::Display for PowPhase {
     }
 }
 
-/// Turn a failed transcript step into the matching verification error.
-///
-/// The grinding phase is a property of where the step sits in the run, so the
-/// caller replaying that step supplies it.
-const fn fri_error_from<CommitMmcsErr, InputError>(
-    failure: TranscriptFailure,
-    phase: PowPhase,
-) -> FriError<CommitMmcsErr, InputError>
+impl<CommitMmcsErr, InputError> From<TranscriptFailure> for FriError<CommitMmcsErr, InputError>
 where
     CommitMmcsErr: core::fmt::Debug,
     InputError: core::fmt::Debug,
 {
-    match failure {
-        // A witness that is absent and one that is too weak both fail the same step.
-        TranscriptFailure::PowWitness | TranscriptFailure::MissingPowWitness => {
-            FriError::InvalidPowWitness(phase)
-        }
-        TranscriptFailure::FinalPolyLen { expected, got } => {
-            FriError::FinalPolyLengthMismatch { expected, got }
+    fn from(failure: TranscriptFailure) -> Self {
+        match failure {
+            // A witness that is absent and one that is too weak fail the same step.
+            TranscriptFailure::PowWitness(phase) | TranscriptFailure::MissingPowWitness(phase) => {
+                Self::InvalidPowWitness(phase)
+            }
+            TranscriptFailure::FinalPolyLen { expected, got } => {
+                Self::FinalPolyLengthMismatch { expected, got }
+            }
         }
     }
 }
@@ -455,14 +450,12 @@ where
         .map(|(comm, witness)| {
             transcript
                 .commit_round(comm.clone(), Some(*witness))
-                .map_err(|e| fri_error_from(e, PowPhase::CommitPhase))
+                .map_err(FriError::from)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
     // Bind the final polynomial, re-check the query grind, redraw the indices.
-    let indices = transcript
-        .query_phase(&proof.final_poly, Some(proof.query_pow_witness))
-        .map_err(|e| fri_error_from(e, PowPhase::Query))?;
+    let indices = transcript.query_phase(&proof.final_poly, Some(proof.query_pow_witness))?;
 
     // Every described step has now been replayed.
     transcript.finish();
@@ -887,7 +880,7 @@ where
                     height,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, FriError<FriMmcs::Error, InputMmcs::Error>>>()?;
 
         // If the maximum height of the batch is smaller than the global max height,
         // we need to correct the indices by right shifting them.

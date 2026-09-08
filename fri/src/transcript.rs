@@ -37,6 +37,7 @@ use p3_challenger::fs::{
 use p3_challenger::{CanObserve, CanSample, CanSampleBits, GrindingChallenger};
 use p3_field::{ExtensionField, PrimeField64};
 
+use crate::verifier::PowPhase;
 use crate::{FriParameters, fold_schedule};
 
 /// Version byte bound into the transcript seed.
@@ -372,11 +373,11 @@ where
             // Releasing the completeness check keeps this rejection the only failure.
             let Some(witness) = witness else {
                 self.state.abort();
-                return Err(TranscriptFailure::MissingPowWitness);
+                return Err(TranscriptFailure::MissingPowWitness(PowPhase::CommitPhase));
             };
             self.state
                 .observe_pow(COMMIT_POW, self.shape.commit_pow_bits, witness)
-                .map_err(|_| TranscriptFailure::PowWitness)?;
+                .map_err(|_| TranscriptFailure::PowWitness(PowPhase::CommitPhase))?;
         }
 
         Ok(self
@@ -411,11 +412,11 @@ where
             // Releasing the completeness check keeps this rejection the only failure.
             let Some(witness) = witness else {
                 self.state.abort();
-                return Err(TranscriptFailure::MissingPowWitness);
+                return Err(TranscriptFailure::MissingPowWitness(PowPhase::Query));
             };
             self.state
                 .observe_pow(QUERY_POW, self.shape.query_pow_bits, witness)
-                .map_err(|_| TranscriptFailure::PowWitness)?;
+                .map_err(|_| TranscriptFailure::PowWitness(PowPhase::Query))?;
         }
 
         Ok(self
@@ -439,12 +440,15 @@ where
 }
 
 /// A transcript step the proof failed to satisfy.
+///
+/// Only the two grinding steps a FRI run replays are reachable here.
+/// The one guarding the batching challenge is drawn before the run starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TranscriptFailure {
-    /// A grinding witness did not meet the required difficulty.
-    PowWitness,
+    /// A grinding witness did not meet the difficulty its step requires.
+    PowWitness(PowPhase),
     /// A described grinding step arrived with no witness to replay it.
-    MissingPowWitness,
+    MissingPowWitness(PowPhase),
     /// The final polynomial carries a coefficient count the run never described.
     FinalPolyLen {
         /// Coefficient count the run was described with.
@@ -530,7 +534,10 @@ mod tests {
             .commit_round([F::ONE; 8], None)
             .expect_err("a described grinding step with no witness must error");
 
-        assert_eq!(err, TranscriptFailure::MissingPowWitness);
+        assert_eq!(
+            err,
+            TranscriptFailure::MissingPowWitness(PowPhase::CommitPhase)
+        );
     }
 
     #[test]
