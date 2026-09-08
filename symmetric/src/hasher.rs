@@ -12,6 +12,14 @@ pub trait CryptographicHasher<Item: Clone, Out>: Clone {
     /// Callers read this only to decide whether grouping messages is worth the bookkeeping.
     const LANES: usize = 1;
 
+    /// Whether materializing a compound input iterator can improve hashing throughput.
+    ///
+    /// Callers concatenating disjoint inputs may use this hint to reuse a contiguous
+    /// staging buffer and pass its simple iterator to [`Self::hash_iter`]. It is not
+    /// a request to copy inputs that already have an efficient iterator, nor does it
+    /// affect the digest: the input sequence and message boundaries must stay identical.
+    const PREFER_CONTIGUOUS_INPUT: bool = false;
+
     /// Hash an iterator of input items.
     /// # Arguments
     /// - `input`: An iterator over items to be hashed.

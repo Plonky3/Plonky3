@@ -191,6 +191,10 @@ where
     F: Field,
     Inner: CryptographicHasher<[u64; M], [[u64; M]; N]>,
 {
+    // Flattened iterators inhibit vectorization when pairing 32-bit elements into u64s.
+    // Staging does not help the direct u64 mapping of 64-bit fields.
+    const PREFER_CONTIGUOUS_INPUT: bool = M > 1 && F::NUM_BYTES == 4;
+
     fn hash_iter<I>(&self, input: I) -> [[u64; M]; N]
     where
         I: IntoIterator<Item = [F; M]>,
