@@ -99,19 +99,45 @@ impl FriShape {
     /// - `input_log_heights`: log-heights of the folding inputs, strictly decreasing.
     /// - `index_bits`: bit width of each query index.
     ///
+    /// # Panics
+    ///
+    /// When the input heights are not strictly decreasing.
     #[must_use]
     pub fn new<M>(
         params: &FriParameters<M>,
         input_log_heights: &[usize],
         index_bits: usize,
     ) -> Self {
+        // The schedule is a function of the heights and the parameters.
+        let log_arities = fold_schedule(
+            input_log_heights,
+            params.log_blowup + params.log_final_poly_len,
+            params.max_log_arity,
+        );
+
+        Self::with_schedule(params, log_arities, index_bits)
+    }
+
+    /// Build the shape around a schedule the caller already holds.
+    ///
+    /// Every other number still comes from the parameters.
+    ///
+    /// A caller holding its own schedule skips the derivation.
+    /// A deliberately forged schedule is the other case: no derivation produces one.
+    ///
+    /// # Arguments
+    ///
+    /// - `params`: the protocol parameters.
+    /// - `log_arities`: one log-arity per commit round, in round order.
+    /// - `index_bits`: bit width of each query index.
+    #[must_use]
+    pub const fn with_schedule<M>(
+        params: &FriParameters<M>,
+        log_arities: Vec<usize>,
+        index_bits: usize,
+    ) -> Self {
         Self {
-            // The schedule is a function of the heights and the parameters.
-            log_arities: fold_schedule(
-                input_log_heights,
-                params.log_blowup + params.log_final_poly_len,
-                params.max_log_arity,
-            ),
+            log_arities,
             final_poly_len: params.final_poly_len(),
             commit_pow_bits: params.commit_proof_of_work_bits,
             query_pow_bits: params.query_proof_of_work_bits,

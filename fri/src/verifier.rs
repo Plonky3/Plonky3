@@ -435,9 +435,10 @@ where
     // FRI's, so seeding starts here.
     let mut transcript = VerifierTranscript::<Challenger, Val, Challenge>::new(
         challenger,
-        FriShape::new(
+        // The schedule checked above is the one the run is described with.
+        FriShape::with_schedule(
             params,
-            &input_log_heights,
+            expected_schedule,
             log_global_max_height + folding.extra_query_index_bits(),
         ),
     );

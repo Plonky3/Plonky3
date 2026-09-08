@@ -160,18 +160,18 @@ where
         .iter()
         .map(|input| log2_strict_usize(input.len()))
         .collect();
-    let mut shape = FriShape::new(
-        params,
-        &input_log_heights,
-        log_global_max_height + folding.extra_query_index_bits(),
-    );
+    let index_bits = log_global_max_height + folding.extra_query_index_bits();
 
-    // A forged schedule replaces the derived one here, before anything reads it.
+    // A forged schedule stands in for the derived one, so no derivation runs.
     //
-    // Folding, the described transcript and the proof then all agree with the forgery.
-    if let Some(schedule) = schedule {
-        shape.log_arities = schedule;
-    }
+    // `fold_schedule` asserts strictly decreasing heights.
+    // Inputs of equal length clear this function's own sort check but not that one.
+    //
+    // Folding, the described transcript and the proof all agree with whichever wins.
+    let shape = schedule.map_or_else(
+        || FriShape::new(params, &input_log_heights, index_bits),
+        |log_arities| FriShape::with_schedule(params, log_arities, index_bits),
+    );
 
     // Folding walks the described schedule, so the two cannot drift apart.
     let log_arities = shape.log_arities.clone();
