@@ -18,8 +18,8 @@ use crate::{CircleCommitPhaseMultiStep, CircleFriProof};
 ///
 /// Nothing here reads a challenge, and nothing here is described by the transcript.
 ///
-/// It runs before the transcript is seeded, so a proof of the wrong shape is
-/// rejected without a driver ever being constructed.
+/// It runs before the transcript is seeded.
+/// A proof of the wrong shape is therefore rejected without a driver ever existing.
 ///
 /// # Arguments
 ///
@@ -77,8 +77,8 @@ where
     //     H_claim = max claimed log_n + log_blowup
     //     rounds  = H_claim - 1 - log_blowup      (the first layer takes one bit)
     //
-    // Reporting the heights rather than the counts keeps the error comparable
-    // with the one the query phase would have raised.
+    // The error reports heights rather than counts.
+    // That is the pair the query phase would have compared, so the two read alike.
     if proof.commit_phase_commits.len() != num_commit_rounds {
         return Err(FriError::GlobalMaxHeightMismatch {
             expected: num_commit_rounds + params.log_blowup + 1,
@@ -167,8 +167,9 @@ where
 /// - `betas`: the folding challenge of each round, redrawn from the transcript.
 /// - `indices`: the query indices, redrawn from the transcript.
 /// - `log_arities`: the validated schedule, one entry per round.
-/// - `open_inputs`: checks every input commitment's shared multi-opening and returns,
-///   for each query, its reduced openings sorted by height descending.
+/// - `open_inputs`: checks every input commitment's shared multi-opening.
+///   It returns, for each query, that query's reduced openings.
+///   Those arrive sorted by height, tallest first.
 ///
 /// # Errors
 ///
