@@ -23,22 +23,8 @@ use p3_field::{
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
-use crate::clmul::TAIL_128;
+use super::split::{HIGH_BY_HIGH, LOW_BY_LOW, Lanes, fold_shifted};
 use crate::{Gf2, Ghash128};
-
-/// Selects the low quadword of both operands.
-///
-/// Bit 0 picks the half of the first argument, bit 4 the half of the second.
-pub(crate) const LOW_BY_LOW: i32 = 0x00;
-
-/// Selects the high quadword of both operands.
-pub(crate) const HIGH_BY_HIGH: i32 = 0x11;
-
-/// Selects the high quadword of the first operand and the low quadword of the second.
-pub(crate) const HIGH_BY_LOW: i32 = 0x01;
-
-/// Selects the low quadword of the first operand and the high quadword of the second.
-pub(crate) const LOW_BY_HIGH: i32 = 0x10;
 
 /// Swaps the two quadwords of every lane, so `x ^ swap(x)` holds `x_lo ^ x_hi` in both halves.
 const SWAP_QUADWORDS: i32 = 0x4e;
@@ -246,6 +232,36 @@ pub(crate) mod lanes {
 
 use lanes::WIDTH;
 
+// The register is the production backend of the shared algebra in `super::split`.
+//
+// Every method is one intrinsic, so the generic code monomorphizes to the same instructions.
+impl Lanes for lanes::Reg {
+    #[inline(always)]
+    fn zero() -> Self {
+        lanes::zero()
+    }
+
+    #[inline(always)]
+    fn broadcast(value: u128) -> Self {
+        lanes::broadcast(value)
+    }
+
+    #[inline(always)]
+    fn xor(self, other: Self) -> Self {
+        lanes::xor(self, other)
+    }
+
+    #[inline(always)]
+    fn unpack_low_64(self, other: Self) -> Self {
+        lanes::unpack_low_64(self, other)
+    }
+
+    #[inline(always)]
+    fn clmul<const IMM: i32>(self, other: Self) -> Self {
+        lanes::clmul::<IMM>(self, other)
+    }
+}
+
 /// Several elements of the polynomial-basis `GF(2^128)`, one per 128-bit lane of a register.
 ///
 /// Two under `AVX2`, four under `AVX-512`.
@@ -278,43 +294,6 @@ impl PackedGhash128 {
     #[inline]
     const fn broadcast(value: Ghash128) -> Self {
         Self([value; WIDTH])
-    }
-
-    /// The modulus tail in the low quadword of every lane.
-    ///
-    /// The broadcast intrinsic keeps the constant in a register.
-    ///
-    /// An array literal goes through memory, which some targets fill with a libc call.
-    #[inline]
-    fn tail() -> lanes::Reg {
-        lanes::broadcast(TAIL_128)
-    }
-
-    /// One Horner step of the reduction, in every lane at once.
-    ///
-    /// Splitting the second argument into its 64-bit halves rewrites the part that overflows:
-    ///
-    /// ```text
-    ///     T  = x^7 + x^2 + x + 1                    the modulus tail, since x^128 = T
-    ///     t1 = t1_lo + t1_hi x^64
-    ///
-    ///     t1 x^64 = t1_lo x^64 + t1_hi T
-    /// ```
-    ///
-    /// Both rewritten terms stay below `x^128`, so one step is exact here.
-    ///
-    /// One step lowers the second argument's weight by `x^64`.
-    ///
-    /// A product spanning more than three 64-bit limbs therefore needs one step per extra limb.
-    #[inline]
-    pub(crate) fn fold_shifted(t0: lanes::Reg, t1: lanes::Reg) -> lanes::Reg {
-        // Interleaving against zero moves the low quadword up, scaling by x^64.
-        let raised = lanes::unpack_low_64(lanes::zero(), t1);
-
-        // The high quadword times the tail is what the modulus rewrites.
-        let folded = lanes::clmul::<HIGH_BY_LOW>(t1, Self::tail());
-
-        lanes::xor(t0, lanes::xor(raised, folded))
     }
 }
 
@@ -385,7 +364,7 @@ impl Mul for PackedGhash128 {
         );
 
         // Inner fold brings the top limb down, outer fold finishes the reduction.
-        Self::from_vector(Self::fold_shifted(low, Self::fold_shifted(middle, high)))
+        Self::from_vector(fold_shifted(low, fold_shifted(middle, high)))
     }
 }
 
@@ -425,12 +404,8 @@ impl PrimeCharacteristicRing for PackedGhash128 {
         // coefficient and the inner fold has nothing to add to.
         let low = lanes::clmul::<LOW_BY_LOW>(x, x);
         let high = lanes::clmul::<HIGH_BY_HIGH>(x, x);
-        let folded = lanes::xor(
-            lanes::unpack_low_64(lanes::zero(), high),
-            lanes::clmul::<HIGH_BY_LOW>(high, Self::tail()),
-        );
 
-        Self::from_vector(Self::fold_shifted(low, folded))
+        Self::from_vector(fold_shifted(low, fold_shifted(lanes::zero(), high)))
     }
 
     #[inline]
@@ -454,7 +429,7 @@ impl PrimeCharacteristicRing for PackedGhash128 {
         middle = lanes::xor(middle, lanes::xor(low, high));
 
         // Reduction is linear, so the whole sum folds the modulus once.
-        Self::from_vector(Self::fold_shifted(low, Self::fold_shifted(middle, high)))
+        Self::from_vector(fold_shifted(low, fold_shifted(middle, high)))
     }
 
     #[inline]

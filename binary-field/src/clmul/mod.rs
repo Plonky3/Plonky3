@@ -42,10 +42,15 @@ pub(crate) use inverse::poly_inverse_128;
 mod portable;
 
 // The modulus tail, which only a packed backend folds with directly.
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    any(target_feature = "avx2", target_feature = "avx512f")
+//
+// The scalar model of that fold needs it on every target, so `test` widens the gate.
+#[cfg(any(
+    test,
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    )
 ))]
 pub(crate) use basis::TAIL_128;
 pub(crate) use basis::{poly_to_tower_128, tower_image_128, tower_to_poly_128};
