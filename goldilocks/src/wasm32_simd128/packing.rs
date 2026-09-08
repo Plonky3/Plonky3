@@ -439,13 +439,14 @@ fn reduce128(hi: v128, lo: v128) -> v128 {
     shift(lo2_s)
 }
 
-/// `1` in each lane where `a < b` (unsigned), else `0`. Used to detect unsigned-add
-/// overflow when accumulating 128-bit-per-lane values across `v128` pairs, via the same
-/// sign-bit-shift trick as [`canonicalize_s`] and friends.
+/// Return `1` in each lane where the `a + b` addition overflowed, else `0`.
+///
+/// This bitwise carry formula keeps the comparison vectorized on Wasm SIMD, which has no
+/// unsigned 64-bit vector comparison: `((a & b) | ((a | b) & !sum)) >> 63`.
 #[inline(always)]
-fn unsigned_lt_as_carry(a: v128, b: v128) -> v128 {
-    let mask = i64x2_gt(shift(b), shift(a));
-    u64x2_shr(mask, 63)
+fn unsigned_add_carry(a: v128, b: v128, sum: v128) -> v128 {
+    let carry_mask = v128_or(v128_and(a, b), v128_andnot(v128_or(a, b), sum));
+    u64x2_shr(carry_mask, 63)
 }
 
 /// Delayed-reduction dot product: `sum(get(i).0 * get(i).1)` with a single final
@@ -480,7 +481,7 @@ fn dot_pairs<const N: usize>(get: impl Fn(usize) -> (v128, v128)) -> v128 {
         let term_hi96 = u64x2_shr(term_hi, 32);
 
         let new_lo_lo = i64x2_add(acc_lo_lo, term_lo);
-        let carry = unsigned_lt_as_carry(new_lo_lo, acc_lo_lo);
+        let carry = unsigned_add_carry(acc_lo_lo, term_lo, new_lo_lo);
         acc_lo_hi = i64x2_add(i64x2_add(acc_lo_hi, term_hi), carry);
         acc_lo_lo = new_lo_lo;
 
@@ -496,7 +497,7 @@ fn dot_pairs<const N: usize>(get: impl Fn(usize) -> (v128, v128)) -> v128 {
     // `sum = lo + (P - acc_hi96)`, a 128-bit + 64-bit add with carry into the high word.
     let p_minus_hi = i64x2_sub(u64x2_splat(P), acc_hi96);
     let sum_lo = i64x2_add(lo_lo, p_minus_hi);
-    let carry2 = unsigned_lt_as_carry(sum_lo, lo_lo);
+    let carry2 = unsigned_add_carry(lo_lo, p_minus_hi, sum_lo);
     let sum_hi = i64x2_add(lo_hi, carry2);
 
     reduce128(sum_hi, sum_lo)
@@ -518,7 +519,7 @@ fn sum_delayed_reduce<const N: usize>(terms: &[v128; N]) -> v128 {
 
     for &term in terms {
         let new_lo = i64x2_add(acc_lo, term);
-        let carry = unsigned_lt_as_carry(new_lo, acc_lo);
+        let carry = unsigned_add_carry(acc_lo, term, new_lo);
         acc_hi = i64x2_add(acc_hi, carry);
         acc_lo = new_lo;
     }
@@ -592,6 +593,51 @@ mod tests {
         &[super::ONES],
         crate::PackedGoldilocksWasmSimd128(super::SPECIAL_VALS)
     );
+
+    /// Check the carry helper directly, including both operand orderings and values at the
+    /// full `u64` boundary. The delayed sum and dot tests below exercise this helper indirectly,
+    /// but their arithmetic can otherwise mask an operand-ordering error in carry detection.
+    #[test]
+    fn unsigned_add_carry_matches_wrapping_add() {
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        fn check(a: [u64; 2], b: [u64; 2]) {
+            let sum = [a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1])];
+            let carry = super::unsigned_add_carry(
+                unsafe { core::mem::transmute(a) },
+                unsafe { core::mem::transmute(b) },
+                unsafe { core::mem::transmute(sum) },
+            );
+            let carry: [u64; 2] = unsafe { core::mem::transmute(carry) };
+            assert_eq!(carry[0], u64::from(sum[0] < a[0]));
+            assert_eq!(carry[1], u64::from(sum[1] < a[1]));
+        }
+
+        const EDGES: [u64; 8] = [
+            0,
+            1,
+            2,
+            0x7FFF_FFFF_FFFF_FFFF,
+            0x8000_0000_0000_0000,
+            0xFFFF_FFFF_0000_0000,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+        for &a in &EDGES {
+            for &b in &EDGES {
+                check([a, b], [b, a]);
+                check([b, a], [a, b]);
+            }
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0xCA77_0FF1_CE);
+        for _ in 0..4096 {
+            let a = [rng.random(), rng.random()];
+            let b = [rng.random(), rng.random()];
+            check(a, b);
+        }
+    }
 
     /// Adversarial + random coverage for `sum_array`'s delayed-reduction path (`N > 2`),
     /// across every lane independently.
