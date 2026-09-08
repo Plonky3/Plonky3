@@ -18,7 +18,6 @@ use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
-use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use crate::pcs::prover::WhirProver;
 use crate::pcs::verifier::errors::VerifierError;
@@ -114,9 +113,6 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
     // Prover
     let (commitment, proof) = {
         let mut challenger = challenger();
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<8>(&mut domain_separator);
-        domain_separator.observe_domain_separator(&mut challenger);
 
         let (commitment, prover_data) =
             <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
@@ -136,9 +132,6 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
     // Verifier
     {
         let mut challenger = challenger();
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<8>(&mut domain_separator);
-        domain_separator.observe_domain_separator(&mut challenger);
 
         <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
             &pcs,
@@ -219,9 +212,6 @@ fn run_whir_pcs_at_prescribed_points<L: Layout<F, EF>>(
     // Prover: commit, then open every batch at its prescribed point.
     let (commitment, mut proof) = {
         let mut challenger = challenger();
-        let mut ds = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<8>(&mut ds);
-        ds.observe_domain_separator(&mut challenger);
 
         let (commitment, prover_data) =
             <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
@@ -255,9 +245,6 @@ fn run_whir_pcs_at_prescribed_points<L: Layout<F, EF>>(
     }
 
     let mut challenger = challenger();
-    let mut ds = DomainSeparator::new(vec![]);
-    pcs.add_domain_separator::<8>(&mut ds);
-    ds.observe_domain_separator(&mut challenger);
     // The prescribed-point verifier does not absorb the commitment.
     // The caller absorbs it once, matching the prover's commit phase.
     challenger.observe(commitment.clone());
@@ -522,9 +509,6 @@ fn test_whir_end_to_end_mixed_current_next_openings() {
 
         let (commitment, proof) = {
             let mut challenger = challenger();
-            let mut domain_separator = DomainSeparator::new(vec![]);
-            pcs.add_domain_separator::<8>(&mut domain_separator);
-            domain_separator.observe_domain_separator(&mut challenger);
 
             let (commitment, prover_data) =
                 <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
@@ -547,9 +531,6 @@ fn test_whir_end_to_end_mixed_current_next_openings() {
         assert_eq!(proof.evals[0].next().len(), 1);
 
         let mut challenger = challenger();
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<8>(&mut domain_separator);
-        domain_separator.observe_domain_separator(&mut challenger);
 
         <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
             &pcs,
@@ -611,6 +592,82 @@ fn test_whir_end_to_end_exhaustive() {
     }
 }
 
+#[test]
+fn a_verifier_configured_with_another_folding_strategy_rejects() {
+    // Two configurations that derive the same numbers everywhere:
+    //
+    //     Constant(4)                    ->  schedule [4, 4]
+    //     ConstantFromSecondRound(4, 4)  ->  schedule [4, 4]
+    //
+    // Same rounds, same query counts, same grinding, same rates.
+    // Nothing inside the run can tell the two apart, so the seed has to.
+    const NUM_VARIABLES: usize = 12;
+    const FOLDING: usize = 4;
+
+    let specs = vec![TableSpec::new(
+        TableShape::new(NUM_VARIABLES, 1),
+        vec![OpeningBatch::new(vec![0], Vec::new())],
+    )];
+    let witness = PrefixProver::<F, EF>::new_witness(table_specs_to_tables(&specs), FOLDING);
+    let protocol = OpeningProtocol::new(specs).pad_to_min_num_variables(FOLDING);
+
+    // Same builder twice, so only the folding strategy differs.
+    let pcs_of = |folding_factor: FoldingFactor| {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: default_round_log_inv_rates(NUM_VARIABLES, &folding_factor),
+            folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+        TestWhirPcs::<PrefixProver<F, EF>>::new(
+            WhirConfig::new(NUM_VARIABLES, params).expect("valid parameters"),
+            MyDft::default(),
+            mmcs,
+        )
+    };
+
+    let prover_pcs = pcs_of(FoldingFactor::Constant(FOLDING));
+    let verifier_pcs = pcs_of(FoldingFactor::ConstantFromSecondRound(FOLDING, FOLDING));
+
+    // Fixture check: the two derive one schedule, so the aliasing is real.
+    assert_eq!(
+        prover_pcs.config.folding_schedule,
+        verifier_pcs.config.folding_schedule
+    );
+
+    let mut prover_challenger = challenger();
+    let (commitment, prover_data) = <TestWhirPcs<PrefixProver<F, EF>> as MultilinearPcs<
+        EF,
+        MyChallenger,
+    >>::commit(&prover_pcs, witness, &mut prover_challenger);
+    let proof = <TestWhirPcs<PrefixProver<F, EF>> as MultilinearPcs<EF, MyChallenger>>::open(
+        &prover_pcs,
+        prover_data,
+        protocol.clone(),
+        &mut prover_challenger,
+    );
+
+    // The verifier seeds from its own configuration, which is the other one.
+    let mut verifier_challenger = challenger();
+    let result = <TestWhirPcs<PrefixProver<F, EF>> as MultilinearPcs<EF, MyChallenger>>::verify(
+        &verifier_pcs,
+        &commitment,
+        &proof,
+        &mut verifier_challenger,
+        protocol,
+    );
+
+    assert!(
+        result.is_err(),
+        "a proof must not cross between two configurations the seed separates",
+    );
+}
+
 mod error_variant_tests {
     //! Lock the precise error variant emitted on each opening-shape mismatch.
     use alloc::vec;
@@ -625,7 +682,6 @@ mod error_variant_tests {
     use super::{
         EF, F, MyChallenger, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, challenger,
     };
-    use crate::fiat_shamir::domain_separator::DomainSeparator;
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
     use crate::pcs::proof::{PcsProof, QueryOpenings};
     use crate::pcs::verifier::errors::VerifierError;
@@ -709,9 +765,6 @@ mod error_variant_tests {
         );
 
         let mut prover_challenger = challenger();
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<8>(&mut domain_separator);
-        domain_separator.observe_domain_separator(&mut prover_challenger);
 
         let (commitment, prover_data) =
             <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
@@ -738,9 +791,6 @@ mod error_variant_tests {
     ) -> Result<(), VerifierError> {
         // Verifier needs the same transcript prefix the prover absorbed.
         let mut verifier_challenger = challenger();
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<8>(&mut domain_separator);
-        domain_separator.observe_domain_separator(&mut verifier_challenger);
 
         <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
             pcs,
@@ -1099,7 +1149,6 @@ mod keccak_tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use crate::fiat_shamir::domain_separator::DomainSeparator;
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
     use crate::pcs::prover::WhirProver;
 
@@ -1163,9 +1212,6 @@ mod keccak_tests {
         // Prover side: seed the transcript with the protocol description, commit, open.
         let (commitment, proof) = {
             let mut prover_challenger = challenger();
-            let mut domain_separator = DomainSeparator::new(vec![]);
-            pcs.add_domain_separator::<4>(&mut domain_separator);
-            domain_separator.observe_domain_separator(&mut prover_challenger);
 
             let (commitment, prover_data) = <TestWhirPcs<L> as MultilinearPcs<
                 EF,
@@ -1184,9 +1230,6 @@ mod keccak_tests {
 
         // Verifier side: replay the same transcript prefix from a fresh challenger.
         let mut verifier_challenger = challenger();
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<4>(&mut domain_separator);
-        domain_separator.observe_domain_separator(&mut verifier_challenger);
 
         // Final assertion: the honest proof must verify under both layout modes.
         <TestWhirPcs<L> as MultilinearPcs<EF, KeccakChallenger>>::verify(
