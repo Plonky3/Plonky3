@@ -409,11 +409,13 @@ mod tests {
             .unwrap();
     }
 
-    /// Mirrors the shipped opening entry point, with the fold rounds driven through the
-    /// reference route that applies each round's binding on its own pass.
+    /// Mirrors the shipped opening entry point.
     ///
-    /// Every other step is the shipped one, so the two proofs can only differ if a round
-    /// polynomial did.
+    /// The fold rounds take the reference route, which applies each binding on its own pass.
+    ///
+    /// Every other step is the shipped one.
+    ///
+    /// So the two proofs can only differ if a round polynomial did.
     fn open_binding_each_round(
         pcs: &BinaryPcs<MyMmcs>,
         mut prover_data: BinaryPcsProverData<MyMmcs>,
@@ -459,13 +461,16 @@ mod tests {
         //
         // Both routes must send the same transcript, so the proof bytes must match.
         //
-        // Fixture state: one random single-column table, opened at a transcript-sampled
-        // point, driven twice from identically seeded challengers.
+        // Fixture state: one random single-column table.
+        //
+        //     opened at : a transcript-sampled point
+        //     driven    : twice, from identically seeded challengers
         //
         // The grinding budget is zero, which is what makes the whole proof reproducible.
         //
-        // A non-zero one searches its witness across threads and keeps whichever one a
-        // thread finds first.
+        // A non-zero budget searches its witness across threads.
+        //
+        // It keeps whichever witness a thread finds first.
         //
         // The witness, and every transcript draw after it, then varies run to run.
         let num_variables = NUM_VARIABLES;
@@ -523,8 +528,11 @@ mod tests {
         let want_bytes = postcard::to_allocvec(&want).unwrap();
         assert_eq!(got_bytes, want_bytes, "proof bytes");
 
-        // The transcripts must also be in the same state, which the proof bytes alone do
-        // not show: two challengers that diverged could still have produced equal proofs.
+        // The transcripts must also be left in the same state.
+        //
+        // Equal proof bytes do not show that on their own.
+        //
+        // Two challengers that diverged could still have produced the same bytes.
         assert_eq!(
             got_challenger.sample_algebra_element::<F>(),
             want_challenger.sample_algebra_element::<F>(),

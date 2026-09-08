@@ -127,8 +127,9 @@ where
             // Measure this round, absorbing whatever binding the last one left behind.
             //
             // Everything the loop does between the two is scalar work.
-            // Assembling the round polynomial, the transcript, the grinding and the mask
-            // evaluation never read the tables.
+            // None of the steps below read the tables.
+            //
+            //     round polynomial   transcript   grinding   mask evaluation
             let (plain_c0, plain_c_inf) = self.measure_round();
             // The aux carry enters only the transmitted constant slot; the
             // source-side fold below keeps the raw coefficients.
@@ -165,8 +166,9 @@ where
 
         // The last challenge has no successor to fuse with.
         //
-        // The weight scaling below reads the tables, so it settles the binding on the
-        // way in, and its own settling step checks the claim against what it bound.
+        // The weight scaling below reads the tables, so it settles the binding on the way in.
+        //
+        // Its own settling step checks the claim against what it bound.
         self.scale_weights_and_claim(eps);
 
         ZkSumcheckHandoff {

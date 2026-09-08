@@ -528,8 +528,9 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
                 MaybePacked::Unpacked { evals, weights } => {
                     fold_and_round_coefficients_suffix(evals, weights, &mut self.buffers, r)
                 }
-                // The lanes carry the last variables, so a suffix round cannot reach the
-                // variable it names.
+                // The lanes carry the last variables.
+                //
+                // So a suffix round cannot reach the variable it names.
                 //
                 // Construction unpacks such a pair before it is ever stored packed.
                 MaybePacked::Packed { .. } => {

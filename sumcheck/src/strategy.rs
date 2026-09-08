@@ -82,8 +82,9 @@ where
 
 /// Splits a `2K`-wide chunk into the two faces of the suffix round variable.
 ///
-/// The suffix variable is the low index bit, so the two faces of a point are
-/// adjacent entries:
+/// The suffix variable is the low index bit.
+///
+/// So the two faces of a point are adjacent entries:
 ///
 /// ```text
 ///     chunk : [ t0, t1, t2, t3, ... ]
@@ -489,8 +490,9 @@ where
 {
     // Precondition: paired tables, with a variable left over for the message.
     //
-    // Zero is a multiple of four, so an empty pair would otherwise pass here and
-    // return a zero message instead of panicking.
+    // Zero is a multiple of four.
+    //
+    // So an empty pair would otherwise pass and return a zero message instead of panicking.
     assert_eq!(evals.len(), weights.len());
     assert!(evals.len() >= 4 && evals.len().is_multiple_of(4));
     let evals_len = evals.len();
@@ -567,9 +569,11 @@ where
 
 /// Round message of an interleaved pair, serial.
 ///
-/// The suffix counterpart of the split-face scaffold: the two faces of the round
-/// variable are adjacent entries rather than separate slices, so each tile gathers
-/// them itself.
+/// The suffix counterpart of the split-face scaffold.
+///
+/// The two faces of the round variable are adjacent entries, not separate slices.
+///
+/// So each tile gathers them itself.
 ///
 /// Parallelism is left to the caller, which owns the outer loop.
 #[inline]
@@ -641,12 +645,14 @@ where
 ///     round 3:  tables 2^{n-2} buffers 2^{n-1}   -> destination 2^{n-3}
 /// ```
 ///
-/// The two slots alternate and every round halves, so the storage a round hands over
-/// is four times the length the next round writes.
+/// The two slots alternate and every round halves.
 ///
-/// `resize_destination` releases an overshoot that large rather than hold it.
-/// The footprint therefore follows the tables down, instead of pinning the first
-/// round's full-size allocation until the pair drops.
+/// So the storage a round hands over is four times the length the next round writes.
+///
+/// The resize below releases an overshoot that large rather than holding it.
+/// The footprint therefore follows the tables down.
+///
+/// The first round's full-size allocation is released rather than pinned until drop.
 #[derive(Debug, Clone)]
 pub struct FoldBuffers<A> {
     /// Destination for the bound evaluation table.
@@ -685,9 +691,11 @@ impl<A> FoldBuffers<A> {
 /// One is bound now.
 /// The other is the one the returned message sums over.
 ///
-/// The suffix variable is the low index bit, so the four points of those two
-/// variables are four consecutive entries, and binding compacts each group of
-/// four into two:
+/// The suffix variable is the low index bit.
+///
+/// So the four points of those two variables are four consecutive entries.
+///
+/// Binding compacts each group of four into two:
 ///
 /// ```text
 ///     in  : [ a0, a1, a2, a3 | a4, a5, a6, a7 | ... ]
@@ -697,14 +705,20 @@ impl<A> FoldBuffers<A> {
 ///     b_{2g+1} = a_{4g+2} + (a_{4g+3} - a_{4g+2}) * r
 /// ```
 ///
-/// Those two entries are the two faces the message sums over, so a block binds
-/// its own output and measures it straight afterwards, while it is still in cache.
+/// Those two entries are the two faces the message sums over.
+///
+/// So a block binds its own output and measures it straight afterwards.
+///
+/// The output is still in cache when the measuring pass reads it.
 ///
 /// # Why the destination is a separate buffer
 ///
 /// Output index `g` reads input indices `2g` and `2g+1`, both at or above `g`.
-/// The fold is therefore a compaction: writes land at indices no higher than the
-/// reads they depend on, so one serial forward sweep could safely write in place.
+/// The fold is therefore a compaction.
+///
+/// Writes land at indices no higher than the reads they depend on.
+///
+/// So one serial forward sweep could safely write in place.
 ///
 /// Blocked parallelism breaks that.
 ///
@@ -764,8 +778,10 @@ where
         r,
     );
 
-    // Trade places: the bound buffers become the tables, and the storage the tables
-    // had becomes the destination the next round writes into.
+    // Trade places.
+    //
+    //     bound buffers  ->  become the tables
+    //     old storage    ->  becomes the next round's destination
     swap_storage(evals, &mut buffers.evals);
     swap_storage(weights, &mut buffers.weights);
 
@@ -775,8 +791,10 @@ where
 /// Hands a buffer to a table and takes the table's old storage as the buffer.
 ///
 /// The old storage is twice the length of the buffer replacing it.
-/// The next round writes a quarter of it, so `resize_destination` decides whether that
-/// much room is worth keeping.
+///
+/// The next round writes only a quarter of that.
+///
+/// Whether so much room is worth keeping is decided when the destination is resized.
 #[inline]
 fn swap_storage<A>(table: &mut Poly<A>, buffer: &mut Vec<A>) {
     let bound = core::mem::take(buffer);
@@ -793,11 +811,13 @@ fn swap_storage<A>(table: &mut Poly<A>, buffer: &mut Vec<A>) {
 ///     capacity >  2 * len : released, then a fresh `len`-entry allocation
 /// ```
 ///
-/// Two is the smallest factor that still lets a buffer survive one halving, which
-/// is the reuse the swap is built around.
+/// Two is the smallest factor that still lets a buffer survive one halving.
 ///
-/// The first round hands over storage four times the next destination, so that round
-/// is the one whose full-size allocation is released rather than held to the end.
+/// That single halving is the reuse the exchange above is built around.
+///
+/// The first round hands over storage four times the next destination.
+///
+/// So that round is the one whose full-size allocation is released rather than held.
 ///
 /// Footprint per side is then the live table plus at most twice its length:
 ///
@@ -805,8 +825,8 @@ fn swap_storage<A>(table: &mut Poly<A>, buffer: &mut Vec<A>) {
 ///     after round i:  table 2^{n-i}  +  buffer <= 2^{n-i+1}
 /// ```
 ///
-/// A replacement comes from `zero_vec`, which takes pages the allocator has already
-/// zeroed instead of filling them from userspace.
+/// A replacement is allocated already zeroed, so no userspace pass fills it.
+///
 /// Every entry is overwritten before anything reads it, so the values do not matter.
 #[inline]
 fn resize_destination<A>(buffer: &mut Vec<A>, len: usize)
@@ -826,8 +846,9 @@ where
 
 /// The pass behind the binding above, over the raw tables.
 ///
-/// The destinations are resized to the bound length and fully overwritten, so
-/// whatever they held before is never read.
+/// The destinations are resized to the bound length and fully overwritten.
+///
+/// So whatever they held before is never read.
 fn bind_and_measure_pairs<A, Ch>(
     evals: &[A],
     weights: &[A],
@@ -841,8 +862,9 @@ where
 {
     // Precondition: paired tables, with a variable left over for the message.
     //
-    // Zero is a multiple of four, so an empty pair would otherwise pass here and
-    // return a zero message instead of panicking.
+    // Zero is a multiple of four.
+    //
+    // So an empty pair would otherwise pass and return a zero message instead of panicking.
     assert_eq!(evals.len(), weights.len());
     assert!(evals.len() >= 4 && evals.len().is_multiple_of(4));
 
@@ -861,12 +883,16 @@ where
 
     // Bound index positions one block writes before measuring them.
     //
-    // A block keeps one bound face of each table hot across the two steps, where a
-    // prefix block keeps four half-apart faces, so the same byte budget buys twice
-    // as many positions.
+    // A block keeps one bound face of each table hot across the two steps.
     //
-    // Twice a whole number of tiles is still a whole number of tiles, so no block
-    // ends mid-tile.
+    //     prefix block : four faces, half the table apart
+    //     suffix block : one face, adjacent entries
+    //
+    // So the same byte budget buys twice as many positions.
+    //
+    // Twice a whole number of tiles is still a whole number of tiles.
+    //
+    // So no block ends mid-tile.
     let block_len = 2 * fused_block::<A>();
 
     // One block: bind its own slice of the destination, then measure it while hot.
@@ -876,8 +902,9 @@ where
         round_coefficients_pairs(e_out, w_out)
     };
 
-    // Each destination block reads exactly the twice-as-long input block at the same
-    // position, and no block writes where another reads.
+    // Each destination block reads the twice-as-long input block at the same position.
+    //
+    // No block writes where another reads.
     let (c_a, c_inf) = if threaded {
         evals_out
             .par_chunks_mut(block_len)
@@ -1229,8 +1256,9 @@ impl VariableOrder {
 /// The arity is the one exception.
 /// It is a length, so subtracting the outstanding binding answers it exactly.
 ///
-/// Keeping the challenge here rather than in a driver's local is what lets a caller
-/// that asks for one round at a time still get one pass per round.
+/// The challenge lives here rather than in a driver's local.
+///
+/// So a caller asking for one round at a time still gets one pass per round.
 ///
 /// Such a caller interleaves its own work between rounds.
 /// It cannot ask for several rounds at once.
@@ -1265,8 +1293,9 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
 
     /// Returns the number of remaining (unbound) variables.
     ///
-    /// An outstanding binding has already consumed a variable, even though the
-    /// tables are still the length they had before it.
+    /// An outstanding binding has already consumed a variable.
+    ///
+    /// The tables are still the length they had before it.
     /// Subtracting it is exact, so the answer costs no pass over the data.
     pub fn num_variables(&self) -> usize {
         self.poly.num_variables() - usize::from(self.outstanding.is_some())
@@ -1342,8 +1371,9 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// # Panics
     ///
     /// Panics if a challenge is already outstanding.
-    /// Two unapplied bindings cannot be fused into one pass, so the second would
-    /// overwrite the first and lose a variable.
+    /// Two unapplied bindings cannot be fused into one pass.
+    ///
+    /// The second would overwrite the first and lose a variable.
     pub(crate) fn hold(&mut self, r: EF) {
         assert!(
             self.outstanding.replace(r).is_none(),
@@ -1384,8 +1414,9 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// The caller guarantees `sum_delta == <evals, weights_delta>`, restoring
     /// the running invariant `sum == dot_product` after the update.
     pub fn accumulate_claim(&mut self, weights_delta: &[EF], sum_delta: EF) {
-        // The increment is indexed by the current hypercube, so the tables have to be
-        // the length the caller sized it against.
+        // The increment is indexed by the current hypercube.
+        //
+        // So the tables have to be the length the caller sized it against.
         self.settle();
         self.poly.accumulate_weights(weights_delta);
         self.sum += sum_delta;
@@ -1422,8 +1453,9 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     {
         // Optional constraint absorption: fold into the weight polynomial and update the sum.
         //
-        // The constraint is sized against the current hypercube, so an outstanding
-        // binding has to land before the weights grow by it.
+        // The constraint is sized against the current hypercube.
+        //
+        // So an outstanding binding has to land before the weights grow by it.
         if let Some(constraint) = constraint {
             self.settle();
             self.poly.combine(&mut self.sum, &constraint);
@@ -1823,8 +1855,9 @@ mod tests {
         // Those stale entries can never reach a round message.
         //
         // The footprint is checked alongside the values.
-        // A buffer never holds more than twice the live table, so what the pair retains
-        // halves with the rounds rather than staying at the first round's size.
+        // A buffer never holds more than twice the live table.
+        //
+        // So what the pair retains halves with the rounds, rather than staying at round one's.
         //
         // Fixture state: 2^15 paired entries, bound down to 4.
         // The first rounds run the threaded branch, the last ones the serial branch.
@@ -2045,20 +2078,24 @@ mod tests {
         let log_width = log2_strict_usize(<F as Field>::Packing::WIDTH);
         let mut rng = SmallRng::seed_from_u64(0xACCE55);
 
-        // Invariant: reading the tables through any accessor applies the binding the
-        // last round left outstanding.
+        // Invariant: any accessor applies the binding the last round left outstanding.
         //
-        // A reader that skipped it would see the tables one round behind the claim and
-        // silently produce the previous round's answer.
+        // A reader that skipped it would see the tables one round behind the claim.
         //
-        // Fixture state: a batch of rounds is run, which returns with its last challenge
-        // outstanding, and every accessor is then read on a fresh copy of that state.
+        // It would then silently produce the previous round's answer.
+        //
+        // Fixture state: a batch of rounds runs and returns with its last challenge held.
+        //
+        // Every accessor is then read on a fresh copy of that state.
         //
         //     driven : one binding outstanding, accessor settles it
         //     settled: the same state with the binding already applied
         //
-        // Fixture shapes: 3, 5 and 9 variables, both binding orders, batches that stop
-        // short of the last variable and batches that consume every one.
+        // Fixture shapes:
+        //
+        //     variables : 3, 5, 9
+        //     orders    : both
+        //     batches   : stopping short of the last variable, and consuming every one
         for (num_variables, rounds) in [(3usize, 1usize), (3, 3), (5, 2), (9, 4), (9, 9)] {
             for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
                 let evals = Poly::<EF>::rand(&mut rng, num_variables);
@@ -2175,8 +2212,9 @@ mod tests {
 
         // Invariant: at most one binding is ever outstanding.
         //
-        // Two unapplied bindings cannot be fused into a single pass, so the second
-        // would overwrite the first and lose a variable without anyone noticing.
+        // Two unapplied bindings cannot be fused into a single pass.
+        //
+        // The second would overwrite the first and lose a variable with nothing noticing.
         let evals = Poly::new(vec![EF::ONE; 4]);
         let weights = Poly::new(vec![EF::TWO; 4]);
         let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);

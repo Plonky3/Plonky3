@@ -152,11 +152,13 @@ where
 /// Left outstanding, the next round's measuring pass absorbs it.
 /// That is one pass per round.
 ///
-/// The two produce the same round polynomials, so the tests can pin one against the
-/// other.
+/// The two produce the same round polynomials.
 ///
-/// The choice is a const parameter, so a build that never asks for the two-pass route
-/// never compiles one.
+/// So one can be pinned against the other.
+///
+/// The choice is a const parameter.
+///
+/// So a build that never asks for the two-pass route never compiles one.
 #[must_use]
 #[allow(clippy::type_complexity)]
 fn fold_rounds_with<const BIND_EACH_ROUND: bool, MT, Ch>(
@@ -212,8 +214,9 @@ where
         let beta = challenge.as_slice()[0];
         randomness.extend(&challenge);
 
-        // The reference route: apply this round's binding now, rather than letting the
-        // next round's measuring pass absorb it.
+        // The reference route applies this round's binding now.
+        //
+        // The fused route instead lets the next round's measuring pass absorb it.
         if BIND_EACH_ROUND {
             sumcheck.settle();
         }
@@ -262,8 +265,11 @@ where
     )
 }
 
-/// Reference route for the tests: applies each round's binding on the spot instead of
-/// letting the next round's measuring pass absorb it.
+/// Reference route for the tests.
+///
+/// Each round's binding is applied on the spot.
+///
+/// The fused route instead lets the next round's measuring pass absorb it.
 ///
 /// Two passes per round rather than one, over the same round polynomials.
 #[cfg(test)]
@@ -514,13 +520,18 @@ mod tests {
         assert!(final_codeword.iter().all(|&v| v == expected));
     }
 
-    /// The fused route and the reference route agree on every fold round: the round
-    /// messages, the round commitments, the folding randomness, the final codeword, and the
-    /// transcript state left behind.
+    /// Invariant: the fused route and the reference route agree on every fold round.
     ///
-    /// The fold rounds are the only place the two routes differ, and everything they produce
-    /// is a deterministic function of the transcript, so this comparison is reproducible even
-    /// under threaded execution — unlike the query phase's grinding search.
+    ///     round messages       round commitments      folding randomness
+    ///     final codeword       transcript state left behind
+    ///
+    /// The fold rounds are the only place the two routes differ.
+    ///
+    /// Everything they produce is a deterministic function of the transcript.
+    ///
+    /// So the comparison is reproducible under threaded execution.
+    ///
+    /// The query phase's grinding search is not, which is why it stays out of scope here.
     #[test]
     fn fold_rounds_agree_with_binding_each_round() {
         // Invariant: how many passes compute a round polynomial never changes its value.
@@ -541,8 +552,9 @@ mod tests {
             };
             let config = BinaryPcsConfig::try_new(num_variables, params).unwrap();
 
-            // The shipped encoder, not the naive one: the larger arity is out of reach of a
-            // quadratic transform in a debug build.
+            // The shipped encoder, not the naive one.
+            //
+            // The larger arity is out of reach of a quadratic transform in a debug build.
             let encoder = AdditiveRsEncoder::<F>::default();
             let mmcs_instance = mmcs();
 
@@ -609,8 +621,11 @@ mod tests {
                 );
             }
 
-            // The transcripts must also be in the same state, which the outputs alone do not
-            // show: two challengers that diverged could still have produced equal outputs.
+            // The transcripts must also be left in the same state.
+            //
+            // Equal outputs do not show that on their own.
+            //
+            // Two challengers that diverged could still have produced the same outputs.
             assert_eq!(
                 got_ch.sample_algebra_element::<F>(),
                 want_ch.sample_algebra_element::<F>(),
