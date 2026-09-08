@@ -24,5 +24,6 @@ pub use periodic::*;
 pub use point::*;
 pub use proof::*;
 pub use transcript::{
-    CirclePcsShape, CircleProverTranscript, CircleVerifierTranscript, OpeningClaim,
+    CirclePcsShape, CircleProverTranscript, CircleTranscriptFailure, CircleVerifierTranscript,
+    OpeningClaim,
 };
