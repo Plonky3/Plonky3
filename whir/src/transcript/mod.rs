@@ -271,7 +271,7 @@ impl WhirRoundShape {
 
         // Every index is drawn at the same width, so they form one step.
         if self.query_draws > 0 {
-            steps.push(Interaction::bits(
+            steps.push(Interaction::uniform_bits(
                 Hierarchy::Atomic,
                 Kind::Challenge,
                 QUERY_INDICES,
@@ -452,7 +452,7 @@ impl WhirShape {
         }
 
         if self.final_query_draws > 0 {
-            steps.push(Interaction::bits(
+            steps.push(Interaction::uniform_bits(
                 Hierarchy::Atomic,
                 Kind::Challenge,
                 FINAL_QUERY_INDICES,
@@ -518,6 +518,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::fs::TypeTag;
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::extension::BinomialExtensionField;
     use rand::SeedableRng;
@@ -595,6 +596,40 @@ mod tests {
             first_challenge(&config_from(params)),
             "changing {name} left the seed where it was",
         );
+    }
+
+    #[test]
+    fn every_query_step_describes_uniform_sampling() {
+        // The query phase draws through rejection sampling, so its positions are exactly uniform.
+        // A plain bit draw is a different distribution, and the tag is what tells the two apart.
+        //
+        //     described  UniformBits(w)   ->  replayed with a uniform draw
+        //     described  Bits(w)          ->  replayed with a plain draw
+        //
+        // A step described as one and played as the other is a pattern mismatch.
+        let config = config_from(base_params());
+        let pattern = WhirShape::new(&config).pattern::<F, EF>();
+
+        // Fixture state: the plain pipeline draws at two labels, per round and once at the end.
+        let query_steps: Vec<_> = pattern
+            .interactions()
+            .iter()
+            .filter(|step| matches!(step.label(), QUERY_INDICES | FINAL_QUERY_INDICES))
+            .collect();
+
+        assert!(
+            !query_steps.is_empty(),
+            "the fixture configuration must draw at least one query"
+        );
+
+        for step in query_steps {
+            assert!(
+                matches!(step.type_tag(), TypeTag::UniformBits { .. }),
+                "{} is described as {:?}, which is not how it is drawn",
+                step.label(),
+                step.type_tag(),
+            );
+        }
     }
 
     /// Assert that perturbing one derived field moves the seed.

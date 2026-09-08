@@ -248,7 +248,7 @@ impl ZkWhirRoundShape {
         }
 
         if self.query_draws > 0 {
-            steps.push(Interaction::bits(
+            steps.push(Interaction::uniform_bits(
                 Hierarchy::Atomic,
                 Kind::Challenge,
                 QUERY_INDICES,
@@ -356,7 +356,7 @@ impl ZkBaseCaseShape {
         }
 
         if self.source_query_draws > 0 {
-            steps.push(Interaction::bits(
+            steps.push(Interaction::uniform_bits(
                 Hierarchy::Atomic,
                 Kind::Challenge,
                 BASE_SOURCE_QUERIES,
@@ -368,7 +368,7 @@ impl ZkBaseCaseShape {
         // Positions are shared inside a group, so one step covers the group.
         for (group, &draws) in self.groups.iter().zip(&self.mask_query_draws) {
             if draws > 0 {
-                steps.push(Interaction::bits(
+                steps.push(Interaction::uniform_bits(
                     Hierarchy::Atomic,
                     Kind::Challenge,
                     BASE_MASK_QUERIES,
