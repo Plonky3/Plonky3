@@ -25,8 +25,8 @@ use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use p3_whir::{
-    DomainSeparator, FoldingFactor, ProtocolParameters, SecurityAssumption,
-    VerifierError as WhirVerifierError, WhirConfig, WhirProver,
+    FoldingFactor, ProtocolParameters, SecurityAssumption, VerifierError as WhirVerifierError,
+    WhirConfig, WhirProver,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -161,15 +161,11 @@ fn batch_config_for(log_height: usize, num_tables: usize) -> WhirConfigForTest {
     }
 }
 
-/// A challenger seeded with the same domain separator on both proof and verify sides.
+/// A fresh challenger.
 ///
-/// Both schemes fold identically, so one domain separator covers the shared transcript.
-fn challenger(config: &WhirConfigForTest) -> MyChallenger {
-    let mut challenger = MyChallenger::new(perm());
-    let mut ds = DomainSeparator::new(vec![]);
-    config.pcs.add_domain_separator::<8>(&mut ds);
-    ds.observe_domain_separator(&mut challenger);
-    challenger
+/// Each scheme seeds its own transcript when it opens.
+fn challenger() -> MyChallenger {
+    MyChallenger::new(perm())
 }
 
 /// AIR pairing a two-column main trace with a fixed one-column preprocessed trace.
@@ -261,7 +257,7 @@ fn prove_verify_preprocessed_roundtrips() {
     let airs = [&air];
 
     // Commit the preprocessed trace once, so both keys carry its commitment.
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -272,7 +268,7 @@ fn prove_verify_preprocessed_roundtrips() {
             &[],
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
     // The preprocessed opening is present, matching the AIR's declared trace.
     assert!(proof.preprocessed_opening.is_some());
@@ -282,7 +278,7 @@ fn prove_verify_preprocessed_roundtrips() {
         VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .expect("honest preprocessed proof must verify");
 }
@@ -298,7 +294,7 @@ fn prove_verify_batched_preprocessed_roundtrips() {
     let config = batch_config_for(log_height, 2);
     let airs = [&air, &air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -307,7 +303,7 @@ fn prove_verify_batched_preprocessed_roundtrips() {
             ProverInstance::new(&air, Table::new(trace.transpose()), &pk, &[]),
         ]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     assert!(proof.preprocessed_opening.is_some());
@@ -320,7 +316,7 @@ fn prove_verify_batched_preprocessed_roundtrips() {
         ]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .expect("honest batched preprocessed proof must verify");
 }
@@ -356,7 +352,7 @@ fn prove_verify_mixed_height_preprocessed_roundtrips() {
     };
     let airs = [&air_a, &air_b];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -365,7 +361,7 @@ fn prove_verify_mixed_height_preprocessed_roundtrips() {
             ProverInstance::new(&air_b, Table::new(trace_b.transpose()), &pk, &[]),
         ]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     assert!(proof.preprocessed_opening.is_some());
@@ -378,7 +374,7 @@ fn prove_verify_mixed_height_preprocessed_roundtrips() {
         ]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .expect("honest mixed-height batched preprocessed proof must verify");
 }
@@ -394,7 +390,7 @@ fn setup_is_reusable_across_proofs() {
     let config = config_for(log_height);
     let airs = [&air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     // Each proof clones the committed preprocessed data and opens it at its own point.
     for _ in 0..2 {
@@ -407,14 +403,14 @@ fn setup_is_reusable_across_proofs() {
                 &[],
             )]),
             0,
-            &mut challenger(&config),
+            &mut challenger(),
         );
         verify(
             &config,
             VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
             &proof,
             0,
-            &mut challenger(&config),
+            &mut challenger(),
         )
         .expect("each proof reusing the preprocessed key must verify");
     }
@@ -433,7 +429,7 @@ fn verify_rejects_violated_main_constraint() {
     let config = config_for(log_height);
     let airs = [&air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let proof = prove(
         &config,
@@ -444,7 +440,7 @@ fn verify_rejects_violated_main_constraint() {
             &[],
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     // Expected rejection: the zerocheck closes on a nonzero constraint value.
@@ -453,7 +449,7 @@ fn verify_rejects_violated_main_constraint() {
         VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .unwrap_err();
     assert!(
@@ -476,7 +472,7 @@ fn verify_rejects_tampered_preprocessed_opening() {
     let config = config_for(log_height);
     let airs = [&air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger(&config));
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
 
     let mut proof = prove(
         &config,
@@ -487,7 +483,7 @@ fn verify_rejects_tampered_preprocessed_opening() {
             &[],
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     // Mutation: shift the first preprocessed current-row value by one field element.
@@ -506,7 +502,7 @@ fn verify_rejects_tampered_preprocessed_opening() {
         VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .unwrap_err();
     match err {

@@ -16,7 +16,6 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::proof::{PcsProof, QueryOpenings};
 use p3_whir::pcs::prover::WhirProver;
@@ -129,8 +128,6 @@ struct Bench<L: Layout<F, EF>> {
     witness: <Pcs<L> as MultilinearPcs<EF, Challenger>>::Witness,
     /// Public opening protocol matching the witness shape.
     protocol: OpeningProtocol,
-    /// Fiat-Shamir domain separator binding the protocol structure.
-    domain_separator: DomainSeparator<EF, F>,
     /// Pristine challenger cloned at the start of each iteration.
     base_challenger: Challenger,
 }
@@ -182,25 +179,19 @@ impl<L: Layout<F, EF>> Bench<L> {
             point_schedule,
         )]);
 
-        // Bind the protocol structure into the Fiat-Shamir transcript.
-        let mut domain_separator = DomainSeparator::<EF, F>::new(vec![]);
-        pcs.add_domain_separator::<8>(&mut domain_separator);
-
         Self {
             pcs,
             witness,
             protocol,
-            domain_separator,
             base_challenger: Challenger::new(poseidon16),
         }
     }
 
-    /// Pristine challenger with the domain separator already absorbed.
+    /// Pristine challenger.
+    ///
+    /// The scheme seeds its own transcript when it opens.
     fn challenger(&self) -> Challenger {
-        let mut challenger = self.base_challenger.clone();
-        self.domain_separator
-            .observe_domain_separator(&mut challenger);
-        challenger
+        self.base_challenger.clone()
     }
 
     /// Time the commit phase under the given criterion group.
