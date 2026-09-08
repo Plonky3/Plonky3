@@ -281,10 +281,13 @@ impl PackedGhash128 {
     }
 
     /// The modulus tail in the low quadword of every lane.
+    ///
+    /// The broadcast intrinsic keeps the constant in a register.
+    ///
+    /// An array literal goes through memory, which some targets fill with a libc call.
     #[inline]
     fn tail() -> lanes::Reg {
-        // SAFETY: `u128` and one 128-bit lane have the same layout.
-        unsafe { transmute::<[u128; WIDTH], lanes::Reg>([TAIL_128; WIDTH]) }
+        lanes::broadcast(TAIL_128)
     }
 
     /// One Horner step of the reduction, in every lane at once.
