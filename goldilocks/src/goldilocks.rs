@@ -16,8 +16,8 @@ use p3_field::op_assign_macros::{
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField64, RawDataSerializable, TwoAdicField, UniformSamplingField,
-    impl_raw_serializable_primefield64, quotient_map_large_iint, quotient_map_large_uint,
-    quotient_map_small_int, tonelli_shanks_two_adic,
+    impl_raw_serializable_primefield64, quotient_map_large_iint, quotient_map_small_int,
+    tonelli_shanks_two_adic,
 };
 use p3_util::{branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
@@ -471,17 +471,9 @@ impl Field for Goldilocks {
     }
 }
 
-// We use macros to implement QuotientMap<Int> for all integer types except for u64 and i64.
+// We use macros to implement QuotientMap<Int> for all integer types except u64, i64, and u128.
 quotient_map_small_int!(Goldilocks, u64, [u8, u16, u32]);
 quotient_map_small_int!(Goldilocks, i64, [i8, i16, i32]);
-quotient_map_large_uint!(
-    Goldilocks,
-    u64,
-    Goldilocks::ORDER_U64,
-    "`[0, 2^64 - 2^32]`",
-    "`[0, 2^64 - 1]`",
-    [u128]
-);
 quotient_map_large_iint!(
     Goldilocks,
     i64,
@@ -489,6 +481,33 @@ quotient_map_large_iint!(
     "`[1 + 2^32 - 2^64, 2^64 - 1]`",
     [(i128, u128)]
 );
+
+impl QuotientMap<u128> for Goldilocks {
+    /// Convert a given `u128` integer into an element of the `Goldilocks` field.
+    ///
+    /// Uses the specialized Goldilocks reduction and returns a canonical representation.
+    #[inline]
+    fn from_int(int: u128) -> Self {
+        Self::new(reduce128(int).as_canonical_u64())
+    }
+
+    /// Convert a given `u128` integer into an element of the `Goldilocks` field.
+    ///
+    /// Returns `None` if the input does not lie in the range `[0, 2^64 - 2^32]`.
+    #[inline]
+    fn from_canonical_checked(int: u128) -> Option<Self> {
+        (int < Self::ORDER_U64 as u128).then(|| Self::new(int as u64))
+    }
+
+    /// Convert a given `u128` integer into an element of the `Goldilocks` field.
+    ///
+    /// # Safety
+    /// The input must lie in the range `[0, 2^64 - 1]`.
+    #[inline]
+    unsafe fn from_canonical_unchecked(int: u128) -> Self {
+        Self::new(int as u64)
+    }
+}
 
 impl QuotientMap<u64> for Goldilocks {
     /// Convert a given `u64` integer into an element of the `Goldilocks` field.
@@ -875,6 +894,153 @@ mod tests {
         assert_eq!(f.injective_exp_n().injective_exp_root_n(), f);
         assert_eq!(y.injective_exp_n().injective_exp_root_n(), y);
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
+    }
+
+    #[test]
+    fn u128_conversion_matches_modulo_oracle() {
+        const EDGES: [u128; 12] = [
+            0,
+            1,
+            P as u128 - 1,
+            P as u128,
+            P as u128 + 1,
+            u64::MAX as u128,
+            1 << 64,
+            (1 << 64) + P as u128,
+            1 << 96,
+            1 << 127,
+            u128::MAX - 1,
+            u128::MAX,
+        ];
+
+        let check = |input: u128| {
+            let expected = (input % P as u128) as u64;
+            let actual = F::from_int(input);
+            assert_eq!(actual.value, expected, "input = {input:#034x}");
+        };
+
+        for input in EDGES {
+            check(input);
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x128_C0DE);
+        for _ in 0..10_000 {
+            check(rng.random());
+        }
+    }
+
+    #[test]
+    fn i128_conversion_matches_modulo_oracle() {
+        const P_I128: i128 = P as i128;
+        const EDGES: [i128; 14] = [
+            i128::MIN,
+            i128::MIN + 1,
+            -(1 << 96),
+            -P_I128 - 1,
+            -P_I128,
+            -P_I128 + 1,
+            -1,
+            0,
+            1,
+            P_I128 - 1,
+            P_I128,
+            P_I128 + 1,
+            i128::MAX - 1,
+            i128::MAX,
+        ];
+
+        let check = |input: i128| {
+            let magnitude_mod_p = (input.unsigned_abs() % P as u128) as u64;
+            let expected_raw = if input < 0 {
+                P - magnitude_mod_p
+            } else {
+                magnitude_mod_p
+            };
+            let actual = F::from_int(input);
+            assert_eq!(actual.value, expected_raw, "input = {input}");
+        };
+
+        for input in EDGES {
+            check(input);
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x128_51C0);
+        for _ in 0..10_000 {
+            check(rng.random());
+        }
+    }
+
+    #[test]
+    fn large_integer_checked_conversion_preserves_bounds_and_raw_values() {
+        let unsigned_cases = [
+            (0, Some(0)),
+            (P as u128 - 1, Some(P - 1)),
+            (P as u128, None),
+            (P as u128 + 1, None),
+            (u128::MAX, None),
+        ];
+        for (input, expected_raw) in unsigned_cases {
+            assert_eq!(
+                F::from_canonical_checked(input).map(|value| value.value),
+                expected_raw,
+                "input = {input}"
+            );
+        }
+
+        const BOUND: i128 = (P >> 1) as i128;
+        let signed_cases = [
+            (-BOUND - 1, None),
+            (-BOUND, Some(P - BOUND as u64)),
+            (-1, Some(P - 1)),
+            (0, Some(0)),
+            (BOUND, Some(BOUND as u64)),
+            (BOUND + 1, None),
+            (i128::MIN, None),
+            (i128::MAX, None),
+        ];
+        for (input, expected_raw) in signed_cases {
+            assert_eq!(
+                F::from_canonical_checked(input).map(|value| value.value),
+                expected_raw,
+                "input = {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn large_integer_unchecked_conversion_preserves_cast_behavior() {
+        let unsigned_cases = [
+            (0, 0),
+            (P as u128 - 1, P - 1),
+            (P as u128, P),
+            (u64::MAX as u128, u64::MAX),
+        ];
+        for (input, expected_raw) in unsigned_cases {
+            let actual = unsafe { F::from_canonical_unchecked(input) };
+            assert_eq!(actual.value, expected_raw, "input = {input}");
+        }
+
+        const MIN_UNCHECKED: i128 = 1 + (1_i128 << 32) - (1_i128 << 64);
+        let signed_inputs = [
+            MIN_UNCHECKED,
+            i64::MIN as i128 - 1,
+            i64::MIN as i128,
+            -1,
+            0,
+            i64::MAX as i128,
+            i64::MAX as i128 + 1,
+            u64::MAX as i128,
+        ];
+        for input in signed_inputs {
+            let narrowed = input as i64;
+            let expected_raw = if narrowed >= 0 {
+                narrowed as u64
+            } else {
+                P.wrapping_add_signed(narrowed)
+            };
+            let actual = unsafe { F::from_canonical_unchecked(input) };
+            assert_eq!(actual.value, expected_raw, "input = {input}");
+        }
     }
 
     #[test]

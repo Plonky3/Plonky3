@@ -1,6 +1,8 @@
 use core::any::type_name;
+use core::hint::black_box;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use p3_field::integers::QuotientMap;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_chunked_linear_combination,
@@ -79,6 +81,32 @@ fn bench_field(c: &mut Criterion) {
     });
 }
 
+fn bench_large_integer_conversion(c: &mut Criterion) {
+    const INPUT_COUNT: usize = 1024;
+
+    let mut rng = SmallRng::seed_from_u64(0x128_C0DE);
+    let unsigned_inputs: [u128; INPUT_COUNT] = core::array::from_fn(|_| rng.random());
+    let signed_inputs: [i128; INPUT_COUNT] = core::array::from_fn(|_| rng.random());
+
+    c.bench_function("from_u128", |b| {
+        let mut index = 0;
+        b.iter(|| {
+            let input = black_box(unsigned_inputs[index]);
+            index = (index + 1) % INPUT_COUNT;
+            black_box(F::from_int(input))
+        });
+    });
+
+    c.bench_function("from_i128", |b| {
+        let mut index = 0;
+        b.iter(|| {
+            let input = black_box(signed_inputs[index]);
+            index = (index + 1) % INPUT_COUNT;
+            black_box(F::from_int(input))
+        });
+    });
+}
+
 fn bench_packedfield(c: &mut Criterion) {
     let name = type_name::<<F as Field>::Packing>().to_string();
     // Note that each round of throughput has 10 operations
@@ -111,5 +139,10 @@ fn bench_packedfield(c: &mut Criterion) {
     benchmark_mixed_dot_array::<PF, F, 6>(c, &name);
 }
 
-criterion_group!(goldilocks_arithmetic, bench_field, bench_packedfield);
+criterion_group!(
+    goldilocks_arithmetic,
+    bench_field,
+    bench_large_integer_conversion,
+    bench_packedfield
+);
 criterion_main!(goldilocks_arithmetic);
