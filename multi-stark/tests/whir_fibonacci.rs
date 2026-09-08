@@ -690,7 +690,7 @@ fn verify_rejects_tampered_public_values() {
     }
 }
 
-const WHIR_FIXTURE: &str = "tests/fixtures/multi_stark_whir_v1.postcard";
+const WHIR_FIXTURE: &str = "tests/fixtures/multi_stark_whir_v0_8_0.postcard";
 
 /// A fixed Fibonacci instance shared by the WHIR compat-fixture generator and checker.
 fn whir_compat_case() -> (WhirConfigForTest, RowMajorMatrix<F>, [F; 3], usize) {

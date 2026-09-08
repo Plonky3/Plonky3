@@ -125,7 +125,7 @@ type Dft = Radix2DitParallel<Val>;
 type Pcs = TwoAdicStirPcs<Val, Dft, ValMmcs, ChallengeMmcs, Challenge, Challenger>;
 type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
 
-const STIR_FIXTURE: &str = "tests/fixtures/uni_stark_stir_v1.postcard";
+const STIR_FIXTURE: &str = "tests/fixtures/uni_stark_stir_v0_8_0.postcard";
 
 /// `TwoAdicStirPcs::commit` requires every committed matrix to have at least
 /// `2^log_starting_folding_factor` rows. `make_config` below sets

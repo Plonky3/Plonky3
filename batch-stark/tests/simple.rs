@@ -32,8 +32,8 @@ use p3_util::{assert_clone, assert_send, assert_sync, log2_strict_usize};
 use rand::SeedableRng;
 use rand::rngs::{SmallRng, StdRng};
 
-const TWO_ADIC_FIXTURE: &str = "tests/fixtures/batch_stark_two_adic_v1.postcard";
-const CIRCLE_FIXTURE: &str = "tests/fixtures/batch_stark_circle_v1.postcard";
+const TWO_ADIC_FIXTURE: &str = "tests/fixtures/batch_stark_two_adic_v0_8_0.postcard";
+const CIRCLE_FIXTURE: &str = "tests/fixtures/batch_stark_circle_v0_8_0.postcard";
 
 // --- Simple Fibonacci AIR and trace ---
 
