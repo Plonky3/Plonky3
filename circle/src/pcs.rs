@@ -10,9 +10,9 @@ use p3_commit::{
     PointOpening, PolynomialSpace, UnivariateStarkPcs,
 };
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field, batch_multiplicative_inverse, dot_product};
-use p3_fri::verifier::FriError;
-use p3_fri::{BatchMultiOpening, FriParameters};
+use p3_field::{ExtensionField, Field, PrimeField64, batch_multiplicative_inverse, dot_product};
+use p3_fri::verifier::{FriError, PowPhase};
+use p3_fri::{BatchMultiOpening, FriFoldingStrategy, FriParameters};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::{Dimensions, Matrix};
@@ -32,7 +32,8 @@ use crate::folding::{
 };
 use crate::point::{Point, compute_lagrange_den_batched};
 use crate::prover::prove;
-use crate::verifier::verify;
+use crate::transcript::{CirclePcsShape, CircleProverTranscript, CircleVerifierTranscript};
+use crate::verifier::{validate_proof_shape, verify_queries};
 use crate::{
     CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, build_periodic_lde_table_circle,
     cfft_permute_index, cfft_permute_slice,
@@ -110,6 +111,11 @@ where
         "batch {batch}, matrix {matrix}: opened at no points; its width cannot be authenticated"
     )]
     MatrixWithoutOpeningPoints { batch: usize, matrix: usize },
+    /// The tallest claimed domain leaves no room for the first-layer fold.
+    ///
+    /// The bivariate layer takes one bit before FRI folds anything.
+    #[error("tallest claimed domain is 2^{log_n} rows; the first-layer fold needs at least 2")]
+    DomainTooSmall { log_n: usize },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -134,14 +140,114 @@ pub struct CirclePcsProof<
     >,
 }
 
-impl<Val, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
-    for CirclePcs<Val, InputMmcs, FriMmcs>
+/// One commitment together with every claim made about the matrices behind it.
+///
+/// Shape: for each matrix, its domain, then for each opening point the claimed values.
+type CommitmentWithClaims<Val, Challenge, Com> =
+    CommitmentOpening<Challenge, Com, CircleDomain<Val>>;
+
+/// Challenges one replayed Circle PCS transcript hands back.
+struct ReplayedChallenges<EF> {
+    /// Challenge batching every claim into one DEEP quotient.
+    alpha: EF,
+    /// Challenge folding the first, bivariate layer.
+    bivariate_beta: EF,
+    /// One folding challenge per commit-phase round.
+    betas: Vec<EF>,
+    /// The query indices.
+    indices: Vec<usize>,
+}
+
+/// Replay the whole Circle PCS transcript against the values the proof carries.
+///
+/// # Overview
+///
+/// Every step the shape describes is played here, in one pass, before any
+/// arithmetic reads a challenge.
+///
+/// The driver is borrowed, so the caller decides whether to finalise or abort it.
+///
+/// # Arguments
+///
+/// - `transcript`: the seeded driver, described with the shape these claims fix.
+/// - `rounds`: the claims, in batch then matrix then point order.
+/// - `proof`: the proof carrying every value the run absorbs.
+///
+/// # Errors
+///
+/// When a grinding witness misses the difficulty its step requires.
+///
+/// # Panics
+///
+/// When an opening point is a point at infinity of the projective line.
+/// Opening points are part of the statement, supplied by the caller, never by a proof.
+fn replay_transcript<Val, Challenge, InputMmcs, FriMmcs, Challenger>(
+    transcript: &mut CircleVerifierTranscript<'_, Challenger, Val, Challenge>,
+    rounds: &[CommitmentWithClaims<Val, Challenge, InputMmcs::Commitment>],
+    proof: &CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Val>,
+) -> Result<ReplayedChallenges<Challenge>, PowPhase>
 where
-    Val: ComplexExtendable,
+    Val: ComplexExtendable + PrimeField64,
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Challenger:
+        FieldChallenger<Val> + GrindingChallenger<Witness = Val> + CanObserve<FriMmcs::Commitment>,
+{
+    // The claims travel flattened, so both sides walk them in one fixed order.
+    let claims = rounds
+        .iter()
+        .flat_map(|CommitmentOpening { matrices: mats, .. }| {
+            mats.iter().flat_map(
+                |MatrixOpening {
+                     points: points_and_values,
+                     ..
+                 }| {
+                    points_and_values.iter().map(
+                        |PointOpening {
+                             point: zeta,
+                             values,
+                         }| {
+                            (Point::from_projective_line(*zeta), values.as_slice())
+                        },
+                    )
+                },
+            )
+        });
+    let alpha = transcript.batch_phase(claims);
+
+    let bivariate_beta = transcript.first_layer(proof.first_layer_commitment.clone());
+
+    // One folding challenge per round, each guarded by its own grinding step.
+    let betas = proof
+        .fri_proof
+        .commit_phase_commits
+        .iter()
+        .zip(&proof.fri_proof.commit_pow_witnesses)
+        .map(|(commit, &witness)| transcript.commit_round(commit.clone(), witness))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Bind the final constant, re-check the query grind, redraw the indices.
+    let indices =
+        transcript.query_phase(proof.fri_proof.final_poly, proof.fri_proof.pow_witness)?;
+
+    Ok(ReplayedChallenges {
+        alpha,
+        bivariate_beta,
+        betas,
+        indices,
+    })
+}
+
+impl<Val, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
+    for CirclePcs<Val, InputMmcs, FriMmcs>
+where
+    Val: ComplexExtendable + PrimeField64,
+    Challenge: ExtensionField<Val>,
+    InputMmcs: Mmcs<Val>,
+    FriMmcs: Mmcs<Challenge>,
+    Challenger:
+        FieldChallenger<Val> + GrindingChallenger<Witness = Val> + CanObserve<FriMmcs::Commitment>,
 {
     type Domain = CircleDomain<Val>;
     type Commitment = InputMmcs::Commitment;
@@ -289,10 +395,6 @@ where
                                             })
                                             .collect(),
                                     });
-
-                            for ps_at_zeta in &ps_for_points {
-                                challenger.observe_algebra_slice(ps_at_zeta);
-                            }
                             ps_for_points
                         })
                         .collect()
@@ -301,8 +403,57 @@ where
             .collect();
         drop(lagrange_dens);
 
-        // Batch combination challenge
-        let alpha: Challenge = challenger.sample_algebra_element();
+        // Log-height of the tallest committed low-degree extension.
+        //
+        // Every number the transcript is described with follows from it.
+        // The map above holds one entry per committed height, so the largest key is it.
+        let (&log_max_height, _) = permuted_points
+            .last_key_value()
+            .expect("CirclePcs::open needs at least one committed matrix");
+
+        let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
+            CircleFriFolding(PhantomData);
+        // The extra bit re-indexes the first-layer sibling inside a query index.
+        let extra_query_index_bits =
+            FriFoldingStrategy::<Val, Challenge>::extra_query_index_bits(&folding);
+
+        // Describe the transcript before running it.
+        //
+        // Every number comes from the parameters and the claims the caller opened.
+        // The verifier builds the identical description from the claims it is handed.
+        let opened_widths: Vec<Vec<Vec<usize>>> = values
+            .iter()
+            .map(|mats| {
+                mats.iter()
+                    .map(|points| points.iter().map(Vec::len).collect())
+                    .collect()
+            })
+            .collect();
+        let shape = CirclePcsShape::new(
+            &self.fri_params,
+            opened_widths,
+            log_max_height,
+            extra_query_index_bits,
+        );
+        let mut transcript =
+            CircleProverTranscript::<Challenger, Val, Challenge>::new(challenger, shape);
+
+        // Bind every claim, point and values together, then draw the batching challenge.
+        let alpha = transcript.batch_phase(izip!(&rounds, &values).flat_map(
+            |(
+                OpeningRequest {
+                    points: points_for_mats,
+                    ..
+                },
+                values_for_mats,
+            )| {
+                izip!(points_for_mats, values_for_mats).flat_map(|(points, values)| {
+                    izip!(points, values).map(|(&zeta, ps_at_zeta)| {
+                        (Point::from_projective_line(zeta), ps_at_zeta.as_slice())
+                    })
+                })
+            },
+        ));
 
         /*
         We are reducing columns ("ro" = reduced opening) with powers of alpha:
@@ -424,7 +575,11 @@ where
                 RowMajorMatrix::new(ro, 2)
             })
             .collect();
-        let log_max_height = log_heights.iter().max().copied().unwrap();
+        debug_assert_eq!(
+            log_heights.iter().max().copied(),
+            Some(log_max_height),
+            "the described height and the committed heights must agree"
+        );
 
         // Commit to reduced openings at each log_height, so we can challenge a global
         // folding factor for all first layers, which we use for a "manual" (not part of p3-fri) fold.
@@ -433,8 +588,7 @@ where
 
         let (first_layer_commitment, first_layer_data) =
             self.fri_params.mmcs.commit(first_layer_mats);
-        challenger.observe(first_layer_commitment.clone());
-        let bivariate_beta: Challenge = challenger.sample_algebra_element();
+        let bivariate_beta = transcript.first_layer(first_layer_commitment.clone());
 
         // Fold all first layers at bivariate_beta.
 
@@ -448,14 +602,11 @@ where
             .rev()
             .collect();
 
-        let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
-            CircleFriFolding(PhantomData);
-
         let fri_proof = prove(
             &folding,
             &self.fri_params,
             fri_input,
-            challenger,
+            &mut transcript,
             |indices| {
                 // CircleFriFolder asks for an extra query index bit, so we use that here to index
                 // the first layer fold.
@@ -509,6 +660,9 @@ where
             },
         );
 
+        // Every described step has now been played.
+        transcript.finish();
+
         (
             values,
             CirclePcsProof {
@@ -531,20 +685,99 @@ where
                 bits: self.fri_params.batch_proof_of_work_bits,
             }));
         }
-        // Write evaluations to challenger
-        for CommitmentOpening {
-            matrices: round, ..
-        } in &rounds
-        {
-            for MatrixOpening { points: mat, .. } in round {
-                for PointOpening { values: point, .. } in mat {
-                    challenger.observe_algebra_slice(point);
-                }
-            }
+        let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
+            CircleFriFolding(PhantomData);
+        // The extra bit re-indexes the first-layer sibling inside a query index.
+        let extra_query_index_bits =
+            FriFoldingStrategy::<Val, Challenge>::extra_query_index_bits(&folding);
+
+        // The tallest claimed low-degree extension fixes every derived number.
+        //
+        //     H_claim = max claimed log_n + log_blowup
+        //
+        // Nothing below reads a height from the proof, so a forged round count cannot
+        // widen a query index or shorten the fold chain.
+        let log_global_max_height = rounds
+            .iter()
+            .flat_map(|CommitmentOpening { matrices: mats, .. }| {
+                mats.iter()
+                    .map(|MatrixOpening { domain, .. }| domain.log_n + self.fri_params.log_blowup)
+            })
+            .max()
+            .ok_or(FriError::NoCommittedMatrices)?;
+
+        // The bivariate layer folds one bit before FRI folds anything.
+        let Some(num_commit_rounds) =
+            log_global_max_height.checked_sub(self.fri_params.log_blowup + 1)
+        else {
+            return Err(FriError::InputError(InputError::DomainTooSmall {
+                log_n: log_global_max_height - self.fri_params.log_blowup,
+            }));
+        };
+
+        // Invariant: the query-index width fits the circle group of order 2^CIRCLE_TWO_ADICITY.
+        //
+        //     index_bits  = H_claim - 1 + extra_query_index_bits
+        //     field order = 2^CIRCLE_TWO_ADICITY - 1   (one short of the group order)
+        //     => a width of CIRCLE_TWO_ADICITY bits is unsampleable
+        let index_bits = log_global_max_height - 1 + extra_query_index_bits;
+        if index_bits >= Val::CIRCLE_TWO_ADICITY {
+            return Err(FriError::GlobalMaxHeightTooLarge {
+                log_global_max_height: index_bits,
+                two_adicity: Val::CIRCLE_TWO_ADICITY,
+            });
         }
 
-        // Batch combination challenge
-        let alpha: Challenge = challenger.sample_algebra_element();
+        // Every length the transcript is described with is checked before it is seeded.
+        let log_arities =
+            validate_proof_shape(&self.fri_params, &proof.fri_proof, num_commit_rounds)?;
+
+        // Describe the transcript from the claims, exactly as the prover described it.
+        let opened_widths: Vec<Vec<Vec<usize>>> = rounds
+            .iter()
+            .map(|CommitmentOpening { matrices: mats, .. }| {
+                mats.iter()
+                    .map(
+                        |MatrixOpening {
+                             points: points_and_values,
+                             ..
+                         }| {
+                            points_and_values.iter().map(|p| p.values.len()).collect()
+                        },
+                    )
+                    .collect()
+            })
+            .collect();
+        let shape = CirclePcsShape::new(
+            &self.fri_params,
+            opened_widths,
+            log_global_max_height,
+            extra_query_index_bits,
+        );
+        let mut transcript =
+            CircleVerifierTranscript::<Challenger, Val, Challenge>::new(challenger, shape);
+
+        // Invariant: the driver is released on both exits of this span.
+        //
+        //     Ok  -> `finish` consumes it and runs the completeness check
+        //     Err -> `abort` releases that check so the rejection travels alone
+        //
+        // Nothing between the two branches can return early, so no path drops it live.
+        let ReplayedChallenges {
+            alpha,
+            bivariate_beta,
+            betas,
+            indices,
+        } = match replay_transcript(&mut transcript, &rounds, proof) {
+            Ok(challenges) => {
+                transcript.finish();
+                challenges
+            }
+            Err(phase) => {
+                transcript.abort();
+                return Err(FriError::InvalidPowWitness(phase));
+            }
+        };
 
         // Per (batch, matrix) `alpha^width` and `alpha^(2*width)`, plus a shared table of
         // `alpha`'s powers up to the widest matrix. A matrix's width is fixed by the
@@ -587,49 +820,13 @@ where
             .unwrap_or(0);
         let alpha_powers: Vec<Challenge> = alpha.powers().collect_n(max_width);
 
-        challenger.observe(proof.first_layer_commitment.clone());
-        let bivariate_beta: Challenge = challenger.sample_algebra_element();
-
-        // +1 to account for first layer
-        let log_global_max_height =
-            proof.fri_proof.commit_phase_commits.len() + self.fri_params.log_blowup + 1;
-
-        // Guard the query-phase height subtraction against an under-reported round count.
-        //
-        // Invariant: the proof's global height covers every claimed matrix.
-        //
-        //     H_proof = commit-phase round count + log_blowup + 1   (first-layer fold)
-        //     H_claim = max committed log_n + log_blowup
-        //
-        // The query phase computes `index >> (log_global_max_height - log_height)`.
-        //   - `log_height <= H_claim` holds for every matrix
-        //   - `H_proof < H_claim` makes that usize subtraction underflow and the shift wrap
-        // Over-reporting is caught downstream (two-adicity bound, Merkle openings), so the
-        // under-report is the only case to reject here.
-        let expected_log_global_max_height = rounds
-            .iter()
-            .flat_map(|CommitmentOpening { matrices: mats, .. }| {
-                mats.iter()
-                    .map(|MatrixOpening { domain, .. }| domain.log_n + self.fri_params.log_blowup)
-            })
-            .max();
-        if let Some(expected) = expected_log_global_max_height
-            && log_global_max_height < expected
-        {
-            return Err(FriError::GlobalMaxHeightMismatch {
-                expected,
-                got: log_global_max_height,
-            });
-        }
-
-        let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
-            CircleFriFolding(PhantomData);
-
-        verify(
+        verify_queries(
             &folding,
             &self.fri_params,
             &proof.fri_proof,
-            challenger,
+            &betas,
+            &indices,
+            &log_arities,
             |indices, input_proof| {
                 let CircleInputProof {
                     input_openings,
@@ -909,11 +1106,12 @@ where
 impl<Val, InputMmcs, FriMmcs, Challenge, Challenger> UnivariateStarkPcs<Challenge, Challenger>
     for CirclePcs<Val, InputMmcs, FriMmcs>
 where
-    Val: ComplexExtendable,
+    Val: ComplexExtendable + PrimeField64,
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Challenger:
+        FieldChallenger<Val> + GrindingChallenger<Witness = Val> + CanObserve<FriMmcs::Commitment>,
 {
     type EvaluationsOnDomain<'a> = RowIndexMappedView<CfftPerm, RowMajorMatrixCow<'a, Val>>;
 
@@ -1001,7 +1199,7 @@ mod tests {
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_mersenne_31::Mersenne31;
-    use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+    use p3_symmetric::{CompressionFunctionFromHasher, MerkleCap, SerializingHasher};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -1720,6 +1918,102 @@ mod tests {
         );
     }
 
+    // Soundness by mutation, one test per value the transcript absorbs.
+    //
+    // Every one of them moves a challenge the rest of the run depends on, so the
+    // rejection can surface as a failed grinding replay or as a diverged fold. Both
+    // are rejections; asserting the exact variant would pin an accident of the
+    // fixture rather than the property, so these tests assert only that.
+
+    #[test]
+    fn reject_tampered_opening_point() {
+        // The transcript binds the point as a circle point, not just the values at it.
+        //
+        //     zeta on the projective line  ->  P = ((1 - zeta^2)/(1 + zeta^2), 2 zeta/(1 + zeta^2))
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+
+        // Mutation: claim the same values at a different point.
+        let moved = zeta + Challenge::ONE;
+
+        try_verify(&pcs, byte_hash, &comm, d, moved, &values, &proof)
+            .expect_err("a moved opening point must be rejected");
+    }
+
+    #[test]
+    fn reject_tampered_opened_value() {
+        // The claimed evaluations are the statement, and the transcript binds them.
+        let (pcs, byte_hash, comm, d, zeta, mut values, proof) = setup_valid_proof();
+
+        // Mutation: shift one claimed evaluation.
+        values[0][0][0][0] += Challenge::ONE;
+
+        try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("a tampered claimed evaluation must be rejected");
+    }
+
+    #[test]
+    fn reject_tampered_first_layer_commitment() {
+        // The bivariate challenge is drawn after this commitment, so it binds it.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        proof.first_layer_commitment = MerkleCap::new(vec![[0u8; 32]]);
+
+        try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("a tampered first-layer commitment must be rejected");
+    }
+
+    #[test]
+    fn reject_tampered_commit_phase_commitment() {
+        // Each round's folding challenge is drawn after its commitment.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        proof.fri_proof.commit_phase_commits[0] = MerkleCap::new(vec![[0u8; 32]]);
+
+        try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("a tampered commit-phase commitment must be rejected");
+    }
+
+    #[test]
+    fn reject_tampered_commit_pow_witness() {
+        // Grinding sits between a commitment and the challenge it protects.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        assert!(
+            pcs.fri_params.commit_proof_of_work_bits > 0,
+            "fixture must describe a commit-phase grinding step"
+        );
+
+        proof.fri_proof.commit_pow_witnesses[0] += Val::ONE;
+
+        try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("a tampered commit grinding witness must be rejected");
+    }
+
+    #[test]
+    fn reject_tampered_final_poly() {
+        // The constant is absorbed before the query indices are drawn.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        proof.fri_proof.final_poly += Challenge::ONE;
+
+        try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("a tampered final polynomial must be rejected");
+    }
+
+    #[test]
+    fn reject_tampered_query_pow_witness() {
+        // Grinding here raises the cost of searching for favourable query indices.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        assert!(
+            pcs.fri_params.query_proof_of_work_bits > 0,
+            "fixture must describe a query grinding step"
+        );
+
+        proof.fri_proof.pow_witness += Val::ONE;
+
+        try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("a tampered query grinding witness must be rejected");
+    }
+
     #[test]
     fn reject_invalid_log_arity() {
         // Invariant: each log_arity must be in 1..=max_log_arity.
@@ -1748,35 +2042,18 @@ mod tests {
     fn reject_global_max_height_too_large() {
         // Invariant: the query-index width fits the circle group of order 2^CIRCLE_TWO_ADICITY.
         //
+        //     index_bits  = claimed log_n + log_blowup - 1 + extra_query_index_bits (= 1)
         //     field order = 2^CIRCLE_TWO_ADICITY - 1   (one short of the group order)
-        //     => width of CIRCLE_TWO_ADICITY bits is unsampleable => verifier must reject
-        let (mut pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
-
-        // Zero both proof-of-work targets.
-        // Otherwise grinding rejects the cloned witnesses before the width check runs.
-        pcs.fri_params.commit_proof_of_work_bits = 0;
-        pcs.fri_params.query_proof_of_work_bits = 0;
-
-        // Mutation: clone commit-phase rounds until the width reaches the bound.
+        //     => a width of CIRCLE_TWO_ADICITY bits is unsampleable
         //
-        //     num_index_bits = rounds + log_blowup + extra_query_index_bits (= 1 for circle)
-        //     stop once num_index_bits >= CIRCLE_TWO_ADICITY
-        let extra_query_index_bits = 1;
-        let commit = proof.fri_proof.commit_phase_commits[0].clone();
-        let witness = proof.fri_proof.commit_pow_witnesses[0];
-        while proof.fri_proof.commit_phase_commits.len()
-            + pcs.fri_params.log_blowup
-            + extra_query_index_bits
-            < Val::CIRCLE_TWO_ADICITY
-        {
-            proof.fri_proof.commit_phase_commits.push(commit.clone());
-            proof.fri_proof.commit_pow_witnesses.push(witness);
-            // Each round needs its own opening set.
-            let opening = proof.fri_proof.commit_phase_openings[0].clone();
-            proof.fri_proof.commit_phase_openings.push(opening);
-        }
+        // The width comes from the claimed statement, so the claim is what has to overflow it.
+        let (pcs, byte_hash, comm, _, zeta, values, proof) = setup_valid_proof();
 
-        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+        // Mutation: claim a domain wide enough to drive the index width to the bound.
+        let log_n = Val::CIRCLE_TWO_ADICITY - pcs.fri_params.log_blowup;
+        let too_wide = CircleDomain::standard(log_n);
+
+        let err = try_verify(&pcs, byte_hash, &comm, too_wide, zeta, &values, &proof)
             .expect_err("expected GlobalMaxHeightTooLarge");
 
         let FriError::GlobalMaxHeightTooLarge {
