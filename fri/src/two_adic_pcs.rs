@@ -21,8 +21,8 @@ use core::marker::PhantomData;
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{
-    CommitmentOpening, MatrixOpening, Mmcs, OpenedValues, OpeningRequest, Pcs, PeriodicLdeTable,
-    PointOpening, UnivariateStarkPcs,
+    CommitmentOpening, Mmcs, OpenedValues, OpeningRequest, Pcs, PeriodicLdeTable,
+    UnivariateStarkPcs,
 };
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
@@ -41,7 +41,10 @@ use tracing::{debug_span, instrument};
 
 use crate::periodic::build_periodic_lde_table_two_adic;
 use crate::verifier::{self, FriError};
-use crate::{BatchMultiOpening, FriFoldingStrategy, FriParameters, FriProof, prover};
+use crate::{
+    BatchMultiOpening, FriFoldingStrategy, FriParameters, FriProof, PcsProverTranscript, PcsShape,
+    PcsVerifierTranscript, prover,
+};
 
 /// A polynomial commitment scheme using FRI to generate opening proofs.
 ///
@@ -472,22 +475,17 @@ where
                                         .entered();
 
                                 // Use Barycentric interpolation to evaluate each column of the matrix at the given point.
-                                let ys = debug_span!(
-                                    "compute opened values with Lagrange interpolation"
-                                )
-                                .in_scope(|| {
-                                    // Slice the precomputed adjusted weights to match this matrix's height.
-                                    // Zero-allocation hot path: straight to the SIMD dot product.
-                                    let adj = &adjusted_weights.get(&point).unwrap()[..h];
-                                    low_coset.interpolate_coset_with_precomputation(
-                                        Val::GENERATOR,
-                                        point,
-                                        adj,
-                                    )
-                                });
-
-                                challenger.observe_algebra_slice(&ys);
-                                ys
+                                debug_span!("compute opened values with Lagrange interpolation")
+                                    .in_scope(|| {
+                                        // Slice the precomputed adjusted weights to match this matrix's height.
+                                        // Zero-allocation hot path: straight to the SIMD dot product.
+                                        let adj = &adjusted_weights.get(&point).unwrap()[..h];
+                                        low_coset.interpolate_coset_with_precomputation(
+                                            Val::GENERATOR,
+                                            point,
+                                            adj,
+                                        )
+                                    })
                             })
                             .collect_vec()
                     })
@@ -495,25 +493,36 @@ where
             })
             .collect_vec();
 
-        // Batch combination challenge
+        // Describe the transcript before running it.
+        //
+        // Every number comes from the parameters and the matrices this prover holds.
+        // The verifier builds the identical description from the claims it is handed.
+        let mut transcript = PcsProverTranscript::<Challenger, Val, Challenge>::new(
+            challenger,
+            PcsShape::from_opened_values(&self.fri, &all_opened_values),
+        );
 
-        // Grind before sampling `alpha`. Every claimed evaluation has been observed by now, so the
-        // witness commits the prover to those openings; a prover hunting for an `alpha` that makes
-        // a false batched claim look low degree must redo `2^batch_proof_of_work_bits` work per
-        // candidate. This is the site whose round-by-round error grows with the number of batched
-        // openings, so it is the one that binds a proven-soundness target on a wide instance over a
-        // small field — see `FriParameters::batch_proof_of_work_bits`.
-        let batch_pow_witness = challenger.grind(self.fri.batch_proof_of_work_bits);
+        // Bind every claimed evaluation, in commitment, matrix and point order.
+        transcript.claimed_openings(&all_opened_values);
 
-        // Soundness Error:
-        // See the discussion in the doc comment of [`prove_fri`]. Essentially, the soundness error
-        // for this sample is tightly tied to the soundness error of the FRI protocol.
-        // Roughly speaking, at a minimum is it k/|EF| where `k` is the sum of, for each function, the number of
-        // points it needs to be opened at. This comes from the fact that we are taking a large linear combination
-        // of `(f(zeta) - f(x))/(zeta - x)` for each function `f` and all of `f`'s opening points.
-        // In our setup, k is two times the trace width plus the number of quotient polynomials.
-        // The grind above adds `batch_proof_of_work_bits` to that error.
-        let alpha: Challenge = challenger.sample_algebra_element();
+        // Grind, then draw the challenge that batches the claims just bound.
+        //
+        // Why: the witness commits the prover to those openings before it learns the challenge.
+        // Hunting for a challenge that makes a false batched claim look low degree costs
+        // `2^batch_proof_of_work_bits` work per candidate.
+        //
+        // Soundness error: at minimum `k/|EF|`, over the linear combination
+        //
+        //     sum_i alpha^i * (f_i(zeta) - f_i(x)) / (zeta - x)
+        //
+        // where `k` counts every (function, opening point) pair.
+        // For a univariate STARK that is twice the trace width plus the quotient chunk count.
+        //
+        // This site's error grows with the batch, unlike the query phase's.
+        // On a wide instance over a small field it is what limits proven soundness.
+        let (alpha, batch_pow_witness) = transcript.batch_phase();
+        // A zero difficulty still occupies a slot in the proof, keeping its shape fixed.
+        let batch_pow_witness = batch_pow_witness.unwrap_or(Val::ZERO);
 
         // We precompute the packed powers of alpha as we need the same powers for each matrix.
         // The hot per-matrix reduction (`rowwise_packed_dot_product`) consumes these directly; the
@@ -608,30 +617,41 @@ where
 
         let folding: TwoAdicFriFoldingForMmcs<Val, InputMmcs> = TwoAdicFriFolding(PhantomData);
 
-        // Produce the FRI proof.
-        #[cfg(test)]
-        let fri_proof = prover::prove_fri_with_schedule(
-            &folding,
-            &self.fri,
-            fri_input,
-            challenger,
-            log_global_max_height,
-            &commitment_data_with_opening_points,
-            &self.mmcs,
-            batch_pow_witness,
-            self.forged_fold_schedule.clone(),
-        );
-        #[cfg(not(test))]
-        let fri_proof = prover::prove_fri(
-            &folding,
-            &self.fri,
-            fri_input,
-            challenger,
-            log_global_max_height,
-            &commitment_data_with_opening_points,
-            &self.mmcs,
-            batch_pow_witness,
-        );
+        // Produce the FRI proof, bracketed as a sub-protocol of this transcript.
+        //
+        // FRI seeds its own description from the sponge state reached here.
+        let fri_proof = transcript.delegate(|challenger| {
+            #[cfg(test)]
+            {
+                prover::prove_fri_with_schedule(
+                    &folding,
+                    &self.fri,
+                    fri_input,
+                    challenger,
+                    log_global_max_height,
+                    &commitment_data_with_opening_points,
+                    &self.mmcs,
+                    batch_pow_witness,
+                    self.forged_fold_schedule.clone(),
+                )
+            }
+            #[cfg(not(test))]
+            {
+                prover::prove_fri(
+                    &folding,
+                    &self.fri,
+                    fri_input,
+                    challenger,
+                    log_global_max_height,
+                    &commitment_data_with_opening_points,
+                    &self.mmcs,
+                    batch_pow_witness,
+                )
+            }
+        });
+
+        // Every described step has now been played.
+        transcript.finish();
 
         (all_opened_values, fri_proof)
     }
@@ -645,31 +665,47 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        // Write all evaluations to challenger.
-        // Need to ensure to do this in the same order as the prover.
-        for CommitmentOpening {
-            matrices: round, ..
-        } in &commitments_with_opening_points
-        {
-            for MatrixOpening { points: mat, .. } in round {
-                for PointOpening { values: point, .. } in mat {
-                    challenger.observe_algebra_slice(point);
-                }
-            }
-        }
+        // Describe the transcript from the claims, which are this verifier's own input.
+        //
+        // The prover built the identical description from the matrices it opened.
+        let mut transcript = PcsVerifierTranscript::<Challenger, Val, Challenge>::new(
+            challenger,
+            PcsShape::from_claims(&self.fri, &commitments_with_opening_points),
+        );
+
+        // Replay every claimed evaluation, in commitment, matrix and point order.
+        //
+        // A failure poisons the driver on its way out, so dropping it here is silent.
+        transcript.claimed_openings(&commitments_with_opening_points)?;
+
+        // Replay the grind and redraw the challenge that batches the claims.
+        let alpha = transcript.batch_phase(Some(proof.batch_pow_witness))?;
 
         let folding: TwoAdicFriFoldingForMmcs<Val, InputMmcs> = TwoAdicFriFolding(PhantomData);
 
-        verifier::verify_fri(
-            &folding,
-            &self.fri,
-            proof,
-            challenger,
-            &commitments_with_opening_points,
-            &self.mmcs,
-        )?;
+        // Run the low-degree test inside the bracket, lending it the sponge.
+        //
+        // Invariant: the bracket closes whichever way the delegated run goes.
+        //
+        //     delegate  -> Begin, run, End      (End is recorded on any outcome)
+        //     finish    -> every described step replayed
+        //     rejection -> propagated afterwards, never across an unfinished driver
+        let result = transcript.delegate(|challenger| {
+            verifier::verify_fri(
+                &folding,
+                &self.fri,
+                proof,
+                challenger,
+                &commitments_with_opening_points,
+                &self.mmcs,
+                alpha,
+            )
+        });
 
-        Ok(())
+        // Every described step has now been replayed.
+        transcript.finish();
+
+        result
     }
 }
 
@@ -839,16 +875,207 @@ fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matri
 
 #[cfg(test)]
 mod tests {
-    use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
+    use alloc::vec;
+
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_commit::ExtensionMmcs;
+    use p3_dft::Radix2Dit;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::verifier::PowPhase;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<BabyBear, 4>;
+
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type ValMmcs =
+        MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress, 2, 8>;
+    type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+    type Challenger = DuplexChallenger<F, Perm, 16, 8>;
+    type MyPcs = TwoAdicFriPcs<F, Radix2Dit<F>, ValMmcs, ChallengeMmcs>;
+    type Commitment = <ValMmcs as Mmcs<F>>::Commitment;
+    type Domain = TwoAdicMultiplicativeCoset<F>;
+    type Claims = Vec<CommitmentWithOpeningPoints<EF, Commitment, Domain>>;
+    type MyProof = <MyPcs as Pcs<EF, Challenger>>::Proof;
+    type TestError = FriError<<ChallengeMmcs as Mmcs<EF>>::Error, <ValMmcs as Mmcs<F>>::Error>;
+
+    /// Grinding difficulty the roundtrip fixture proves at.
+    ///
+    /// Positive so the witness is genuinely absorbed.
+    /// A zero-bit check short-circuits without reading the witness at all.
+    const BATCH_POW_BITS: usize = 1;
+
+    /// Run a real prover roundtrip and return everything a verifier needs.
+    ///
+    /// One commitment, two matrices, one opening point each.
+    ///
+    /// The claimed openings therefore nest as:
+    ///
+    /// ```text
+    ///     claims           = [commitment_0]         // 1 commitment
+    ///     claims[0].1      = [matrix_0, matrix_1]   // 2 matrices
+    ///     claims[0].1[i].1 = [point_0]              // 1 point each
+    /// ```
+    ///
+    /// The challenger is advanced past the commitment, ready for `Pcs::verify`.
+    fn make_pcs_fixture() -> (MyPcs, Claims, MyProof, Challenger) {
+        // Fixed seed keeps the roundtrip deterministic.
+        let mut rng = SmallRng::seed_from_u64(42);
+
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+
+        let val_mmcs = ValMmcs::new(hash.clone(), compress.clone(), 0);
+        let challenge_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress, 0));
+
+        // Minimal sound parameters: blowup 2, binary folding, 2 queries.
+        let fri_params = FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 2,
+            batch_proof_of_work_bits: BATCH_POW_BITS,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: challenge_mmcs,
+        };
+        let pcs = MyPcs::new(Radix2Dit::default(), val_mmcs, fri_params);
+
+        // Two matrices of different widths, so moving a value between them is observable.
+        let log_degree = 3;
+        let domain =
+            <MyPcs as Pcs<EF, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_degree);
+        let traces = [2, 3].map(|width| {
+            (
+                domain,
+                RowMajorMatrix::<F>::rand_nonzero(&mut rng, 1 << log_degree, width),
+            )
+        });
+        let (commitment, prover_data) = <MyPcs as Pcs<EF, Challenger>>::commit(&pcs, traces);
+
+        // Prover: observe the commitment, sample the point, open.
+        let mut p_challenger = Challenger::new(perm.clone());
+        p_challenger.observe(&commitment);
+        let zeta: EF = p_challenger.sample_algebra_element();
+        let (opened_values, proof) = pcs.open(
+            vec![(&prover_data, vec![vec![zeta], vec![zeta]]).into()],
+            &mut p_challenger,
+        );
+
+        // Verifier: replay up to the point sample so a valid proof must pass.
+        let mut v_challenger = Challenger::new(perm);
+        v_challenger.observe(&commitment);
+        let v_zeta: EF = v_challenger.sample_algebra_element();
+        assert_eq!(
+            v_zeta, zeta,
+            "prover and verifier must sample the same point"
+        );
+
+        let claims = vec![
+            (
+                commitment,
+                opened_values[0]
+                    .iter()
+                    .map(|matrix| (domain, vec![(zeta, matrix[0].clone())]))
+                    .collect(),
+            )
+                .into(),
+        ];
+
+        (pcs, claims, proof, v_challenger)
+    }
+
+    /// Verify with fully qualified syntax so the type parameters are unambiguous.
+    fn run_pcs_verify(
+        pcs: &MyPcs,
+        claims: Claims,
+        proof: &MyProof,
+        challenger: &mut Challenger,
+    ) -> Result<(), TestError> {
+        <MyPcs as Pcs<EF, Challenger>>::verify(pcs, claims, proof, challenger)
+    }
+
+    #[test]
+    fn a_valid_opening_proof_verifies() {
+        // Baseline: the mutation tests below start from a genuinely valid proof.
+        let (pcs, claims, proof, mut challenger) = make_pcs_fixture();
+
+        run_pcs_verify(&pcs, claims, &proof, &mut challenger)
+            .expect("an untouched opening proof must verify");
+    }
+
+    #[test]
+    fn a_perturbed_claimed_evaluation_is_rejected() {
+        // Every claimed evaluation is absorbed before `alpha` is drawn.
+        //
+        // Moving one moves the seed of the low-degree test that follows.
+        // The reduced opening the verifier rebuilds then misses the committed codeword.
+        let (pcs, mut claims, proof, mut challenger) = make_pcs_fixture();
+        claims[0].matrices[0].points[0].values[0] += EF::ONE;
+
+        run_pcs_verify(&pcs, claims, &proof, &mut challenger)
+            .expect_err("a perturbed claimed evaluation must be rejected");
+    }
+
+    #[test]
+    fn a_claimed_evaluation_moved_between_matrices_is_rejected() {
+        // Invariant: the transcript sees one step per opening, of that opening's width.
+        //
+        //     described:  [2, 3]
+        //     supplied:   [1, 4]   -> a different seed and a different step sequence
+        //
+        // Both sides derive that description from their own inputs, so the two disagree.
+        let (pcs, mut claims, proof, mut challenger) = make_pcs_fixture();
+        let moved = claims[0].matrices[0].points[0].values.pop().unwrap();
+        claims[0].matrices[1].points[0].values.push(moved);
+
+        run_pcs_verify(&pcs, claims, &proof, &mut challenger)
+            .expect_err("a reshaped set of claims must be rejected");
+    }
+
+    #[test]
+    fn a_tampered_batch_grinding_witness_is_rejected() {
+        // Invariant: the grind is binding, not decorative.
+        //
+        // The witness must satisfy the proof-of-work predicate at the difficulty
+        // the run was described with, even though the proof was produced at it.
+        let (pcs, claims, mut proof, mut challenger) = make_pcs_fixture();
+        proof.batch_pow_witness += F::ONE;
+
+        let err = run_pcs_verify(&pcs, claims, &proof, &mut challenger)
+            .expect_err("a tampered batch grinding witness must be rejected");
+
+        match err {
+            FriError::InvalidPowWitness(PowPhase::Batch) => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_batch_grinding_witness_below_the_configured_difficulty_is_rejected() {
+        // A verifier demanding more work than the prover did must reject, and must
+        // name the batch phase rather than one of the two witnesses FRI also carries.
+        let (mut pcs, claims, proof, mut challenger) = make_pcs_fixture();
+        pcs.fri.batch_proof_of_work_bits = 20;
+
+        let err = run_pcs_verify(&pcs, claims, &proof, &mut challenger)
+            .expect_err("a batch grinding witness below the difficulty must be rejected");
+
+        match err {
+            FriError::InvalidPowWitness(PowPhase::Batch) => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
 
     /// `fold_row`'s arity-2 closed form must agree with the generic barycentric path.
     #[test]
