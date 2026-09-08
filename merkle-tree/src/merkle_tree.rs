@@ -576,6 +576,39 @@ where
     next_digests
 }
 
+/// Hash one SIMD batch of concatenated rows, reusing scratch only when requested.
+#[inline]
+fn hash_packed_row<P, PW, H, M, const DIGEST_ELEMS: usize>(
+    h: &H,
+    matrices: &[&M],
+    first_row: usize,
+    scratch: &mut Vec<P>,
+) -> [PW; DIGEST_ELEMS]
+where
+    P: PackedValue,
+    PW: PackedValue,
+    H: CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
+    M: Matrix<P::Value>,
+{
+    if let [m] = matrices {
+        h.hash_iter(m.vertically_packed_row(first_row))
+    } else if H::PREFER_CONTIGUOUS_INPUT {
+        scratch.clear();
+        for m in matrices {
+            scratch.extend(m.vertically_packed_row::<P>(first_row));
+        }
+        // Stage before serialization: a partial word or sponge block can span matrices.
+        // hash_slice's default reintroduces a compound iterator, so use hash_iter directly.
+        h.hash_iter(scratch.iter().copied())
+    } else {
+        h.hash_iter(
+            matrices
+                .iter()
+                .flat_map(|m| m.vertically_packed_row(first_row)),
+        )
+    }
+}
+
 /// Hash every row of the tallest matrices and build the first digest layer.
 ///
 /// This function is responsible for creating the first layer of Merkle digests,
@@ -635,26 +668,16 @@ where
     digests[0..max_height]
         .par_chunks_exact_mut(width)
         .enumerate()
-        .for_each(|(i, digests_chunk)| {
+        .for_each_init(Vec::new, |scratch, (i, digests_chunk)| {
             // Compute the starting row index for this chunk.
             let first_row = i * width;
 
-            // Collect all vertically packed rows from each matrix at `first_row`.
-            // These packed rows are then hashed together using `h`.
-            //
-            // The single-matrix case feeds `h` the row iterator directly: going
-            // through `flat_map` hands the hasher a compound iterator whose
-            // `next()` defeats the optimizer's vectorization of the absorb loop,
-            // which is worth ~40% of the leaf-hashing time on wide matrices.
-            let packed_digest: [PW; DIGEST_ELEMS] = if let [m] = tallest_matrices {
-                h.hash_iter(m.vertically_packed_row(first_row))
-            } else {
-                h.hash_iter(
-                    tallest_matrices
-                        .iter()
-                        .flat_map(|m| m.vertically_packed_row(first_row)),
-                )
-            };
+            let packed_digest = hash_packed_row::<P, PW, _, _, DIGEST_ELEMS>(
+                h,
+                tallest_matrices,
+                first_row,
+                scratch,
+            );
 
             // Unpack the resulting packed digest into individual scalar digests.
             PW::unpack_into(&packed_digest, digests_chunk);
@@ -736,7 +759,7 @@ where
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
         .enumerate()
-        .for_each(|(i, digests_chunk)| {
+        .for_each_init(Vec::new, |scratch, (i, digests_chunk)| {
             let first_row = i * width;
             let children: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n < step {
@@ -747,18 +770,12 @@ where
             });
             let mut packed_digest = c.compress(children);
 
-            // As in `first_digest_layer`, the single-matrix case feeds `h` the
-            // row iterator directly: a `flat_map` compound iterator defeats the
-            // optimizer's vectorization of the absorb loop.
-            let tallest_digest: [PW; DIGEST_ELEMS] = if let [m] = matrices_to_inject {
-                h.hash_iter(m.vertically_packed_row(first_row))
-            } else {
-                h.hash_iter(
-                    matrices_to_inject
-                        .iter()
-                        .flat_map(|m| m.vertically_packed_row(first_row)),
-                )
-            };
+            let tallest_digest = hash_packed_row::<P, PW, _, _, DIGEST_ELEMS>(
+                h,
+                matrices_to_inject,
+                first_row,
+                scratch,
+            );
             let inject_inputs: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n == 0 {
                     packed_digest

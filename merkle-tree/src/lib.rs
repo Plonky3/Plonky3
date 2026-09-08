@@ -8,6 +8,9 @@ mod merkle_tree;
 mod mmcs;
 mod pruning;
 
+#[cfg(test)]
+mod packed_row_tests;
+
 pub use hiding_mmcs::*;
 pub use merkle_tree::MerkleTree;
 pub use mmcs::{MerkleTreeError, MerkleTreeMmcs, PrunedBatchOpening, PrunedProofError};

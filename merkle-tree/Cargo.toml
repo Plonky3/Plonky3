@@ -30,6 +30,7 @@ tracing.workspace = true
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-blake3 = { path = "../blake3" }
+p3-goldilocks = { path = "../goldilocks" }
 p3-keccak = { path = "../keccak" }
 p3-mds = { path = "../mds" }
 p3-rescue = { path = "../rescue" }
@@ -43,6 +44,10 @@ harness = false
 
 [[bench]]
 name = "pruned_verify"
+harness = false
+
+[[bench]]
+name = "multi_matrix"
 harness = false
 
 [lints]
