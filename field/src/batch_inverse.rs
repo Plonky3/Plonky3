@@ -46,8 +46,9 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
 
     // One item is a whole chunk of Montgomery steps, not a chunk of reads.
     //
-    // The three multiplies and the amortized inversion per element cost far more than
-    // moving the element, so the chunk is priced by the time it takes:
+    // Per element the three multiplies and the amortized inversion dominate the move.
+    //
+    // So the chunk is priced by the time it takes:
     //
     //     measured  : 2 ns per 4-byte element through the 4-lane packed path
     //     streaming :                            0.4 ns for a read and a write

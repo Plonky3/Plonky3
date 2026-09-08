@@ -32,8 +32,9 @@ use crate::poly::{Poly, PolyView};
 
 /// Extension widths one extension-by-extension multiply-accumulate is charged as.
 ///
-/// These contractions do one such step per element they read, so pricing them by the
-/// bytes they move undercharges them by an order of magnitude.
+/// These contractions do one such step per element they read.
+///
+/// So pricing them by the bytes they move undercharges them by an order of magnitude.
 ///
 /// Measured per multiplied element, degree-4 extension over a 4-byte prime field:
 ///
@@ -46,19 +47,24 @@ const MUL_ACC_BYTES: usize = 3;
 
 /// Extension widths one base-by-extension multiply-accumulate is charged as, per lane.
 ///
-/// A base element times an extension weight is a handful of base multiplies, where two
-/// extension elements cost the square of that, so it earns a smaller charge.
+/// A base element times an extension weight is a handful of base multiplies.
 ///
-/// Measured per element multiplied one at a time, across the contractions that take a
-/// base polynomial:
+/// Two extension elements cost the square of that.
+///
+/// So the base step earns the smaller charge.
+///
+/// Measured per element multiplied one at a time.
+///
+/// Taken across the contractions that read a base polynomial:
 ///
 /// ```text
 ///     x86-64, scalar packing  : 1.3 to 5.5 ns
 ///     two widths at 100 ps    : 3.2 ns
 /// ```
 ///
-/// This prices one lane, so a kernel that multiplies several at once divides by that
-/// count through `base_mul_acc_bytes`.
+/// This prices one lane.
+///
+/// A kernel that multiplies several at once divides by the count it multiplies.
 /// SIMD scales the arithmetic a body does, and not the bytes it moves.
 const BASE_MUL_ACC_BYTES: usize = 2;
 
@@ -79,8 +85,9 @@ const BASE_MUL_ACC_BYTES: usize = 2;
 ///
 /// Break-even for a loop that only just crosses the gate is an overcharge of 1.56, since
 /// `0.625 us / 1.56` is the 0.4 us a dispatch costs per worker.
-/// Undercharging instead leaves such a loop whole, and cannot cut a split one below one
-/// task per worker.
+/// Undercharging instead leaves such a loop whole.
+///
+/// It cannot cut a split loop below one task per worker.
 ///
 /// The charge rounds up, so no item is ever priced at nothing and left looking free.
 const fn base_mul_acc_bytes<EF>(count: usize, lanes: usize) -> usize {
@@ -161,8 +168,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
 
     /// Base elements the eq1-dot kernels multiply per instruction.
     ///
-    /// `dot_with_base` reads the base chunk as packed elements only when the suffix-half
-    /// table is packed.
+    /// The base chunk is read as packed elements only when the suffix-half table is packed.
     /// A scalar table dots one element at a time.
     const fn dot_lanes(&self) -> usize {
         if self.eq1.is_packed() {
@@ -1142,8 +1148,9 @@ mod tests {
         //     one task   : threads a carry from one prefix block to the next
         //     many tasks : rebuilds each block's boundary from its own index
         //
-        // The property test covers the carry-threading arm across its whole range, and
-        // only brushes the other in its top corner.
+        // The property test covers the carry-threading arm across its whole range.
+        //
+        // It only brushes the other arm, in its top corner.
         // This pins the boundary-rebuilding arm at a shape that splits on a wide pool.
         let mut rng = SmallRng::seed_from_u64(0xB0117);
         let split_vars = 8;
@@ -1166,8 +1173,9 @@ mod tests {
                 + 2 * (1 << inner_vars) * size_of::<EF>()
         };
 
-        // The gate scales with the pool and the charge scales down with the packing
-        // width, so no fixed shape splits on every host.
+        // The gate scales with the pool, and the charge scales down with the packing width.
+        //
+        // So no fixed shape splits on every host.
         // Grow the inner block until this one does.
         let mut inner_vars = 12;
         while !should_split(prefix_blocks, item_bytes(inner_vars)) {
