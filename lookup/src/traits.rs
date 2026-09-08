@@ -1,26 +1,25 @@
 use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder, RowWindow};
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{ExtensionField, Field};
 use p3_matrix::stack::ViewPair;
-use p3_uni_stark::{StarkGenericConfig, Val};
 
 pub use crate::types::{Kind, Lookup, LookupError, LookupTerminal};
 
 /// A builder to generate the lookup traces, given the main trace, public values and permutation challenges.
-pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
-    main: ViewPair<'a, Val<SC>>,
-    preprocessed: RowWindow<'a, Val<SC>>,
-    public_values: &'a [Val<SC>],
-    permutation_challenges: &'a [SC::Challenge],
+pub struct LookupTraceBuilder<'a, F: Field, EF: ExtensionField<F>> {
+    main: ViewPair<'a, F>,
+    preprocessed: RowWindow<'a, F>,
+    public_values: &'a [F],
+    permutation_challenges: &'a [EF],
     height: usize,
     row: usize,
 }
 
-impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
+impl<'a, F: Field, EF: ExtensionField<F>> LookupTraceBuilder<'a, F, EF> {
     pub fn new(
-        main: ViewPair<'a, Val<SC>>,
-        preprocessed: ViewPair<'a, Val<SC>>,
-        public_values: &'a [Val<SC>],
-        permutation_challenges: &'a [SC::Challenge],
+        main: ViewPair<'a, F>,
+        preprocessed: ViewPair<'a, F>,
+        public_values: &'a [F],
+        permutation_challenges: &'a [EF],
         height: usize,
         row: usize,
     ) -> Self {
@@ -38,14 +37,14 @@ impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
     }
 }
 
-impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
-    type F = Val<SC>;
-    type Expr = Val<SC>;
-    type Var = Val<SC>;
-    type PreprocessedWindow = RowWindow<'a, Val<SC>>;
-    type MainWindow = RowWindow<'a, Val<SC>>;
-    type PublicVar = Val<SC>;
-    type PeriodicVar = Val<SC>;
+impl<'a, F: Field, EF: ExtensionField<F>> AirBuilder for LookupTraceBuilder<'a, F, EF> {
+    type F = F;
+    type Expr = F;
+    type Var = F;
+    type PreprocessedWindow = RowWindow<'a, F>;
+    type MainWindow = RowWindow<'a, F>;
+    type PublicVar = F;
+    type PeriodicVar = F;
 
     #[inline]
     fn main(&self) -> Self::MainWindow {
@@ -89,31 +88,31 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
     }
 }
 
-impl<SC: StarkGenericConfig> ExtensionBuilder for LookupTraceBuilder<'_, SC> {
-    type EF = SC::Challenge;
-    type ExprEF = SC::Challenge;
-    type VarEF = SC::Challenge;
+impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for LookupTraceBuilder<'_, F, EF> {
+    type EF = EF;
+    type ExprEF = EF;
+    type VarEF = EF;
 
     fn assert_zero_ext<I: Into<Self::ExprEF>>(&mut self, x: I) {
-        assert!(x.into() == SC::Challenge::ZERO);
+        assert!(x.into() == EF::ZERO);
     }
 }
 
-impl<'a, SC: StarkGenericConfig> PermutationAirBuilder for LookupTraceBuilder<'a, SC> {
-    type MP = RowWindow<'a, SC::Challenge>;
-    type RandomVar = SC::Challenge;
+impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder for LookupTraceBuilder<'a, F, EF> {
+    type MP = RowWindow<'a, EF>;
+    type RandomVar = EF;
 
-    type PermutationVar = SC::Challenge;
+    type PermutationVar = EF;
 
     fn permutation(&self) -> Self::MP {
         panic!("we should not be accessing the permutation matrix while building it");
     }
 
-    fn permutation_randomness(&self) -> &[SC::Challenge] {
+    fn permutation_randomness(&self) -> &[EF] {
         self.permutation_challenges
     }
 
-    fn permutation_values(&self) -> &[SC::Challenge] {
+    fn permutation_values(&self) -> &[EF] {
         &[]
     }
 }

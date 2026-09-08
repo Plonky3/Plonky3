@@ -8,8 +8,7 @@ use p3_uni_stark::{
     VerifierConstraintFolder,
 };
 
-use crate::builder::InteractionBuilder;
-use crate::count::Count;
+use p3_lookup::{Count, InteractionBuilder};
 
 pub struct ProverConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
     pub inner: ProverConstraintFolder<'a, SC>,

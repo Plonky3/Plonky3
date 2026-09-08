@@ -3,13 +3,13 @@ use core::fmt::Debug;
 use p3_air::{Air, RowWindow};
 use p3_commit::PolynomialSpace;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::{Lookup, LookupProtocol};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{VerificationError, VerifierConstraintFolder};
 
 use crate::config::{Domain, StarkGenericConfig as SGC, Val};
+use crate::folder::VerifierConstraintFolderWithLookups;
 
 /// Structure storing all data needed for verifying one instance's constraints at the out-of-domain point.
 pub struct VerifierData<'a, SC: SGC> {

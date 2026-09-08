@@ -14,7 +14,6 @@ use p3_field::{
     Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
     PrimeField,
 };
-use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{
     InteractionSymbolicBuilder, Lookup, LookupProtocol, LookupTerminal,
@@ -29,6 +28,7 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::common::ProverData;
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val};
+use crate::folder::ProverConstraintFolderWithLookups;
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
 use crate::symbolic::{
     get_constraint_layout, get_log_num_quotient_chunks_for_domain, get_symbolic_constraints,
@@ -257,13 +257,14 @@ where
         .for_each(|((i, inst), ext_domain)| {
             if !all_lookups[i].is_empty() {
                 // Compute the permutation argument trace and the AIR's single terminal.
-                let (generated_perm, terminal) = lookup_gadget.generate_permutation::<SC>(
-                    inst.trace,
-                    &inst.air.preprocessed_trace(),
-                    &inst.public_values,
-                    all_lookups[i],
-                    &challenges_per_instance[i],
-                );
+                let (generated_perm, terminal) = lookup_gadget
+                    .generate_permutation::<Val<SC>, SC::Challenge>(
+                        inst.trace,
+                        &inst.air.preprocessed_trace(),
+                        &inst.public_values,
+                        all_lookups[i],
+                        &challenges_per_instance[i],
+                    );
 
                 // Record the AIR's terminal for transcript observation and proof emission.
                 lookup_terminals[i] = terminal;

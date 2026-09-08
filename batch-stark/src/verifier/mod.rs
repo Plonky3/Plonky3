@@ -9,7 +9,6 @@ use p3_air::{Air, BaseAir};
 use p3_challenger::GrindingChallenger;
 use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField};
-use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{
     InteractionSymbolicBuilder, LookupError, LookupProtocol, check_multiplicity_height_bound,
@@ -25,6 +24,7 @@ use tracing::{info_span, instrument};
 use crate::common::CommonData;
 use crate::config::{Challenge, Commitment, Domain, PcsError, StarkGenericConfig as SGC, Val};
 use crate::error::BatchVerificationError;
+use crate::folder::VerifierConstraintFolderWithLookups;
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof};
 use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 use crate::transcript::BatchTranscript;
