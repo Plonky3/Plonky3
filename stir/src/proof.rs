@@ -69,6 +69,11 @@ pub struct StirRoundProof<EF: Field, M: Mmcs<EF>, Witness> {
     /// constant than rebuilding them by Newton's divided differences. `ans_polynomial` is
     /// observed in the transcript before `rho` is sampled, so a malicious prover cannot fit
     /// `Ans` to a known `rho`.
+    ///
+    /// With [`crate::StirOptions::compact_answers`], this vector must be empty. The verifier
+    /// reconstructs the same canonical coefficients from the OOD and verified query values
+    /// before observing them at the same transcript position. The option is agreed outside
+    /// the proof; an empty vector alone does not select compact mode.
     pub ans_polynomial: Vec<EF>,
 
     /// Merkle openings for the STIR queries, sharing one pruned multi-opening proof.

@@ -98,6 +98,20 @@ pub struct StirParameters<M> {
     pub mmcs: M,
 }
 
+/// Optional STIR prover/proof-size tradeoffs. Both prover and verifier must use the same options.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StirOptions {
+    /// `Some(cap)` stops folding once the coefficient bound is at most `2^cap`, after at least the
+    /// starting fold. `None` retains the legacy schedule. Larger bounds save intermediate
+    /// rounds at the cost of sending more final coefficients. An unreachable bound is rejected.
+    pub max_log_final_poly_len: Option<usize>,
+
+    /// Omit answer-polynomial coefficients from the proof and reconstruct them in the
+    /// verifier. This saves proof bytes at the cost of verifier interpolation work and
+    /// temporary memory. The default sends coefficients; both sides must agree on this option.
+    pub compact_answers: bool,
+}
+
 /// Derived configuration for a single STIR round.
 ///
 /// All values are computed from [`StirParameters`] and the accumulated state
@@ -178,6 +192,7 @@ type NonOwning<F, EF, Challenger> = PhantomData<fn() -> (F, EF, Challenger)>;
 /// Contains all precomputed values needed by the prover and verifier.
 #[derive(Debug, Clone)]
 pub struct StirConfig<F, EF, M, Challenger> {
+    options: StirOptions,
     /// Log₂ of the degree of the initial polynomial.
     pub log_starting_degree: usize,
 
@@ -264,6 +279,15 @@ impl core::fmt::Display for Stage {
 /// process.
 #[derive(Clone, Copy, Debug, PartialEq, Error)]
 pub enum StirConfigError {
+    /// The folding arities cannot reach the requested final coefficient bound.
+    #[error(
+        "requested final polynomial log length {max_log_final_poly_len} is below the minimum reachable {min_log_final_poly_len}"
+    )]
+    FinalPolynomialBoundUnreachable {
+        max_log_final_poly_len: usize,
+        min_log_final_poly_len: usize,
+    },
+
     /// `log_folding_factor` was below the paper-backed schedule's minimum of 2 (k >= 4).
     #[error(
         "the paper-backed STIR parameter schedule requires log_folding_factor >= 2 (k >= 4), \
@@ -457,7 +481,7 @@ where
         log_starting_degree: usize,
         params: StirParameters<M>,
     ) -> Result<Self, StirConfigError> {
-        Self::try_new_with_optional_combine(log_starting_degree, params, None)
+        Self::try_new_with_options(log_starting_degree, params, StirOptions::default())
     }
 
     /// Derive a full STIR configuration from user-facing parameters.
@@ -470,6 +494,29 @@ where
     /// [`Self::try_new`] for the fallible form and [`StirConfigError`] for the failure modes.
     pub fn new(log_starting_degree: usize, params: StirParameters<M>) -> Self {
         Self::try_new(log_starting_degree, params).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Derive the full schedule using optional prover/proof-size tradeoffs.
+    /// Both prover and verifier must agree on `options`.
+    pub fn try_new_with_options(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        options: StirOptions,
+    ) -> Result<Self, StirConfigError> {
+        Self::try_new_with_optional_combine(log_starting_degree, params, None, options)
+    }
+
+    /// Panicking form of [`Self::try_new_with_options`].
+    ///
+    /// # Panics
+    /// Panics when the parameters or requested options cannot produce a valid schedule.
+    pub fn new_with_options(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        options: StirOptions,
+    ) -> Self {
+        Self::try_new_with_options(log_starting_degree, params, options)
+            .unwrap_or_else(|e| panic!("{e}"))
     }
 
     /// Like [`Self::try_new`], but additionally inflates round 0's `eta` (and, transitively,
@@ -499,6 +546,24 @@ where
         num_classes: usize,
         ell: u64,
     ) -> Result<Self, StirConfigError> {
+        Self::try_new_with_combine_and_options(
+            log_starting_degree,
+            params,
+            num_classes,
+            ell,
+            StirOptions::default(),
+        )
+    }
+
+    /// Like [`Self::try_new_with_combine`], deriving the entire schedule with `options`.
+    /// Both prover and verifier must agree on these options.
+    pub fn try_new_with_combine_and_options(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        num_classes: usize,
+        ell: u64,
+        options: StirOptions,
+    ) -> Result<Self, StirConfigError> {
         // `ell` carries the real information, so without these a `num_classes` of 1 would
         // silently skip all Combine accounting despite the name.
         if num_classes < 2 {
@@ -511,6 +576,7 @@ where
             log_starting_degree,
             params,
             Some(CombineRequirement { num_classes, ell }),
+            options,
         )
     }
 
@@ -533,10 +599,32 @@ where
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
+    /// Panicking form of [`Self::try_new_with_combine_and_options`].
+    ///
+    /// # Panics
+    /// Panics when the parameters, Combine requirements or options cannot produce a valid schedule.
+    pub fn new_with_combine_and_options(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        num_classes: usize,
+        ell: u64,
+        options: StirOptions,
+    ) -> Self {
+        Self::try_new_with_combine_and_options(
+            log_starting_degree,
+            params,
+            num_classes,
+            ell,
+            options,
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
+    }
+
     fn try_new_with_optional_combine(
         log_starting_degree: usize,
         params: StirParameters<M>,
         combine: Option<CombineRequirement>,
+        options: StirOptions,
     ) -> Result<Self, StirConfigError> {
         // Rate 1 leaves no redundancy to test proximity against: `delta = 1 - rho - eta` is
         // non-positive, so the query-count formula has no per-query failure probability
@@ -599,16 +687,24 @@ where
         let algebraic_security_level = security_level - max_pow_bits;
         let num_ood_samples = params.soundness_type.stir_num_ood_samples();
 
-        // Determine number of intermediate rounds. Round 0 folds by k0
-        // (`log_starting_folding_factor`); every fold after that, including the final
-        // direct-send stage, folds by k (`log_folding_factor`). We fold all the way down
-        // to a polynomial of size `2^log_final_degree` (where log_final_degree <
-        // log_folding_factor, whenever more than the k0 fold happens) and send it
-        // directly. When `log_starting_degree - log_starting_folding_factor` is itself
-        // already `< log_folding_factor`, the k0 fold IS the final fold and no further
-        // k-fold occurs.
+        // Every schedule performs k0 first. Optional early stopping removes only whole
+        // subsequent k folds, before deriving queries, eta, PoW and the union-bound buffer.
         let after_starting_fold = log_starting_degree - log_starting_folding_factor;
-        let extra_folds = after_starting_fold / log_folding_factor;
+        let extra_folds = match options.max_log_final_poly_len {
+            None => after_starting_fold / log_folding_factor,
+            Some(cap) => {
+                let minimum = after_starting_fold % log_folding_factor;
+                if cap < minimum {
+                    return Err(StirConfigError::FinalPolynomialBoundUnreachable {
+                        max_log_final_poly_len: cap,
+                        min_log_final_poly_len: minimum,
+                    });
+                }
+                after_starting_fold
+                    .saturating_sub(cap)
+                    .div_ceil(log_folding_factor)
+            }
+        };
         let total_folds = 1 + extra_folds;
 
         // Last fold produces the final polynomial; intermediate rounds = total_folds - 1.
@@ -887,6 +983,7 @@ where
         let final_pow_bits = derive_pow_bits("query", Stage::Final, final_query_alg)?;
 
         Ok(Self {
+            options,
             log_starting_degree,
             soundness_type: params.soundness_type,
             security_level: params.security_level,
@@ -903,6 +1000,11 @@ where
             mmcs: params.mmcs,
             _phantom: PhantomData,
         })
+    }
+
+    /// Options used to derive this schedule; prover and verifier must agree on them.
+    pub const fn options(&self) -> StirOptions {
+        self.options
     }
 
     /// Log₂ of the initial evaluation domain size.
@@ -985,6 +1087,56 @@ mod tests {
             max_pow_bits: 20,
             mmcs: TestMmcs::new(val_mmcs),
         }
+    }
+
+    #[test]
+    fn early_stop_selects_the_first_fold_within_the_requested_bound() {
+        let cases = [
+            (18, 2, 2, None, 8, 0),
+            (18, 2, 2, Some(0), 8, 0),
+            (18, 2, 2, Some(6), 5, 6),
+            (18, 2, 3, None, 5, 1),
+            (18, 2, 3, Some(6), 4, 4),
+            (10, 3, 2, Some(3), 2, 3),
+            (10, 3, 2, Some(2), 3, 1),
+            (10, 3, 2, Some(usize::MAX), 0, 7),
+        ];
+        for (degree, starting_fold, fold, cap, rounds, final_log) in cases {
+            let mut params = test_params(1, fold);
+            params.log_starting_folding_factor = starting_fold;
+            params.security_level = 16;
+            params.max_pow_bits = 0;
+            let options = StirOptions {
+                max_log_final_poly_len: cap,
+                ..Default::default()
+            };
+            let config = StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::new_with_options(
+                degree, params, options,
+            );
+            assert_eq!(
+                (config.num_rounds(), config.log_final_degree),
+                (rounds, final_log)
+            );
+            assert_eq!(config.options(), options);
+        }
+        let mut params = test_params(1, 2);
+        params.log_starting_folding_factor = 3;
+        let err = StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::try_new_with_options(
+            10,
+            params,
+            StirOptions {
+                max_log_final_poly_len: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            StirConfigError::FinalPolynomialBoundUnreachable {
+                max_log_final_poly_len: 0,
+                min_log_final_poly_len: 1,
+            }
+        );
     }
 
     /// [`test_params`] with every knob the fallibility tests need to vary exposed.
@@ -1483,11 +1635,11 @@ mod tests {
             (16, 1, 3, 2, 80, 20, cb),
         ];
 
-        {
+        for cap in [None, Some(2), Some(6), Some(12), Some(usize::MAX)] {
             for &(log_deg, log_blowup, log_fold, log_starting_fold, sec, max_pow, soundness_type) in
                 &cases
             {
-                let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(
+                let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new_with_options(
                     log_deg,
                     StirParameters {
                         log_blowup,
@@ -1498,10 +1650,14 @@ mod tests {
                         max_pow_bits: max_pow,
                         mmcs: MyMmcs::new(val_mmcs.clone()),
                     },
+                    StirOptions {
+                        max_log_final_poly_len: cap,
+                        ..Default::default()
+                    },
                 );
 
                 // Mirror `StirConfig::new`'s buffered target.
-                let total_folds = 1 + (log_deg - log_starting_fold) / log_fold;
+                let total_folds = config.num_rounds() + 1;
                 let buffer = libm::ceil(libm::log2((6 * (total_folds - 1) + 3) as f64)) as usize;
                 let buffered = (sec + buffer) as f64;
                 // Recomputed algebraic bits use the same `libm` math as the config, so
@@ -1570,7 +1726,7 @@ mod tests {
                         .round_configs
                         .last()
                         .map_or((log_deg, log_blowup), |last| {
-                            let fd = last.log_degree - log_fold;
+                            let fd = last.log_degree - last.log_folding_factor;
                             let fdom = last.log_domain_size - 1;
                             (fd, fdom - fd)
                         });
