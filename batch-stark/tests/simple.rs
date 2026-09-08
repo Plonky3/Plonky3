@@ -8,7 +8,7 @@ use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
-    BatchVerificationError, InvalidLookupPow, ProverData, StarkGenericConfig, StarkInstance,
+    BatchTranscriptFailure, BatchVerificationError, ProverData, StarkGenericConfig, StarkInstance,
     VerificationError, prove_batch, verify_batch,
 };
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
@@ -2350,7 +2350,9 @@ fn tampered_lookup_pow_witness_is_rejected() {
     assert!(
         matches!(
             err,
-            BatchVerificationError::InvalidLookupPow(InvalidLookupPow::BadWitness)
+            BatchVerificationError::Transcript(BatchTranscriptFailure::LookupPowWitness {
+                bits: LOOKUP_POW_BITS
+            })
         ),
         "wrong error variant: {err:?}"
     );
@@ -2371,7 +2373,9 @@ fn lookup_pow_difficulty_mismatch_is_rejected() {
     assert!(
         matches!(
             err,
-            BatchVerificationError::InvalidLookupPow(InvalidLookupPow::BadWitness)
+            BatchVerificationError::Transcript(BatchTranscriptFailure::LookupPowWitness {
+                bits: 24
+            })
         ),
         "wrong error variant: {err:?}"
     );
@@ -2400,7 +2404,7 @@ fn batch_without_lookups_carries_no_witness() {
     assert!(
         matches!(
             err,
-            BatchVerificationError::InvalidLookupPow(InvalidLookupPow::UnexpectedWitness)
+            BatchVerificationError::Transcript(BatchTranscriptFailure::UnexpectedLookupPowWitness)
         ),
         "wrong error variant: {err:?}"
     );
@@ -2433,7 +2437,12 @@ fn tampered_ood_pow_witness_is_rejected() {
     .expect_err("a tampered witness must be rejected");
 
     assert!(
-        matches!(err, BatchVerificationError::InvalidOodPowWitness),
+        matches!(
+            err,
+            BatchVerificationError::Transcript(BatchTranscriptFailure::OodPowWitness {
+                bits: OOD_POW_BITS
+            })
+        ),
         "wrong error variant: {err:?}"
     );
 }
@@ -2451,9 +2460,95 @@ fn ood_pow_difficulty_mismatch_is_rejected() {
         .expect_err("a difficulty mismatch must be rejected");
 
     assert!(
-        matches!(err, BatchVerificationError::InvalidOodPowWitness),
+        matches!(
+            err,
+            BatchVerificationError::Transcript(BatchTranscriptFailure::OodPowWitness { bits: 24 })
+        ),
         "wrong error variant: {err:?}"
     );
+}
+
+/// Substituting one commitment for another leaves both absorbs bound to the wrong value.
+#[test]
+fn a_substituted_main_commitment_is_rejected() {
+    let config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.commitments.main = proof.commitments.quotient_chunks.clone();
+    })
+    .expect_err("a main commitment the prover never committed to must be rejected");
+
+    // The transcript diverges from the first absorb, so nothing downstream lines up.
+    assert!(matches!(err, BatchVerificationError::Verification(_)));
+}
+
+/// The quotient commitment is absorbed before the out-of-domain point is drawn.
+#[test]
+fn a_substituted_quotient_commitment_is_rejected() {
+    let config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.commitments.quotient_chunks = proof.commitments.main.clone();
+    })
+    .expect_err("a quotient commitment the prover never committed to must be rejected");
+
+    assert!(matches!(err, BatchVerificationError::Verification(_)));
+}
+
+/// The permutation commitment is absorbed before the constraint-folding challenge.
+#[test]
+fn a_substituted_permutation_commitment_is_rejected() {
+    let config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.commitments.permutation = Some(proof.commitments.main.clone());
+    })
+    .expect_err("a permutation commitment the prover never committed to must be rejected");
+
+    assert!(matches!(err, BatchVerificationError::Verification(_)));
+}
+
+/// Each instance's degree bits are absorbed, so a proof cannot restate its own size.
+#[test]
+fn a_tampered_degree_bit_is_rejected() {
+    let config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.degree_bits[0] += 1;
+    })
+    .expect_err("a degree bit the prover never absorbed must be rejected");
+
+    assert!(matches!(err, BatchVerificationError::Verification(_)));
+}
+
+/// The randomization commitment exists only under a hiding PCS, and it is absorbed too.
+#[test]
+fn a_substituted_randomization_commitment_is_rejected() {
+    let config = make_config_zk(1337);
+
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4);
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: &fib_trace,
+        public_values: fib_pis.clone(),
+    }];
+
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+
+    // Swap in the main commitment, which is a real commitment to something else.
+    proof.commitments.random = Some(proof.commitments.main.clone());
+
+    let airs = vec![air_fib];
+    let err = verify_batch(&config, &airs, &proof, from_ref(&fib_pis), common)
+        .expect_err("a randomization commitment the prover never committed to must be rejected");
+
+    assert!(matches!(err, BatchVerificationError::Verification(_)));
 }
 
 /// Test with global lookups only using MulAirLookups and FibAirLookups
