@@ -14,14 +14,16 @@ use config::{
 use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
-    BatchTranscriptFailure, BatchVerificationError, ProverData, StarkGenericConfig, StarkInstance,
-    VerificationError, prove_batch, verify_batch,
+    BatchShape, BatchTranscriptFailure, BatchVerificationError, ProverData, StarkGenericConfig,
+    StarkInstance, VerificationError, prove_batch, verify_batch,
 };
+use p3_challenger::testing::pow_difficulties;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
-use p3_fri::FriParameters;
+use p3_fri::{FriParameters, FriShape, PcsShape};
 use p3_lookup::{Count, InteractionBuilder, LookupError, LookupTerminal};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_security::grinding::{GrindingBudget, GrindingSites, RecordedGrind};
 use p3_uni_stark::{InvalidProofShapeError, OpeningShape, PeriodicColumnError};
 use p3_util::log2_strict_usize;
 
@@ -3290,4 +3292,134 @@ fn from_airs_and_degrees_with_lookup_budgets_rejects_overshooting_the_blowup() {
         &[usize::MAX],
         1,
     );
+}
+
+/// The three protocols a batch-STARK proof over `p3-fri` layers, outermost first.
+///
+/// Each brackets the next, and each seeds its own transcript, so the same step
+/// label in two of them is two different steps.
+const BATCH_STARK_STACK: [&str; 3] = ["p3-batch-stark", "p3-fri-pcs", "p3-fri"];
+
+/// Every grinding difficulty the three transcripts of one configuration demand.
+///
+/// Fixture state: two traces of width 2 and 3, one preprocessed commitment.
+///
+/// Nothing but the difficulties and whether the lookup phase runs reaches the result.
+fn demanded_grinding(
+    fri: &FriParameters<()>,
+    num_lookup_instances: usize,
+    lookup_pow_bits: usize,
+    ood_pow_bits: usize,
+) -> Vec<RecordedGrind> {
+    let batch = BatchShape {
+        trace_widths: vec![2, 3],
+        public_value_counts: vec![0, 3],
+        preprocessed_widths: vec![0, 1],
+        has_preprocessed_commitment: true,
+        num_lookup_instances,
+        lookup_pow_bits,
+        has_randomization_commitment: false,
+        ood_pow_bits,
+    };
+    let opening = PcsShape {
+        claimed_evaluation_counts: vec![vec![vec![3]]],
+        batch_pow_bits: fri.batch_proof_of_work_bits,
+    };
+    let ldt = FriShape::with_schedule(fri, vec![2, 2], 8);
+
+    let patterns = [
+        batch.pattern::<Val, Challenge>(),
+        opening.pattern::<Val, Challenge>(),
+        ldt.pattern::<Val, Challenge>(),
+    ];
+
+    BATCH_STARK_STACK
+        .iter()
+        .zip(&patterns)
+        .flat_map(|(protocol, pattern)| {
+            pow_difficulties(pattern)
+                .into_iter()
+                .map(|(label, bits)| RecordedGrind::new(protocol, label, bits))
+        })
+        .collect()
+}
+
+#[test]
+fn recorded_grinding_matches_what_the_security_model_credits() {
+    // Property: recorded difficulty == credited difficulty, at every site.
+    //
+    // A batch-STARK exercises all three zero-bit conventions in one stack:
+    //
+    //     ood_pow     ->  always described
+    //     lookup_pow  ->  described only while the lookup phase runs
+    //     FRI sites   ->  elided at zero
+    //
+    // Reading an absent step as zero bits would therefore be wrong twice over.
+
+    // The parameters the config feeds its PCS, with the commitment scheme
+    // dropped: only the difficulties matter here.
+    let base = FriParameters::new_testing((), 2);
+
+    for batch_pow_bits in [0, 10] {
+        for lookup_pow_bits in [0, 12] {
+            for ood_pow_bits in [0, 8] {
+                for num_lookup_instances in [0, 2] {
+                    let fri = FriParameters {
+                        batch_proof_of_work_bits: batch_pow_bits,
+                        ..base
+                    };
+
+                    // The FRI sites, plus the two the batch itself enforces.
+                    let credited = GrindingBudget::from_sites(&GrindingSites {
+                        out_of_domain: ood_pow_bits,
+                        lookup_challenge: lookup_pow_bits,
+                        ..fri.grinding_sites()
+                    })
+                    .with_fri(&fri.security_regime());
+
+                    credited
+                        .check(
+                            &BATCH_STARK_STACK,
+                            &demanded_grinding(
+                                &fri,
+                                num_lookup_instances,
+                                lookup_pow_bits,
+                                ood_pow_bits,
+                            ),
+                        )
+                        .unwrap_or_else(|mismatch| {
+                            panic!(
+                                "batch={batch_pow_bits} lookup={lookup_pow_bits} \
+                                 ood={ood_pow_bits} instances={num_lookup_instances}: {mismatch}"
+                            )
+                        });
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_lookup_grinding_configuration_is_accounted_for() {
+    // The config the lookup-grinding tests prove with is itself accounted for.
+    //
+    // The numbers it hands the prover are the numbers a security report is built from.
+    let config = make_config(2024).with_lookup_proof_of_work_bits(LOOKUP_POW_BITS);
+    let fri = FriParameters::new_testing((), 2);
+
+    let lookup_pow_bits = config.lookup_proof_of_work_bits();
+    let ood_pow_bits = config.ood_proof_of_work_bits();
+    assert_eq!((lookup_pow_bits, ood_pow_bits), (LOOKUP_POW_BITS, 0));
+
+    GrindingBudget::from_sites(&GrindingSites {
+        out_of_domain: ood_pow_bits,
+        lookup_challenge: lookup_pow_bits,
+        ..fri.grinding_sites()
+    })
+    .with_fri(&fri.security_regime())
+    .check(
+        &BATCH_STARK_STACK,
+        &demanded_grinding(&fri, 2, lookup_pow_bits, ood_pow_bits),
+    )
+    .unwrap_or_else(|mismatch| panic!("{mismatch}"));
 }

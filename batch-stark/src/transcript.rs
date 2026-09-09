@@ -1000,13 +1000,20 @@ where
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use core::str::from_utf8;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_challenger::testing::{SeedDigest, assert_seeds_pairwise_distinct, seed_digest};
+    use p3_challenger::testing::{
+        SeedDigest, assert_seeds_pairwise_distinct, pow_difficulties, seed_digest,
+    };
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_lookup::logup::LogUpGadget;
+    use p3_security::grinding::{
+        GRINDING_VOCABULARY, GrindingBudget, GrindingSite, GrindingSites, RecordedGrind,
+        ZeroBitConvention, grinding_step,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -1328,5 +1335,84 @@ mod tests {
         let verifier_next: F = verifier_challenger.sample();
         let prover_next: F = prover_challenger.sample();
         assert_eq!(verifier_next, prover_next);
+    }
+    /// This protocol's name, as the vocabulary table keys it.
+    fn protocol() -> &'static str {
+        from_utf8(NAME).expect("the protocol name is ASCII")
+    }
+
+    /// Every grind `shape` describes, keyed for the security model's check.
+    fn recorded_grinds(shape: &BatchShape) -> Vec<RecordedGrind> {
+        pow_difficulties(&shape.pattern::<F, EF>())
+            .into_iter()
+            .map(|(label, bits)| RecordedGrind::new(protocol(), label, bits))
+            .collect()
+    }
+
+    #[test]
+    fn the_grinding_vocabulary_maps_both_grinds_this_protocol_describes() {
+        // The out-of-domain step is described whatever its difficulty.
+        let ood = grinding_step(protocol(), OOD_POW).expect("the out-of-domain grind is mapped");
+        assert_eq!(ood.site, GrindingSite::OutOfDomain);
+        assert_eq!(ood.zero_bits, ZeroBitConvention::Always);
+
+        // The lookup step is described only while the lookup phase runs.
+        let lookup = grinding_step(protocol(), LOOKUP_POW).expect("the lookup grind is mapped");
+        assert_eq!(lookup.site, GrindingSite::LookupChallenge);
+        assert_eq!(lookup.zero_bits, ZeroBitConvention::WhenPhaseRuns);
+
+        // Two grinds described, so two rows.
+        assert_eq!(
+            GRINDING_VOCABULARY
+                .iter()
+                .filter(|step| step.protocol == protocol())
+                .count(),
+            2,
+        );
+    }
+
+    #[test]
+    fn both_grinds_carry_the_difficulties_the_model_credits() {
+        // Invariant: the two conventions this protocol uses both hold.
+        //
+        //     ood_pow     always described, zero included
+        //     lookup_pow  described iff an instance declares a lookup
+        for ood_pow_bits in [0, 1, 8] {
+            for lookup_pow_bits in [0, 1, 12] {
+                for num_lookup_instances in [0, 2] {
+                    let shape = BatchShape {
+                        num_lookup_instances,
+                        lookup_pow_bits,
+                        ood_pow_bits,
+                        ..plain_shape()
+                    };
+
+                    GrindingBudget::from_sites(&GrindingSites {
+                        out_of_domain: ood_pow_bits,
+                        lookup_challenge: lookup_pow_bits,
+                        ..GrindingSites::NONE
+                    })
+                    .check(&[protocol()], &recorded_grinds(&shape))
+                    .unwrap_or_else(|mismatch| panic!("{mismatch}"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_zero_bit_out_of_domain_grind_is_described_rather_than_elided() {
+        // Why: the witness travels in the proof whatever the difficulty.
+        //
+        // The step is therefore described at zero bits, unlike every elided site.
+        // Reading its absence as zero bits would be reading the wrong convention.
+        let shape = BatchShape {
+            ood_pow_bits: 0,
+            ..plain_shape()
+        };
+
+        assert_eq!(
+            recorded_grinds(&shape),
+            vec![RecordedGrind::new(protocol(), OOD_POW, 0)],
+        );
     }
 }

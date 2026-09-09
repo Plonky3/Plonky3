@@ -6,6 +6,7 @@
 //!
 //! - A sponge stand-in that keeps every absorbed value, in order.
 //! - One comparable value standing for a whole transcript seed.
+//! - The grinding difficulties a recorded transcript description demands.
 //!
 //! # Comparing two seeds
 //!
@@ -26,7 +27,7 @@ use p3_keccak::Keccak256Hash;
 use p3_symmetric::CryptographicHasher;
 
 use crate::CanObserve;
-use crate::fs::{DomainSeparator, Unit};
+use crate::fs::{DomainSeparator, InteractionPattern, Kind, Label, Length, Unit};
 
 /// Captures every value absorbed into it, in order.
 ///
@@ -98,6 +99,35 @@ impl Debug for SeedDigest {
 #[must_use]
 pub fn seed_digest<U: Unit>(separator: &DomainSeparator<U>) -> SeedDigest {
     SeedDigest(Keccak256Hash.hash_iter(separator.seed_bytes()))
+}
+
+/// Every grinding step a pattern describes, in transcript order.
+///
+/// A proof-of-work step carries its difficulty as a fixed length.
+///
+/// A grind repeated once per round is one entry per round.
+///
+/// This is the transcript half of a grinding-accounting check.
+///
+/// The security half reads the same difficulties out of a parameter set.
+///
+/// # Panics
+///
+/// When a proof-of-work step carries any other length variant.
+#[must_use]
+pub fn pow_difficulties(pattern: &InteractionPattern) -> Vec<(Label, usize)> {
+    pattern
+        .interactions()
+        .iter()
+        .filter(|interaction| interaction.kind() == Kind::Pow)
+        .map(|interaction| match interaction.length() {
+            Length::Fixed(bits) => (interaction.label(), bits),
+            other => panic!(
+                "the `{}` proof-of-work step carries `{other}`, not a `Fixed` difficulty",
+                interaction.label(),
+            ),
+        })
+        .collect()
 }
 
 /// Panic unless every labelled seed differs from every other one in the set.

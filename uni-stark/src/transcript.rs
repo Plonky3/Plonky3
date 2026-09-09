@@ -706,12 +706,19 @@ pub enum StarkTranscriptFailure {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use core::str::from_utf8;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_challenger::testing::{SeedDigest, assert_seeds_pairwise_distinct, seed_digest};
+    use p3_challenger::testing::{
+        SeedDigest, assert_seeds_pairwise_distinct, pow_difficulties, seed_digest,
+    };
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_security::grinding::{
+        GRINDING_VOCABULARY, GrindingBudget, GrindingSite, GrindingSites, RecordedGrind,
+        ZeroBitConvention, grinding_step,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -1114,5 +1121,63 @@ mod tests {
         eight.finish();
 
         assert_ne!(seven_alpha, eight_alpha);
+    }
+    /// This protocol's name, as the vocabulary table keys it.
+    fn protocol() -> &'static str {
+        from_utf8(NAME).expect("the protocol name is ASCII")
+    }
+
+    #[test]
+    fn the_grinding_vocabulary_maps_the_one_grind_this_protocol_describes() {
+        // The security model keys its table on the name and the label bound here.
+        let ood = grinding_step(protocol(), OOD_POW).expect("the out-of-domain grind is mapped");
+        assert_eq!(ood.site, GrindingSite::OutOfDomain);
+        assert_eq!(ood.zero_bits, ZeroBitConvention::Elided);
+
+        // A uni-STARK has no lookups, so it describes no lookup grind and owns no second row.
+        assert_eq!(
+            GRINDING_VOCABULARY
+                .iter()
+                .filter(|step| step.protocol == protocol())
+                .count(),
+            1,
+        );
+    }
+
+    #[test]
+    fn the_out_of_domain_grind_carries_the_difficulty_the_model_credits() {
+        // Invariant: one number reaches the pattern and the report by two routes.
+        //
+        //     ood_pow_bits  --pattern-->        Kind::Pow Length::Fixed
+        //                   --GrindingSites-->  out_of_domain
+        //
+        // Elided at zero, so the sweep covers the step being absent and present.
+        for ood_pow_bits in [0, 1, 8] {
+            let shape = StarkShape {
+                log_ext_degree: 5,
+                log_degree: 5,
+                main_width: 2,
+                preprocessed_width: 0,
+                num_public_values: 1,
+                num_periodic_columns: 0,
+                num_quotient_chunks: 2,
+                opens_main_next_row: true,
+                opens_preprocessed_next_row: false,
+                has_randomization: false,
+                ood_pow_bits,
+            };
+
+            let recorded: Vec<_> = pow_difficulties(&shape.pattern::<F, EF>())
+                .into_iter()
+                .map(|(label, bits)| RecordedGrind::new(protocol(), label, bits))
+                .collect();
+
+            GrindingBudget::from_sites(&GrindingSites {
+                out_of_domain: ood_pow_bits,
+                ..GrindingSites::NONE
+            })
+            .check(&[protocol()], &recorded)
+            .unwrap_or_else(|mismatch| panic!("{mismatch}"));
+        }
     }
 }
