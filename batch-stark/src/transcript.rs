@@ -142,6 +142,7 @@ struct OpeningArgument;
 ///
 /// Every other described step is replayed against data the caller validated first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum BatchTranscriptFailure {
     /// The witness guarding the lookup challenges misses its difficulty.
     #[error("lookup phase PoW witness does not meet the required {bits} bits")]

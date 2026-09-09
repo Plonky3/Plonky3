@@ -660,9 +660,13 @@ fn zk_whir_conditioned_witness_round_trip_accepts() {
     //
     // The per-component simulation tests live where the masks are drawn:
     //
-    //     masked sumcheck wires  ->  p3-sumcheck simulator tests
+    //     masked sumcheck wires  ->  p3-sumcheck inherited-claim simulator tests
     //     private OOD answers    ->  code_switch programmability tests
     //     one-time-pad reveals   ->  base case OTP test
+    //
+    // Every batch here inherits its claim, so the inherited-claim simulator covers these wires.
+    //
+    // The recorded-claims one plays a prelude no WHIR round reaches.
     let num_variables = 12;
     let mut rng = SmallRng::seed_from_u64(21);
 

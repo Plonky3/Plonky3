@@ -136,7 +136,14 @@ impl<F, EF> GenericDegreeProof<F, EF> {
         // The rejection happens at the offending round, not before the replay.
         // A proof whose round 3 carries the wrong width has rounds 0 to 2 absorbed first.
         //
-        // The verdict is unaffected: the sponge is dropped on the error path and never reused.
+        // The sponge is borrowed from the caller, so it outlives the rejection half advanced.
+        //
+        // What keeps the verdict safe is that every caller propagates the error:
+        //
+        //     propagate -> the half-advanced sponge is abandoned with the failed verification
+        //     retry     -> the next attempt starts from a state the rejected proof chose
+        //
+        // A retry on this borrow is therefore unsound: it lets a prover pick its own challenges.
         let shape = GenericDegreeShape::new(num_rounds, degree, pow_bits);
         let mut transcript =
             VerifierTranscript::<Challenger, F, EF>::new(challenger, shape, self.claimed_sum);

@@ -630,6 +630,7 @@ impl WhirShape {
 
 /// A transcript step the proof failed to satisfy.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TranscriptFailure {
     /// A grinding witness did not meet the difficulty its step requires.
     #[error("round {round}: query grinding witness clears fewer than {bits} bits")]

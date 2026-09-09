@@ -507,6 +507,7 @@ where
 
 /// A transcript step the proof failed to satisfy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum PcsTranscriptFailure {
     /// One opening carries a claimed-evaluation count the run never described.
     #[error("opening {opening}: claimed evaluation count mismatch: expected {expected}, got {got}")]
@@ -745,38 +746,44 @@ mod tests {
     }
 
     #[test]
-    fn the_delegation_bracket_leaves_the_sponge_untouched() {
-        // Invariant: the markers are structural.
-        // They record the delegation, and absorb nothing.
+    fn both_sides_walk_the_delegation_bracket_identically() {
+        // Invariant: the two sides come through the bracket in the same place.
         //
-        // Fixture state: the two sides over the same shape, each bracketing an empty delegation.
+        //     alpha        ->  the batching challenge agrees across the delegation
+        //     next sample  ->  the sponges are still in step once the bracket closes
+        //
+        // Fixture state: one shape, driven once by each side, each bracketing an empty run.
+        //
+        // The shape describes the bracket unconditionally, so neither side can skip it.
+        // An absorbing marker would move both sponges alike, so it is outside what this pins.
         let shape = shape_with(vec![vec![vec![1]]]);
         let claims: Vec<CommitmentWithOpeningPoints<EF, (), ()>> =
             vec![((), vec![((), vec![(EF::ONE, vec![EF::ONE])])]).into()];
 
-        let mut bracketed_challenger = fresh_challenger();
-        let mut bracketed =
-            PcsVerifierTranscript::<Ch, F, EF>::new(&mut bracketed_challenger, shape.clone());
-        bracketed.claimed_openings(&claims).unwrap();
-        let bracketed_alpha = bracketed.batch_phase(None).unwrap();
-        bracketed.delegate(|_| ());
-        bracketed.finish();
+        let mut verifier_challenger = fresh_challenger();
+        let mut verifier =
+            PcsVerifierTranscript::<Ch, F, EF>::new(&mut verifier_challenger, shape.clone());
+        verifier.claimed_openings(&claims).unwrap();
+        let verifier_alpha = verifier.batch_phase(None).unwrap();
+        verifier.delegate(|_| ());
+        verifier.finish();
 
         // The prover side plays the same steps and must land on the same challenge.
-        let mut plain_challenger = fresh_challenger();
-        let mut plain = PcsProverTranscript::<Ch, F, EF>::new(&mut plain_challenger, shape);
-        plain.claimed_openings(&vec![vec![vec![vec![EF::ONE]]]]);
-        let (plain_alpha, witness) = plain.batch_phase();
-        plain.delegate(|_| ());
-        plain.finish();
+        let mut prover_challenger = fresh_challenger();
+        let mut prover = PcsProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, shape);
+        prover.claimed_openings(&vec![vec![vec![vec![EF::ONE]]]]);
+        let (prover_alpha, witness) = prover.batch_phase();
+        prover.delegate(|_| ());
+        prover.finish();
 
-        assert_eq!(bracketed_alpha, plain_alpha);
+        assert_eq!(verifier_alpha, prover_alpha);
         assert_eq!(witness, None);
         // Both sponges advanced identically, so they still agree on what comes next.
-        let bracketed_next: F = bracketed_challenger.sample();
-        let plain_next: F = plain_challenger.sample();
-        assert_eq!(bracketed_next, plain_next);
+        let verifier_next: F = verifier_challenger.sample();
+        let prover_next: F = prover_challenger.sample();
+        assert_eq!(verifier_next, prover_next);
     }
+
     /// This protocol's name, as the vocabulary table keys it.
     fn protocol() -> &'static str {
         from_utf8(NAME).expect("the protocol name is ASCII")

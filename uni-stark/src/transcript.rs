@@ -677,6 +677,7 @@ where
 
 /// A transcript step the proof failed to satisfy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum StarkTranscriptFailure {
     /// The described preprocessed-commitment step arrived with no commitment.
     #[error(

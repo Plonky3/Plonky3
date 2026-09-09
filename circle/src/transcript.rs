@@ -136,6 +136,7 @@ pub type OpeningClaim<'a, EF> = (Point<EF>, &'a [EF]);
 /// A described grinding step therefore always has a witness to replay it.
 /// Only the strength of that witness can still fail here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum CircleTranscriptFailure {
     /// A grinding witness did not produce the zero bits its step requires.
     #[error("invalid proof-of-work witness for the {phase} phase: {bits} bits required")]

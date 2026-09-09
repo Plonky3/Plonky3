@@ -5,6 +5,7 @@
 //! opened at the single point the zerocheck binds.
 
 use core::borrow::Borrow;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -549,4 +550,131 @@ fn verify_rejects_tampered_preprocessed_opening() {
         }
         other => panic!("expected a preprocessed Merkle opening rejection, got {other:?}"),
     }
+}
+
+/// A configuration that counts how often a caller reaches for the preprocessed scheme.
+///
+/// The verifier asks for it in one place only, inside the preprocessed opening bracket.
+/// The count is therefore the number of preprocessed openings the verifier performed.
+struct CountingConfig {
+    /// The configuration the other tests use, wrapped unchanged.
+    inner: WhirConfigForTest,
+    /// Times the preprocessed scheme has been handed out since the last read.
+    preprocessed_lookups: AtomicUsize,
+}
+
+impl CountingConfig {
+    const fn new(inner: WhirConfigForTest) -> Self {
+        Self {
+            inner,
+            preprocessed_lookups: AtomicUsize::new(0),
+        }
+    }
+
+    /// Read the count and reset it, so each phase is measured on its own.
+    fn take_preprocessed_lookups(&self) -> usize {
+        self.preprocessed_lookups.swap(0, Ordering::Relaxed)
+    }
+}
+
+impl MultiStarkConfig for CountingConfig {
+    type Val = F;
+    type Challenge = EF;
+    type Challenger = MyChallenger;
+    type Pcs = TestPcs;
+
+    fn pcs(&self) -> &TestPcs {
+        self.inner.pcs()
+    }
+
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        self.inner.collision_resistance_bits()
+    }
+
+    fn preprocessed_pcs(&self) -> &TestPcs {
+        self.preprocessed_lookups.fetch_add(1, Ordering::Relaxed);
+        self.inner.preprocessed_pcs()
+    }
+
+    fn min_num_variables(&self) -> usize {
+        self.inner.min_num_variables()
+    }
+
+    fn build_witness(&self, tables: Vec<Table<F>>) -> Witness<F> {
+        self.inner.build_witness(tables)
+    }
+
+    fn committed_table<'a>(
+        &self,
+        prover_data: &'a p3_whir::WhirProverData<F, EF, MyMmcs, L>,
+        table_index: usize,
+    ) -> &'a Table<F> {
+        self.inner.committed_table(prover_data, table_index)
+    }
+}
+
+#[test]
+fn a_rejected_main_opening_leaves_the_preprocessed_opening_unrun() {
+    // Invariant: the preprocessed opening cannot change a verdict the main opening already made.
+    //
+    // Fixture state: one instance with preprocessed columns, so both openings are described.
+    // The configuration counts every hand-out of the preprocessed scheme.
+    let n = 256;
+    let fixed = fixed_column(n);
+    let air = PreprocessedAir { height: n };
+    let trace = main_trace(&fixed);
+    let log_height = log2_strict_usize(n);
+    let config = CountingConfig::new(config_for(log_height));
+    let airs = [&air];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
+
+    let mut proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(),
+    );
+
+    // Setup and proving reach for the scheme as well, so the verifier starts from zero.
+    config.take_preprocessed_lookups();
+
+    // Baseline: an untouched proof verifies, and its preprocessed opening runs once.
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect("honest preprocessed proof must verify");
+    assert_eq!(config.take_preprocessed_lookups(), 1);
+
+    // Mutation: shift the first opened main current-row value by one field element.
+    let batch = &proof.opening.evals[0];
+    let mut current = batch.current().to_vec();
+    current[0] += EF::ONE;
+    proof.opening.evals[0] = OpeningBatch::new(current, batch.next().to_vec());
+
+    // Expected rejection: the opened main value is no longer bound to the main commitment.
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, VerificationError::Opening(_)),
+        "expected a main opening rejection, got {err:?}"
+    );
+
+    // The rejecting path never asked for the preprocessed scheme, so it opened nothing twice.
+    assert_eq!(config.take_preprocessed_lookups(), 0);
 }

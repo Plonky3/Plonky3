@@ -475,6 +475,7 @@ where
 /// Only the two grinding steps a FRI run replays are reachable here.
 /// The one guarding the batching challenge is drawn before the run starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum TranscriptFailure {
     /// A grinding witness did not meet the difficulty its step requires.
     #[error("{0} phase PoW witness does not meet the required difficulty")]

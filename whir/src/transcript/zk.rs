@@ -440,6 +440,10 @@ impl ZkWhirShape {
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Every masked batch sends the same wire width.
+        //
+        // The sumcheck crate derives the same number from the same input, so this is a copy.
+        // Both sides of this pipeline seed from this one, so the copy cannot desync them.
+        // Drift would instead leave the fingerprint describing steps the run no longer takes.
         let wire_len = config.zk.ell_zk.max(3) - 1;
 
         // Each round queries its own domain, folded by that round's arity.
@@ -512,6 +516,12 @@ impl ZkWhirShape {
     }
 
     /// Describe the transcript this shape fixes.
+    ///
+    /// # Scope
+    ///
+    /// The description reaches the sponge as a seed fingerprint, and no driver plays it.
+    ///
+    /// Every phase is a leaf step, so the delegations to the sumcheck batches carry no markers.
     ///
     /// # Panics
     ///
