@@ -3,7 +3,7 @@ use core::iter;
 use core::marker::PhantomData;
 use core::ops::Deref;
 
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PackedValue};
 
 use crate::Matrix;
 use crate::bitrev::BitReversibleMatrix;
@@ -107,6 +107,19 @@ where
                 .collect::<Vec<_>>()
         }
     }
+
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
+    where
+        F: Copy,
+        P: PackedValue<Value = F>,
+    {
+        let rows = self.0.wrapping_row_slices(r, P::WIDTH);
+        (0..self.width()).map(move |c| {
+            P::from_fn(|lane| {
+                rows[lane][c / EF::DIMENSION].as_basis_coefficients_slice()[c % EF::DIMENSION]
+            })
+        })
+    }
 }
 
 pub struct FlatIter<F, I: Iterator> {
@@ -149,16 +162,108 @@ where
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use alloc::vec::Vec;
 
     use itertools::Itertools;
-    use p3_field::extension::Complex;
-    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::{BinomialExtensionField, Complex, CubicTrinomialExtensionField};
+    use p3_field::{BasedVectorSpace, PackedValue, PrimeCharacteristicRing};
+    use p3_goldilocks::Goldilocks;
     use p3_mersenne_31::Mersenne31;
 
     use super::*;
     use crate::dense::RowMajorMatrix;
     type F = Mersenne31;
     type EF = Complex<Mersenne31>;
+
+    fn assert_vertical_packing<F, EF, Inner, P>(flat: &FlatMatrixView<F, EF, Inner>)
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        Inner: Matrix<EF>,
+        P: PackedValue<Value = F>,
+    {
+        for r in [0, flat.height() - 1, flat.height() + 1] {
+            let mut packed_width = 0;
+            for (c, packed) in flat.vertically_packed_row::<P>(r).enumerate() {
+                packed_width += 1;
+                for (lane, value) in packed.as_slice().iter().enumerate() {
+                    assert_eq!(*value, flat.get((r + lane) % flat.height(), c).unwrap());
+                }
+            }
+            assert_eq!(packed_width, flat.width());
+        }
+    }
+
+    fn extension_matrix<F, EF>(height: usize, width: usize) -> RowMajorMatrix<EF>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        let values = (0..height * width)
+            .map(|i| {
+                EF::from_basis_coefficients_fn(|coeff| F::from_usize(i * EF::DIMENSION + coeff + 1))
+            })
+            .collect();
+        RowMajorMatrix::new(values, width)
+    }
+
+    fn assert_dense_vertical_packing<F, EF>()
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        for height in [1, 3, 16] {
+            for width in [1, 3, 17] {
+                let flat = FlatMatrixView::<F, EF, _>::new(extension_matrix(height, width));
+                assert_vertical_packing::<F, EF, _, F>(&flat);
+                assert_vertical_packing::<F, EF, _, F::Packing>(&flat);
+            }
+        }
+    }
+
+    fn assert_bit_reversed_vertical_packing<F, EF>()
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        // Bit-reversal views require power-of-two heights.
+        for height in [1, 16] {
+            for width in [1, 3, 17] {
+                let inner = extension_matrix::<F, EF>(height, width).bit_reverse_rows();
+                let flat = FlatMatrixView::<F, EF, _>::new(inner);
+                assert_vertical_packing::<F, EF, _, F>(&flat);
+                assert_vertical_packing::<F, EF, _, F::Packing>(&flat);
+            }
+        }
+    }
+
+    #[test]
+    fn test_vertically_packed_row_extension_degrees() {
+        type EF2 = BinomialExtensionField<Goldilocks, 2>;
+        type EF3 = CubicTrinomialExtensionField<Goldilocks>;
+        type EF4 = BinomialExtensionField<BabyBear, 4>;
+        type EF5 = BinomialExtensionField<BabyBear, 5>;
+
+        assert_dense_vertical_packing::<Goldilocks, EF2>();
+        assert_dense_vertical_packing::<Goldilocks, EF3>();
+        assert_dense_vertical_packing::<BabyBear, EF4>();
+        assert_dense_vertical_packing::<BabyBear, EF5>();
+
+        assert_bit_reversed_vertical_packing::<Goldilocks, EF2>();
+        assert_bit_reversed_vertical_packing::<Goldilocks, EF3>();
+        assert_bit_reversed_vertical_packing::<BabyBear, EF4>();
+        assert_bit_reversed_vertical_packing::<BabyBear, EF5>();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_vertically_packed_row_empty_height_panics() {
+        let flat = FlatMatrixView::<BabyBear, BinomialExtensionField<BabyBear, 4>, _>::new(
+            RowMajorMatrix::new(vec![], 1),
+        );
+        let _ = flat.vertically_packed_row::<BabyBear>(0).next();
+    }
 
     #[test]
     fn flat_matrix() {

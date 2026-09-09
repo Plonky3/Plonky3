@@ -3,6 +3,12 @@
 
 #![no_std]
 
+/// Whether this crate uses the Rayon backend instead of the serial fallback.
+///
+/// This reflects feature unification across dependents and remains true for a
+/// one-worker Rayon pool, unlike a check of the current worker count.
+pub const PARALLEL_ENABLED: bool = cfg!(feature = "parallel");
+
 #[cfg(not(feature = "parallel"))]
 mod serial;
 

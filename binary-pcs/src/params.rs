@@ -8,7 +8,7 @@
 //! [`BinaryPcsConfigError`] and is returned rather than asserted, since the parameters come
 //! from the caller.
 
-use p3_security::SecurityAssumption;
+use p3_security::binary::BinaryPcsRegime;
 use thiserror::Error;
 
 /// Largest grinding request `BinaryChallenger<BinaryField128, _>::grind` accepts.
@@ -17,79 +17,6 @@ use thiserror::Error;
 /// field width, is what binds at this level.
 const MAX_POW_BITS: usize = 56;
 
-/// Bit width of the codeword alphabet, `BinaryField128`.
-///
-/// Checked against the field itself by `the_alphabet_width_matches_the_field` below, so this
-/// cannot drift from the type the crate actually commits over.
-const ALPHABET_BITS: usize = 128;
-
-/// The regime this scheme is analysed in.
-///
-/// Capacity-rate list decodability is refuted over characteristic 2 with `F_2`-subspace
-/// domains, and the Cantor domain is one. The Johnson bound is not refuted by this: it is an
-/// unconditional theorem whose radius those same counterexamples show to be tight, but
-/// `p3-security` documents it as resting on a correlated-agreement conjecture, and it is
-/// excluded here by choice, not by mathematics. It is fixed here rather than taken from the
-/// caller, which is why this crate does not re-export `SecurityAssumption`.
-const REGIME: SecurityAssumption = SecurityAssumption::UniqueDecoding;
-
-// A change of regime must fail to compile, not fail at run time.
-// The other regimes are refuted over `F_2`-subspace domains.
-// No configuration should accept them, so there is nothing to report as an error.
-const _: () = assert!(matches!(REGIME, SecurityAssumption::UniqueDecoding));
-
-/// `ceil(log2(value))`.
-///
-/// For `value >= 2` the highest set bit of `value - 1` sits one below the ceiling at a power
-/// of two and exactly at it otherwise, so the leading-zero count gives the ceiling in both
-/// cases. `value <= 1` needs no bits.
-const fn log2_ceil_u128(value: u128) -> usize {
-    if value <= 1 {
-        return 0;
-    }
-    (u128::BITS - (value - 1).leading_zeros()) as usize
-}
-
-/// Bits of security the rounds leave once the field's width is paid for, rounded down.
-///
-/// The queries are not the only place soundness is spent, and the two rounds below lose bits
-/// that no query count buys back. Both are bounded by a multiple of `1/|F|`:
-///
-/// - **The commit phase.** At fold arity 2 in the unique-decoding regime the per-round
-///   proximity error is `(arity - 1) * (n + 1) / |F|`, i.e. `(n + 1) / |F|` for a base codeword
-///   of `n` symbols. That is the bound `p3_security::fri::commit_phase_error_udr` states, which
-///   `the_field_security_agrees_with_p3_security` below checks this function against.
-/// - **The sumcheck.** Each of the `num_fold_rounds` rounds sends a degree-2 polynomial, so a
-///   forged round survives a uniform challenge with probability at most `2 / |F|`.
-///
-/// Their sum is `n + 1 + 2 * num_fold_rounds` over `|F|`. The sum cannot overflow: `try_new`
-/// admits `log_domain_size` only below `usize::BITS`, so `n` stays below `2^64`.
-///
-/// The two terms compose under different conventions:
-///
-/// - The commit term is a per-round bound, charged once.
-/// - The sumcheck term is union-bounded over every round.
-///
-/// Charging a per-round bound once is the round-by-round convention.
-/// The security crate composes the same way, taking the worst term rather than summing errors.
-/// The mixture here is conservative, never optimistic.
-///
-/// At arity 2 the choice is numerically inert:
-///
-/// ```text
-///     commit    n + 1      = 2^22   at the largest shape benched here
-///     sumcheck  2 * rounds = 40
-/// ```
-///
-/// Raising the arity shrinks the round count without shrinking `n`, so the two stay far apart.
-///
-/// Taking the ceiling of the logarithm rounds the result **down**, so this understates the
-/// achieved security by up to one bit rather than overstating it.
-const fn field_security_bits_at(log_domain_size: usize, num_fold_rounds: usize) -> usize {
-    let numerator = (1u128 << log_domain_size) + 1 + 2 * num_fold_rounds as u128;
-    ALPHABET_BITS.saturating_sub(log2_ceil_u128(numerator))
-}
-
 /// Parameters chosen by the caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BinaryPcsParams {
@@ -97,13 +24,14 @@ pub struct BinaryPcsParams {
     pub log_inv_rate: usize,
     /// Grinding bits demanded once, before the query phase.
     pub pow_bits: usize,
-    /// Target security, in bits.
+    /// Target for the union of opening-claim, fold, sumcheck, and query errors, in bits.
     pub security_level: usize,
 }
 
 /// The round schedule derived from [`BinaryPcsParams`] and the polynomial's arity.
 ///
-/// The schedule prices the field's width and the query count, and nothing else.
+/// The schedule uses `p3-security` to budget all algebraic opening errors and queries.
+/// Opening protocols are checked against the remaining claim-batching capacity.
 /// In particular it does not price the commitment scheme, which is supplied separately.
 /// A digest narrower than `2 * security_level` bits leaves the reported level undeliverable.
 /// Supplying one wide enough is the caller's obligation.
@@ -181,6 +109,19 @@ impl BinaryPcsConfig {
         num_variables: usize,
         params: BinaryPcsParams,
     ) -> Result<Self, BinaryPcsConfigError> {
+        Self::try_new_with_folding(num_variables, params, 1)
+    }
+
+    /// Derive a schedule with batching selected before validating its security target.
+    ///
+    /// Unlike starting with `try_new` and then changing the folding factor, this admits
+    /// targets that need exhaustive batched queries to release the query-error reserve.
+    /// Returns the same configuration errors as [`Self::try_new`], or an invalid fold factor.
+    pub fn try_new_with_folding(
+        num_variables: usize,
+        params: BinaryPcsParams,
+        log_folding_factor: usize,
+    ) -> Result<Self, BinaryPcsConfigError> {
         // The codeword length is computed downstream as `1usize << log_len`, so `log_len`
         // must stay below `usize::BITS` or that shift is already invalid. `checked_add`
         // guards the sum itself: an adversarial `num_variables` and `log_inv_rate` must not
@@ -199,6 +140,13 @@ impl BinaryPcsConfig {
             return Err(BinaryPcsConfigError::NoVariablesToFold);
         }
 
+        if log_folding_factor == 0 || log_folding_factor > num_variables {
+            return Err(BinaryPcsConfigError::InvalidFoldingFactor {
+                requested: log_folding_factor,
+                num_variables,
+            });
+        }
+
         if params.pow_bits > MAX_POW_BITS {
             return Err(BinaryPcsConfigError::PowBitsExceedWitnessCapacity {
                 requested: params.pow_bits,
@@ -213,28 +161,33 @@ impl BinaryPcsConfig {
             });
         }
 
-        // Every variable folds, so the fold-round count is the arity itself.
-        let field_security_bits = field_security_bits_at(log_len, num_variables);
-        if params.security_level > field_security_bits {
-            return Err(BinaryPcsConfigError::SecurityLevelExceedsFieldCapacity {
-                security_level: params.security_level,
-                max: field_security_bits,
-            });
-        }
-
-        // Grinding buys back `pow_bits`, so the queries only cover the remainder.
-        let protocol_security_level = params.security_level - params.pow_bits;
-        let num_queries = REGIME.queries(protocol_security_level, params.log_inv_rate);
+        let num_queries = BinaryPcsRegime::queries_for_target(
+            params.security_level,
+            params.log_inv_rate,
+            params.pow_bits,
+        );
         if num_queries == 0 {
             return Err(BinaryPcsConfigError::ZeroQueries);
         }
-
-        Ok(Self {
+        let config = Self {
             params,
             num_variables,
             num_queries,
-            log_folding_factor: 1,
-        })
+            log_folding_factor,
+        };
+        config.validate_security()?;
+        Ok(config)
+    }
+
+    const fn validate_security(&self) -> Result<(), BinaryPcsConfigError> {
+        let max = self.security_regime().max_security_bits();
+        if self.params.security_level > max {
+            return Err(BinaryPcsConfigError::SecurityLevelExceedsFieldCapacity {
+                security_level: self.params.security_level,
+                max,
+            });
+        }
+        Ok(())
     }
 
     /// Batch up to `log_folding_factor` sequential variable folds between commitments.
@@ -249,7 +202,8 @@ impl BinaryPcsConfig {
     /// Sum `(N / 2^r + 1) / |F|` over every variable fold, plus `2 / |F|` per
     /// sumcheck round. Reserve one bit each for that sum and the query error so their sum
     /// meets the requested budget. Query PoW is credited only to the query error.
-    /// Factor log one retains the existing single-fold configuration and transcript.
+    /// Single and batched schedules use the same summed field budget. Exhaustive queries
+    /// have zero error and need no query reserve.
     ///
     /// # Errors
     /// Rejects an empty/oversized batch or a target exceeding the batched field budget.
@@ -263,20 +217,8 @@ impl BinaryPcsConfig {
                 num_variables: self.num_variables,
             });
         }
-        // Re-derive from the original parameters, including when switching back to one fold.
         self.log_folding_factor = log_folding_factor;
-        let reserve = usize::from(log_folding_factor > 1);
-        let max = self.field_security_bits().saturating_sub(reserve);
-        if self.params.security_level > max {
-            return Err(BinaryPcsConfigError::SecurityLevelExceedsFieldCapacity {
-                security_level: self.params.security_level,
-                max,
-            });
-        }
-        self.num_queries = REGIME.queries(
-            self.params.security_level + reserve - self.params.pow_bits,
-            self.params.log_inv_rate,
-        );
+        self.validate_security()?;
         Ok(self)
     }
 
@@ -352,34 +294,47 @@ impl BinaryPcsConfig {
         self.params.pow_bits
     }
 
-    /// Bits of security the sampled queries deliver.
-    ///
-    /// The query phase runs one test per distinct first-batch coset, capped at the
-    /// number of such cosets in the domain.
-    ///
-    /// Where the derived count exceeds that, this figure is a lower bound.
-    /// Opening every base coset checks every composed fold at every position, and the
-    /// query-phase error of that is zero rather than a power of the proximity gap.
+    /// Validated security model for this exact fold and query schedule.
     #[must_use]
-    pub fn query_security_bits(&self) -> f64 {
-        REGIME.queries_error(self.params.log_inv_rate, self.num_queries)
+    pub const fn security_regime(&self) -> BinaryPcsRegime {
+        match BinaryPcsRegime::new(
+            self.num_variables,
+            self.params.log_inv_rate,
+            self.log_folding_factor,
+            self.num_queries,
+            self.params.pow_bits,
+        ) {
+            Some(regime) => regime,
+            None => panic!("configuration invariants must describe a binary PCS regime"),
+        }
     }
 
-    /// Bits of security the fold and sumcheck rounds leave, rounded down.
+    /// Configured total algebraic opening-security target, excluding hash collisions.
+    #[must_use]
+    pub const fn security_level(&self) -> usize {
+        self.params.security_level
+    }
+
+    /// Conservative capacity for scalar evaluations, counting current and successor columns.
     ///
-    /// No query count buys these bits back. Batched configurations reserve one additional
-    /// bit to add this error to the query error; see [`Self::try_with_folding`].
+    /// The validated configuration always leaves room for at least one claim. Query grinding
+    /// does not increase this alpha budget: it happens after the batching challenge.
+    #[must_use]
+    pub fn max_opening_claims(&self) -> usize {
+        self.security_regime()
+            .max_opening_claims(self.params.security_level)
+    }
+
+    /// Query security before grinding; infinity when every base coset is queried.
+    #[must_use]
+    pub fn query_security_bits(&self) -> f64 {
+        self.security_regime().query_security_bits()
+    }
+
+    /// Whole-bit lower bound for all fold and sumcheck errors, before opening batching.
     #[must_use]
     pub const fn field_security_bits(&self) -> usize {
-        if self.log_folding_factor == 1 {
-            field_security_bits_at(self.log_domain_size(), self.num_fold_rounds())
-        } else {
-            // Sum the geometric series of all virtual codeword lengths and every
-            // fold/sumcheck error. log_domain_size < usize::BITS leaves room in u128.
-            let numerator = (2u128 << self.log_domain_size()) - (2u128 << self.log_final_len())
-                + 3 * self.num_variables as u128;
-            ALPHABET_BITS.saturating_sub(log2_ceil_u128(numerator))
-        }
+        self.security_regime().field_security_bits()
     }
 }
 
@@ -388,9 +343,10 @@ mod tests {
     use p3_binary_field::BinaryField128;
     use p3_field::Field;
     use p3_security::InstanceShape;
+    use p3_security::binary::BINARY_PCS_FIELD_BITS;
     use p3_security::fri::{FriRegime, commit_phase_error_udr};
 
-    use super::{ALPHABET_BITS, BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams};
+    use super::{BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams};
 
     const fn params() -> BinaryPcsParams {
         BinaryPcsParams {
@@ -402,7 +358,7 @@ mod tests {
 
     #[test]
     fn the_alphabet_width_matches_the_field() {
-        assert_eq!(ALPHABET_BITS, BinaryField128::bits());
+        assert_eq!(BINARY_PCS_FIELD_BITS, BinaryField128::bits());
     }
 
     #[test]
@@ -454,8 +410,7 @@ mod tests {
         assert_eq!(config.field_security_bits(), 105);
         let mut p = params();
         p.security_level = 105;
-        let old = BinaryPcsConfig::try_new(19, p).unwrap();
-        assert!(old.try_with_folding(3).is_err());
+        assert!(BinaryPcsConfig::try_new(19, p).is_err());
         p.security_level = 104;
         assert!(
             BinaryPcsConfig::try_new(19, p)
@@ -463,6 +418,19 @@ mod tests {
                 .try_with_folding(3)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn exhaustive_batching_can_reclaim_the_query_reserve_at_construction() {
+        let params = BinaryPcsParams {
+            log_inv_rate: 2,
+            pow_bits: 0,
+            security_level: 117,
+        };
+        assert!(BinaryPcsConfig::try_new(7, params).is_err());
+        let batched = BinaryPcsConfig::try_new_with_folding(7, params, 2).unwrap();
+        assert_eq!(batched.max_opening_claims(), 1012);
+        assert!(batched.try_with_folding(1).is_err());
     }
 
     /// `query_security_bits` reports the achieved security the sampled queries buy back after
@@ -497,18 +465,19 @@ mod tests {
         );
     }
 
-    /// The fold term this crate charges must agree with the one `p3-security` states for the
-    /// unique-decoding commit phase, so the two cannot drift apart silently. Arity 2 is
-    /// `max_log_arity = 1`, and every fold round here runs at `pow_bits = 0`.
-    ///
-    /// This crate's value must never be the larger of the two — it is the one `try_new`
-    /// enforces — and must stay within a rounding of it: the two differ only by this crate's
-    /// extra sumcheck term, which the codeword term dwarfs, and by its rounding down to a
-    /// whole bit.
+    /// Independent comparison with the sum of the FRI per-round UDR bounds and quadratic
+    /// sumcheck errors. Comparing only the largest FRI round would miss omitted folds.
     #[test]
     fn the_field_security_agrees_with_p3_security() {
-        for &num_variables in &[10usize, 16, 20, 24] {
-            let config = BinaryPcsConfig::try_new(num_variables, params()).unwrap();
+        for num_variables in [10, 16, 20, 24] {
+            let config = BinaryPcsConfig::try_new(
+                num_variables,
+                BinaryPcsParams {
+                    security_level: 90,
+                    ..params()
+                },
+            )
+            .unwrap();
             let regime = FriRegime {
                 log_blowup: config.log_inv_rate(),
                 num_queries: config.num_queries(),
@@ -517,20 +486,26 @@ mod tests {
                 commit_pow_bits: 0,
                 query_pow_bits: config.pow_bits(),
             };
-            let shape = InstanceShape {
-                log_trace_length: config.num_variables(),
-                modulus_bits: ALPHABET_BITS,
-                collision_resistance: ALPHABET_BITS,
-                num_batched_functions: 1,
-            };
-            let reference = commit_phase_error_udr(&regime, &shape)
-                .expect("arity 2 folds, so there is a commit-phase round")
-                .bits();
+            let mut errors: alloc::vec::Vec<_> = (1..=num_variables)
+                .map(|remaining| {
+                    commit_phase_error_udr(
+                        &regime,
+                        &InstanceShape {
+                            log_trace_length: remaining,
+                            modulus_bits: BINARY_PCS_FIELD_BITS,
+                            collision_resistance: BINARY_PCS_FIELD_BITS,
+                            num_batched_functions: 1,
+                        },
+                    )
+                    .unwrap()
+                })
+                .collect();
+            errors.push(p3_security::ErrorBits::from_log2(
+                128.0 - (2.0 * num_variables as f64).log2(),
+            ));
+            let reference = p3_security::ErrorBits::sum(&errors).bits();
             let ours = config.field_security_bits() as f64;
-            assert!(
-                ours <= reference && reference - ours < 1.5,
-                "num_variables={num_variables}: {ours} bits does not track p3-security's {reference}"
-            );
+            assert!(ours <= reference && reference - ours < 1.0);
         }
     }
 
@@ -597,7 +572,7 @@ mod tests {
 
     /// A target the alphabet cannot deliver is rejected rather than met on paper by piling on
     /// queries: at 20 variables and rate `2^-2` the base codeword holds `2^22` symbols, so the
-    /// fold and sumcheck rounds alone cap the achievable security at 105 bits.
+    /// summed field error plus the query reserve caps the configured target at 103 bits.
     #[test]
     fn rejects_a_security_level_the_field_cannot_deliver() {
         let mut p = params();
@@ -606,13 +581,12 @@ mod tests {
             BinaryPcsConfig::try_new(20, p),
             Err(BinaryPcsConfigError::SecurityLevelExceedsFieldCapacity {
                 security_level: 120,
-                max: 105,
+                max: 103,
             })
         );
 
-        // One bit below the cap is accepted, so the boundary is the stated one and not an
-        // accident of a much looser bound.
-        p.security_level = 105;
+        // The stated cap is accepted.
+        p.security_level = 103;
         assert!(BinaryPcsConfig::try_new(20, p).is_ok());
     }
 
