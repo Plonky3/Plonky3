@@ -17,6 +17,7 @@ on:
       - "binary-dft/tests/**"
       - "stir/src/**"
       - "stir/tests/**"
+      - "examples/src/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

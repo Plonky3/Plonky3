@@ -367,6 +367,36 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
                 "--ignored",
                 "--exact",
             ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-examples",
+                "tests::test_end_to_end_koalabear_keccak_hashes_parallel_dft_keccak_merkle_tree_stir",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-examples",
+                "tests::test_end_to_end_mersenne_31_keccak_hashes_keccak_merkle_tree",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-examples",
+                "tests::test_end_to_end_mersenne31_blake3_hashes_keccak_merkle_tree",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
         ]
     raise AssertionError(f"unhandled command: {command}")
 
