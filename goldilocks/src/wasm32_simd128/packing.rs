@@ -633,11 +633,12 @@ mod tests {
         fn check(a: [u64; 2], b: [u64; 2]) {
             let sum = [a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1])];
             let carry = super::unsigned_add_carry(
-                unsafe { core::mem::transmute(a) },
-                unsafe { core::mem::transmute(b) },
-                unsafe { core::mem::transmute(sum) },
+                unsafe { core::mem::transmute::<[u64; 2], core::arch::wasm32::v128>(a) },
+                unsafe { core::mem::transmute::<[u64; 2], core::arch::wasm32::v128>(b) },
+                unsafe { core::mem::transmute::<[u64; 2], core::arch::wasm32::v128>(sum) },
             );
-            let carry: [u64; 2] = unsafe { core::mem::transmute(carry) };
+            let carry: [u64; 2] =
+                unsafe { core::mem::transmute::<core::arch::wasm32::v128, [u64; 2]>(carry) };
             assert_eq!(carry[0], u64::from(sum[0] < a[0]));
             assert_eq!(carry[1], u64::from(sum[1] < a[1]));
         }
@@ -659,7 +660,7 @@ mod tests {
             }
         }
 
-        let mut rng = SmallRng::seed_from_u64(0xCA77_0FF1_CE);
+        let mut rng = SmallRng::seed_from_u64(0x00CA_770F_F1CE);
         for _ in 0..4096 {
             let a = [rng.random(), rng.random()];
             let b = [rng.random(), rng.random()];
