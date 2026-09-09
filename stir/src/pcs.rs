@@ -318,6 +318,7 @@ pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> 
     input_mmcs: InputMmcs,
     stir: StirParameters<StirMmcs>,
     options: StirOptions,
+    batch_proof_of_work_bits: usize,
     /// Maximum `h_max - h_min`, in octaves, among the native heights sharing one LDE domain.
     ///
     /// `0` puts every distinct native height on its own domain, so `Combine` never runs and
@@ -343,6 +344,7 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
             input_mmcs,
             stir,
             options: StirOptions::default(),
+            batch_proof_of_work_bits: 0,
             max_log_height_spread: DEFAULT_MAX_LOG_HEIGHT_SPREAD,
             config_cache: Arc::new(RwLock::new(alloc::collections::BTreeMap::new())),
         }
@@ -361,6 +363,46 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
     /// Options used to derive this PCS instance's STIR schedules.
     pub const fn options(&self) -> StirOptions {
         self.options
+    }
+
+    /// Grind after absorbing all opening claims and immediately before sampling `alpha`.
+    ///
+    /// Defaults to zero. Both sides must agree on the difficulty. The PCS carries one
+    /// witness for the whole opening batch, regardless of its number of height buckets.
+    /// This prices retries of the opening-batching challenge, as in the two-adic FRI PCS.
+    /// It does not change STIR's query counts, `eta`, or the conservative `Combine` bound:
+    /// [`StirParameters::max_pow_bits`] still applies only to STIR's own grinding sites.
+    ///
+    /// # Panics
+    ///
+    /// If the difficulty cannot be sampled from a base-field element and a `usize`.
+    #[must_use]
+    pub fn with_batch_proof_of_work_bits(mut self, bits: usize) -> Self
+    where
+        Val: PrimeField64,
+    {
+        assert!(
+            bits < Val::bits().min(usize::BITS as usize),
+            "invalid batching PoW difficulty"
+        );
+        self.batch_proof_of_work_bits = bits;
+        self
+    }
+
+    /// Difficulty of the PCS opening-batching grind.
+    pub const fn batch_proof_of_work_bits(&self) -> usize {
+        self.batch_proof_of_work_bits
+    }
+
+    /// PCS-owned grinding metadata for an opening-batching security term.
+    ///
+    /// This exposes the enforced site; it does not itself compute a STIR security report
+    /// or credit the grind to the separate mixed-height `Combine` error.
+    pub const fn grinding_sites(&self) -> p3_security::GrindingSites {
+        p3_security::GrindingSites {
+            batch_combination: self.batch_proof_of_work_bits,
+            ..p3_security::GrindingSites::NONE
+        }
     }
 
     /// Override how wide a native-height spread may share one LDE domain.
@@ -676,6 +718,7 @@ type ProverDataWithPoints<'a, Val, InputMmcs, Challenge> =
 
 /// Everything `open` settles before STIR runs.
 struct PreparedOpen<Val, Challenge, StirMmcs, Challenger> {
+    batch_pow_witness: Option<Val>,
     /// Claimed evaluations, already absorbed into the transcript.
     opened_values: OpenedValues<Challenge>,
     /// Distinct shared LDE heights across every commitment's groups, descending: one STIR
@@ -817,7 +860,12 @@ where
         // height) class. Every matrix in a class lives on the same physical domain (its
         // commitment's shared domain) and shares the same claimed degree, both required to
         // alpha-batch them together and, later, for `Combine` to merge classes soundly.
-        let alpha: Challenge = challenger.sample_algebra_element();
+        // Claims are fixed before the grind. No prover message may intervene between
+        // this site and `alpha`, or a retry could bypass the work just paid.
+        let (alpha, batch_pow_witness) = crate::batch_transcript::prove::<Val, Challenge, _>(
+            challenger,
+            self.batch_proof_of_work_bits,
+        );
         let packed_alpha_powers =
             Challenge::ExtensionPacking::packed_ext_powers_capped(alpha, global_max_width)
                 .collect_vec();
@@ -947,6 +995,7 @@ where
             .collect();
 
         PreparedOpen {
+            batch_pow_witness,
             opened_values: all_opened_values,
             bucket_log_heights,
             stir_configs,
@@ -983,6 +1032,7 @@ where
         StirPcsProof<Val, Challenge, InputMmcs, StirMmcs>,
     ) {
         let PreparedOpen {
+            batch_pow_witness,
             opened_values,
             bucket_log_heights,
             stir_configs,
@@ -1027,7 +1077,13 @@ where
             })
             .collect();
 
-        (opened_values, bucket_proofs)
+        (
+            opened_values,
+            StirPcsProof {
+                batch_pow_witness,
+                buckets: bucket_proofs,
+            },
+        )
     }
 }
 
@@ -1186,7 +1242,12 @@ where
             }
         }
 
-        let alpha: Challenge = challenger.sample_algebra_element();
+        let alpha: Challenge = crate::batch_transcript::verify(
+            challenger,
+            self.batch_proof_of_work_bits,
+            proof.batch_pow_witness,
+        )?;
+        let proof = &proof.buckets;
 
         // Reproduce each commitment's shared-domain layout from the claimed domain sizes,
         // exactly as `commit` derived it from the committed ones. Nothing about the layout
@@ -1917,10 +1978,29 @@ where
 /// - `input_openings[commit_idx]`: one shared multi-opening proof for that commitment's rows
 ///   at the bucket's queried positions, `None` if the commitment has no group at this
 ///   bucket's LDE height.
-type StirPcsProof<Val, Challenge, InputMmcs, StirMmcs> = Vec<(
+type StirPcsBucket<Val, Challenge, InputMmcs, StirMmcs> = (
     StirProof<Challenge, StirMmcs, Val>,
     Vec<Option<InputOpenings<Val, InputMmcs>>>,
-)>;
+);
+
+/// A PCS opening proof, with one optional batching witness shared by every height bucket.
+///
+/// The witness belongs to the PCS: standalone STIR proofs do not sample `alpha`.
+/// The optional field is serialized even when grinding is disabled, so this encoding
+/// differs from the former bare vector of bucket proofs.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound = "")]
+pub struct StirPcsProof<
+    Val: Field,
+    Challenge: Field,
+    InputMmcs: Mmcs<Val>,
+    StirMmcs: Mmcs<Challenge>,
+> {
+    /// Present exactly when the PCS's batching difficulty is positive.
+    pub batch_pow_witness: Option<Val>,
+    /// STIR proofs and input openings in descending shared LDE height.
+    pub buckets: Vec<StirPcsBucket<Val, Challenge, InputMmcs, StirMmcs>>,
+}
 
 /// Source of an external initial oracle's fibers, for the STIR verifier's `None`: this PCS
 /// has STIR commit the initial oracle itself, so no such source ever exists.
@@ -2357,6 +2437,116 @@ mod tests {
         };
         TwoAdicStirPcs::new(Radix2DitParallel::default(), val_mmcs, stir)
             .with_max_log_height_spread(max_log_height_spread)
+    }
+
+    #[test]
+    fn batch_grinding_is_enforced_across_pcs_layouts() {
+        for spread in [0, DEFAULT_MAX_LOG_HEIGHT_SPREAD] {
+            let pcs = test_pcs_with(spread, SecurityAssumption::CapacityBound, 32)
+                .with_batch_proof_of_work_bits(8);
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(42);
+            let mut base = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
+            let domains = [6, 4].map(|log_h| pcs.natural_domain_for_degree(1 << log_h));
+            let matrices = domains.map(|domain| {
+                (
+                    domain,
+                    RowMajorMatrix::<TestVal>::rand(&mut rng, domain.size(), 3),
+                )
+            });
+            let (commitment, data) = pcs.commit(matrices);
+            base.observe(commitment.clone());
+            let point: EF = base.sample_algebra_element();
+            let mut prover = base.clone();
+            let (values, proof) = pcs.open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![point]; 2],
+                }],
+                &mut prover,
+            );
+            // Replay just the claims and batching site independently of `prepare_open`.
+            // Moving the prover's grind before a claim or after alpha breaks this check.
+            let mut batch_replay = base.clone();
+            for claim in values.iter().flatten().flatten() {
+                batch_replay.observe_algebra_slice(claim);
+            }
+            let _: EF = crate::batch_transcript::verify::<TestVal, EF, _, (), ()>(
+                &mut batch_replay,
+                8,
+                proof.batch_pow_witness,
+            )
+            .expect("the witness must bind all claims before alpha is sampled");
+            let claims: Vec<_> = vec![
+                (
+                    commitment,
+                    domains
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, domain)| (domain, vec![(point, values[0][i][0].clone())]))
+                        .collect(),
+                )
+                    .into(),
+            ];
+            let mut verifier = base.clone();
+            pcs.verify(claims.clone(), &proof, &mut verifier).unwrap();
+            assert_eq!(
+                prover.sample_algebra_element::<EF>(),
+                verifier.sample_algebra_element::<EF>(),
+            );
+            assert!(proof.batch_pow_witness.is_some());
+            assert_eq!(proof.buckets.len(), if spread == 0 { 2 } else { 1 });
+            let bytes = postcard::to_allocvec(&proof).unwrap();
+            let decoded = postcard::from_bytes(&bytes).unwrap();
+            pcs.verify(claims.clone(), &decoded, &mut base.clone())
+                .unwrap();
+
+            let mut missing = proof.clone();
+            missing.batch_pow_witness = None;
+            assert!(matches!(
+                pcs.verify(claims.clone(), &missing, &mut base.clone()),
+                Err(StirError::InvalidProofShape(
+                    ProofShapeError::BatchPowWitness { .. }
+                ))
+            ));
+
+            // A verifier that skips the new PoW check may still reject at a later Merkle
+            // check. Require the dedicated error to catch that missing enforcement.
+            let mut invalid = proof.clone();
+            let rejects_pow = (0..256).any(|candidate| {
+                invalid.batch_pow_witness = Some(TestVal::from_u64(candidate));
+                matches!(
+                    pcs.verify(claims.clone(), &invalid, &mut base.clone()),
+                    Err(StirError::InvalidBatchPowWitness { bits: 8 })
+                )
+            });
+            assert!(
+                rejects_pow,
+                "an invalid batching witness must be rejected at its site"
+            );
+
+            let unground = pcs.clone().with_batch_proof_of_work_bits(0);
+            assert_eq!(pcs.grinding_sites().batch_combination, 8);
+            assert_eq!(unground.grinding_sites(), p3_security::GrindingSites::NONE);
+            // Batching work must not silently weaken any STIR or Combine bound.
+            for combine in [None, Some((2, 50))] {
+                assert_eq!(
+                    schedule_fingerprint(&pcs.get_or_compute_stir_config(6, combine)),
+                    schedule_fingerprint(&unground.get_or_compute_stir_config(6, combine)),
+                );
+            }
+            assert!(matches!(
+                unground.verify(claims.clone(), &proof, &mut base.clone()),
+                Err(StirError::InvalidProofShape(
+                    ProofShapeError::BatchPowWitness { .. }
+                ))
+            ));
+            assert!(
+                pcs.clone()
+                    .with_batch_proof_of_work_bits(7)
+                    .verify(claims, &proof, &mut base.clone())
+                    .is_err()
+            );
+        }
     }
 
     /// Group sizes of the plan for `log_native_heights`, in descending LDE height.

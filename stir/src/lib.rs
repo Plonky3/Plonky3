@@ -54,6 +54,7 @@ extern crate alloc;
 #[cfg(all(test, panic = "unwind"))]
 extern crate std;
 
+mod batch_transcript;
 pub mod config;
 pub mod error;
 pub mod pcs;
@@ -69,7 +70,7 @@ pub use config::{
 };
 pub use error::{ExternalSourceError, GrindStage, ProofShapeError, RoundLabel, StirError};
 pub use p3_security::whir::SecurityAssumption;
-pub use pcs::{DEFAULT_MAX_LOG_HEIGHT_SPREAD, StirCommitment, TwoAdicStirPcs};
+pub use pcs::{DEFAULT_MAX_LOG_HEIGHT_SPREAD, StirCommitment, StirPcsProof, TwoAdicStirPcs};
 pub use proof::{StirProof, StirQueryOpenings, StirRoundProof};
 pub use transcript::{
     ProverTranscript, StirInstanceShape, StirRoundShape, StirShape, TranscriptFailure,

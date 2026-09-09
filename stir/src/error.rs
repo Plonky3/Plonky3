@@ -53,6 +53,10 @@ impl Display for GrindStage {
 /// `got` is what the proof carried.
 #[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
 pub enum ProofShapeError {
+    /// The PCS requires one batching witness exactly when batching grinding is enabled.
+    #[error("batching proof-of-work witness presence: expected {expected}, got {got}")]
+    BatchPowWitness { expected: bool, got: bool },
+
     /// A batch takes one proof per configured instance.
     #[error("expected {expected} proofs, got {got}")]
     InstanceCount { expected: usize, got: usize },
@@ -243,6 +247,10 @@ pub enum ExternalSourceError {
 /// Errors returned by [`crate::verifier::verify_stir`].
 #[derive(Debug, Error, PartialEq)]
 pub enum StirError<MmcsError, InputError = ()> {
+    /// The PCS opening-batching witness failed its configured difficulty.
+    #[error("batching proof-of-work witness clears fewer than {bits} bits")]
+    InvalidBatchPowWitness { bits: usize },
+
     /// A proof-of-work witness failed verification.
     #[error("{round}: {stage} proof-of-work witness clears fewer than {bits} bits")]
     InvalidPowWitness {
@@ -320,6 +328,7 @@ impl<E, IE> StirError<E, IE> {
     /// Map the `InputError` variant to a different type.
     pub fn map_input_err<IE2>(self, f: impl FnOnce(IE) -> IE2) -> StirError<E, IE2> {
         match self {
+            Self::InvalidBatchPowWitness { bits } => StirError::InvalidBatchPowWitness { bits },
             Self::InvalidPowWitness { round, stage, bits } => {
                 StirError::InvalidPowWitness { round, stage, bits }
             }
