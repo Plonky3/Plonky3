@@ -21,12 +21,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUSTFLAGS: -C debuginfo=0
-  # Optimize the test profile while retaining its debug assertions and overflow
-  # checks, so compute-heavy correctness tests (full proofs, large polynomial
-  # sweeps) don't pay the cost of a fully unoptimized build. The heavy,
-  # unrelated curve-arithmetic crates a p3-bn254 dev-dependency pulls in are
-  # excluded via per-package profile overrides in the root Cargo.toml.
-  CARGO_PROFILE_TEST_OPT_LEVEL: 1
 
 jobs:
   build_and_test:

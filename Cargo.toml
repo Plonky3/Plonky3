@@ -171,38 +171,3 @@ inherits = "release"
 lto = "thin"
 codegen-units = 1
 opt-level = 3
-
-# CI raises the test profile's opt-level (CARGO_PROFILE_TEST_OPT_LEVEL) so
-# compute-heavy correctness tests aren't fully unoptimized. `zkhash`, a
-# p3-bn254 dev-dependency used only as a cross-implementation reference, pulls
-# in a cluster of curve-arithmetic crates whose const-generic-heavy code is
-# far more expensive to optimize than to compile; none of it sits on any
-# tested hot path, so it stays at opt-level 0 regardless of that default.
-[profile.test.package.zkhash]
-opt-level = 0
-[profile.test.package.ark-ff]
-opt-level = 0
-[profile.test.package.ark-ff-asm]
-opt-level = 0
-[profile.test.package.ark-ff-macros]
-opt-level = 0
-[profile.test.package.ark-serialize]
-opt-level = 0
-[profile.test.package.ark-std]
-opt-level = 0
-[profile.test.package.derivative]
-opt-level = 0
-[profile.test.package.bls12_381]
-opt-level = 0
-[profile.test.package.ff]
-opt-level = 0
-[profile.test.package.group]
-opt-level = 0
-[profile.test.package.halo2]
-opt-level = 0
-[profile.test.package.halo2_proofs]
-opt-level = 0
-[profile.test.package.pasta_curves]
-opt-level = 0
-[profile.test.package.jubjub]
-opt-level = 0
