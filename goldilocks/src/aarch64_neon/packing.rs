@@ -326,6 +326,17 @@ impl Algebra<Goldilocks> for PackedGoldilocksNeon {
     #[cfg(not(target_feature = "sve2"))]
     const BATCHED_LC_CHUNK: usize = 2;
 
+    #[cfg(target_feature = "sve2")]
+    #[inline]
+    fn batched_linear_combination(values: &[Self], coeffs: &[Goldilocks]) -> Self {
+        if values.len() <= 3 {
+            return p3_field::chunked_linear_combination::<64, Self, Goldilocks>(values, coeffs);
+        }
+        // Accumulate the whole slice, avoiding fixed-size reductions and a
+        // serial multiply-add tail. The driver validates matching lengths.
+        sve2_mixed_dot_delayed_with_chunk_limit(values, coeffs, u32::MAX as usize)
+    }
+
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
         #[cfg(target_feature = "sve2")]
@@ -364,24 +375,25 @@ fn sve2_mixed_dot_delayed<const N: usize>(
 
 #[cfg(target_feature = "sve2")]
 #[inline]
-fn sve2_mixed_dot_delayed_with_chunk_limit<const N: usize>(
-    a: &[PackedGoldilocksNeon; N],
-    f: &[Goldilocks; N],
+fn sve2_mixed_dot_delayed_with_chunk_limit(
+    a: &[PackedGoldilocksNeon],
+    f: &[Goldilocks],
     chunk_limit: usize,
 ) -> PackedGoldilocksNeon {
-    if N == 0 {
+    assert_eq!(a.len(), f.len());
+    if a.is_empty() {
         return PackedGoldilocksNeon::ZERO;
     }
     assert!((1..=u32::MAX as usize).contains(&chunk_limit));
 
-    if N <= chunk_limit {
-        // SAFETY: Both arrays contain N readable elements and N is nonzero and
-        // bounded by u32::MAX.
+    if a.len() <= chunk_limit {
+        // SAFETY: Both slices have the same nonzero length, bounded by
+        // chunk_limit <= u32::MAX.
         return unsafe { sve2_mixed_dot_chunk(a, f) };
     }
 
     let mut chunks = a.chunks(chunk_limit).zip(f.chunks(chunk_limit));
-    let (first_a, first_f) = chunks.next().expect("N is nonzero");
+    let (first_a, first_f) = chunks.next().expect("a is nonempty");
     // SAFETY: `chunks` produces equally sized, nonempty chunks no longer than
     // `chunk_limit`, which is bounded by u32::MAX above.
     let mut sum = unsafe { sve2_mixed_dot_chunk(first_a, first_f) };
@@ -818,6 +830,8 @@ mod tests {
 
 #[cfg(test)]
 mod mixed_dot_tests {
+    extern crate std;
+
     use p3_field::PrimeField64;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
@@ -826,19 +840,67 @@ mod mixed_dot_tests {
     use super::super::utils::tests::EDGE;
     use super::*;
 
-    /// Reference: canonicalize inputs, accumulate mod P in u128.
-    fn dot_ref<const N: usize>(
-        a: &[PackedGoldilocksNeon; N],
-        f: &[Goldilocks; N],
-        lane: usize,
-    ) -> u64 {
+    /// Independent raw-u64 reference; reduce each product before adding so
+    /// the u128 sum cannot overflow even for noncanonical inputs.
+    fn dot_ref(a: &[PackedGoldilocksNeon], f: &[Goldilocks], lane: usize) -> u64 {
         let mut acc: u128 = 0;
-        for i in 0..N {
-            let ai = a[i].as_slice()[lane].as_canonical_u64() as u128;
-            let fi = f[i].as_canonical_u64() as u128;
-            acc = (acc + ai * fi) % (P as u128);
+        for i in 0..a.len() {
+            let ai = a[i].as_slice()[lane].value as u128;
+            let fi = f[i].value as u128;
+            acc = (acc + ai * fi % (P as u128)) % (P as u128);
         }
         acc as u64
+    }
+
+    #[test]
+    fn batched_linear_combination_lengths_match_raw_reference() {
+        let mut rng = SmallRng::seed_from_u64(0x5E2_51CE);
+        for len in [0, 1, 2, 3, 4, 5, 6, 31, 32, 33, 63, 64, 65, 100, 129, 1024] {
+            for pattern in 0..3 {
+                let a = (0..len)
+                    .map(|i| {
+                        PackedGoldilocksNeon::from_fn(|lane| {
+                            Goldilocks::new(match pattern {
+                                0 => rng.random(),
+                                1 => EDGE[(i + 3 * lane) % EDGE.len()],
+                                _ => u64::MAX,
+                            })
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let f = (0..len)
+                    .map(|i| {
+                        Goldilocks::new(match pattern {
+                            0 => rng.random(),
+                            1 => EDGE[(i / EDGE.len()) % EDGE.len()],
+                            _ => u64::MAX,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let got = PackedGoldilocksNeon::batched_linear_combination(&a, &f);
+                for lane in 0..WIDTH {
+                    assert_eq!(
+                        got.as_slice()[lane].as_canonical_u64(),
+                        dot_ref(&a, &f, lane),
+                        "lane {lane}, len={len}, pattern={pattern}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn batched_linear_combination_rejects_mismatched_lengths() {
+        let a = [PackedGoldilocksNeon::ONE; 4];
+        let f = [Goldilocks::ONE; 4];
+        for (a_len, f_len) in [(0, 1), (1, 0), (2, 3), (3, 2)] {
+            assert!(
+                std::panic::catch_unwind(|| {
+                    PackedGoldilocksNeon::batched_linear_combination(&a[..a_len], &f[..f_len])
+                })
+                .is_err()
+            );
+        }
     }
 
     fn check_mixed_dot<const N: usize>(
@@ -980,11 +1042,13 @@ mod mixed_dot_tests {
     fn sve2_mixed_dot_forced_small_chunks_match_reference() {
         fn case<const N: usize>(seed: u64) {
             let mut rng = SmallRng::seed_from_u64(seed);
-            let a: [PackedGoldilocksNeon; N] = core::array::from_fn(|_| {
-                PackedGoldilocksNeon(Goldilocks::new_array([rng.random(), rng.random()]))
-            });
-            let f: [Goldilocks; N] = core::array::from_fn(|_| Goldilocks::new(rng.random()));
-            let got = sve2_mixed_dot_delayed_with_chunk_limit(&a, &f, 3);
+            let a = (0..N)
+                .map(|_| PackedGoldilocksNeon(Goldilocks::new_array([rng.random(), rng.random()])))
+                .collect::<Vec<_>>();
+            let f = (0..N)
+                .map(|_| Goldilocks::new(rng.random()))
+                .collect::<Vec<_>>();
+            let got = sve2_mixed_dot_delayed_with_chunk_limit(a.as_slice(), f.as_slice(), 3);
             for lane in 0..WIDTH {
                 assert_eq!(
                     got.as_slice()[lane].as_canonical_u64(),
@@ -1000,6 +1064,22 @@ mod mixed_dot_tests {
         case::<3>(3);
         case::<4>(4);
         case::<7>(7);
+        case::<100>(100);
+    }
+
+    #[cfg(target_feature = "sve2")]
+    #[test]
+    fn sve2_mixed_dot_slice_driver_rejects_mismatched_lengths() {
+        let a = [PackedGoldilocksNeon::ONE; 4];
+        let f = [Goldilocks::ONE; 4];
+        for (a_len, f_len) in [(0, 1), (1, 0), (2, 3), (3, 2), (3, 4), (4, 3)] {
+            assert!(
+                std::panic::catch_unwind(|| {
+                    sve2_mixed_dot_delayed_with_chunk_limit(&a[..a_len], &f[..f_len], 3)
+                })
+                .is_err()
+            );
+        }
     }
 
     proptest! {

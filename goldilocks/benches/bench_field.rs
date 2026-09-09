@@ -3,7 +3,7 @@ use core::hint::black_box;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_field::integers::QuotientMap;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, Field, PackedValue, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_chunked_linear_combination,
     benchmark_div_2exp, benchmark_double_latency, benchmark_double_throughput, benchmark_halve,
@@ -193,6 +193,25 @@ where
     });
 }
 
+fn benchmark_packed_batched_linear_combination(c: &mut Criterion, name: &str) {
+    type PF = <F as Field>::Packing;
+    let mut rng = SmallRng::seed_from_u64(0x5E2_51CE);
+    for len in [0, 1, 2, 3, 4, 5, 6, 16, 32, 63, 64, 65, 100, 129, 1024] {
+        let values = (0..len)
+            .map(|_| PF::from_fn(|_| F::new(rng.random())))
+            .collect::<Vec<_>>();
+        let coeffs = (0..len).map(|_| F::new(rng.random())).collect::<Vec<_>>();
+        c.bench_function(&format!("{name} batched_linear_combination/{len}"), |b| {
+            b.iter(|| {
+                black_box(PF::batched_linear_combination(
+                    black_box(values.as_slice()),
+                    black_box(coeffs.as_slice()),
+                ))
+            });
+        });
+    }
+}
+
 fn bench_packedfield(c: &mut Criterion) {
     let name = type_name::<<F as Field>::Packing>().to_string();
     type PF = <F as Field>::Packing;
@@ -234,6 +253,7 @@ fn bench_packedfield(c: &mut Criterion) {
     benchmark_sum_array::<PF, 129, 100>(c, &name);
 
     benchmark_chunked_linear_combination::<F, PF, 100>(c, &name);
+    benchmark_packed_batched_linear_combination(c, &name);
 
     benchmark_mixed_dot_array::<PF, F, 1>(c, &name);
     benchmark_mixed_dot_array::<PF, F, 2>(c, &name);
