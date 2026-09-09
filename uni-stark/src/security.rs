@@ -15,7 +15,9 @@ use p3_security::fri::FriRegime;
 // dependency on `p3-security`.
 pub use p3_security::grinding::GrindingSites;
 use p3_security::shape::{InstanceShape, StarkAirParams as P3AirShape};
-use p3_security::stark::{conjectured_security_report, proven_security_report};
+use p3_security::stark::{
+    conjectured_security_report, legacy_security_report, proven_security_report,
+};
 use p3_util::{log2_ceil_usize, log2_floor_usize};
 
 /// What the polynomial commitment scheme commits beyond what the AIR itself
@@ -478,6 +480,40 @@ impl ConjecturedSecurity {
     }
 }
 
+/// Historical security estimate using the pre-random-words ethSTARK
+/// FRI query formula: `num_queries * log_blowup + query_pow_bits`.
+///
+/// The STARK composite still includes AIR composition, DEEP-ALI, batched
+/// openings, and the commitment-collision cap. The FRI folding round and its
+/// commit-phase grinding are omitted by this historical heuristic. See
+/// [`legacy_security_report`].
+///
+/// For historical comparison only: this may exceed [`ConjecturedSecurity`]
+/// and is not a soundness bound. Do not use it to size deployment parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LegacySecurity {
+    pub security_bits: usize,
+}
+
+impl LegacySecurity {
+    /// Compute legacy security at the proof's committed-polynomial size.
+    /// `degree_bits` includes zk padding, as in
+    /// [`ConjecturedSecurity::compute_from_params`].
+    pub fn compute_from_params(params: &StarkSecurityParams, degree_bits: usize) -> Self {
+        let report = legacy_security_report(
+            &params.fri_regime(),
+            &params.air_shape(),
+            &params.instance_shape(degree_bits),
+            &[],
+            &params.grinding,
+        )
+        .expect("FRI supports the legacy conjectured regime");
+        Self {
+            security_bits: report.security_bits() as usize,
+        }
+    }
+}
+
 /// Proven security level (in bits) of a STARK configuration.
 ///
 /// Follows Theorems 2 and 3 of [2024/1553](https://eprint.iacr.org/2024/1553)
@@ -621,6 +657,41 @@ mod tests {
     fn conjectured_security_log_blowup_zero_returns_zero_fri_bits() {
         let s = ConjecturedSecurity::compute_ldt_only(0, 100, 16, 128, 256);
         assert_eq!(s.security_bits, 16);
+    }
+
+    #[test]
+    fn legacy_security_from_params_preserves_the_legacy_bound() {
+        let params = benchmark_high_arity_params(252);
+        assert_eq!(
+            LegacySecurity::compute_from_params(&params, 20).security_bits,
+            116
+        );
+
+        let params = benchmark_high_arity_params(96);
+        let actual = [10, 16, 20, 24, 28]
+            .map(|degree_bits| LegacySecurity::compute_from_params(&params, degree_bits))
+            .map(|s| s.security_bits);
+        // DEEP-ALI binds at 96 - log2(3 * 2^degree_bits + 1).
+        assert_eq!(actual, [84, 78, 74, 70, 66]);
+
+        let params = params.with_grinding(GrindingSites {
+            out_of_domain: 8,
+            ..GrindingSites::NONE
+        });
+        assert_eq!(
+            LegacySecurity::compute_from_params(&params, 20).security_bits,
+            82
+        );
+    }
+
+    #[test]
+    fn legacy_security_rejects_an_unrepresentable_trace_length() {
+        let params = benchmark_high_arity_params(252);
+        // Proof::legacy_security passes the deserialized degree_bits through here.
+        assert_eq!(
+            LegacySecurity::compute_from_params(&params, 64).security_bits,
+            0
+        );
     }
 
     fn benchmark_high_arity_params(num_modulus_bits: usize) -> StarkSecurityParams {

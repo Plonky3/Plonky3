@@ -25,9 +25,14 @@ use libm::log2;
 use crate::error::ErrorBits;
 use crate::shape::{InstanceShape, StarkAirParams};
 
-/// `-log2(ε_DEEP)` in bits. Returns 0 bits if inputs are degenerate.
+/// `-log2(ε_DEEP)` in bits. Returns 0 bits if inputs are degenerate or the trace size
+/// cannot be represented by `u64`.
 pub fn deep_ali_error(air: &StarkAirParams, shape: &InstanceShape, list_size: f64) -> ErrorBits {
-    if shape.modulus_bits == 0 || !list_size.is_finite() || list_size <= 0.0 {
+    if shape.modulus_bits == 0
+        || shape.log_trace_length >= u64::BITS as usize
+        || !list_size.is_finite()
+        || list_size <= 0.0
+    {
         return ErrorBits::from_log2(0.0);
     }
     let k = (1u64 << shape.log_trace_length) as f64;
@@ -39,4 +44,33 @@ pub fn deep_ali_error(air: &StarkAirParams, shape: &InstanceShape, list_size: f6
     let factor = ethstark.max(chunked).max(1.0);
     let bits = shape.modulus_bits as f64 - log2(list_size) - log2(factor);
     ErrorBits::from_log2(bits.max(0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trace_length_shift_boundary_is_conservative() {
+        let air = StarkAirParams {
+            num_constraints: 1,
+            max_constraint_degree: 2,
+            max_combo: 2,
+        };
+        let mut shape = InstanceShape {
+            log_trace_length: 63,
+            modulus_bits: 128,
+            collision_resistance: 128,
+            num_batched_functions: 1,
+        };
+        // 2^63 fits in u64; the DEEP factor is 3 * 2^63 + 1.
+        let expected = 128.0 - 63.0 - log2(3.0);
+        assert!((deep_ali_error(&air, &shape, 1.0).bits() - expected).abs() < 1e-12);
+
+        // These exponents must not panic or wrap back to a small trace.
+        for log_trace_length in [64, 65, usize::MAX] {
+            shape.log_trace_length = log_trace_length;
+            assert_eq!(deep_ali_error(&air, &shape, 1.0).bits(), 0.0);
+        }
+    }
 }

@@ -433,22 +433,26 @@ where
 
 /// Report the security parameter of the proof.
 ///
-/// Prints the conjectured and proven security levels.
+/// Prints proven and conjectured security, followed by the historical legacy estimate.
 #[inline]
 pub fn report_parameter_security<SC>(proof: &Proof<SC>, security_params: &StarkSecurityParams)
 where
     SC: StarkGenericConfig,
 {
-    println!(
-        "Conjectured security: {} bits",
-        proof.conjectured_security(security_params).security_bits
-    );
     let proven = proof.proven_security(security_params);
     println!(
         "Proven security: {} bits (UDR: {}, LDR: {})",
         proven.security_bits(),
         proven.unique_decoding_bits,
         proven.list_decoding_bits
+    );
+    println!(
+        "Conjectured security: {} bits",
+        proof.conjectured_security(security_params).security_bits
+    );
+    println!(
+        "Legacy security (historical, not a bound): {} bits",
+        proof.legacy_security(security_params).security_bits
     );
 }
 
