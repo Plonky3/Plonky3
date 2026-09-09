@@ -66,6 +66,10 @@ jobs:
           # VPCLMULQDQ, the 256- and 512-bit carryless multiply, arrived with Ice Lake and
           # Zen 3. GitHub's runner pool still includes older parts, so these legs compile the
           # wide carryless-multiply paths rather than running them.
+          #
+          # A user-mode emulator is not a way around that. QEMU's translator decodes the
+          # 128-bit carryless multiply only, so every test reaching a 256-bit product dies
+          # on an illegal instruction. Executing these paths needs real silicon.
           - os: ubuntu-latest
             features: "+avx2,+vpclmulqdq"
             compile_only: true
