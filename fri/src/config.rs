@@ -113,10 +113,8 @@ impl<M> FriParameters<M> {
             log_final_poly_len,
             max_log_arity: 1,
             num_queries: 2,
-            // Zero because `CirclePcs` shares these parameters, samples its own
-            // batch-combination challenge, and does not grind before it: a nonzero value here
-            // would claim a bit the circle prover never pays and the circle verifier never
-            // checks. A caller that wants the batch site exercised sets it explicitly.
+            // Keep the minimal test configuration cheap. Tests exercising the batch
+            // grinding site set its difficulty explicitly.
             batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 1,
             query_proof_of_work_bits: 1,
@@ -148,10 +146,8 @@ impl<M> FriParameters<M> {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 100,
-            // Zero because `CirclePcs::new` rejects a nonzero value: it samples its own
-            // batch-combination challenge and does not grind before it, and this constructor
-            // feeds circle instances (`examples/src/proofs.rs`, `monolith-air`'s bench).
-            // The two-adic-only constructors below carry the grind instead.
+            // Callers with wide opening batches can enable this site to raise the
+            // batching bound without changing the query-phase difficulty.
             batch_proof_of_work_bits: 0,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 16,

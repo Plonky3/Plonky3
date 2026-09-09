@@ -49,22 +49,9 @@ pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
 }
 
 impl<Val: Field, InputMmcs, FriMmcs> CirclePcs<Val, InputMmcs, FriMmcs> {
-    /// # Panics
-    ///
-    /// If `fri_params.batch_proof_of_work_bits` is nonzero. This PCS samples its
-    /// own batch-combination challenge (see [`Pcs::open`]) and does not grind
-    /// before it, so honouring that setting is not yet implemented here.
-    /// Rejecting it is deliberate: silently ignoring the field would let a
-    /// caller claim grinding bits in a soundness analysis that no prover ever
-    /// paid and no verifier ever checks.
-    // TODO: grind the batch-combination challenge here as `TwoAdicFriPcs` does,
-    // then drop this assertion.
+    /// Construct the PCS with grinding before opening batching, folding, and queries
+    /// as configured by `fri_params`.
     pub const fn new(mmcs: InputMmcs, fri_params: FriParameters<FriMmcs>) -> Self {
-        assert!(
-            fri_params.batch_proof_of_work_bits == 0,
-            "CirclePcs does not implement batch-combination grinding; \
-             batch_proof_of_work_bits must be 0"
-        );
         Self {
             mmcs,
             fri_params,
@@ -96,8 +83,6 @@ where
     InputMmcsError: core::fmt::Debug,
     FriMmcsError: core::fmt::Debug,
 {
-    #[error("CirclePcs does not implement batch-combination grinding ({bits} bits requested)")]
-    UnsupportedBatchGrinding { bits: usize },
     #[error("input MMCS error: {0:?}")]
     InputMmcsError(InputMmcsError),
     #[error("first layer MMCS error: {0:?}")]
@@ -132,6 +117,8 @@ pub struct CirclePcsProof<
     FriMmcs: Mmcs<Challenge>,
     Witness,
 > {
+    /// Witness for the grind before the challenge batching all opening claims.
+    batch_pow_witness: Witness,
     first_layer_commitment: FriMmcs::Commitment,
     lambdas: Vec<Challenge>,
     fri_proof: CircleFriProof<
@@ -216,7 +203,7 @@ where
                 },
             )
         });
-    let alpha = transcript.batch_phase(claims);
+    let alpha = transcript.batch_phase(claims, proof.batch_pow_witness)?;
 
     let bivariate_beta = transcript.first_layer(proof.first_layer_commitment.clone());
 
@@ -290,11 +277,6 @@ where
         rounds: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
-        assert!(
-            self.fri_params.batch_proof_of_work_bits == 0,
-            "CirclePcs does not implement batch-combination grinding; \
-             batch_proof_of_work_bits must be 0"
-        );
         // Materialize the CFFT-ordered domain points once per committed height. They are shared
         // by the Lagrange denominators and the DEEP-quotient vanishing parts below, which are in
         // turn shared by every matrix opened at the same point on the same domain.
@@ -440,8 +422,8 @@ where
         let mut transcript =
             CircleProverTranscript::<Challenger, Val, Challenge>::new(challenger, shape);
 
-        // Bind every claim, point and values together, then draw the batching challenge.
-        let alpha = transcript.batch_phase(izip!(&rounds, &values).flat_map(
+        // Bind every claim, grind, then draw the batching challenge.
+        let (alpha, batch_pow_witness) = transcript.batch_phase(izip!(&rounds, &values).flat_map(
             |(
                 OpeningRequest {
                     points: points_for_mats,
@@ -668,6 +650,7 @@ where
         (
             values,
             CirclePcsProof {
+                batch_pow_witness: batch_pow_witness.unwrap_or_default(),
                 first_layer_commitment,
                 lambdas,
                 fri_proof,
@@ -682,11 +665,6 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        if self.fri_params.batch_proof_of_work_bits != 0 {
-            return Err(FriError::InputError(InputError::UnsupportedBatchGrinding {
-                bits: self.fri_params.batch_proof_of_work_bits,
-            }));
-        }
         let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriFolding(PhantomData);
         // The extra bit re-indexes the first-layer sibling inside a query index.
@@ -1254,7 +1232,9 @@ mod tests {
     /// - FRI: testing parameters with log_blowup = 2, log_final_poly_len = 0.
     /// - Hash: Keccak-256 with a binary Merkle tree.
     #[allow(clippy::type_complexity)]
-    fn setup_valid_proof() -> (
+    fn setup_valid_proof(
+        batch_pow_bits: usize,
+    ) -> (
         TestPcs,
         ByteHash,
         <ValMmcs as Mmcs<Val>>::Commitment,
@@ -1263,7 +1243,7 @@ mod tests {
         Vec<Vec<Vec<Vec<Challenge>>>>,
         CirclePcsProof<Val, Challenge, ValMmcs, ChallengeMmcs, Val>,
     ) {
-        setup_valid_proof_at(1, 1)
+        setup_valid_proof_at(batch_pow_bits, 1, 1)
     }
 
     /// The same fixture at caller-chosen commit- and query-phase difficulties.
@@ -1272,6 +1252,7 @@ mod tests {
     /// built from the same pair for the replay to line up.
     #[allow(clippy::type_complexity)]
     fn setup_valid_proof_at(
+        batch_pow_bits: usize,
         commit_pow_bits: usize,
         query_pow_bits: usize,
     ) -> (
@@ -1296,6 +1277,7 @@ mod tests {
 
         // Minimal FRI parameters for fast test execution.
         let mut fri_params = FriParameters::new_testing(challenge_mmcs, 0);
+        fri_params.batch_proof_of_work_bits = batch_pow_bits;
         fri_params.commit_proof_of_work_bits = commit_pow_bits;
         fri_params.query_proof_of_work_bits = query_pow_bits;
 
@@ -1364,39 +1346,47 @@ mod tests {
     #[test]
     fn circle_pcs() {
         // Smoke test: an honestly generated proof must verify successfully.
-        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof(0);
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).expect("verify err");
     }
 
     #[test]
-    fn reject_unsupported_batch_grinding_after_construction() {
-        let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+    fn batch_grinding_proves_and_verifies() {
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof(8);
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).unwrap();
+    }
 
-        pcs.fri_params.batch_proof_of_work_bits = 20;
+    #[test]
+    fn invalid_batch_grinding_witness_is_rejected_at_the_batch_phase() {
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(8);
+        proof.batch_pow_witness = Val::ZERO;
         assert!(matches!(
             try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof),
-            Err(FriError::InputError(InputError::UnsupportedBatchGrinding {
-                bits: 20
-            }))
+            Err(FriError::InvalidPowWitness(
+                p3_fri::verifier::PowPhase::Batch
+            ))
         ));
     }
 
     #[test]
-    #[should_panic(expected = "CirclePcs does not implement batch-combination grinding")]
-    fn prover_rejects_unsupported_batch_grinding_after_construction() {
-        let (mut pcs, byte_hash, _, d, zeta, _, _) = setup_valid_proof();
-        let evals = RowMajorMatrix::new(vec![Val::ONE; d.size()], 1);
-        let (_, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
-        pcs.fri_params.batch_proof_of_work_bits = 20;
+    fn changing_batch_grinding_difficulty_rejects_the_proof() {
+        for (prover_bits, verifier_bits) in [(0, 8), (8, 0), (8, 9)] {
+            let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof(prover_bits);
+            pcs.fri_params.batch_proof_of_work_bits = verifier_bits;
+            assert!(try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).is_err());
+        }
+    }
 
-        pcs.open(
-            vec![OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut Challenger::from_hasher(vec![], byte_hash),
-        );
+    #[test]
+    fn batch_grinding_binds_the_opening_claims() {
+        let (pcs, byte_hash, comm, d, zeta, mut values, proof) = setup_valid_proof(8);
+        values[0][0][0][0] += Challenge::ONE;
+        assert!(matches!(
+            try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof),
+            Err(FriError::InvalidPowWitness(
+                p3_fri::verifier::PowPhase::Batch
+            ))
+        ));
     }
 
     #[test]
@@ -1532,7 +1522,7 @@ mod tests {
     fn reject_commit_phase_query_count_mismatch() {
         // Invariant: every commit-phase round must open every query. The round's
         // shared proof carries one sibling set per query.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         // Mutation: drop one query's siblings from round 0.
         //
@@ -1569,7 +1559,7 @@ mod tests {
         // Fixture state: an honest proof built with the testing query count.
         //
         // Mutation: verify it under params with num_queries = 0.
-        let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof(0);
         pcs.fri_params.num_queries = 0;
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
@@ -1590,7 +1580,7 @@ mod tests {
         // Fixture state: an honest proof built with log_blowup >= 1.
         //
         // Mutation: verify it under params with log_blowup = 0.
-        let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof(0);
         pcs.fri_params.log_blowup = 0;
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
@@ -1654,7 +1644,7 @@ mod tests {
         // That aborted on an honest proof as readily as on a forged one.
         //
         // Fixture state: a valid proof, then a cap of 3 on the verifier.
-        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof(0);
 
         let mut wide = pcs;
         wide.fri_params.max_log_arity = 3;
@@ -1713,7 +1703,7 @@ mod tests {
 
     #[test]
     fn reject_commit_pow_witness_count_mismatch() {
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
         let num_rounds = proof.fri_proof.commit_phase_commits.len();
 
         // Drop one witness so the per-round count falls short.
@@ -1736,7 +1726,7 @@ mod tests {
         //   - under-reporting drives it below a matrix's log_height
         //   - then `index >> (log_global_max_height - log_height)` would underflow
         // The verifier must reject before that subtraction runs.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         // On an honest proof the two height derivations coincide:
         //
@@ -1771,7 +1761,7 @@ mod tests {
         // Invariant: the proof must carry exactly one opening set per
         // commit-phase round. Fewer (or more) than there are commitments
         // makes the proof shape invalid.
-        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof(0);
 
         // We need the original proof to assert against its commitment count,
         // so clone before mutating.
@@ -1799,7 +1789,7 @@ mod tests {
         // Invariant: in each folding round with arity k, the prover must
         // supply exactly k - 1 sibling values (the queried evaluation is
         // the remaining one).
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         // Capture the original sibling count and arity before mutating.
         let log_arity = proof.fri_proof.commit_phase_openings[0].log_arity as usize;
@@ -1858,7 +1848,7 @@ mod tests {
         // The cross-query arity-schedule check this test used to perform is
         // now unrepresentable: `log_arity` lives once per round, not once per
         // query, so no two queries can disagree.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         // Mutation: drop the last query's first-layer siblings.
         //
@@ -1886,7 +1876,7 @@ mod tests {
         // leaf (see `reject_tampered_commit_phase_opening_proof`). Together the
         // two paths cover both shapes of attack; the accepted set is their
         // conjunction, so the order in which they run does not widen it.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         proof.fri_proof.commit_phase_openings[0].sibling_values[0][0] += Challenge::ONE;
 
@@ -1904,7 +1894,7 @@ mod tests {
         // The round's shared multiproof carries every deduplicated sibling
         // digest. Corrupting one makes the recomputed root diverge from the
         // round commitment.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         proof.fri_proof.commit_phase_openings[0]
             .opening_proof
@@ -1924,7 +1914,7 @@ mod tests {
         // The first-layer tree is opened once for every query through a single
         // shared multiproof; a corrupted digest there must fail before any
         // reduced opening is trusted.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         proof
             .fri_proof
@@ -1961,7 +1951,7 @@ mod tests {
         // The transcript binds the point as a circle point, not just the values at it.
         //
         //     zeta on the projective line  ->  P = ((1 - zeta^2)/(1 + zeta^2), 2 zeta/(1 + zeta^2))
-        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof(0);
 
         // Mutation: claim the same values at a different point.
         let moved = zeta + Challenge::ONE;
@@ -1973,7 +1963,7 @@ mod tests {
     #[test]
     fn reject_tampered_opened_value() {
         // The claimed evaluations are the statement, and the transcript binds them.
-        let (pcs, byte_hash, comm, d, zeta, mut values, proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, mut values, proof) = setup_valid_proof(0);
 
         // Mutation: shift one claimed evaluation.
         values[0][0][0][0] += Challenge::ONE;
@@ -1985,7 +1975,7 @@ mod tests {
     #[test]
     fn reject_tampered_first_layer_commitment() {
         // The bivariate challenge is drawn after this commitment, so it binds it.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         proof.first_layer_commitment = MerkleCap::new(vec![[0u8; 32]]);
 
@@ -1996,7 +1986,7 @@ mod tests {
     #[test]
     fn reject_tampered_commit_phase_commitment() {
         // Each round's folding challenge is drawn after its commitment.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         proof.fri_proof.commit_phase_commits[0] = MerkleCap::new(vec![[0u8; 32]]);
 
@@ -2007,7 +1997,7 @@ mod tests {
     #[test]
     fn reject_tampered_commit_pow_witness() {
         // Grinding sits between a commitment and the challenge it protects.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
         assert!(
             pcs.fri_params.commit_proof_of_work_bits > 0,
             "fixture must describe a commit-phase grinding step"
@@ -2022,7 +2012,7 @@ mod tests {
     #[test]
     fn reject_tampered_final_poly() {
         // The constant is absorbed before the query indices are drawn.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         proof.fri_proof.final_poly += Challenge::ONE;
 
@@ -2033,7 +2023,7 @@ mod tests {
     #[test]
     fn reject_tampered_query_pow_witness() {
         // Grinding here raises the cost of searching for favourable query indices.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
         assert!(
             pcs.fri_params.query_proof_of_work_bits > 0,
             "fixture must describe a query grinding step"
@@ -2054,7 +2044,7 @@ mod tests {
         //
         // The commit-phase mutation moves one element and leaves the length alone: the
         // length has its own rejection, and a count check is not a value check.
-        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof_at(0, 0);
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof_at(0, 0, 0);
 
         // The honest prover writes zero into every slot it pays no work for.
         assert!(
@@ -2102,7 +2092,7 @@ mod tests {
     #[test]
     fn reject_invalid_log_arity() {
         // Invariant: each log_arity must be in 1..=max_log_arity.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         // Mutation: force an invalid zero arity in query 0, round 0.
         proof.fri_proof.commit_phase_openings[0].log_arity = 0;
@@ -2132,7 +2122,7 @@ mod tests {
         //     => a width of CIRCLE_TWO_ADICITY bits is unsampleable
         //
         // The width comes from the claimed statement, so the claim is what has to overflow it.
-        let (pcs, byte_hash, comm, _, zeta, values, proof) = setup_valid_proof();
+        let (pcs, byte_hash, comm, _, zeta, values, proof) = setup_valid_proof(0);
 
         // Mutation: claim a domain wide enough to drive the index width to the bound.
         let log_n = Val::CIRCLE_TWO_ADICITY - pcs.fri_params.log_blowup;

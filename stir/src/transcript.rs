@@ -21,14 +21,16 @@
 //!
 //!     per global round:
 //!       folding grinding       only when the shared difficulty is positive
-//!       per active instance:   fold challenge, folded-oracle commitment
+//!       per active instance:   fold challenge
+//!       per active instance:   folded-oracle commitment
 //!       per active instance:   out-of-domain points, their answers
 //!       query grinding         only when the shared difficulty is positive
 //!       per active instance:   combination challenge, query indices
 //!       per active instance:   answer polynomial, its consistency challenge
 //!
 //!     final folding grinding   only when the shared difficulty is positive
-//!     per instance:            final fold challenge, final polynomial
+//!     per instance:            final fold challenge
+//!     per instance:            final polynomial
 //!     final query grinding     only when the shared difficulty is positive
 //!     per instance:            final query indices
 //! ```
@@ -46,6 +48,9 @@
 //! A grind is shared by the instances active at its site.
 //!
 //! Its difficulty is the largest any of them asks for.
+//!
+//! All challenges covered by a shared grind precede every prover response at that site.
+//! Interleaving responses would let a prover resample later challenges without new work.
 //!
 //! Each instance's block inside a phase is bracketed by its own container.
 //!
@@ -119,8 +124,11 @@ const INITIAL_COMMITMENT: &str = "initial_commitment";
 /// Step label of the grinding step guarding a round's folding challenge.
 const FOLDING_POW: &str = "folding_pow";
 
-/// Container label of one instance's folding block.
+/// Container label of one instance's folding-challenge block.
 const FOLD_BLOCK: &str = "instance_fold";
+
+/// Container label of one instance's folded-oracle commitment block.
+const FOLD_COMMITMENT_BLOCK: &str = "instance_fold_commitment";
 
 /// Step label of a round's folding challenge.
 const FOLD_CHALLENGE: &str = "fold_challenge";
@@ -161,8 +169,11 @@ const ANS_CHALLENGE: &str = "ans_challenge";
 /// Step label of the grinding step guarding the final folding challenge.
 const FINAL_FOLDING_POW: &str = "final_folding_pow";
 
-/// Container label of one instance's final folding block.
+/// Container label of one instance's final folding-challenge block.
 const FINAL_FOLD_BLOCK: &str = "instance_final_fold";
+
+/// Container label of one instance's final-polynomial block.
+const FINAL_POLYNOMIAL_BLOCK: &str = "instance_final_polynomial";
 
 /// Step label of the final folding challenge.
 const FINAL_FOLD_CHALLENGE: &str = "final_fold_challenge";
@@ -596,7 +607,7 @@ impl StirShape {
         for round in 0..self.max_rounds() {
             let active = self.active(round);
 
-            // Grinding sits between the last message and the challenge it protects.
+            // No prover message may separate this grind from any challenge it protects.
             push_pow::<F>(&mut steps, FOLDING_POW, self.folding_pow_bits(round));
 
             for _ in &active {
@@ -607,13 +618,17 @@ impl StirShape {
                     FOLD_CHALLENGE,
                     Length::Scalar,
                 ));
+                close(&mut steps, FOLD_BLOCK);
+            }
+            for _ in &active {
+                open(&mut steps, FOLD_COMMITMENT_BLOCK);
                 steps.push(Interaction::opaque(
                     Hierarchy::Atomic,
                     Kind::Message,
                     ROUND_COMMITMENT,
                     Length::Scalar,
                 ));
-                close(&mut steps, FOLD_BLOCK);
+                close(&mut steps, FOLD_COMMITMENT_BLOCK);
             }
 
             for &instance in &active {
@@ -678,7 +693,7 @@ impl StirShape {
 
         push_pow::<F>(&mut steps, FINAL_FOLDING_POW, self.final_folding_pow_bits());
 
-        for instance in &self.instances {
+        for _ in &self.instances {
             open(&mut steps, FINAL_FOLD_BLOCK);
             steps.push(Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
@@ -686,13 +701,17 @@ impl StirShape {
                 FINAL_FOLD_CHALLENGE,
                 Length::Scalar,
             ));
+            close(&mut steps, FINAL_FOLD_BLOCK);
+        }
+        for instance in &self.instances {
+            open(&mut steps, FINAL_POLYNOMIAL_BLOCK);
             steps.push(Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
                 Kind::Message,
                 FINAL_POLYNOMIAL,
                 Length::Fixed(instance.final_poly_len),
             ));
-            close(&mut steps, FINAL_FOLD_BLOCK);
+            close(&mut steps, FINAL_POLYNOMIAL_BLOCK);
         }
 
         push_pow::<F>(&mut steps, FINAL_POW, self.final_pow_bits());
@@ -921,24 +940,26 @@ where
         self.state.observe_pow(FOLDING_POW, bits)
     }
 
-    /// Open one instance's folding block and draw its folding challenge.
-    ///
-    /// The commitment step that follows closes the block.
+    /// Draw one instance's folding challenge before any folded-oracle commitment.
     pub fn fold_challenge(&mut self) -> EF {
         self.state.begin_protocol::<Block>(FOLD_BLOCK);
-        self.state
+        let challenge = self
+            .state
             .challenge_extension::<F, EF, FieldToFieldCodec<F>>(FOLD_CHALLENGE)
-            .into_inner()
+            .into_inner();
+        self.state.end_protocol::<Block>(FOLD_BLOCK);
+        challenge
     }
 
-    /// Bind the folded-oracle commitment and close the folding block.
+    /// Bind one folded-oracle commitment after every active folding challenge.
     pub fn fold_commitment<Com>(&mut self, commitment: Com)
     where
         Com: Clone,
         C: CanObserve<Com>,
     {
+        self.state.begin_protocol::<Block>(FOLD_COMMITMENT_BLOCK);
         self.state.observe_opaque(ROUND_COMMITMENT, commitment);
-        self.state.end_protocol::<Block>(FOLD_BLOCK);
+        self.state.end_protocol::<Block>(FOLD_COMMITMENT_BLOCK);
     }
 
     /// Open one instance's out-of-domain block and draw its points.
@@ -1050,22 +1071,24 @@ where
         self.state.observe_pow(FINAL_FOLDING_POW, bits)
     }
 
-    /// Open one instance's final folding block and draw its folding challenge.
-    ///
-    /// The final-polynomial step that follows closes the block.
+    /// Draw one instance's final folding challenge before any final polynomial.
     pub fn final_fold_challenge(&mut self) -> EF {
         self.state.begin_protocol::<Block>(FINAL_FOLD_BLOCK);
-        self.state
+        let challenge = self
+            .state
             .challenge_extension::<F, EF, FieldToFieldCodec<F>>(FINAL_FOLD_CHALLENGE)
-            .into_inner()
+            .into_inner();
+        self.state.end_protocol::<Block>(FINAL_FOLD_BLOCK);
+        challenge
     }
 
-    /// Bind the final polynomial and close the final folding block.
+    /// Bind one final polynomial after every final folding challenge.
     pub fn final_polynomial(&mut self, final_poly: &[EF]) {
+        self.state.begin_protocol::<Block>(FINAL_POLYNOMIAL_BLOCK);
         let _bound = self
             .state
             .observe_extensions::<F, EF, FieldToFieldCodec<F>>(FINAL_POLYNOMIAL, final_poly);
-        self.state.end_protocol::<Block>(FINAL_FOLD_BLOCK);
+        self.state.end_protocol::<Block>(FINAL_POLYNOMIAL_BLOCK);
     }
 
     /// Grind the final query site.
@@ -1168,24 +1191,26 @@ where
         self.replay_pow(FOLDING_POW, bits, witness, site)
     }
 
-    /// Open one instance's folding block and redraw its folding challenge.
-    ///
-    /// The commitment step that follows closes the block.
+    /// Draw one instance's folding challenge before any folded-oracle commitment.
     pub fn fold_challenge(&mut self) -> EF {
         self.state.begin_protocol::<Block>(FOLD_BLOCK);
-        self.state
+        let challenge = self
+            .state
             .challenge_extension::<F, EF, FieldToFieldCodec<F>>(FOLD_CHALLENGE)
-            .into_inner()
+            .into_inner();
+        self.state.end_protocol::<Block>(FOLD_BLOCK);
+        challenge
     }
 
-    /// Bind the folded-oracle commitment and close the folding block.
+    /// Bind one folded-oracle commitment after every active folding challenge.
     pub fn fold_commitment<Com>(&mut self, commitment: Com)
     where
         Com: Clone,
         C: CanObserve<Com>,
     {
+        self.state.begin_protocol::<Block>(FOLD_COMMITMENT_BLOCK);
         self.state.observe_opaque(ROUND_COMMITMENT, commitment);
-        self.state.end_protocol::<Block>(FOLD_BLOCK);
+        self.state.end_protocol::<Block>(FOLD_COMMITMENT_BLOCK);
     }
 
     /// Open one instance's out-of-domain block and redraw its points.
@@ -1317,17 +1342,18 @@ where
         self.replay_pow(FINAL_FOLDING_POW, bits, witness, site)
     }
 
-    /// Open one instance's final folding block and redraw its folding challenge.
-    ///
-    /// The final-polynomial step that follows closes the block.
+    /// Draw one instance's final folding challenge before any final polynomial.
     pub fn final_fold_challenge(&mut self) -> EF {
         self.state.begin_protocol::<Block>(FINAL_FOLD_BLOCK);
-        self.state
+        let challenge = self
+            .state
             .challenge_extension::<F, EF, FieldToFieldCodec<F>>(FINAL_FOLD_CHALLENGE)
-            .into_inner()
+            .into_inner();
+        self.state.end_protocol::<Block>(FINAL_FOLD_BLOCK);
+        challenge
     }
 
-    /// Bind the final polynomial and close the final folding block.
+    /// Bind one final polynomial after every final folding challenge.
     ///
     /// # Errors
     ///
@@ -1338,6 +1364,7 @@ where
         final_poly: &[EF],
     ) -> Result<(), TranscriptFailure> {
         let expected = self.shape.instances[instance].final_poly_len;
+        self.state.begin_protocol::<Block>(FINAL_POLYNOMIAL_BLOCK);
         // The length is also checked against the proof before the transcript is built.
         // Rejecting here as well keeps this method safe to call on its own.
         self.state
@@ -1347,7 +1374,7 @@ where
                 expected,
                 got: final_poly.len(),
             })?;
-        self.state.end_protocol::<Block>(FINAL_FOLD_BLOCK);
+        self.state.end_protocol::<Block>(FINAL_POLYNOMIAL_BLOCK);
         Ok(())
     }
 
@@ -1644,8 +1671,10 @@ mod tests {
     fn a_batch_brackets_every_instance_it_runs() {
         // Two instances share every global round, so their steps interleave phase by phase.
         //
-        //     Begin instance_fold  gamma  commitment  End
-        //     Begin instance_fold  gamma  commitment  End
+        //     Begin instance_fold             gamma       End
+        //     Begin instance_fold             gamma       End
+        //     Begin instance_fold_commitment  commitment  End
+        //     Begin instance_fold_commitment  commitment  End
         //
         // Flattened, that is one run of four steps with nothing saying where the first
         // instance stops and the second begins.
@@ -1663,8 +1692,8 @@ mod tests {
             .iter()
             .filter(|step| step.hierarchy() == Hierarchy::End)
             .count();
-        // Six blocks per instance: four in the round, two in the final send.
-        assert_eq!(openers, 12);
+        // Eight blocks per instance: five in the round, three in the final send.
+        assert_eq!(openers, 16);
         assert_eq!(openers, closers);
 
         // The same leaf steps with the brackets removed fingerprint differently.
@@ -1716,6 +1745,66 @@ mod tests {
 
         assert_eq!(batch.folding_pow_bits(0), 7);
         assert_eq!(batch.final_pow_bits(), 4);
+    }
+
+    /// A shared grind protects only the challenges before the next prover message.
+    fn assert_shared_folding_challenges_are_contiguous(batch: &StirShape, final_round: bool) {
+        let pattern = batch.pattern::<F, EF>();
+        let steps: Vec<_> = pattern
+            .interactions()
+            .iter()
+            .filter(|step| step.hierarchy() == Hierarchy::Atomic)
+            .collect();
+        let (pow_label, challenge_label, expected_counts) = if final_round {
+            (
+                FINAL_FOLDING_POW,
+                FINAL_FOLD_CHALLENGE,
+                vec![batch.instances.len()],
+            )
+        } else {
+            (
+                FOLDING_POW,
+                FOLD_CHALLENGE,
+                (0..batch.max_rounds())
+                    .map(|round| batch.active(round).len())
+                    .collect(),
+            )
+        };
+        let covered: Vec<_> = steps
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| step.label() == pow_label)
+            .map(|(index, _)| {
+                steps[index + 1..]
+                    .iter()
+                    .take_while(|step| step.kind() == Kind::Challenge)
+                    .filter(|step| step.label() == challenge_label)
+                    .count()
+            })
+            .collect();
+        assert_eq!(
+            covered, expected_counts,
+            "every folding challenge must precede the first prover response after the shared grind"
+        );
+    }
+
+    #[test]
+    fn shared_round_folding_grinds_cover_every_active_instance() {
+        let mut batch = shape();
+        batch.instances[0].rounds[0].folding_pow_bits = 3;
+        batch.instances.push(batch.instances[0].clone());
+        let extra_round = batch.instances[0].rounds[0].clone();
+        batch.instances[0].rounds.push(extra_round);
+        assert_shared_folding_challenges_are_contiguous(&batch, false);
+    }
+
+    #[test]
+    fn shared_final_folding_grind_covers_instances_without_intermediate_rounds() {
+        let mut batch = shape();
+        batch.instances[0].final_folding_pow_bits = 3;
+        batch.instances.push(batch.instances[0].clone());
+        batch.instances[1].rounds.clear();
+        assert_shared_folding_challenges_are_contiguous(&batch, true);
     }
 
     #[test]
