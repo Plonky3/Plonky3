@@ -7,7 +7,7 @@
 //! Wrapped, the two bases look alike, and a value in the wrong one is silently wrong.
 
 use crate::tower::TowerLevel;
-use crate::{BinaryField128, clmul};
+use crate::{BinaryField128, clmul, poly_slice};
 
 /// Whether multiplication and squaring use hardware carryless multiplication.
 ///
@@ -48,13 +48,12 @@ pub fn square(a: u128) -> u128 {
 /// Multiply every polynomial-basis element by the same scalar.
 #[inline]
 pub fn mul_slice(values: &mut [u128], scalar: u128) {
+    // A lone element has no loop to amortize any setup over, so it takes the plain product.
     if let [value] = values {
         *value = mul(*value, scalar);
         return;
     }
-    for value in values {
-        *value = clmul::poly_mul_128_batch(*value, scalar);
-    }
+    poly_slice::scale(values, scalar);
 }
 
 /// Apply `(lo, hi) -> (lo + scalar*hi, lo + (scalar + 1)*hi)` in place.
@@ -64,21 +63,20 @@ pub fn mul_slice(values: &mut [u128], scalar: u128) {
 #[inline]
 pub fn butterfly_forward(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
     assert_eq!(lo.len(), hi.len(), "butterfly lengths differ");
+    // A zero scalar kills the product, leaving an addition that needs no multiply at all.
     if scalar == 0 {
         for (lo, hi) in lo.iter().zip(hi) {
             *hi ^= *lo;
         }
         return;
     }
+    // A lone pair has no loop to amortize any setup over, so it takes the plain product.
     if lo.len() == 1 {
         lo[0] ^= mul(scalar, hi[0]);
         hi[0] ^= lo[0];
         return;
     }
-    for (lo, hi) in lo.iter_mut().zip(hi) {
-        *lo ^= clmul::poly_mul_128_batch(scalar, *hi);
-        *hi ^= *lo;
-    }
+    poly_slice::butterfly_forward(lo, hi, scalar);
 }
 
 /// Undo [`butterfly_forward`] with the same scalar.
@@ -88,21 +86,20 @@ pub fn butterfly_forward(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
 #[inline]
 pub fn butterfly_inverse(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
     assert_eq!(lo.len(), hi.len(), "butterfly lengths differ");
+    // A zero scalar kills the product, leaving an addition that needs no multiply at all.
     if scalar == 0 {
         for (lo, hi) in lo.iter().zip(hi) {
             *hi ^= *lo;
         }
         return;
     }
+    // A lone pair has no loop to amortize any setup over, so it takes the plain product.
     if lo.len() == 1 {
         hi[0] ^= lo[0];
         lo[0] ^= mul(scalar, hi[0]);
         return;
     }
-    for (lo, hi) in lo.iter_mut().zip(hi) {
-        *hi ^= *lo;
-        *lo ^= clmul::poly_mul_128_batch(scalar, *hi);
-    }
+    poly_slice::butterfly_inverse(lo, hi, scalar);
 }
 
 #[cfg(test)]
@@ -149,8 +146,18 @@ mod tests {
     #[test]
     fn slice_operations_match_reference_tower_arithmetic() {
         use alloc::vec::Vec;
-        for len in [0, 1, 2, 3, 8, 17, 64, 257] {
-            for scalar in [0, 1, 0xfeed_9876_0123_4567_89ab_cdef_9876_5432] {
+        // A packed kernel covers whole registers of two or four elements.
+        //
+        // The lengths below therefore hit every prefix and tail combination.
+        for len in [0, 1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 64, 257] {
+            // A zero scalar takes the addition-only shortcut and one is the identity.
+            for scalar in [
+                0,
+                1,
+                0x87,
+                1 << 127,
+                0xfeed_9876_0123_4567_89ab_cdef_9876_5432,
+            ] {
                 let t = element(scalar);
                 let xs: Vec<_> = (0..len)
                     .map(|i| {

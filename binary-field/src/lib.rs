@@ -12,6 +12,7 @@ mod ghash;
 mod linear;
 mod packed;
 pub mod poly_basis;
+mod poly_slice;
 mod tables;
 mod tower;
 mod transcript;
