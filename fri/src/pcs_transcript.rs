@@ -535,16 +535,25 @@ pub enum PcsTranscriptFailure {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use core::str::from_utf8;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_challenger::testing::{SeedDigest, assert_seeds_pairwise_distinct, seed_digest};
+    use p3_challenger::testing::{
+        SeedDigest, assert_seeds_pairwise_distinct, pow_difficulties, seed_digest,
+    };
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_security::grinding::{
+        GRINDING_VOCABULARY, GrindingBudget, GrindingSite, RecordedGrind, ZeroBitConvention,
+        grinding_step,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
     use super::*;
+    use crate::FriShape;
+    use crate::transcript::NAME as LDT_NAME;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -767,5 +776,123 @@ mod tests {
         let bracketed_next: F = bracketed_challenger.sample();
         let plain_next: F = plain_challenger.sample();
         assert_eq!(bracketed_next, plain_next);
+    }
+    /// This protocol's name, as the vocabulary table keys it.
+    fn protocol() -> &'static str {
+        from_utf8(NAME).expect("the protocol name is ASCII")
+    }
+
+    /// The low-degree test this protocol brackets, as the table keys it.
+    fn low_degree_test() -> &'static str {
+        from_utf8(LDT_NAME).expect("the protocol name is ASCII")
+    }
+
+    #[test]
+    fn the_grinding_vocabulary_maps_the_one_grind_this_protocol_describes() {
+        // The security model keys its table on the name and the label bound here.
+        let batch = grinding_step(protocol(), BATCH_POW).expect("the batching grind is mapped");
+        assert_eq!(batch.site, GrindingSite::BatchCombination);
+        assert_eq!(batch.zero_bits, ZeroBitConvention::Elided);
+
+        // One grind described, so one row.
+        assert_eq!(
+            GRINDING_VOCABULARY
+                .iter()
+                .filter(|step| step.protocol == protocol())
+                .count(),
+            1,
+        );
+    }
+
+    #[test]
+    fn the_two_halves_of_one_parameter_set_account_for_every_grind_it_describes() {
+        // Invariant: `grinding_sites` and `security_regime` partition the grinds.
+        //
+        //     grinding_sites  ->  batch_pow, described here
+        //     security_regime ->  commit_pow and query_pow, described in the bracket
+        //
+        // Neither may omit a site, and neither may claim the other's.
+        for batch_proof_of_work_bits in [0, 1, 10] {
+            for commit_proof_of_work_bits in [0, 4] {
+                for query_proof_of_work_bits in [0, 16] {
+                    let params = FriParameters {
+                        log_blowup: 1,
+                        log_final_poly_len: 0,
+                        max_log_arity: 3,
+                        num_queries: 64,
+                        batch_proof_of_work_bits,
+                        commit_proof_of_work_bits,
+                        query_proof_of_work_bits,
+                        mmcs: (),
+                    };
+
+                    // One opening, then the bracketed low-degree test over two rounds.
+                    let opening = PcsShape {
+                        claimed_evaluation_counts: vec![vec![vec![3]]],
+                        batch_pow_bits: params.batch_proof_of_work_bits,
+                    };
+                    let ldt = FriShape::with_schedule(&params, vec![2, 2], 8);
+
+                    let recorded: Vec<_> = [
+                        (protocol(), opening.pattern::<F, EF>()),
+                        (low_degree_test(), ldt.pattern::<F, EF>()),
+                    ]
+                    .iter()
+                    .flat_map(|(name, pattern)| {
+                        pow_difficulties(pattern)
+                            .into_iter()
+                            .map(|(label, bits)| RecordedGrind::new(name, label, bits))
+                    })
+                    .collect();
+
+                    GrindingBudget::from_sites(&params.grinding_sites())
+                        .with_fri(&params.security_regime())
+                        .check(&[protocol(), low_degree_test()], &recorded)
+                        .unwrap_or_else(|mismatch| panic!("{mismatch}"));
+                }
+            }
+        }
+    }
+    #[test]
+    fn every_parameter_set_this_crate_ships_is_fully_accounted_for() {
+        // A named constructor is a parameter set someone deploys unread.
+        //
+        // Each is checked here so that raising a difficulty in one of them
+        // cannot land without the site that credits it moving too.
+        let sets: [(&str, FriParameters<()>); 5] = [
+            ("new_testing", FriParameters::new_testing((), 0)),
+            ("new_testing_zk", FriParameters::new_testing_zk(())),
+            ("new_benchmark", FriParameters::new_benchmark(())),
+            (
+                "new_benchmark_high_arity",
+                FriParameters::new_benchmark_high_arity(()),
+            ),
+            ("new_benchmark_zk", FriParameters::new_benchmark_zk(())),
+        ];
+
+        for (name, params) in sets {
+            let opening = PcsShape {
+                claimed_evaluation_counts: vec![vec![vec![3]]],
+                batch_pow_bits: params.batch_proof_of_work_bits,
+            };
+            let ldt = FriShape::with_schedule(&params, vec![2, 2], 8);
+
+            let recorded: Vec<_> = [
+                (protocol(), opening.pattern::<F, EF>()),
+                (low_degree_test(), ldt.pattern::<F, EF>()),
+            ]
+            .iter()
+            .flat_map(|(who, pattern)| {
+                pow_difficulties(pattern)
+                    .into_iter()
+                    .map(|(label, bits)| RecordedGrind::new(who, label, bits))
+            })
+            .collect();
+
+            GrindingBudget::from_sites(&params.grinding_sites())
+                .with_fri(&params.security_regime())
+                .check(&[protocol(), low_degree_test()], &recorded)
+                .unwrap_or_else(|mismatch| panic!("`{name}`: {mismatch}"));
+        }
     }
 }

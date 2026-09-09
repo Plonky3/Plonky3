@@ -45,7 +45,10 @@ use crate::{FriParameters, fold_schedule};
 const VERSION: u8 = 1;
 
 /// Protocol name bound into the transcript seed.
-const NAME: &[u8] = b"p3-fri";
+///
+/// Visible to the crate so the opening argument that brackets this protocol can
+/// name it when checking their two halves of one `FriParameters` together.
+pub(crate) const NAME: &[u8] = b"p3-fri";
 
 /// Step label of a commit-phase commitment.
 const COMMITMENT: &str = "commit_phase_commitment";
@@ -492,15 +495,22 @@ pub enum TranscriptFailure {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use core::str::from_utf8;
     #[cfg(panic = "unwind")]
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
     use p3_challenger::fs::TypeTag;
-    use p3_challenger::testing::{SeedDigest, assert_seeds_pairwise_distinct, seed_digest};
+    use p3_challenger::testing::{
+        SeedDigest, assert_seeds_pairwise_distinct, pow_difficulties, seed_digest,
+    };
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_security::grinding::{
+        GRINDING_VOCABULARY, GrindingBudget, GrindingSite, RecordedGrind, ZeroBitConvention,
+        grinding_step,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -765,5 +775,65 @@ mod tests {
                 got: 3
             }
         );
+    }
+    /// This protocol's name, as the vocabulary table keys it.
+    fn protocol() -> &'static str {
+        from_utf8(NAME).expect("the protocol name is ASCII")
+    }
+
+    #[test]
+    fn the_grinding_vocabulary_maps_both_grinds_this_protocol_describes() {
+        // The security model keys its table on the name and the labels bound here.
+        let commit = grinding_step(protocol(), COMMIT_POW).expect("the folding grind is mapped");
+        assert_eq!(commit.site, GrindingSite::LdtCommitPhase);
+        assert_eq!(commit.zero_bits, ZeroBitConvention::Elided);
+
+        let query = grinding_step(protocol(), QUERY_POW).expect("the query grind is mapped");
+        assert_eq!(query.site, GrindingSite::LdtQueryPhase);
+        assert_eq!(query.zero_bits, ZeroBitConvention::Elided);
+
+        // Two grinds described, so two rows: a third would credit bits nothing pays.
+        assert_eq!(
+            GRINDING_VOCABULARY
+                .iter()
+                .filter(|step| step.protocol == protocol())
+                .count(),
+            2,
+        );
+    }
+
+    #[test]
+    fn every_described_grind_carries_the_difficulty_the_regime_credits() {
+        // Invariant: `security_regime` and the pattern read one number twice.
+        //
+        //     FriParameters  --security_regime-->  FriRegime      --> credited bits
+        //                    --FriShape::pattern-->  Kind::Pow    --> recorded bits
+        //
+        // Three rounds, so the commit-phase grind is described three times.
+        for commit_proof_of_work_bits in [0, 1, 12] {
+            for query_proof_of_work_bits in [0, 1, 16] {
+                let params = FriParameters {
+                    log_blowup: 1,
+                    log_final_poly_len: 0,
+                    max_log_arity: 3,
+                    num_queries: 64,
+                    batch_proof_of_work_bits: 0,
+                    commit_proof_of_work_bits,
+                    query_proof_of_work_bits,
+                    mmcs: (),
+                };
+                let shape = FriShape::with_schedule(&params, vec![3, 3, 2], 8);
+
+                let recorded: Vec<_> = pow_difficulties(&shape.pattern::<F, EF>())
+                    .into_iter()
+                    .map(|(label, bits)| RecordedGrind::new(protocol(), label, bits))
+                    .collect();
+
+                GrindingBudget::NONE
+                    .with_fri(&params.security_regime())
+                    .check(&[protocol()], &recorded)
+                    .unwrap_or_else(|mismatch| panic!("{mismatch}"));
+            }
+        }
     }
 }
