@@ -504,7 +504,13 @@ unsafe impl PackedFieldPow2 for PackedGhash128 {
 mod tests {
     use p3_field::PackedValue;
     use p3_field_testing::test_packed_binary_field;
+    use proptest::prelude::*;
 
+    use super::lanes::{self, WIDTH};
+    use crate::packed::split::model::Model;
+    use crate::packed::split::{
+        HIGH_BY_HIGH, HIGH_BY_LOW, LOW_BY_HIGH, LOW_BY_LOW, Lanes, SplitScalar, fold_shifted,
+    };
     use crate::{Ghash128, PackedGhash128};
 
     /// The bit patterns a random search is unlikely to reach.
@@ -522,6 +528,131 @@ mod tests {
     /// One extreme bit pattern per lane.
     fn specials() -> PackedGhash128 {
         PackedValue::from_fn(|i| Ghash128::from_le_bytes(SPECIAL[i].to_le_bytes()))
+    }
+
+    /// The elements a register holds, read back one per lane.
+    fn lanes_of(register: lanes::Reg) -> [u128; WIDTH] {
+        let mut out = [0u128; WIDTH];
+
+        // SAFETY: the destination is exactly one register of contiguous 128-bit integers.
+        //
+        // The store is the unaligned form, so the array's own alignment is irrelevant.
+        unsafe { lanes::store(out.as_mut_ptr(), register) };
+
+        out
+    }
+
+    /// A register holding the given elements, one per lane.
+    fn register_of(values: [u128; WIDTH]) -> lanes::Reg {
+        // SAFETY: the source is exactly one register of contiguous 128-bit integers.
+        unsafe { lanes::load(values.as_ptr()) }
+    }
+
+    /// The two 64-bit halves of every lane, exchanged.
+    fn swapped_halves(values: [u128; WIDTH]) -> [u128; WIDTH] {
+        // Rotating a 128-bit value by half its width is exactly the exchange.
+        core::array::from_fn(|i| values[i].rotate_left(64))
+    }
+
+    /// Each lane-local operation on the register, against the same operation on the model.
+    ///
+    /// One assertion per operation, so a mismatch names the intrinsic that disagreed.
+    ///
+    /// The whole-element interleave is the one left out, since it crosses lanes by design.
+    fn lanes_conform(
+        a: [u128; WIDTH],
+        b: [u128; WIDTH],
+        scalar: u128,
+    ) -> Result<(), TestCaseError> {
+        let (x, y) = (register_of(a), register_of(b));
+        let (mx, my) = (Model(a), Model(b));
+
+        prop_assert_eq!(lanes_of(lanes::Reg::zero()), Model::<WIDTH>::zero().0);
+        prop_assert_eq!(
+            lanes_of(lanes::Reg::broadcast(scalar)),
+            Model::<WIDTH>::broadcast(scalar).0
+        );
+        prop_assert_eq!(lanes_of(lanes::Reg::tail()), Model::<WIDTH>::tail().0);
+        prop_assert_eq!(lanes_of(x.xor(y)), mx.xor(my).0);
+        prop_assert_eq!(lanes_of(x.unpack_low_64(y)), mx.unpack_low_64(my).0);
+        prop_assert_eq!(
+            lanes_of(x.clmul::<LOW_BY_LOW>(y)),
+            mx.clmul::<LOW_BY_LOW>(my).0
+        );
+        prop_assert_eq!(
+            lanes_of(x.clmul::<HIGH_BY_LOW>(y)),
+            mx.clmul::<HIGH_BY_LOW>(my).0
+        );
+        prop_assert_eq!(
+            lanes_of(x.clmul::<LOW_BY_HIGH>(y)),
+            mx.clmul::<LOW_BY_HIGH>(my).0
+        );
+        prop_assert_eq!(
+            lanes_of(x.clmul::<HIGH_BY_HIGH>(y)),
+            mx.clmul::<HIGH_BY_HIGH>(my).0
+        );
+
+        // Not a trait method, so the model cannot supply the expectation.
+        //
+        // It carries the only hand-written shuffle immediate here, which is why it is pinned.
+        prop_assert_eq!(lanes_of(lanes::swap_halves(x)), swapped_halves(a));
+
+        // The two composites built from those operations.
+        //
+        // A lane-crossing slip therefore shows up here as well as in the primitives above.
+        prop_assert_eq!(lanes_of(fold_shifted(x, y)), fold_shifted(mx, my).0);
+        prop_assert_eq!(
+            lanes_of(SplitScalar::new(scalar).apply(x)),
+            SplitScalar::new(scalar).apply(mx).0
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn the_register_matches_the_scalar_model_at_the_corners() {
+        // Invariant: each operation is lane-local, so distinct lanes must stay distinct.
+        //
+        // Lane 0 carries the pair under test, so all sixteen combinations are reached.
+        //
+        // That includes the squaring-shaped case where both operands are the same value.
+        //
+        // The other lanes rotate through the corners, so a value that crosses a lane
+        // boundary lands on a different extreme and shows as a mismatch.
+        for (i, &x) in SPECIAL.iter().enumerate() {
+            for (j, &y) in SPECIAL.iter().enumerate() {
+                let a = core::array::from_fn(|lane| match lane {
+                    0 => x,
+                    _ => SPECIAL[(i + lane) % SPECIAL.len()],
+                });
+                let b = core::array::from_fn(|lane| match lane {
+                    0 => y,
+                    _ => SPECIAL[(j + lane) % SPECIAL.len()],
+                });
+
+                // The multiplier walks the corners too, so the split runs from each extreme.
+                for scalar in SPECIAL {
+                    lanes_conform(a, b, scalar)
+                        .unwrap_or_else(|e| panic!("a {x:#x}, b {y:#x}, scalar {scalar:#x}: {e}"));
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn the_register_matches_the_scalar_model(
+            a in prop::array::uniform(any::<u128>()),
+            b in prop::array::uniform(any::<u128>()),
+            scalar in any::<u128>(),
+        ) {
+            // The seam the scalar model alone cannot reach.
+            //
+            // Each intrinsic must be the one the algebra was written against, lane by lane.
+            lanes_conform(a, b, scalar)?;
+        }
     }
 
     test_packed_binary_field!(

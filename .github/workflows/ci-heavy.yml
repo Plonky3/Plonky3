@@ -47,6 +47,8 @@ jobs:
           echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test WHIR exhaustive sweep
         run: python3 scripts/check.py whir-exhaustive
@@ -70,6 +72,8 @@ jobs:
         run: echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=+pclmulqdq" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test the 2^16 round trip
         run: python3 scripts/check.py binary-large
