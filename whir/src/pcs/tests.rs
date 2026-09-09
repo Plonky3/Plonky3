@@ -8,13 +8,14 @@ use p3_challenger::{CanObserve, DuplexChallenger};
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, Witness};
 use p3_sumcheck::test_util::{random_table_specs, table_specs_to_tables};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -90,21 +91,24 @@ fn rejects_opening_batches_below_target_security() {
 #[test]
 fn both_verifiers_reject_infeasible_claim_counts_before_sumcheck() {
     type L = PrefixProver<F, EF>;
+    const FOLDING: usize = 4;
+    // The prefix handoff must retain a full SIMD vector after the initial fold.
+    let num_variables = FOLDING + log2_strict_usize(PackedF::WIDTH);
     let mut rng = SmallRng::seed_from_u64(947);
-    let witness = L::new_witness(vec![Table::rand(&mut rng, 1, 6)], 4);
+    let witness = L::new_witness(vec![Table::rand(&mut rng, 1, num_variables)], FOLDING);
     let small_protocol = OpeningProtocol::new(vec![TableSpec::new(
-        TableShape::new(6, 1),
+        TableShape::new(num_variables, 1),
         vec![OpeningBatch::new(vec![0], vec![0])],
     )]);
     let perm = Perm::new_from_rng_128(&mut rng);
     let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
     let config = WhirConfig::new_with_initial_claims(
-        6,
+        num_variables,
         ProtocolParameters {
             security_level: 100,
             pow_bits: 0,
             round_log_inv_rates: vec![],
-            folding_factor: FoldingFactor::Constant(4),
+            folding_factor: FoldingFactor::Constant(FOLDING),
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         },
@@ -119,7 +123,7 @@ fn both_verifiers_reject_infeasible_claim_counts_before_sumcheck() {
     // batches or only current columns misses a factor of two.
     let num_batches = 1 << 12;
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
-        TableShape::new(6, 1),
+        TableShape::new(num_variables, 1),
         vec![OpeningBatch::new(vec![0], vec![0]); num_batches],
     )]);
     proof.evals = vec![proof.evals[0].clone(); num_batches];
@@ -134,7 +138,7 @@ fn both_verifiers_reject_infeasible_claim_counts_before_sumcheck() {
         pcs.verify(&commitment, &proof, &mut challenger(), protocol.clone())
             .unwrap_err(),
     );
-    let points = vec![Point::new(vec![EF::ONE; 6]); num_batches];
+    let points = vec![Point::new(vec![EF::ONE; num_variables]); num_batches];
     check(
         pcs.verify_at(&commitment, &proof, &protocol, &points, &mut challenger())
             .unwrap_err(),
