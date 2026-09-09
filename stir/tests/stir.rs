@@ -2354,6 +2354,7 @@ mod babybear_pcs {
     }
 
     #[test]
+    #[ignore = "full FRI+STIR prove/verify at two sizes; run from heavy CI"]
     fn assert_stir_proof_smaller_than_binary_fri() {
         const WIDTH: usize = 3;
 

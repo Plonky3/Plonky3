@@ -217,11 +217,13 @@ fn test_smallest_trace() {
 }
 
 #[test]
+#[ignore = "full STIR prove/verify round trip; run from heavy CI"]
 fn test_public_value() {
     test_public_value_impl(1 << 3, 21);
 }
 
 #[test]
+#[ignore = "full STIR prove/verify round trip; run from heavy CI"]
 fn test_short_public_values_rejected() {
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let config = make_fast_config();

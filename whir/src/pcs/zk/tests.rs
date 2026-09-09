@@ -229,6 +229,7 @@ fn zk_whir_end_to_end_no_rounds() {
 }
 
 #[test]
+#[ignore = "full ZK-WHIR prove/verify at 2^17 variables; run from heavy CI"]
 fn zk_whir_end_to_end_multi_round() {
     // Two code-switching rounds with mixed folding factors and grinding,
     // so the round-to-round oracle carry path is exercised.
@@ -261,6 +262,7 @@ fn zk_whir_end_to_end_partial_final_fold() {
 }
 
 #[test]
+#[ignore = "full ZK-WHIR prove at 2^17 variables; run from heavy CI"]
 fn zk_whir_code_switch_overhead_accounting() {
     // Construction 9.7 per-round overhead (eprint 2026/391, #1587):
     //

@@ -277,6 +277,97 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
                 "--exact",
             ]
         ]
+    if command == "slow-regressions":
+        return [
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-multilinear-util",
+                "poly::test::test_compress_suffix",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-multi-stark",
+                "zerocheck::tests::staged_zerocheck_mixed_poseidon2_blake3_fib",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-whir",
+                "pcs::zk::tests::zk_whir_end_to_end_multi_round",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-whir",
+                "pcs::zk::tests::zk_whir_code_switch_overhead_accounting",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-uni-stark",
+                "--test",
+                "stir_fibonacci",
+                "test_public_value",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-uni-stark",
+                "--test",
+                "stir_fibonacci",
+                "test_short_public_values_rejected",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-binary-dft",
+                "--test",
+                "commit",
+                "polynomial_commit_matches_naive_for_both_orders",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-stir",
+                "--test",
+                "stir",
+                "babybear_pcs::assert_stir_proof_smaller_than_binary_fri",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+        ]
     raise AssertionError(f"unhandled command: {command}")
 
 
@@ -360,6 +451,9 @@ def parser() -> argparse.ArgumentParser:
     whir = subparsers.add_parser("whir-exhaustive", help="run the ignored exhaustive WHIR sweep")
     whir.add_argument("--parallel", action="store_true")
     subparsers.add_parser("binary-large", help="run the ignored binary PCS 2^16 round trip")
+    subparsers.add_parser(
+        "slow-regressions", help="run the ignored compute-heavy regression tests"
+    )
     return result
 
 
