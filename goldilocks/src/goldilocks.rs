@@ -969,6 +969,109 @@ mod tests {
         check_length!(rng, 129, 4);
     }
 
+    /// Reduce each full-u64 product separately in the oracle, so repeated max * max
+    /// also checks sums exceeding u128 without overflowing the expected-value calculation.
+    #[test]
+    fn packed_dot_products_match_full_u64_oracle() {
+        use p3_field::Algebra;
+
+        type PF = <F as Field>::Packing;
+
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            (1 << 32) - 2,
+            (1 << 32) - 1,
+            1 << 32,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX,
+        ];
+
+        fn check<const N: usize>(lhs: &[PF; N], rhs: &[PF; N], coeffs: &[F; N]) {
+            let ordinary = PF::dot_product(lhs, rhs);
+            let mixed = PF::mixed_dot_product(lhs, coeffs);
+            let broadcast = PF::dot_product(lhs, &coeffs.map(PF::from));
+            assert_eq!(mixed, broadcast, "mixed/broadcast, N={N}");
+
+            for lane in 0..PF::WIDTH {
+                let mut ordinary_expected = 0u128;
+                let mut mixed_expected = 0u128;
+                for term in 0..N {
+                    let a = u128::from(lhs[term].as_slice()[lane].value);
+                    let b = u128::from(rhs[term].as_slice()[lane].value);
+                    ordinary_expected += (a * b) % u128::from(P);
+                    mixed_expected += (a * u128::from(coeffs[term].value)) % u128::from(P);
+                }
+                assert_eq!(
+                    ordinary.as_slice()[lane].as_canonical_u64(),
+                    (ordinary_expected % u128::from(P)) as u64,
+                    "ordinary, N={N}, lane={lane}"
+                );
+                assert_eq!(
+                    mixed.as_slice()[lane].as_canonical_u64(),
+                    (mixed_expected % u128::from(P)) as u64,
+                    "mixed, N={N}, lane={lane}"
+                );
+            }
+        }
+
+        fn check_length<const N: usize>(rng: &mut SmallRng) {
+            // Repeated edge pairs exercise carries above bit 128, zero representatives,
+            // and the largest possible high limbs in every lane.
+            for a in RAW_EDGES {
+                for b in RAW_EDGES {
+                    check::<N>(
+                        &[PF::from(F::new(a)); N],
+                        &[PF::from(F::new(b)); N],
+                        &[F::new(b); N],
+                    );
+                }
+            }
+            for offset in 0..RAW_EDGES.len() {
+                let lhs = core::array::from_fn(|term| {
+                    PF::from_fn(|lane| F::new(RAW_EDGES[(offset + term + lane) % RAW_EDGES.len()]))
+                });
+                let rhs = core::array::from_fn(|term| {
+                    PF::from_fn(|lane| {
+                        F::new(RAW_EDGES[(offset + 3 * term + 7 * lane) % RAW_EDGES.len()])
+                    })
+                });
+                let coeffs = core::array::from_fn(|term| {
+                    F::new(RAW_EDGES[(offset + term) % RAW_EDGES.len()])
+                });
+                check::<N>(&lhs, &rhs, &coeffs);
+            }
+            for _ in 0..128 {
+                let lhs = core::array::from_fn(|_| PF::from_fn(|_| F::new(rng.random())));
+                let rhs = core::array::from_fn(|_| PF::from_fn(|_| F::new(rng.random())));
+                let coeffs = core::array::from_fn(|_| F::new(rng.random()));
+                check::<N>(&lhs, &rhs, &coeffs);
+            }
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0xD07_F011_5EED);
+        check_length::<0>(&mut rng);
+        check_length::<1>(&mut rng);
+        check_length::<2>(&mut rng);
+        check_length::<3>(&mut rng);
+        check_length::<4>(&mut rng);
+        check_length::<5>(&mut rng);
+        check_length::<6>(&mut rng);
+        check_length::<7>(&mut rng);
+        check_length::<8>(&mut rng);
+        check_length::<12>(&mut rng);
+        check_length::<16>(&mut rng);
+        check_length::<31>(&mut rng);
+        check_length::<32>(&mut rng);
+        check_length::<33>(&mut rng);
+        check_length::<64>(&mut rng);
+        check_length::<65>(&mut rng);
+        check_length::<129>(&mut rng);
+    }
+
     #[test]
     fn power_of_two_coefficient_matches_generic_exponentiation() {
         for exp in (0..384).chain([1 << 32, 1 << 63, u64::MAX - 1, u64::MAX]) {

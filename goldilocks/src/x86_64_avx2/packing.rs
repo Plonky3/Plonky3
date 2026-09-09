@@ -214,6 +214,18 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX2 {
     }
 
     #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        if (2..=6).contains(&N) {
+            Self::from_vector(dot_product_delayed_reduce::<N>(|i| {
+                (lhs[i].to_vector(), rhs[i].to_vector())
+            }))
+        } else {
+            let products: [Self; N] = core::array::from_fn(|i| lhs[i] * rhs[i]);
+            Self::sum_array::<N>(&products)
+        }
+    }
+
+    #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
         unsafe { reconstitute_from_base(Goldilocks::zero_vec(len * WIDTH)) }
@@ -247,11 +259,17 @@ impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {
 
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
-        dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(
-            a,
-            f,
-            <Self as Algebra<Goldilocks>>::BATCHED_LC_CHUNK,
-        )
+        if (2..=6).contains(&N) {
+            Self::from_vector(dot_product_delayed_reduce::<N>(|i| {
+                (a[i].to_vector(), Self::broadcast(f[i]).to_vector())
+            }))
+        } else {
+            dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(
+                a,
+                f,
+                <Self as Algebra<Goldilocks>>::BATCHED_LC_CHUNK,
+            )
+        }
     }
 }
 
@@ -653,6 +671,61 @@ unsafe fn sub_small_64s_64_s(x_s: __m256i, y: __m256i) -> __m256i {
         // The mask contains 0xffffffff in the high 32 bits if wraparound occurred and 0 otherwise.
         let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if underflowed else 0.
         _mm256_sub_epi64(res_wrapped_s, wrapback_amt)
+    }
+}
+
+/// Accumulate 2..=6 full-u64 products without losing carries above bit 128.
+///
+/// With B = 2^32, the exact sum is lo + B^2 * mid + B^3 * top. Each product
+/// contributes its low64 word, the bottom32 of its high64 word, and its top32.
+/// Carries from lo enter mid. After k terms, mid <= k*B - 1 and top <= k*(B - 1),
+/// so neither accumulator can overflow for k <= 6, even for noncanonical inputs.
+#[inline]
+fn dot_product_delayed_reduce<const N: usize>(
+    inputs: impl Fn(usize) -> (__m256i, __m256i),
+) -> __m256i {
+    debug_assert!((2..=6).contains(&N));
+    unsafe {
+        let (a, b) = inputs(0);
+        let (hi, lo) = mul64_64(a, b);
+        let mut lo_s = shift(lo);
+        let mut mid = _mm256_and_si256(hi, EPSILON);
+        let mut top = _mm256_srli_epi64::<32>(hi);
+        let mut accumulate = |i| {
+            let (a, b) = inputs(i);
+            let (hi, lo) = mul64_64(a, b);
+            let old_s = lo_s;
+            lo_s = _mm256_add_epi64(lo_s, lo);
+            // Shifted signed order is unsigned order of the unshifted low words.
+            let carry = _mm256_cmpgt_epi64(old_s, lo_s);
+            mid = _mm256_add_epi64(mid, _mm256_and_si256(hi, EPSILON));
+            mid = _mm256_sub_epi64(mid, carry);
+            top = _mm256_add_epi64(top, _mm256_srli_epi64::<32>(hi));
+        };
+        // Spell out the bounded schedule so LLVM can interleave every product,
+        // including the six-term case that otherwise retains a counted loop.
+        accumulate(1);
+        if N > 2 {
+            accumulate(2);
+        }
+        if N > 3 {
+            accumulate(3);
+        }
+        if N > 4 {
+            accumulate(4);
+        }
+        if N > 5 {
+            accumulate(5);
+        }
+
+        // B^2 = B - 1 and B^3 = -1 modulo P. Splitting mid at bit 32 gives
+        // lo - (top + (mid >> 32)) + (mid & (B - 1)) * (B - 1).
+        // correction <= N*B - 1 and term <= (B - 1)^2 are both below
+        // 2^64 - 2^32, satisfying the small-sub/add helper bounds.
+        let correction = _mm256_add_epi64(top, _mm256_srli_epi64::<32>(mid));
+        let term = _mm256_mul_epu32(mid, EPSILON);
+        let adjusted_s = sub_small_64s_64_s(lo_s, correction);
+        shift(add_small_64s_64_s(adjusted_s, term))
     }
 }
 

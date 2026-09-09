@@ -16,6 +16,7 @@ type EF3 = CubicTrinomialExtensionField<Goldilocks>;
 type EF5 = BinomialExtensionField<Goldilocks, 5>;
 type PEF2 = <EF2 as ExtensionField<Goldilocks>>::ExtensionPacking;
 type PEF3 = <EF3 as ExtensionField<Goldilocks>>::ExtensionPacking;
+type PEF5 = <EF5 as ExtensionField<Goldilocks>>::ExtensionPacking;
 
 // Note that each round of throughput has 10 operations
 // So we should have 10 * more repetitions for latency tests.
@@ -48,6 +49,10 @@ fn bench_quintic_extension(c: &mut Criterion) {
     benchmark_mul::<EF5>(c, name);
     benchmark_mul_throughput::<EF5, REPS>(c, name);
     benchmark_mul_latency::<EF5, L_REPS>(c, name);
+
+    let packed_name = "Packed BinomialExtensionField<Goldilocks, 5>";
+    benchmark_mul_throughput::<PEF5, REPS>(c, packed_name);
+    benchmark_mul_latency::<PEF5, L_REPS>(c, packed_name);
 }
 
 fn bench_cubic_frobenius(c: &mut Criterion) {
