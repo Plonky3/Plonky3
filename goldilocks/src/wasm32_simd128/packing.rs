@@ -267,11 +267,39 @@ impl_sum_prod_base_field!(PackedGoldilocksWasmSimd128, Goldilocks);
 impl Algebra<Goldilocks> for PackedGoldilocksWasmSimd128 {
     #[inline]
     fn quadratic_extension_square(a: &[Self; 2], w: Goldilocks) -> [Self; 2] {
-        [a[0].square() + a[1].square() * w, (a[0] * a[1]).double()]
+        let square1 = a[1].square();
+        // The Goldilocks quadratic extension uses the canonical constant 7, so
+        // this branch folds away at its call sites. Other coefficients remain valid.
+        let weighted_square1 = if w.value == 7 {
+            square1.mul_2exp_u64(3) - square1
+        } else {
+            square1 * w
+        };
+        [a[0].square() + weighted_square1, (a[0] * a[1]).double()]
     }
 
-    // Bound each delayed-reduction chunk to four products.
+    // Vectorized wrappers inherit this constant but not the tail-aware override below.
     const BATCHED_LC_CHUNK: usize = 4;
+
+    #[inline]
+    fn batched_linear_combination(values: &[Self], coeffs: &[Goldilocks]) -> Self {
+        assert_eq!(values.len(), coeffs.len());
+        // Amortize reduction across long inputs; 64 terms are inside dot_products' bound.
+        let (values, tail_values) = values.as_chunks::<64>();
+        let (coeffs, tail_coeffs) = coeffs.as_chunks::<64>();
+        // Seed the accumulator with the tail, avoiding an extra addition for short inputs.
+        let mut acc = match tail_values {
+            [] => Self::ZERO,
+            [value] => *value * tail_coeffs[0],
+            _ => Self::from_vector(dot_products_n(tail_values.len(), |i| {
+                mul64_scalar(tail_values[i].to_vector(), tail_coeffs[i])
+            })),
+        };
+        for (values, coeffs) in values.iter().zip(coeffs) {
+            acc += Self::mixed_dot_product(values, coeffs);
+        }
+        acc
+    }
 
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
@@ -537,24 +565,6 @@ fn unsigned_add_carry(a: v128, b: v128, sum: v128) -> v128 {
     u64x2_shr(carry_mask, 63)
 }
 
-/// Sum two full products with one reduction. Each product is at most `(2^64 - 1)^2`,
-/// strictly below `OFFSET = 2^128 - EPSILON^2`, a multiple of P. If their sum overflows,
-/// adding `EPSILON^2` to the wrapped sum subtracts OFFSET from the exact sum. This fits
-/// in 128 bits because the exact sum is below `2 * OFFSET`.
-#[inline]
-fn dot2((a_hi, a_lo): (v128, v128), (b_hi, b_lo): (v128, v128)) -> v128 {
-    let lo = i64x2_add(a_lo, b_lo);
-    let carry = unsigned_add_carry(a_lo, b_lo, lo);
-    // A u64 product's high word is <= 2^64 - 2, so adding the low carry cannot wrap.
-    let b_hi = i64x2_add(b_hi, carry);
-    let hi = i64x2_add(a_hi, b_hi);
-    let overflow = i64x2_gt(shift(a_hi), shift(hi));
-    let correction = v128_and(overflow, u64x2_splat(EPSILON * EPSILON));
-    let corrected_lo = i64x2_add(lo, correction);
-    let corrected_hi = i64x2_add(hi, unsigned_add_carry(lo, correction, corrected_lo));
-    reduce128(corrected_hi, corrected_lo)
-}
-
 /// Delayed-reduction dot product from full `(hi, lo)` products with a single final
 /// [`reduce128`] instead of one reduction per term. Mirrors the scalar
 /// `Goldilocks::dot_product`'s `N > 2` algorithm (see `goldilocks.rs`), vectorized to 2 lanes.
@@ -577,15 +587,18 @@ fn dot_products<const N: usize>(get: impl Fn(usize) -> (v128, v128)) -> v128 {
         assert!((N as u32) <= (1 << 31));
     }
 
-    if N == 2 {
-        return dot2(get(0), get(1));
-    }
+    dot_products_n(N, get)
+}
 
+/// Shared accumulator for fixed-size dots and runtime tails of fewer than 64 terms.
+/// The caller must ensure n <= 2^31, as required by dot_products.
+#[inline]
+fn dot_products_n(n: usize, get: impl Fn(usize) -> (v128, v128)) -> v128 {
     let mut acc_lo_hi = u64x2_splat(0);
     let mut acc_lo_lo = u64x2_splat(0);
     let mut acc_hi96 = u64x2_splat(0);
 
-    for i in 0..N {
+    for i in 0..n {
         let (term_hi, term_lo) = get(i);
         let term_hi96 = u64x2_shr(term_hi, 32);
 
@@ -1151,6 +1164,50 @@ mod tests {
         check_random_n!(7, 32);
         check_random_n!(16, 16);
         check_random_n!(64, 8);
+    }
+
+    /// Check long chunks and their short tails with arbitrary u64 representatives.
+    #[test]
+    fn batched_linear_combination_full_u64_oracle() {
+        use alloc::vec::Vec;
+
+        use p3_field::{Algebra, PrimeField64};
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        let mut rng = SmallRng::seed_from_u64(0x1C64_7A11);
+        for len in [
+            0, 1, 2, 3, 4, 7, 8, 16, 31, 32, 63, 64, 65, 67, 68, 127, 128, 129, 255, 256, 257,
+        ] {
+            for edge in [true, false] {
+                let values: Vec<_> = (0..len)
+                    .map(|_| {
+                        let raw = if edge { [u64::MAX, 0] } else { rng.random() };
+                        PackedGoldilocksWasmSimd128(raw.map(Goldilocks::new))
+                    })
+                    .collect();
+                let coeffs: Vec<_> = (0..len)
+                    .map(|_| Goldilocks::new(if edge { u64::MAX } else { rng.random() }))
+                    .collect();
+                let actual =
+                    PackedGoldilocksWasmSimd128::batched_linear_combination(&values, &coeffs);
+                let p = u128::from(super::P);
+                for lane in 0..2 {
+                    let expected = values
+                        .iter()
+                        .zip(&coeffs)
+                        .fold(0u128, |acc, (value, coeff)| {
+                            (acc + u128::from(value.0[lane].value) * u128::from(coeff.value) % p)
+                                % p
+                        });
+                    assert_eq!(
+                        actual.0[lane].as_canonical_u64(),
+                        expected as u64,
+                        "len={len}, lane={lane}"
+                    );
+                }
+            }
+        }
     }
 
     /// Adversarial coverage for mixed scalar-coefficient products and their shared
