@@ -357,16 +357,21 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
     lb_num_chunks: usize,
     lb_chunk_size: usize,
 ) {
+    // Derive both chunk pointers from the entire slice: separate element borrows
+    // would not grant access to the whole chunk and could invalidate each other.
+    let ptr = vals.as_mut_ptr();
     for i in 0..1usize << lb_num_chunks {
         // `wrapping_shr` handles the silly case when `lb_num_chunks == 0`.
         let j = i
             .reverse_bits()
             .wrapping_shr(usize::BITS - lb_num_chunks as u32);
         if i < j {
+            // SAFETY: Both indices select complete chunks within the slice by the
+            // length precondition; i < j ensures the chunks do not overlap.
             unsafe {
                 core::ptr::swap_nonoverlapping(
-                    vals.get_unchecked_mut(i << lb_chunk_size),
-                    vals.get_unchecked_mut(j << lb_chunk_size),
+                    ptr.add(i << lb_chunk_size),
+                    ptr.add(j << lb_chunk_size),
                     1 << lb_chunk_size,
                 );
             }
