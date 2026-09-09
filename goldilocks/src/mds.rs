@@ -6,7 +6,7 @@
 //! work by Angus Gruen and Hamish Ivey-Law. Other sizes are from Ulrich Haböck's
 //! database.
 
-use p3_dft::{Radix2Bowers, TwoAdicSubgroupDft};
+use p3_dft::{Radix2DFTSmallBatch, TwoAdicSubgroupDft};
 use p3_field::PrimeCharacteristicRing;
 use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::Convolve;
@@ -69,7 +69,8 @@ impl Convolve<Goldilocks, i128, i64> for SmallConvolveGoldilocks {
     }
 }
 
-const FFT_ALGO: Radix2Bowers = Radix2Bowers;
+static FFT_ALGO: LazyLock<Radix2DFTSmallBatch<Goldilocks>> =
+    LazyLock::new(|| Radix2DFTSmallBatch::new(64));
 
 pub(crate) const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [7, 1, 3, 8, 8, 3, 4, 9];
 
@@ -163,7 +164,7 @@ static MATRIX_CIRC_MDS_32_FREQ: LazyLock<[Goldilocks; 32]> = LazyLock::new(|| {
 
 impl Permutation<[Goldilocks; 32]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 32]) -> [Goldilocks; 32] {
-        apply_circulant_fft_precomputed(&FFT_ALGO, &MATRIX_CIRC_MDS_32_FREQ, &input)
+        apply_circulant_fft_precomputed(&*FFT_ALGO, &MATRIX_CIRC_MDS_32_FREQ, &input)
     }
 }
 impl MdsPermutation<Goldilocks, 32> for MdsMatrixGoldilocks {}
@@ -199,7 +200,7 @@ static MATRIX_CIRC_MDS_64_FREQ: LazyLock<[Goldilocks; 64]> = LazyLock::new(|| {
 
 impl Permutation<[Goldilocks; 64]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 64]) -> [Goldilocks; 64] {
-        apply_circulant_fft_precomputed(&FFT_ALGO, &MATRIX_CIRC_MDS_64_FREQ, &input)
+        apply_circulant_fft_precomputed(&*FFT_ALGO, &MATRIX_CIRC_MDS_64_FREQ, &input)
     }
 }
 impl MdsPermutation<Goldilocks, 64> for MdsMatrixGoldilocks {}
@@ -234,9 +235,62 @@ impl MdsPermutation<Goldilocks, 68> for MdsMatrixGoldilocks {}
 
 #[cfg(test)]
 mod tests {
+    use p3_mds::util::apply_circulant;
     use p3_symmetric::Permutation;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
-    use super::{Goldilocks, MdsMatrixGoldilocks};
+    use super::{
+        Goldilocks, MATRIX_CIRC_MDS_32_GOLDILOCKS, MATRIX_CIRC_MDS_64_GOLDILOCKS,
+        MdsMatrixGoldilocks,
+    };
+
+    #[test]
+    fn goldilocks32_and_64_match_direct_circulant_on_raw_edges_and_random_inputs() {
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            (1 << 32) - 1,
+            1 << 32,
+            1 << 63,
+            0xFFFF_FFFF_0000_0000,
+            0xFFFF_FFFF_0000_0001,
+            0xFFFF_FFFF_0000_0002,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+
+        for offset in 0..RAW_EDGES.len() {
+            let input32 = core::array::from_fn(|i| {
+                Goldilocks::new(RAW_EDGES[(i + offset) % RAW_EDGES.len()])
+            });
+            let input64 = core::array::from_fn(|i| {
+                Goldilocks::new(RAW_EDGES[(i + offset) % RAW_EDGES.len()])
+            });
+            assert_eq!(
+                MdsMatrixGoldilocks.permute(input32),
+                apply_circulant(&MATRIX_CIRC_MDS_32_GOLDILOCKS, &input32)
+            );
+            assert_eq!(
+                MdsMatrixGoldilocks.permute(input64),
+                apply_circulant(&MATRIX_CIRC_MDS_64_GOLDILOCKS, &input64)
+            );
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x4DD5_3264);
+        for _ in 0..32 {
+            let input32 = Goldilocks::new_array(rng.random());
+            let input64 = Goldilocks::new_array(rng.random());
+            assert_eq!(
+                MdsMatrixGoldilocks.permute(input32),
+                apply_circulant(&MATRIX_CIRC_MDS_32_GOLDILOCKS, &input32)
+            );
+            assert_eq!(
+                MdsMatrixGoldilocks.permute(input64),
+                apply_circulant(&MATRIX_CIRC_MDS_64_GOLDILOCKS, &input64)
+            );
+        }
+    }
 
     #[test]
     fn goldilocks8() {

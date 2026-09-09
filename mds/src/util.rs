@@ -98,13 +98,15 @@ pub fn apply_circulant_fft_precomputed<
     input: &[F; N],
 ) -> [F; N] {
     // Transform the input vector to the frequency domain.
-    let input = fft.dft(input.to_vec());
+    let mut input = fft.dft(input.to_vec());
 
     // Convolution theorem: point-wise multiply in frequency domain.
-    let product = freq_column.iter().zip(input).map(|(&x, y)| x * y).collect();
+    for (&coefficient, value) in freq_column.iter().zip(&mut input) {
+        *value = coefficient * *value;
+    }
 
     // Transform back to the time domain to get the circulant product.
-    let output = fft.idft(product);
+    let output = fft.idft(input);
     output.try_into().unwrap()
 }
 

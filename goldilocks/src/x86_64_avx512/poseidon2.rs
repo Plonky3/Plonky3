@@ -203,7 +203,9 @@ fn internal_round_goldilocks_16(
     let s13 = state[13];
     let s14 = state[14];
     let s15 = state[15];
-    let sum_tail = s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15;
+    let sum_tail = PackedGoldilocksAVX512::sum_array::<15>(&[
+        s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15,
+    ]);
 
     add_rc_and_sbox(&mut state[0], rc);
     let s0 = state[0];
@@ -230,20 +232,19 @@ fn internal_round_goldilocks_16(
     let two_s8 = s8 + s8;
     state[8] = sum - (two_s8 + two_s8);
     // V[9] = 1/2^3
-    state[9] = sum + s9.halve().halve().halve();
+    state[9] = sum + s9.div_2exp_u64(3);
     // V[10] = 1/2^4
-    state[10] = sum + s10.halve().halve().halve().halve();
+    state[10] = sum + s10.div_2exp_u64(4);
     // V[11] = 1/2^5
-    state[11] = sum + s11.halve().halve().halve().halve().halve();
+    state[11] = sum + s11.div_2exp_u64(5);
     // V[12] = -1/2^3
-    state[12] = sum - s12.halve().halve().halve();
+    state[12] = sum - s12.div_2exp_u64(3);
     // V[13] = -1/2^4
-    state[13] = sum - s13.halve().halve().halve().halve();
+    state[13] = sum - s13.div_2exp_u64(4);
     // V[14] = -1/2^5
-    state[14] = sum - s14.halve().halve().halve().halve().halve();
+    state[14] = sum - s14.div_2exp_u64(5);
     // V[15] = 1/2^32
-    let inv_2_32 = crate::MATRIX_DIAG_16_GOLDILOCKS[15];
-    state[15] = sum + s15 * inv_2_32;
+    state[15] = sum + s15.div_2exp_u64(32);
 }
 
 /// The internal layers of the Poseidon2 permutation, specialized for `PackedGoldilocksAVX512`.

@@ -154,6 +154,36 @@ impl PrimeCharacteristicRing for PackedGoldilocksWasmSimd128 {
     }
 
     #[inline]
+    fn mul_2exp_u64(&self, mut exp: u64) -> Self {
+        exp %= 192;
+        match exp {
+            0 => *self,
+            1 => self.double(),
+            _ => *self * Self::broadcast(Goldilocks::power_of_two(exp)),
+        }
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, mut exp: u64) -> Self {
+        exp %= 192;
+        match exp {
+            0 => *self,
+            1 => self.halve(),
+            2..=32 => {
+                let x = self.to_vector();
+                let lo = v128_and(x, u64x2_splat((1u64 << exp) - 1));
+                let hi = u64x2_shr(x, exp as u32);
+                let a = i64x2_add(hi, i64x2_shl(lo, (32 - exp) as u32));
+                let b = i64x2_shl(lo, (64 - exp) as u32);
+                // 2^-exp = 2^(32-exp) - 2^(64-exp) mod P. Both a and b are
+                // below P; in particular b <= 2^64 - 2^32, as required by the helper.
+                Self::from_vector(shift(sub_small_64s_64_s(shift(a), b)))
+            }
+            _ => *self * Self::broadcast(Goldilocks::power_of_two(192 - exp)),
+        }
+    }
+
+    #[inline]
     fn square(&self) -> Self {
         Self::from_vector(square(self.to_vector()))
     }
@@ -171,10 +201,7 @@ impl PrimeCharacteristicRing for PackedGoldilocksWasmSimd128 {
             0 => Self::ZERO,
             1 => input[0],
             2 => input[0] + input[1],
-            _ => {
-                let vectors: [v128; N] = core::array::from_fn(|i| input[i].to_vector());
-                Self::from_vector(sum_delayed_reduce::<N>(&vectors))
-            }
+            _ => Self::from_vector(sum_delayed_reduce::<N>(input)),
         }
     }
 
@@ -439,13 +466,14 @@ fn reduce128(hi: v128, lo: v128) -> v128 {
     shift(lo2_s)
 }
 
-/// `1` in each lane where `a < b` (unsigned), else `0`. Used to detect unsigned-add
-/// overflow when accumulating 128-bit-per-lane values across `v128` pairs, via the same
-/// sign-bit-shift trick as [`canonicalize_s`] and friends.
+/// Return `1` in each lane where the `a + b` addition overflowed, else `0`.
+///
+/// This bitwise carry formula keeps the comparison vectorized on Wasm SIMD, which has no
+/// unsigned 64-bit vector comparison: `((a & b) | ((a | b) & !sum)) >> 63`.
 #[inline(always)]
-fn unsigned_lt_as_carry(a: v128, b: v128) -> v128 {
-    let mask = i64x2_gt(shift(b), shift(a));
-    u64x2_shr(mask, 63)
+fn unsigned_add_carry(a: v128, b: v128, sum: v128) -> v128 {
+    let carry_mask = v128_or(v128_and(a, b), v128_andnot(v128_or(a, b), sum));
+    u64x2_shr(carry_mask, 63)
 }
 
 /// Delayed-reduction dot product: `sum(get(i).0 * get(i).1)` with a single final
@@ -480,7 +508,7 @@ fn dot_pairs<const N: usize>(get: impl Fn(usize) -> (v128, v128)) -> v128 {
         let term_hi96 = u64x2_shr(term_hi, 32);
 
         let new_lo_lo = i64x2_add(acc_lo_lo, term_lo);
-        let carry = unsigned_lt_as_carry(new_lo_lo, acc_lo_lo);
+        let carry = unsigned_add_carry(acc_lo_lo, term_lo, new_lo_lo);
         acc_lo_hi = i64x2_add(i64x2_add(acc_lo_hi, term_hi), carry);
         acc_lo_lo = new_lo_lo;
 
@@ -496,34 +524,35 @@ fn dot_pairs<const N: usize>(get: impl Fn(usize) -> (v128, v128)) -> v128 {
     // `sum = lo + (P - acc_hi96)`, a 128-bit + 64-bit add with carry into the high word.
     let p_minus_hi = i64x2_sub(u64x2_splat(P), acc_hi96);
     let sum_lo = i64x2_add(lo_lo, p_minus_hi);
-    let carry2 = unsigned_lt_as_carry(sum_lo, lo_lo);
+    let carry2 = unsigned_add_carry(lo_lo, p_minus_hi, sum_lo);
     let sum_hi = i64x2_add(lo_hi, carry2);
 
     reduce128(sum_hi, sum_lo)
 }
 
-/// Delayed-reduction sum: `sum(terms)` with a single final [`reduce128`] instead of one
-/// reduction per term (the generic `sum_array`/`+`-chain default pays a full `add`, ~9 ops
-/// including a canonicalize step, for every term).
-///
-/// Each term is a single (arbitrary, possibly non-canonical) 64-bit value, i.e. a 128-bit
-/// value with a zero high half, so — unlike [`dot_pairs`] — no bit-96 split
-/// is needed: accumulating with plain wrapping 128-bit-per-lane addition (carry from the low
-/// word into the high word on overflow) gives the *exact* sum as long as `N < 2^64`, which
-/// always holds. `reduce128` finishes it.
+/// Delayed-reduction sum of the original packed input, keeping only the wrapped low word and a
+/// carry count. Each input is an arbitrary 64-bit value, so the exact sum is
+/// `acc_lo + carry_count * 2^64`; on wasm32, `N <= 2^32 - 1` and `carry_count <= N - 1`.
 #[inline]
-fn sum_delayed_reduce<const N: usize>(terms: &[v128; N]) -> v128 {
-    let mut acc_hi = u64x2_splat(0);
-    let mut acc_lo = u64x2_splat(0);
+fn sum_delayed_reduce<const N: usize>(terms: &[PackedGoldilocksWasmSimd128]) -> v128 {
+    let mut acc_lo = terms[0].to_vector();
+    let mut carry_count = u64x2_splat(0);
 
-    for &term in terms {
+    for term in &terms[1..] {
+        let term = term.to_vector();
         let new_lo = i64x2_add(acc_lo, term);
-        let carry = unsigned_lt_as_carry(new_lo, acc_lo);
-        acc_hi = i64x2_add(acc_hi, carry);
+        carry_count = i64x2_add(carry_count, unsigned_add_carry(acc_lo, term, new_lo));
         acc_lo = new_lo;
     }
 
-    reduce128(acc_hi, acc_lo)
+    // `2^64 ≡ EPSILON (mod P)`, so the high carry count contributes
+    // `correction = (carry_count << 32) - carry_count`. The largest possible count is
+    // `2^32 - 2`, making `correction <= (2^32 - 2)(2^32 - 1) < P`; the shift and subtraction
+    // therefore cannot wrap. The stronger bound `correction <= 0xffffffff00000000` satisfies
+    // `add_small_64s_64_s`'s precondition for an arbitrary pre-shifted `acc_lo`, so one overflow
+    // correction is sufficient and no full `reduce128` is needed.
+    let correction = i64x2_sub(i64x2_shl(carry_count, 32), carry_count);
+    shift(add_small_64s_64_s(shift(acc_lo), correction))
 }
 
 /// Goldilocks modular multiplication. Computes `x * y mod FIELD_ORDER`.
@@ -593,6 +622,52 @@ mod tests {
         crate::PackedGoldilocksWasmSimd128(super::SPECIAL_VALS)
     );
 
+    /// Check the carry helper directly, including both operand orderings and values at the
+    /// full `u64` boundary. The delayed sum and dot tests below exercise this helper indirectly,
+    /// but their arithmetic can otherwise mask an operand-ordering error in carry detection.
+    #[test]
+    fn unsigned_add_carry_matches_wrapping_add() {
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        fn check(a: [u64; 2], b: [u64; 2]) {
+            let sum = [a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1])];
+            let carry = super::unsigned_add_carry(
+                unsafe { core::mem::transmute::<[u64; 2], core::arch::wasm32::v128>(a) },
+                unsafe { core::mem::transmute::<[u64; 2], core::arch::wasm32::v128>(b) },
+                unsafe { core::mem::transmute::<[u64; 2], core::arch::wasm32::v128>(sum) },
+            );
+            let carry: [u64; 2] =
+                unsafe { core::mem::transmute::<core::arch::wasm32::v128, [u64; 2]>(carry) };
+            assert_eq!(carry[0], u64::from(sum[0] < a[0]));
+            assert_eq!(carry[1], u64::from(sum[1] < a[1]));
+        }
+
+        const EDGES: [u64; 8] = [
+            0,
+            1,
+            2,
+            0x7FFF_FFFF_FFFF_FFFF,
+            0x8000_0000_0000_0000,
+            0xFFFF_FFFF_0000_0000,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+        for &a in &EDGES {
+            for &b in &EDGES {
+                check([a, b], [b, a]);
+                check([b, a], [a, b]);
+            }
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x00CA_770F_F1CE);
+        for _ in 0..4096 {
+            let a = [rng.random(), rng.random()];
+            let b = [rng.random(), rng.random()];
+            check(a, b);
+        }
+    }
+
     /// Adversarial + random coverage for `sum_array`'s delayed-reduction path (`N > 2`),
     /// across every lane independently.
     #[test]
@@ -656,6 +731,62 @@ mod tests {
         check_random_n!(11, 16);
         check_random_n!(15, 16);
         check_random_n!(64, 8);
+    }
+
+    /// Compare every sum lane with an independent full-u64 sum modulo the field order. The
+    /// scalar Goldilocks sum is deliberately not used as the oracle here because it shares the
+    /// delayed-reduction shape that this packed implementation exercises.
+    #[test]
+    fn sum_array_full_u64_oracle() {
+        use p3_field::{PackedValue, PrimeCharacteristicRing, PrimeField64};
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        fn oracle(values: &[u64]) -> u64 {
+            (values.iter().map(|&value| u128::from(value)).sum::<u128>()
+                % u128::from(Goldilocks::ORDER_U64)) as u64
+        }
+
+        fn check<const N: usize>(terms0: [u64; N], terms1: [u64; N]) {
+            let packed: [PackedGoldilocksWasmSimd128; N] = core::array::from_fn(|i| {
+                PackedGoldilocksWasmSimd128([
+                    Goldilocks::new(terms0[i]),
+                    Goldilocks::new(terms1[i]),
+                ])
+            });
+            let actual = PackedGoldilocksWasmSimd128::sum_array::<N>(&packed);
+
+            assert_eq!(actual.as_slice()[0].as_canonical_u64(), oracle(&terms0));
+            assert_eq!(actual.as_slice()[1].as_canonical_u64(), oracle(&terms1));
+        }
+
+        macro_rules! check_length {
+            ($rng:ident, $n:literal, $count:literal) => {{
+                check::<$n>([u64::MAX; $n], [0; $n]);
+                check::<$n>([0xFFFF_FFFF_0000_0000; $n], [u64::MAX; $n]);
+                for _ in 0..$count {
+                    let terms0 = core::array::from_fn(|_| $rng.random::<u64>());
+                    let terms1 = core::array::from_fn(|_| $rng.random::<u64>());
+                    check::<$n>(terms0, terms1);
+                }
+            }};
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x5A_0B17_5EED);
+        check_length!(rng, 0, 16);
+        check_length!(rng, 1, 16);
+        check_length!(rng, 2, 16);
+        check_length!(rng, 3, 16);
+        check_length!(rng, 4, 16);
+        check_length!(rng, 5, 16);
+        check_length!(rng, 6, 16);
+        check_length!(rng, 7, 16);
+        check_length!(rng, 11, 16);
+        check_length!(rng, 15, 16);
+        check_length!(rng, 16, 16);
+        check_length!(rng, 32, 16);
+        check_length!(rng, 64, 8);
+        check_length!(rng, 129, 4);
     }
 
     /// Adversarial + random coverage for `dot_product`'s delayed-reduction path (`N > 1`),
