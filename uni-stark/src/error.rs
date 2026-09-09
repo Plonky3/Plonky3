@@ -108,6 +108,19 @@ pub enum InvalidProofShapeError {
     /// Opened values (trace, quotient, random) don't match expected dimensions.
     #[error("opened values do not match expected dimensions")]
     OpenedValuesDimensionMismatch,
+    /// The out-of-domain grinding witness is not the value a zero difficulty admits.
+    ///
+    /// Checked with the other proof-shape rejections, before any transcript work.
+    //
+    // Why: at `ood_pow_bits = 0` neither side touches the sponge.
+    //
+    //     prover  : grind(0)            -> returns zero, absorbs nothing
+    //     verifier: the Pow step is elided, so no witness is read at all
+    //
+    // `ood_pow_witness` is then bound to nothing: any value rides along and still verifies.
+    // Zero is the only value an honest prover emits, so zero is the only value accepted.
+    #[error("out-of-domain grinding witness is nonzero at zero difficulty, expected zero")]
+    NonCanonicalOodPowWitness,
 }
 
 /// Reasons a periodic column cannot be evaluated.

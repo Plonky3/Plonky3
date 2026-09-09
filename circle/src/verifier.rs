@@ -5,7 +5,7 @@ use itertools::{Itertools, izip};
 use p3_commit::Mmcs;
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
-use p3_fri::verifier::FriError;
+use p3_fri::verifier::{FriError, PowPhase};
 use p3_fri::{FriFoldingStrategy, FriParameters};
 use p3_matrix::Dimensions;
 
@@ -38,6 +38,7 @@ use crate::{CircleCommitPhaseMultiStep, CircleFriProof};
 /// - The proof declares a round count the configuration does not fix.
 /// - A per-round list does not carry one entry per round, or one entry per query.
 /// - A round declares an arity outside `1..=max_log_arity`.
+/// - A grinding witness is not the value its zero difficulty admits.
 pub(crate) fn validate_proof_shape<Challenge, M, Witness, InputProof, InputErr>(
     params: &FriParameters<M>,
     proof: &CircleFriProof<Challenge, M, Witness, InputProof>,
@@ -46,6 +47,7 @@ pub(crate) fn validate_proof_shape<Challenge, M, Witness, InputProof, InputErr>(
 where
     Challenge: Field,
     M: Mmcs<Challenge>,
+    Witness: Field,
     InputErr: core::fmt::Debug,
 {
     // Reject a vacuous instance before any transcript work.
@@ -91,6 +93,33 @@ where
         return Err(FriError::CommitPowWitnessCountMismatch {
             expected: num_commit_rounds,
             got: proof.commit_pow_witnesses.len(),
+        });
+    }
+
+    // A zero difficulty leaves both witnesses unread, so their values are pinned here
+    // rather than by their grinds.
+    //
+    // Why: `check_witness` returns `true` at zero bits without absorbing, and the
+    // transcript elides the step, so nothing downstream compares the field to anything.
+    //
+    //     bits = 0 -> prover emits zero, verifier reads nothing -> pin the field here
+    //     bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
+    //
+    // Every commit-round entry is pinned, not only the count checked just above: a count
+    // check is not a value check.
+    if params.commit_proof_of_work_bits == 0
+        && proof
+            .commit_pow_witnesses
+            .iter()
+            .any(|w| *w != Witness::ZERO)
+    {
+        return Err(FriError::NonCanonicalPowWitness {
+            phase: PowPhase::CommitPhase,
+        });
+    }
+    if params.query_proof_of_work_bits == 0 && proof.pow_witness != Witness::ZERO {
+        return Err(FriError::NonCanonicalPowWitness {
+            phase: PowPhase::Query,
         });
     }
 

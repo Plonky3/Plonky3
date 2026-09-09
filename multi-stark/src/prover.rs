@@ -14,6 +14,7 @@ use crate::instance::ProverParts;
 use crate::lookup::prove_lookup;
 use crate::proof::MultiStarkProof;
 use crate::security::{SecurityError, assess_statement};
+use crate::transcript::{MultiStarkProverTranscript, MultiStarkShape};
 use crate::zerocheck::AirZerocheck;
 
 /// Prove only when the complete statement's security assessment meets `target_bits`.
@@ -51,17 +52,21 @@ where
 /// This entry point enforces no minimum security level. Use [`prove_with_security`]
 /// to assess all reduction and opening terms and reject unsupported or weak parameters.
 ///
-/// The phases share one transcript:
+/// The phases share one statement-level transcript, which records every one of them:
 ///
 /// ```text
-///     1. absorb batched preprocessed commitment (if any)
-///     2. commit(main trace tables) -> absorb main commitment
-///     3. absorb public values, then reduce the lookup fractions (if any)
-///     4. zerocheck reduction       -> bound point r, sumcheck transcript
-///     5. open main tables at r     -> openings bound to the main commitment
-///     6. open preprocessed tables at r (if any)
-///                                  -> openings bound to the preprocessed commitment
+///     1. bind batched preprocessed commitment (if any)
+///     2. commit(main trace tables)  -> the scheme absorbs the main commitment
+///     3. bind public values, one step per instance
+///     4. lookup reduction (if any)  -> delegated
+///     5. zerocheck reduction        -> delegated, yields bound point r
+///     6. open main tables at r      -> delegated, openings bound to the main commitment
+///     7. open preprocessed tables at r (if any)
+///                                   -> delegated, bound to the preprocessed commitment
 /// ```
+///
+/// Phases 2 and 4 through 7 run inside a recorded `Begin`/`End` bracket.
+/// The pattern player therefore rejects a run that skips one or reorders two.
 ///
 /// Main trace tables are committed together in input-instance order. Each table
 /// is still opened at the suffix of the common zerocheck point matching that
@@ -86,6 +91,8 @@ where
 /// - The trace arity must meet the commitment scheme's padding floor.
 /// - This keeps the committed successor view in the same frame as zerocheck.
 /// - The prover instances must all use the same proving key.
+/// - The proving key must carry a preprocessed commitment exactly when an AIR declares columns.
+/// - Every instance must supply the public-value count its AIR declares.
 /// - The preprocessed key width must match the AIR's declared preprocessed width.
 /// - A preprocessed key, when present, must have the same height as the main trace.
 /// - A periodic column's period must be a power of two dividing the trace height.
@@ -131,16 +138,31 @@ where
         "every trace arity must be at least the commitment scheme's padding floor"
     );
 
-    // 1. Absorb the reusable batched preprocessed commitment before any challenge depends on it.
-    if let Some(preprocessed) = &proving_key.preprocessed {
-        challenger.observe(preprocessed.commitment.clone());
-    }
-
-    // 2. Commit all main trace tables in instance order. The scheme absorbs its
-    // commitment into the transcript.
+    // Describe the statement before binding anything into it.
+    //
+    // Every number comes from the AIRs, from the tables this caller holds, and from `pow_bits`.
+    // No proof exists yet, so none of them can come from one.
     let num_instances = instances.len();
+    let airs = instances.airs();
+    let public_values = instances.public_values();
+    let mut transcript = MultiStarkProverTranscript::<C::Challenger, C::Val>::new(
+        challenger,
+        MultiStarkShape::new::<C::Val, A>(&airs, &instances.num_variables(), pow_bits),
+    );
+
+    // 1. Bind the reusable batched preprocessed commitment before any challenge depends on it.
+    transcript.preprocessed_commitment(
+        proving_key
+            .preprocessed
+            .as_ref()
+            .map(|preprocessed| preprocessed.commitment.clone()),
+    );
+
+    // 2. Commit all main trace tables in instance order, inside the delegation bracket.
+    // The scheme absorbs the commitment it produces, so the bracket records where that lands.
     let witness = config.build_witness(tables);
-    let (commitment, prover_data) = config.pcs().commit(witness, challenger);
+    let (commitment, prover_data) =
+        transcript.main_commitment(|challenger| config.pcs().commit(witness, challenger));
 
     // Keep commitment-bound table views for zerocheck, one per instance.
     let tables = (0..num_instances)
@@ -167,50 +189,57 @@ where
         })
         .collect::<Vec<_>>();
 
-    // 3. Materialize the lookup fractions and reduce them.
-    // The resulting claim feeds the coupled AIR sumcheck below.
-    let airs = instances.airs();
-    let public_values = instances.public_values();
-    // Public values belong to the whole statement.
-    // Bind them once, before either phase samples a challenge.
-    for values in &public_values {
-        challenger.observe_algebra_slice(values);
-    }
-    let (lookup_proof, lookup_data) = prove_lookup::<C::Val, C::Challenge, A, _>(
-        &airs,
-        &tables,
-        &preprocessed_tables,
-        &public_values,
-        challenger,
-    );
+    // 3. Bind the public values, one step per instance.
+    // They belong to the whole statement, so they land before either phase samples anything.
+    transcript.public_values(&public_values);
 
-    // 4. Reduce all AIR constraints to one batched sumcheck and one bound point.
+    // 4. Materialize the lookup fractions and reduce them, inside the delegation bracket.
+    // The resulting claim feeds the coupled AIR sumcheck below.
+    let (lookup_proof, lookup_data) = transcript.lookup_argument(|challenger| {
+        prove_lookup::<C::Val, C::Challenge, A, _>(
+            &airs,
+            &tables,
+            &preprocessed_tables,
+            &public_values,
+            challenger,
+        )
+    });
+
+    // 5. Reduce all AIR constraints to one batched sumcheck and one bound point.
     // The committed prover opens columns through the commitment schemes below, so
     // the zerocheck's own opened values are not used as the final proof openings.
     let zerocheck = AirZerocheck::new(&airs, pow_bits);
-    let (zerocheck_proof, point) = zerocheck.prove_with_lookup::<C::Val, C::Challenge, _>(
-        &preprocessed_tables,
-        &tables,
-        &public_values,
-        lookup_data,
-        challenger,
-    );
+    let (zerocheck_proof, point) = transcript.zerocheck(|challenger| {
+        zerocheck.prove_with_lookup::<C::Val, C::Challenge, _>(
+            &preprocessed_tables,
+            &tables,
+            &public_values,
+            lookup_data,
+            challenger,
+        )
+    });
     let sumcheck = zerocheck_proof.sumcheck;
 
     drop(tables);
     drop(preprocessed_tables);
 
-    // 5. Open each main trace table at its suffix of the common bound point.
-    let opening = config.pcs().open_at(
-        prover_data,
-        &instances.opening_protocol(),
-        &instances.main_points(&point),
-        challenger,
-    );
+    // 6. Open each main trace table at its suffix of the common bound point.
+    let opening = transcript.main_opening(|challenger| {
+        config.pcs().open_at(
+            prover_data,
+            &instances.opening_protocol(),
+            &instances.main_points(&point),
+            challenger,
+        )
+    });
 
-    // 6. Open each non-empty preprocessed table at its suffix of the same bound point.
+    // 7. Open each non-empty preprocessed table at its suffix of the same bound point.
     // The setup commitment data is reused rather than rebuilt.
-    let preprocessed_opening = proving_key.preprocessed.as_ref().map(|preprocessed| {
+    let preprocessed_opening = transcript.preprocessed_opening(|challenger| {
+        let preprocessed = proving_key
+            .preprocessed
+            .as_ref()
+            .expect("preprocessed proving key is missing for an AIR with preprocessed columns");
         config.preprocessed_pcs().open_at(
             preprocessed.prover_data.clone(),
             &instances.preprocessed_opening_protocol(),
@@ -218,6 +247,9 @@ where
             challenger,
         )
     });
+
+    // Every described step has now been played.
+    transcript.finish();
 
     MultiStarkProof {
         commitment,

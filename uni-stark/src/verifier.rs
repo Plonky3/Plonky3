@@ -543,6 +543,15 @@ where
         return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch.into());
     }
 
+    // A zero grinding budget leaves the out-of-domain witness unread, so its value is
+    // pinned here rather than by the grind.
+    //
+    //     bits = 0 -> prover emits zero, verifier reads nothing -> pin the field here
+    //     bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
+    if config.ood_proof_of_work_bits() == 0 && *ood_pow_witness != Val::<SC>::ZERO {
+        return Err(InvalidProofShapeError::NonCanonicalOodPowWitness.into());
+    }
+
     // A preprocessed commitment is bound only when the width in force is positive.
     let preprocessed_commit = preprocessed_commit.filter(|_| preprocessed_width > 0);
 

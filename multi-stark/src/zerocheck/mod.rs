@@ -25,7 +25,8 @@ use p3_lookup::InteractionSymbolicBuilder as SymbolicAirBuilder;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::generic_degree::{
-    GenericDegreeError, GenericDegreeProof, ProverTranscript, RoundPolyInterpolator,
+    GenericDegreeError, GenericDegreeProof, GenericDegreeShape, ProverTranscript,
+    RoundPolyInterpolator,
 };
 use p3_sumcheck::layout::Table;
 use thiserror::Error;
@@ -555,13 +556,9 @@ impl<'a, A> AirZerocheck<'a, A> {
         // They never touch the challenger directly, so this loop cannot drift from the
         // verifier, which replays the same description.
         let (proof, challenges, states) = transcript.constraint_sumcheck(|challenger| {
-            let mut sumcheck = ProverTranscript::<Challenger, F, EF>::new(
-                challenger,
-                log_height,
-                transmitted_degree,
-                self.pow_bits,
-                claimed_sum,
-            );
+            let shape = GenericDegreeShape::new(log_height, transmitted_degree, self.pow_bits);
+            let mut sumcheck =
+                ProverTranscript::<Challenger, F, EF>::new(challenger, shape, claimed_sum);
 
             let mut proof = GenericDegreeProof {
                 claimed_sum,

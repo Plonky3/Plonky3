@@ -8,7 +8,7 @@ use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
 
 use super::proof::GenericDegreeProof;
-use super::transcript::ProverTranscript;
+use super::transcript::{GenericDegreeShape, ProverTranscript};
 
 /// Per-round callback used to drive the prover loop.
 ///
@@ -81,13 +81,9 @@ pub trait RoundProver<EF> {
         let mut challenges = Vec::with_capacity(num_rounds);
 
         // Seeding binds the shape and the claimed sum before the first round.
-        let mut transcript = ProverTranscript::<Challenger, F, EF>::new(
-            challenger,
-            num_rounds,
-            degree,
-            pow_bits,
-            claimed_sum,
-        );
+        let shape = GenericDegreeShape::new(num_rounds, degree, pow_bits);
+        let mut transcript =
+            ProverTranscript::<Challenger, F, EF>::new(challenger, shape, claimed_sum);
 
         for _ in 0..num_rounds {
             let evals = self.round_poly();
@@ -346,7 +342,7 @@ mod binary_tests {
     use p3_multilinear_util::poly::Poly;
 
     use super::RoundProver;
-    use crate::generic_degree::transcript::domain_separator;
+    use crate::generic_degree::transcript::GenericDegreeShape;
 
     type F = BinaryField128;
     type Ch = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
@@ -423,7 +419,9 @@ mod binary_tests {
     fn binary_sumcheck_seed_binds_rounds_degree_and_grinding() {
         let sample = |rounds, degree, pow_bits| {
             let mut challenger = fresh_challenger();
-            domain_separator::<F, F>(rounds, degree, pow_bits).seed(&mut challenger);
+            GenericDegreeShape::new(rounds, degree, pow_bits)
+                .domain_separator::<F, F>()
+                .seed(&mut challenger);
             CanSample::<F>::sample(&mut challenger)
         };
         let baseline = sample(4, 3, 0);

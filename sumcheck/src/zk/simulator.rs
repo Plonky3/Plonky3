@@ -2,9 +2,10 @@
 
 use alloc::vec::Vec;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field, HornerIter};
+use p3_field::{ExtensionField, HornerIter};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncodingWithRandomness;
@@ -12,6 +13,8 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::data::ZkSumcheckData;
+use super::prover::common::{mask_endpoints, sample_masks};
+use super::transcript::{ZkProverTranscript, ZkSumcheckShape};
 use super::verifier::ZkVerifier;
 
 /// Witness-free HVZK simulator (Lemma 6.4).
@@ -24,6 +27,21 @@ use super::verifier::ZkVerifier;
 /// - Sample and commit fresh masks just like the prover.
 /// - Sample each wire coordinate uniformly over `EF` (the honest joint distribution).
 /// - Reconstruct the dropped `c_1` from the affine identity, so every simulated wire verifies by construction.
+///
+/// # Indistinguishability
+///
+/// The transcript is played through the prover's own description.
+///
+/// It runs over the prover's own mask helpers, not a copy of them.
+///
+/// ```text
+///     shape    ->  ZkSumcheckShape::new_batching, exactly as the layout prover builds it
+///     prelude  ->  the same drawn batching challenge
+///     masks    ->  sample_masks, then mask_endpoints
+///     rounds   ->  the same wire, grinding and challenge steps
+/// ```
+///
+/// A step this simulator plays out of order is a pattern failure, not a silent loss of hiding.
 ///
 /// # Scope
 ///
@@ -48,7 +66,7 @@ use super::verifier::ZkVerifier;
 ///
 /// # Panics
 ///
-/// Same precondition checks as the prover.
+/// When the configuration cannot describe a masked batch, exactly as the prover panics.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn simulate_classic_unpacked<F, EF, Enc, M, Challenger, R>(
     challenger: &mut Challenger,
@@ -60,7 +78,7 @@ pub fn simulate_classic_unpacked<F, EF, Enc, M, Challenger, R>(
     rng: &mut R,
 ) -> (ZkSumcheckData<F, EF>, M::Commitment, Point<EF>)
 where
-    F: Field,
+    F: TranscriptField,
     EF: ExtensionField<F>,
     Enc: ZkEncodingWithRandomness<EF>,
     Enc::Codeword: Matrix<EF>,
@@ -73,73 +91,55 @@ where
     let k = folding_factor;
     let ell_zk = encoding.message_len();
 
-    // Lemma 6.4 hypotheses.
-    assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
-    assert!(
-        ell_zk >= 3,
-        "mask degree ell_zk - 1 must cover the degree-2 plain piece (ell_zk >= 3)",
-    );
-    assert!(k >= 1, "sumcheck requires at least one round");
+    // The same description the layout prover builds from the same three numbers.
+    let shape = ZkSumcheckShape::new_batching(k, ell_zk, pow_bits);
+    shape
+        .validate::<F>()
+        .expect("a simulator's own configuration must describe a masked batch");
 
-    // Phase 1: sample alpha and derive mu (replays Construction 6.3 prelude).
+    let mut transcript = ZkProverTranscript::<Challenger, F, EF>::new(challenger, shape);
+
+    // Phase 1: draw alpha and derive mu (replays Construction 6.3 prelude).
     //
     // Honest prover's transcript order after the claim phase:
     //
-    //     alpha  ->  mask commits  ->  mu_tilde  ->  eps  ->  wires
+    //     alpha  ->  mask commit  ->  mu_tilde  ->  eps  ->  wires
     //
     // `verifier.sum(alpha)` reads only the recorded claims, so Lemma 6.4's witness-freeness is preserved.
-    let alpha: EF = challenger.sample_algebra_element();
+    let alpha: EF = transcript.batching_challenge();
     let mu = verifier.sum(alpha);
 
-    // Phase 2: sample, encode, commit, observe masks (Construction 6.3 step 1 replay).
+    // Phase 2: sample, encode and commit the masks (Construction 6.3 step 1 replay).
     //
     // Uniform messages produce uniform Reed-Solomon codewords.
     // Their Merkle commits are indistinguishable from the honest prover's (zero simulator error for RS).
-
-    let masks: Vec<Vec<EF>> = (0..k).map(|_| encoding.sample_message(rng)).collect();
-
-    // Draw explicit randomness in the same order as the prover, batch encode
-    // the masks into one width-`k` matrix, and commit once.
-    let mask_randomness: Vec<Vec<EF>> = masks
-        .iter()
-        .map(|_| encoding.sample_randomness(rng))
-        .collect();
-    let (mask_commitment, _prover_data) =
-        mmcs.commit_matrix(encoding.encode_batch_with_randomness(&masks, &mask_randomness));
-    challenger.observe(mask_commitment.clone());
+    //
+    // The prover's own helper draws them, so the two draw sequences cannot drift.
+    let (masks, _mask_randomness, (mask_commitment, _prover_data)) =
+        sample_masks::<EF, _, _, _>(k, encoding, mmcs, rng);
 
     // Phase 3: mu_tilde via the closed form (Construction 6.3 step 2 replay).
     //
     //     mu_tilde = 2^{k-1} * sum_l ( s_l(0) + s_l(1) )
-    //              = 2^{k-1} * sum_l ( mask[0].double() + sum(mask[1..]) )
     //
     // Byte-equivalent to the honest prover under matched RNG seeds.
-    let two_to_k_minus_1 = EF::TWO.exp_u64((k - 1) as u64);
-    let mu_tilde: EF = two_to_k_minus_1
-        * masks
-            .iter()
-            .map(|m| m[0].double() + m[1..].iter().copied().sum::<EF>())
-            .sum::<EF>();
+    let (mu_tilde, _endpoints) = mask_endpoints::<EF>(&masks, k);
 
-    // Observe mu_tilde and sample the combining challenge.
-    challenger.observe_algebra_element(mu_tilde);
-    let eps: EF = challenger.sample_algebra_element();
+    // Bind the oracle and mu_tilde, then draw the combining challenge.
+    let eps: EF = transcript.masks(mask_commitment.clone(), mu_tilde);
 
     // Phase 4: per-round wire sampling (Construction 6.3 step 4 simulated; every coordinate uniform over EF).
     //
     // Wire shape (linear coefficient c_1 dropped):
     //
-    //     h_size    = max(ell_zk, 3)
-    //     wire_size = h_size - 1
+    //     wire_size = max(ell_zk, 3) - 1
     //
     //     wire = [ c_0, c_2, c_3, ..., c_d ]
-    let h_size = ell_zk.max(3);
-    let wire_size = h_size - 1;
+    let wire_size = shape.wire_len();
 
     // Output container; metadata fields populated up front.
     let mut zk_data = ZkSumcheckData::<F, EF> {
         mu_tilde,
-        ell_zk,
         round_coefficients: Vec::with_capacity(k),
         pow_witnesses: Vec::with_capacity(if pow_bits > 0 { k } else { 0 }),
     };
@@ -153,16 +153,9 @@ where
         // (Lemma 6.4 with `F := EF`).
         let wire: Vec<EF> = (0..wire_size).map(|_| rng.random::<EF>()).collect();
 
-        // Absorb the wire on the transcript.
-        challenger.observe_algebra_slice(&wire);
-
-        // Drive the grind step when enabled.
-        if pow_bits > 0 {
-            zk_data.pow_witnesses.push(challenger.grind(pow_bits));
-        }
-
-        // Sample the per-round challenge.
-        let gamma_j: EF = challenger.sample_algebra_element();
+        // One call binds the wire, grinds when enabled, and draws the challenge.
+        let (gamma_j, witness) = transcript.round(&wire);
+        zk_data.pow_witnesses.extend(witness);
 
         // Reconstruct c_1:
         //
@@ -184,6 +177,9 @@ where
         zk_data.round_coefficients.push(wire);
         randomness.push(gamma_j);
     }
+
+    // Every described step has been played, so the sponge goes back to the caller.
+    transcript.finish();
 
     (zk_data, mask_commitment, Point::new(randomness))
 }
@@ -515,7 +511,6 @@ mod tests {
                     round_idx,
                 );
             }
-            prop_assert_eq!(sim_zk_data.ell_zk, ell_zk, "ell_zk header must match the encoding");
             prop_assert!(
                 sim_zk_data.pow_witnesses.is_empty(),
                 "pow_witnesses must be empty when pow_bits == 0",
@@ -563,6 +558,136 @@ mod tests {
                 replay.err(),
             );
         }
+    }
+
+    /// Replay one recorded masked batch through a bare prover-side driver.
+    ///
+    /// Reads nothing but the description and the values the batch bound.
+    /// Returns the per-round challenges the driver draws.
+    fn replay_through_the_description(
+        challenger: &mut MyChallenger,
+        shape: ZkSumcheckShape,
+        mask_commitment: <MyMmcs as Mmcs<EF>>::Commitment,
+        zk_data: &ZkSumcheckData<F, EF>,
+    ) -> Vec<EF> {
+        let mut transcript = ZkProverTranscript::<MyChallenger, F, EF>::new(challenger, shape);
+        let _alpha = transcript.batching_challenge();
+        let _eps = transcript.masks(mask_commitment, zk_data.mu_tilde);
+        let gammas = zk_data
+            .round_coefficients
+            .iter()
+            .map(|wire| transcript.round(wire).0)
+            .collect();
+        transcript.finish();
+        gammas
+    }
+
+    #[test]
+    fn the_simulator_and_the_prover_play_one_description() {
+        // Invariant: honest-verifier zero knowledge needs both parties on one step sequence.
+        //
+        // Neither party keeps a private copy of the masking prelude.
+        //
+        // Both build the same shape from the same three numbers, and both drive it.
+        //
+        // What this pins is that each party's challenge stream is reproduced by a bare driver
+        // over that description alone, fed only the values the party bound.
+        //
+        //     party      | bound values                          | stream
+        //     -----------+---------------------------------------+---------------
+        //     prover     | its commitment, mu_tilde, its wires   | its gammas
+        //     simulator  | its commitment, mu_tilde, its wires   | its gammas
+        //
+        // A step either party played out of order would make the bare driver panic on the
+        // description, or land on a different stream.
+        //
+        // Fixture state: n_vars = 6, folding = 2, ell_zk = 4, num_virtual = 1, seed = 11.
+        //
+        // PoW is disabled, so the replay draws no witness of its own.
+        let n_vars = 6;
+        let folding_factor = 2;
+        let ell_zk = 4;
+        let num_virtual = 1;
+        let pow_bits = 0;
+        let seed = 11u64;
+
+        let shape = ZkSumcheckShape::new_batching(folding_factor, ell_zk, pow_bits);
+
+        // Honest run.
+        //
+        // The verifier-side challenger sits at the post-claim state both parties
+        // start their batch from.
+        let real_run = run_prover(
+            VariableOrder::Prefix,
+            n_vars,
+            folding_factor,
+            ell_zk,
+            0,
+            num_virtual,
+            pow_bits,
+            seed,
+        );
+        let real_gammas: Vec<EF> = real_run.prover_randomness.iter().copied().collect();
+
+        // The layout prover's own stream, reproduced from the description alone.
+        let mut real_replay_ch = real_run.verifier_challenger.clone();
+        assert_eq!(
+            replay_through_the_description(
+                &mut real_replay_ch,
+                shape,
+                real_run.mask_commitment.clone(),
+                &real_run.zk_data,
+            ),
+            real_gammas,
+            "the layout prover's stream must come out of the shared description",
+        );
+
+        // Simulator run from a challenger driven to the same post-claim state.
+        let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
+        let mut verifier_sim = ZkVerifier::<F, EF>::new_prefix(&[TableShape::new(n_vars, 1)]);
+        let mut sim_ch = MyChallenger::new(perm);
+        for &eval in &real_run.virtual_evals {
+            verifier_sim.add_virtual_eval(eval, &mut sim_ch);
+        }
+        let mut sim_replay_ch = sim_ch.clone();
+        let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let (sim_zk_data, sim_commitment, sim_gammas) =
+            simulate_classic_unpacked::<F, EF, _, _, _, _>(
+                &mut sim_ch,
+                &verifier_sim,
+                folding_factor,
+                pow_bits,
+                &encoding,
+                &mmcs,
+                &mut sim_rng,
+            );
+
+        // The simulator's own stream, reproduced from the very same description.
+        assert_eq!(
+            replay_through_the_description(
+                &mut sim_replay_ch,
+                shape,
+                sim_commitment.clone(),
+                &sim_zk_data,
+            ),
+            sim_gammas.iter().copied().collect::<Vec<_>>(),
+            "the simulator's stream must come out of the shared description",
+        );
+
+        // Matched RNG seeds, so the masking prelude couples value for value.
+        assert_eq!(real_run.zk_data.mu_tilde, sim_zk_data.mu_tilde);
+        assert_eq!(real_run.mask_commitment, sim_commitment);
+
+        // The wires themselves are not equal, and Lemma 6.4 does not claim they are.
+        //
+        //     prover     ->  the round polynomial its masked witness produces
+        //     simulator  ->  a uniform draw over the same space
+        //
+        // What the two share is the description, which is what the assertions above pin.
+        assert_eq!(
+            real_run.zk_data.round_coefficients.len(),
+            sim_zk_data.round_coefficients.len(),
+        );
     }
 
     #[test]

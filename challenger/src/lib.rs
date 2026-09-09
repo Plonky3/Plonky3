@@ -17,6 +17,8 @@ mod grinding_challenger;
 mod hash_challenger;
 mod multi_field_challenger;
 mod serializing_challenger;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod testing;
 
 use alloc::vec::Vec;
 use core::array;
@@ -26,7 +28,7 @@ pub use grinding_challenger::*;
 pub use hash_challenger::*;
 pub use multi_field_challenger::*;
 pub use p3_field::UniformSamplingField;
-use p3_field::{Algebra, BasedVectorSpace, Field, PrimeField64};
+use p3_field::{Algebra, BasedVectorSpace, Field};
 pub use serializing_challenger::*;
 
 /// A generic trait for absorbing elements into the transcript.
@@ -219,7 +221,6 @@ impl<C, F: Field> FieldChallenger<F> for &mut C where C: FieldChallenger<F> {}
 
 impl<C, F> CanSampleUniformBits<F> for &mut C
 where
-    F: PrimeField64,
     C: CanSampleUniformBits<F>,
 {
     fn sample_uniform_bits<const RESAMPLE: bool>(
