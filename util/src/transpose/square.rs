@@ -67,7 +67,7 @@ unsafe fn transpose_in_place_square_small<T>(
 /// - `a` and `b` must be valid for `rows * cols` reads and writes.
 /// - The regions pointed to by `a` and `b` must be disjoint.
 /// - `width_outer_mat` must be large enough to avoid overlapping accesses during index calculations.
-pub(super) unsafe fn transpose_swap<T: Copy>(
+pub(super) unsafe fn transpose_swap<T: Send + Sync>(
     a: *mut T,
     b: *mut T,
     width_outer_mat: usize,
@@ -75,6 +75,8 @@ pub(super) unsafe fn transpose_swap<T: Copy>(
 ) {
     let size = rows * cols;
 
+    // Swaps preserve ownership of non-Copy values. Recursive branches operate on
+    // disjoint regions, and Send + Sync retains the entry point's threading contract.
     // Base case: directly swap A[i,j] with B[j,i] using pointer offsets
     if size < BASE_CASE_ELEMENT_THRESHOLD {
         for i in 0..rows {
@@ -210,7 +212,7 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
     log_size: usize,
     x: usize,
 ) where
-    T: Copy + Send + Sync,
+    T: Send + Sync,
 {
     // SAFETY: `arr.as_mut_ptr()` is valid for the accesses the recursion
     // below performs, per this function's own safety contract.
@@ -238,7 +240,7 @@ unsafe fn transpose_in_place_square_ptr<T>(
     log_size: usize,
     x: usize,
 ) where
-    T: Copy + Send + Sync,
+    T: Send + Sync,
 {
     // If small, switch to base case
     if log_size <= BASE_CASE_LOG {
