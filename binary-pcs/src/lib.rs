@@ -8,6 +8,7 @@ use p3_sumcheck::layout::SuffixProver;
 
 mod error;
 mod fold;
+mod grouped_mmcs;
 mod params;
 mod pcs;
 mod proof;
@@ -18,6 +19,7 @@ mod verifier;
 
 pub use error::BinaryPcsError;
 pub use fold::{fold_codeword, fold_pair};
+pub use grouped_mmcs::GroupedCodewordMmcs;
 pub use params::{BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams};
 pub use pcs::BinaryPcs;
 pub use proof::{BinaryPcsProof, RoundProof};
