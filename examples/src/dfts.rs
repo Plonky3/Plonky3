@@ -214,6 +214,24 @@ where
     }
 
     #[inline]
+    fn idft_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+        match self {
+            Self::Recursive(inner_dft) => inner_dft.idft_batch(mat),
+            Self::Parallel(inner_dft) => inner_dft.idft_batch(mat),
+            Self::SmallBatch(inner_dft) => inner_dft.idft_batch(mat),
+        }
+    }
+
+    #[inline]
+    fn coset_idft_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+        match self {
+            Self::Recursive(inner_dft) => inner_dft.coset_idft_batch(mat, shift),
+            Self::Parallel(inner_dft) => inner_dft.coset_idft_batch(mat, shift),
+            Self::SmallBatch(inner_dft) => inner_dft.coset_idft_batch(mat, shift),
+        }
+    }
+
+    #[inline]
     fn coset_lde_batch(
         &self,
         mat: RowMajorMatrix<F>,

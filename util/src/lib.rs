@@ -234,11 +234,13 @@ const _: () = assert!(SMALL_ARR_SIZE >= 4 * BIG_T_SIZE);
 
 /// Permutes `arr` such that each index is mapped to its reverse in binary.
 ///
+/// This permutation swaps elements without cloning or dropping them.
+///
 /// If the whole array fits in fast cache, then the trivial algorithm is cache friendly. Also, if
 /// `T` is really big, then the trivial algorithm is cache-friendly, no matter the size of the array.
 pub fn reverse_slice_index_bits<F>(vals: &mut [F])
 where
-    F: Copy + Send + Sync,
+    F: Send + Sync,
 {
     let n = vals.len();
     if n == 0 {
@@ -355,16 +357,21 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
     lb_num_chunks: usize,
     lb_chunk_size: usize,
 ) {
+    // Derive both chunk pointers from the entire slice: separate element borrows
+    // would not grant access to the whole chunk and could invalidate each other.
+    let ptr = vals.as_mut_ptr();
     for i in 0..1usize << lb_num_chunks {
         // `wrapping_shr` handles the silly case when `lb_num_chunks == 0`.
         let j = i
             .reverse_bits()
             .wrapping_shr(usize::BITS - lb_num_chunks as u32);
         if i < j {
+            // SAFETY: Both indices select complete chunks within the slice by the
+            // length precondition; i < j ensures the chunks do not overlap.
             unsafe {
                 core::ptr::swap_nonoverlapping(
-                    vals.get_unchecked_mut(i << lb_chunk_size),
-                    vals.get_unchecked_mut(j << lb_chunk_size),
+                    ptr.add(i << lb_chunk_size),
+                    ptr.add(j << lb_chunk_size),
                     1 << lb_chunk_size,
                 );
             }
@@ -1049,6 +1056,52 @@ mod tests {
                 vec![16, 17, 18, 19, 20]
             ]
         );
+    }
+
+    #[test]
+    fn test_reverse_slice_index_bits_strings() {
+        use alloc::string::ToString;
+
+        for log_n in 0..=14 {
+            let original: Vec<_> = (0..1 << log_n).map(|i| i.to_string()).collect();
+            let expected: Vec<_> = (0..original.len())
+                .map(|i| original[reverse_bits_len(i, log_n)].clone())
+                .collect();
+            let mut values = original.clone();
+            reverse_slice_index_bits(&mut values);
+            assert_eq!(values, expected, "log_n={log_n}");
+            reverse_slice_index_bits(&mut values);
+            assert_eq!(values, original, "involution at log_n={log_n}");
+        }
+    }
+
+    #[test]
+    fn test_reverse_slice_index_bits_preserves_owners() {
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        // Pointer-sized, non-Copy and non-Clone: large cases exercise the cache decomposition.
+        struct Owner<'a>(&'a AtomicUsize);
+        impl Drop for Owner<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        for log_n in 0..=15 {
+            let drops: Vec<_> = (0..1 << log_n).map(|_| AtomicUsize::new(0)).collect();
+            let mut values: Vec<_> = drops.iter().map(Owner).collect();
+            reverse_slice_index_bits(&mut values);
+            for (i, value) in values.iter().enumerate() {
+                assert!(core::ptr::eq(value.0, &drops[reverse_bits_len(i, log_n)]));
+            }
+            reverse_slice_index_bits(&mut values);
+            for (value, count) in values.iter().zip(&drops) {
+                assert!(core::ptr::eq(value.0, count));
+                assert_eq!(count.load(Ordering::Relaxed), 0);
+            }
+            drop(values);
+            assert!(drops.iter().all(|count| count.load(Ordering::Relaxed) == 1));
+        }
     }
 
     #[test]
