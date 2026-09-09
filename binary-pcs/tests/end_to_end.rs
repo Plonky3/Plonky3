@@ -209,6 +209,52 @@ fn a_zero_grinding_budget_round_trips() {
     }
 }
 
+/// Opening claims are compressed with successive powers of one 128-bit challenge. Seven
+/// claims therefore add a degree-six failure term to the field-error union bound. At this
+/// shape the fold and sumcheck numerator is already 11, so a 124-bit target permits at most
+/// six claims: the seventh raises the numerator above `2^(128 - 124) = 16`.
+#[test]
+fn verifier_rejects_opening_batches_below_the_configured_security_level() {
+    let num_variables = 1;
+    let mut rng = SmallRng::seed_from_u64(0xA17A);
+    let table = Table::rand(&mut rng, 1, num_variables);
+    let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(num_variables, 1),
+        (0..7)
+            .map(|_| OpeningBatch::new(vec![0], Vec::new()))
+            .collect(),
+    )]);
+
+    // The low-target prover and high-target verifier sample every fold pair at this tiny
+    // domain, so they otherwise produce and consume the same proof shape. This lets the test
+    // exercise the verifier's security gate without asking a fixed prover to emit a proof it
+    // now knows cannot meet its own target.
+    let prover_config = BinaryPcsConfig::try_new(num_variables, params(2, 0, 40)).unwrap();
+    let prover_pcs = BinaryPcs::new(prover_config, mmcs());
+    let mut prover_challenger = challenger();
+    let (commitment, prover_data) = prover_pcs.commit(witness, &mut prover_challenger);
+    let proof = prover_pcs.open(prover_data, protocol.clone(), &mut prover_challenger);
+
+    let verifier_config = BinaryPcsConfig::try_new(num_variables, params(2, 0, 124)).unwrap();
+    let verifier_pcs = BinaryPcs::new(verifier_config, mmcs());
+    let mut verifier_challenger = challenger();
+    let err = verifier_pcs
+        .verify(&commitment, &proof, &mut verifier_challenger, protocol)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            BinaryPcsError::OpeningClaimCountExceedsSecurityBudget {
+                actual: 7,
+                max: 6,
+                security_level: 124,
+            }
+        ),
+        "expected OpeningClaimCountExceedsSecurityBudget, got {err:?}"
+    );
+}
+
 /// The degenerate edge below `small_configurations_round_trip`'s sweep: `num_variables = 1`
 /// gives `num_fold_rounds() == 1`, so `fold_rounds`'s `rounds` vector is empty and every
 /// `num_fold_rounds - 1` derivation in the verifier bottoms out at zero rather than

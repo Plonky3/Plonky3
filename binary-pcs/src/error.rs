@@ -80,6 +80,17 @@ pub enum BinaryPcsError<MmcsError> {
     #[error("expected {expected} opening batches, proof carries {actual}")]
     OpeningBatchCountMismatch { expected: usize, actual: usize },
 
+    /// The opening batching challenge cannot retain the configured security target across
+    /// this many claimed evaluations.
+    #[error(
+        "opening protocol has {actual} claims, but at most {max} retain the configured {security_level}-bit security level"
+    )]
+    OpeningClaimCountExceedsSecurityBudget {
+        actual: usize,
+        max: usize,
+        security_level: usize,
+    },
+
     /// One opening batch has the wrong number of evaluations for its column list.
     #[error("table {table_idx} opening expected {expected} evaluations, got {actual}")]
     OpeningBatchSizeMismatch {

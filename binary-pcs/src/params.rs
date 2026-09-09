@@ -85,9 +85,15 @@ const fn log2_ceil_u128(value: u128) -> usize {
 ///
 /// Taking the ceiling of the logarithm rounds the result **down**, so this understates the
 /// achieved security by up to one bit rather than overstating it.
+const fn field_error_numerator(log_domain_size: usize, num_fold_rounds: usize) -> u128 {
+    (1u128 << log_domain_size) + 1 + 2 * num_fold_rounds as u128
+}
+
 const fn field_security_bits_at(log_domain_size: usize, num_fold_rounds: usize) -> usize {
-    let numerator = (1u128 << log_domain_size) + 1 + 2 * num_fold_rounds as u128;
-    ALPHABET_BITS.saturating_sub(log2_ceil_u128(numerator))
+    ALPHABET_BITS.saturating_sub(log2_ceil_u128(field_error_numerator(
+        log_domain_size,
+        num_fold_rounds,
+    )))
 }
 
 /// Parameters chosen by the caller.
@@ -103,7 +109,8 @@ pub struct BinaryPcsParams {
 
 /// The round schedule derived from [`BinaryPcsParams`] and the polynomial's arity.
 ///
-/// The schedule prices the field's width and the query count, and nothing else.
+/// The schedule prices the field's width, opening-claim batching, and the query count, and
+/// nothing else.
 /// In particular it does not price the commitment scheme, which is supplied separately.
 /// A digest narrower than `2 * security_level` bits leaves the reported level undeliverable.
 /// Supplying one wide enough is the caller's obligation.
@@ -352,6 +359,34 @@ impl BinaryPcsConfig {
         self.params.pow_bits
     }
 
+    /// Security target this configuration promises, in bits.
+    #[must_use]
+    pub const fn security_level(&self) -> usize {
+        self.params.security_level
+    }
+
+    /// Largest number of opening claims one batching challenge can combine while retaining
+    /// this configuration's security target.
+    ///
+    /// Combining `k` claimed evaluations with powers of one uniform field element adds a
+    /// `(k - 1) / |F|` failure term. This limit reserves that term alongside the fold and
+    /// sumcheck numerator already charged by [`Self::field_security_bits`].
+    #[must_use]
+    pub const fn max_opening_claims(&self) -> usize {
+        // Batched-fold configurations reserve half the target error for the query phase.
+        // Opening batching shares the remaining half with the other field-error terms.
+        let query_reserve = if self.log_folding_factor > 1 { 1 } else { 0 };
+        let target_numerator =
+            1u128 << (ALPHABET_BITS - self.params.security_level - query_reserve);
+        let base_numerator = self.field_error_numerator();
+        let max = target_numerator.saturating_sub(base_numerator) + 1;
+        if max > usize::MAX as u128 {
+            usize::MAX
+        } else {
+            max as usize
+        }
+    }
+
     /// Bits of security the sampled queries deliver.
     ///
     /// The query phase runs one test per distinct first-batch coset, capped at the
@@ -365,20 +400,25 @@ impl BinaryPcsConfig {
         REGIME.queries_error(self.params.log_inv_rate, self.num_queries)
     }
 
-    /// Bits of security the fold and sumcheck rounds leave, rounded down.
+    /// Bits of security the fold and sumcheck rounds leave before opening-claim batching,
+    /// rounded down.
     ///
     /// No query count buys these bits back. Batched configurations reserve one additional
     /// bit to add this error to the query error; see [`Self::try_with_folding`].
     #[must_use]
     pub const fn field_security_bits(&self) -> usize {
+        ALPHABET_BITS.saturating_sub(log2_ceil_u128(self.field_error_numerator()))
+    }
+
+    /// Numerator of the field-error terms, before opening-claim batching.
+    const fn field_error_numerator(&self) -> u128 {
         if self.log_folding_factor == 1 {
-            field_security_bits_at(self.log_domain_size(), self.num_fold_rounds())
+            field_error_numerator(self.log_domain_size(), self.num_fold_rounds())
         } else {
             // Sum the geometric series of all virtual codeword lengths and every
             // fold/sumcheck error. log_domain_size < usize::BITS leaves room in u128.
-            let numerator = (2u128 << self.log_domain_size()) - (2u128 << self.log_final_len())
-                + 3 * self.num_variables as u128;
-            ALPHABET_BITS.saturating_sub(log2_ceil_u128(numerator))
+            (2u128 << self.log_domain_size()) - (2u128 << self.log_final_len())
+                + 3 * self.num_variables as u128
         }
     }
 }
@@ -630,5 +670,44 @@ mod tests {
             large < small,
             "a larger domain must leave fewer bits: {large} vs {small}"
         );
+    }
+
+    /// At one variable and rate `2^-2`, the fold and sumcheck field-error numerator is 11.
+    /// A 124-bit target leaves a numerator budget of 16, so the alpha batching term can add
+    /// at most five more roots: six claims total.
+    #[test]
+    fn opening_claim_capacity_reserves_the_alpha_batching_term() {
+        let config = BinaryPcsConfig::try_new(
+            1,
+            BinaryPcsParams {
+                log_inv_rate: 2,
+                pow_bits: 0,
+                security_level: 124,
+            },
+        )
+        .unwrap();
+        assert_eq!(config.security_level(), 124);
+        assert_eq!(config.field_security_bits(), 124);
+        assert_eq!(config.max_opening_claims(), 6);
+    }
+
+    /// Batched folds use their larger geometric field-error numerator and retain the bit
+    /// reserved for composition with the query phase. Here that leaves 256 numerator units;
+    /// the folds and sumcheck spend 132, so 125 opening claims are the exact boundary.
+    #[test]
+    fn batched_folding_claim_capacity_preserves_the_query_reserve() {
+        let config = BinaryPcsConfig::try_new(
+            4,
+            BinaryPcsParams {
+                log_inv_rate: 2,
+                pow_bits: 0,
+                security_level: 119,
+            },
+        )
+        .unwrap()
+        .try_with_folding(2)
+        .unwrap();
+        assert_eq!(config.field_security_bits(), 120);
+        assert_eq!(config.max_opening_claims(), 125);
     }
 }

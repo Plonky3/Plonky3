@@ -52,6 +52,22 @@ impl<MT> BinaryPcs<MT> {
             encoder: AdditiveRsEncoder::default(),
         }
     }
+
+    fn opening_claim_count(protocol: &OpeningProtocol) -> usize {
+        protocol.iter_openings().fold(0usize, |count, (_, batch)| {
+            count.saturating_add(batch.len())
+        })
+    }
+
+    fn assert_protocol_security(&self, protocol: &OpeningProtocol) {
+        let actual = Self::opening_claim_count(protocol);
+        let max = self.config.max_opening_claims();
+        assert!(
+            actual <= max,
+            "opening protocol has {actual} claims, but at most {max} retain the configured {}-bit security level",
+            self.config.security_level()
+        );
+    }
 }
 
 impl<MT> BinaryPcs<MT>
@@ -100,15 +116,16 @@ where
     /// via [`Verifier::add_claim_at`], `None` samples the point from the transcript via
     /// [`Verifier::add_claim`], mirroring the prover's `eval_at`/`eval` choice.
     ///
-    /// `OpeningBatchCountMismatch`, both round-count checks, `FinalCodewordLengthMismatch` and
-    /// `NonEmptyPowWitnesses` run before this function performs any transcript operation of its
-    /// own, so a malformed proof is rejected rather than indexed out of bounds or used to
-    /// desync the replay. That does not mean the challenger itself is untouched: `verify`
-    /// observes the commitment before calling here, and `verify_at`'s contract requires the
-    /// caller to have done the same. `OpeningBatchSizeMismatch`, by contrast, is checked once
-    /// per claim inside the claim-recording loop below, after every earlier claim in the same
-    /// proof has already been absorbed — it is ordered only relative to its own claim, not to
-    /// the transcript as a whole.
+    /// `OpeningClaimCountExceedsSecurityBudget`, `OpeningBatchCountMismatch`, both round-count
+    /// checks, `FinalCodewordLengthMismatch` and `NonEmptyPowWitnesses` run before this function
+    /// performs any transcript operation of its own, so a malformed proof is rejected rather
+    /// than indexed out of bounds or used to desync the replay. That does not mean the
+    /// challenger itself is untouched: `verify` observes the commitment before calling here,
+    /// and `verify_at`'s contract requires the caller to have done the same.
+    /// `OpeningBatchSizeMismatch`, by contrast, is checked once per claim inside the
+    /// claim-recording loop below, after every earlier claim in the same proof has already been
+    /// absorbed — it is ordered only relative to its own claim, not to the transcript as a
+    /// whole.
     ///
     /// The per-round sumcheck replay is interleaved with each intermediate round's commitment
     /// observation, one `SumcheckData::verify_rounds` call per fold round, because a single
@@ -134,6 +151,16 @@ where
             + CanSampleUniformBits<BinaryField128>
             + CanObserve<MT::Commitment>,
     {
+        let opening_claims = Self::opening_claim_count(protocol);
+        let max_opening_claims = self.config.max_opening_claims();
+        if opening_claims > max_opening_claims {
+            return Err(BinaryPcsError::OpeningClaimCountExceedsSecurityBudget {
+                actual: opening_claims,
+                max: max_opening_claims,
+                security_level: self.config.security_level(),
+            });
+        }
+
         if protocol.num_openings() != proof.evals.len() {
             return Err(BinaryPcsError::OpeningBatchCountMismatch {
                 expected: protocol.num_openings(),
@@ -284,6 +311,7 @@ where
         protocol: Self::OpeningProtocol,
         challenger: &mut Challenger,
     ) -> Self::Proof {
+        self.assert_protocol_security(&protocol);
         let evals = protocol
             .iter_openings()
             .map(|(table_idx, batch)| prover_data.layout.eval(table_idx, batch, challenger))
@@ -329,6 +357,7 @@ where
         challenger: &mut Challenger,
     ) -> Self::Proof {
         assert_eq!(protocol.num_openings(), points.len());
+        self.assert_protocol_security(protocol);
         let evals = protocol
             .iter_openings()
             .zip(points)
