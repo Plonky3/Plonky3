@@ -36,11 +36,13 @@ pub const fn boost(error: ErrorBits, pow_bits: usize) -> ErrorBits {
 /// Each site is consumed by the term whose round it opens:
 ///
 /// - [`Self::out_of_domain`] is applied to the DEEP-ALI term by
-///   [`crate::stark::proven_security_report`] and
-///   [`crate::stark::conjectured_security_report`].
+///   [`crate::stark::proven_security_report`],
+///   [`crate::stark::conjectured_security_report`], and
+///   [`crate::stark::legacy_security_report`].
 /// - [`Self::batch_combination`] is applied to the batched-openings term by
-///   [`crate::stark::proven_security_report`] and
-///   [`crate::stark::conjectured_security_report`].
+///   [`crate::stark::proven_security_report`],
+///   [`crate::stark::conjectured_security_report`], and
+///   [`crate::stark::legacy_security_report`].
 /// - [`Self::lookup_challenge`] is applied to the LogUp fingerprint term by
 ///   [`crate::logup::security_term`].
 ///
@@ -71,9 +73,9 @@ pub struct GrindingSites {
     /// with nothing to batch there is no such round and these bits buy
     /// nothing.
     ///
-    /// Both the proven and the conjectured composites model this round, so
-    /// grinding here moves either report — the two grade it in different
-    /// proximity regimes, but the prover pays the same work regardless.
+    /// The proven, conjectured, and legacy composites all model this round.
+    /// They grade it in different proximity regimes, but the prover pays the
+    /// same work regardless.
     pub batch_combination: usize,
     /// Bits ground before the lookup / permutation argument's challenges are
     /// sampled.

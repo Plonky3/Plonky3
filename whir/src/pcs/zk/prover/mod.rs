@@ -132,6 +132,9 @@ where
         rng: &mut R,
     ) -> ZkWhirProof<F, EF, MT> {
         let config = self.config;
+        config
+            .validate_initial_claims(claims.len())
+            .unwrap_or_else(|error| panic!("{error}"));
         let num_variables = config.num_variables;
         let sumcheck_mask_encoding = config.sumcheck_mask.encoding::<EF>();
 
@@ -284,7 +287,7 @@ where
                 ood_answers.push(answer);
             }
 
-            // PoW, transcript checkpoint, STIR queries on the previous oracle.
+            // PoW, then STIR queries on the previous oracle.
             //
             //     pow_bits = 0  ->  no grind, zero witness on the wire
             let pow_witness = if round_params.pow_bits > 0 {
@@ -292,7 +295,6 @@ where
             } else {
                 F::ZERO
             };
-            challenger.sample();
             let stir_indexes = get_challenge_stir_queries::<Challenger, F>(
                 round_params.domain_size,
                 folding,

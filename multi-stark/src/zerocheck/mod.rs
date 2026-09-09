@@ -10,6 +10,8 @@
 //! The generic-degree sumcheck proves that sum.
 //! A zerocheck always claims zero, so the verifier rejects any proof that claims a different sum.
 
+pub mod transcript;
+
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -33,6 +35,9 @@ use crate::lookup::{ActiveLookupRuntime, AirLinkClaim, LookupRuntime};
 use crate::opening::{OpeningClaims, TableOpening};
 use crate::rounds::{AirDegrees, AirOpenings, RoundStateBase, RoundStateExt, Stage, StageCoupling};
 use crate::selectors::{BoundaryEvals, PeriodicError, periodic_evals_at, periodic_num_variables};
+use crate::zerocheck::transcript::{
+    ZerocheckChallenges, ZerocheckProverTranscript, ZerocheckShape, ZerocheckVerifierTranscript,
+};
 
 /// Reasons the zerocheck verifier rejects a proof.
 #[derive(Debug, Error)]
@@ -153,7 +158,7 @@ pub struct AirZerocheck<'a, A> {
 /// Panics if the AIR declares mutually-exclusive interactions.
 /// Panics if a declared family is constant, since a constant has no round polynomial.
 /// Panics if the AIR declares neither constraints nor interactions.
-fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
+pub(crate) fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -473,11 +478,22 @@ impl<'a, A> AirZerocheck<'a, A> {
         let air_log_height = indices_by_height.keys().copied().max().unwrap();
         let log_height = air_log_height.max(lookup_point.num_variables());
 
-        let (alpha, beta, eta, tau) = sample_zerocheck_challenges::<F, EF, Challenger>(
+        // One driver covers the whole zerocheck, challenges and delegated sumcheck alike.
+        let mut transcript = ZerocheckProverTranscript::<Challenger, F, EF>::new(
             challenger,
-            log_height,
-            lookup_point.as_slice(),
+            ZerocheckShape::new(
+                &degrees,
+                log_height,
+                lookup_point.num_variables(),
+                self.pow_bits,
+            ),
         );
+        let ZerocheckChallenges {
+            alpha,
+            beta,
+            eta,
+            tau,
+        } = transcript.challenges(lookup_point.as_slice());
         let tau = Point::new(tau);
         // Beta batches AIR contributions in caller order.
         // When a stage activates, it selects the beta powers for its original AIR indices.
@@ -535,165 +551,174 @@ impl<'a, A> AirZerocheck<'a, A> {
         // The zerocheck's equality weight contributes that extra degree.
         let transmitted_degree = max_degree + 1;
 
-        // The rounds below drive the shared sumcheck transcript.
+        // The rounds below drive the delegated sumcheck transcript.
         // They never touch the challenger directly, so this loop cannot drift from the
         // verifier, which replays the same description.
-        let mut transcript = ProverTranscript::<Challenger, F, EF>::new(
-            challenger,
-            log_height,
-            transmitted_degree,
-            self.pow_bits,
-            claimed_sum,
-        );
-
-        let mut proof = GenericDegreeProof {
-            claimed_sum,
-            round_polys: Vec::with_capacity(log_height),
-            pow_witnesses: Vec::with_capacity(if self.pow_bits > 0 { log_height } else { 0 }),
-        };
-
-        let mut challenges = Vec::with_capacity(log_height);
-        // Active stages live as folded extension states.
-        // claims[i] is the current reduced claim for states[i].
-        let mut states = Vec::<RoundStateExt<'_, '_, A, F, EF>>::new();
-        let mut claims = Vec::<EF>::new();
-
-        // Before any height activates, the full lookup claim is dormant.
-        let mut pending_claim = claimed_sum;
-
-        // All stages share the same global sumcheck point.
-        // eq_prefix covers folded rounds; eq_suffix covers the tail still inside each state.
-        let mut eq_prefix = EF::ONE;
-        let mut eq_suffix = Poly::new_from_point(&tau.as_slice()[1..], EF::ONE);
-
-        // Barycentric interpolators, indexed by internal degree, built once.
-        // A lower-degree stage is extrapolated up to the batch's max degree.
-        // Reusing prebuilt weights avoids recomputing them every round.
-        let interpolators = (0..=max_degree)
-            .map(RoundPolyInterpolator::<EF>::new)
-            .collect::<Vec<_>>();
-
-        for round in 0..log_height {
-            let num_vars = log_height - round;
-            let tau_round = tau.as_slice()[round];
-            let tau_round_inv = tau_round.inverse();
-
-            // `peek` only borrows the next stage; `next` below moves it into the round state.
-            let activates_stage = stages
-                .peek()
-                .is_some_and(|stage| num_vars == stage.num_vars);
-            let activating_claim = if activates_stage {
-                stages.peek().unwrap().lookup_claim(eta)
-            } else {
-                EF::ZERO
-            };
-            pending_claim -= activating_claim;
-
-            // Not-yet-active lookup stages remain represented by one dormant constant.
-            let mut round_poly_acc = vec![pending_claim; max_degree];
-            let mut round_polys = Vec::with_capacity(states.len());
-
-            // Existing stages already live over the extension field.
-            // Extend each stage's internal round polynomial to the global degree and accumulate it.
-            for (state, &claim) in states.iter_mut().zip(claims.iter()) {
-                let round_poly = state.round_poly(&eq_suffix);
-                let q1 = (claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
-                let unweighted_claim = round_poly[0] + q1;
-                let round_poly = interpolators[round_poly.len()].extend_evals(
-                    &round_poly,
-                    unweighted_claim,
-                    max_degree,
-                );
-                EF::add_slices(&mut round_poly_acc, &round_poly);
-                round_polys.push(round_poly);
-            }
-
-            // A stage activates when the global cube reaches its trace height.
-            // Its private lookup claim supplies the omitted node-one evaluation.
-            let mut new_state = None;
-            if activates_stage {
-                let stage = stages.next().unwrap();
-                let tau = Point::new(tau.as_slice()[round..].to_vec());
-                let betas = stage
-                    .indices
-                    .iter()
-                    .map(|&air_index| beta_powers[air_index])
-                    .collect::<Vec<_>>();
-                let mut state = RoundStateBase::new(stage, alpha, eta, betas, tau);
-                let round_poly = state.round_poly(&eq_suffix);
-                let q1 = (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
-                let unweighted_claim = round_poly[0] + q1;
-                let round_poly = interpolators[round_poly.len()].extend_evals(
-                    &round_poly,
-                    unweighted_claim,
-                    max_degree,
-                );
-                EF::add_slices(&mut round_poly_acc, &round_poly);
-                new_state = Some((state, round_poly));
-            }
-
-            // The verifier sees one global sumcheck round.
-            // Convert the accumulated internal q-evals back to eq-weighted standard evals.
-            let interpolator = interpolators.last().unwrap();
-            let (standard_evals, _) = standard_round_from_q_evals(
-                interpolator,
-                &round_poly_acc,
-                claims.iter().copied().sum::<EF>() + activating_claim + pending_claim,
-                eq_prefix,
-                tau.as_slice()[round],
+        let (proof, challenges, states) = transcript.constraint_sumcheck(|challenger| {
+            let mut sumcheck = ProverTranscript::<Challenger, F, EF>::new(
+                challenger,
+                log_height,
+                transmitted_degree,
+                self.pow_bits,
+                claimed_sum,
             );
 
-            // Bind the polynomial, grind, and draw this round's challenge.
-            let (r, witness) = transcript.round(&standard_evals);
+            let mut proof = GenericDegreeProof {
+                claimed_sum,
+                round_polys: Vec::with_capacity(log_height),
+                pow_witnesses: Vec::with_capacity(if self.pow_bits > 0 { log_height } else { 0 }),
+            };
 
-            // Store what the round produced alongside what it bound.
-            proof.round_polys.push(standard_evals);
-            proof.pow_witnesses.extend(witness);
-            challenges.push(r);
+            let mut challenges = Vec::with_capacity(log_height);
+            // Active stages live as folded extension states.
+            // claims[i] is the current reduced claim for states[i].
+            let mut states = Vec::<RoundStateExt<'_, '_, A, F, EF>>::new();
+            let mut claims = Vec::<EF>::new();
 
-            // Fold every already-active state at the sampled challenge.
-            // Update its reduced claim using the same internal round polynomial used above.
-            for ((state, claim), round_poly) in states
-                .iter_mut()
-                .zip(claims.iter_mut())
-                .zip(round_polys.iter())
-            {
-                let q1 = (*claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
-                let unweighted_claim = round_poly[0] + q1;
-                *claim = interpolator.eval(round_poly, unweighted_claim, r);
-                state.fold(r);
+            // Before any height activates, the full lookup claim is dormant.
+            let mut pending_claim = claimed_sum;
+
+            // All stages share the same global sumcheck point.
+            // eq_prefix covers folded rounds; eq_suffix covers the tail still inside each state.
+            let mut eq_prefix = EF::ONE;
+            let mut eq_suffix = Poly::new_from_point(&tau.as_slice()[1..], EF::ONE);
+
+            // Barycentric interpolators, indexed by internal degree, built once.
+            // A lower-degree stage is extrapolated up to the batch's max degree.
+            // Reusing prebuilt weights avoids recomputing them every round.
+            let interpolators = (0..=max_degree)
+                .map(RoundPolyInterpolator::<EF>::new)
+                .collect::<Vec<_>>();
+
+            for round in 0..log_height {
+                let num_vars = log_height - round;
+                let tau_round = tau.as_slice()[round];
+                let tau_round_inv = tau_round.inverse();
+
+                // `peek` only borrows the next stage; `next` below moves it into the round state.
+                let activates_stage = stages
+                    .peek()
+                    .is_some_and(|stage| num_vars == stage.num_vars);
+                let activating_claim = if activates_stage {
+                    stages.peek().unwrap().lookup_claim(eta)
+                } else {
+                    EF::ZERO
+                };
+                pending_claim -= activating_claim;
+
+                // Not-yet-active lookup stages remain represented by one dormant constant.
+                let mut round_poly_acc = vec![pending_claim; max_degree];
+                let mut round_polys = Vec::with_capacity(states.len());
+
+                // Existing stages already live over the extension field.
+                // Extend each stage's internal round polynomial to the global degree and accumulate it.
+                for (state, &claim) in states.iter_mut().zip(claims.iter()) {
+                    let round_poly = state.round_poly(&eq_suffix);
+                    let q1 = (claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
+                    let unweighted_claim = round_poly[0] + q1;
+                    let round_poly = interpolators[round_poly.len()].extend_evals(
+                        &round_poly,
+                        unweighted_claim,
+                        max_degree,
+                    );
+                    EF::add_slices(&mut round_poly_acc, &round_poly);
+                    round_polys.push(round_poly);
+                }
+
+                // A stage activates when the global cube reaches its trace height.
+                // Its private lookup claim supplies the omitted node-one evaluation.
+                let mut new_state = None;
+                if activates_stage {
+                    let stage = stages.next().unwrap();
+                    let tau = Point::new(tau.as_slice()[round..].to_vec());
+                    let betas = stage
+                        .indices
+                        .iter()
+                        .map(|&air_index| beta_powers[air_index])
+                        .collect::<Vec<_>>();
+                    let mut state = RoundStateBase::new(stage, alpha, eta, betas, tau);
+                    let round_poly = state.round_poly(&eq_suffix);
+                    let q1 =
+                        (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
+                    let unweighted_claim = round_poly[0] + q1;
+                    let round_poly = interpolators[round_poly.len()].extend_evals(
+                        &round_poly,
+                        unweighted_claim,
+                        max_degree,
+                    );
+                    EF::add_slices(&mut round_poly_acc, &round_poly);
+                    new_state = Some((state, round_poly));
+                }
+
+                // The verifier sees one global sumcheck round.
+                // Convert the accumulated internal q-evals back to eq-weighted standard evals.
+                let interpolator = interpolators.last().unwrap();
+                let (standard_evals, _) = standard_round_from_q_evals(
+                    interpolator,
+                    &round_poly_acc,
+                    claims.iter().copied().sum::<EF>() + activating_claim + pending_claim,
+                    eq_prefix,
+                    tau.as_slice()[round],
+                );
+
+                // Bind the polynomial, grind, and draw this round's challenge.
+                let (r, witness) = sumcheck.round(&standard_evals);
+
+                // Store what the round produced alongside what it bound.
+                proof.round_polys.push(standard_evals);
+                proof.pow_witnesses.extend(witness);
+                challenges.push(r);
+
+                // Fold every already-active state at the sampled challenge.
+                // Update its reduced claim using the same internal round polynomial used above.
+                for ((state, claim), round_poly) in states
+                    .iter_mut()
+                    .zip(claims.iter_mut())
+                    .zip(round_polys.iter())
+                {
+                    let q1 = (*claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
+                    let unweighted_claim = round_poly[0] + q1;
+                    *claim = interpolator.eval(round_poly, unweighted_claim, r);
+                    state.fold(r);
+                }
+
+                // The newly activated stage joins the active list only after this round.
+                // Its first reduced claim comes from the private lookup claim supplied at activation.
+                // Ordinary constraints contribute nothing there.
+                if let Some((state, round_poly)) = new_state {
+                    let q1 =
+                        (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
+                    let unweighted_claim = round_poly[0] + q1;
+                    claims.push(interpolator.eval(&round_poly, unweighted_claim, r));
+                    states.push(state.fold(r));
+                }
+
+                // Advance the shared equality factors to the next round.
+                // The prefix absorbs r; the suffix drops the variable just bound.
+                eq_prefix *= Point::eval_eq(&[tau_round], &[r]);
+                if round + 1 < log_height {
+                    eq_suffix.sum_prefix_var_mut();
+                }
             }
 
-            // The newly activated stage joins the active list only after this round.
-            // Its first reduced claim comes from the private lookup claim supplied at activation.
-            // Ordinary constraints contribute nothing there.
-            if let Some((state, round_poly)) = new_state {
-                let q1 = (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
-                let unweighted_claim = round_poly[0] + q1;
-                claims.push(interpolator.eval(&round_poly, unweighted_claim, r));
-                states.push(state.fold(r));
-            }
+            // Require that every described step of the delegated run was played.
+            sumcheck.finish();
 
-            // Advance the shared equality factors to the next round.
-            // The prefix absorbs r; the suffix drops the variable just bound.
-            eq_prefix *= Point::eval_eq(&[tau_round], &[r]);
-            if round + 1 < log_height {
-                eq_suffix.sum_prefix_var_mut();
-            }
-        }
+            assert!(
+                stages.next().is_none(),
+                "every zerocheck stage must activate"
+            );
+            debug_assert_eq!(
+                pending_claim,
+                EF::ZERO,
+                "activated AIR interactions must reconstruct the fractional-GKR claim"
+            );
 
-        // Require that every described step was played.
+            (proof, challenges, states)
+        });
+
+        // The bracket was the zerocheck's last described step.
         transcript.finish();
-
-        assert!(
-            stages.next().is_none(),
-            "every zerocheck stage must activate"
-        );
-        debug_assert_eq!(
-            pending_claim,
-            EF::ZERO,
-            "activated AIR interactions must reconstruct the fractional-GKR claim"
-        );
 
         // States are ordered by activation height, not caller AIR order.
         // Each state retains its original AIR indices and scatters its openings back here.
@@ -984,19 +1009,39 @@ impl<'a, A> AirZerocheck<'a, A> {
         if lookup.is_none() && sumcheck.claimed_sum != EF::ZERO {
             return Err(ZerocheckError::NonZeroClaimedSum);
         }
-        let (alpha, beta, eta, tau) = sample_zerocheck_challenges::<F, EF, Challenger>(
+
+        // The reduction point of the lookup argument becomes the tail of the zerocheck point.
+        let lookup_tail = lookup.map_or(&[][..], |lookup| lookup.point.as_slice());
+
+        // One driver covers the whole zerocheck, challenges and delegated sumcheck alike.
+        let mut transcript = ZerocheckVerifierTranscript::<Challenger, F, EF>::new(
             challenger,
-            max_log_height,
-            lookup.map_or(&[][..], |lookup| lookup.point.as_slice()),
+            ZerocheckShape::new(&degrees, max_log_height, lookup_tail.len(), self.pow_bits),
         );
+        let ZerocheckChallenges {
+            alpha,
+            beta,
+            eta,
+            tau,
+        } = transcript.challenges(lookup_tail);
+
+        // The claim the sumcheck starts from is fixed by the reduction, so it is checked here.
+        //
+        // Releasing the completeness check keeps this rejection the only failure.
         let expected_claim = lookup.map_or(EF::ZERO, |lookup| eta * lookup.claimed_sum);
         if sumcheck.claimed_sum != expected_claim {
+            transcript.abort();
             return Err(ZerocheckError::ClaimedSumMismatch);
         }
 
-        let (point, final_sum) = sumcheck
-            .verify(challenger, max_log_height, degree, self.pow_bits)
-            .map_err(ZerocheckError::Sumcheck)?;
+        // The bracket is the last described step, so a rejected sumcheck still closes it.
+        let reduced = transcript
+            .constraint_sumcheck(|challenger| {
+                sumcheck.verify(challenger, max_log_height, degree, self.pow_bits)
+            })
+            .map_err(ZerocheckError::Sumcheck);
+        transcript.finish();
+        let (point, final_sum) = reduced?;
 
         Ok(ZerocheckReduction {
             alpha,
@@ -1300,77 +1345,6 @@ where
         .collect();
 
     (standard_evals, unweighted_sum)
-}
-
-/// Draw the two batching scalars, the lookup scalar, and the zerocheck point, in that order.
-///
-/// Prover and verifier call this identically, so their transcripts stay in lockstep.
-///
-/// The lookup reduction already opened its tables at a random point.
-/// The zerocheck must evaluate the lookup link at that same point to link the two arguments,
-/// so the reduction point is pinned as the tail of the zerocheck point:
-///
-/// ```text
-///     tau = [ freshly sampled | reduction output point ]
-/// ```
-///
-/// Only the coordinates the reduction did not already fix are sampled here.
-/// In practice the reduction point already covers the tallest trace, so with lookups
-/// active there is usually nothing left to sample.
-///
-/// # Soundness
-///
-/// The reduction point is drawn from the transcript after the traces are committed,
-/// so it is as good a random point as a freshly sampled one.
-///
-/// A violated constraint has a nonzero multilinear extension, which vanishes at the
-/// zerocheck point only with probability about the trace arity over the field size.
-///
-/// # Panics
-///
-/// Panics if the reduction point is longer than the zerocheck height.
-fn sample_zerocheck_challenges<F, EF, Challenger>(
-    challenger: &mut Challenger,
-    log_height: usize,
-    lookup_point: &[EF],
-) -> (EF, EF, EF, Vec<EF>)
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    Challenger: FieldChallenger<F>,
-{
-    // Alpha batches one AIR's constraints, beta batches the AIRs against each other.
-    let alpha = challenger.sample_algebra_element();
-    let beta = challenger.sample_algebra_element();
-
-    // Eta separates lookup links from ordinary constraints, and is drawn only when
-    // there are links to separate. Zero then means "no lookup contribution".
-    let eta = if lookup_point.is_empty() {
-        EF::ZERO
-    } else {
-        challenger.sample_algebra_element()
-    };
-
-    let fixed_suffix = lookup_point;
-    assert!(
-        fixed_suffix.len() <= log_height,
-        "lookup point cannot exceed the zerocheck height"
-    );
-
-    // The prover divides by a coordinate when it rebuilds a round message from its
-    // internal evaluations, so a freshly drawn zero is discarded and redrawn.
-    // Both sides redraw identically, which keeps the transcripts aligned.
-    let mut tau = Vec::with_capacity(log_height);
-    tau.extend((fixed_suffix.len()..log_height).map(|_| {
-        let mut coord: EF = challenger.sample_algebra_element();
-        while coord.is_zero() {
-            coord = challenger.sample_algebra_element();
-        }
-        coord
-    }));
-    tau.extend_from_slice(fixed_suffix);
-
-    (alpha, beta, eta, tau)
 }
 
 #[cfg(test)]

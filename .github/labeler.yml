@@ -1,0 +1,36 @@
+---  # Github labeler configuration file
+
+# Add 'documentation' label to any changes within 'docs' or top-level/crate READMEs.
+'documentation':
+  - changed-files:
+      - any-glob-to-any-file: ['docs/**', 'README.md', '**/README.md']
+
+# Add 'ci' label to any changes within '.github' folder.
+'ci':
+  - changed-files:
+      - any-glob-to-any-file: .github/**
+
+# Add 'dependencies' label to any changes to Cargo manifests or the lockfile.
+'dependencies':
+  - changed-files:
+      - any-glob-to-any-file: ['Cargo.toml', 'Cargo.lock', '**/Cargo.toml']
+
+# Add 'perf' label to any changes within a crate's 'benches' folder.
+'perf':
+  - changed-files:
+      - any-glob-to-any-file: '**/benches/**'
+
+# Add 'binary' label to any changes within the binary SNARK stack crates.
+'binary':
+  - changed-files:
+      - any-glob-to-any-file: ['binary-dft/**', 'binary-field/**', 'binary-pcs/**']
+
+# Add 'multilinear' label to any changes within the multilinear PCS crates.
+'multilinear':
+  - changed-files:
+      - any-glob-to-any-file: ['whir/**', 'multi-stark/**', 'multilinear-util/**', 'sumcheck/**']
+
+# Add 'security' label to any changes within the security crate or audit reports.
+'security':
+  - changed-files:
+      - any-glob-to-any-file: ['security/**', 'audits/**']

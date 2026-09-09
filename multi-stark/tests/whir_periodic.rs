@@ -30,9 +30,7 @@ use p3_multi_stark::{
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
-use p3_whir::{
-    DomainSeparator, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirProver,
-};
+use p3_whir::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirProver};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -85,6 +83,10 @@ impl MultiStarkConfig for WhirConfigForTest {
 
     fn pcs(&self) -> &TestPcs {
         &self.pcs
+    }
+
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        Some(100)
     }
 
     fn preprocessed_pcs(&self) -> &TestPcs {
@@ -160,13 +162,11 @@ fn config_for(log_height: usize, width: usize) -> WhirConfigForTest {
     }
 }
 
-/// A challenger seeded with the same domain separator on both proof and verify sides.
-fn challenger(config: &WhirConfigForTest) -> MyChallenger {
-    let mut challenger = MyChallenger::new(perm());
-    let mut ds = DomainSeparator::new(vec![]);
-    config.pcs.add_domain_separator::<8>(&mut ds);
-    ds.observe_domain_separator(&mut challenger);
-    challenger
+/// A fresh challenger.
+///
+/// The scheme seeds its own transcript when it opens.
+fn challenger() -> MyChallenger {
+    MyChallenger::new(perm())
 }
 
 /// The two period vectors, of different lengths.
@@ -241,9 +241,9 @@ fn prove_verify_periodic_roundtrips() {
 
     // This AIR has no preprocessed trace, and periodic columns are never committed.
     // Setup therefore commits nothing and yields empty keys.
-    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger(&config));
+    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger());
 
-    let proof = prove(
+    let proof = p3_multi_stark::prove_with_security(
         &config,
         ProverInstances::new(vec![ProverInstance::new(
             &PeriodicAir,
@@ -252,13 +252,15 @@ fn prove_verify_periodic_roundtrips() {
             &[],
         )]),
         0,
-        &mut challenger(&config),
-    );
+        20,
+        &mut challenger(),
+    )
+    .unwrap();
     // Nothing was committed at setup.
     // There is therefore no preprocessed opening to carry.
     assert!(proof.preprocessed_opening.is_none());
 
-    verify(
+    p3_multi_stark::verify_with_security(
         &config,
         VerifierInstances::new(vec![VerifierInstance::new(
             &PeriodicAir,
@@ -268,9 +270,38 @@ fn prove_verify_periodic_roundtrips() {
         )]),
         &proof,
         0,
-        &mut challenger(&config),
+        20,
+        &mut challenger(),
     )
     .expect("honest periodic proof must verify");
+}
+
+#[test]
+fn security_rejects_invalid_periodic_metadata() {
+    struct InvalidPeriod;
+    impl BaseAir<F> for InvalidPeriod {
+        fn width(&self) -> usize {
+            1
+        }
+        fn num_periodic_columns(&self) -> usize {
+            1
+        }
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            Cow::Owned(vec![vec![F::ONE; 3]])
+        }
+    }
+    impl<AB: AirBuilder<F = F>> Air<AB> for InvalidPeriod {
+        fn eval(&self, builder: &mut AB) {
+            let x = builder.main().current_slice()[0];
+            let periodic = builder.periodic_values()[0];
+            builder.assert_eq(x, periodic);
+        }
+    }
+    let config = config_for(4, 1);
+    let air = InvalidPeriod;
+    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
+    assert!(p3_multi_stark::security_report(&config, &instances).is_err());
 }
 
 #[test]
@@ -284,7 +315,7 @@ fn verify_rejects_violated_periodic_constraint() {
     trace.values[0] += F::ONE;
     let config = config_for(log2_strict_usize(n), MAIN_WIDTH);
 
-    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger(&config));
+    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger());
 
     let proof = prove(
         &config,
@@ -295,7 +326,7 @@ fn verify_rejects_violated_periodic_constraint() {
             &[],
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     // The claimed zero sum cannot close against a nonzero constraint value.
@@ -309,7 +340,7 @@ fn verify_rejects_violated_periodic_constraint() {
         )]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .unwrap_err();
     assert!(
@@ -411,7 +442,7 @@ fn prove_verify_periodic_with_preprocessed_roundtrips() {
     let config = config_for(log_height, MAIN_WIDTH);
 
     // Setup commits the preprocessed column and nothing else.
-    let (pk, vk) = setup(&config, &[&air], &mut challenger(&config));
+    let (pk, vk) = setup(&config, &[&air], &mut challenger());
 
     let proof = prove(
         &config,
@@ -422,7 +453,7 @@ fn prove_verify_periodic_with_preprocessed_roundtrips() {
             &[],
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     // The preprocessed commitment is opened at the bound point, hence one opening here.
@@ -433,7 +464,7 @@ fn prove_verify_periodic_with_preprocessed_roundtrips() {
         VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .expect("honest three-group proof must verify");
 }
@@ -451,7 +482,7 @@ fn verify_rejects_violated_periodic_preprocessed_constraint() {
     trace.values[0] += F::ONE;
     let config = config_for(log_height, MAIN_WIDTH);
 
-    let (pk, vk) = setup(&config, &[&air], &mut challenger(&config));
+    let (pk, vk) = setup(&config, &[&air], &mut challenger());
 
     let proof = prove(
         &config,
@@ -462,7 +493,7 @@ fn verify_rejects_violated_periodic_preprocessed_constraint() {
             &[],
         )]),
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     );
 
     // The claimed zero sum cannot close against a nonzero constraint value.
@@ -471,7 +502,7 @@ fn verify_rejects_violated_periodic_preprocessed_constraint() {
         VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
         &proof,
         0,
-        &mut challenger(&config),
+        &mut challenger(),
     )
     .unwrap_err();
     assert!(

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_commit::{CommitmentOpening, MatrixOpening, Mmcs, PointOpening};
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, Field, HornerIter, PrimeField64, TwoAdicField, batch_multiplicative_inverse,
@@ -16,7 +16,8 @@ use thiserror::Error;
 
 use crate::{
     BatchMultiOpening, CommitPhaseMultiStep, CommitmentWithOpeningPoints, FriFoldingStrategy,
-    FriParameters, FriProof, FriShape, TranscriptFailure, VerifierTranscript, fold_schedule,
+    FriParameters, FriProof, FriShape, PcsTranscriptFailure, TranscriptFailure, VerifierTranscript,
+    fold_schedule,
 };
 
 #[derive(Debug, Error)]
@@ -41,6 +42,19 @@ where
     },
     #[error("commit PoW witness count mismatch: expected {expected}, got {got}")]
     CommitPowWitnessCountMismatch { expected: usize, got: usize },
+    /// One claimed opening carries a count the PCS transcript was not described with.
+    ///
+    /// Both sides derive that count from the claims the verifier was handed.
+    /// Reaching this means the description and the claims came from different inputs.
+    #[error("opening {opening}: claimed evaluation count mismatch: expected {expected}, got {got}")]
+    ClaimedEvaluationCountMismatch {
+        /// Position of the opening in commitment, matrix and point order.
+        opening: usize,
+        /// Claimed-evaluation count the run was described with.
+        expected: usize,
+        /// Claimed-evaluation count the caller supplied.
+        got: usize,
+    },
     #[error("final polynomial length mismatch: expected {expected}, got {got}")]
     FinalPolyLengthMismatch { expected: usize, got: usize },
     /// The instance is configured with zero queries.
@@ -168,6 +182,19 @@ where
         expected: usize,
         got: usize,
     },
+    #[error("hiding PCS requires at least {required} random codewords, got {got}")]
+    InsufficientHidingRandomCodewords { required: usize, got: usize },
+    #[error(
+        "hiding PCS round {round}, matrix {matrix}: insufficient hiding budget: {mask_height} mask values, {num_queries} queries, {num_opening_points} opening points, extension degree {extension_degree}"
+    )]
+    HidingBudgetExceeded {
+        round: usize,
+        matrix: usize,
+        mask_height: usize,
+        num_queries: usize,
+        num_opening_points: usize,
+        extension_degree: usize,
+    },
     #[error("commit phase MMCS error: {0:?}")]
     CommitPhaseMmcsError(CommitMmcsErr),
     #[error("input error: {0:?}")]
@@ -197,6 +224,8 @@ where
 pub enum PowPhase {
     /// Guards the challenge batching the openings into one FRI instance
     /// (`FriParameters::batch_proof_of_work_bits`).
+    ///
+    /// Replayed by the commitment scheme wrapped around the low-degree test.
     Batch,
     /// Guards one commit-phase folding challenge
     /// (`FriParameters::commit_proof_of_work_bits`).
@@ -233,6 +262,31 @@ where
     }
 }
 
+impl<CommitMmcsErr, InputError> From<PcsTranscriptFailure> for FriError<CommitMmcsErr, InputError>
+where
+    CommitMmcsErr: core::fmt::Debug,
+    InputError: core::fmt::Debug,
+{
+    fn from(failure: PcsTranscriptFailure) -> Self {
+        match failure {
+            // A witness that is absent and one that is too weak fail the same step.
+            PcsTranscriptFailure::PowWitness { .. }
+            | PcsTranscriptFailure::MissingPowWitness { .. } => {
+                Self::InvalidPowWitness(PowPhase::Batch)
+            }
+            PcsTranscriptFailure::ClaimedEvaluationCount {
+                opening,
+                expected,
+                got,
+            } => Self::ClaimedEvaluationCountMismatch {
+                opening,
+                expected,
+                got,
+            },
+        }
+    }
+}
+
 /// A chain of FRI input openings allowing a verifier to check a sequence of
 /// FRI folds and rolls. The first element of each pair indicates the round of
 /// fri in which the input should be rolled in. The second element is the opening.
@@ -247,6 +301,12 @@ pub type FriOpenings<F> = Vec<(usize, F)>;
 /// - `challenger`: The Fiat-Shamir challenger.
 /// - `commitments_with_opening_points`: A vector of joint commitments to collections of matrices
 ///   and openings of those matrices at a collection of points.
+/// - `alpha`: The challenge batching every claimed opening into one low-degree claim.
+///   The caller draws it, against a transcript that binds the claims it batches.
+///   This function runs inside a bracket the caller opens around it.
+// The argument list is the protocol's own shape.
+// Grouping any of it into a struct would move the same fields behind another name.
+#[allow(clippy::too_many_arguments)]
 pub fn verify_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     folding: &Folding,
     params: &FriParameters<FriMmcs>,
@@ -258,6 +318,7 @@ pub fn verify_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
         TwoAdicMultiplicativeCoset<Val>,
     >],
     input_mmcs: &InputMmcs,
+    alpha: Challenge,
 ) -> Result<(), FriError<FriMmcs::Error, InputMmcs::Error>>
 where
     Val: TwoAdicField + PrimeField64,
@@ -291,28 +352,21 @@ where
     // With none, each guard would compare against nothing and pass.
     if commitments_with_opening_points
         .iter()
-        .all(|(_, mats)| mats.is_empty())
+        .all(|CommitmentOpening { matrices: mats, .. }| mats.is_empty())
     {
         return Err(FriError::NoCommittedMatrices);
     }
 
-    // Check the proof of work guarding the batch combination challenge. The prover ground this
-    // after committing to every claimed evaluation and before learning `alpha`, so a prover
-    // searching for a favourable `alpha` pays `2^batch_proof_of_work_bits` per attempt.
-    if !challenger.check_witness(params.batch_proof_of_work_bits, proof.batch_pow_witness) {
-        return Err(FriError::InvalidPowWitness(PowPhase::Batch));
-    }
-
-    // Generate the Batch combination challenge
+    // The batching challenge arrives from the caller, drawn against the caller's transcript.
+    //
     // Soundness Error: `|f|/|EF|` where `|f|` is the number of different functions of the form
     // `(f(zeta) - fi(x))/(zeta - x)` which need to be checked.
     // Explicitly, `|f|` is `commitments_with_opening_points.flatten().flatten().len()`
     // (i.e counting the number (point, claimed_evaluation) pairs).
     //
-    // Grinding sited immediately above adds `batch_proof_of_work_bits` to this round's
-    // round-by-round error; `p3_security::GrindingSites::batch_combination` is where the
-    // soundness model credits it.
-    let alpha: Challenge = challenger.sample_algebra_element();
+    // The grinding step the caller plays immediately before drawing it adds
+    // `batch_proof_of_work_bits` to this round's round-by-round error;
+    // `p3_security::GrindingSites::batch_combination` is where the soundness model credits it.
 
     // One commit-phase opening set per commitment.
     let expected_rounds = proof.commit_phase_commits.len();
@@ -374,9 +428,10 @@ where
     // Folding sees one input per distinct height, tallest first.
     let mut input_log_heights: Vec<usize> = commitments_with_opening_points
         .iter()
-        .flat_map(|(_, mats)| {
-            mats.iter()
-                .map(|(domain, _)| log2_strict_usize(domain.size()) + params.log_blowup)
+        .flat_map(|CommitmentOpening { matrices: mats, .. }| {
+            mats.iter().map(|MatrixOpening { domain, .. }| {
+                log2_strict_usize(domain.size()) + params.log_blowup
+            })
         })
         .collect();
     input_log_heights.sort_unstable_by(|a, b| b.cmp(a));
@@ -828,7 +883,16 @@ where
     // Check every batch's openings against its commitment first, one shared
     // amortized verification per batch, so the arithmetic below only ever
     // reads authenticated values.
-    for (batch, (batch_opening, (batch_commit, mats))) in input_openings
+    for (
+        batch,
+        (
+            batch_opening,
+            CommitmentOpening {
+                commitment: batch_commit,
+                matrices: mats,
+            },
+        ),
+    ) in input_openings
         .iter()
         .zip(commitments_with_opening_points.iter())
         .enumerate()
@@ -859,28 +923,39 @@ where
         // assumed to always be Val::GENERATOR.
         let batch_heights = mats
             .iter()
-            .map(|(domain, _)| domain.size() << params.log_blowup)
+            .map(|MatrixOpening { domain, .. }| domain.size() << params.log_blowup)
             .collect_vec();
         let batch_dims = batch_heights
             .iter()
             .zip(mats)
             .enumerate()
-            .map(|(matrix, (&height, (_, points_and_values)))| {
-                // Pin each matrix width to its claimed evaluation count, never to the proof.
-                //
-                // Why: the leaf hash flattens all same-height rows into one stream.
-                //   - `check_widths` (in the MMCS) is the only authenticator of row boundaries
-                //   - a matrix opened at no points carries no claim to pin its width
-                //   - reading the width from the proof-supplied row leaves that boundary unchecked
-                // Every input matrix is opened at >= 1 point, so reject the degenerate case.
-                let (_, values) = points_and_values
-                    .first()
-                    .ok_or(FriError::MatrixWithoutOpeningPoints { batch, matrix })?;
-                Ok(Dimensions {
-                    width: values.len(),
-                    height,
-                })
-            })
+            .map(
+                |(
+                    matrix,
+                    (
+                        &height,
+                        MatrixOpening {
+                            points: points_and_values,
+                            ..
+                        },
+                    ),
+                )| {
+                    // Pin each matrix width to its claimed evaluation count, never to the proof.
+                    //
+                    // Why: the leaf hash flattens all same-height rows into one stream.
+                    //   - `check_widths` (in the MMCS) is the only authenticator of row boundaries
+                    //   - a matrix opened at no points carries no claim to pin its width
+                    //   - reading the width from the proof-supplied row leaves that boundary unchecked
+                    // Every input matrix is opened at >= 1 point, so reject the degenerate case.
+                    let PointOpening { values, .. } = points_and_values
+                        .first()
+                        .ok_or(FriError::MatrixWithoutOpeningPoints { batch, matrix })?;
+                    Ok(Dimensions {
+                        width: values.len(),
+                        height,
+                    })
+                },
+            )
             .collect::<Result<Vec<_>, FriError<FriMmcs::Error, InputMmcs::Error>>>()?;
 
         // If the maximum height of the batch is smaller than the global max height,
@@ -919,15 +994,26 @@ where
     // lockstep.
     let mut denominators = Vec::new();
     for &index in indices {
-        for (batch, (_, mats)) in commitments_with_opening_points.iter().enumerate() {
-            for (matrix, (mat_domain, mat_points_and_values)) in mats.iter().enumerate() {
+        for (batch, CommitmentOpening { matrices: mats, .. }) in
+            commitments_with_opening_points.iter().enumerate()
+        {
+            for (
+                matrix,
+                MatrixOpening {
+                    domain: mat_domain,
+                    points: mat_points_and_values,
+                },
+            ) in mats.iter().enumerate()
+            {
                 let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
                 let bits_reduced = log_global_max_height - log_height;
                 let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
                 let x = Val::GENERATOR
                     * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
 
-                for (point, (z, _)) in mat_points_and_values.iter().enumerate() {
+                for (point, PointOpening { point: z, .. }) in
+                    mat_points_and_values.iter().enumerate()
+                {
                     let denominator = *z - x;
                     if denominator.is_zero() {
                         return Err(FriError::OpeningPointMatchesQueryPoint {
@@ -956,16 +1042,23 @@ where
     // remaining `p_i(x)` half is a dot product of extension-field powers against an authenticated
     // base-field row. This mirrors how the prover builds the same combination in `TwoAdicFriPcs`.
     let opening_points = || {
-        commitments_with_opening_points
-            .iter()
-            .flat_map(|(_, mats)| {
-                mats.iter().flat_map(|(mat_domain, mat_points_and_values)| {
-                    let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
-                    mat_points_and_values
-                        .iter()
-                        .map(move |(_, ps_at_z)| (log_height, ps_at_z))
-                })
-            })
+        commitments_with_opening_points.iter().flat_map(
+            |CommitmentOpening { matrices: mats, .. }| {
+                mats.iter().flat_map(
+                    |MatrixOpening {
+                         domain: mat_domain,
+                         points: mat_points_and_values,
+                     }| {
+                        let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
+                        mat_points_and_values.iter().map(
+                            move |PointOpening {
+                                      values: ps_at_z, ..
+                                  }| (log_height, ps_at_z),
+                        )
+                    },
+                )
+            },
+        )
     };
 
     // The longest ladder over all heights bounds how many powers of alpha are ever needed.
@@ -1002,14 +1095,22 @@ where
             // The per-opening-point data above, replayed in the same order for this query.
             let mut reductions = point_reductions.iter();
 
-            for (batch, (batch_opening, (_, mats))) in input_openings
+            for (batch, (batch_opening, CommitmentOpening { matrices: mats, .. })) in input_openings
                 .iter()
                 .zip(commitments_with_opening_points.iter())
                 .enumerate()
             {
                 // For each matrix in the commitment
-                for (matrix, (mat_opening, (mat_domain, mat_points_and_values))) in batch_opening
-                    .opened_values[query]
+                for (
+                    matrix,
+                    (
+                        mat_opening,
+                        MatrixOpening {
+                            domain: mat_domain,
+                            points: mat_points_and_values,
+                        },
+                    ),
+                ) in batch_opening.opened_values[query]
                     .iter()
                     .zip(mats.iter())
                     .enumerate()
@@ -1023,7 +1124,14 @@ where
                     // For each opening point, combine this matrix's polynomials with the powers of
                     // alpha at that point's ladder position, map the combination through
                     // `(f(z) - f(x))/(z - x)` and add it to the reduced opening for this log_height.
-                    for (point, (_z, ps_at_z)) in mat_points_and_values.iter().enumerate() {
+                    for (
+                        point,
+                        PointOpening {
+                            point: _z,
+                            values: ps_at_z,
+                        },
+                    ) in mat_points_and_values.iter().enumerate()
+                    {
                         if mat_opening.len() != ps_at_z.len() {
                             return Err(FriError::PointEvaluationCountMismatch {
                                 batch,
@@ -1094,8 +1202,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        CommitmentWithOpeningPoints, FriParameters, TwoAdicFriFolding, TwoAdicFriFoldingForMmcs,
-        TwoAdicFriPcs,
+        CommitmentWithOpeningPoints, FriParameters, PcsShape, PcsVerifierTranscript,
+        TwoAdicFriFolding, TwoAdicFriFoldingForMmcs, TwoAdicFriPcs,
     };
 
     type Val = BabyBear;
@@ -1120,9 +1228,11 @@ mod tests {
         input_mmcs: ValMmcs,
         /// A valid proof produced by a real prover run.
         proof: Proof,
-        /// Fiat-Shamir challenger already advanced past the opened-values
-        /// observation step, ready for the verification entry point.
+        /// Fiat-Shamir challenger already advanced past the PCS phase,
+        /// ready for the verification entry point.
         challenger: Challenger,
+        /// The batching challenge that phase drew, which the PCS hands to FRI.
+        alpha: Challenge,
         /// Commitment and opening-point data the verifier checks against.
         commitments_with_opening_points: Vec<
             CommitmentWithOpeningPoints<
@@ -1247,8 +1357,13 @@ mod tests {
         let mut p_challenger = Challenger::new(perm.clone());
         p_challenger.observe(&commitment);
         let zeta: Challenge = p_challenger.sample_algebra_element();
-        let (opened_values, proof) =
-            pcs.open(vec![(&prover_data, vec![vec![zeta]])], &mut p_challenger);
+        let (opened_values, proof) = pcs.open(
+            vec![p3_commit::OpeningRequest {
+                prover_data: &prover_data,
+                points: vec![vec![zeta]],
+            }],
+            &mut p_challenger,
+        );
 
         // Verifier side:
         // Replay the transcript up to the point where the top-level FRI verification begins.
@@ -1262,28 +1377,61 @@ mod tests {
 
         // Assemble the commitment-with-opening-points structure that the
         // verifier checks the proof against.
-        let cwop = vec![(
-            commitment,
-            vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
-        )];
+        let cwop: Vec<CommitmentWithOpeningPoints<_, _, _>> = vec![
+            (
+                commitment,
+                vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
+            )
+                .into(),
+        ];
 
-        // Feed the opened evaluations into the verifier challenger.
-        // This is the last transcript step before FRI verification begins.
-        for (_, round) in &cwop {
-            for (_, mat) in round {
-                for (_, point) in mat {
-                    v_challenger.observe_algebra_slice(point);
-                }
-            }
-        }
+        // Replay the PCS phase: bind the claims, replay the grind, draw the batching challenge.
+        // This is the last transcript work before FRI verification begins.
+        let alpha = replay_pcs_phase(
+            &fri_params,
+            &mut v_challenger,
+            &cwop,
+            proof.batch_pow_witness,
+        );
 
         TestFixture {
             fri_params,
             input_mmcs,
             proof,
             challenger: v_challenger,
+            alpha,
             commitments_with_opening_points: cwop,
         }
+    }
+
+    /// Advance a verifier challenger through the PCS phase and hand back its challenge.
+    ///
+    /// The driver seeds itself, replays the claims, replays the grind, and draws `alpha`.
+    /// Its delegation bracket records no sponge operation.
+    /// So the state left here is exactly the one the PCS lends to `verify_fri`.
+    fn replay_pcs_phase(
+        params: &FriParameters<ChallengeMmcs>,
+        challenger: &mut Challenger,
+        cwop: &[CommitmentWithOpeningPoints<
+            Challenge,
+            <ValMmcs as Mmcs<Val>>::Commitment,
+            TwoAdicMultiplicativeCoset<Val>,
+        >],
+        batch_pow_witness: Val,
+    ) -> Challenge {
+        let mut transcript = PcsVerifierTranscript::<Challenger, Val, Challenge>::new(
+            challenger,
+            PcsShape::from_claims(params, cwop),
+        );
+        transcript
+            .claimed_openings(cwop)
+            .expect("the claims describe their own shape");
+        let alpha = transcript
+            .batch_phase(Some(batch_pow_witness))
+            .expect("the fixture's witness meets the difficulty it was ground at");
+        transcript.delegate(|_| ());
+        transcript.finish();
+        alpha
     }
 
     /// Convenience wrapper that constructs the folding strategy and
@@ -1298,9 +1446,10 @@ mod tests {
             TwoAdicMultiplicativeCoset<Val>,
         >],
         input_mmcs: &ValMmcs,
+        alpha: Challenge,
     ) -> Result<(), TestError> {
         let folding: Folding = TwoAdicFriFolding(PhantomData);
-        verify_fri(&folding, params, proof, challenger, cwop, input_mmcs)
+        verify_fri(&folding, params, proof, challenger, cwop, input_mmcs, alpha)
     }
 
     #[test]
@@ -1327,6 +1476,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         );
         assert!(
             result.is_ok(),
@@ -1368,6 +1518,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject a tampered shared node");
 
@@ -1390,6 +1541,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         );
         assert!(result.is_ok(), "valid proof should pass: {result:?}");
     }
@@ -1421,6 +1573,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject mismatched commit-phase opening count");
 
@@ -1447,7 +1600,7 @@ mod tests {
         //     before: mats[0] points = [(zeta, values)]   → width pinned by claim
         //     after:  mats[0] points = []                 → no claim → reject
         let mut cwop = f.commitments_with_opening_points.clone();
-        cwop[0].1[0].1 = vec![];
+        cwop[0].matrices[0].points = vec![];
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -1456,6 +1609,7 @@ mod tests {
             &mut challenger,
             &cwop,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject a matrix opened at zero points");
 
@@ -1494,6 +1648,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject a round that does not open every query");
 
@@ -1532,6 +1687,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with extra PoW witness");
 
@@ -1564,6 +1720,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with wrong final polynomial length");
 
@@ -1598,6 +1755,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject an input batch that does not open every query");
 
@@ -1647,6 +1805,7 @@ mod tests {
             &mut challenger,
             &empty_cwop,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with no committed polynomials");
 
@@ -1681,6 +1840,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with wrong number of sibling values");
 
@@ -1714,6 +1874,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject invalid log_arity");
 
@@ -1781,30 +1942,38 @@ mod tests {
         let mut p_challenger = Challenger::new(perm.clone());
         p_challenger.observe(&commitment);
         let zeta: Challenge = p_challenger.sample_algebra_element();
-        let (opened_values, proof) =
-            pcs.open(vec![(&prover_data, vec![vec![zeta]])], &mut p_challenger);
+        let (opened_values, proof) = pcs.open(
+            vec![p3_commit::OpeningRequest {
+                prover_data: &prover_data,
+                points: vec![vec![zeta]],
+            }],
+            &mut p_challenger,
+        );
 
         let mut v_challenger = Challenger::new(perm);
         v_challenger.observe(&commitment);
         let _: Challenge = v_challenger.sample_algebra_element();
 
-        let cwop = vec![(
-            commitment,
-            vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
-        )];
-        for (_, round) in &cwop {
-            for (_, mat) in round {
-                for (_, point) in mat {
-                    v_challenger.observe_algebra_slice(point);
-                }
-            }
-        }
+        let cwop: Vec<CommitmentWithOpeningPoints<_, _, _>> = vec![
+            (
+                commitment,
+                vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
+            )
+                .into(),
+        ];
+        let alpha = replay_pcs_phase(
+            &fri_params,
+            &mut v_challenger,
+            &cwop,
+            proof.batch_pow_witness,
+        );
 
         TestFixture {
             fri_params,
             input_mmcs,
             proof,
             challenger: v_challenger,
+            alpha,
             commitments_with_opening_points: cwop,
         }
     }
@@ -1844,6 +2013,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("a forged fold schedule must be rejected");
 
@@ -1869,6 +2039,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect("an honest non-uniform schedule must verify");
     }
@@ -1911,6 +2082,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject a reordered fold schedule");
 
@@ -1933,7 +2105,10 @@ mod tests {
         let h_in = f
             .commitments_with_opening_points
             .iter()
-            .flat_map(|(_, mats)| mats.iter().map(|(d, _)| log2_strict_usize(d.size())))
+            .flat_map(|CommitmentOpening { matrices: mats, .. }| {
+                mats.iter()
+                    .map(|MatrixOpening { domain: d, .. }| log2_strict_usize(d.size()))
+            })
             .max()
             .expect("fixture commits at least one matrix")
             + log_blowup;
@@ -1977,6 +2152,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("undershoot must be rejected before input opening");
 
@@ -2024,6 +2200,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("overshoot must be rejected before commit-phase verification");
 
@@ -2071,6 +2248,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("height above two-adicity must be rejected");
 
@@ -2111,6 +2289,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with extra input batch");
 
@@ -2148,6 +2327,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with missing opened-values entry");
 
@@ -2185,9 +2365,10 @@ mod tests {
         //     point 0 claims:  [f_0(z), f_1(z)]            (length 2)
         //     point 1 claims:  [0, 0, 0]                   (length 3)
         //     → 2 != 3 → error at point 1
-        cwop[0].1[0]
-            .1
-            .push((Challenge::ZERO, vec![Challenge::ZERO; 3]));
+        cwop[0].matrices[0].points.push(PointOpening {
+            point: Challenge::ZERO,
+            values: vec![Challenge::ZERO; 3],
+        });
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -2196,6 +2377,7 @@ mod tests {
             &mut challenger,
             &cwop,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with extra claimed evaluation");
 
@@ -2229,7 +2411,7 @@ mod tests {
         //     opened values:  [f_0(x), f_1(x)]             (length 2)
         //     claims:         [f_0(z), f_1(z), EXTRA]      (length 3)
         //     → expected width 3, opened row has 2 → error
-        cwop[0].1[0].1[0].1.push(Challenge::ZERO);
+        cwop[0].matrices[0].points[0].values.push(Challenge::ZERO);
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -2238,6 +2420,7 @@ mod tests {
             &mut challenger,
             &cwop,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject opened rows narrower than the claimed width");
 
@@ -2421,62 +2604,12 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with invalid PoW witness");
 
         match err {
             FriError::InvalidPowWitness(PowPhase::CommitPhase) => {}
-            other => panic!("wrong error variant: {other:?}"),
-        }
-    }
-
-    /// The batch witness is checked before the batching challenge is sampled,
-    /// so raising the required difficulty past what the prover ground must be
-    /// rejected — and must be attributed to the batch phase, not to one of the
-    /// other two witnesses the proof also carries.
-    #[test]
-    fn reject_insufficient_batch_pow() {
-        let f = make_test_fixture();
-        let mut params = f.fri_params.clone();
-        params.batch_proof_of_work_bits = 20;
-
-        let mut challenger = f.challenger.clone();
-        let err = run_verify_fri(
-            &params,
-            &f.proof,
-            &mut challenger,
-            &f.commitments_with_opening_points,
-            &f.input_mmcs,
-        )
-        .expect_err("should reject a proof whose batch PoW is too weak");
-
-        match err {
-            FriError::InvalidPowWitness(PowPhase::Batch) => {}
-            other => panic!("wrong error variant: {other:?}"),
-        }
-    }
-
-    /// A tampered batch witness is rejected even at the difficulty the proof
-    /// was produced with, which is what makes the grind binding rather than
-    /// decorative: the witness must actually satisfy the PoW predicate.
-    #[test]
-    fn reject_tampered_batch_pow_witness() {
-        let f = make_test_fixture();
-        let mut proof = f.proof.clone();
-        proof.batch_pow_witness += Val::ONE;
-
-        let mut challenger = f.challenger.clone();
-        let err = run_verify_fri(
-            &f.fri_params,
-            &proof,
-            &mut challenger,
-            &f.commitments_with_opening_points,
-            &f.input_mmcs,
-        )
-        .expect_err("should reject a tampered batch PoW witness");
-
-        match err {
-            FriError::InvalidPowWitness(PowPhase::Batch) => {}
             other => panic!("wrong error variant: {other:?}"),
         }
     }
@@ -2501,6 +2634,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with corrupted commit-phase Merkle proof");
 
@@ -2530,6 +2664,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("should reject proof with corrupted input Merkle proof");
 
@@ -2588,6 +2723,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("zero-query instance must be rejected");
 
@@ -2616,6 +2752,7 @@ mod tests {
             &mut challenger,
             &f.commitments_with_opening_points,
             &f.input_mmcs,
+            f.alpha,
         )
         .expect_err("zero-blowup instance must be rejected");
 
@@ -2666,7 +2803,13 @@ mod tests {
         let mut challenger = Challenger::new(perm);
         challenger.observe(&commitment);
         let zeta: Challenge = challenger.sample_algebra_element();
-        let _ = pcs.open(vec![(&prover_data, vec![vec![zeta]])], &mut challenger);
+        let _ = pcs.open(
+            vec![p3_commit::OpeningRequest {
+                prover_data: &prover_data,
+                points: vec![vec![zeta]],
+            }],
+            &mut challenger,
+        );
     }
 
     #[test]
@@ -2699,7 +2842,8 @@ mod tests {
         //     opening point z : GENERATOR   (claimed value is irrelevant; the denominator fails first)
         //     query point   x : GENERATOR
         let z = Challenge::from(Val::GENERATOR);
-        let cwop = vec![(commit, vec![(domain, vec![(z, vec![Challenge::ZERO])])])];
+        let cwop: Vec<CommitmentWithOpeningPoints<_, _, _>> =
+            vec![(commit, vec![(domain, vec![(z, vec![Challenge::ZERO])])]).into()];
 
         let err = open_inputs::<Val, Challenge, ValMmcs, ChallengeMmcs>(
             &f.fri_params,

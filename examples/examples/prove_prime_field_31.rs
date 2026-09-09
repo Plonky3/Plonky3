@@ -14,7 +14,7 @@ use p3_examples::proofs::{
     prove_m31_keccak, prove_m31_poseidon2, prove_monty31_keccak, prove_monty31_keccak_stir,
     prove_monty31_poseidon2, prove_monty31_poseidon2_stir, report_result,
 };
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::{BinomialExtensionField, QuinticTrinomialExtensionField};
 use p3_keccak_air::KeccakAir;
 use p3_koala_bear::{
     GenericPoseidon2LinearLayersKoalaBear, KOALABEAR_POSEIDON_HALF_FULL_ROUNDS,
@@ -121,6 +121,8 @@ fn main() {
     match args.field {
         FieldOptions::KoalaBear => {
             type EF = BinomialExtensionField<KoalaBear, 4>;
+            // STIR must also budget alpha batching across wide AIR quotient sets.
+            type StirEF = QuinticTrinomialExtensionField<KoalaBear>;
 
             let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
@@ -204,13 +206,13 @@ fn main() {
                 }
                 (PcsOptions::Stir, MerkleHashOptions::KeccakF) => {
                     let result =
-                        prove_monty31_keccak_stir::<_, EF, _, _>(&proof_goal, dft, num_hashes);
+                        prove_monty31_keccak_stir::<_, StirEF, _, _>(&proof_goal, dft, num_hashes);
                     report_result(result);
                 }
                 (PcsOptions::Stir, MerkleHashOptions::Poseidon2) => {
                     let perm16 = Poseidon2KoalaBear::<16>::new_from_rng_128(&mut rng);
                     let perm24 = Poseidon2KoalaBear::<24>::new_from_rng_128(&mut rng);
-                    let result = prove_monty31_poseidon2_stir::<_, EF, _, _, _, _>(
+                    let result = prove_monty31_poseidon2_stir::<_, StirEF, _, _, _, _>(
                         &proof_goal,
                         dft,
                         num_hashes,
@@ -223,6 +225,8 @@ fn main() {
         }
         FieldOptions::BabyBear => {
             type EF = BinomialExtensionField<BabyBear, 4>;
+            // STIR must also budget alpha batching across wide AIR quotient sets.
+            type StirEF = BinomialExtensionField<BabyBear, 5>;
 
             let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
@@ -306,13 +310,13 @@ fn main() {
                 }
                 (PcsOptions::Stir, MerkleHashOptions::KeccakF) => {
                     let result =
-                        prove_monty31_keccak_stir::<_, EF, _, _>(&proof_goal, dft, num_hashes);
+                        prove_monty31_keccak_stir::<_, StirEF, _, _>(&proof_goal, dft, num_hashes);
                     report_result(result);
                 }
                 (PcsOptions::Stir, MerkleHashOptions::Poseidon2) => {
                     let perm16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
                     let perm24 = Poseidon2BabyBear::<24>::new_from_rng_128(&mut rng);
-                    let result = prove_monty31_poseidon2_stir::<_, EF, _, _, _, _>(
+                    let result = prove_monty31_poseidon2_stir::<_, StirEF, _, _, _, _>(
                         &proof_goal,
                         dft,
                         num_hashes,

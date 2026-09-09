@@ -34,6 +34,14 @@ use crate::pcs::utils::get_challenge_stir_queries;
 /// Failure modes of the HVZK-WHIR verifier.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub enum ZkVerifierError {
+    /// The initial alpha batch cannot reach the requested security level.
+    #[error(
+        "initial claim combination of {num_claims} claims is below the {security_level}-bit target"
+    )]
+    InitialClaimsBelowTarget {
+        num_claims: usize,
+        security_level: usize,
+    },
     /// A masked sumcheck batch failed to replay.
     #[error(transparent)]
     Sumcheck(#[from] SumcheckError),
@@ -148,6 +156,12 @@ where
         challenger: &mut Challenger,
     ) -> Result<(), ZkVerifierError> {
         let config = self.config;
+        config.validate_initial_claims(claims.len()).map_err(|_| {
+            ZkVerifierError::InitialClaimsBelowTarget {
+                num_claims: claims.len(),
+                security_level: config.security_level,
+            }
+        })?;
         let n_rounds = config.n_rounds();
 
         // Structural checks before any transcript work.
@@ -238,13 +252,12 @@ where
                 rho_points.push(rho);
             }
 
-            // PoW, transcript checkpoint, STIR queries on the previous oracle.
+            // PoW, then STIR queries on the previous oracle.
             if round_params.pow_bits > 0
                 && !challenger.check_witness(round_params.pow_bits, round_proof.pow_witness)
             {
                 return Err(ZkVerifierError::InvalidPowWitness { round });
             }
-            challenger.sample();
             let stir_indexes = get_challenge_stir_queries::<Challenger, F>(
                 round_params.domain_size,
                 folding,

@@ -7,7 +7,7 @@ use core::ops::Deref;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, PrimeField64, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::point::Point;
@@ -18,13 +18,13 @@ use p3_sumcheck::layout::Layout;
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use tracing::instrument;
 
-use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::WhirConfig;
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{
     QueryOpenings, SharedProofOpening, SumcheckData, WhirProof, WhirRoundProof,
 };
 use crate::pcs::utils::get_challenge_stir_queries;
+use crate::transcript::WhirShape;
 
 /// Per-round prover state with the Merkle authentication shapes
 /// baked in for the WHIR commitment scheme.
@@ -123,19 +123,21 @@ where
         }
     }
 
-    /// Build the Fiat-Shamir domain separator for this protocol instance.
+    /// Absorb this instance's transcript seed into the challenger.
     ///
-    /// The domain separator encodes all public protocol parameters into
-    /// the transcript so the verifier's challenges are bound to this
-    /// specific configuration (see Construction 5.1, step 1).
-    pub fn add_domain_separator<const DIGEST_ELEMS: usize>(&self, ds: &mut DomainSeparator<EF, F>)
+    /// The opening and verifying entry points call this themselves.
+    /// An integrator wiring up the scheme has nothing left to remember.
+    ///
+    /// # Arguments
+    ///
+    /// - `challenger`: the sponge the whole proof shares.
+    pub(crate) fn seed_transcript(&self, challenger: &mut Challenger)
     where
-        EF: TwoAdicField,
+        F: PrimeField64,
     {
-        // Encode the public parameters (num_variables, security, rate, etc.).
-        ds.commit_statement::<Challenger, DIGEST_ELEMS>(&self.config);
-        // Encode the full proof structure (round counts, query counts, etc.).
-        ds.add_whir_proof::<Challenger, DIGEST_ELEMS>(&self.config);
+        WhirShape::new(&self.config)
+            .domain_separator::<F, EF>()
+            .seed(challenger);
     }
 
     /// Execute the full WHIR proving protocol.
@@ -155,6 +157,13 @@ where
         Challenger: CanObserve<MT::Commitment>,
     {
         assert_eq!(self.round_folding_factor(0), layout.folding());
+        self.config
+            .validate_initial_claims(
+                layout
+                    .num_claims()
+                    .saturating_add(initial_ood_answers.len()),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
         let variable_order = L::variable_order();
 
         let mut initial_sumcheck = SumcheckData::default();
@@ -244,8 +253,6 @@ where
             F::ZERO
         };
 
-        challenger.sample();
-
         // STIR query sampling.
         let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F>(
             round_params.domain_size,
@@ -295,7 +302,7 @@ where
         // A freshly sampled challenge weights the groups by its successive powers,
         // and the verifier samples the same challenge to rebuild the identical batch.
         let num_variables = ood_statement.num_variables();
-        let constraint = Constraint::new(
+        let constraint = Constraint::new_with_existing_claim(
             challenger.sample_algebra_element(),
             num_variables,
             vec![

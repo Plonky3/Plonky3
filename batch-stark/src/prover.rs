@@ -9,10 +9,10 @@ use p3_air::DebugConstraintBuilder;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_air::{Air, RowWindow};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{Pcs, PolynomialSpace, UnivariateStarkPcs};
 use p3_field::{
     Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
-    PrimeField,
+    PrimeField64,
 };
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{
@@ -27,13 +27,13 @@ use p3_util::{DisjointMutPtr, log2_strict_usize};
 use tracing::{debug_span, info_span, instrument};
 
 use crate::common::ProverData;
-use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val};
+use crate::config::{Challenge, Commitment, Domain, StarkGenericConfig as SGC, Val};
 use crate::folder::ProverConstraintFolderWithLookups;
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
 use crate::symbolic::{
     get_constraint_layout, get_log_num_quotient_chunks_for_domain, get_symbolic_constraints,
 };
-use crate::transcript::BatchTranscript;
+use crate::transcript::{BatchProverTranscript, BatchShape};
 
 /// Per-instance quotient output: the chunk domains and their committed LDE matrices.
 type InstanceQuotient<SC> = (Vec<Domain<SC>>, Vec<RowMajorMatrix<Val<SC>>>);
@@ -117,7 +117,7 @@ pub fn prove_batch<
 ) -> BatchProof<SC>
 where
     SC: SGC,
-    Val<SC>: PrimeField,
+    Val<SC>: PrimeField64,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     Domain<SC>: Send + Sync,
     SC::Pcs: Sync,
@@ -130,7 +130,6 @@ where
     let lookup_gadget = LogUpGadget::new();
 
     let pcs = config.pcs();
-    let mut transcript = BatchTranscript::<SC>::new(config.initialise_challenger());
 
     // Collect per-instance degree information.
     let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
@@ -211,16 +210,30 @@ where
     let n_instances = airs.len();
     let widths: Vec<usize> = airs.iter().map(|a| A::width(a)).collect();
 
-    // Transcript: Observe instance count and per-instance bindings.
-    transcript.observe_instance_count(n_instances);
-    for i in 0..n_instances {
-        transcript.observe_instance_binding(
-            log_ext_degrees[i],
-            log_degrees[i],
-            widths[i],
-            num_quotient_chunks[i],
+    // Transcript: describe the run, then seed a driver from that description.
+    //
+    // Every number here comes from the AIRs, the common data, or the config.
+    // None of it is read back from the proof this run is about to build.
+    let shape = BatchShape {
+        trace_widths: widths,
+        public_value_counts: pub_vals.iter().map(|pv| pv.len()).collect(),
+        preprocessed_widths: preprocessed_widths.clone(),
+        has_preprocessed_commitment: common.preprocessed.is_some(),
+        num_lookup_instances: all_lookups.iter().filter(|l| !l.is_empty()).count(),
+        lookup_pow_bits: config.lookup_proof_of_work_bits(),
+        has_randomization_commitment: SC::Pcs::ZK,
+        ood_pow_bits: config.ood_proof_of_work_bits(),
+    };
+
+    let mut challenger = config.initialise_challenger();
+    let mut transcript =
+        BatchProverTranscript::<SC::Challenger, Val<SC>, Challenge<SC>, Commitment<SC>>::new(
+            &mut challenger,
+            shape,
         );
-    }
+
+    // The size of each instance is the prover's to choose, so it is absorbed.
+    transcript.instance_bindings(&log_ext_degrees);
 
     // Transcript: Main trace commitment
 
@@ -232,21 +245,18 @@ where
         .collect::<Vec<_>>();
     let (main_commit, main_data) = pcs.commit(main_commit_inputs);
 
-    transcript.observe_main(&main_commit, &pub_vals);
-    transcript.observe_preprocessed(&preprocessed_widths, common.preprocessed.as_ref());
+    transcript.main_phase(main_commit.clone(), &pub_vals);
+    transcript.preprocessed_phase(common.preprocessed.as_ref().map(|g| g.commitment.clone()));
 
     // Transcript: Lookup challenges and permutation traces
 
-    // Grind before the lookup challenges, then draw them. The main-trace
-    // commitment and every public value are already in the transcript, so the
-    // witness binds the trace: a prover searching for a favourable
-    // `(alpha, beta)` pays `2^lookup_proof_of_work_bits` per candidate.
-    let (challenges_per_instance, lookup_pow_witness) = transcript
-        .grind_and_sample_perm_challenges(
-            &all_lookups,
-            &lookup_gadget,
-            config.lookup_proof_of_work_bits(),
-        );
+    // Grind before the lookup challenges, then draw them.
+    //
+    // Why: the main-trace commitment and every public value are already bound.
+    // The witness therefore commits the prover to the trace before the pair exists.
+    // Searching for a favourable pair costs `2^lookup_proof_of_work_bits` per candidate.
+    let (challenges_per_instance, lookup_pow_witness) =
+        transcript.lookup_phase(&all_lookups, &lookup_gadget);
 
     // Generate permutation traces for instances that have lookups.
     let mut permutation_commit_inputs = Vec::with_capacity(n_instances);
@@ -325,10 +335,14 @@ where
         None
     };
 
-    // Transcript: observe permutation commitment + per-AIR terminals, sample alpha.
-    let alpha: Challenge<SC> = transcript.observe_perm_and_sample_alpha(
-        permutation_commit_and_data.as_ref().map(|(c, _)| c),
-        &lookup_terminals,
+    // Transcript: bind the permutation commitment and every terminal, then draw alpha.
+    let terminal_values: Vec<Challenge<SC>> =
+        lookup_terminals.iter().flatten().map(|t| t.0).collect();
+    let alpha: Challenge<SC> = transcript.permutation_phase(
+        permutation_commit_and_data
+            .as_ref()
+            .map(|(commitment, _)| commitment.clone()),
+        &terminal_values,
     );
 
     // Capture only the permutation prover data;
@@ -469,7 +483,6 @@ where
 
     // Commit all quotient chunks in a single batch.
     let (quotient_commit, quotient_data) = pcs.commit_ldes(quotient_chunk_mats);
-    transcript.observe_quotient_commitment(&quotient_commit);
 
     // Transcript: Optional ZK randomization polynomial
     //
@@ -488,18 +501,18 @@ where
         (None, None)
     };
 
-    if let Some(r_commit) = &opt_r_commit {
-        transcript.observe_random_commitment(r_commit);
-    }
+    transcript.quotient_phase(quotient_commit.clone(), opt_r_commit.clone());
 
     // Transcript: OOD opening
 
-    // Grind before the out-of-domain point, then sample it. Every commitment and lookup
-    // terminal above is already observed, so the witness commits the prover to the whole batch.
-    let (zeta, ood_pow_witness): (Challenge<SC>, Val<SC>) =
-        transcript.grind_and_sample_zeta(config.ood_proof_of_work_bits());
+    // Grind before the out-of-domain point, then sample it.
+    //
+    // Why: every commitment and lookup terminal above is already bound.
+    // The witness commits the prover to the whole batch before it learns the point.
+    let (zeta, ood_pow_witness): (Challenge<SC>, Val<SC>) = transcript.ood_phase();
 
     // Build the opening rounds and produce the FRI opening proof.
+    let opening_layout = p3_uni_stark::StarkOpeningLayout::new(SC::Pcs::ZK);
     let (opened_values, opening_proof) = {
         let mut rounds = Vec::new();
 
@@ -582,24 +595,32 @@ where
             rounds.push(lookup_round);
         }
 
-        pcs.open_with_preprocessing(
-            rounds,
-            &mut transcript.challenger,
-            common.preprocessed.is_some(),
-        )
+        // The opening argument runs on the same sponge, under its own description.
+        transcript.delegate(|challenger| {
+            pcs.open_with_preprocessing(
+                rounds.into_iter().map(Into::into).collect(),
+                challenger,
+                common
+                    .preprocessed
+                    .as_ref()
+                    .map(|_| opening_layout.preprocessed),
+            )
+        })
     };
+
+    transcript.finish();
 
     // Parse opened values into per-instance structures
 
     // Permutation round follows preprocessed (if present), else takes its slot.
     let permutation_idx = if common.preprocessed.is_some() {
-        SC::Pcs::PREPROCESSED_TRACE_IDX + 1
+        opening_layout.preprocessed + 1
     } else {
-        SC::Pcs::PREPROCESSED_TRACE_IDX
+        opening_layout.preprocessed
     };
 
     // Main trace opened values: one entry per instance.
-    let trace_values_for_mats = &opened_values[SC::Pcs::TRACE_IDX];
+    let trace_values_for_mats = &opened_values[opening_layout.trace];
     assert_eq!(trace_values_for_mats.len(), n_instances);
 
     let mut per_instance = Vec::with_capacity(n_instances);
@@ -608,7 +629,7 @@ where
     let preprocessed_openings = common
         .preprocessed
         .as_ref()
-        .map(|_| &opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX]);
+        .map(|_| &opened_values[opening_layout.preprocessed]);
 
     // Iterator over permutation opened values (one per instance with lookups).
     let is_lookup = permutation_commit_and_data.is_some();
@@ -620,7 +641,7 @@ where
     let mut permutation_values_for_mats = permutation_values_for_mats.iter();
 
     // Iterate over quotient chunk ranges to assemble per-instance opened values.
-    let mut quotient_openings_iter = opened_values[SC::Pcs::QUOTIENT_IDX].iter();
+    let mut quotient_openings_iter = opened_values[opening_layout.quotient].iter();
     for (i, (s, e)) in quotient_chunk_ranges.iter().copied().enumerate() {
         // Optional randomization polynomial opening.
         let random = if opt_r_data.is_some() {

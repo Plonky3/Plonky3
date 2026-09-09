@@ -321,11 +321,29 @@ fn apply_64(tables: &[[u64; 256]; 8], v: u64) -> u64 {
 /// Applies the sixteen-table form of a `128 × 128` matrix over `GF(2)`.
 #[inline]
 fn apply_128(tables: &[[u128; 256]; 16], v: u128) -> u128 {
-    let mut acc = 0;
-    for (byte, table) in tables.iter().enumerate() {
-        acc ^= table[(v >> (8 * byte)) as u8 as usize];
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        use core::arch::aarch64::{uint8x16_t, vdupq_n_u8, veorq_u8, vld1q_u8};
+        // Keep each table entry and the XOR accumulator in one 128-bit register.
+        // SAFETY: NEON is enabled, every selected entry contains 16 initialized bytes,
+        // and unaligned vector loads are supported. XOR is independent of byte order.
+        unsafe {
+            let mut acc = vdupq_n_u8(0);
+            for (byte, table) in tables.iter().enumerate() {
+                let entry = &table[(v >> (8 * byte)) as u8 as usize];
+                acc = veorq_u8(acc, vld1q_u8(core::ptr::from_ref(entry).cast()));
+            }
+            core::mem::transmute::<uint8x16_t, u128>(acc)
+        }
     }
-    acc
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+    {
+        let mut acc = 0;
+        for (byte, table) in tables.iter().enumerate() {
+            acc ^= table[(v >> (8 * byte)) as u8 as usize];
+        }
+        acc
+    }
 }
 
 /// `GF(2^64)` from the tower basis to the polynomial basis.
@@ -368,6 +386,23 @@ mod tests {
     use super::*;
     use crate::tower::TowerLevel;
     use crate::{BinaryField64, BinaryField128};
+
+    /// Check the dispatched map against scalar table evaluation, including every
+    /// possible byte in each position. This also pins the NEON load byte order.
+    #[test]
+    fn byte_maps_match_scalar_evaluation() {
+        for tables in [&TOWER_TO_POLY_128, &POLY_TO_TOWER_128] {
+            for byte in 0..16 {
+                for value in 0..256u128 {
+                    let input = !(255u128 << (8 * byte)) | (value << (8 * byte));
+                    let expected = tables.iter().enumerate().fold(0, |acc, (i, table)| {
+                        acc ^ table[(input >> (8 * i)) as u8 as usize]
+                    });
+                    assert_eq!(apply_128(tables, input), expected);
+                }
+            }
+        }
+    }
 
     /// Squaring in `GF(2)[x]/(x^bits + tail)`.
     fn poly_square(a: u128, bits: usize, tail: u128) -> u128 {

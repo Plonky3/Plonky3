@@ -8,6 +8,9 @@ use thiserror::Error;
 /// Errors during WHIR proof verification.
 #[derive(Error, Debug)]
 pub enum VerifierError {
+    /// The public opening batch does not reach the configured security target.
+    #[error(transparent)]
+    Config(#[from] crate::parameters::WhirConfigError),
     /// Merkle proof verification failed.
     #[error("Merkle proof verification failed at position {position}: {reason}")]
     MerkleProofInvalid { position: usize, reason: String },

@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear};
 use p3_blake3_air::Blake3Air;
 use p3_dft::Radix2DitParallel;
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::{BinomialExtensionField, QuinticTrinomialExtensionField};
 use p3_keccak_air::KeccakAir;
 use p3_koala_bear::{
     GenericPoseidon2LinearLayersKoalaBear, KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS,
@@ -117,7 +117,8 @@ fn test_end_to_end_koalabear_keccak_hashes_parallel_dft_keccak_merkle_tree_stir(
 -> Result<(), impl Debug> {
     let num_hashes = TRACE_SIZE / 24;
 
-    type EF = BinomialExtensionField<KoalaBear, 4>;
+    // Wide quotient batches need a larger field for the 100-bit STIR target.
+    type EF = QuinticTrinomialExtensionField<KoalaBear>;
 
     let proof_goal = KeccakAir {};
 
@@ -132,7 +133,8 @@ fn test_end_to_end_koalabear_vectorized_poseidon2_hashes_recursive_dft_poseidon2
     // WARNING: Use a real cryptographic PRNG in applications!!
     let mut rng = SmallRng::seed_from_u64(1);
 
-    type EF = BinomialExtensionField<KoalaBear, 4>;
+    // Wide quotient batches need a larger field for the 100-bit STIR target.
+    type EF = QuinticTrinomialExtensionField<KoalaBear>;
 
     let constants = RoundConstants::from_rng(&mut rng);
     const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;

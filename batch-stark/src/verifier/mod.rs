@@ -7,8 +7,8 @@ pub use data::VerifierData;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_air::{Air, BaseAir};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace};
-use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField};
+use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace, UnivariateStarkPcs};
+use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField64};
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{
     InteractionSymbolicBuilder, LookupError, LookupProtocol, check_multiplicity_height_bound,
@@ -27,7 +27,7 @@ use crate::error::BatchVerificationError;
 use crate::folder::VerifierConstraintFolderWithLookups;
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof};
 use crate::symbolic::get_log_num_quotient_chunks_for_domain;
-use crate::transcript::BatchTranscript;
+use crate::transcript::{BatchShape, BatchVerifierTranscript};
 
 /// What [`commitments_with_opening_points`] builds: the PCS opening argument itself — one
 /// [`CommitmentWithOpeningPoints`] per commitment round — paired with each instance's
@@ -75,7 +75,7 @@ pub type OpeningArgumentWithQuotientDomains<SC> = (
 /// - per-instance counts agreeing across `airs`, opened values, public values, degree bits,
 ///   lookup terminals and lookups ([`InvalidProofShapeError::InstanceCountMismatch`]);
 /// - presence of the ZK randomization commitment and its per-instance opened values matching
-///   [`Pcs::ZK`], and each random opening's dimension;
+///   [`UnivariateStarkPcs::ZK`], and each random opening's dimension;
 /// - public-value counts, trace-width agreement (local and next) and the
 ///   `main_next_row_columns` presence rule;
 /// - quotient-chunk counts and per-chunk dimensions;
@@ -332,7 +332,10 @@ where
         coms_to_verify.push((permutation_commit, permutation_round));
     }
 
-    Ok((coms_to_verify, quotient_domains))
+    Ok((
+        coms_to_verify.into_iter().map(Into::into).collect(),
+        quotient_domains,
+    ))
 }
 
 #[instrument(skip_all)]
@@ -345,7 +348,7 @@ pub fn verify_batch<SC, A>(
 ) -> Result<(), BatchVerificationError<PcsError<SC>>>
 where
     SC: SGC,
-    Val<SC>: PrimeField,
+    Val<SC>: PrimeField64,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
@@ -368,7 +371,6 @@ where
     let all_lookups = &common.lookups;
 
     let pcs = config.pcs();
-    let mut transcript = BatchTranscript::<SC>::new(config.initialise_challenger());
 
     // Sanity checks
     if airs.len() != opened_values.instances.len()
@@ -458,9 +460,6 @@ where
     // Base degree bits give the same heights the prover used.
     let trace_heights: Vec<usize> = base_degree_bits.iter().map(|&b| 1usize << b).collect();
     check_multiplicity_height_bound(all_lookups, &trace_heights)?;
-
-    // Observe the instance count up front to match the prover's transcript.
-    transcript.observe_instance_count(airs.len());
 
     for (i, air) in airs.iter().enumerate() {
         let air_width = A::width(air);
@@ -560,51 +559,71 @@ where
             }
             .into());
         }
-
-        // Observe per-instance binding data.
-        let ext_db = degree_bits[i];
-        let base_db = base_degree_bits[i];
-        let width = air.width();
-        let n_chunks = num_quotient_chunks[i];
-        transcript.observe_instance_binding(ext_db, base_db, width, n_chunks);
     }
 
-    // Observe main commitment and public values, then preprocessed data.
-    transcript.observe_main(&commitments.main, public_values);
-    transcript.observe_preprocessed(&preprocessed_widths, common.preprocessed.as_ref());
-
     // Validate the shape of the lookup commitment.
-    let is_lookup = commitments.permutation.is_some();
+    let num_lookup_instances = all_lookups.iter().filter(|c| !c.is_empty()).count();
 
-    if is_lookup != all_lookups.iter().any(|c| !c.is_empty()) {
+    if commitments.permutation.is_some() != (num_lookup_instances > 0) {
         return Err(LookupError::CommitmentMismatch.into());
     }
 
-    // Check the proof of work guarding the lookup challenges, then resample
-    // them. The check runs before the first squeeze, so a bad witness is
-    // rejected without the challenges ever being drawn.
-    let challenges_per_instance = transcript.check_and_sample_perm_challenges(
-        all_lookups,
-        &lookup_gadget,
-        config.lookup_proof_of_work_bits(),
-        *lookup_pow_witness,
-    )?;
-    let alpha: Challenge<SC> = transcript
-        .observe_perm_and_sample_alpha(commitments.permutation.as_ref(), lookup_terminals);
+    // Transcript: describe the run, then seed a driver from that description.
+    //
+    // Every number here comes from the AIRs, the common data, or the config.
+    // Every proof-carried count the description relies on was rejected above.
+    let shape = BatchShape {
+        trace_widths: airs.iter().map(A::width).collect(),
+        public_value_counts: airs.iter().map(BaseAir::num_public_values).collect(),
+        preprocessed_widths: preprocessed_widths.clone(),
+        has_preprocessed_commitment: common.preprocessed.is_some(),
+        num_lookup_instances,
+        lookup_pow_bits: config.lookup_proof_of_work_bits(),
+        has_randomization_commitment: SC::Pcs::ZK,
+        ood_pow_bits: config.ood_proof_of_work_bits(),
+    };
 
-    // Observe quotient chunks and optional random commitment.
-    transcript.observe_quotient_commitment(&commitments.quotient_chunks);
-    if let Some(r_commit) = &commitments.random {
-        transcript.observe_random_commitment(r_commit);
-    }
+    let mut challenger = config.initialise_challenger();
+    let mut transcript =
+        BatchVerifierTranscript::<SC::Challenger, Val<SC>, Challenge<SC>, Commitment<SC>>::new(
+            &mut challenger,
+            shape,
+        );
 
-    // Check the proof of work guarding the out-of-domain point, then resample it. The check
-    // runs before the sample, so a bad witness is rejected without zeta ever being drawn.
-    let zeta = transcript
-        .check_and_sample_zeta(config.ood_proof_of_work_bits(), *ood_pow_witness)
-        .ok_or(BatchVerificationError::InvalidOodPowWitness)?;
+    // The size of each instance is the prover's to choose, so it is replayed.
+    transcript.instance_bindings(degree_bits);
 
-    let (coms_to_verify, quotient_domains) = commitments_with_opening_points(
+    transcript.main_phase(commitments.main.clone(), public_values);
+    transcript.preprocessed_phase(common.preprocessed.as_ref().map(|g| g.commitment.clone()));
+
+    // Replay the grind guarding the lookup challenges, then redraw them.
+    //
+    // Why: the check runs before the first squeeze.
+    // A bad witness is therefore rejected without the challenges ever being drawn.
+    let challenges_per_instance =
+        transcript.lookup_phase(all_lookups, &lookup_gadget, *lookup_pow_witness)?;
+
+    let terminal_values: Vec<Challenge<SC>> =
+        lookup_terminals.iter().flatten().map(|t| t.0).collect();
+    let alpha: Challenge<SC> =
+        transcript.permutation_phase(commitments.permutation.clone(), &terminal_values);
+
+    transcript.quotient_phase(
+        commitments.quotient_chunks.clone(),
+        commitments.random.clone(),
+    );
+
+    // Replay the grind guarding the out-of-domain point, then redraw it.
+    //
+    // Why: the check runs before the sample.
+    // A bad witness is therefore rejected without zeta ever being drawn.
+    let zeta = transcript.ood_phase(*ood_pow_witness)?;
+
+    // Assembling the opening argument can still reject the proof's shape.
+    //
+    // The driver is mid-pattern here, and dropping it unfinished panics.
+    // Releasing its completeness check first keeps the rejection the only failure.
+    let opening_argument = commitments_with_opening_points(
         config,
         airs,
         zeta,
@@ -614,11 +633,22 @@ where
         degree_bits,
         &preprocessed_widths,
         &log_num_quotient_chunks,
-    )?;
+    );
+    let (coms_to_verify, quotient_domains) = match opening_argument {
+        Ok(argument) => argument,
+        Err(err) => {
+            transcript.abort();
+            return Err(err);
+        }
+    };
 
-    // Verify all openings via PCS.
-    pcs.verify(coms_to_verify, opening_proof, &mut transcript.challenger)
-        .map_err(VerificationError::InvalidOpeningArgument)?;
+    // Verify all openings via PCS, on the same sponge and under its own description.
+    let opening_result =
+        transcript.delegate(|challenger| pcs.verify(coms_to_verify, opening_proof, challenger));
+
+    // The bracket is closed either way, so the driver finishes before the rejection travels.
+    transcript.finish();
+    opening_result.map_err(VerificationError::InvalidOpeningArgument)?;
 
     // Un-extended trace domains, one per instance — needed below for periodic-column
     // evaluation. `commitments_with_opening_points` derives the same domains internally but

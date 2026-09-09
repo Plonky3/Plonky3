@@ -22,6 +22,10 @@ env:
 jobs:
   whir_exhaustive:
     name: WHIR exhaustive tests
+    env:
+      # Optimize the exhaustive sweep while retaining the test profile's
+      # debug assertions and overflow checks.
+      CARGO_PROFILE_TEST_OPT_LEVEL: 1
     strategy:
       matrix:
         include:
@@ -43,6 +47,8 @@ jobs:
           echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test WHIR exhaustive sweep
         run: python3 scripts/check.py whir-exhaustive
@@ -66,6 +72,8 @@ jobs:
         run: echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=+pclmulqdq" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test the 2^16 round trip
         run: python3 scripts/check.py binary-large

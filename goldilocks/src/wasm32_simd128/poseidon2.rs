@@ -175,11 +175,11 @@ fn internal_round_goldilocks_12(
     let two_s8 = s8 + s8;
     state[8] = sum - (two_s8 + two_s8);
     // V[9] = 1/2^2
-    state[9] = sum + s9.halve().halve();
+    state[9] = sum + s9.div_2exp_u64(2);
     // V[10] = -1/2^2
-    state[10] = sum - s10.halve().halve();
+    state[10] = sum - s10.div_2exp_u64(2);
     // V[11] = 1/2^3
-    state[11] = sum + s11.halve().halve().halve();
+    state[11] = sum + s11.div_2exp_u64(3);
 }
 
 /// Apply one internal round of the width-16 Goldilocks Poseidon2 internal linear layer to a
@@ -234,20 +234,19 @@ fn internal_round_goldilocks_16(
     let two_s8 = s8 + s8;
     state[8] = sum - (two_s8 + two_s8);
     // V[9] = 1/2^3
-    state[9] = sum + s9.halve().halve().halve();
+    state[9] = sum + s9.div_2exp_u64(3);
     // V[10] = 1/2^4
-    state[10] = sum + s10.halve().halve().halve().halve();
+    state[10] = sum + s10.div_2exp_u64(4);
     // V[11] = 1/2^5
-    state[11] = sum + s11.halve().halve().halve().halve().halve();
+    state[11] = sum + s11.div_2exp_u64(5);
     // V[12] = -1/2^3
-    state[12] = sum - s12.halve().halve().halve();
+    state[12] = sum - s12.div_2exp_u64(3);
     // V[13] = -1/2^4
-    state[13] = sum - s13.halve().halve().halve().halve();
+    state[13] = sum - s13.div_2exp_u64(4);
     // V[14] = -1/2^5
-    state[14] = sum - s14.halve().halve().halve().halve().halve();
+    state[14] = sum - s14.div_2exp_u64(5);
     // V[15] = 1/2^32
-    let inv_2_32 = crate::MATRIX_DIAG_16_GOLDILOCKS[15];
-    state[15] = sum + s15 * inv_2_32;
+    state[15] = sum + s15.div_2exp_u64(32);
 }
 
 /// The internal layers of the Poseidon2 permutation, specialized for `PackedGoldilocksWasmSimd128`.

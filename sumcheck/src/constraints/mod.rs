@@ -216,6 +216,9 @@ pub struct Constraint<F: Field, EF: ExtensionField<F>> {
 
     /// Batching challenge whose powers weight each constraint.
     challenge: EF,
+
+    /// First exponent for fresh claims; one reserves coefficient zero for a carried claim.
+    initial_power: usize,
 }
 
 impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
@@ -250,6 +253,23 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
             num_variables,
             statements,
             challenge,
+            initial_power: 0,
+        }
+    }
+
+    /// Builds fresh claims to add to a carried claim with coefficient one.
+    ///
+    /// Fresh weights start at `challenge`, reserving the constant coefficient
+    /// for the carried claim. All claims must be fixed before sampling it.
+    #[must_use]
+    pub fn new_with_existing_claim(
+        challenge: EF,
+        num_variables: usize,
+        statements: Vec<Statements<F, EF>>,
+    ) -> Self {
+        Self {
+            initial_power: 1,
+            ..Self::new(challenge, num_variables, statements)
         }
     }
 
@@ -273,11 +293,11 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     ///
     /// # Arguments
     ///
-    /// - `shift`: exponent of the first power yielded.
+    /// - `shift`: offset relative to this batch's first exponent (zero or one).
     pub fn challenge_powers(&self, shift: usize) -> impl Iterator<Item = EF> {
         // Seed the power sequence at the challenge raised to the requested offset.
         self.challenge
-            .shifted_powers(self.challenge.exp_u64(shift as u64))
+            .shifted_powers(self.challenge.exp_u64((self.initial_power + shift) as u64))
     }
 
     /// Accumulates the challenge-weighted expected value across all groups.
@@ -291,7 +311,7 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     /// Each group starts at the power just after the previous group's last constraint.
     pub fn combine_evals(&self, eval: &mut EF) {
         // Running exponent of the next challenge power to assign.
-        let mut shift = 0;
+        let mut shift = self.initial_power;
         for statement in &self.statements {
             // Fold this group's expected values starting at the current exponent.
             statement.combine_evals(eval, self.challenge, shift);
@@ -313,7 +333,7 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     /// - `eval`: scalar accumulator for the expected value.
     pub fn combine(&self, combined: &mut Poly<EF>, eval: &mut EF) {
         // Running exponent of the next challenge power to assign.
-        let mut shift = 0;
+        let mut shift = self.initial_power;
         // Treat the incoming accumulator as already holding data, so every group adds onto it.
         let mut initialized = true;
         for statement in &self.statements {
@@ -332,7 +352,7 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     /// - `eval`: scalar accumulator for the expected value.
     pub fn combine_packed(&self, combined: &mut Poly<EF::ExtensionPacking>, eval: &mut EF) {
         // Running exponent of the next challenge power to assign.
-        let mut shift = 0;
+        let mut shift = self.initial_power;
         // Treat the incoming accumulator as already holding data, so every group adds onto it.
         let mut initialized = true;
         for statement in &self.statements {
@@ -356,7 +376,7 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         let mut eval = EF::ZERO;
 
         // Running exponent of the next challenge power to assign.
-        let mut shift = 0;
+        let mut shift = self.initial_power;
         // The accumulator starts empty, so the first nonempty group may overwrite instead of add.
         let mut initialized = false;
         for statement in &self.statements {
@@ -386,7 +406,7 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         let mut eval = EF::ZERO;
 
         // Running exponent of the next challenge power to assign.
-        let mut shift = 0;
+        let mut shift = self.initial_power;
         // The accumulator starts empty, so the first nonempty group may overwrite instead of add.
         let mut initialized = false;
         for statement in &self.statements {
@@ -423,6 +443,58 @@ mod tests {
 
     /// Type alias for the extension field used in tests
     type EF = BinomialExtensionField<F, 4>;
+
+    #[test]
+    fn fresh_claim_cannot_cancel_a_carried_error_for_every_challenge() {
+        // A zero polynomial with a carried +1 error and a fresh -1 error.
+        // Distinct challenge powers leave 1-alpha, which is nonzero at 2 and 3.
+        // Giving both errors coefficient one incorrectly erases both errors.
+        for alpha in [EF::from_u64(2), EF::from_u64(3)] {
+            let statement =
+                EqStatement::new_hypercube(vec![Point::new(vec![EF::ZERO; 4])], vec![-EF::ONE]);
+            let constraint = Constraint::<F, EF>::new_with_existing_claim(
+                alpha,
+                4,
+                vec![Statements::Eq(statement)],
+            );
+            let mut claimed = EF::ONE;
+            constraint.combine_evals(&mut claimed);
+            assert_ne!(
+                claimed,
+                EF::ZERO,
+                "independent errors must retain their random weight"
+            );
+            assert_eq!(claimed, EF::ONE - alpha);
+
+            let (weights, fresh_claim) = constraint.combine_new();
+            assert_eq!(fresh_claim, -alpha);
+            assert_eq!(weights.as_slice()[0], alpha);
+            assert!(weights.as_slice()[1..].iter().all(|&w| w == EF::ZERO));
+            let (packed, packed_claim) = constraint.combine_new_packed();
+            assert_eq!(packed.unpack::<F, EF>(), weights);
+            assert_eq!(packed_claim, -alpha);
+
+            let mut dense = Poly::new(vec![EF::ONE; 16]);
+            let mut packed = dense.pack::<F, EF>();
+            let mut dense_claim = EF::ONE;
+            let mut packed_claim = EF::ONE;
+            constraint.combine(&mut dense, &mut dense_claim);
+            constraint.combine_packed(&mut packed, &mut packed_claim);
+            assert_eq!(dense_claim, EF::ONE - alpha);
+            assert_eq!(packed_claim, dense_claim);
+            assert_eq!(packed.unpack::<F, EF>(), dense);
+            assert_eq!(dense.as_slice()[0], EF::ONE + alpha);
+            for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
+                assert_eq!(
+                    order.eval_constraints_poly(
+                        core::slice::from_ref(&constraint),
+                        &Point::new(vec![EF::ZERO; 4]),
+                    ),
+                    alpha
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_constraint_new() {

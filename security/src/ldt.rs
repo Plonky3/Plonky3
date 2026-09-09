@@ -18,8 +18,9 @@ use crate::shape::{InstanceShape, StarkAirParams};
 /// DEEP-ALI bounds at the protocol call site.
 ///
 /// The proximity regimes mirror [`crate::proximity`]: unique decoding (list
-/// size 1) and list decoding at an explicit proximity parameter `m`. An
-/// implementation reports only the **LDT-only** error for each regime; the
+/// size 1) and list decoding at an explicit proximity parameter `m`, plus
+/// conjectured and optionally legacy bounds. An implementation reports only
+/// the **LDT-only** error for each regime; the
 /// composite ([`crate::stark::proven_security_report`]) folds in the ALI,
 /// DEEP, extra, and commitment-collision terms.
 pub trait LowDegreeTest {
@@ -61,6 +62,17 @@ pub trait LowDegreeTest {
 
     /// Conjectured LDT error (random-words / heuristic regime).
     fn conjectured_error(&self, shape: &InstanceShape) -> ErrorBits;
+
+    /// Legacy conjectured LDT error, before the random-words correction.
+    ///
+    /// Returns `None` unless the implementation explicitly supports the
+    /// legacy regime. This keeps existing implementations compatible without
+    /// relabeling their modern conjectured bound as a legacy one.
+    /// [`crate::fri::FriRegime`] returns the ethSTARK query-only bound,
+    /// omitting its commit-phase folding round.
+    fn legacy_conjectured_error(&self, _shape: &InstanceShape) -> Option<ErrorBits> {
+        None
+    }
 
     /// The conjectured regime's LDT terms, labeled per phase.
     ///

@@ -217,12 +217,14 @@ mod test_quadratic_extension {
 mod test_cubic_trinomial_extension {
 
     use num_bigint::BigUint;
-    use p3_field::extension::CubicTrinomialExtensionField;
+    use p3_field::extension::{CubicTrinomialExtensionField, HasFrobenius};
     use p3_field::{ExtensionField, PrimeCharacteristicRing};
     use p3_field_testing::{
         test_extension_field, test_field, test_frobenius, test_packed_extension_field,
         test_two_adic_extension_field,
     };
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use crate::Goldilocks;
 
@@ -253,6 +255,31 @@ mod test_cubic_trinomial_extension {
         let x_cubed = x * x * x;
         let x_plus_one = x + EF::ONE;
         assert_eq!(x_cubed, x_plus_one, "X^3 should equal X + 1");
+    }
+
+    #[test]
+    fn test_frobenius_matches_exponentiation_oracle() {
+        const P: u64 = 0xFFFF_FFFF_0000_0001;
+
+        let edge_values = [0, 1, P - 1, P, P + 1, u64::MAX];
+        for a0 in edge_values {
+            for a1 in edge_values {
+                for a2 in edge_values {
+                    let x = EF::new([F::new(a0), F::new(a1), F::new(a2)]);
+                    assert_eq!(x.frobenius(), x.exp_u64(P), "x = {x:?}");
+                }
+            }
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x0F0B_31A5);
+        for _ in 0..128 {
+            let x = EF::new([
+                F::new(rng.random()),
+                F::new(rng.random()),
+                F::new(rng.random()),
+            ]);
+            assert_eq!(x.frobenius(), x.exp_u64(P), "x = {x:?}");
+        }
     }
 
     test_field!(

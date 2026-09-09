@@ -119,6 +119,7 @@ where
     /// point the fold challenges define, times the final codeword's (uniform) value equals the
     /// running sumcheck claim; `verify_query_paths` then ties every sampled query's fold chain
     /// to that same codeword.
+    #[tracing::instrument(name = "binary pcs verify", skip_all)]
     fn verify_opening<'p, Challenger>(
         &self,
         commitment: &MT::Commitment,
@@ -194,21 +195,26 @@ where
         let mut claimed_sum = BinaryField128::ZERO;
         constraint.combine_evals(&mut claimed_sum);
 
-        // One `verify_rounds` call per fold round: a single call spanning every round would
-        // read all of the proof's polynomial messages before any intermediate commitment is
-        // observed, which is not the order the prover produced them in.
+        // Replay each polynomial before its own challenge, observing roots only at the
+        // batch boundaries chosen by the verifier's configuration.
         let mut betas = Vec::with_capacity(num_fold_rounds);
-        for r in 0..num_fold_rounds {
-            let round_data = SumcheckData {
-                polynomial_evaluations: vec![proof.sumcheck.polynomial_evaluations()[r]],
-                pow_witnesses: Vec::new(),
-            };
-            let round_point =
-                round_data.verify_rounds(challenger, &mut claimed_sum, 1, 0, Basis::Evaluation)?;
-            betas.push(round_point.as_slice()[0]);
-
-            if r + 1 < num_fold_rounds {
-                challenger.observe(proof.rounds[r].commitment.clone());
+        for (batch, (start, arity)) in self.config.fold_batches().enumerate() {
+            for r in start..start + arity {
+                let round_data = SumcheckData {
+                    polynomial_evaluations: vec![proof.sumcheck.polynomial_evaluations()[r]],
+                    pow_witnesses: Vec::new(),
+                };
+                let round_point = round_data.verify_rounds(
+                    challenger,
+                    &mut claimed_sum,
+                    1,
+                    0,
+                    Basis::Evaluation,
+                )?;
+                betas.push(round_point.as_slice()[0]);
+            }
+            if batch + 1 < self.config.num_fold_batches() {
+                challenger.observe(proof.rounds[batch].commitment.clone());
             }
         }
 
@@ -271,6 +277,7 @@ where
         commit(&self.config, &self.encoder, &self.mmcs, challenger, witness)
     }
 
+    #[tracing::instrument(name = "binary pcs open", skip_all)]
     fn open(
         &self,
         mut prover_data: Self::ProverData,
@@ -313,6 +320,7 @@ where
     /// This trait gives no Fiat-Shamir guarantee on its own: the caller must have bound
     /// `points` to the shared transcript (see [`PrescribedPointPcs`]'s own Fiat-Shamir /
     /// Soundness doc) before calling this method, exactly as it must before `verify_at`.
+    #[tracing::instrument(name = "binary pcs open", skip_all)]
     fn open_at(
         &self,
         mut prover_data: Self::ProverData,
@@ -426,6 +434,7 @@ mod tests {
     #[allow(clippy::type_complexity)]
     fn open_at_fixture(
         seed: u64,
+        log_folding_factor: usize,
     ) -> (
         BinaryPcs<MyMmcs>,
         <MyMmcs as Mmcs<F>>::Commitment,
@@ -442,7 +451,10 @@ mod tests {
             vec![OpeningBatch::new(vec![0], Vec::new())],
         )]);
 
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
+        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params())
+            .unwrap()
+            .try_with_folding(log_folding_factor)
+            .unwrap();
         let pcs = BinaryPcs::new(config, mmcs());
 
         let mut prover_challenger = challenger();
@@ -467,7 +479,7 @@ mod tests {
     /// than assumed.
     #[test]
     fn verify_at_round_trips_with_transcript_derived_points() {
-        let (pcs, commitment, proof, protocol, point) = open_at_fixture(0xFEED);
+        let (pcs, commitment, proof, protocol, point) = open_at_fixture(0xFEED, 1);
 
         // `verify_at` does not absorb the commitment; the caller does, exactly once, before
         // deriving the point it then hands to `verify_at`.
@@ -490,6 +502,24 @@ mod tests {
         .unwrap();
     }
 
+    #[test]
+    fn batched_verify_at_round_trips_with_transcript_derived_points() {
+        let (pcs, commitment, proof, protocol, point) = open_at_fixture(0xFEED, 3);
+        let mut verifier_challenger = challenger();
+        verifier_challenger.observe(commitment.clone());
+        let sample: F = verifier_challenger.sample_algebra_element();
+        let verifier_point = Point::expand_from_univariate(sample, NUM_VARIABLES);
+        assert_eq!(verifier_point, point);
+        pcs.verify_at(
+            &commitment,
+            &proof,
+            &protocol,
+            core::slice::from_ref(&verifier_point),
+            &mut verifier_challenger,
+        )
+        .unwrap();
+    }
+
     /// A verifier that skips absorbing the commitment before calling `verify_at` — the one
     /// responsibility `verify_at` leaves to its caller — must reject the proof, even though the
     /// point it supplies is the genuine one the proof was opened at. This is what would catch a
@@ -499,7 +529,7 @@ mod tests {
     /// verify anyway, since the point supplied here needs no repair — only the challenger does.
     #[test]
     fn verify_at_rejects_a_proof_when_the_caller_skips_absorbing_the_commitment() {
-        let (pcs, commitment, proof, protocol, point) = open_at_fixture(0xFEED);
+        let (pcs, commitment, proof, protocol, point) = open_at_fixture(0xFEED, 1);
 
         let mut verifier_challenger = challenger();
         let err = pcs

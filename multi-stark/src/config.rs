@@ -21,7 +21,10 @@ pub trait MultiStarkConfig {
 
     /// Extension field that challenges are drawn from.
     ///
-    /// Large enough that a random challenge collides with negligible probability.
+    /// Its cardinality must cover the complete reduction's security budget.
+    /// `ExtensionField` also admits the base field itself; that is appropriate
+    /// for sufficiently large fields, but does not enforce a security minimum.
+    /// Use [`crate::verify_with_security`] to enforce an explicit target.
     type Challenge: ExtensionField<Self::Val>;
 
     /// Fiat-Shamir transcript used to derive challenges and absorb commitments.
@@ -32,6 +35,15 @@ pub trait MultiStarkConfig {
 
     /// Borrow the commitment scheme for the main trace.
     fn pcs(&self) -> &Self::Pcs;
+
+    /// Trusted collision-security cap for the transcript and all commitment hashes.
+    ///
+    /// Return the minimum supported by these primitives and their parameters.
+    /// This is separate from the PCS's algebraic soundness assessment. The
+    /// default supplies no evidence, so security-checked entry points fail closed.
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        None
+    }
 
     /// Borrow the commitment scheme for the preprocessed trace.
     ///

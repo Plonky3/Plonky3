@@ -132,8 +132,97 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX2 {
     }
 
     #[inline]
+    fn mul_2exp_u64(&self, mut exp: u64) -> Self {
+        exp %= 192;
+        match exp {
+            0 => *self,
+            1 => self.double(),
+            _ => *self * Self::broadcast(Goldilocks::power_of_two(exp)),
+        }
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, mut exp: u64) -> Self {
+        exp %= 192;
+        match exp {
+            0 => *self,
+            1 => self.halve(),
+            2..=32 => unsafe {
+                let x = self.to_vector();
+                let lo = _mm256_and_si256(x, _mm256_set1_epi64x((1i64 << exp) - 1));
+                let hi = _mm256_srl_epi64(x, _mm_cvtsi64_si128(exp as i64));
+                let a = _mm256_add_epi64(
+                    hi,
+                    _mm256_sll_epi64(lo, _mm_cvtsi64_si128((32 - exp) as i64)),
+                );
+                let b = _mm256_sll_epi64(lo, _mm_cvtsi64_si128((64 - exp) as i64));
+                // 2^-exp = 2^(32-exp) - 2^(64-exp) mod P. Both a and b are
+                // below P; in particular b <= 2^64 - 2^32, as required by the helper.
+                Self::from_vector(shift(sub_small_64s_64_s(shift(a), b)))
+            },
+            _ => *self * Self::broadcast(Goldilocks::power_of_two(192 - exp)),
+        }
+    }
+
+    #[inline]
     fn square(&self) -> Self {
         Self::from_vector(square(self.to_vector()))
+    }
+
+    #[inline]
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
+        assert_eq!(N, input.len());
+        match N {
+            0 => Self::ZERO,
+            1 => input[0],
+            2 => input[0] + input[1],
+            3 => input[0] + input[1] + input[2],
+            4 => (input[0] + input[1]) + (input[2] + input[3]),
+            5 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<1>(&input[4..]),
+            6 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<2>(&input[4..]),
+            7 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<3>(&input[4..]),
+            8 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<4>(&input[4..]),
+            9..=63 => {
+                // Keep the existing eight-term trees for short sums: carry bookkeeping
+                // adds latency until enough independent work amortizes the final fold.
+                let mut acc = Self::sum_array::<8>(&input[..8]);
+                for i in (16..=N).step_by(8) {
+                    acc += Self::sum_array::<8>(&input[(i - 8)..i]);
+                }
+                let tail = &input[(8 * (N / 8))..];
+                match N & 7 {
+                    0 => acc,
+                    1 => acc + Self::sum_array::<1>(tail),
+                    2 => acc + Self::sum_array::<2>(tail),
+                    3 => acc + Self::sum_array::<3>(tail),
+                    4 => acc + Self::sum_array::<4>(tail),
+                    5 => acc + Self::sum_array::<5>(tail),
+                    6 => acc + Self::sum_array::<6>(tail),
+                    7 => acc + Self::sum_array::<7>(tail),
+                    _ => unreachable!(),
+                }
+            }
+            _ => {
+                let mut chunks = input.chunks(MAX_SUM_CHUNK);
+                let mut sum = Self::from_vector(sum_delayed_reduce(chunks.next().unwrap()));
+                for chunk in chunks {
+                    sum += Self::from_vector(sum_delayed_reduce(chunk));
+                }
+                sum
+            }
+        }
+    }
+
+    #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        if (2..=6).contains(&N) {
+            Self::from_vector(dot_product_delayed_reduce::<N>(|i| {
+                (lhs[i].to_vector(), rhs[i].to_vector())
+            }))
+        } else {
+            let products: [Self; N] = core::array::from_fn(|i| lhs[i] * rhs[i]);
+            Self::sum_array::<N>(&products)
+        }
     }
 
     #[inline]
@@ -170,11 +259,17 @@ impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {
 
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
-        dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(
-            a,
-            f,
-            <Self as Algebra<Goldilocks>>::BATCHED_LC_CHUNK,
-        )
+        if (2..=6).contains(&N) {
+            Self::from_vector(dot_product_delayed_reduce::<N>(|i| {
+                (a[i].to_vector(), Self::broadcast(f[i]).to_vector())
+            }))
+        } else {
+            dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(
+                a,
+                f,
+                <Self as Algebra<Goldilocks>>::BATCHED_LC_CHUNK,
+            )
+        }
     }
 }
 
@@ -248,6 +343,7 @@ const SHIFTED_FIELD_ORDER: __m256i =
 
 /// Equal to 2^32 - 1 = 2^64 mod P.
 const EPSILON: __m256i = unsafe { transmute([Goldilocks::ORDER_U64.wrapping_neg(); WIDTH]) };
+const MAX_SUM_CHUNK: usize = 64;
 
 /// Add 2^63 with overflow. Needed to emulate unsigned comparisons (see point 3. in
 /// packed_prime_field.rs).
@@ -447,6 +543,119 @@ unsafe fn add_small_64s_64_s(x_s: __m256i, y: __m256i) -> __m256i {
     }
 }
 
+/// Sum a nonempty chunk of at most [`MAX_SUM_CHUNK`] arbitrary packed u64 values.
+#[inline]
+fn sum_delayed_reduce(input: &[PackedGoldilocksAVX2]) -> __m256i {
+    debug_assert!(!input.is_empty());
+    debug_assert!(input.len() <= MAX_SUM_CHUNK);
+
+    unsafe {
+        let zero = _mm256_setzero_si256();
+
+        // Only a final chunk can have fewer than four terms. A single dependency chain is
+        // preferable for this small tail and avoids indexing four empty accumulators.
+        if input.len() < 4 {
+            let mut lo_s = shift(input[0].to_vector());
+            let mut carries = zero;
+            for value in &input[1..] {
+                let old_s = lo_s;
+                lo_s = _mm256_add_epi64(lo_s, value.to_vector());
+                let carry = _mm256_cmpgt_epi64(old_s, lo_s);
+                carries = _mm256_sub_epi64(carries, carry);
+            }
+
+            let correction = _mm256_sub_epi64(_mm256_slli_epi64::<32>(carries), carries);
+            return shift(add_small_64s_64_s(lo_s, correction));
+        }
+
+        let (groups, remainder) = input.as_chunks::<4>();
+        let (first, groups) = groups.split_first().unwrap();
+        let mut lo0_s = shift(first[0].to_vector());
+        let mut lo1_s = shift(first[1].to_vector());
+        let mut lo2_s = shift(first[2].to_vector());
+        let mut lo3_s = shift(first[3].to_vector());
+        let mut carries0 = zero;
+        let mut carries1 = zero;
+        let mut carries2 = zero;
+        let mut carries3 = zero;
+
+        // Keep these four updates explicit so the independent dependency chains are visible
+        // to the compiler without dynamically indexing an accumulator array.
+        for values in groups {
+            let old0_s = lo0_s;
+            lo0_s = _mm256_add_epi64(lo0_s, values[0].to_vector());
+            let carry0 = _mm256_cmpgt_epi64(old0_s, lo0_s);
+            carries0 = _mm256_sub_epi64(carries0, carry0);
+
+            let old1_s = lo1_s;
+            lo1_s = _mm256_add_epi64(lo1_s, values[1].to_vector());
+            let carry1 = _mm256_cmpgt_epi64(old1_s, lo1_s);
+            carries1 = _mm256_sub_epi64(carries1, carry1);
+
+            let old2_s = lo2_s;
+            lo2_s = _mm256_add_epi64(lo2_s, values[2].to_vector());
+            let carry2 = _mm256_cmpgt_epi64(old2_s, lo2_s);
+            carries2 = _mm256_sub_epi64(carries2, carry2);
+
+            let old3_s = lo3_s;
+            lo3_s = _mm256_add_epi64(lo3_s, values[3].to_vector());
+            let carry3 = _mm256_cmpgt_epi64(old3_s, lo3_s);
+            carries3 = _mm256_sub_epi64(carries3, carry3);
+        }
+
+        // Distribute the one-to-three remainder terms across distinct chains.
+        if let Some(value) = remainder.first() {
+            let old_s = lo0_s;
+            lo0_s = _mm256_add_epi64(lo0_s, value.to_vector());
+            let carry = _mm256_cmpgt_epi64(old_s, lo0_s);
+            carries0 = _mm256_sub_epi64(carries0, carry);
+        }
+        if let Some(value) = remainder.get(1) {
+            let old_s = lo1_s;
+            lo1_s = _mm256_add_epi64(lo1_s, value.to_vector());
+            let carry = _mm256_cmpgt_epi64(old_s, lo1_s);
+            carries1 = _mm256_sub_epi64(carries1, carry);
+        }
+        if let Some(value) = remainder.get(2) {
+            let old_s = lo2_s;
+            lo2_s = _mm256_add_epi64(lo2_s, value.to_vector());
+            let carry = _mm256_cmpgt_epi64(old_s, lo2_s);
+            carries2 = _mm256_sub_epi64(carries2, carry);
+        }
+
+        let (lo01_s, carries01) = merge_sum_accumulators(lo0_s, carries0, lo1_s, carries1);
+        let (lo23_s, carries23) = merge_sum_accumulators(lo2_s, carries2, lo3_s, carries3);
+        let (lo_s, carries) = merge_sum_accumulators(lo01_s, carries01, lo23_s, carries23);
+
+        // Each chain counts its internal low-word carries, and each merge adds the carry from
+        // combining its two low words. Thus the final count is the carry count of the exact
+        // whole-chunk sum and is at most `input.len() - 1 <= 63`.
+        // Since `2^64 = 2^32 - 1 (mod P)`, the correction is `(c << 32) - c`.
+        // It is at most `63 * (2^32 - 1) < P`, so the bounded add is valid.
+        let correction = _mm256_sub_epi64(_mm256_slli_epi64::<32>(carries), carries);
+        shift(add_small_64s_64_s(lo_s, correction))
+    }
+}
+
+/// Merge two exact delayed-sum states, including the carry from adding their low words.
+#[inline(always)]
+unsafe fn merge_sum_accumulators(
+    lo0_s: __m256i,
+    carries0: __m256i,
+    lo1_s: __m256i,
+    carries1: __m256i,
+) -> (__m256i, __m256i) {
+    unsafe {
+        // Both inputs are shifted, so undo the second shift before adding it to the first. The
+        // result remains shifted and can use a signed comparison for the unsigned merge carry.
+        let lo_s = _mm256_add_epi64(lo0_s, shift(lo1_s));
+        let carry = _mm256_cmpgt_epi64(lo0_s, lo_s);
+        let carries = _mm256_add_epi64(carries0, carries1);
+        let carries = _mm256_sub_epi64(carries, carry);
+        (lo_s, carries)
+    }
+}
+
 /// Goldilocks subtraction of a "small" number. `x_s` is pre-shifted by 2**63. `y` is assumed to be
 /// <= `0xffffffff00000000`. The result is shifted by 2**63.
 #[inline]
@@ -462,6 +671,61 @@ unsafe fn sub_small_64s_64_s(x_s: __m256i, y: __m256i) -> __m256i {
         // The mask contains 0xffffffff in the high 32 bits if wraparound occurred and 0 otherwise.
         let wrapback_amt = _mm256_srli_epi64::<32>(mask); // -FIELD_ORDER if underflowed else 0.
         _mm256_sub_epi64(res_wrapped_s, wrapback_amt)
+    }
+}
+
+/// Accumulate 2..=6 full-u64 products without losing carries above bit 128.
+///
+/// With B = 2^32, the exact sum is lo + B^2 * mid + B^3 * top. Each product
+/// contributes its low64 word, the bottom32 of its high64 word, and its top32.
+/// Carries from lo enter mid. After k terms, mid <= k*B - 1 and top <= k*(B - 1),
+/// so neither accumulator can overflow for k <= 6, even for noncanonical inputs.
+#[inline]
+fn dot_product_delayed_reduce<const N: usize>(
+    inputs: impl Fn(usize) -> (__m256i, __m256i),
+) -> __m256i {
+    debug_assert!((2..=6).contains(&N));
+    unsafe {
+        let (a, b) = inputs(0);
+        let (hi, lo) = mul64_64(a, b);
+        let mut lo_s = shift(lo);
+        let mut mid = _mm256_and_si256(hi, EPSILON);
+        let mut top = _mm256_srli_epi64::<32>(hi);
+        let mut accumulate = |i| {
+            let (a, b) = inputs(i);
+            let (hi, lo) = mul64_64(a, b);
+            let old_s = lo_s;
+            lo_s = _mm256_add_epi64(lo_s, lo);
+            // Shifted signed order is unsigned order of the unshifted low words.
+            let carry = _mm256_cmpgt_epi64(old_s, lo_s);
+            mid = _mm256_add_epi64(mid, _mm256_and_si256(hi, EPSILON));
+            mid = _mm256_sub_epi64(mid, carry);
+            top = _mm256_add_epi64(top, _mm256_srli_epi64::<32>(hi));
+        };
+        // Spell out the bounded schedule so LLVM can interleave every product,
+        // including the six-term case that otherwise retains a counted loop.
+        accumulate(1);
+        if N > 2 {
+            accumulate(2);
+        }
+        if N > 3 {
+            accumulate(3);
+        }
+        if N > 4 {
+            accumulate(4);
+        }
+        if N > 5 {
+            accumulate(5);
+        }
+
+        // B^2 = B - 1 and B^3 = -1 modulo P. Splitting mid at bit 32 gives
+        // lo - (top + (mid >> 32)) + (mid & (B - 1)) * (B - 1).
+        // correction <= N*B - 1 and term <= (B - 1)^2 are both below
+        // 2^64 - 2^32, satisfying the small-sub/add helper bounds.
+        let correction = _mm256_add_epi64(top, _mm256_srli_epi64::<32>(mid));
+        let term = _mm256_mul_epu32(mid, EPSILON);
+        let adjusted_s = sub_small_64s_64_s(lo_s, correction);
+        shift(add_small_64s_64_s(adjusted_s, term))
     }
 }
 
@@ -516,7 +780,10 @@ fn square(x: __m256i) -> __m256i {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::{PackedValue, PrimeCharacteristicRing, PrimeField64};
     use p3_field_testing::test_packed_field;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::{Goldilocks, PackedGoldilocksAVX2, WIDTH};
 
@@ -540,6 +807,64 @@ mod tests {
         0x0000_0000_0000_0001,
         0xFFFF_FFFF_0000_0002,
     ]));
+
+    #[test]
+    fn sum_array_chunk_remainders_match_full_u64_oracle() {
+        fn check<const N: usize>(values: [[u64; WIDTH]; N]) {
+            let input = values.map(|lanes| PackedGoldilocksAVX2(Goldilocks::new_array(lanes)));
+            let actual = PackedGoldilocksAVX2::sum_array::<N>(&input);
+            let delayed = (N <= super::MAX_SUM_CHUNK)
+                .then(|| PackedGoldilocksAVX2::from_vector(super::sum_delayed_reduce(&input)));
+
+            for lane in 0..WIDTH {
+                let expected = (values
+                    .iter()
+                    .map(|term| u128::from(term[lane]))
+                    .sum::<u128>()
+                    % u128::from(Goldilocks::ORDER_U64)) as u64;
+                assert_eq!(
+                    actual.as_slice()[lane].as_canonical_u64(),
+                    expected,
+                    "N={N}, lane={lane}"
+                );
+                if let Some(delayed) = delayed {
+                    assert_eq!(delayed.as_slice()[lane].as_canonical_u64(), expected);
+                }
+            }
+        }
+
+        macro_rules! check_length {
+            ($rng:ident, $n:literal) => {{
+                const EDGES: [u64; 8] = [
+                    0,
+                    1,
+                    (1 << 32) - 1,
+                    1 << 32,
+                    1 << 63,
+                    Goldilocks::ORDER_U64 - 1,
+                    Goldilocks::ORDER_U64,
+                    u64::MAX,
+                ];
+                check::<$n>(core::array::from_fn(|term| {
+                    core::array::from_fn(|lane| EDGES[(term * WIDTH + lane) % EDGES.len()])
+                }));
+                check::<$n>([[u64::MAX; WIDTH]; $n]);
+                for _ in 0..8 {
+                    check::<$n>(core::array::from_fn(|_| $rng.random()));
+                }
+            }};
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0xA2_51_65_66_67);
+        check_length!(rng, 9);
+        check_length!(rng, 10);
+        check_length!(rng, 11);
+        check_length!(rng, 63);
+        check_length!(rng, 64);
+        check_length!(rng, 65);
+        check_length!(rng, 66);
+        check_length!(rng, 67);
+    }
 
     test_packed_field!(
         crate::PackedGoldilocksAVX2,

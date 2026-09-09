@@ -3,11 +3,11 @@
 //! Run with `cargo run --release -p p3-multi-stark --example prove_binary_field`.
 //! The PCS is binding but not hiding; this example does not provide zero knowledge.
 
-use std::time::Instant;
-
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_binary_field::{BinaryChallenger, BinaryField128, TowerLevel};
-use p3_binary_pcs::{BinaryPcs, BinaryPcsConfig, BinaryPcsParams, BinaryPcsProverData};
+use p3_binary_pcs::{
+    BinaryPcs, BinaryPcsConfig, BinaryPcsParams, BinaryPcsProverData, GroupedCodewordMmcs,
+};
 use p3_challenger::HashChallenger;
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
@@ -18,11 +18,17 @@ use p3_multi_stark::{
 };
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+use tracing_forest::ForestLayer;
+use tracing_forest::util::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Registry};
 
 type F = BinaryField128;
 type Hash = SerializingHasher<Keccak256Hash>;
 type Compress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
-type Mmcs = p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash, Compress, 2, 32>;
+type MerkleMmcs = p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash, Compress, 2, 32>;
+type Mmcs = GroupedCodewordMmcs<MerkleMmcs>;
 type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 struct Config {
@@ -64,8 +70,14 @@ fn config(log_height: usize) -> Config {
         pow_bits: 0,
         security_level: 100,
     };
-    let pcs_config = BinaryPcsConfig::try_new(log_height + 1, params).unwrap();
-    let mmcs = Mmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
+    // Commit after up to three variable folds, with one coset per leaf.
+    // The final batch and its leaves shrink to the number of remaining variables.
+    let pcs_config = BinaryPcsConfig::try_new(log_height + 1, params)
+        .unwrap()
+        .try_with_folding(3.min(log_height + 1))
+        .unwrap();
+    let merkle = MerkleMmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
+    let mmcs = Mmcs::for_folding(merkle, &pcs_config);
     Config {
         pcs: BinaryPcs::new(pcs_config, mmcs),
     }
@@ -130,12 +142,19 @@ fn trace(log_height: usize) -> (Table<F>, [F; 3]) {
 }
 
 fn main() {
-    let log_height = 8;
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    Registry::default()
+        .with(env_filter)
+        .with(ForestLayer::default())
+        .init();
+
+    let log_height = 18;
     let config = config(log_height);
     let (table, public) = trace(log_height);
     let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
 
-    let start = Instant::now();
     let proof = prove(
         &config,
         ProverInstances::new(vec![ProverInstance::new(
@@ -147,11 +166,9 @@ fn main() {
         0,
         &mut challenger(),
     );
-    let proving_time = start.elapsed();
     let bytes = postcard::to_allocvec(&proof).unwrap();
     let proof: MultiStarkProof<Config> = postcard::from_bytes(&bytes).unwrap();
 
-    let start = Instant::now();
     verify(
         &config,
         VerifierInstances::new(vec![VerifierInstance::new(
@@ -166,11 +183,9 @@ fn main() {
     )
     .expect("binary AIR proof must verify");
     println!(
-        "Verified {} rows over GF(2^128) using BinaryPcs: {} bytes, prove {:?}, verify {:?}",
+        "Verified {} rows over GF(2^128) using BinaryPcs: {} bytes",
         1 << log_height,
         bytes.len(),
-        proving_time,
-        start.elapsed(),
     );
 }
 
@@ -244,6 +259,21 @@ mod tests {
                 Fixture::new(log_height, pow_bits).verify().unwrap();
             }
         }
+    }
+
+    #[test]
+    fn security_preserves_large_base_fields_but_requires_pcs_evidence() {
+        let config = config(4);
+        let (_, public) = trace(4);
+        let (_, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
+        let instances =
+            VerifierInstances::new(vec![VerifierInstance::new(&RecurrenceAir, &vk, 4, &public)]);
+        let report = p3_multi_stark::security_report(&config, &instances).unwrap();
+        // GF(2^128) needs no extension to give high-security AIR challenges.
+        assert!(report.terms().iter().all(|term| term.bits.bits() >= 120.0));
+        // BinaryPcs has not supplied a full prescribed-opening assessment.
+        assert!(report.unassessed_components().contains(&"main-pcs"));
+        assert!(report.require_security(100).is_err());
     }
 
     #[test]

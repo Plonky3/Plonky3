@@ -1,36 +1,29 @@
+#[path = "common/config.rs"]
+mod config;
+
 use core::borrow::Borrow;
 use core::fmt::Debug;
-use core::marker::PhantomData;
 use core::slice::from_ref;
 use std::borrow::Cow;
 
+use config::{
+    Challenge, CircleConfig, CircleVal, MyConfig, MyConfigWide, MyHidingConfig, Val,
+    make_circle_config, make_config, make_config_allow_tiny_trace, make_config_wide,
+    make_config_zk, make_two_adic_compat_config,
+};
 use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
-use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
-    BatchVerificationError, InvalidLookupPow, ProverData, StarkGenericConfig, StarkInstance,
+    BatchTranscriptFailure, BatchVerificationError, ProverData, StarkGenericConfig, StarkInstance,
     VerificationError, prove_batch, verify_batch,
 };
-use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
-use p3_circle::CirclePcs;
-use p3_commit::ExtensionMmcs;
-use p3_dft::Radix2DitParallel;
-use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
-use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
-use p3_keccak::Keccak256Hash;
+use p3_fri::FriParameters;
 use p3_lookup::{Count, InteractionBuilder, LookupError, LookupTerminal};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
-use p3_mersenne_31::Mersenne31;
-use p3_symmetric::{
-    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
-};
-use p3_uni_stark::{InvalidProofShapeError, OpeningShape, PeriodicColumnError, StarkConfig};
-use p3_util::{assert_clone, assert_send, assert_sync, log2_strict_usize};
-use rand::SeedableRng;
-use rand::rngs::{SmallRng, StdRng};
+use p3_uni_stark::{InvalidProofShapeError, OpeningShape, PeriodicColumnError};
+use p3_util::log2_strict_usize;
 
 const TWO_ADIC_FIXTURE: &str = "tests/fixtures/batch_stark_two_adic_v0_8_0.postcard";
 const CIRCLE_FIXTURE: &str = "tests/fixtures/batch_stark_circle_v0_8_0.postcard";
@@ -489,176 +482,6 @@ fn preprocessed_mul_trace<F: Field>(rows: usize, multiplier: u64) -> RowMajorMat
     RowMajorMatrix::new(v, 1)
 }
 
-// --- Config types ---
-
-type Val = BabyBear;
-type Challenge = BinomialExtensionField<Val, 4>;
-type Perm = Poseidon2BabyBear<16>;
-type PermWide = Poseidon2BabyBear<32>;
-type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
-type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-type MyCompressWide = TruncatedPermutation<PermWide, 4, 8, 32>;
-type ValMmcs =
-    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
-type ValMmcsWide =
-    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompressWide, 4, 8>;
-type HidingValMmcs = MerkleTreeHidingMmcs<
-    <Val as Field>::Packing,
-    <Val as Field>::Packing,
-    MyHash,
-    MyCompress,
-    StdRng,
-    2,
-    8,
-    4,
->;
-type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-type ChallengeMmcsWide = ExtensionMmcs<Val, Challenge, ValMmcsWide>;
-type HidingChallengeMmcs = ExtensionMmcs<Val, Challenge, HidingValMmcs>;
-type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
-type Dft = Radix2DitParallel<Val>;
-type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-type MyPcsWide = TwoAdicFriPcs<Val, Dft, ValMmcsWide, ChallengeMmcsWide>;
-type HidingPcs = HidingFriPcs<Val, Dft, HidingValMmcs, HidingChallengeMmcs, StdRng>;
-type MyConfig = StarkConfig<MyPcs, Challenge, Challenger>;
-type MyConfigWide = StarkConfig<MyPcsWide, Challenge, Challenger>;
-type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
-
-fn make_config(seed: u64) -> MyConfig {
-    let mut rng = SmallRng::seed_from_u64(seed);
-    let perm = Perm::new_from_rng_128(&mut rng);
-    let hash = MyHash::new(perm.clone());
-    let compress = MyCompress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress, 0);
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-    let dft = Dft::default();
-    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
-    let pcs = MyPcs::new(dft, val_mmcs, fri_params);
-    let challenger = Challenger::new(perm);
-    StarkConfig::new(pcs, challenger)
-}
-
-/// Minimal FRI shape so a tiny trace still completes `prove_batch` / `verify_batch`.
-fn make_config_allow_tiny_trace(seed: u64) -> MyConfig {
-    let mut rng = SmallRng::seed_from_u64(seed);
-    let perm = Perm::new_from_rng_128(&mut rng);
-    let hash = MyHash::new(perm.clone());
-    let compress = MyCompress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress, 0);
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-    let dft = Dft::default();
-    let fri_params = FriParameters {
-        log_blowup: 1,
-        log_final_poly_len: 0,
-        max_log_arity: 1,
-        num_queries: 2,
-        batch_proof_of_work_bits: 0,
-        commit_proof_of_work_bits: 1,
-        query_proof_of_work_bits: 1,
-        mmcs: challenge_mmcs,
-    };
-    let pcs = MyPcs::new(dft, val_mmcs, fri_params);
-    let challenger = Challenger::new(perm);
-    StarkConfig::new(pcs, challenger)
-}
-
-/// Same as make_config, but with a different arity.
-fn make_config_wide(seed: u64) -> MyConfigWide {
-    let mut rng = SmallRng::seed_from_u64(seed);
-    let perm = Perm::new_from_rng_128(&mut rng);
-    let perm_wide = PermWide::new_from_rng_128(&mut rng);
-    let hash = MyHash::new(perm.clone());
-    let compress = MyCompressWide::new(perm_wide);
-    let val_mmcs = ValMmcsWide::new(hash, compress, 0);
-    let challenge_mmcs = ChallengeMmcsWide::new(val_mmcs.clone());
-    let dft = Dft::default();
-    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
-    let pcs = MyPcsWide::new(dft, val_mmcs, fri_params);
-    let challenger = Challenger::new(perm);
-    StarkConfig::new(pcs, challenger)
-}
-
-fn make_two_adic_compat_config(seed: u64) -> MyConfig {
-    let mut rng = SmallRng::seed_from_u64(seed);
-    let perm = Perm::new_from_rng_128(&mut rng);
-    let hash = MyHash::new(perm.clone());
-    let compress = MyCompress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress, 1);
-    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-    let dft = Dft::default();
-    let fri_params = FriParameters {
-        log_blowup: 2,
-        log_final_poly_len: 2,
-        max_log_arity: 1,
-        num_queries: 2,
-        batch_proof_of_work_bits: 0,
-        commit_proof_of_work_bits: 1,
-        query_proof_of_work_bits: 1,
-        mmcs: challenge_mmcs,
-    };
-    let pcs = MyPcs::new(dft, val_mmcs, fri_params);
-    let challenger = Challenger::new(perm);
-    StarkConfig::new(pcs, challenger)
-}
-
-fn make_config_zk(seed: u64) -> MyHidingConfig {
-    assert_clone::<HidingValMmcs>();
-    assert_sync::<HidingValMmcs>();
-    assert_send::<HidingPcs>();
-    assert_sync::<HidingPcs>();
-    assert_sync::<MyHidingConfig>();
-
-    let mut rng = SmallRng::seed_from_u64(seed);
-    let perm = Perm::new_from_rng_128(&mut rng);
-    let hash = MyHash::new(perm.clone());
-    let compress = MyCompress::new(perm.clone());
-    let val_mmcs = HidingValMmcs::new(hash, compress, 2, StdRng::seed_from_u64(1));
-    let challenge_mmcs = HidingChallengeMmcs::new(val_mmcs.clone());
-    let dft = Dft::default();
-    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, StdRng::seed_from_u64(2));
-    let challenger = Challenger::new(perm);
-    StarkConfig::new(pcs, challenger)
-}
-
-type CircleVal = Mersenne31;
-type CircleChallenge = BinomialExtensionField<CircleVal, 3>;
-type CircleByteHash = Keccak256Hash;
-type CircleFieldHash = SerializingHasher<CircleByteHash>;
-type CircleCompress = CompressionFunctionFromHasher<CircleByteHash, 2, 32>;
-type CircleValMmcs = MerkleTreeMmcs<CircleVal, u8, CircleFieldHash, CircleCompress, 2, 32>;
-type CircleChallengeMmcs = ExtensionMmcs<CircleVal, CircleChallenge, CircleValMmcs>;
-type CircleChallenger = SerializingChallenger32<CircleVal, HashChallenger<u8, CircleByteHash, 32>>;
-type CirclePcsType = CirclePcs<CircleVal, CircleValMmcs, CircleChallengeMmcs>;
-type CircleConfig = StarkConfig<CirclePcsType, CircleChallenge, CircleChallenger>;
-
-fn make_circle_config() -> CircleConfig {
-    let byte_hash = CircleByteHash {};
-    let field_hash = CircleFieldHash::new(byte_hash);
-    let compress = CircleCompress::new(byte_hash);
-    let val_mmcs = CircleValMmcs::new(field_hash, compress, 3);
-    let challenge_mmcs = CircleChallengeMmcs::new(val_mmcs.clone());
-
-    let fri_params = FriParameters {
-        log_blowup: 1,
-        log_final_poly_len: 0,
-        max_log_arity: 1,
-        num_queries: 40,
-        batch_proof_of_work_bits: 0,
-        commit_proof_of_work_bits: 8,
-        query_proof_of_work_bits: 8,
-        mmcs: challenge_mmcs,
-    };
-
-    let pcs = CirclePcsType {
-        mmcs: val_mmcs,
-        fri_params,
-        _phantom: PhantomData,
-    };
-    let challenger = CircleChallenger::from_hasher(vec![], byte_hash);
-    CircleConfig::new(pcs, challenger)
-}
-
 // Heterogeneous enum wrapper for batching
 #[derive(Clone, Copy)]
 enum DemoAir {
@@ -1042,8 +865,8 @@ fn test_periodic_air_zk() -> Result<(), impl Debug> {
 fn test_two_instances_zk() -> Result<(), impl Debug> {
     let config = make_config_zk(1337);
 
-    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows
-    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2); // 16 rows, 2 reps
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(5); // 32 rows
+    let (air_mul, mul_trace, mul_pis) = create_mul_instance(5, 2); // 32 rows, 2 reps
 
     let instances = vec![
         StarkInstance {
@@ -1219,8 +1042,8 @@ fn test_degree_bits_too_small_for_zk_rejected() -> Result<(), Box<dyn std::error
     // ZK-enabled config — is_zk = 1, meaning degree_bits must be >= 1.
     let config = make_config_zk(1337);
 
-    // Build a valid Fibonacci proof with a 2^4 = 16-row trace.
-    let (air_fib, trace, fib_pis) = create_fib_instance(4);
+    // Build a valid Fibonacci proof with a 2^5 = 32-row trace.
+    let (air_fib, trace, fib_pis) = create_fib_instance(5);
     let instances = vec![StarkInstance {
         air: &air_fib,
         trace: &trace,
@@ -2350,7 +2173,9 @@ fn tampered_lookup_pow_witness_is_rejected() {
     assert!(
         matches!(
             err,
-            BatchVerificationError::InvalidLookupPow(InvalidLookupPow::BadWitness)
+            BatchVerificationError::Transcript(BatchTranscriptFailure::LookupPowWitness {
+                bits: LOOKUP_POW_BITS
+            })
         ),
         "wrong error variant: {err:?}"
     );
@@ -2371,7 +2196,9 @@ fn lookup_pow_difficulty_mismatch_is_rejected() {
     assert!(
         matches!(
             err,
-            BatchVerificationError::InvalidLookupPow(InvalidLookupPow::BadWitness)
+            BatchVerificationError::Transcript(BatchTranscriptFailure::LookupPowWitness {
+                bits: 24
+            })
         ),
         "wrong error variant: {err:?}"
     );
@@ -2400,7 +2227,7 @@ fn batch_without_lookups_carries_no_witness() {
     assert!(
         matches!(
             err,
-            BatchVerificationError::InvalidLookupPow(InvalidLookupPow::UnexpectedWitness)
+            BatchVerificationError::Transcript(BatchTranscriptFailure::UnexpectedLookupPowWitness)
         ),
         "wrong error variant: {err:?}"
     );
@@ -2433,7 +2260,12 @@ fn tampered_ood_pow_witness_is_rejected() {
     .expect_err("a tampered witness must be rejected");
 
     assert!(
-        matches!(err, BatchVerificationError::InvalidOodPowWitness),
+        matches!(
+            err,
+            BatchVerificationError::Transcript(BatchTranscriptFailure::OodPowWitness {
+                bits: OOD_POW_BITS
+            })
+        ),
         "wrong error variant: {err:?}"
     );
 }
@@ -2451,9 +2283,95 @@ fn ood_pow_difficulty_mismatch_is_rejected() {
         .expect_err("a difficulty mismatch must be rejected");
 
     assert!(
-        matches!(err, BatchVerificationError::InvalidOodPowWitness),
+        matches!(
+            err,
+            BatchVerificationError::Transcript(BatchTranscriptFailure::OodPowWitness { bits: 24 })
+        ),
         "wrong error variant: {err:?}"
     );
+}
+
+/// Substituting one commitment for another leaves both absorbs bound to the wrong value.
+#[test]
+fn a_substituted_main_commitment_is_rejected() {
+    let config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.commitments.main = proof.commitments.quotient_chunks.clone();
+    })
+    .expect_err("a main commitment the prover never committed to must be rejected");
+
+    // The transcript diverges from the first absorb, so nothing downstream lines up.
+    assert!(matches!(err, BatchVerificationError::Verification(_)));
+}
+
+/// The quotient commitment is absorbed before the out-of-domain point is drawn.
+#[test]
+fn a_substituted_quotient_commitment_is_rejected() {
+    let config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.commitments.quotient_chunks = proof.commitments.main.clone();
+    })
+    .expect_err("a quotient commitment the prover never committed to must be rejected");
+
+    assert!(matches!(err, BatchVerificationError::Verification(_)));
+}
+
+/// The permutation commitment is absorbed before the constraint-folding challenge.
+#[test]
+fn a_substituted_permutation_commitment_is_rejected() {
+    let config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.commitments.permutation = Some(proof.commitments.main.clone());
+    })
+    .expect_err("a permutation commitment the prover never committed to must be rejected");
+
+    assert!(matches!(err, BatchVerificationError::Verification(_)));
+}
+
+/// Each instance's degree bits are absorbed, so a proof cannot restate its own size.
+#[test]
+fn a_tampered_degree_bit_is_rejected() {
+    let config = make_config(2024);
+    let airs = lookup_grinding_airs();
+
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.degree_bits[0] += 1;
+    })
+    .expect_err("a degree bit the prover never absorbed must be rejected");
+
+    assert!(matches!(err, BatchVerificationError::Verification(_)));
+}
+
+/// The randomization commitment exists only under a hiding PCS, and it is absorbed too.
+#[test]
+fn a_substituted_randomization_commitment_is_rejected() {
+    let config = make_config_zk(1337);
+
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(5);
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: &fib_trace,
+        public_values: fib_pis.clone(),
+    }];
+
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+
+    // Swap in the main commitment, which is a real commitment to something else.
+    proof.commitments.random = Some(proof.commitments.main.clone());
+
+    let airs = vec![air_fib];
+    let err = verify_batch(&config, &airs, &proof, from_ref(&fib_pis), common)
+        .expect_err("a randomization commitment the prover never committed to must be rejected");
+
+    assert!(matches!(err, BatchVerificationError::Verification(_)));
 }
 
 /// Test with global lookups only using MulAirLookups and FibAirLookups
@@ -2566,7 +2484,7 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
         vec!["MulFib".to_string(), "MulFib".to_string()],
     ); // both
 
-    let log_height = 4;
+    let log_height = 5;
     let height = 1 << log_height;
 
     let fibonacci_air = FibonacciAir {
@@ -2577,7 +2495,11 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
 
     let mul_trace = mul_trace::<Val>(height, 2);
     let fib_trace = fib_trace::<Val>(0, 1, height);
-    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+    let fib_pis = vec![
+        Val::from_u64(0),
+        Val::from_u64(1),
+        Val::from_u64(fib_n(height)),
+    ];
 
     // Use the enum wrapper for heterogeneous types
     let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);

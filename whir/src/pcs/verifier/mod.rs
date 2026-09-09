@@ -159,7 +159,7 @@ where
             // The query openings form the selection group.
             // The challenge sampled here matches the prover's, weighting the groups
             // by its successive powers so both sides combine the claims identically.
-            let constraint = Constraint::new(
+            let constraint = Constraint::new_with_existing_claim(
                 challenger.sample_algebra_element(),
                 new_commitment.ood_statement.num_variables(),
                 vec![
@@ -287,11 +287,6 @@ where
         };
         if params.pow_bits > 0 && !challenger.check_witness(params.pow_bits, pow_witness) {
             return Err(VerifierError::InvalidPowWitness);
-        }
-
-        // Transcript checkpoint after PoW.
-        if round_index < self.n_rounds() {
-            challenger.sample();
         }
 
         // Sample STIR query positions.

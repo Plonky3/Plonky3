@@ -11,6 +11,29 @@ pub mod hiding;
 pub use crate::assumption::SecurityAssumption;
 
 impl SecurityAssumption {
+    /// Initial claim-combination error in bits, before any folding or grinding.
+    ///
+    /// Combining `num_claims` constraints with powers `1, alpha, ..., alpha^(N-1)`
+    /// can hide a false claim at at most `N - 1` roots for each codeword in the
+    /// initial decoding list. The bound is `(N - 1) * L / |F|`. The count must
+    /// include both concrete openings and commitment-phase OOD claims.
+    /// Zero or one claim introduces no random-combination error.
+    #[must_use]
+    pub fn initial_claims_error(
+        &self,
+        field_size_bits: usize,
+        num_variables: usize,
+        log_inv_rate: usize,
+        num_claims: usize,
+    ) -> f64 {
+        if num_claims <= 1 {
+            return f64::INFINITY;
+        }
+        field_size_bits as f64
+            - libm::log2((num_claims - 1) as f64)
+            - self.list_size_bits(num_variables, log_inv_rate)
+    }
+
     /// [`Self::ood_error`] at an explicit `log_eta`, rather than the regime's own default
     /// safety margin ([`Self::log_eta`]).
     ///
@@ -208,6 +231,29 @@ impl SecurityAssumption {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_claims_charge_the_polynomial_degree_and_decoding_list() {
+        let cases = [
+            (SecurityAssumption::UniqueDecoding, 118.),
+            (SecurityAssumption::JohnsonBound, 113.67807190511263),
+            (SecurityAssumption::CapacityBound, 101.67807190511263),
+        ];
+        for (assumption, expected) in cases {
+            // 1025 powers have degree 1024. At degree 2^10 and rate 1/2,
+            // L is respectively 1, 20, and 20 * 2^12.
+            assert!((assumption.initial_claims_error(128, 10, 1, 1025) - expected).abs() < 1e-10);
+            assert!(
+                (assumption.initial_claims_error(128, 10, 1, 2049) - (expected - 1.)).abs() < 1e-10
+            );
+            for count in [0, 1] {
+                assert_eq!(
+                    assumption.initial_claims_error(128, 10, 1, count),
+                    f64::INFINITY
+                );
+            }
+        }
+    }
 
     /// Field size in bits used by the WHIR-style budget regression test.
     /// 5 × ⌈log₂(p_KoalaBear)⌉ — degree-5 KoalaBear extension.

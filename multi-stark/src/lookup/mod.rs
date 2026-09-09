@@ -12,6 +12,8 @@
 //! GKR opens the fractions there.
 //! The zerocheck sumcheck then rebuilds the same value from the AIR's own columns.
 
+pub mod transcript;
+
 use alloc::collections::BTreeMap;
 use alloc::collections::btree_map::Entry;
 use alloc::string::String;
@@ -21,6 +23,7 @@ use core::cmp::Reverse;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr};
 use p3_air::{Air, BaseAir, SymbolicExpression};
 use p3_challenger::FieldChallenger;
+use p3_challenger::fs::TranscriptField;
 use p3_field::{ExtensionField, Field, PackedValue};
 use p3_lookup::{
     Challenges, InteractionSymbolicBuilder, Kind, Lookups, check_multiplicity_height_bound,
@@ -36,6 +39,7 @@ use crate::fractional_gkr::{
     Fraction, FractionGkrError, FractionGkrOutput, FractionGkrProof, prove_fractional_gkr,
     verify_fractional_gkr,
 };
+use crate::lookup::transcript::{LookupProverTranscript, LookupShape, LookupVerifierTranscript};
 
 /// Whether a lookup expression reads one of the AIR's fixed periodic columns.
 fn uses_periodic_column<F>(expression: &SymbolicExpression<F>) -> bool {
@@ -637,7 +641,7 @@ pub(crate) fn prove_lookup<F, EF, A, Challenger>(
     challenger: &mut Challenger,
 ) -> (Option<FractionGkrProof<EF>>, LookupRuntime<EF>)
 where
-    F: Field,
+    F: TranscriptField,
     EF: ExtensionField<F>,
     A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
     Challenger: FieldChallenger<F>,
@@ -663,20 +667,26 @@ where
     // Phase 2: sample the fingerprint challenges.
     // Beta combines the payload coordinates.
     // Alpha plus the reserved beta power give each bus its own prefix.
-    let alpha: EF = challenger.sample_algebra_element();
-    let beta: EF = challenger.sample_algebra_element();
+    //
+    // One driver covers the whole argument, from alpha through to theta.
+    let mut transcript =
+        LookupProverTranscript::<Challenger, F, EF>::new(challenger, &LookupShape::new(&plan));
+    let (alpha, beta) = transcript.fingerprint_challenges();
 
     // Phase 3: reduce.
     // Materialize every `multiplicity / denominator` fraction.
     // Prove their padded sum is zero and open both tables at one output point.
     let fraction = plan.materialize_fraction(main, preprocessed, public_values, alpha, beta);
-    let (fractional_gkr, output) = prove_fractional_gkr(&fraction, challenger);
+    let (fractional_gkr, output) =
+        transcript.reduction(|challenger| prove_fractional_gkr(&fraction, challenger));
 
     // Theta is drawn only after the reduction has fixed its point and openings.
     // It folds the two openings into the one claim the zerocheck carries:
     //
     //     N(point) + theta * (D(point) - 1)
-    let theta: EF = challenger.sample_algebra_element();
+    let theta = transcript.link_challenge();
+    transcript.finish();
+
     let air_link = AirLinkClaim::new(&plan, alpha, beta, output, theta);
 
     // Split that claim into the private per-AIR shares each zerocheck stage starts from.
@@ -717,7 +727,7 @@ pub(crate) fn verify_lookup<F, EF, A, Challenger>(
     challenger: &mut Challenger,
 ) -> Result<Option<AirLinkClaim<EF>>, LookupError>
 where
-    F: Field,
+    F: TranscriptField,
     EF: ExtensionField<F>,
     A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
     Challenger: FieldChallenger<F>,
@@ -737,17 +747,27 @@ where
     };
 
     // Replay the lookup challenges from the statement-bound transcript.
-    let alpha: EF = challenger.sample_algebra_element();
-    let beta: EF = challenger.sample_algebra_element();
+    //
+    // One driver covers the whole argument, from alpha through to theta.
+    let mut transcript =
+        LookupVerifierTranscript::<Challenger, F, EF>::new(challenger, &LookupShape::new(&plan));
+    let (alpha, beta) = transcript.fingerprint_challenges();
 
     // Check the reduction over the padded layout.
     // It yields the numerator and denominator openings at its output point.
-    let output = verify_fractional_gkr::<F, EF, _>(proof, plan.num_variables, challenger)?;
+    //
+    // A rejected reduction is carried past theta rather than returned from inside the
+    // bracket, so this driver reaches finalisation on every path out of the function.
+    let output = transcript.reduction(|challenger| {
+        verify_fractional_gkr::<F, EF, _>(proof, plan.num_variables, challenger)
+    });
 
     // As on the prover side, theta is drawn only after the reduction fixes its output.
     // It folds the two openings into the one claim the zerocheck carries.
-    let theta: EF = challenger.sample_algebra_element();
-    Ok(Some(AirLinkClaim::new(&plan, alpha, beta, output, theta)))
+    let theta = transcript.link_challenge();
+    transcript.finish();
+
+    Ok(Some(AirLinkClaim::new(&plan, alpha, beta, output?, theta)))
 }
 
 #[cfg(test)]
@@ -1408,6 +1428,40 @@ mod tests {
         assert!(matches!(
             sumcheck.verify_reduction::<F, EF, _>(&proof, &[6], &[&[]], &mut challenger()),
             Err(ZerocheckError::LookupLinkMismatch { air: 0 })
+        ));
+    }
+
+    #[test]
+    fn a_rejected_reduction_leaves_the_lookup_transcript_replayable() {
+        // The reduction runs inside a bracket, and the bracket must close either way.
+        //
+        // A driver dropped mid-pattern panics, and that panic would land on top of
+        // the rejection already travelling to the caller. So the rejection is
+        // carried past theta rather than returned from inside the bracket.
+        //
+        // Fixture state: an honest proof whose first layer claim is then perturbed.
+        let air = BalancedLookupAir;
+        let mut rng = SmallRng::seed_from_u64(0x8AD_C1A1);
+        let main = Table::<F>::rand(&mut rng, 1, 6);
+
+        let mut prover_challenger = challenger();
+        let (proof, _) =
+            prove_lookup::<F, EF, _, _>(&[&air], &[&main], &[None], &[&[]], &mut prover_challenger);
+        let mut proof = proof.expect("a lookup-declaring AIR produces a reduction");
+        proof.layers[0].claims.n0 += EF::ONE;
+
+        // Mutation: the perturbed claim must come back as a rejection, not a panic.
+        let mut verifier_challenger = challenger();
+        assert!(matches!(
+            verify_lookup::<F, EF, _, _>(
+                &[&air],
+                &[main.num_variables()],
+                Some(&proof),
+                &mut verifier_challenger,
+            ),
+            Err(LookupError::FractionGkr(
+                FractionGkrError::LayerConsistency { layer: 0 }
+            ))
         ));
     }
 }

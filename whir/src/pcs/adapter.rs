@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, TwoAdicField};
+use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::{Layout, Table, Verifier, Witness};
@@ -61,7 +61,7 @@ where
 impl<EF, F, Dft, MT, Challenger, L> MultilinearPcs<EF, Challenger>
     for WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + Ord,
+    F: TwoAdicField + PrimeField64 + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     MT: Mmcs<F>,
@@ -124,6 +124,10 @@ where
             .map(|(table_idx, batch)| prover_data.layout.eval(table_idx, batch, challenger))
             .collect::<Vec<_>>();
 
+        // The claims are bound and the WHIR run starts here.
+        // Its seed therefore lands here, ahead of the run's first challenge.
+        self.seed_transcript(challenger);
+
         let whir = self.prove(
             initial_ood_answers,
             challenger,
@@ -179,6 +183,17 @@ where
             layout_verifier.add_claim(table_idx, batch, evals, challenger)?;
         }
 
+        // The claims are bound and the WHIR run starts here.
+        // Its seed therefore lands here, ahead of the run's first challenge.
+        self.seed_transcript(challenger);
+
+        self.config.validate_initial_claims(
+            protocol
+                .iter_openings()
+                .map(|(_, batch)| batch.len())
+                .sum::<usize>()
+                .saturating_add(self.commitment_ood_samples),
+        )?;
         let alpha = challenger.sample_algebra_element();
         let constraint = layout_verifier.constraint(alpha);
         let mut claimed_eval = EF::ZERO;
@@ -200,7 +215,7 @@ where
 impl<EF, F, Dft, MT, Challenger, L> PrescribedPointPcs<EF, Challenger>
     for WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + Ord,
+    F: TwoAdicField + PrimeField64 + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     MT: Mmcs<F>,
@@ -210,6 +225,13 @@ where
         + CanObserve<MT::Commitment>,
     L: Layout<F, EF>,
 {
+    fn prescribed_security(
+        &self,
+        protocol: &OpeningProtocol,
+    ) -> Option<p3_sumcheck::PrescribedOpeningSecurity> {
+        super::security::prescribed_security(&self.config, protocol)
+    }
+
     /// Open each batch at its supplied point.
     ///
     /// The out-of-domain commitment samples are still drawn from the transcript.
@@ -240,6 +262,10 @@ where
                     .eval_at(table_idx, batch, point, challenger)
             })
             .collect::<Vec<_>>();
+
+        // The claims are bound and the WHIR run starts here.
+        // Its seed therefore lands here, ahead of the run's first challenge.
+        self.seed_transcript(challenger);
 
         let whir = self.prove(
             initial_ood_answers,
@@ -299,6 +325,17 @@ where
             layout_verifier.add_claim_at(table_idx, batch, point, evals, challenger)?;
         }
 
+        // The claims are bound and the WHIR run starts here.
+        // Its seed therefore lands here, ahead of the run's first challenge.
+        self.seed_transcript(challenger);
+
+        self.config.validate_initial_claims(
+            protocol
+                .iter_openings()
+                .map(|(_, batch)| batch.len())
+                .sum::<usize>()
+                .saturating_add(self.commitment_ood_samples),
+        )?;
         let alpha = challenger.sample_algebra_element();
         let constraint = layout_verifier.constraint(alpha);
         let mut claimed_eval = EF::ZERO;
