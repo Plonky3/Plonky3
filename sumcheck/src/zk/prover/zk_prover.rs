@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, dot_product};
@@ -11,7 +12,7 @@ use p3_multilinear_util::point::Point;
 use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
 use rand::Rng;
 
-use super::common::{observe_masks_and_mu_tilde, sample_masks};
+use super::common::{mask_endpoints, sample_masks};
 use super::layout::ZkLayout;
 use super::round::{PlainPiece, RoundContext, RoundState, round_poly_to_wire};
 use crate::extrapolate_01inf;
@@ -21,6 +22,7 @@ use crate::strategy::SumcheckProver;
 use crate::svo::calculate_accumulators_batch;
 use crate::table::{OpeningEvals, OpeningRequest};
 use crate::zk::data::{ZkSumcheckData, ZkSumcheckHandoff};
+use crate::zk::transcript::{ZkProverTranscript, ZkSumcheckShape};
 
 /// Honest-verifier zero-knowledge sumcheck prover.
 ///
@@ -143,9 +145,9 @@ where
     /// # Phases
     ///
     /// 1. Plain-piece preamble (alpha, accumulators, plain_sum).
-    /// 2. Sample, encode, commit, observe masks (Construction 6.3 step 1).
-    /// 3. Compute and observe `mu_tilde` (step 2).
-    /// 4. Sample the combining challenge `eps` (step 3).
+    /// 2. Sample, encode and commit the masks (Construction 6.3 step 1).
+    /// 3. Compute `mu_tilde` from the mask endpoints (step 2).
+    /// 4. Bind the oracle and `mu_tilde`, then draw the combining challenge `eps` (step 3).
     /// 5. Per-round sumcheck (step 4).
     /// 6. Residual handoff scaled by `eps` (mode-specific compression).
     ///
@@ -158,9 +160,8 @@ where
     ///
     /// # Panics
     ///
-    /// - Base field characteristic is `2` (violates Lemma 6.4).
-    /// - Mask code message length is below `3` (mask must cover the degree-2 plain piece).
-    /// - Folding factor is `0` or exceeds the polynomial's arity.
+    /// - The configuration cannot describe a masked batch.
+    /// - Folding factor exceeds the polynomial's arity.
     #[allow(clippy::too_many_lines)]
     #[tracing::instrument(skip_all)]
     pub fn into_sumcheck<R, Ch>(
@@ -171,6 +172,7 @@ where
         rng: &mut R,
     ) -> ZkSumcheckHandoff<F, EF, M>
     where
+        F: TranscriptField,
         EF: TwoAdicField,
         Enc::Codeword: Matrix<EF>,
         R: Rng,
@@ -181,22 +183,25 @@ where
         let ell_zk = self.encoding.message_len();
         let n_vars = self.inner.num_variables();
 
-        // Lemma 6.4 hypotheses + sanity bounds on the folding factor.
-        assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
-        assert!(
-            ell_zk >= 3,
-            "mask degree ell_zk - 1 must cover the degree-2 plain piece (ell_zk >= 3)",
-        );
-        assert!(k >= 1, "sumcheck requires at least one round");
+        // The batch derives its claim from the claims the layout recorded.
+        let shape = ZkSumcheckShape::new_batching(k, ell_zk, pow_bits);
+
+        // Lemma 6.4 hypotheses, plus the one bound the transcript never sees.
+        shape
+            .validate::<F>()
+            .expect("a prover's own configuration must describe a masked batch");
         assert!(
             k <= n_vars,
             "folding_factor must be <= poly.num_variables()",
         );
 
+        // Every step from here on is played through the description.
+        let mut transcript = ZkProverTranscript::<Ch, F, EF>::new(challenger, shape);
+
         // Phase 1: plain-piece preamble (setup, precedes Construction 6.3).
 
         // `alpha` is the per-claim batching base: powers a^0, a^1, ... weight the claim accumulators below.
-        let alpha: EF = challenger.sample_algebra_element();
+        let alpha: EF = transcript.batching_challenge();
 
         // Materialise every alpha power in one batched pass.
         //
@@ -224,25 +229,25 @@ where
         // Plain sumcheck claim `mu`, batched by the alphas.
         let mut plain_sum = self.inner.batched_sum(alpha);
 
-        // Phase 2: sample, encode, commit, observe masks (Construction 6.3 step 1).
+        // Phase 2: sample, encode and commit the masks (Construction 6.3 step 1).
         //
         // The encoder draws zero-knowledge padding randomness from the same rng.
         let (masks, mask_randomness, mask_oracle) =
-            sample_masks::<EF, _, _, _, _>(k, &self.encoding, &self.mmcs, challenger, rng);
+            sample_masks::<EF, _, _, _>(k, &self.encoding, &self.mmcs, rng);
 
         // Phase 3: mu_tilde via the closed form (Construction 6.3 step 2).
         //
-        // The helper also seeds `zk_data` and returns the running future-mask
-        // endpoint budget for the per-round loop.
-        let sum_endpoints_init =
-            observe_masks_and_mu_tilde::<F, EF, _>(&masks, k, ell_zk, challenger, zk_data);
+        // The helper also returns the running future-mask endpoint budget for
+        // the per-round loop.
+        let (mu_tilde, sum_endpoints_init) = mask_endpoints::<EF>(&masks, k);
+        zk_data.mu_tilde = mu_tilde;
 
-        // Phase 4: combining challenge `eps` (Construction 6.3 step 3).
+        // Phase 4: bind the oracle and mu_tilde, then draw `eps` (Construction 6.3 step 3).
         //
         // The construction is instantiated over `EF`: the masks, `eps`, and the
         // round polynomials all live in `EF`, so Lemma 6.4 applies with `F := EF`
         // and the per-round polynomial is uniform over the full extension field.
-        let eps: EF = challenger.sample_algebra_element();
+        let eps: EF = transcript.masks(mask_oracle.0.clone(), mu_tilde);
 
         // Phase 5: per-round sumcheck (Construction 6.3 step 4).
 
@@ -325,17 +330,12 @@ where
             // reconstructs it from the affine identity.
             let wire = round_poly_to_wire(&h);
 
-            // Absorb the wire on the transcript and stash it.
-            challenger.observe_algebra_slice(&wire);
+            // One call binds the wire, grinds when enabled, and draws the challenge.
+            let (gamma_j, witness) = transcript.round(&wire);
+
+            // Record what the round produced alongside what it bound.
             zk_data.round_coefficients.push(wire);
-
-            // Optional grind before the per-round challenge.
-            if pow_bits > 0 {
-                zk_data.pow_witnesses.push(challenger.grind(pow_bits));
-            }
-
-            // Sample the per-round challenge gamma_j.
-            let gamma_j: EF = challenger.sample_algebra_element();
+            zk_data.pow_witnesses.extend(witness);
 
             // Cache s_j(gamma_j) via Horner for the past-mask term in future rounds.
             let s_j_at_gamma_j: EF = s_j.iter().copied().horner(gamma_j);
@@ -345,6 +345,9 @@ where
             plain_sum = extrapolate_01inf(plain_c0, plain_sum - plain_c0, plain_c_inf, gamma_j);
             rs.push(gamma_j);
         }
+
+        // Every described step has been played, so the sponge goes back to the caller.
+        transcript.finish();
 
         // Phase 6: residual handoff scaled by eps.
         //

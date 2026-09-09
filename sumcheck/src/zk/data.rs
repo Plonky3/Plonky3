@@ -47,12 +47,6 @@ pub struct ZkSumcheckData<F, EF> {
     /// Lives in the extension field because the mask coefficients do.
     pub mu_tilde: EF,
 
-    /// Message length of the zero-knowledge mask code.
-    ///
-    /// The verifier rejects up front if its own expected value disagrees with this.
-    /// Pinning this in the transcript closes a non-injectivity gap in the wire-length check: lengths `2` and `3` share a wire layout.
-    pub ell_zk: usize,
-
     /// Per-round wire payload with the linear coefficient dropped.
     ///
     /// One entry per sumcheck round.
@@ -71,8 +65,6 @@ impl<F, EF: Field> Default for ZkSumcheckData<F, EF> {
         Self {
             // Real runs overwrite this in step 2 once the prover has summed the masks.
             mu_tilde: EF::ZERO,
-            // Sentinel: honest runs set this to the encoding's message length; the verifier rejects 0.
-            ell_zk: 0,
             // Filled with one wire entry per sumcheck round.
             round_coefficients: Vec::new(),
             // Filled only when grinding is enabled.

@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use masks::VerifierMasks;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_field::{ExtensionField, TwoAdicField};
+use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -146,6 +146,9 @@ where
     /// `f(point_i) = eval_i`.
     ///
     /// The claims must already be bound to the transcript by the caller.
+    ///
+    /// Each masked sumcheck batch seeds a typed sub-transcript of its own from this sponge.
+    /// The base-field bound is what lets that sub-transcript encode its seed.
     #[instrument(skip_all)]
     #[allow(clippy::too_many_lines)]
     pub fn verify(
@@ -154,7 +157,10 @@ where
         commitment: &MT::Commitment,
         claims: &[(Point<EF>, EF)],
         challenger: &mut Challenger,
-    ) -> Result<(), ZkVerifierError> {
+    ) -> Result<(), ZkVerifierError>
+    where
+        F: PrimeField64,
+    {
         let config = self.config;
         config.validate_initial_claims(claims.len()).map_err(|_| {
             ZkVerifierError::InitialClaimsBelowTarget {
@@ -398,7 +404,10 @@ where
         source: &mut SourceClaim<EF>,
         masks: &mut VerifierMasks<F, EF, MT>,
         challenger: &mut Challenger,
-    ) -> Result<Point<EF>, ZkVerifierError> {
+    ) -> Result<Point<EF>, ZkVerifierError>
+    where
+        F: PrimeField64,
+    {
         let ell_zk = self.config.zk.ell_zk;
         let commitment = &proof.sumcheck_mask_commitments[batch];
         let handoff = ZkVerifier::<F, EF>::verify_claim::<ExtensionMmcs<F, EF, MT>, _>(
