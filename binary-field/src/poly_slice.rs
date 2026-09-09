@@ -27,8 +27,10 @@ pub(crate) fn scale(values: &mut [u128], scalar: u128) {
 /// Send `(lo, hi)` to `(lo + scalar*hi, lo + (scalar + 1)*hi)`, element by element.
 #[inline]
 pub(crate) fn butterfly_forward(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
-    // Invariant: the two halves are paired element for element, so a mismatch drops work.
-    debug_assert_eq!(lo.len(), hi.len(), "butterfly lengths differ");
+    // Invariant: the two halves are paired element for element.
+    //
+    // Both kernels below stop at the shorter side, so a mismatch would silently drop work.
+    assert_eq!(lo.len(), hi.len(), "butterfly lengths differ");
 
     let packed = if lo.len() < wide::WIDTH {
         0
@@ -47,8 +49,10 @@ pub(crate) fn butterfly_forward(lo: &mut [u128], hi: &mut [u128], scalar: u128) 
 /// Undo [`butterfly_forward`] with the same scalar.
 #[inline]
 pub(crate) fn butterfly_inverse(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
-    // Invariant: the two halves are paired element for element, so a mismatch drops work.
-    debug_assert_eq!(lo.len(), hi.len(), "butterfly lengths differ");
+    // Invariant: the two halves are paired element for element.
+    //
+    // Both kernels below stop at the shorter side, so a mismatch would silently drop work.
+    assert_eq!(lo.len(), hi.len(), "butterfly lengths differ");
 
     let packed = if lo.len() < wide::WIDTH {
         0
@@ -218,8 +222,23 @@ mod tests {
     /// ```
     const CORNERS: [u128; 7] = [0, 1, u128::MAX, 1 << 127, 1 << 64, (1u128 << 64) - 1, 0x87];
 
-    /// Guard elements placed after the payload, one full register of the widest build.
-    const SENTINELS: usize = 4;
+    /// Whether this build is one the packed prefix is compiled for.
+    ///
+    /// Stated a second time here, independently of the gate on the kernels themselves.
+    ///
+    /// A gate that drifts then shows up as a failure rather than as a silent scalar fallback.
+    const PACKED_BUILD: bool = cfg!(all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ));
+
+    /// Guard elements on each side of the payload, two full registers of the widest build.
+    ///
+    /// One register wide would catch only a store that overran by exactly one register.
+    ///
+    /// Two make the next one out detectable as well, still inside the buffer's own allocation.
+    const SENTINELS: usize = 8;
 
     /// What those elements hold, which no product of the inputs below can reproduce.
     const SENTINEL: u128 = 0x5a5a_5a5a_5a5a_5a5a_5a5a_5a5a_5a5a_5a5a;
@@ -233,28 +252,39 @@ mod tests {
 
     /// The same values, walled off from the rest of the allocation on both sides.
     ///
-    /// One register load covers several elements.
+    /// Both walls are sentinels, so an overrun in either direction shows as a changed guard.
     ///
-    /// Leading zeros therefore walk the payload across every alignment it can have.
-    ///
-    /// Trailing sentinels catch a store that ran a whole register past the end.
+    /// ```text
+    ///     [ guard | offset | values | guard ]
+    ///                ^ slides the payload across every alignment one register can see
+    /// ```
     fn padded(values: &[u128], offset: usize) -> Vec<u128> {
-        let mut buffer = Vec::with_capacity(offset + values.len() + SENTINELS);
-        buffer.extend(core::iter::repeat_n(0, offset));
+        let lead = SENTINELS + offset;
+
+        let mut buffer = Vec::with_capacity(lead + values.len() + SENTINELS);
+        buffer.extend(core::iter::repeat_n(SENTINEL, lead));
         buffer.extend_from_slice(values);
         buffer.extend(core::iter::repeat_n(SENTINEL, SENTINELS));
         buffer
     }
 
+    /// The payload of such a buffer, as the kernels see it.
+    fn payload_mut(buffer: &mut [u128], offset: usize, len: usize) -> &mut [u128] {
+        let start = SENTINELS + offset;
+        &mut buffer[start..start + len]
+    }
+
     /// The payload of such a buffer, once both walls are confirmed intact.
     fn payload(buffer: &[u128], offset: usize, len: usize) -> Result<&[u128], TestCaseError> {
+        let start = SENTINELS + offset;
+
         // Nothing may have run off the front.
-        prop_assert!(buffer[..offset].iter().all(|&v| v == 0));
+        prop_assert!(buffer[..start].iter().all(|&v| v == SENTINEL));
 
         // Nothing may have run off the back either.
-        prop_assert!(buffer[offset + len..].iter().all(|&v| v == SENTINEL));
+        prop_assert!(buffer[start + len..].iter().all(|&v| v == SENTINEL));
 
-        Ok(&buffer[offset..offset + len])
+        Ok(&buffer[start..start + len])
     }
 
     /// Scaling, one element at a time through the scalar backend.
@@ -298,7 +328,7 @@ mod tests {
 
         // Scaling: the packed prefix and the scalar tail must together match the scalar loop.
         let mut scaled = padded(values, offset);
-        super::scale(&mut scaled[offset..offset + len], scalar);
+        super::scale(payload_mut(&mut scaled, offset, len), scalar);
         prop_assert_eq!(
             payload(&scaled, offset, len)?,
             &reference_scale(values, scalar)[..]
@@ -308,8 +338,8 @@ mod tests {
         let mut lo = padded(values, offset);
         let mut hi = padded(&other, offset);
         super::butterfly_forward(
-            &mut lo[offset..offset + len],
-            &mut hi[offset..offset + len],
+            payload_mut(&mut lo, offset, len),
+            payload_mut(&mut hi, offset, len),
             scalar,
         );
         let (want_lo, want_hi) = reference_forward(values, &other, scalar);
@@ -318,8 +348,8 @@ mod tests {
 
         // The inverse kernel applied to the forward output must return the input.
         super::butterfly_inverse(
-            &mut lo[offset..offset + len],
-            &mut hi[offset..offset + len],
+            payload_mut(&mut lo, offset, len),
+            payload_mut(&mut hi, offset, len),
             scalar,
         );
         prop_assert_eq!(payload(&lo, offset, len)?, values);
@@ -329,8 +359,8 @@ mod tests {
         let mut lo = padded(values, offset);
         let mut hi = padded(&other, offset);
         super::butterfly_inverse(
-            &mut lo[offset..offset + len],
-            &mut hi[offset..offset + len],
+            payload_mut(&mut lo, offset, len),
+            payload_mut(&mut hi, offset, len),
             scalar,
         );
         let (want_lo, want_hi) = reference_inverse(values, &other, scalar);
@@ -360,6 +390,55 @@ mod tests {
                         .unwrap_or_else(|e| panic!("len {len}, scalar {scalar:#x}: {e}"));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn the_packed_prefix_covers_every_whole_register() {
+        // Invariant: the kernels report how many leading elements they covered.
+        //
+        // The dispatchers use that count only as a tail offset.
+        //
+        // So a build that lost the packed path still returns right answers, silently.
+        //
+        // Checking the reported count is what turns that into a failure.
+        if !PACKED_BUILD {
+            // No packing here, so the width is the sentinel that sends every slice to the tail.
+            assert_eq!(super::wide::WIDTH, usize::MAX);
+            return;
+        }
+
+        let width = super::wide::WIDTH;
+
+        // Two lanes under the 256-bit register, four under the 512-bit one, and nothing else.
+        assert!(
+            width == 2 || width == 4,
+            "unexpected register width {width}"
+        );
+
+        // Every length from an empty prefix to several whole registers plus a tail.
+        for len in 0..4 * width {
+            // Whole registers only: the remainder is the scalar tail's business.
+            let want = len - len % width;
+
+            let mut values = sample(len);
+            assert_eq!(
+                super::wide::scale(&mut values, 3),
+                want,
+                "scale at len {len}"
+            );
+
+            let (mut lo, mut hi) = (sample(len), sample(len));
+            assert_eq!(
+                super::wide::butterfly_forward(&mut lo, &mut hi, 3),
+                want,
+                "forward butterfly at len {len}"
+            );
+            assert_eq!(
+                super::wide::butterfly_inverse(&mut lo, &mut hi, 3),
+                want,
+                "inverse butterfly at len {len}"
+            );
         }
     }
 

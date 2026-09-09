@@ -504,7 +504,13 @@ unsafe impl PackedFieldPow2 for PackedGhash128 {
 mod tests {
     use p3_field::PackedValue;
     use p3_field_testing::test_packed_binary_field;
+    use proptest::prelude::*;
 
+    use super::lanes::{self, WIDTH};
+    use crate::packed::split::model::Model;
+    use crate::packed::split::{
+        HIGH_BY_HIGH, HIGH_BY_LOW, LOW_BY_HIGH, LOW_BY_LOW, Lanes, SplitScalar, fold_shifted,
+    };
     use crate::{Ghash128, PackedGhash128};
 
     /// The bit patterns a random search is unlikely to reach.
@@ -522,6 +528,101 @@ mod tests {
     /// One extreme bit pattern per lane.
     fn specials() -> PackedGhash128 {
         PackedValue::from_fn(|i| Ghash128::from_le_bytes(SPECIAL[i].to_le_bytes()))
+    }
+
+    /// The elements a register holds, read back one per lane.
+    fn lanes_of(register: lanes::Reg) -> [u128; WIDTH] {
+        let mut out = [0u128; WIDTH];
+
+        // SAFETY: the destination is exactly one register of contiguous 128-bit integers.
+        //
+        // The store is the unaligned form, so the array's own alignment is irrelevant.
+        unsafe { lanes::store(out.as_mut_ptr(), register) };
+
+        out
+    }
+
+    /// A register holding the given elements, one per lane.
+    fn register_of(values: [u128; WIDTH]) -> lanes::Reg {
+        // SAFETY: the source is exactly one register of contiguous 128-bit integers.
+        unsafe { lanes::load(values.as_ptr()) }
+    }
+
+    /// Every lane operation on the register, against the same operation on the scalar model.
+    ///
+    /// One assertion per operation, so a mismatch names the intrinsic that disagreed.
+    fn lanes_conform(
+        a: [u128; WIDTH],
+        b: [u128; WIDTH],
+        scalar: u128,
+    ) -> Result<(), TestCaseError> {
+        let (x, y) = (register_of(a), register_of(b));
+        let (mx, my) = (Model(a), Model(b));
+
+        prop_assert_eq!(lanes_of(lanes::Reg::zero()), Model::<WIDTH>::zero().0);
+        prop_assert_eq!(
+            lanes_of(lanes::Reg::broadcast(scalar)),
+            Model::<WIDTH>::broadcast(scalar).0
+        );
+        prop_assert_eq!(lanes_of(lanes::Reg::tail()), Model::<WIDTH>::tail().0);
+        prop_assert_eq!(lanes_of(x.xor(y)), mx.xor(my).0);
+        prop_assert_eq!(lanes_of(x.unpack_low_64(y)), mx.unpack_low_64(my).0);
+        prop_assert_eq!(
+            lanes_of(x.clmul::<LOW_BY_LOW>(y)),
+            mx.clmul::<LOW_BY_LOW>(my).0
+        );
+        prop_assert_eq!(
+            lanes_of(x.clmul::<HIGH_BY_LOW>(y)),
+            mx.clmul::<HIGH_BY_LOW>(my).0
+        );
+        prop_assert_eq!(
+            lanes_of(x.clmul::<LOW_BY_HIGH>(y)),
+            mx.clmul::<LOW_BY_HIGH>(my).0
+        );
+        prop_assert_eq!(
+            lanes_of(x.clmul::<HIGH_BY_HIGH>(y)),
+            mx.clmul::<HIGH_BY_HIGH>(my).0
+        );
+
+        // The two composites built from those operations.
+        //
+        // A lane-crossing slip therefore shows up here as well as in the primitives above.
+        prop_assert_eq!(lanes_of(fold_shifted(x, y)), fold_shifted(mx, my).0);
+        prop_assert_eq!(
+            lanes_of(SplitScalar::new(scalar).apply(x)),
+            SplitScalar::new(scalar).apply(mx).0
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn the_register_matches_the_scalar_model_at_the_corners() {
+        // Invariant: each lane operation is lane-local, so distinct lanes must stay distinct.
+        //
+        // Filling the lanes by rotating through the corners pairs a different extreme in each.
+        for (i, &scalar) in SPECIAL.iter().enumerate() {
+            let a = core::array::from_fn(|lane| SPECIAL[(lane + i) % SPECIAL.len()]);
+            let b = core::array::from_fn(|lane| SPECIAL[(lane + i + 1) % SPECIAL.len()]);
+
+            lanes_conform(a, b, scalar).unwrap_or_else(|e| panic!("scalar {scalar:#x}: {e}"));
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn the_register_matches_the_scalar_model(
+            a in prop::array::uniform(any::<u128>()),
+            b in prop::array::uniform(any::<u128>()),
+            scalar in any::<u128>(),
+        ) {
+            // The seam the scalar model alone cannot reach.
+            //
+            // Each intrinsic must be the one the algebra was written against, lane by lane.
+            lanes_conform(a, b, scalar)?;
+        }
     }
 
     test_packed_binary_field!(

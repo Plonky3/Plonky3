@@ -2,7 +2,7 @@
 //!
 //! One backend is whichever register the target provides.
 //!
-//! The other is a scalar model in the tests below, so every leg checks the algebra.
+//! The other is a scalar model compiled under `cfg(test)`, so every leg checks the algebra.
 //! Otherwise only a target with the wide carryless multiply would exercise any of it.
 
 use crate::clmul::TAIL_128;
@@ -158,36 +158,16 @@ impl<L: Lanes> SplitScalar<L> {
     }
 }
 
+/// A scalar stand-in for a register, so the algebra above is checked on every target.
+///
+/// Without it only a build with the wide carryless multiply would exercise any of the split.
 #[cfg(test)]
-mod tests {
-    use proptest::prelude::*;
-
-    use super::{Lanes, SplitScalar, fold_shifted};
-    use crate::clmul;
-
-    /// Lanes in the model, enough that a lane-crossing operation shows up as a mismatch.
-    const LANES: usize = 2;
-
-    /// The multipliers a random search is unlikely to reach.
-    ///
-    /// Each one drives the split of the multiplier, or the fold of the modulus, to an extreme:
-    ///
-    /// ```text
-    ///     0                 the whole product vanishes
-    ///     1                 the identity
-    ///     all ones          every coefficient of every half product is live
-    ///     x^127             the highest degree, so the companion spills furthest
-    ///     x^64              the companion is the multiplier's own shift, already reduced
-    ///     lower half only   the companion is the only source of upper limbs
-    ///     0x87              the modulus tail itself
-    /// ```
-    const CORNERS: [u128; 7] = [0, 1, u128::MAX, 1 << 127, 1 << 64, (1u128 << 64) - 1, 0x87];
+pub(crate) mod model {
+    use super::Lanes;
 
     /// One 128-bit field element per lane, held in plain integers.
-    ///
-    /// This is what makes the algebra above testable on a target with no wide multiply.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    struct Model([u128; LANES]);
+    pub(crate) struct Model<const LANES: usize>(pub(crate) [u128; LANES]);
 
     /// The carryless product of two quadwords, bit-serial from the low bit up.
     ///
@@ -202,7 +182,7 @@ mod tests {
         acc
     }
 
-    impl Lanes for Model {
+    impl<const LANES: usize> Lanes for Model<LANES> {
         fn zero() -> Self {
             Self([0; LANES])
         }
@@ -239,10 +219,37 @@ mod tests {
             }))
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::model::Model;
+    use super::{Lanes, SplitScalar, fold_shifted};
+    use crate::clmul;
+
+    /// Lanes in the model, enough that a lane-crossing operation shows up as a mismatch.
+    const LANES: usize = 2;
+
+    /// The multipliers a random search is unlikely to reach.
+    ///
+    /// Each one drives the split of the multiplier, or the fold of the modulus, to an extreme:
+    ///
+    /// ```text
+    ///     0                 the whole product vanishes
+    ///     1                 the identity
+    ///     all ones          every coefficient of every half product is live
+    ///     x^127             the highest degree, so the companion spills furthest
+    ///     x^64              the companion is the multiplier's own shift, already reduced
+    ///     lower half only   the companion is the only source of upper limbs
+    ///     0x87              the modulus tail itself
+    /// ```
+    const CORNERS: [u128; 7] = [0, 1, u128::MAX, 1 << 127, 1 << 64, (1u128 << 64) - 1, 0x87];
 
     /// The lanes of the split product against the scalar backend, element by element.
     fn split_agrees(scalar: u128, values: [u128; LANES]) -> Result<(), TestCaseError> {
-        let got = SplitScalar::new(scalar).apply(Model(values));
+        let got = SplitScalar::new(scalar).apply(Model::<LANES>(values));
         let want = core::array::from_fn(|i| clmul::poly_mul_128(scalar, values[i]));
         prop_assert_eq!(got, Model(want));
         Ok(())
@@ -275,7 +282,7 @@ mod tests {
         /// The companion is the multiplier scaled by `x^64`, which fixes the four immediates.
         #[test]
         fn the_companion_is_the_shifted_multiplier(scalar in any::<u128>()) {
-            let companion = fold_shifted(Model::zero(), Model::broadcast(scalar));
+            let companion = fold_shifted(Model::<LANES>::zero(), Model::broadcast(scalar));
             let want = clmul::poly_mul_128(scalar, 1 << 64);
             prop_assert_eq!(companion, Model::broadcast(want));
         }
