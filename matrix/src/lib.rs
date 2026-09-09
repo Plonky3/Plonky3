@@ -429,7 +429,11 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Field,
         EF: ExtensionField<T>,
     {
-        assert_eq!(v.len(), self.height());
+        assert_eq!(
+            v.len(),
+            self.height(),
+            "weight count must match matrix height"
+        );
 
         // Below this many total elements, the rayon fork-join and SIMD-packing machinery
         // costs more than the dot product itself; fall back to a plain scalar accumulation.
@@ -771,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "weight count must match matrix height")]
     fn test_columnwise_dot_product_rejects_short_weights() {
         let mat = patterned_matrix::<BabyBear>(17, 17);
         let weights = BinomialExtensionField::<BabyBear, 4>::zero_vec(16);
@@ -779,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "weight count must match matrix height")]
     fn test_columnwise_dot_product_rejects_long_weights() {
         let mat = patterned_matrix::<BabyBear>(17, 17);
         let weights = BinomialExtensionField::<BabyBear, 4>::zero_vec(18);
