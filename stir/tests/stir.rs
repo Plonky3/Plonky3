@@ -1009,8 +1009,8 @@ mod babybear_stir {
             source,
             ExternalSourceError::FiberCount {
                 round: RoundLabel::Round(0),
-                expected: 19,
-                got: 18,
+                expected: 20,
+                got: 19,
             }
         );
     }
@@ -3043,8 +3043,8 @@ mod babybear_pcs {
             ProofShapeError::InputOpenedRowCount {
                 log_height: log_d + 1,
                 commitment: 0,
-                expected: 17,
-                got: 16,
+                expected: 19,
+                got: 18,
             }
         );
     }
@@ -4082,6 +4082,37 @@ mod babybear_stir_multi {
     fn test_multi_three_buckets_ratio8_spread() {
         let (params, dft, challenger) = make_params(1, 2, 16, 0);
         do_test_multi_prove_verify(&params, &dft, &challenger, &[12, 9, 8]);
+    }
+
+    #[test]
+    fn test_multi_shared_folding_pow_with_late_and_final_only_instances() {
+        let (params, dft, challenger) = make_params(1, 2, 100, 16);
+        let (configs, polys) = make_instances(&params, &[10, 6, 2]);
+        assert!(configs[0].num_rounds() > configs[1].num_rounds());
+        assert!(configs[1].num_rounds() > 0);
+        assert_eq!(configs[2].num_rounds(), 0);
+        assert!(configs[1].round_configs[0].folding_pow_bits > 0);
+        assert!(configs[2].final_folding_pow_bits > 0);
+        let config_refs: Vec<_> = configs.iter().collect();
+
+        let mut prover_challenger = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys, &dft, &mut prover_challenger);
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+        let mut verifier_challenger = challenger;
+        let outputs = verify_stir_multi::<F, EF, MyMmcs, Challenger>(
+            &config_refs,
+            &proofs,
+            &mut verifier_challenger,
+        )
+        .expect("shared folding grinds must cover every right-aligned instance");
+
+        for ((_, queries), output) in results.iter().zip(outputs) {
+            assert_eq!(queries.draws, output.first_round_draws);
+        }
+        assert_eq!(
+            prover_challenger.sample_algebra_element::<EF>(),
+            verifier_challenger.sample_algebra_element::<EF>()
+        );
     }
 
     #[test]

@@ -1553,11 +1553,14 @@ where
             proofs[active[0]].round_proofs[r - offset(active[0])].folding_pow_witness;
         transcript.folding_pow(r, folding_witness)?;
 
-        // Phase 1: per-instance folding challenge and commitment absorb.
+        // Fix every folding challenge before any prover response, so the shared grind
+        // protects all active instances.
         for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
             let gamma = transcript.fold_challenge();
-            transcript.fold_commitment(proofs[i].round_proofs[r - offset(i)].commitment.clone());
             rv.set_gamma(gamma, shifts[i]);
+        }
+        for &i in &active {
+            transcript.fold_commitment(proofs[i].round_proofs[r - offset(i)].commitment.clone());
         }
 
         // Phase 2: per-instance OOD sampling and answer absorb.
@@ -1656,10 +1659,13 @@ where
     for i in 0..b {
         let final_gamma = transcript.final_fold_challenge();
         fvs[i].set_gamma(final_gamma, shifts[i]);
+    }
 
+    // As in intermediate rounds, no response may intervene in the challenge block.
+    for (i, proof) in proofs.iter().enumerate() {
         // The coefficient count is checked against the configuration before the
         // transcript starts.
-        transcript.final_polynomial(i, &proofs[i].final_polynomial)?;
+        transcript.final_polynomial(i, &proof.final_polynomial)?;
     }
 
     transcript.final_pow(proofs[0].final_pow_witness)?;
