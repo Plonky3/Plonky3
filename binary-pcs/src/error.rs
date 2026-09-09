@@ -81,6 +81,24 @@ pub enum BinaryPcsError<MmcsError> {
     #[error("expected {expected} opening batches, proof carries {actual}")]
     OpeningBatchCountMismatch { expected: usize, actual: usize },
 
+    /// The scalar claim count exceeds the remaining alpha-batching budget.
+    #[error(
+        "opening protocol has {actual} claims, but at most {max} retain the configured {security_level}-bit opening budget"
+    )]
+    OpeningClaimCountExceedsSecurityBudget {
+        actual: usize,
+        max: usize,
+        security_level: usize,
+    },
+
+    /// The table dimensions do not fit the configured stacked polynomial.
+    #[error("opening protocol dimensions do not match the configured stacked polynomial")]
+    InvalidOpeningProtocol,
+
+    /// Prescribed points must match the batches and their table arities.
+    #[error("prescribed opening points do not match the opening protocol")]
+    OpeningPointShapeMismatch,
+
     /// One opening batch has the wrong number of evaluations for its column list.
     #[error("table {table_idx} opening expected {expected} evaluations, got {actual}")]
     OpeningBatchSizeMismatch {

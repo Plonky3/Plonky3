@@ -677,9 +677,6 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     /// Return a copy of this matrix with additional zero-filled columns
     /// appended on the right.
     ///
-    /// Delegates to cloning the matrix and calling the in-place widening
-    /// method with a zero fill value.
-    ///
     /// # Memory Layout
     ///
     /// ```text
@@ -701,9 +698,53 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     where
         T: Field,
     {
-        // Clone the original matrix and widen it in-place with zero fill.
-        let mut result = self.clone();
-        result.widen_right(num_cols, T::ZERO);
+        if num_cols == 0 {
+            return self.clone();
+        }
+
+        let old_width = self.width();
+        let new_width = old_width + num_cols;
+        let source_bytes = core::mem::size_of_val(self.values.as_slice());
+
+        // Measurements found that direct padding above 1 MiB regresses on a
+        // single AArch64 worker, so retain the relocation path for that case.
+        if cfg!(target_arch = "aarch64") && current_num_threads() == 1 && source_bytes > 1024 * 1024
+        {
+            let mut result = self.clone();
+            result.widen_right(num_cols, T::ZERO);
+            return result;
+        }
+
+        let mut result = Self::new(T::zero_vec(self.height() * new_width), new_width);
+        if self.values.is_empty() {
+            return result;
+        }
+
+        // AArch64 measurements placed the crossover between regressions just
+        // above 1 MiB and gains near 2 MiB. Other targets retain the 1 MiB cutoff.
+        let serial_copy_bytes = if cfg!(target_arch = "aarch64") {
+            3 * 512 * 1024
+        } else {
+            1024 * 1024
+        };
+        if source_bytes <= serial_copy_bytes {
+            result
+                .values
+                .chunks_exact_mut(new_width)
+                .zip(self.values.chunks_exact(old_width))
+                .for_each(|(destination, source)| {
+                    destination[..old_width].copy_from_slice(source);
+                });
+        } else {
+            result
+                .values
+                .par_chunks_exact_mut(new_width)
+                .zip(self.values.par_chunks_exact(old_width))
+                .for_each(|(destination, source)| {
+                    destination[..old_width].copy_from_slice(source);
+                });
+        }
+
         result
     }
 
@@ -2051,6 +2092,37 @@ mod tests {
         assert_eq!(via_method.width(), via_widen.width());
         assert_eq!(via_method.height(), via_widen.height());
         assert_eq!(via_method.values, via_widen.values);
+    }
+
+    #[test]
+    fn test_with_zero_cols_preserves_rows_for_edge_shapes() {
+        for (height, width, extra) in [
+            (0, 3, 1),
+            (1, 5, 1),
+            (3, 5, 4),
+            (4, 3, 0),
+            (16_385, 17, 3),
+            (4_097, 129, 1),
+        ] {
+            let matrix: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(
+                (0..height * width)
+                    .map(|i| BabyBear::new((i + 1) as u32))
+                    .collect(),
+                width,
+            );
+            let original = matrix.clone();
+            let padded = matrix.with_zero_cols(extra);
+
+            assert_eq!(padded.width(), width + extra);
+            assert_eq!(padded.height(), height);
+            for row in 0..height {
+                let source = matrix.row_slice(row).unwrap();
+                let result = padded.row_slice(row).unwrap();
+                assert_eq!(&result[..width], &*source);
+                assert!(result[width..].iter().all(|value| value.is_zero()));
+            }
+            assert_eq!(matrix, original);
+        }
     }
 
     #[test]
