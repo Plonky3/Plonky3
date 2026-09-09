@@ -875,13 +875,13 @@ fn internal_layer_mat_mul_goldilocks_12<A: Algebra<Goldilocks>>(state: &mut [A; 
     state[8] = sum.dup() - four_s8;
 
     // V[9] = 1/2^2
-    state[9] = sum.dup() + s9.halve().halve();
+    state[9] = sum.dup() + s9.div_2exp_u64(2);
 
     // V[10] = -1/2^2
-    state[10] = sum.dup() - s10.halve().halve();
+    state[10] = sum.dup() - s10.div_2exp_u64(2);
 
     // V[11] = 1/2^3
-    state[11] = sum + s11.halve().halve().halve();
+    state[11] = sum + s11.div_2exp_u64(3);
 }
 
 fn internal_layer_mat_mul_goldilocks_16<A: Algebra<Goldilocks>>(state: &mut [A; 16]) {
@@ -942,26 +942,25 @@ fn internal_layer_mat_mul_goldilocks_16<A: Algebra<Goldilocks>>(state: &mut [A; 
     state[8] = sum.dup() - four_s8;
 
     // V[9] = 1/2^3
-    state[9] = sum.dup() + s9.halve().halve().halve();
+    state[9] = sum.dup() + s9.div_2exp_u64(3);
 
     // V[10] = 1/2^4
-    state[10] = sum.dup() + s10.halve().halve().halve().halve();
+    state[10] = sum.dup() + s10.div_2exp_u64(4);
 
     // V[11] = 1/2^5
-    state[11] = sum.dup() + s11.halve().halve().halve().halve().halve();
+    state[11] = sum.dup() + s11.div_2exp_u64(5);
 
     // V[12] = -1/2^3
-    state[12] = sum.dup() - s12.halve().halve().halve();
+    state[12] = sum.dup() - s12.div_2exp_u64(3);
 
     // V[13] = -1/2^4
-    state[13] = sum.dup() - s13.halve().halve().halve().halve();
+    state[13] = sum.dup() - s13.div_2exp_u64(4);
 
     // V[14] = -1/2^5
-    state[14] = sum.dup() - s14.halve().halve().halve().halve().halve();
+    state[14] = sum.dup() - s14.div_2exp_u64(5);
 
     // V[15] = 1/2^32
-    let inv_2_32 = MATRIX_DIAG_16_GOLDILOCKS[15];
-    let v15 = s15 * inv_2_32;
+    let v15 = s15.div_2exp_u64(32);
     state[15] = sum + v15;
 }
 

@@ -73,9 +73,9 @@ impl<F: CubicTrinomialExtendable> HasFrobenius<F> for CubicTrinomialExtensionFie
     fn frobenius(&self) -> Self {
         let a = &self.value;
         let m = F::FROBENIUS_MATRIX;
-        let c0 = a[0] + m[0][1] * a[1] + m[0][2] * a[2];
-        let c1 = m[1][1] * a[1] + m[1][2] * a[2];
-        let c2 = m[2][1] * a[1] + m[2][2] * a[2];
+        let c0 = a[0] + F::dot_product::<2>(&[a[1], a[2]], &[m[0][1], m[0][2]]);
+        let c1 = F::dot_product::<2>(&[a[1], a[2]], &[m[1][1], m[1][2]]);
+        let c2 = F::dot_product::<2>(&[a[1], a[2]], &[m[2][1], m[2][2]]);
         Self::new([c0, c1, c2])
     }
 

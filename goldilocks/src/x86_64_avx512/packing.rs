@@ -13,7 +13,7 @@ use p3_field::op_assign_macros::{
     impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
-    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    Algebra, Dup, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing, PrimeField64, dispatch_chunked_mixed_dot_product,
     impl_packed_field_pow_2,
 };
@@ -132,8 +132,97 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     }
 
     #[inline]
+    fn mul_2exp_u64(&self, mut exp: u64) -> Self {
+        exp %= 192;
+        match exp {
+            0 => *self,
+            1 => self.double(),
+            _ => *self * Self::broadcast(Goldilocks::power_of_two(exp)),
+        }
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, mut exp: u64) -> Self {
+        exp %= 192;
+        match exp {
+            0 => *self,
+            1 => self.halve(),
+            2..=32 => unsafe {
+                let x = self.to_vector();
+                let lo = _mm512_and_si512(x, _mm512_set1_epi64((1i64 << exp) - 1));
+                let hi = _mm512_srl_epi64(x, _mm_cvtsi64_si128(exp as i64));
+                let a = _mm512_add_epi64(
+                    hi,
+                    _mm512_sll_epi64(lo, _mm_cvtsi64_si128((32 - exp) as i64)),
+                );
+                let b = _mm512_sll_epi64(lo, _mm_cvtsi64_si128((64 - exp) as i64));
+                // 2^-exp = 2^(32-exp) - 2^(64-exp) mod P. Both a and b are
+                // below P, so a - b > -P and one borrow correction suffices.
+                Self::from_vector(sub_no_double_overflow_64_64(a, b))
+            },
+            _ => *self * Self::broadcast(Goldilocks::power_of_two(192 - exp)),
+        }
+    }
+
+    #[inline]
     fn square(&self) -> Self {
         Self::from_vector(square(self.to_vector()))
+    }
+
+    #[inline]
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
+        assert_eq!(N, input.len());
+        match N {
+            0 => Self::ZERO,
+            1 => input[0].dup(),
+            2 => input[0].dup() + input[1].dup(),
+            3 => input[0].dup() + input[1].dup() + input[2].dup(),
+            4 => (input[0].dup() + input[1].dup()) + (input[2].dup() + input[3].dup()),
+            5 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<1>(&input[4..]),
+            6 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<2>(&input[4..]),
+            7 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<3>(&input[4..]),
+            8 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<4>(&input[4..]),
+            9..=63 => {
+                // Keep the existing eight-term trees for short sums: carry bookkeeping
+                // adds latency until enough independent work amortizes the final fold.
+                let mut acc = Self::sum_array::<8>(&input[..8]);
+                for i in (16..=N).step_by(8) {
+                    acc += Self::sum_array::<8>(&input[(i - 8)..i]);
+                }
+                let tail = &input[(8 * (N / 8))..];
+                match N & 7 {
+                    0 => acc,
+                    1 => acc + Self::sum_array::<1>(tail),
+                    2 => acc + Self::sum_array::<2>(tail),
+                    3 => acc + Self::sum_array::<3>(tail),
+                    4 => acc + Self::sum_array::<4>(tail),
+                    5 => acc + Self::sum_array::<5>(tail),
+                    6 => acc + Self::sum_array::<6>(tail),
+                    7 => acc + Self::sum_array::<7>(tail),
+                    _ => unreachable!(),
+                }
+            }
+            _ => {
+                let mut chunks = input.chunks(MAX_SUM_CHUNK);
+                let mut sum = Self::from_vector(sum_delayed_reduce(chunks.next().unwrap()));
+                for chunk in chunks {
+                    sum += Self::from_vector(sum_delayed_reduce(chunk));
+                }
+                sum
+            }
+        }
+    }
+
+    #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        if (2..=6).contains(&N) {
+            Self::from_vector(dot_product_delayed_reduce::<N>(|i| {
+                (lhs[i].to_vector(), rhs[i].to_vector())
+            }))
+        } else {
+            let products: [Self; N] = core::array::from_fn(|i| lhs[i] * rhs[i]);
+            Self::sum_array::<N>(&products)
+        }
     }
 
     #[inline]
@@ -156,11 +245,17 @@ impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {
 
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
-        dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(
-            a,
-            f,
-            <Self as Algebra<Goldilocks>>::BATCHED_LC_CHUNK,
-        )
+        if (2..=6).contains(&N) {
+            Self::from_vector(dot_product_delayed_reduce::<N>(|i| {
+                (a[i].to_vector(), Self::broadcast(f[i]).to_vector())
+            }))
+        } else {
+            dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(
+                a,
+                f,
+                <Self as Algebra<Goldilocks>>::BATCHED_LC_CHUNK,
+            )
+        }
     }
 }
 
@@ -196,6 +291,7 @@ impl_packed_field_pow_2!(
 
 const FIELD_ORDER: __m512i = unsafe { transmute([Goldilocks::ORDER_U64; WIDTH]) };
 const EPSILON: __m512i = unsafe { transmute([Goldilocks::ORDER_U64.wrapping_neg(); WIDTH]) };
+const MAX_SUM_CHUNK: usize = 64;
 
 #[inline]
 unsafe fn canonicalize(x: __m512i) -> __m512i {
@@ -238,6 +334,118 @@ unsafe fn sub_no_double_overflow_64_64(x: __m512i, y: __m512i) -> __m512i {
         let mask = _mm512_cmplt_epu64_mask(x, y); // mask set if sub will underflow (x < y)
         let res_wrapped = _mm512_sub_epi64(x, y);
         _mm512_mask_add_epi64(res_wrapped, mask, res_wrapped, FIELD_ORDER)
+    }
+}
+
+/// Sum a nonempty chunk of at most [`MAX_SUM_CHUNK`] arbitrary packed u64 values.
+#[inline]
+fn sum_delayed_reduce(input: &[PackedGoldilocksAVX512]) -> __m512i {
+    debug_assert!(!input.is_empty());
+    debug_assert!(input.len() <= MAX_SUM_CHUNK);
+
+    unsafe {
+        let zero = _mm512_setzero_si512();
+        let one = _mm512_set1_epi64(1);
+
+        // Only a final chunk can have fewer than four terms. A single dependency chain is
+        // preferable for this small tail and avoids indexing four empty accumulators.
+        if input.len() < 4 {
+            let mut lo = input[0].to_vector();
+            let mut carries = zero;
+            for value in &input[1..] {
+                let old = lo;
+                lo = _mm512_add_epi64(lo, value.to_vector());
+                let carry = _mm512_cmplt_epu64_mask(lo, old);
+                carries = _mm512_mask_add_epi64(carries, carry, carries, one);
+            }
+
+            let correction = _mm512_sub_epi64(_mm512_slli_epi64::<32>(carries), carries);
+            return add_no_double_overflow_64_64(lo, correction);
+        }
+
+        let (groups, remainder) = input.as_chunks::<4>();
+        let (first, groups) = groups.split_first().unwrap();
+        let mut lo0 = first[0].to_vector();
+        let mut lo1 = first[1].to_vector();
+        let mut lo2 = first[2].to_vector();
+        let mut lo3 = first[3].to_vector();
+        let mut carries0 = zero;
+        let mut carries1 = zero;
+        let mut carries2 = zero;
+        let mut carries3 = zero;
+
+        // Keep these four updates explicit so the independent dependency chains are visible
+        // to the compiler without dynamically indexing an accumulator array.
+        for values in groups {
+            let old0 = lo0;
+            lo0 = _mm512_add_epi64(lo0, values[0].to_vector());
+            let carry0 = _mm512_cmplt_epu64_mask(lo0, old0);
+            carries0 = _mm512_mask_add_epi64(carries0, carry0, carries0, one);
+
+            let old1 = lo1;
+            lo1 = _mm512_add_epi64(lo1, values[1].to_vector());
+            let carry1 = _mm512_cmplt_epu64_mask(lo1, old1);
+            carries1 = _mm512_mask_add_epi64(carries1, carry1, carries1, one);
+
+            let old2 = lo2;
+            lo2 = _mm512_add_epi64(lo2, values[2].to_vector());
+            let carry2 = _mm512_cmplt_epu64_mask(lo2, old2);
+            carries2 = _mm512_mask_add_epi64(carries2, carry2, carries2, one);
+
+            let old3 = lo3;
+            lo3 = _mm512_add_epi64(lo3, values[3].to_vector());
+            let carry3 = _mm512_cmplt_epu64_mask(lo3, old3);
+            carries3 = _mm512_mask_add_epi64(carries3, carry3, carries3, one);
+        }
+
+        // Distribute the one-to-three remainder terms across distinct chains.
+        if let Some(value) = remainder.first() {
+            let old = lo0;
+            lo0 = _mm512_add_epi64(lo0, value.to_vector());
+            let carry = _mm512_cmplt_epu64_mask(lo0, old);
+            carries0 = _mm512_mask_add_epi64(carries0, carry, carries0, one);
+        }
+        if let Some(value) = remainder.get(1) {
+            let old = lo1;
+            lo1 = _mm512_add_epi64(lo1, value.to_vector());
+            let carry = _mm512_cmplt_epu64_mask(lo1, old);
+            carries1 = _mm512_mask_add_epi64(carries1, carry, carries1, one);
+        }
+        if let Some(value) = remainder.get(2) {
+            let old = lo2;
+            lo2 = _mm512_add_epi64(lo2, value.to_vector());
+            let carry = _mm512_cmplt_epu64_mask(lo2, old);
+            carries2 = _mm512_mask_add_epi64(carries2, carry, carries2, one);
+        }
+
+        let (lo01, carries01) = merge_sum_accumulators(lo0, carries0, lo1, carries1);
+        let (lo23, carries23) = merge_sum_accumulators(lo2, carries2, lo3, carries3);
+        let (lo, carries) = merge_sum_accumulators(lo01, carries01, lo23, carries23);
+
+        // Each chain counts its internal low-word carries, and each merge adds the carry from
+        // combining its two low words. Thus the final count is the carry count of the exact
+        // whole-chunk sum and is at most `input.len() - 1 <= 63`.
+        // Since `2^64 = 2^32 - 1 (mod P)`, the correction is `(c << 32) - c`, at most
+        // `63 * (2^32 - 1) < P`, so the bounded add is valid.
+        let correction = _mm512_sub_epi64(_mm512_slli_epi64::<32>(carries), carries);
+        add_no_double_overflow_64_64(lo, correction)
+    }
+}
+
+/// Merge two exact delayed-sum states, including the carry from adding their low words.
+#[inline(always)]
+unsafe fn merge_sum_accumulators(
+    lo0: __m512i,
+    carries0: __m512i,
+    lo1: __m512i,
+    carries1: __m512i,
+) -> (__m512i, __m512i) {
+    unsafe {
+        let lo = _mm512_add_epi64(lo0, lo1);
+        let carry = _mm512_cmplt_epu64_mask(lo, lo0);
+        let carries = _mm512_add_epi64(carries0, carries1);
+        let carries = _mm512_mask_add_epi64(carries, carry, carries, _mm512_set1_epi64(1));
+        (lo, carries)
     }
 }
 
@@ -365,6 +573,45 @@ fn square64(x: __m512i) -> (__m512i, __m512i) {
     }
 }
 
+/// Accumulate 2..=6 full-u64 products without losing carries above bit 128.
+///
+/// With B = 2^32, the exact sum is lo + B^2 * mid + B^3 * top. Each product
+/// contributes its low64 word, the bottom32 of its high64 word, and its top32.
+/// Carries from lo enter mid. After k terms, mid <= k*B - 1 and top <= k*(B - 1),
+/// so neither accumulator can overflow for k <= 6, even for noncanonical inputs.
+#[inline]
+fn dot_product_delayed_reduce<const N: usize>(
+    inputs: impl Fn(usize) -> (__m512i, __m512i),
+) -> __m512i {
+    debug_assert!((2..=6).contains(&N));
+    unsafe {
+        let (a, b) = inputs(0);
+        let (hi, mut lo) = mul64_64(a, b);
+        let mut mid = _mm512_and_si512(hi, EPSILON);
+        let mut top = _mm512_srli_epi64::<32>(hi);
+        let one = _mm512_set1_epi64(1);
+        for i in 1..N {
+            let (a, b) = inputs(i);
+            let (hi, product_lo) = mul64_64(a, b);
+            let old = lo;
+            lo = _mm512_add_epi64(lo, product_lo);
+            let carry = _mm512_cmplt_epu64_mask(lo, old);
+            mid = _mm512_add_epi64(mid, _mm512_and_si512(hi, EPSILON));
+            mid = _mm512_mask_add_epi64(mid, carry, mid, one);
+            top = _mm512_add_epi64(top, _mm512_srli_epi64::<32>(hi));
+        }
+
+        // B^2 = B - 1 and B^3 = -1 modulo P. Splitting mid at bit 32 gives
+        // lo - (top + (mid >> 32)) + (mid & (B - 1)) * (B - 1).
+        // correction <= N*B - 1 and term <= (B - 1)^2 are both below P,
+        // satisfying the no-double-overflow helper bounds for arbitrary lo.
+        let correction = _mm512_add_epi64(top, _mm512_srli_epi64::<32>(mid));
+        let term = _mm512_mul_epu32(mid, EPSILON);
+        let adjusted = sub_no_double_overflow_64_64(lo, correction);
+        add_no_double_overflow_64_64(adjusted, term)
+    }
+}
+
 /// Given a 128-bit value represented as two 64-bit halves, reduce it modulo the Goldilocks field order.
 ///
 /// The result will be a 64-bit value but may be larger than `FIELD_ORDER`.
@@ -409,7 +656,10 @@ fn square(x: __m512i) -> __m512i {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::{PackedValue, PrimeCharacteristicRing, PrimeField64};
     use p3_field_testing::test_packed_field;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::{Goldilocks, PackedGoldilocksAVX512, WIDTH};
 
@@ -445,6 +695,64 @@ mod tests {
         0x0000_0000_0000_0001,
         0xFFFF_FFFF_0000_0002,
     ]));
+
+    #[test]
+    fn sum_array_chunk_remainders_match_full_u64_oracle() {
+        fn check<const N: usize>(values: [[u64; WIDTH]; N]) {
+            let input = values.map(|lanes| PackedGoldilocksAVX512(Goldilocks::new_array(lanes)));
+            let actual = PackedGoldilocksAVX512::sum_array::<N>(&input);
+            let delayed = (N <= super::MAX_SUM_CHUNK)
+                .then(|| PackedGoldilocksAVX512::from_vector(super::sum_delayed_reduce(&input)));
+
+            for lane in 0..WIDTH {
+                let expected = (values
+                    .iter()
+                    .map(|term| u128::from(term[lane]))
+                    .sum::<u128>()
+                    % u128::from(Goldilocks::ORDER_U64)) as u64;
+                assert_eq!(
+                    actual.as_slice()[lane].as_canonical_u64(),
+                    expected,
+                    "N={N}, lane={lane}"
+                );
+                if let Some(delayed) = delayed {
+                    assert_eq!(delayed.as_slice()[lane].as_canonical_u64(), expected);
+                }
+            }
+        }
+
+        macro_rules! check_length {
+            ($rng:ident, $n:literal) => {{
+                const EDGES: [u64; 8] = [
+                    0,
+                    1,
+                    (1 << 32) - 1,
+                    1 << 32,
+                    1 << 63,
+                    Goldilocks::ORDER_U64 - 1,
+                    Goldilocks::ORDER_U64,
+                    u64::MAX,
+                ];
+                check::<$n>(core::array::from_fn(|term| {
+                    core::array::from_fn(|lane| EDGES[(term * WIDTH + lane) % EDGES.len()])
+                }));
+                check::<$n>([[u64::MAX; WIDTH]; $n]);
+                for _ in 0..8 {
+                    check::<$n>(core::array::from_fn(|_| $rng.random()));
+                }
+            }};
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0xA7_51_65_66_67);
+        check_length!(rng, 9);
+        check_length!(rng, 10);
+        check_length!(rng, 11);
+        check_length!(rng, 63);
+        check_length!(rng, 64);
+        check_length!(rng, 65);
+        check_length!(rng, 66);
+        check_length!(rng, 67);
+    }
 
     test_packed_field!(
         crate::PackedGoldilocksAVX512,
