@@ -115,7 +115,7 @@ fn query_count_from_failure_base(
     Ok(libm::ceil(security_bits as f64 / -libm::log2(failure_base)) as usize)
 }
 
-fn minimum_eta_for_target(
+pub(crate) fn minimum_eta_for_target(
     upper_bound: f64,
     target_bits: usize,
     mut bits_at_eta: impl FnMut(f64) -> f64,
@@ -146,6 +146,40 @@ fn minimum_eta_for_target(
         }
     }
     Ok(high)
+}
+
+/// Union bound for the PCS's per-height alpha batches, at STIR's initial radius.
+pub(crate) fn initial_batching_error(
+    assumption: SecurityAssumption,
+    field_size_bits: usize,
+    log_degree: usize,
+    log_inv_rate: usize,
+    batches: &[(usize, usize)],
+    eta: f64,
+) -> f64 {
+    let initial_base = assumption.stir_query_failure_base(log_inv_rate, 0.);
+    let mut total = f64::INFINITY;
+    for &(class_log_degree, num_quotients) in batches {
+        if num_quotients <= 1 {
+            continue;
+        }
+        let class_log_inv_rate = log_inv_rate + log_degree - class_log_degree;
+        // All classes use the shared domain and acceptance distance delta_0.
+        // Thus eta_i = eta_0 + B(rho_0) - B(rho_i), not eta_0 at a new rate.
+        let class_eta =
+            eta + (initial_base - assumption.stir_query_failure_base(class_log_inv_rate, 0.));
+        let bits = assumption.prox_gaps_error_at_log_eta(
+            class_log_degree,
+            class_log_inv_rate,
+            field_size_bits,
+            num_quotients,
+            libm::log2(class_eta),
+        );
+        // Sum probabilities in the log domain, including fields wider than 1024 bits.
+        let min = total.min(bits);
+        total = min - libm::log2(libm::exp2(min - total) + libm::exp2(min - bits));
+    }
+    total
 }
 
 /// Algebraic bits §7 Construction 7.2's batch degree correction ("Combine") retains merging
@@ -528,6 +562,37 @@ impl StirSoundness for SecurityAssumption {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quotient_batches_use_each_native_rate_at_the_shared_radius() {
+        // Shared domain 512, initial degree 256 and eta=1/4 give delta=1/4.
+        // The degree-4 class has rho=1/128 and eta=95/128 at that same delta.
+        // Its 65536 claims dominate the error despite the much smaller degree.
+        let probability = (256. / (0.25 * 0.25)
+            + 65535. * 4. / (libm::pow(1. / 128., 2.) * (95. / 128.)))
+            / libm::exp2(123.);
+        let bits = initial_batching_error(
+            SecurityAssumption::CapacityBound,
+            123,
+            8,
+            1,
+            &[(8, 2), (2, 65536)],
+            0.25,
+        );
+        assert!((bits + libm::log2(probability)).abs() < 1e-10);
+        assert!(bits < 91.);
+        assert_eq!(
+            initial_batching_error(
+                SecurityAssumption::CapacityBound,
+                123,
+                8,
+                1,
+                &[(8, 1), (2, 1)],
+                0.25
+            ),
+            f64::INFINITY
+        );
+    }
 
     #[test]
     fn johnson_initial_eta_is_derived_from_bcss25_validation_bound() {
