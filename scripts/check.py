@@ -100,30 +100,13 @@ def feature_args(parallel: bool) -> list[str]:
     return ["--features", "parallel"] if parallel else []
 
 
-def target_args(target: str | None) -> list[str]:
-    """Build for one triple explicitly, which is what keeps pinned flags off host artifacts.
-
-    Cargo applies the flag variables to build scripts and proc macros as well, unless a
-    triple is named.
-
-    A leg that pins instructions the runner may lack therefore has to name its own triple,
-    even when that triple is the host.
-    """
-    return ["--target", target] if target else []
-
-
 def test_commands(
-    metadata: dict[str, Any],
-    package: str | None,
-    parallel: bool,
-    doctest: bool,
-    target: str | None = None,
+    metadata: dict[str, Any], package: str | None, parallel: bool, doctest: bool
 ) -> list[list[str]]:
     if doctest:
         base = ["cargo", "test", "--doc"]
     else:
         base = ["cargo", "nextest", "run"]
-    base = base + target_args(target)
     feature_runs = package_test_features(metadata, package, parallel)
     baseline = base + package_args(package) + feature_args(parallel)
     if package and feature_runs and not doctest:
@@ -209,9 +192,9 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
         scope = package_args(args.package) if args.package else ["--workspace"]
         return [["cargo", "check", *scope, "--all-targets", *feature_args(args.parallel)]]
     if command == "test":
-        return test_commands(metadata, args.package, args.parallel, False, args.target)
+        return test_commands(metadata, args.package, args.parallel, False)
     if command == "doctest":
-        return test_commands(metadata, args.package, args.parallel, True, args.target)
+        return test_commands(metadata, args.package, args.parallel, True)
     if command == "lint":
         return lint_commands(args.check)
     if command == "full":
@@ -302,16 +285,6 @@ def add_package_and_parallel(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--parallel", action="store_true", help="enable the parallel feature")
 
 
-def add_optional_target(parser: argparse.ArgumentParser) -> None:
-    """Accept an explicit build triple, which a leg pinning instructions needs."""
-    parser.add_argument(
-        "--target",
-        default=None,
-        metavar="TRIPLE",
-        help="build for one triple, keeping pinned flags off host build scripts",
-    )
-
-
 def add_target_feature(parser: argparse.ArgumentParser) -> None:
     """Accept the target features a CI leg pins, so the same leg is reproducible locally."""
     parser.add_argument(
@@ -361,11 +334,9 @@ def parser() -> argparse.ArgumentParser:
     subparsers.add_parser("full", help="run all host checks used by CI")
     test = subparsers.add_parser("test", help="run tests with cargo-nextest")
     add_package_and_parallel(test)
-    add_optional_target(test)
     add_target_feature(test)
     doctest = subparsers.add_parser("doctest", help="run Rust documentation tests")
     add_package_and_parallel(doctest)
-    add_optional_target(doctest)
     add_target_feature(doctest)
     lint = subparsers.add_parser("lint", help="run formatting, lint, dependency and doc checks")
     lint.add_argument("--check", choices=LINT_COMMANDS, help="run one lint check")

@@ -47,26 +47,6 @@ class CheckCliTests(unittest.TestCase):
             ["+ cargo test --doc -p p3-util"],
         )
 
-    def test_an_explicit_triple_reaches_the_test_recipe(self):
-        # A leg that pins instructions the runner may lack names its own triple, so the
-        # pinned flags stay off host build scripts and proc macros.
-        self.assertEqual(
-            self.dry_run_lines(
-                "test",
-                "--package",
-                "p3-binary-field",
-                "--target",
-                "x86_64-unknown-linux-gnu",
-            ),
-            ["+ cargo nextest run --target x86_64-unknown-linux-gnu -p p3-binary-field"],
-        )
-
-        # Omitting it leaves the recipe exactly as the ordinary legs run it.
-        self.assertEqual(
-            self.dry_run_lines("test", "--package", "p3-binary-field"),
-            ["+ cargo nextest run -p p3-binary-field"],
-        )
-
     def test_architecture_build_is_compile_only(self):
         self.assertEqual(
             self.dry_run_lines(
