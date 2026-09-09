@@ -6,7 +6,7 @@ use core::mem::{MaybeUninit, transmute};
 
 use itertools::{Itertools, izip};
 use p3_field::integers::QuotientMap;
-use p3_field::{Field, Powers, TwoAdicField};
+use p3_field::{Field, Powers, PrimeCharacteristicRing, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
@@ -169,6 +169,25 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         reverse_matrix_index_bits(&mut mat);
         coset_dft(self, &mut mat.as_view_mut(), shift);
         BitReversalPerm::new_view(mat)
+    }
+
+    fn idft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+        let h = mat.height();
+        if h == 1 {
+            return mat;
+        }
+        let log_h = log2_strict_usize(h);
+        let mid = log_h.div_ceil(2);
+        let inverse_twiddles = self.get_or_compute_inverse_twiddles(log_h);
+
+        reverse_matrix_index_bits(&mut mat);
+        first_half(&mut mat, mid, &inverse_twiddles.twiddles);
+        reverse_matrix_index_bits(&mut mat);
+        let h_inv_subfield = F::PrimeSubfield::ONE.div_2exp_u64(log_h as u64);
+        let scale = Some(F::from_prime_subfield(h_inv_subfield));
+        second_half(&mut mat, mid, &inverse_twiddles.bitrev_twiddles, scale);
+        reverse_matrix_index_bits(&mut mat);
+        mat
     }
 
     fn coset_idft_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
