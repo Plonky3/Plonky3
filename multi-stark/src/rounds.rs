@@ -25,11 +25,11 @@ use crate::selectors::{BoundaryEvals, periodic_num_variables};
 
 /// Native per-variable degrees of one AIR's two zerocheck expression families.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
-pub(super) struct AirDegrees {
+pub struct AirDegrees {
     /// Alpha-batched ordinary constraint degree, or zero when the AIR asserts none.
-    pub(super) constraints: usize,
+    pub constraints: usize,
     /// Lookup-link degree, or zero when the AIR declares no interactions.
-    pub(super) interactions: usize,
+    pub interactions: usize,
 }
 
 impl AirDegrees {
@@ -37,7 +37,8 @@ impl AirDegrees {
     ///
     /// The round state evaluates the AIR up to this node, and stops accumulating the
     /// lower-degree family once its own final node is past.
-    pub(super) const fn max(self) -> usize {
+    #[must_use]
+    pub const fn max(self) -> usize {
         if self.constraints > self.interactions {
             self.constraints
         } else {

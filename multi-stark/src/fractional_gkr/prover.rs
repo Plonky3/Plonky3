@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::FieldChallenger;
+use p3_challenger::fs::TranscriptField;
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
 };
@@ -13,6 +14,7 @@ use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 use p3_util::log2_strict_usize;
 
+use super::transcript::{FractionGkrProverTranscript, FractionGkrShape};
 use super::{Fraction, FractionGkrLayerProof, FractionGkrOutput, FractionGkrProof, SplitFraction};
 
 struct InputLayer<'a, F: Field, EF: ExtensionField<F>> {
@@ -515,9 +517,11 @@ fn restore_equality_factor<EF: Field>(
 
 /// Proves that a table of fractions sums to zero via a binary-tree reduction.
 ///
-/// It observes the root denominator and layer messages in `challenger` and
-/// returns the numerator and denominator openings of the input tables at the
+/// The run is driven through this protocol's own transcript, seeded from the variable count.
+/// It returns the numerator and denominator openings of the input tables at the
 /// resulting transcript-derived point.
+///
+/// The challenger is borrowed for the run and handed back where the reduction stops.
 ///
 /// # Panics
 ///
@@ -528,7 +532,7 @@ pub fn prove_fractional_gkr<F, EF, Challenger>(
     challenger: &mut Challenger,
 ) -> (FractionGkrProof<EF>, FractionGkrOutput<EF>)
 where
-    F: Field,
+    F: TranscriptField,
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F>,
 {
@@ -561,17 +565,19 @@ where
             EF::ZERO,
             "fraction GKR root denominator must be nonzero"
         );
-        challenger.observe_algebra_element(root_denominator);
 
-        let lambda: EF = challenger.sample_algebra_element();
+        // One driver covers the whole run, which here is the single root layer.
+        let mut transcript = FractionGkrProverTranscript::<Challenger, F, EF>::new(
+            challenger,
+            FractionGkrShape { num_variables },
+            root_denominator,
+        );
+
+        let lambda = transcript.begin_layer();
         debug_assert_eq!(lambda * root_denominator, root_claims.gate(lambda));
-        challenger.observe_algebra_slice(&[
-            root_claims.n0,
-            root_claims.d0,
-            root_claims.n1,
-            root_claims.d1,
-        ]);
-        let branch: EF = challenger.sample_algebra_element();
+        let branch = transcript.end_layer(&root_claims);
+        transcript.finish();
+
         let numerator = root_claims.n0 + branch * (root_claims.n1 - root_claims.n0);
         let denominator = root_claims.d0 + branch * (root_claims.d1 - root_claims.d0);
 
@@ -628,22 +634,22 @@ where
         EF::ZERO,
         "fraction GKR root denominator must be nonzero"
     );
-    challenger.observe_algebra_element(root_denominator);
+
+    // One driver covers every layer of the run, from the root down to the input tables.
+    let mut transcript = FractionGkrProverTranscript::<Challenger, F, EF>::new(
+        challenger,
+        FractionGkrShape { num_variables },
+        root_denominator,
+    );
     let interpolator = RoundPolyInterpolator::new(2);
     let mut layer_proofs = Vec::with_capacity(num_variables);
 
     // Prove the final reduction from the two one-variable children to the scalar root. This
     // layer has no sumcheck variables, but its random linear combination binds the root
     // denominator to the zero-numerator statement.
-    let lambda: EF = challenger.sample_algebra_element();
+    let lambda = transcript.begin_layer();
     debug_assert_eq!(lambda * root_denominator, root_claims.gate(lambda));
-    challenger.observe_algebra_slice(&[
-        root_claims.n0,
-        root_claims.d0,
-        root_claims.n1,
-        root_claims.d1,
-    ]);
-    let branch: EF = challenger.sample_algebra_element();
+    let branch = transcript.end_layer(&root_claims);
     let mut numerator = root_claims.n0 + branch * (root_claims.n1 - root_claims.n0);
     let mut denominator = root_claims.d0 + branch * (root_claims.d1 - root_claims.d0);
     let mut point = Point::new(vec![branch]);
@@ -654,7 +660,7 @@ where
 
     // Reduced extension-field layers are consumed from the top of the tree down.
     for fraction in fractions.into_iter().rev() {
-        let lambda: EF = challenger.sample_algebra_element();
+        let lambda = transcript.begin_layer();
         let mut normalized_sum = numerator + lambda * denominator;
         let mut layer = Layer::new(fraction, &point);
         let mut round_polys = Vec::with_capacity(point.num_variables());
@@ -671,8 +677,7 @@ where
                 layer.eq_prefix,
                 &interpolator,
             );
-            challenger.observe_algebra_slice(&round_poly);
-            let challenge: EF = challenger.sample_algebra_element();
+            let challenge = transcript.round(&round_poly);
             round_polys.push(round_poly);
             round_point.push(challenge);
             normalized_sum = interpolator.eval(&quadratic_evals, q_sum, challenge);
@@ -681,8 +686,7 @@ where
 
         let claims = layer.into_claims();
         debug_assert_eq!(normalized_sum, claims.gate(lambda));
-        challenger.observe_algebra_slice(&[claims.n0, claims.d0, claims.n1, claims.d1]);
-        let branch: EF = challenger.sample_algebra_element();
+        let branch = transcript.end_layer(&claims);
         numerator = claims.n0 + branch * (claims.n1 - claims.n0);
         denominator = claims.d0 + branch * (claims.d1 - claims.d0);
         round_point.insert(0, branch);
@@ -695,7 +699,7 @@ where
 
     // The original lookup arrays are the only mixed base/extension-field layer.
     // Its first fold promotes the numerators; all later rounds use Layer.
-    let lambda: EF = challenger.sample_algebra_element();
+    let lambda = transcript.begin_layer();
     let mut normalized_sum = numerator + lambda * denominator;
     let input_layer = InputLayer::new(fraction, &point);
     let mut round_polys = Vec::with_capacity(point.num_variables());
@@ -710,8 +714,7 @@ where
         EF::ONE,
         &interpolator,
     );
-    challenger.observe_algebra_slice(&round_poly);
-    let challenge: EF = challenger.sample_algebra_element();
+    let challenge = transcript.round(&round_poly);
     round_polys.push(round_poly);
     round_point.push(challenge);
     normalized_sum = interpolator.eval(&quadratic_evals, q_sum, challenge);
@@ -728,8 +731,7 @@ where
             layer.eq_prefix,
             &interpolator,
         );
-        challenger.observe_algebra_slice(&round_poly);
-        let challenge: EF = challenger.sample_algebra_element();
+        let challenge = transcript.round(&round_poly);
         round_polys.push(round_poly);
         round_point.push(challenge);
         normalized_sum = interpolator.eval(&quadratic_evals, q_sum, challenge);
@@ -738,8 +740,9 @@ where
 
     let claims = layer.into_claims();
     debug_assert_eq!(normalized_sum, claims.gate(lambda));
-    challenger.observe_algebra_slice(&[claims.n0, claims.d0, claims.n1, claims.d1]);
-    let branch: EF = challenger.sample_algebra_element();
+    let branch = transcript.end_layer(&claims);
+    transcript.finish();
+
     let numerator = claims.n0 + branch * (claims.n1 - claims.n0);
     let denominator = claims.d0 + branch * (claims.d1 - claims.d0);
     round_point.insert(0, branch);
