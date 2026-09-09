@@ -637,6 +637,37 @@ fn corrupted_pow_witness_is_rejected() {
     );
 }
 
+#[test]
+fn a_noncanonical_pow_witness_at_zero_difficulty_is_rejected() {
+    // Fixture state: pow_bits = 0, so the grind is a no-op on both sides.
+    let (pcs, commitment, mut proof, protocol) =
+        run_lifecycle(NUM_VARIABLES, LOG_INV_RATE, 0, SECURITY_LEVEL, 12);
+
+    // Invariant: a zero budget makes zero the one witness an honest prover emits.
+    assert_eq!(proof.pow_witness, F::ZERO);
+
+    // Mutation: any other value.
+    //
+    //     prover  : grind at 0 bits -> zero witness, sponge untouched
+    //     verifier: check at 0 bits -> accepts,      sponge untouched
+    //
+    // Nothing in the transcript binds the field, so only a canonical-value check rejects
+    // this second encoding of the same statement.
+    proof.pow_witness = F::ONE;
+
+    let mut verifier_challenger = challenger();
+    let err = pcs
+        .verify(&commitment, &proof, &mut verifier_challenger, protocol)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            BinaryPcsError::NonCanonicalPowWitness { actual } if actual == F::ONE
+        ),
+        "expected NonCanonicalPowWitness, got {err:?}"
+    );
+}
+
 /// A proof carrying PoW witnesses is rejected outright: every fold round replays with a
 /// freshly built, always-empty `pow_witnesses` vector (see `BinaryPcs::verify_opening`), so
 /// nothing in the proof's own transcript reads or binds the ones this test appends. Without

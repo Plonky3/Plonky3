@@ -33,7 +33,9 @@ use crate::error::BinaryPcsError;
 use crate::params::BinaryPcsConfig;
 use crate::proof::BinaryPcsProof;
 use crate::prover::{BinaryPcsProverData, commit, fold_rounds, open_queries};
-use crate::verifier::{check_round_and_final_lengths, verify_query_paths};
+use crate::verifier::{
+    check_canonical_pow_witness, check_round_and_final_lengths, verify_query_paths,
+};
 
 /// A multilinear polynomial commitment scheme over `BinaryField128`: an additive-domain
 /// Reed-Solomon codeword folded in lockstep with a residual sumcheck.
@@ -213,15 +215,24 @@ where
     /// via [`Verifier::add_claim_at`], `None` samples the point from the transcript via
     /// [`Verifier::add_claim`], mirroring the prover's `eval_at`/`eval` choice.
     ///
-    /// Protocol shape/security validation, `OpeningBatchCountMismatch`, both round-count checks,
-    /// `FinalCodewordLengthMismatch` and `NonEmptyPowWitnesses` run before this function performs any transcript operation of its
-    /// own, so a malformed proof is rejected rather than indexed out of bounds or used to
-    /// desync the replay. That does not mean the challenger itself is untouched: `verify`
-    /// observes the commitment before calling here, and `verify_at`'s contract requires the
-    /// caller to have done the same. `OpeningBatchSizeMismatch`, by contrast, is checked once
-    /// per claim inside the claim-recording loop below, after every earlier claim in the same
-    /// proof has already been absorbed — it is ordered only relative to its own claim, not to
-    /// the transcript as a whole.
+    /// The proof-shape checks below all run before this function performs any transcript
+    /// operation of its own:
+    ///
+    /// - `OpeningBatchCountMismatch`
+    /// - both round-count checks
+    /// - `FinalCodewordLengthMismatch`
+    /// - `NonEmptyPowWitnesses`
+    /// - `NonCanonicalPowWitness`
+    ///
+    /// A malformed proof is rejected there, rather than indexed out of bounds or used to
+    /// desync the replay.
+    ///
+    /// The challenger is not untouched by then: `verify` observes the commitment before
+    /// calling here, and `verify_at`'s contract requires the caller to have done the same.
+    ///
+    /// `OpeningBatchSizeMismatch` sits outside that group: it is checked once per claim inside
+    /// the claim-recording loop below, ordered only against its own claim and not against the
+    /// transcript as a whole.
     ///
     /// The per-round sumcheck replay is interleaved with each intermediate round's commitment
     /// observation, one `SumcheckData::verify_rounds` call per fold round, because a single
@@ -274,6 +285,10 @@ where
         }
 
         check_round_and_final_lengths(&self.config, proof)?;
+
+        // At a zero grinding budget the witness never reaches the sponge, so its value is
+        // pinned here rather than by the grind.
+        check_canonical_pow_witness(&self.config, proof)?;
 
         // From here on the transcript is touched: every remaining check runs against the
         // replayed randomness, not the proof's raw bytes.

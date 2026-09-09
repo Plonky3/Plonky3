@@ -5,6 +5,8 @@ use alloc::string::String;
 use p3_sumcheck::SumcheckError;
 use thiserror::Error;
 
+use crate::transcript::TranscriptFailure;
+
 /// Errors during WHIR proof verification.
 #[derive(Error, Debug)]
 pub enum VerifierError {
@@ -66,6 +68,21 @@ pub enum VerifierError {
     #[error("Invalid proof-of-work witness")]
     InvalidPowWitness,
 
+    /// A grinding witness is not the value its zero difficulty admits.
+    ///
+    /// Raised with the other shape checks, before any transcript work.
+    ///
+    /// The final round is labelled by the intermediate round count.
+    //
+    // Why: at `pow_bits = 0` neither side touches the sponge.
+    //
+    //     prover  : grind is skipped     -> zero on the wire
+    //     verifier: check_witness(0, w)  -> returns true, absorbs nothing
+    //
+    // The field is then bound to nothing: any value rides along and still verifies.
+    #[error("Non-canonical proof-of-work witness in round {round} at zero difficulty")]
+    NonCanonicalPowWitness { round: usize },
+
     /// Proof is missing the Merkle commitment for a round.
     #[error("Proof is missing the Merkle commitment for round {round}")]
     MissingRoundCommitment { round: usize },
@@ -100,4 +117,16 @@ pub enum VerifierError {
     /// Final polynomial has the wrong number of evaluations.
     #[error("Final polynomial length mismatch: expected {expected}, got {actual}")]
     FinalPolyLengthMismatch { expected: usize, actual: usize },
+}
+
+impl From<TranscriptFailure> for VerifierError {
+    fn from(failure: TranscriptFailure) -> Self {
+        match failure {
+            TranscriptFailure::PowWitness { .. } => Self::InvalidPowWitness,
+            TranscriptFailure::FinalPolyLength { expected, got } => Self::FinalPolyLengthMismatch {
+                expected,
+                actual: got,
+            },
+        }
+    }
 }

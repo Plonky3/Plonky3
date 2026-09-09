@@ -1,12 +1,14 @@
 use alloc::vec::Vec;
 
-use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field};
+use p3_challenger::fs::TranscriptField;
+use p3_challenger::{CanObserve, CanSample, FieldChallenger, GrindingChallenger};
+use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
 use serde::{Deserialize, Serialize};
 
 use crate::SumcheckError;
 use crate::strategy::Basis;
+use crate::transcript::{ProverTranscript, SumcheckShape, VerifierTranscript};
 
 /// Sumcheck polynomial data
 ///
@@ -45,76 +47,81 @@ impl<F, EF> SumcheckData<F, EF> {
         self.polynomial_evaluations.len()
     }
 
-    /// Commits polynomial coefficients to the transcript and returns a challenge.
+    /// Records one round in this proof and plays the matching transcript step.
     ///
-    /// This helper function handles the Fiat-Shamir interaction for a sumcheck round.
+    /// This is the only place a round reaches both the proof and the sponge.
+    /// Recording and absorbing therefore cannot drift apart.
     ///
     /// # Arguments
     ///
-    /// * `challenger` - Fiat-Shamir transcript.
-    /// * `c_a` - Finite-point value: `h(0)` (evaluation) or `s(1)` (projective).
-    /// * `c_inf` - Leading coefficient `h(inf)` / `s(inf)`.
-    /// * `pow_bits` - PoW difficulty (0 to skip grinding).
+    /// * `transcript` - driver of the batch of rounds this one belongs to.
+    /// * `c_a` - finite-point value: `h(0)` (evaluation) or `s(1)` (projective).
+    /// * `c_inf` - leading coefficient `h(inf)` / `s(inf)`.
     ///
     /// # Returns
     ///
     /// The sampled challenge `r`.
     ///
-    /// The two values are recorded and absorbed verbatim; which basis defines
-    /// them is the caller's business, and must match the [`Basis`] the
-    /// verifier later passes to [`Self::verify_rounds`].
-    pub fn observe_and_sample<Challenger, BF>(
+    /// The two values are recorded and absorbed verbatim.
+    /// Which basis defines them is fixed by the shape the driver was built from.
+    ///
+    /// # Panics
+    ///
+    /// When the batch has already played every round it was described with.
+    pub fn observe_and_sample<Challenger>(
         &mut self,
-        challenger: &mut Challenger,
+        transcript: &mut ProverTranscript<'_, Challenger, F, EF>,
         c_a: EF,
         c_inf: EF,
-        pow_bits: usize,
     ) -> EF
     where
-        BF: Field,
-        EF: ExtensionField<BF>,
-        F: Clone,
-        Challenger: FieldChallenger<BF> + GrindingChallenger<Witness = F>,
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: CanObserve<F> + CanSample<F> + GrindingChallenger<Witness = F>,
     {
-        // Record the polynomial coefficients in the proof.
-        self.polynomial_evaluations.push([c_a, c_inf]);
+        // Absorb the pair, do the optional grinding, and take this round's challenge.
+        let (challenge, witness) = transcript.round(c_a, c_inf);
 
-        // Absorb coefficients into the transcript.
+        // Record what the round produced alongside what it bound.
         //
         // Two of the quadratic's three values cross the wire; the verifier
         // derives the third from the basis-dependent round identity.
-        challenger.observe_algebra_slice(&[c_a, c_inf]);
+        self.polynomial_evaluations.push([c_a, c_inf]);
+        self.pow_witnesses.extend(witness);
 
-        // Optional proof-of-work to increase prover cost.
-        //
-        // This makes it expensive for a malicious prover to "mine" favorable challenges.
-        if pow_bits > 0 {
-            self.pow_witnesses.push(challenger.grind(pow_bits));
-        }
-
-        // Sample the verifier's challenge for this round.
-        challenger.sample_algebra_element()
+        challenge
     }
 
     /// Verifies standard sumcheck rounds and extracts folding randomness from the transcript.
     ///
     /// # Arguments
     ///
-    /// * `challenger` - Fiat-Shamir transcript.
+    /// * `challenger` - sponge of the surrounding protocol, borrowed for the batch.
     /// * `claimed_sum` - Running claim, folded in place to `h(r)` after each round.
     /// * `expected_rounds` - Protocol-fixed number of rounds this proof must carry.
     /// * `pow_bits` - PoW difficulty (0 to skip grinding).
+    /// * `basis` - how the two transmitted values are read.
     ///
     /// # Returns
     ///
-    /// A `Point` of folding randomness values, one per round.
+    /// The folding randomness, one challenge per round.
+    ///
+    /// # Shape checks
+    ///
+    /// Both counts this proof carries are attacker-controlled.
+    /// Both are checked before any transcript work.
+    ///
+    /// The round count decides how many steps the batch is described with.
+    /// The witness count is what the round loop indexes into.
+    ///
+    /// Taking either from the proof would let a wrong one desynchronise Fiat-Shamir.
+    /// Both are therefore compared against the caller's own configuration instead.
     ///
     /// # Errors
     ///
-    /// Returns `RoundCountMismatch` if the proof does not carry exactly `expected_rounds` rounds.
-    ///
-    /// The folding-challenge count is derived from the proof itself.
-    /// A wrong count would desync Fiat-Shamir rather than reject, so it is bound here.
+    /// - The proof does not carry exactly `expected_rounds` rounds.
+    /// - The witness count is not the one the difficulty implies.
+    /// - A round carries a witness that misses the required difficulty.
     pub fn verify_rounds<Challenger>(
         &self,
         challenger: &mut Challenger,
@@ -124,7 +131,7 @@ impl<F, EF> SumcheckData<F, EF> {
         basis: Basis,
     ) -> Result<Point<EF>, SumcheckError>
     where
-        F: Field,
+        F: TranscriptField,
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -139,35 +146,51 @@ impl<F, EF> SumcheckData<F, EF> {
             });
         }
 
-        let mut randomness = Vec::with_capacity(self.polynomial_evaluations.len());
-
-        // Grinding pushes one witness per round;
+        // Canonical proof shape — every accepting proof has a unique form:
+        // - zero difficulty requires an empty witness vector,
+        // - positive difficulty requires exactly one witness per round.
         //
-        // Reject upfront if the proof is short so the loop below cannot panic on out-of-bounds indexing.
-        if pow_bits > 0 && self.pow_witnesses.len() != self.polynomial_evaluations.len() {
+        // The loop below indexes the witness vector, so this also keeps it in bounds.
+        let expected_witnesses = if pow_bits > 0 { expected_rounds } else { 0 };
+        if self.pow_witnesses.len() != expected_witnesses {
             return Err(SumcheckError::PowWitnessCountMismatch {
-                expected: self.polynomial_evaluations.len(),
+                expected: expected_witnesses,
                 actual: self.pow_witnesses.len(),
             });
         }
 
-        for (i, &[c_a, c_inf]) in self.polynomial_evaluations.iter().enumerate() {
-            // Observe only the sent polynomial evaluations; their meaning is
-            // basis-dependent ([h(0), h(inf)] or [s(1), s(inf)]).
-            challenger.observe_algebra_slice(&[c_a, c_inf]);
+        // Seeded from the same numbers the prover seeded with.
+        let shape = SumcheckShape::new(expected_rounds, pow_bits, basis);
+        let mut transcript = VerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
 
-            // Verify PoW (only if pow_bits > 0)
-            if pow_bits > 0 && !challenger.check_witness(pow_bits, self.pow_witnesses[i]) {
-                return Err(SumcheckError::InvalidPowWitness);
-            }
+        let mut randomness = Vec::with_capacity(expected_rounds);
 
-            // Sample the challenge and reconstruct h(r); the basis-dependent
-            // round identity supplies the third quadratic value (shared with
-            // the prover via Basis::reduce_claim).
-            let r: EF = challenger.sample_algebra_element();
+        // Driven by the same number the description was built from, not by the proof's length.
+        //
+        // The two agree only because of the round-count check above.
+        // Reading the count once keeps the loop and the description from ever disagreeing:
+        //
+        //     too few iterations  -> steps left unplayed, and closing the transcript panics
+        //     too many            -> a step past the end of the description, which panics
+        //
+        // Both indices below are in bounds by the two checks above.
+        for round in 0..expected_rounds {
+            let [c_a, c_inf] = self.polynomial_evaluations[round];
+
+            // One call binds both values, re-checks the grind, and draws the challenge.
+            //
+            // A rejection here releases the driver's completeness check on its way out.
+            let witness = (pow_bits > 0).then(|| self.pow_witnesses[round]);
+            let r = transcript.round(c_a, c_inf, witness)?;
+
+            // Reconstruct h(r); the basis-dependent round identity supplies the
+            // third quadratic value (shared with the prover via `Basis::reduce_claim`).
             *claimed_sum = basis.reduce_claim(c_a, c_inf, r, *claimed_sum);
             randomness.push(r);
         }
+
+        // Require that every described step was played.
+        transcript.finish();
 
         Ok(Point::new(randomness))
     }
@@ -175,11 +198,16 @@ impl<F, EF> SumcheckData<F, EF> {
 
 /// Verify the final sumcheck rounds.
 ///
-/// This is a free function because the caller may not have a `SumcheckData` at all when `rounds == 0`.
+/// This is a free function because a run of no rounds may carry no sumcheck data at all.
 ///
 /// # Returns
 ///
-/// A `Point` of folding randomness values.
+/// The folding randomness, one challenge per round.
+///
+/// # Errors
+///
+/// - The run is described with rounds but carries no sumcheck data.
+/// - Any rejection the round replay itself raises.
 pub fn verify_final_sumcheck_rounds<F, EF, Challenger>(
     final_sumcheck: Option<&SumcheckData<F, EF>>,
     challenger: &mut Challenger,
@@ -189,7 +217,7 @@ pub fn verify_final_sumcheck_rounds<F, EF, Challenger>(
     basis: Basis,
 ) -> Result<Point<EF>, SumcheckError>
 where
-    F: Field,
+    F: TranscriptField,
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {

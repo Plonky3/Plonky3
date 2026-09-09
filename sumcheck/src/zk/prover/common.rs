@@ -3,17 +3,26 @@
 //! Covers mask sampling and auxiliary-target bookkeeping.
 //! Both prefix and suffix overlays invoke them before the per-round loop starts.
 //! Per-round polynomial assembly lives in a sibling module.
+//!
+//! Neither helper touches a transcript.
+//!
+//! The masking prelude is one step sequence, owned by the transcript module.
+//!
+//! Everything that feeds it is computed here.
+//!
+//! The prover and the witness-free simulator therefore share both halves.
+//!
+//! Neither keeps a copy of the other's.
 
 use alloc::vec::Vec;
 
-use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
+use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_zk_codes::ZkEncodingWithRandomness;
 use rand::Rng;
 
-use crate::zk::data::{MaskOracle, ZkSumcheckData};
+use crate::zk::data::MaskOracle;
 
 /// Sample `k` mask polynomials, encode them, and commit the batch as one
 /// interleaved oracle.
@@ -32,7 +41,6 @@ use crate::zk::data::{MaskOracle, ZkSumcheckData};
 /// - `encoding` — zero-knowledge encoder.
 ///   Defines the mask message space and draws a uniform sample on demand.
 /// - `mmcs` — Merkle commitment scheme over the codeword alphabet.
-/// - `challenger` — Fiat–Shamir transcript that absorbs the commitment.
 /// - `rng` — driver for both the mask coefficients and the encoder's randomness budget.
 ///
 /// # Returns
@@ -47,11 +55,10 @@ use crate::zk::data::{MaskOracle, ZkSumcheckData};
 ///                 so the base case can reveal blinded combinations of it
 /// ```
 #[allow(clippy::type_complexity)]
-pub(super) fn sample_masks<F, Enc, M, Ch, R>(
+pub(crate) fn sample_masks<F, Enc, M, R>(
     k: usize,
     encoding: &Enc,
     mmcs: &M,
-    challenger: &mut Ch,
     rng: &mut R,
 ) -> (Vec<Vec<F>>, Vec<Vec<F>>, MaskOracle<F, M>)
 where
@@ -59,7 +66,6 @@ where
     Enc: ZkEncodingWithRandomness<F>,
     Enc::Codeword: Matrix<F>,
     M: Mmcs<F>,
-    Ch: CanObserve<M::Commitment>,
     R: Rng,
 {
     // One uniform sample per round, drawn through the encoding so the message
@@ -77,12 +83,11 @@ where
     // separately and stacking the codewords column-wise.
     let (commit, prover_data) =
         mmcs.commit_matrix(encoding.encode_batch_with_randomness(&masks, &mask_randomness));
-    challenger.observe(commit.clone());
 
     (masks, mask_randomness, (commit, prover_data))
 }
 
-/// Compute the auxiliary target, record it on the transcript, and return the running endpoint sum.
+/// Compute the auxiliary target and the running endpoint sum.
 ///
 /// Implements step 2 of the masking layer.
 ///
@@ -95,19 +100,15 @@ where
 ///
 /// # Returns
 ///
-/// The running endpoint sum across all rounds.
-/// The auxiliary target itself is written directly to the transcript record.
-pub(super) fn observe_masks_and_mu_tilde<F, EF, Ch>(
-    masks: &[Vec<EF>],
-    k: usize,
-    ell_zk: usize,
-    challenger: &mut Ch,
-    zk_data: &mut ZkSumcheckData<F, EF>,
-) -> EF
+/// - The auxiliary target `mu_tilde`, which the caller records and binds.
+/// - The running endpoint sum across all rounds.
+///
+/// # Panics
+///
+/// In debug builds, when the closed form disagrees with the naive sum over the cube.
+pub(crate) fn mask_endpoints<EF>(masks: &[Vec<EF>], k: usize) -> (EF, EF)
 where
-    F: Field,
-    EF: ExtensionField<F>,
-    Ch: FieldChallenger<F>,
+    EF: Field,
 {
     // Endpoint sum used by the closed form.
     //
@@ -151,13 +152,7 @@ where
         );
     }
 
-    // Observe the auxiliary target.
-    challenger.observe_algebra_element(mu_tilde);
-    // Pin the transcript record so the verifier reads the same metadata.
-    zk_data.mu_tilde = mu_tilde;
-    zk_data.ell_zk = ell_zk;
-
-    sum_endpoints_init
+    (mu_tilde, sum_endpoints_init)
 }
 
 #[cfg(test)]
@@ -170,14 +165,13 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
-    use crate::zk::test_helpers::{EF, F, MyChallenger, make_setup};
+    use crate::zk::test_helpers::{EF, make_setup};
 
     #[test]
-    fn observe_masks_and_mu_tilde_matches_hand_computed_value() {
+    fn mask_endpoints_matches_hand_computed_value() {
         // Fixture:
         //
         //     k       = 2
-        //     ell_zk  = 3
         //     mask[0] = [1, 2, 3]
         //     mask[1] = [4, 5, 6]
         //
@@ -194,57 +188,11 @@ mod tests {
             vec![EF::from_u32(1), EF::from_u32(2), EF::from_u32(3)],
             vec![EF::from_u32(4), EF::from_u32(5), EF::from_u32(6)],
         ];
-        let k = 2;
-        let ell_zk = 3;
 
-        let (perm, _, _) = make_setup(0, ell_zk);
-        let mut challenger = MyChallenger::new(perm);
-        let mut zk_data = ZkSumcheckData::<F, EF>::default();
-        let endpoints = observe_masks_and_mu_tilde::<F, EF, _>(
-            &masks,
-            k,
-            ell_zk,
-            &mut challenger,
-            &mut zk_data,
-        );
+        let (mu_tilde, endpoints) = mask_endpoints::<EF>(&masks, 2);
 
-        // Returned endpoint sum and transcript record fields.
         assert_eq!(endpoints, EF::from_u32(26));
-        assert_eq!(zk_data.mu_tilde, EF::from_u32(52));
-        assert_eq!(zk_data.ell_zk, ell_zk);
-    }
-
-    #[test]
-    fn observe_masks_and_mu_tilde_advances_challenger() {
-        // Invariant:
-        //
-        //     observe(mu_tilde)  ⇒  next sampled challenge differs from the
-        //                           one a fresh challenger would have produced.
-        //
-        // Fixture: single mask of length 2; mu_tilde value is irrelevant.
-        let masks = vec![vec![EF::from_u32(1), EF::from_u32(2)]];
-        let k = 1;
-        let ell_zk = 2;
-
-        let (perm, _, _) = make_setup(0, ell_zk);
-
-        // Baseline: sample without observing.
-        let mut ch_baseline = MyChallenger::new(perm.clone());
-        let baseline: EF = ch_baseline.sample_algebra_element();
-
-        // Observed: sample after observing mu_tilde.
-        let mut ch_observed = MyChallenger::new(perm);
-        let mut zk_data = ZkSumcheckData::<F, EF>::default();
-        let _ = observe_masks_and_mu_tilde::<F, EF, _>(
-            &masks,
-            k,
-            ell_zk,
-            &mut ch_observed,
-            &mut zk_data,
-        );
-        let after_observe: EF = ch_observed.sample_algebra_element();
-
-        assert_ne!(baseline, after_observe);
+        assert_eq!(mu_tilde, EF::from_u32(52));
     }
 
     #[test]
@@ -257,12 +205,11 @@ mod tests {
         let k = 3;
         let ell_zk = 4;
         let seed = 0;
-        let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
-        let mut challenger = MyChallenger::new(perm);
+        let (_perm, mmcs, encoding) = make_setup(seed, ell_zk);
         let mut rng = SmallRng::seed_from_u64(seed);
 
         let (masks, randomness, _oracle) =
-            sample_masks::<EF, _, _, _, _>(k, &encoding, &mmcs, &mut challenger, &mut rng);
+            sample_masks::<EF, _, _, _>(k, &encoding, &mmcs, &mut rng);
 
         assert_eq!(masks.len(), k);
         assert_eq!(randomness.len(), k);
@@ -283,17 +230,15 @@ mod tests {
         let k = 2;
         let ell_zk = 4;
         let seed = 42;
-        let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
+        let (_perm, mmcs, encoding) = make_setup(seed, ell_zk);
 
-        let mut ch1 = MyChallenger::new(perm.clone());
         let mut rng1 = SmallRng::seed_from_u64(seed);
         let (masks1, randomness1, oracle1) =
-            sample_masks::<EF, _, _, _, _>(k, &encoding, &mmcs, &mut ch1, &mut rng1);
+            sample_masks::<EF, _, _, _>(k, &encoding, &mmcs, &mut rng1);
 
-        let mut ch2 = MyChallenger::new(perm);
         let mut rng2 = SmallRng::seed_from_u64(seed);
         let (masks2, randomness2, oracle2) =
-            sample_masks::<EF, _, _, _, _>(k, &encoding, &mmcs, &mut ch2, &mut rng2);
+            sample_masks::<EF, _, _, _>(k, &encoding, &mmcs, &mut rng2);
 
         assert_eq!(masks1, masks2);
         assert_eq!(randomness1, randomness2);

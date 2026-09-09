@@ -9,5 +9,5 @@ mod util;
 pub use error::GenericDegreeError;
 pub use proof::GenericDegreeProof;
 pub use prover::RoundProver;
-pub use transcript::{ProverTranscript, VerifierTranscript, domain_separator, pattern};
+pub use transcript::{GenericDegreeShape, ProverTranscript, VerifierTranscript};
 pub use util::RoundPolyInterpolator;

@@ -3,6 +3,10 @@
 
 extern crate alloc;
 
+// Only the transcript's unwind tests reach for `std`, and only where unwinding exists.
+#[cfg(all(test, panic = "unwind"))]
+extern crate std;
+
 pub mod parameters;
 pub mod pcs;
 pub mod transcript;

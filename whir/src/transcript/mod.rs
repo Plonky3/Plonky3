@@ -2,7 +2,7 @@
 //!
 //! # Overview
 //!
-//! One statement of what a WHIR run absorbs and draws, consumed by both sides.
+//! One statement of what a WHIR run absorbs and draws, played by both sides.
 //!
 //! It is built from the derived configuration alone.
 //! Neither side ever reads a count out of a proof.
@@ -10,27 +10,46 @@
 //! # Shape
 //!
 //! ```text
-//!     initial batching       one extension element
-//!     initial sumcheck       folding_factor(0) rounds
+//!     Begin initial fold     batching challenge, then the delegated sumcheck
+//!     End   initial fold
 //!     per round:  commitment     one opaque value
 //!                 out-of-domain  one point drawn, one answer sent, per sample
 //!                 grinding       only when the difficulty is positive
 //!                 queries        num_queries draws of index_bits bits
 //!                 batching       one extension element
-//!                 sumcheck       folding_factor(round + 1) rounds
+//!                 Begin fold     the round's delegated sumcheck
+//!                 End   fold
 //!     final polynomial       2^final_sumcheck_rounds extension elements
 //!     final grinding         only when the difficulty is positive
 //!     final queries          final_queries draws of index_bits bits
-//!     final sumcheck         final_sumcheck_rounds rounds
+//!     Begin final fold       the closing delegated sumcheck, when it runs at all
+//!     End   final fold
 //! ```
 //!
-//! A sumcheck round is three steps: two coefficients, optional grinding, one challenge.
+//! # Delegation
+//!
+//! A sumcheck phase is a protocol of its own, with its own seed and its own driver.
+//!
+//! WHIR therefore records the phase as a bracket, not as the rounds inside it.
+//!
+//! ```text
+//!     Begin round_fold  ->  p3_sumcheck plays its own pattern  ->  End round_fold
+//! ```
+//!
+//! The bracket states that the delegation happens, and where.
+//! The counts inside it reach this seed through the instance label.
+//!
+//! The initial bracket also covers the challenge that batches the incoming claims.
+//! The delegate draws that challenge itself, so the bracket is where it lands.
 //!
 //! # What is bound
 //!
-//! - Shape: every count above, every grinding difficulty, every query width.
+//! - Shape: every round, every grinding difficulty, every query width, every draw count.
+//! - Shape: where each sumcheck phase runs, through its bracket.
+//! - Instance label: the rounds and difficulty of every sumcheck phase.
 //! - Instance label: the code rates, the security level, the soundness assumption.
 //! - Instance label: the folding strategy and the variable count.
+//! - Instance label: how many opening claims the run batches, and the committed row width.
 //!
 //! # What is not described
 //!
@@ -40,6 +59,21 @@
 //! WHIR carries every hint inside its own serde proof.
 //! The verifier length-checks each one against the configuration before use.
 //!
+//! # What is not bound
+//!
+//! The width of a commitment digest, which this layer cannot see.
+//!
+//! A commitment is absorbed opaquely, through the challenger's own encoding.
+//! A wrong digest width therefore does not part the two sponges.
+//!
+//! ```text
+//!     digest width  ->  Merkle opening check, against explicit Dimensions
+//!     row width     ->  instance label, as commitment_row_width
+//! ```
+//!
+//! The row width is the width of the matrix the initial commitment covers.
+//! It is what one opened leaf carries, and the label binds it directly.
+//!
 //! # Soundness
 //!
 //! The seed is absorbed where the WHIR run starts, before its first challenge.
@@ -48,25 +82,40 @@
 pub mod zk;
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use p3_challenger::fs::{
-    DomainSeparator, FieldUnit, Hierarchy, Interaction, InteractionPattern, Kind, Length, Unit,
+    DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction, InteractionPattern,
+    Kind, Length, ProverState, TranscriptBound, TranscriptField, Unit, VerifierState,
 };
-use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
+use p3_challenger::{
+    CanObserve, CanSample, CanSampleUniformBits, FieldChallenger, GrindingChallenger,
+};
+use p3_field::{ExtensionField, TwoAdicField};
 use p3_util::log2_strict_usize;
+use thiserror::Error;
 
 use crate::parameters::{FoldingFactor, SecurityAssumption, WhirConfig};
 
 /// Version byte bound into the transcript seed.
-// Version 2 reserves the constant batching coefficient for the carried claim.
-const VERSION: u8 = 2;
+///
+/// The byte parts the seeds of two incompatible descriptions of one run.
+///
+/// Version 2 reserves the constant batching coefficient for the carried claim.
+///
+/// Version 3 keeps that reservation and records each sumcheck phase as one bracket.
+const VERSION: u8 = 3;
 
 /// Protocol name bound into the transcript seed.
 const NAME: &[u8] = b"p3-whir";
 
 /// Step label of the challenge batching the incoming evaluation claims.
 const INITIAL_BATCHING: &str = "initial_batching";
+
+/// Container label of the fold that opens the run.
+///
+/// Covers the batching challenge and the sumcheck the delegate runs after it.
+const INITIAL_FOLD: &str = "initial_fold";
 
 /// Step label of a round commitment.
 const COMMITMENT: &str = "commitment";
@@ -86,11 +135,8 @@ const QUERY_INDICES: &str = "query_indices";
 /// Step label of the challenge batching one round's fresh constraints.
 const ROUND_BATCHING: &str = "round_batching";
 
-/// Step label of the two coefficients one sumcheck round sends.
-const SUMCHECK_POLY: &str = "sumcheck_poly";
-
-/// Step label of the grinding step inside a sumcheck round.
-const SUMCHECK_POW: &str = "sumcheck_pow";
+/// Container label of the fold that closes one intermediate round.
+const ROUND_FOLD: &str = "round_fold";
 
 /// Step label of a sumcheck folding challenge.
 const FOLD_CHALLENGE: &str = "fold_challenge";
@@ -104,8 +150,17 @@ const FINAL_QUERY_POW: &str = "final_query_pow";
 /// Step label of the final query indices.
 const FINAL_QUERY_INDICES: &str = "final_query_indices";
 
+/// Container label of the fold that closes the run.
+const FINAL_FOLD: &str = "final_fold";
+
 /// Sponge alphabet of a challenger that speaks the base field natively.
 pub type Alphabet<F> = FieldUnit<F>;
+
+/// Type naming a delegated sumcheck phase at the type level.
+///
+/// The name is compared locally when a closer meets its opener.
+/// It never reaches the pattern fingerprint.
+struct Sumcheck;
 
 /// Number of index draws a query phase actually makes.
 ///
@@ -125,6 +180,65 @@ pub const fn query_draws(folded_domain_size: usize, num_queries: usize) -> usize
     } else {
         num_queries
     }
+}
+
+/// Append `value` as eight big-endian bytes to the instance label.
+fn push_u64<U: Unit>(separator: &mut DomainSeparator<U>, value: usize) {
+    separator.instance(&(value as u64).to_be_bytes());
+}
+
+/// Append a grinding step, unless the site asks for no work at all.
+///
+/// A zero-difficulty grind absorbs nothing on either side, so it is not a step.
+///
+/// The witness lives in the base field, which is what both drivers record.
+fn push_pow<F: TranscriptField>(steps: &mut Vec<Interaction>, label: &'static str, bits: usize) {
+    if bits > 0 {
+        steps.push(Interaction::algebra::<F, F>(
+            Hierarchy::Atomic,
+            Kind::Pow,
+            label,
+            Length::Fixed(bits),
+        ));
+    }
+}
+
+/// Append a query-index step, unless the phase opens every position.
+///
+/// Every index is drawn at the same width, so they form one step.
+///
+/// The draw is rejection-sampled, which the uniform tag is what records.
+fn push_query_indices(
+    steps: &mut Vec<Interaction>,
+    label: &'static str,
+    index_bits: usize,
+    draws: usize,
+) {
+    if draws > 0 {
+        steps.push(Interaction::uniform_bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            index_bits,
+            Length::Fixed(draws),
+        ));
+    }
+}
+
+/// Append the opener and closer of one delegated sumcheck phase.
+///
+/// The phase's own steps live in its own pattern, under its own seed.
+fn push_delegation(steps: &mut Vec<Interaction>, label: &'static str) {
+    steps.push(Interaction::marker::<Sumcheck>(
+        Hierarchy::Begin,
+        Kind::Protocol,
+        label,
+    ));
+    steps.push(Interaction::marker::<Sumcheck>(
+        Hierarchy::End,
+        Kind::Protocol,
+        label,
+    ));
 }
 
 /// Bind the folding strategy: its variant, then the numbers it carries.
@@ -163,6 +277,9 @@ fn bind_folding_factor<U: Unit>(separator: &mut DomainSeparator<U>, factor: &Fol
 }
 
 /// Numbers that fix one sumcheck phase.
+///
+/// The phase runs under its own seed, played by its own driver.
+/// Its numbers therefore reach this seed through the instance label.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SumcheckShape {
     /// Number of rounds this phase runs.
@@ -172,43 +289,10 @@ pub struct SumcheckShape {
 }
 
 impl SumcheckShape {
-    /// Append this phase's steps to a step sequence under construction.
-    fn extend<F, EF>(&self, steps: &mut Vec<Interaction>)
-    where
-        F: PrimeField64,
-        EF: ExtensionField<F>,
-    {
-        for _ in 0..self.rounds {
-            // Two of the quadratic's three values cross the wire.
-            steps.push(Interaction::algebra::<F, EF>(
-                Hierarchy::Atomic,
-                Kind::Message,
-                SUMCHECK_POLY,
-                Length::Fixed(2),
-            ));
-
-            // Grinding sits between the coefficients and the challenge they face.
-            if self.pow_bits > 0 {
-                steps.push(Interaction::algebra::<F, F>(
-                    Hierarchy::Atomic,
-                    Kind::Pow,
-                    SUMCHECK_POW,
-                    Length::Fixed(self.pow_bits),
-                ));
-            }
-
-            steps.push(Interaction::algebra::<F, EF>(
-                Hierarchy::Atomic,
-                Kind::Challenge,
-                FOLD_CHALLENGE,
-                Length::Scalar,
-            ));
-        }
-    }
-
-    /// Number of steps this phase contributes.
-    const fn step_count(&self) -> usize {
-        self.rounds * if self.pow_bits > 0 { 3 } else { 2 }
+    /// Append this phase's numbers to the instance label under construction.
+    fn bind<U: Unit>(&self, separator: &mut DomainSeparator<U>) {
+        push_u64(separator, self.rounds);
+        push_u64(separator, self.pow_bits);
     }
 }
 
@@ -233,7 +317,7 @@ impl WhirRoundShape {
     /// Append this round's steps to a step sequence under construction.
     fn extend<F, EF>(&self, steps: &mut Vec<Interaction>)
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
     {
         // The commitment's encoding belongs to the commitment scheme.
@@ -261,25 +345,8 @@ impl WhirRoundShape {
         }
 
         // Grinding raises the cost of searching for favourable query indices.
-        if self.query_pow_bits > 0 {
-            steps.push(Interaction::algebra::<F, F>(
-                Hierarchy::Atomic,
-                Kind::Pow,
-                QUERY_POW,
-                Length::Fixed(self.query_pow_bits),
-            ));
-        }
-
-        // Every index is drawn at the same width, so they form one step.
-        if self.query_draws > 0 {
-            steps.push(Interaction::uniform_bits(
-                Hierarchy::Atomic,
-                Kind::Challenge,
-                QUERY_INDICES,
-                self.index_bits,
-                Length::Fixed(self.query_draws),
-            ));
-        }
+        push_pow::<F>(steps, QUERY_POW, self.query_pow_bits);
+        push_query_indices(steps, QUERY_INDICES, self.index_bits, self.query_draws);
 
         // One challenge weights this round's fresh constraints against the carried claim.
         steps.push(Interaction::algebra::<F, EF>(
@@ -289,15 +356,15 @@ impl WhirRoundShape {
             Length::Scalar,
         ));
 
-        self.sumcheck.extend::<F, EF>(steps);
+        push_delegation(steps, ROUND_FOLD);
     }
 
     /// Number of steps this round contributes.
     const fn step_count(&self) -> usize {
-        2 + 2 * self.ood_samples
+        // Commitment, batching challenge, and the two bracket markers.
+        4 + 2 * self.ood_samples
             + if self.query_pow_bits > 0 { 1 } else { 0 }
             + if self.query_draws > 0 { 1 } else { 0 }
-            + self.sumcheck.step_count()
     }
 }
 
@@ -310,6 +377,15 @@ pub struct WhirShape {
     pub num_variables: usize,
     /// Out-of-domain samples the commitment phase draws.
     pub commitment_ood_samples: usize,
+    /// Opening claims the run batches into its first sum.
+    ///
+    /// Each claim is absorbed by the caller before the seed lands.
+    /// The count is what fixes how many draws that pre-seed phase makes.
+    pub num_opening_claims: usize,
+    /// Base-field width of one row of the matrix the initial commitment covers.
+    ///
+    /// One opened leaf carries exactly this many elements.
+    pub commitment_row_width: usize,
     /// Sumcheck phase folding the polynomial before the first round.
     pub initial_sumcheck: SumcheckShape,
     /// One entry per intermediate round, in round order.
@@ -342,8 +418,12 @@ impl WhirShape {
     /// # Arguments
     ///
     /// - `config`: the derived protocol configuration.
+    /// - `num_opening_claims`: opening claims the caller bound before the seed.
     #[must_use]
-    pub fn new<EF, F, Challenger>(config: &WhirConfig<EF, F, Challenger>) -> Self
+    pub fn new<EF, F, Challenger>(
+        config: &WhirConfig<EF, F, Challenger>,
+        num_opening_claims: usize,
+    ) -> Self
     where
         F: TwoAdicField,
         EF: ExtensionField<F> + TwoAdicField,
@@ -377,6 +457,9 @@ impl WhirShape {
         Self {
             num_variables: config.num_variables,
             commitment_ood_samples: config.commitment_ood_samples,
+            num_opening_claims,
+            // The initial commitment lays the first fold's cosets out along one row.
+            commitment_row_width: 1 << config.round_folding_factor(0),
             initial_sumcheck: SumcheckShape {
                 rounds: config.round_folding_factor(0),
                 pow_bits: config.starting_folding_pow_bits,
@@ -398,38 +481,66 @@ impl WhirShape {
         }
     }
 
+    /// Number of intermediate rounds this shape runs.
+    #[must_use]
+    pub const fn n_rounds(&self) -> usize {
+        self.rounds.len()
+    }
+
+    /// Grinding label and difficulty of the query site of `round`.
+    ///
+    /// ```text
+    ///     round <  n_rounds  ->  that round's own site
+    ///     round >= n_rounds  ->  the final site
+    /// ```
+    fn query_pow_site(&self, round: usize) -> (&'static str, usize) {
+        if round < self.rounds.len() {
+            (QUERY_POW, self.rounds[round].query_pow_bits)
+        } else {
+            (FINAL_QUERY_POW, self.final_pow_bits)
+        }
+    }
+
+    /// Index label, index width, and draw count of the query site of `round`.
+    ///
+    /// A draw count of zero means the phase opens every position instead.
+    fn query_index_site(&self, round: usize) -> (&'static str, usize, usize) {
+        if round < self.rounds.len() {
+            let shape = &self.rounds[round];
+            (QUERY_INDICES, shape.index_bits, shape.query_draws)
+        } else {
+            (
+                FINAL_QUERY_INDICES,
+                self.final_index_bits,
+                self.final_query_draws,
+            )
+        }
+    }
+
     /// Describe the transcript this shape fixes.
     ///
     /// # Panics
     ///
     /// Never in practice.
-    /// A flat sequence of leaf steps always passes structural validation.
+    /// Every container opened below is closed one step later, in the same call.
     #[must_use]
     pub fn pattern<F, EF>(&self) -> InteractionPattern
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
     {
-        let capacity = 1
-            + self.initial_sumcheck.step_count()
+        // Initial bracket, every round, three closing steps, and the final bracket.
+        let capacity = 2
             + self
                 .rounds
                 .iter()
                 .map(WhirRoundShape::step_count)
                 .sum::<usize>()
-            + 3
-            + self.final_sumcheck.step_count();
+            + 5;
         let mut steps = Vec::with_capacity(capacity);
 
-        // One challenge weights the incoming evaluation claims into a single sum.
-        steps.push(Interaction::algebra::<F, EF>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            INITIAL_BATCHING,
-            Length::Scalar,
-        ));
-
-        self.initial_sumcheck.extend::<F, EF>(&mut steps);
+        // The delegate draws the claim-batching challenge, so the bracket covers it.
+        push_delegation(&mut steps, INITIAL_FOLD);
 
         for round in &self.rounds {
             round.extend::<F, EF>(&mut steps);
@@ -443,28 +554,20 @@ impl WhirShape {
             Length::Fixed(self.final_poly_len),
         ));
 
-        if self.final_pow_bits > 0 {
-            steps.push(Interaction::algebra::<F, F>(
-                Hierarchy::Atomic,
-                Kind::Pow,
-                FINAL_QUERY_POW,
-                Length::Fixed(self.final_pow_bits),
-            ));
+        push_pow::<F>(&mut steps, FINAL_QUERY_POW, self.final_pow_bits);
+        push_query_indices(
+            &mut steps,
+            FINAL_QUERY_INDICES,
+            self.final_index_bits,
+            self.final_query_draws,
+        );
+
+        // A run described with no closing rounds delegates nothing at all.
+        if self.final_sumcheck.rounds > 0 {
+            push_delegation(&mut steps, FINAL_FOLD);
         }
 
-        if self.final_query_draws > 0 {
-            steps.push(Interaction::uniform_bits(
-                Hierarchy::Atomic,
-                Kind::Challenge,
-                FINAL_QUERY_INDICES,
-                self.final_index_bits,
-                Length::Fixed(self.final_query_draws),
-            ));
-        }
-
-        self.final_sumcheck.extend::<F, EF>(&mut steps);
-
-        InteractionPattern::new(steps).expect("a flat sequence of leaf steps is always well formed")
+        InteractionPattern::new(steps).expect("every container opened here is closed here")
     }
 
     /// Bind the protocol identity, this shape, and the remaining parameters.
@@ -484,46 +587,408 @@ impl WhirShape {
     ///
     /// Two parameter sets landing on one query count would share a shape.
     /// The label therefore carries the rates and the assumption directly.
+    ///
+    /// A delegated sumcheck contributes one bracket whatever its length.
+    /// Its rounds and difficulty therefore travel in the label too.
     #[must_use]
     pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
     {
         let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
 
         // The whole soundness statement is phrased in these numbers.
-        separator.instance(&(self.num_variables as u64).to_be_bytes());
+        push_u64(&mut separator, self.num_variables);
         // The commitment phase draws its samples before the described run starts.
-        separator.instance(&(self.commitment_ood_samples as u64).to_be_bytes());
-        separator.instance(&(self.security_level as u64).to_be_bytes());
-        separator.instance(&(self.pow_budget as u64).to_be_bytes());
-        separator.instance(&(self.starting_log_inv_rate as u64).to_be_bytes());
-        separator.instance(&(self.soundness_type as u64).to_be_bytes());
+        push_u64(&mut separator, self.commitment_ood_samples);
+        // So does the claim phase, once per claim the caller batches.
+        push_u64(&mut separator, self.num_opening_claims);
+        // Width of one committed row, which fixes what a single opened leaf carries.
+        push_u64(&mut separator, self.commitment_row_width);
+        push_u64(&mut separator, self.security_level);
+        push_u64(&mut separator, self.pow_budget);
+        push_u64(&mut separator, self.starting_log_inv_rate);
+        push_u64(&mut separator, self.soundness_type as usize);
 
         bind_folding_factor(&mut separator, &self.folding_factor);
 
+        // Every delegated phase, in the order the run plays them.
+        self.initial_sumcheck.bind(&mut separator);
+        self.final_sumcheck.bind(&mut separator);
+
         // Each round commits at its own rate, and the rate sets that round's distance.
-        separator.instance(&(self.rounds.len() as u64).to_be_bytes());
+        push_u64(&mut separator, self.rounds.len());
         for round in &self.rounds {
-            separator.instance(&(round.log_inv_rate as u64).to_be_bytes());
+            push_u64(&mut separator, round.log_inv_rate);
+            round.sumcheck.bind(&mut separator);
         }
 
         separator
     }
 }
 
+/// A transcript step the proof failed to satisfy.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum TranscriptFailure {
+    /// A grinding witness did not meet the difficulty its step requires.
+    #[error("round {round}: query grinding witness clears fewer than {bits} bits")]
+    PowWitness {
+        /// Round whose query site rejected the witness, `n_rounds` for the final one.
+        round: usize,
+        /// Difficulty the site requires, in bits.
+        bits: usize,
+    },
+    /// The final polynomial carries a coefficient count the run never described.
+    #[error("expected {expected} final evaluations, got {got}")]
+    FinalPolyLength {
+        /// Count the run was described with.
+        expected: usize,
+        /// Count the proof carries.
+        got: usize,
+    },
+}
+
+/// Prover-side transcript of one plain WHIR run.
+///
+/// Holds the only definition of what a prover plays at each phase.
+///
+/// The challenger is borrowed, not consumed.
+/// WHIR runs inside a larger protocol whose transcript continues afterwards.
+pub struct WhirProverTranscript<'a, C, F: TranscriptField, EF> {
+    /// Driver walking the description and holding the borrowed sponge.
+    state: ProverState<&'a mut C, Alphabet<F>>,
+    /// The numbers this run was described with.
+    shape: WhirShape,
+    /// Marker for the extension field the challenges live in.
+    _ef: PhantomData<EF>,
+}
+
+impl<'a, C, F, EF> WhirProverTranscript<'a, C, F, EF>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F> + CanSampleUniformBits<F> + GrindingChallenger<Witness = F>,
+{
+    /// Seed the transcript from the shape.
+    pub fn new(challenger: &'a mut C, shape: WhirShape) -> Self {
+        let separator = shape.domain_separator::<F, EF>();
+        Self {
+            state: ProverState::new(challenger, &separator),
+            shape,
+            _ef: PhantomData,
+        }
+    }
+
+    /// Read-only access to the numbers this run was described with.
+    pub const fn shape(&self) -> &WhirShape {
+        &self.shape
+    }
+
+    /// Lend the sponge to the sumcheck that opens the run.
+    ///
+    /// The delegate draws the claim-batching challenge itself.
+    /// The bracket therefore covers that challenge as well as the rounds.
+    pub fn delegate_initial_fold<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.delegate(INITIAL_FOLD, run)
+    }
+
+    /// Lend the sponge to the sumcheck that closes one intermediate round.
+    pub fn delegate_round_fold<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.delegate(ROUND_FOLD, run)
+    }
+
+    /// Lend the sponge to the sumcheck that closes the run.
+    ///
+    /// # Returns
+    ///
+    /// `None` when the run is described with no closing rounds, which runs nothing.
+    pub fn delegate_final_fold<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> Option<R> {
+        let delegates = self.shape.final_sumcheck.rounds > 0;
+        delegates.then(|| self.delegate(FINAL_FOLD, run))
+    }
+
+    /// Bind one round's commitment.
+    pub fn commitment<Com>(&mut self, commitment: Com)
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        self.state.observe_opaque(COMMITMENT, commitment);
+    }
+
+    /// Draw one out-of-domain evaluation point.
+    pub fn ood_point(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(OOD_POINT)
+            .into_inner()
+    }
+
+    /// Bind the answer at one out-of-domain point.
+    ///
+    /// Each answer is bound before the next point is drawn.
+    pub fn ood_answer(&mut self, answer: EF) {
+        let _bound = self
+            .state
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(OOD_ANSWER, &answer);
+    }
+
+    /// Grind the query site of `round`.
+    ///
+    /// A `round` at or past the last one names the final site.
+    ///
+    /// # Returns
+    ///
+    /// The witness the search found, or zero when the site asks for no work.
+    pub fn query_pow(&mut self, round: usize) -> F {
+        let (label, bits) = self.shape.query_pow_site(round);
+        if bits == 0 {
+            return F::ZERO;
+        }
+        self.state.observe_pow(label, bits)
+    }
+
+    /// Draw the query indices of `round`.
+    ///
+    /// A `round` at or past the last one names the final site.
+    ///
+    /// # Returns
+    ///
+    /// Every index in draw order, repeats included.
+    /// A saturated phase opens every position instead and draws nothing.
+    pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
+        let (label, width, draws) = self.shape.query_index_site(round);
+        // A saturated phase has nothing left to decide, so no draw is described.
+        if draws == 0 {
+            return (0..1usize << width).collect();
+        }
+        self.state
+            .challenge_uniform_bits::<F>(label, width, draws)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect()
+    }
+
+    /// Draw the challenge weighting one round's fresh constraints.
+    pub fn round_batching(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(ROUND_BATCHING)
+            .into_inner()
+    }
+
+    /// Bind the final polynomial, sent in the clear.
+    ///
+    /// # Panics
+    ///
+    /// When the polynomial is not the length the run was described with.
+    pub fn final_poly(&mut self, evaluations: &[EF]) {
+        let _bound = self
+            .state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(FINAL_POLY, evaluations);
+    }
+
+    /// Close the transcript once every described step has been played.
+    ///
+    /// # Panics
+    ///
+    /// When the run played fewer steps than it was described with.
+    pub fn finish(self) {
+        assert!(
+            self.state.finalize().is_empty(),
+            "WHIR carries every value in its own proof",
+        );
+    }
+
+    /// Bracket one delegated sumcheck and hand it the borrowed sponge.
+    fn delegate<R>(&mut self, label: &'static str, run: impl FnOnce(&mut C) -> R) -> R {
+        self.state.begin_protocol::<Sumcheck>(label);
+        let output = run(self.state.challenger_mut());
+        self.state.end_protocol::<Sumcheck>(label);
+        output
+    }
+}
+
+/// Verifier-side transcript of one plain WHIR run.
+///
+/// Mirrors the prover side call for call, over the same description.
+pub struct WhirVerifierTranscript<'a, C, F: TranscriptField, EF> {
+    /// Driver walking the description and holding the borrowed sponge.
+    ///
+    /// The proof carries every value, so the driver reads an empty wire.
+    state: VerifierState<'static, &'a mut C, Alphabet<F>>,
+    /// The numbers this run was described with.
+    shape: WhirShape,
+    /// Marker for the extension field the challenges live in.
+    _ef: PhantomData<EF>,
+}
+
+impl<'a, C, F, EF> WhirVerifierTranscript<'a, C, F, EF>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F> + CanSampleUniformBits<F> + GrindingChallenger<Witness = F>,
+{
+    /// Seed the transcript from the shape.
+    pub fn new(challenger: &'a mut C, shape: WhirShape) -> Self {
+        let separator = shape.domain_separator::<F, EF>();
+        Self {
+            state: VerifierState::new(challenger, &separator, &[]),
+            shape,
+            _ef: PhantomData,
+        }
+    }
+
+    /// Read-only access to the numbers this run was described with.
+    pub const fn shape(&self) -> &WhirShape {
+        &self.shape
+    }
+
+    /// Lend the sponge to the sumcheck that opens the run.
+    pub fn delegate_initial_fold<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.delegate(INITIAL_FOLD, run)
+    }
+
+    /// Lend the sponge to the sumcheck that closes one intermediate round.
+    pub fn delegate_round_fold<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.delegate(ROUND_FOLD, run)
+    }
+
+    /// Lend the sponge to the sumcheck that closes the run.
+    ///
+    /// # Returns
+    ///
+    /// `None` when the run is described with no closing rounds, which runs nothing.
+    pub fn delegate_final_fold<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> Option<R> {
+        let delegates = self.shape.final_sumcheck.rounds > 0;
+        delegates.then(|| self.delegate(FINAL_FOLD, run))
+    }
+
+    /// Bind one round's commitment.
+    pub fn commitment<Com>(&mut self, commitment: Com)
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        self.state.observe_opaque(COMMITMENT, commitment);
+    }
+
+    /// Redraw one out-of-domain evaluation point.
+    pub fn ood_point(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(OOD_POINT)
+            .into_inner()
+    }
+
+    /// Bind the answer at one out-of-domain point.
+    pub fn ood_answer(&mut self, answer: EF) {
+        let _bound = self
+            .state
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(OOD_ANSWER, &answer);
+    }
+
+    /// Replay the grind of the query site of `round`.
+    ///
+    /// A `round` at or past the last one names the final site.
+    ///
+    /// # Errors
+    ///
+    /// When the witness misses the difficulty the site requires.
+    pub fn query_pow(&mut self, round: usize, witness: F) -> Result<(), TranscriptFailure> {
+        let (label, bits) = self.shape.query_pow_site(round);
+        if bits == 0 {
+            return Ok(());
+        }
+        // A failed check poisons the driver, so the rejection travels alone.
+        self.state
+            .observe_pow(label, bits, witness)
+            .map_err(|_| TranscriptFailure::PowWitness { round, bits })
+    }
+
+    /// Redraw the query indices of `round`.
+    ///
+    /// A `round` at or past the last one names the final site.
+    pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
+        let (label, width, draws) = self.shape.query_index_site(round);
+        // A saturated phase has nothing left to decide, so no draw is described.
+        if draws == 0 {
+            return (0..1usize << width).collect();
+        }
+        self.state
+            .challenge_uniform_bits::<F>(label, width, draws)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect()
+    }
+
+    /// Redraw the challenge weighting one round's fresh constraints.
+    pub fn round_batching(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(ROUND_BATCHING)
+            .into_inner()
+    }
+
+    /// Bind the final polynomial the proof carries.
+    ///
+    /// # Errors
+    ///
+    /// When the evaluation count differs from the described one.
+    pub fn final_poly(&mut self, evaluations: &[EF]) -> Result<(), TranscriptFailure> {
+        let expected = self.shape.final_poly_len;
+        self.state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(FINAL_POLY, evaluations)
+            .map(|_| ())
+            .map_err(|_| TranscriptFailure::FinalPolyLength {
+                expected,
+                got: evaluations.len(),
+            })
+    }
+
+    /// Release the completeness check because the proof is being rejected.
+    ///
+    /// Every path that leaves the transcript early goes through this.
+    ///
+    /// Dropping an unfinished driver otherwise panics.
+    /// That panic would land on top of an error already travelling to the caller.
+    pub fn abort(&mut self) {
+        self.state.abort();
+    }
+
+    /// Close the transcript once every described step has been replayed.
+    ///
+    /// # Panics
+    ///
+    /// When the run replayed fewer steps than it was described with.
+    pub fn finish(self) {
+        self.state
+            .finalize()
+            .expect("WHIR reads an empty wire, so no bytes can remain");
+    }
+
+    /// Bracket one delegated sumcheck and hand it the borrowed sponge.
+    fn delegate<R>(&mut self, label: &'static str, run: impl FnOnce(&mut C) -> R) -> R {
+        self.state.begin_protocol::<Sumcheck>(label);
+        let output = run(self.state.challenger_mut());
+        self.state.end_protocol::<Sumcheck>(label);
+        output
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
+    #[cfg(panic = "unwind")]
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::fs::TypeTag;
     use p3_challenger::{CanSample, DuplexChallenger};
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use rand::SeedableRng;
+    use proptest::prelude::*;
     use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
     use crate::parameters::ProtocolParameters;
@@ -536,6 +1001,12 @@ mod tests {
 
     /// Variable count every configuration in this module is derived at.
     const NUM_VARIABLES: usize = 16;
+
+    /// Opening claims every shape in this module is derived with.
+    const CLAIMS: usize = 3;
+
+    /// A commitment shaped like the ones a Merkle scheme hands this layer.
+    const DIGEST: [F; 8] = [F::ONE; 8];
 
     fn fresh_challenger() -> Ch {
         // Fixed seed so two runs differ only where the transcript makes them differ.
@@ -579,12 +1050,20 @@ mod tests {
         WhirConfig::new(NUM_VARIABLES, params).expect("the fixture parameters are all valid")
     }
 
+    /// Shape of the fixture configuration, at the fixture claim count.
+    fn shape_of(config: &Config) -> WhirShape {
+        WhirShape::new(config, CLAIMS)
+    }
+
     /// First challenge the seed of a configuration produces on a fresh sponge.
     fn first_challenge(config: &Config) -> F {
+        first_challenge_of(&shape_of(config))
+    }
+
+    /// First challenge the seed of a shape produces on a fresh sponge.
+    fn first_challenge_of(shape: &WhirShape) -> F {
         let mut challenger = fresh_challenger();
-        WhirShape::new(config)
-            .domain_separator::<F, EF>()
-            .seed(&mut challenger);
+        shape.domain_separator::<F, EF>().seed(&mut challenger);
         challenger.sample()
     }
 
@@ -599,6 +1078,153 @@ mod tests {
         );
     }
 
+    /// Assert that perturbing one derived field moves the seed.
+    fn derived_field_moves_the_seed(name: &str, perturb: impl FnOnce(&mut Config)) {
+        let base = config_from(base_params());
+        let mut tweaked = base.clone();
+        perturb(&mut tweaked);
+        assert_ne!(
+            first_challenge(&base),
+            first_challenge(&tweaked),
+            "changing {name} left the seed where it was",
+        );
+    }
+
+    /// Stand-in for a delegated sumcheck: absorbs one value, then draws one.
+    ///
+    /// The real phase seeds its own driver from the state this one has reached.
+    /// All the bracket has to record is that the delegation happened, and where.
+    fn delegate_stub(challenger: &mut Ch) -> EF {
+        challenger.observe_algebra_element(EF::ONE);
+        challenger.sample_algebra_element()
+    }
+
+    /// Everything one side of a played run produces.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Played {
+        /// Challenges drawn, in draw order.
+        challenges: Vec<EF>,
+        /// Grinding witnesses, one per query site.
+        witnesses: Vec<F>,
+        /// Query indices, one list per query site.
+        indices: Vec<Vec<usize>>,
+    }
+
+    /// Values a described run carries inside its own proof.
+    #[derive(Clone, Debug)]
+    struct Carried {
+        /// One out-of-domain answer per sample, per round.
+        ood_answers: Vec<Vec<EF>>,
+        /// The final polynomial, sent in the clear.
+        final_poly: Vec<EF>,
+    }
+
+    impl Carried {
+        /// Values that fit `shape`, drawn from a single seed.
+        fn new(shape: &WhirShape, seed: u64) -> Self {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let ood_answers: Vec<Vec<EF>> = shape
+                .rounds
+                .iter()
+                .map(|round| (0..round.ood_samples).map(|_| rng.random()).collect())
+                .collect();
+            let final_poly = (0..shape.final_poly_len).map(|_| rng.random()).collect();
+            Self {
+                ood_answers,
+                final_poly,
+            }
+        }
+    }
+
+    /// Play every described step, prover side, in the order the pipeline plays them.
+    fn play_prover(challenger: &mut Ch, shape: &WhirShape, carried: &Carried) -> Played {
+        let mut played = Played {
+            challenges: Vec::new(),
+            witnesses: Vec::new(),
+            indices: Vec::new(),
+        };
+        let mut transcript = WhirProverTranscript::<Ch, F, EF>::new(challenger, shape.clone());
+
+        played
+            .challenges
+            .push(transcript.delegate_initial_fold(delegate_stub));
+
+        for round in 0..shape.n_rounds() {
+            transcript.commitment(DIGEST);
+            for &answer in &carried.ood_answers[round] {
+                played.challenges.push(transcript.ood_point());
+                transcript.ood_answer(answer);
+            }
+            played.witnesses.push(transcript.query_pow(round));
+            played.indices.push(transcript.query_indices(round));
+            played.challenges.push(transcript.round_batching());
+            played
+                .challenges
+                .push(transcript.delegate_round_fold(delegate_stub));
+        }
+
+        transcript.final_poly(&carried.final_poly);
+        let final_site = shape.n_rounds();
+        played.witnesses.push(transcript.query_pow(final_site));
+        played.indices.push(transcript.query_indices(final_site));
+        played
+            .challenges
+            .extend(transcript.delegate_final_fold(delegate_stub));
+
+        transcript.finish();
+        played
+    }
+
+    /// Replay every described step, verifier side, over the prover's own values.
+    fn play_verifier(
+        challenger: &mut Ch,
+        shape: &WhirShape,
+        carried: &Carried,
+        witnesses: &[F],
+    ) -> Played {
+        let mut played = Played {
+            challenges: Vec::new(),
+            witnesses: witnesses.to_vec(),
+            indices: Vec::new(),
+        };
+        let mut transcript = WhirVerifierTranscript::<Ch, F, EF>::new(challenger, shape.clone());
+
+        played
+            .challenges
+            .push(transcript.delegate_initial_fold(delegate_stub));
+
+        for (round, &witness) in witnesses.iter().take(shape.n_rounds()).enumerate() {
+            transcript.commitment(DIGEST);
+            for &answer in &carried.ood_answers[round] {
+                played.challenges.push(transcript.ood_point());
+                transcript.ood_answer(answer);
+            }
+            transcript
+                .query_pow(round, witness)
+                .expect("the prover's own witness satisfies the site");
+            played.indices.push(transcript.query_indices(round));
+            played.challenges.push(transcript.round_batching());
+            played
+                .challenges
+                .push(transcript.delegate_round_fold(delegate_stub));
+        }
+
+        transcript
+            .final_poly(&carried.final_poly)
+            .expect("the described evaluation count");
+        let final_site = shape.n_rounds();
+        transcript
+            .query_pow(final_site, witnesses[final_site])
+            .expect("the prover's own witness satisfies the site");
+        played.indices.push(transcript.query_indices(final_site));
+        played
+            .challenges
+            .extend(transcript.delegate_final_fold(delegate_stub));
+
+        transcript.finish();
+        played
+    }
+
     #[test]
     fn every_query_step_describes_uniform_sampling() {
         // The query phase draws through rejection sampling, so its positions are exactly uniform.
@@ -609,7 +1235,7 @@ mod tests {
         //
         // A step described as one and played as the other is a pattern mismatch.
         let config = config_from(base_params());
-        let pattern = WhirShape::new(&config).pattern::<F, EF>();
+        let pattern = shape_of(&config).pattern::<F, EF>();
 
         // Fixture state: the plain pipeline draws at two labels, per round and once at the end.
         let query_steps: Vec<_> = pattern
@@ -633,15 +1259,42 @@ mod tests {
         }
     }
 
-    /// Assert that perturbing one derived field moves the seed.
-    fn derived_field_moves_the_seed(name: &str, perturb: impl FnOnce(&mut Config)) {
-        let base = config_from(base_params());
-        let mut tweaked = base.clone();
-        perturb(&mut tweaked);
-        assert_ne!(
-            first_challenge(&base),
-            first_challenge(&tweaked),
-            "changing {name} left the seed where it was",
+    #[test]
+    fn every_sumcheck_phase_is_recorded_as_one_bracket() {
+        // A sumcheck phase runs under its own seed, so its rounds are not steps here.
+        //
+        //     initial fold        one bracket
+        //     per round           one bracket
+        //     final fold          one bracket, when the run has closing rounds
+        //
+        // Every opener is matched, so the description passes structural validation.
+        let config = config_from(base_params());
+        let shape = shape_of(&config);
+        let pattern = shape.pattern::<F, EF>();
+
+        let openers: Vec<_> = pattern
+            .interactions()
+            .iter()
+            .filter(|step| step.hierarchy() == Hierarchy::Begin)
+            .map(Interaction::label)
+            .collect();
+        let closers = pattern
+            .interactions()
+            .iter()
+            .filter(|step| step.hierarchy() == Hierarchy::End)
+            .count();
+
+        let expected = 1 + shape.n_rounds() + usize::from(shape.final_sumcheck.rounds > 0);
+        assert_eq!(openers.len(), expected);
+        assert_eq!(openers.len(), closers);
+        assert_eq!(openers[0], INITIAL_FOLD);
+
+        // No round of any sumcheck phase reaches this pattern as a step of its own.
+        assert!(
+            pattern
+                .interactions()
+                .iter()
+                .all(|step| step.label() != FOLD_CHALLENGE),
         );
     }
 
@@ -703,8 +1356,9 @@ mod tests {
     fn every_derived_field_that_shapes_the_transcript_reaches_the_seed() {
         // Walk `WhirConfig` field by field, perturbing the derived value itself.
         //
-        // A derived field can be reached only through the shape, so this is the
-        // check that no transcript-bearing number was left out of the pattern.
+        // A derived field reaches the seed either through the step sequence or
+        // through the instance label, so this is the check that no
+        // transcript-bearing number was left out of both.
         derived_field_moves_the_seed("commitment_ood_samples", |c| c.commitment_ood_samples += 1);
         derived_field_moves_the_seed("starting_folding_pow_bits", |c| {
             c.starting_folding_pow_bits += 1;
@@ -735,6 +1389,246 @@ mod tests {
         derived_field_moves_the_seed("round_parameters.len", |c| {
             c.round_parameters.pop();
         });
+    }
+
+    #[test]
+    fn the_pre_seed_claim_phase_reaches_the_seed() {
+        // Two numbers fix what the caller absorbed before this seed landed.
+        //
+        //     opening claims       one point drawn and one batch absorbed each
+        //     committed row width  what a single opened leaf carries
+        //
+        // Neither moves the step sequence, so only the instance label can carry them.
+        let config = config_from(base_params());
+        let base = shape_of(&config);
+
+        let mut more_claims = base.clone();
+        more_claims.num_opening_claims += 1;
+        assert_eq!(more_claims.pattern::<F, EF>(), base.pattern::<F, EF>());
+        assert_ne!(
+            first_challenge_of(&more_claims),
+            first_challenge_of(&base),
+            "the opening-claim count left the seed where it was",
+        );
+
+        let mut wider = base.clone();
+        wider.commitment_row_width *= 2;
+        assert_eq!(wider.pattern::<F, EF>(), base.pattern::<F, EF>());
+        assert_ne!(
+            first_challenge_of(&wider),
+            first_challenge_of(&base),
+            "the committed row width left the seed where it was",
+        );
+    }
+
+    #[test]
+    fn both_sides_draw_the_same_challenges_from_the_same_values() {
+        // Described run: the fixture configuration, at its own grinding difficulties.
+        let config = config_from(base_params());
+        let shape = shape_of(&config);
+        let carried = Carried::new(&shape, 0xC1A1);
+
+        // Prover side: play every phase in order.
+        let mut prover_challenger = fresh_challenger();
+        let prover = play_prover(&mut prover_challenger, &shape, &carried);
+
+        // Verifier side: the same calls, in the same order, over the same values.
+        let mut verifier_challenger = fresh_challenger();
+        let verifier = play_verifier(
+            &mut verifier_challenger,
+            &shape,
+            &carried,
+            &prover.witnesses,
+        );
+
+        assert_eq!(prover, verifier);
+
+        // Both sponges land on the same state, so whatever runs next agrees too.
+        let prover_next: F = prover_challenger.sample();
+        let verifier_next: F = verifier_challenger.sample();
+        assert_eq!(prover_next, verifier_next);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+
+        #[test]
+        fn prop_both_sides_agree_over_random_carried_values(seed in any::<u64>()) {
+            // Completeness over the values the proof carries: the two sides
+            // agree whatever the out-of-domain answers and final polynomial are.
+            let config = config_from(base_params());
+            let shape = shape_of(&config);
+            let carried = Carried::new(&shape, seed);
+
+            let mut prover_challenger = fresh_challenger();
+            let prover = play_prover(&mut prover_challenger, &shape, &carried);
+
+            let mut verifier_challenger = fresh_challenger();
+            let verifier =
+                play_verifier(&mut verifier_challenger, &shape, &carried, &prover.witnesses);
+
+            prop_assert_eq!(prover, verifier);
+        }
+    }
+
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn a_prover_that_plays_a_step_out_of_order_fails_loudly() {
+        // Described order: the round's commitment lands before its batching challenge.
+        //
+        //     described  commitment       round_batching
+        //     played     round_batching   commitment
+        //
+        // Nothing about the two values says which is which once they are in the sponge.
+        // The step they are played at is what parts them, and the player checks it.
+        let config = config_from(base_params());
+        let shape = shape_of(&config);
+        let mut challenger = fresh_challenger();
+
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            let mut transcript =
+                WhirProverTranscript::<Ch, F, EF>::new(&mut challenger, shape.clone());
+            let _folded = transcript.delegate_initial_fold(delegate_stub);
+            // Mutation: the batching challenge is drawn where the commitment belongs.
+            let _swapped = transcript.round_batching();
+        }));
+
+        let payload = caught.expect_err("a step played out of order must panic");
+        let message = payload
+            .downcast_ref::<String>()
+            .expect("the player reports the mismatch as a formatted message");
+        assert!(
+            message.contains("but expected"),
+            "the panic must diff the played step against the described one, got {message}",
+        );
+        assert!(
+            message.contains(COMMITMENT),
+            "the panic must name the step that was due, got {message}",
+        );
+    }
+
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn a_prover_that_skips_a_step_fails_loudly() {
+        // Described run: the final query indices are drawn after the final grind.
+        //
+        //     described  final_query_pow   final_query_indices
+        //     played     final_query_pow   -- nothing --
+        //
+        // Skipping the draw leaves one step unplayed.
+        //
+        // A verifier would draw at that step and land on a different sponge state.
+        let config = config_from(base_params());
+        let shape = shape_of(&config);
+        let carried = Carried::new(&shape, 0x5C1B);
+        let mut challenger = fresh_challenger();
+
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            let mut transcript =
+                WhirProverTranscript::<Ch, F, EF>::new(&mut challenger, shape.clone());
+            let _folded = transcript.delegate_initial_fold(delegate_stub);
+            for round in 0..shape.n_rounds() {
+                transcript.commitment(DIGEST);
+                for &answer in &carried.ood_answers[round] {
+                    let _point = transcript.ood_point();
+                    transcript.ood_answer(answer);
+                }
+                let _witness = transcript.query_pow(round);
+                let _indices = transcript.query_indices(round);
+                let _batching = transcript.round_batching();
+                let _folded = transcript.delegate_round_fold(delegate_stub);
+            }
+            transcript.final_poly(&carried.final_poly);
+            let _witness = transcript.query_pow(shape.n_rounds());
+            // Mutation: the final query indices are never drawn.
+            let _folded = transcript.delegate_final_fold(delegate_stub);
+            transcript.finish();
+        }));
+
+        let payload = caught.expect_err("a skipped step must panic");
+        let message = payload
+            .downcast_ref::<String>()
+            .expect("the player reports the gap as a formatted message");
+        assert!(
+            message.contains("but expected") || message.contains("not fully replayed"),
+            "the panic must name the step that was skipped, got {message}",
+        );
+    }
+
+    #[test]
+    fn a_grinding_witness_that_misses_its_difficulty_is_rejected() {
+        // Described run: 20 bits of grinding before the first round's query indices.
+        //
+        // Zero is a witness like any other, and it clears 20 bits with probability 2^-20.
+        let config = config_from(base_params());
+        let mut shape = shape_of(&config);
+        shape.rounds[0].query_pow_bits = 20;
+        let ood_samples = shape.rounds[0].ood_samples;
+
+        let mut challenger = fresh_challenger();
+        let mut transcript = WhirVerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape);
+        let _folded = transcript.delegate_initial_fold(delegate_stub);
+        transcript.commitment(DIGEST);
+        for _ in 0..ood_samples {
+            let _point = transcript.ood_point();
+            transcript.ood_answer(EF::ONE);
+        }
+
+        let err = transcript
+            .query_pow(0, F::ZERO)
+            .expect_err("a witness that clears no bits must be rejected");
+
+        assert_eq!(err, TranscriptFailure::PowWitness { round: 0, bits: 20 });
+        // The failed read poisoned the driver, so dropping it here raises nothing.
+    }
+
+    #[test]
+    fn a_final_polynomial_of_the_wrong_length_is_rejected() {
+        // Described length: 2^final_round_config().num_variables evaluations.
+        //
+        //     described  final_poly_len
+        //     supplied   final_poly_len + 1   -> rejected, nothing absorbed
+        let config = config_from(base_params());
+        let mut shape = shape_of(&config);
+        // Fixture state: no grinding anywhere, so a zero witness clears every site.
+        for round in &mut shape.rounds {
+            round.query_pow_bits = 0;
+        }
+        shape.final_pow_bits = 0;
+        let expected = shape.final_poly_len;
+        let carried = Carried::new(&shape, 0xBAD1);
+
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            WhirVerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape.clone());
+        let _folded = transcript.delegate_initial_fold(delegate_stub);
+        for round in 0..shape.n_rounds() {
+            transcript.commitment(DIGEST);
+            for &answer in &carried.ood_answers[round] {
+                let _point = transcript.ood_point();
+                transcript.ood_answer(answer);
+            }
+            transcript
+                .query_pow(round, F::ZERO)
+                .expect("the fixture asks for no work at this site");
+            let _indices = transcript.query_indices(round);
+            let _batching = transcript.round_batching();
+            let _folded = transcript.delegate_round_fold(delegate_stub);
+        }
+
+        let mut too_long = carried.final_poly;
+        too_long.push(EF::ONE);
+        let err = transcript
+            .final_poly(&too_long)
+            .expect_err("an evaluation count outside the described one must error");
+
+        assert_eq!(
+            err,
+            TranscriptFailure::FinalPolyLength {
+                expected,
+                got: expected + 1,
+            }
+        );
     }
 
     #[test]

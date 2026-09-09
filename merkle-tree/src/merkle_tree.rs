@@ -327,12 +327,65 @@ const TASK_NODES: usize = 1024;
 
 /// Target size in bytes of the buffer holding one group of copied rows.
 ///
-/// A batched hasher wants its messages back to back in memory, and a matrix only promises access
-/// one row at a time, so a group of rows is copied into a buffer first.
+/// A batched hasher wants its messages back to back in memory.
+/// A matrix only promises access one row at a time.
+/// So a group of rows is copied in first.
 ///
-/// 16 KiB keeps that buffer inside the first-level cache, so the hasher reads the rows back
-/// while they are still hot.
+/// 16 KiB keeps that copy in the first-level cache until the pass that reads it back.
+///
+/// This is a target rather than a cap.
+///
+/// A group is rounded up to a whole lane group.
+///
+/// One row is staged however wide it is.
+///
+/// So the buffer reaches `max(this, lanes * row bytes)`, which at eight lanes is:
+///
+/// ```text
+///     row bytes   staged           the batching consumer
+///        2 KiB     16 KiB   (1x)   groups rows, every lane busy
+///        8 KiB     64 KiB   (4x)   groups rows, every lane busy
+///       64 KiB    512 KiB  (32x)   one message at a time, every lane idle
+/// ```
+///
+/// The only consumer that groups rows abandons grouping past its own 8 KiB row budget.
+///
+/// Under that budget the overshoot buys occupancy.
+/// An idle lane costs a whole permutation, far more than the cache level given up.
+///
+/// Past it the rows are hashed one at a time whatever this layer staged.
+/// The overshoot then buys nothing and is pure copy cost.
+///
+/// Telling the two apart here would mean coupling this layer to a budget it cannot see.
+///
+/// The bound above is per call.
+///
+/// One buffer lives per parallel task.
+///
+/// A level's peak is therefore that bound times the number of tasks.
 const ROW_SCRATCH_BYTES: usize = 16 * 1024;
+
+/// Rows one hash call stages, from the byte target and the hasher's lane count.
+///
+/// A level is cut into groups of this size.
+/// Only its last group is ever short, and that one runs partly idle on the remainder.
+///
+/// # Returns
+///
+/// A count of at least one, always a whole number of lane groups.
+///
+/// It stages at most the target, or one lane group of rows when that is larger.
+///
+/// Zero on either argument is read as one, so every input has an answer.
+fn rows_per_call(row_bytes: usize, lanes: usize) -> usize {
+    // Both divisors are normalized here rather than at the call site, so no caller can
+    // reach the division by zero that a zero-width row or a zero-lane hasher would cause.
+    let row_bytes = row_bytes.max(1);
+    let lanes = lanes.max(1);
+
+    // Whole lane groups inside the target, and one group when none fits.
+    (ROW_SCRATCH_BYTES / row_bytes / lanes).max(1) * lanes
+}
 
 /// Hash a run of rows from a set of equal-height matrices, several messages per hash call.
 ///
@@ -371,19 +424,17 @@ fn hash_rows_batched<F, W, H, M, const DIGEST_ELEMS: usize>(
 
     // A message spans one row of every matrix.
     let total_width: usize = matrices.iter().map(|m| m.width()).sum();
-    let row_bytes = (total_width * size_of::<F>()).max(1);
+    let row_bytes = total_width * size_of::<F>();
 
-    // Fill as many whole lane groups as the scratch budget allows, and never fewer than one,
-    // so every hash call keeps the hasher's vector width busy.
-    let lanes = H::LANES;
-    let rows_per_call = (ROW_SCRATCH_BYTES / row_bytes / lanes).max(1) * lanes;
+    // Fill as many whole lane groups as the byte target allows, and never fewer than one.
+    let rows_per_group = rows_per_call(row_bytes, H::LANES);
 
     let hash_chunk = |base: usize, digests: &mut [[W; DIGEST_ELEMS]]| {
         // One buffer per task, reused by every group inside it.
-        let mut scratch: Vec<F> = Vec::with_capacity(rows_per_call * total_width);
+        let mut scratch: Vec<F> = Vec::with_capacity(rows_per_group * total_width);
 
-        for (group, group_digests) in digests.chunks_mut(rows_per_call).enumerate() {
-            let first = base + group * rows_per_call;
+        for (group, group_digests) in digests.chunks_mut(rows_per_group).enumerate() {
+            let first = base + group * rows_per_group;
 
             // Lay the group's messages back to back: row by row, matrix by matrix.
             //
@@ -406,7 +457,7 @@ fn hash_rows_batched<F, W, H, M, const DIGEST_ELEMS: usize>(
         hash_chunk(first_row, out);
     } else {
         // Keep each task a whole number of groups so only the final group is ever short.
-        let task = rows_per_call * TASK_NODES.div_ceil(rows_per_call);
+        let task = rows_per_group * TASK_NODES.div_ceil(rows_per_group);
         out.par_chunks_mut(task)
             .enumerate()
             .for_each(|(task_index, digests)| hash_chunk(first_row + task_index * task, digests));
@@ -1371,5 +1422,97 @@ mod tests {
             &compress,
             vec![empty_mat],
         );
+    }
+
+    #[test]
+    fn a_staged_group_is_lane_aligned_and_bounded() {
+        // Invariant: a group is a whole number of lane groups.
+        //
+        // Invariant: it stages at most `max(target, lanes * row_bytes)` bytes.
+        //
+        // The second bound is the price of the first.
+        // A row at or past the target still needs one full lane group staged.
+        //
+        // Both assertions have teeth, checked by mutating the sizing:
+        //
+        //     drop the lane rounding   ->  lanes 2, 16383 B: 1 row, and 1 % 2 != 0
+        //     round the target up      ->  one lane, 8191 B: 3 rows, 24573 bytes staged
+        //
+        // The second is why the sweep carries a width just under half the target.
+        for lanes in [0usize, 1, 2, 4, 8, 16] {
+            for row_bytes in [
+                0usize,
+                1,
+                64,
+                ROW_SCRATCH_BYTES / 8,
+                ROW_SCRATCH_BYTES / 2 - 1,
+                ROW_SCRATCH_BYTES - 1,
+                ROW_SCRATCH_BYTES,
+                ROW_SCRATCH_BYTES + 1,
+                4 * ROW_SCRATCH_BYTES,
+            ] {
+                let rows = rows_per_call(row_bytes, lanes);
+
+                // Zero on either argument is read as one, so both divisions stay defined.
+                let (effective_lanes, effective_bytes) = (lanes.max(1), row_bytes.max(1));
+
+                assert!(rows >= 1, "lanes={lanes} row_bytes={row_bytes}");
+                assert_eq!(
+                    rows % effective_lanes,
+                    0,
+                    "lanes={lanes} row_bytes={row_bytes} rows={rows}"
+                );
+                assert!(
+                    rows * effective_bytes
+                        <= ROW_SCRATCH_BYTES.max(effective_lanes * effective_bytes),
+                    "lanes={lanes} row_bytes={row_bytes} staged {} bytes",
+                    rows * effective_bytes
+                );
+            }
+        }
+
+        // Narrow rows: many whole lane groups fit and the target holds.
+        //
+        //     16 KiB / 64 B = 256 rows, over 8 lanes = 32 whole groups
+        assert_eq!(rows_per_call(64, 8), 256);
+        assert!(rows_per_call(64, 8) * 64 <= ROW_SCRATCH_BYTES);
+
+        // A row past the target still stages one whole lane group.
+        assert_eq!(rows_per_call(ROW_SCRATCH_BYTES + 1, 8), 8);
+    }
+
+    #[test]
+    fn the_staged_buffer_meets_the_bound_the_target_states() {
+        // Invariant: the bound is stated in bytes, and the buffer is sized in field elements.
+        //
+        // The batched driver composes both from the same width, so the two must line up:
+        //
+        //     row bytes    = total width * element bytes
+        //     buffer bytes = rows per group * total width * element bytes
+        //
+        // Checking the helper alone would miss a call site that sized its buffer some other way.
+        const ELEMENT: usize = size_of::<BabyBear>();
+
+        for lanes in [1usize, 2, 4, 8] {
+            // Widths straddling the target: 4096 four-byte columns are exactly 16 KiB.
+            for total_width in [0usize, 1, 16, 1024, 4095, 4096, 4097, 16384] {
+                let row_bytes = total_width * ELEMENT;
+                let rows = rows_per_call(row_bytes, lanes);
+
+                // Exactly what the batched driver reserves, converted to bytes.
+                let staged = rows * total_width * ELEMENT;
+
+                // Zero-width matrices stage nothing, whatever count the sizing hands back.
+                if total_width == 0 {
+                    assert_eq!(staged, 0, "lanes={lanes}");
+                    continue;
+                }
+
+                assert!(
+                    staged <= ROW_SCRATCH_BYTES.max(lanes * row_bytes),
+                    "lanes={lanes} total_width={total_width} staged {staged} bytes"
+                );
+            }
+        }
     }
 }

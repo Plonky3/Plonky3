@@ -56,6 +56,7 @@
 //! composing this reduction into a proof system must account for it in that system's own
 //! error budget, on top of whatever the commitment scheme discharging `t'(r') = s'` costs.
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
@@ -173,7 +174,7 @@ pub fn prove_ring_switch<F, EF, Challenger>(
     challenger: &mut Challenger,
 ) -> (RingSwitchProof<F, EF>, Point<EF>, EF)
 where
-    F: Field,
+    F: TranscriptField,
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
@@ -263,7 +264,7 @@ pub fn verify_ring_switch<F, EF, Challenger>(
     challenger: &mut Challenger,
 ) -> Result<(Point<EF>, EF), RingSwitchError>
 where
-    F: Field,
+    F: TranscriptField,
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
