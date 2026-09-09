@@ -19,7 +19,7 @@ use p3_multi_stark::{
 };
 use p3_sumcheck::OpeningBatch;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
-use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_symmetric::{MerkleCap, PaddingFreeSponge, TruncatedPermutation};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use p3_whir::{
     FoldingFactor, ProtocolParameters, SecurityAssumption, VerifierError as WhirVerifierError,
@@ -925,6 +925,56 @@ fn verify_rejects_tampered_public_values() {
         VerifierInstances::new(vec![VerifierInstance::new(
             &FibAir, &vk, log_height, &wrong,
         )]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .unwrap_err();
+    match err {
+        VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position, reason }) => {
+            assert_eq!(position, 0);
+            assert_eq!(reason, "Base field Merkle multiproof verification failed");
+        }
+        other => panic!("expected a Merkle opening rejection, got {other:?}"),
+    }
+}
+
+#[test]
+fn verify_rejects_tampered_main_commitment() {
+    // Fixture state: the proof carries the commitment the prover's commit phase produced.
+    let n = 256;
+    let trace = fib_trace(n);
+    let pis = fib_public_values(n);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let airs = [&FibAir];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger());
+
+    let mut proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
+        0,
+        &mut challenger(),
+    );
+
+    // Mutation: shift the first word of the committed Merkle root.
+    let mut roots = proof.commitment.roots().to_vec();
+    roots[0][0] += F::ONE;
+    proof.commitment = MerkleCap::new(roots);
+
+    // Expected rejection: the commitment is absorbed inside the main-commitment bracket.
+    // Why: the verifier derives different query positions than the prover answered.
+    //   the round verifies as one pruned multiproof
+    //   -> failure reports a batched placeholder position, not a per-query index.
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, log_height, &pis)]),
         &proof,
         0,
         &mut challenger(),

@@ -1,6 +1,7 @@
 use core::fmt::Debug;
 
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::fs::TranscriptField;
+use p3_challenger::{CanObserve, CanSample, CanSampleUniformBits, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_multilinear_util::point::Point;
@@ -8,6 +9,7 @@ use p3_sumcheck::constraints::statement::EqStatement;
 
 use crate::pcs::proof::WhirProof;
 use crate::pcs::verifier::errors::VerifierError;
+use crate::transcript::WhirVerifierTranscript;
 
 /// Parsed commitment extracted from the verifier's transcript.
 ///
@@ -33,16 +35,19 @@ where
     /// - Round entry is present but its Merkle-root slot is empty.
     pub fn parse_with_round<EF, MT: Mmcs<F>, Challenger>(
         proof: &WhirProof<F, EF, MT>,
-        challenger: &mut Challenger,
+        transcript: &mut WhirVerifierTranscript<'_, Challenger, F, EF>,
         num_variables: usize,
         ood_samples: usize,
         round_index: usize,
     ) -> Result<ParsedCommitment<EF, MT::Commitment>, VerifierError>
     where
-        F: TwoAdicField,
+        F: TwoAdicField + TranscriptField,
         EF: ExtensionField<F> + TwoAdicField,
-        Challenger:
-            FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<MT::Commitment>,
+        Challenger: CanObserve<F>
+            + CanSample<F>
+            + CanSampleUniformBits<F>
+            + GrindingChallenger<Witness = F>
+            + CanObserve<MT::Commitment>,
     {
         let round_proof = proof
             .rounds
@@ -62,15 +67,17 @@ where
         }
 
         // Observe the Merkle root in the transcript.
-        challenger.observe(root.clone());
+        transcript.commitment(root.clone());
 
         // Reconstruct equality constraints from OOD challenge points and answers.
+        //
+        // The count was pinned against the configuration above.
+        // Every index below is therefore in bounds, and every draw is described.
         let mut ood_statement = EqStatement::initialize(num_variables);
         (0..ood_samples).for_each(|i| {
-            let point = challenger.sample_algebra_element();
-            let point = Point::expand_from_univariate(point, num_variables);
+            let point = Point::expand_from_univariate(transcript.ood_point(), num_variables);
             let eval = ood_answers[i];
-            challenger.observe_algebra_element(eval);
+            transcript.ood_answer(eval);
             ood_statement.add_evaluated_constraint(point, eval);
         });
 

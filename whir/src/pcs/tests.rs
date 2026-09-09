@@ -762,6 +762,7 @@ mod error_variant_tests {
     use alloc::vec;
 
     use p3_commit::{Mmcs, MultilinearPcs};
+    use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::layout::{Layout, SuffixProver, Table};
     use p3_sumcheck::{OpeningBatch, OpeningProtocol, SumcheckError, TableShape, TableSpec};
@@ -1180,6 +1181,46 @@ mod error_variant_tests {
                 assert_eq!(a, expected - 1);
             }
             other => panic!("expected InitialOodAnswerCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_noncanonical_pow_witnesses_at_zero_difficulty() {
+        // Invariant: at zero difficulty the grind reads nothing, so only a
+        // canonical-value check can bind the witness fields.
+        //
+        //     pow_bits = 0  ->  check_witness returns true without absorbing
+        //     pow_bits > 0  ->  the witness is absorbed and its bits resampled
+        //
+        // Fixture state: `pow_bits: 0`, so every round's site asks for no work.
+        //
+        // Mutation: rewrite one round's witness, then the final round's, each on its own.
+        let (pcs, commitment, proof, protocol) = commit_and_open();
+        assert!(
+            !proof.whir.rounds.is_empty(),
+            "fixture should produce at least one WHIR round"
+        );
+        let rounds = proof.whir.rounds.len();
+
+        // The honest prover writes zero into every slot it pays no work for.
+        assert!(proof.whir.rounds.iter().all(|r| r.pow_witness == F::ZERO));
+        assert_eq!(proof.whir.final_pow_witness, F::ZERO);
+
+        let mut mutated = proof.clone();
+        mutated.whir.rounds[0].pow_witness = F::ONE;
+        let err = verify(&pcs, &commitment, &mutated, protocol.clone()).unwrap_err();
+        match err {
+            VerifierError::NonCanonicalPowWitness { round } => assert_eq!(round, 0),
+            other => panic!("expected NonCanonicalPowWitness, got {other:?}"),
+        }
+
+        // The final round is labelled by the intermediate round count, as elsewhere here.
+        let mut mutated = proof;
+        mutated.whir.final_pow_witness = F::ONE;
+        let err = verify(&pcs, &commitment, &mutated, protocol).unwrap_err();
+        match err {
+            VerifierError::NonCanonicalPowWitness { round } => assert_eq!(round, rounds),
+            other => panic!("expected NonCanonicalPowWitness, got {other:?}"),
         }
     }
 

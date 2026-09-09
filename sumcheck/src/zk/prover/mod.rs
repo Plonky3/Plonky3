@@ -20,8 +20,11 @@
 //! - Per-round assembly: round-context type and the polynomial it builds.
 //! - Layout trait extension: per-mode residual handoff.
 //! - Generic prover: single `into_sumcheck` implementation parameterised by layout.
+//!
+//! The prelude helpers reach beyond this module.
+//! The witness-free simulator drives the same two, so no second copy of them exists.
 
-mod common;
+pub(crate) mod common;
 mod layout;
 mod residual;
 mod round;

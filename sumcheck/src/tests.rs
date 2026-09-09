@@ -618,5 +618,11 @@ fn test_invalid_pow_witness() {
         )
         .expect_err("zeroed witness must fail");
 
-    assert!(matches!(err, SumcheckError::InvalidPowWitness));
+    assert!(matches!(
+        err,
+        SumcheckError::InvalidPowWitness {
+            round: 0,
+            difficulty: 20
+        }
+    ));
 }

@@ -19,7 +19,8 @@
 //! At each round, we compute a univariate polynomial `h(X)` that represents the partial sum
 //! over remaining variables. For quadratic sumcheck, `h(X)` is degree-2.
 
-use p3_challenger::{FieldChallenger, GrindingChallenger};
+use p3_challenger::fs::TranscriptField;
+use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
@@ -30,6 +31,7 @@ use tracing::instrument;
 use crate::SumcheckData;
 use crate::constraints::Constraint;
 use crate::strategy::{Basis, RoundMessage, VariableOrder, fold_and_round_coefficients_prefix};
+use crate::transcript::ProverTranscript;
 
 /// A paired representation of evaluation and weight polynomials for quadratic sumcheck.
 ///
@@ -373,23 +375,26 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     /// # Arguments
     ///
     /// * `sumcheck_data` - Storage for polynomial evaluations sent to verifier.
-    /// * `challenger` - Fiat-Shamir challenger for transcript operations.
+    /// * `transcript` - driver of the batch of rounds this one belongs to.
     /// * `sum` - Current claimed sum (updated after this round).
-    /// * `pow_bits` - Proof-of-work difficulty (0 to disable).
     ///
     /// # Returns
     ///
     /// The verifier's challenge `r \in EF` for this round.
+    ///
+    /// # Panics
+    ///
+    /// When the batch has already played every round it was described with.
     #[instrument(skip_all, level = "debug")]
     pub fn round<Challenger>(
         &mut self,
         sumcheck_data: &mut SumcheckData<F, EF>,
-        challenger: &mut Challenger,
+        transcript: &mut ProverTranscript<'_, Challenger, F, EF>,
         sum: &mut EF,
-        pow_bits: usize,
     ) -> EF
     where
-        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+        F: TranscriptField,
+        Challenger: CanObserve<F> + CanSample<F> + GrindingChallenger<Witness = F>,
     {
         // Step 1: Compute sumcheck polynomial coefficients.
         //
@@ -417,7 +422,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         };
 
         // Step 2-4: Commit to transcript, do PoW, and receive challenge.
-        let r = sumcheck_data.observe_and_sample(challenger, c_a, c_inf, pow_bits);
+        let r = sumcheck_data.observe_and_sample(transcript, c_a, c_inf);
 
         // Step 5: Fold both polynomials using the challenge.
         self.compress(r);
@@ -696,6 +701,7 @@ mod tests {
     use super::*;
     use crate::extrapolate_01inf;
     use crate::strategy::{RoundMessage, sumcheck_coefficients_prefix};
+    use crate::transcript::SumcheckShape;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<BabyBear, 4>;
@@ -1041,8 +1047,11 @@ mod tests {
         // Perform one round of sumcheck.
         let mut sumcheck_data = SumcheckData::default();
         let mut challenger = make_challenger();
+        let shape = SumcheckShape::new(1, 0, Basis::Evaluation);
+        let mut transcript = ProverTranscript::<_, F, EF>::new(&mut challenger, shape);
 
-        let _r = poly.round(&mut sumcheck_data, &mut challenger, &mut sum, 0);
+        let _r = poly.round(&mut sumcheck_data, &mut transcript, &mut sum);
+        transcript.finish();
 
         // After round:
         // 1. sum should be updated to h(r)
@@ -1076,16 +1085,19 @@ mod tests {
         let mut sum = poly.dot_product();
         let mut sumcheck_data = SumcheckData::default();
         let mut challenger = make_challenger();
+        let shape = SumcheckShape::new(num_variables, 0, Basis::Evaluation);
+        let mut transcript = ProverTranscript::<_, F, EF>::new(&mut challenger, shape);
 
         // Perform all rounds except the last (need at least 1 evaluation left).
         for expected_vars in (1..=num_variables).rev() {
             assert_eq!(poly.num_variables(), expected_vars);
 
-            let _ = poly.round(&mut sumcheck_data, &mut challenger, &mut sum, 0);
+            let _ = poly.round(&mut sumcheck_data, &mut transcript, &mut sum);
 
             // Invariant: dot_product == sum after each round.
             assert_eq!(poly.dot_product(), sum);
         }
+        transcript.finish();
 
         // After all rounds, should have 0 variables (1 evaluation).
         assert_eq!(poly.num_variables(), 0);
@@ -1397,9 +1409,12 @@ mod tests {
             // Use seed to create challenger for reproducibility.
             let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(seed + 1000));
             let mut challenger: TestChallenger = DuplexChallenger::new(perm);
+            let shape = SumcheckShape::new(1, 0, Basis::Evaluation);
+            let mut transcript = ProverTranscript::<_, F, EF>::new(&mut challenger, shape);
 
             // Perform one round.
-            let _ = poly.round(&mut sumcheck_data, &mut challenger, &mut sum, 0);
+            let _ = poly.round(&mut sumcheck_data, &mut transcript, &mut sum);
+            transcript.finish();
 
             // Invariant: dot_product == sum after round.
             prop_assert_eq!(poly.dot_product(), sum);
@@ -1424,9 +1439,12 @@ mod tests {
         fn run(mut poly: ProductPolynomial<F, EF>, mut sum: EF) -> Vec<[EF; 2]> {
             let mut data = SumcheckData::<F, EF>::default();
             let mut challenger = make_challenger();
-            for _ in 0..poly.num_variables() {
-                let _ = poly.round(&mut data, &mut challenger, &mut sum, 0);
+            let shape = SumcheckShape::new(poly.num_variables(), 0, Basis::Evaluation);
+            let mut transcript = ProverTranscript::<_, F, EF>::new(&mut challenger, shape);
+            for _ in 0..shape.num_rounds {
+                let _ = poly.round(&mut data, &mut transcript, &mut sum);
             }
+            transcript.finish();
             data.polynomial_evaluations().to_vec()
         }
 

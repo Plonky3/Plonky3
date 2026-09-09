@@ -4,10 +4,11 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ops::Deref;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, Field, PrimeField64, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::point::Point;
@@ -23,8 +24,7 @@ use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{
     QueryOpenings, SharedProofOpening, SumcheckData, WhirProof, WhirRoundProof,
 };
-use crate::pcs::utils::get_challenge_stir_queries;
-use crate::transcript::WhirShape;
+use crate::transcript::{WhirProverTranscript, WhirShape};
 
 /// Per-round prover state with the Merkle authentication shapes
 /// baked in for the WHIR commitment scheme.
@@ -101,7 +101,7 @@ where
 
 impl<EF, F, Dft, MT, Challenger, L> WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + Ord,
+    F: TwoAdicField + TranscriptField + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
@@ -123,27 +123,18 @@ where
         }
     }
 
-    /// Absorb this instance's transcript seed into the challenger.
-    ///
-    /// The opening and verifying entry points call this themselves.
-    /// An integrator wiring up the scheme has nothing left to remember.
-    ///
-    /// # Arguments
-    ///
-    /// - `challenger`: the sponge the whole proof shares.
-    pub(crate) fn seed_transcript(&self, challenger: &mut Challenger)
-    where
-        F: PrimeField64,
-    {
-        WhirShape::new(&self.config)
-            .domain_separator::<F, EF>()
-            .seed(challenger);
-    }
-
     /// Execute the full WHIR proving protocol.
     ///
     /// Performs multi-round sumcheck-based polynomial folding,
     /// producing Merkle authentication paths and constraint evaluations.
+    ///
+    /// # Arguments
+    ///
+    /// - `initial_ood_answers`: answers at the commitment phase's out-of-domain points.
+    /// - `challenger`: the sponge the whole proof shares, borrowed for this run.
+    /// - `layout`: the committed stacked layout, holding the claims to batch.
+    /// - `prover_data`: Merkle prover data behind the initial commitment.
+    /// - `num_opening_claims`: opening claims the caller bound before this run.
     #[instrument(skip_all)]
     pub fn prove(
         &self,
@@ -151,6 +142,7 @@ where
         challenger: &mut Challenger,
         layout: L,
         prover_data: MT::ProverData<DenseMatrix<F>>,
+        num_opening_claims: usize,
     ) -> WhirProof<F, EF, MT>
     where
         Dft: TwoAdicSubgroupDft<F>,
@@ -166,12 +158,20 @@ where
             .unwrap_or_else(|error| panic!("{error}"));
         let variable_order = L::variable_order();
 
+        // One driver spans the whole run, so the description is walked exactly once.
+        let shape = WhirShape::new(&self.config, num_opening_claims);
+        let mut transcript = WhirProverTranscript::<Challenger, F, EF>::new(challenger, shape);
+
+        // The delegate draws the claim-batching challenge, then plays its own rounds.
         let mut initial_sumcheck = SumcheckData::default();
-        let (sumcheck_prover, folding_randomness) = layout.into_sumcheck(
-            &mut initial_sumcheck,
-            self.starting_folding_pow_bits,
-            challenger,
-        );
+        let (sumcheck_prover, folding_randomness) =
+            transcript.delegate_initial_fold(|challenger| {
+                layout.into_sumcheck(
+                    &mut initial_sumcheck,
+                    self.starting_folding_pow_bits,
+                    challenger,
+                )
+            });
 
         let mut round_state = RoundState {
             sumcheck_prover,
@@ -182,12 +182,20 @@ where
         // Build one round proof per intermediate folding round.
         let mut rounds = Vec::with_capacity(self.n_rounds());
         for round_index in 0..self.n_rounds() {
-            rounds.push(self.round(round_index, challenger, &mut round_state, variable_order));
+            rounds.push(self.round(
+                round_index,
+                &mut transcript,
+                &mut round_state,
+                variable_order,
+            ));
         }
 
         // Final round: send the polynomial in the clear, open the last queries.
         let (final_poly, final_pow_witness, final_openings, final_sumcheck) =
-            self.final_round(self.n_rounds(), challenger, &mut round_state);
+            self.final_round(self.n_rounds(), &mut transcript, &mut round_state);
+
+        // Require that every described step was played.
+        transcript.finish();
 
         WhirProof {
             initial_ood_answers,
@@ -205,7 +213,7 @@ where
     fn round(
         &self,
         round_index: usize,
-        challenger: &mut Challenger,
+        transcript: &mut WhirProverTranscript<'_, Challenger, F, EF>,
         round_state: &mut WhirRoundState<EF, F, MT>,
         variable_order: VariableOrder,
     ) -> WhirRoundProof<F, EF, MT>
@@ -230,36 +238,26 @@ where
         );
 
         // Observe the round commitment.
-        challenger.observe(root.clone());
+        transcript.commitment(root.clone());
         let commitment = Some(root);
 
         // OOD sampling.
         let mut ood_statement = EqStatement::initialize(num_variables);
         let mut ood_answers = Vec::with_capacity(round_params.ood_samples);
         (0..round_params.ood_samples).for_each(|_| {
-            let point =
-                Point::expand_from_univariate(challenger.sample_algebra_element(), num_variables);
+            let point = Point::expand_from_univariate(transcript.ood_point(), num_variables);
             let eval = round_state.sumcheck_prover.eval(&point);
-            challenger.observe_algebra_element(eval);
+            transcript.ood_answer(eval);
 
             ood_answers.push(eval);
             ood_statement.add_evaluated_constraint(point, eval);
         });
 
         // PoW grinding: prevents query manipulation by forcing work after committing.
-        let pow_witness = if round_params.pow_bits > 0 {
-            challenger.grind(round_params.pow_bits)
-        } else {
-            F::ZERO
-        };
+        let pow_witness = transcript.query_pow(round_index);
 
         // STIR query sampling.
-        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F>(
-            round_params.domain_size,
-            self.round_folding_factor(round_index),
-            round_params.num_queries,
-            challenger,
-        );
+        let stir_challenges_indexes = transcript.query_indices(round_index);
 
         let mut stir_statement = SelectStatement::initialize(num_variables);
         let query_randomness = match variable_order {
@@ -303,7 +301,7 @@ where
         // and the verifier samples the same challenge to rebuild the identical batch.
         let num_variables = ood_statement.num_variables();
         let constraint = Constraint::new_with_existing_claim(
-            challenger.sample_algebra_element(),
+            transcript.round_batching(),
             num_variables,
             vec![
                 Statements::Eq(ood_statement),
@@ -311,15 +309,17 @@ where
             ],
         );
 
-        // Run sumcheck and fold the polynomial.
+        // Run sumcheck and fold the polynomial, under this round's delegation bracket.
         let mut sumcheck_data: SumcheckData<F, EF> = SumcheckData::default();
-        let folding_randomness = round_state.sumcheck_prover.compute_sumcheck_polynomials(
-            &mut sumcheck_data,
-            challenger,
-            folding_factor_next,
-            round_params.folding_pow_bits,
-            Some(constraint),
-        );
+        let folding_randomness = transcript.delegate_round_fold(|challenger| {
+            round_state.sumcheck_prover.compute_sumcheck_polynomials(
+                &mut sumcheck_data,
+                challenger,
+                folding_factor_next,
+                round_params.folding_pow_bits,
+                Some(constraint),
+            )
+        });
 
         // Update round state for next iteration.
         round_state.folding_randomness = folding_randomness;
@@ -339,7 +339,7 @@ where
     fn final_round(
         &self,
         round_index: usize,
-        challenger: &mut Challenger,
+        transcript: &mut WhirProverTranscript<'_, Challenger, F, EF>,
         round_state: &mut WhirRoundState<EF, F, MT>,
     ) -> (
         Option<Poly<EF>>,
@@ -356,23 +356,14 @@ where
         // Send final polynomial coefficients in the clear.
         // Unpack once; the transcript and the returned proof share the same copy.
         let final_poly = round_state.sumcheck_prover.evals();
-        challenger.observe_algebra_slice(final_poly.as_slice());
+        transcript.final_poly(final_poly.as_slice());
         let final_poly = Some(final_poly);
 
         // PoW grinding for the final round.
-        let final_pow_witness = if self.final_pow_bits > 0 {
-            challenger.grind(self.final_pow_bits)
-        } else {
-            F::ZERO
-        };
+        let final_pow_witness = transcript.query_pow(round_index);
 
         // Final STIR queries.
-        let final_challenge_indexes = get_challenge_stir_queries::<Challenger, F>(
-            self.final_round_config().domain_size,
-            self.round_folding_factor(round_index),
-            self.final_queries,
-            challenger,
-        );
+        let final_challenge_indexes = transcript.query_indices(round_index);
 
         // Open all queried positions in one multiproof.
         let final_openings = match &round_state.round_data {
@@ -388,8 +379,10 @@ where
             )),
         };
 
-        // Optional final sumcheck.
-        let final_sumcheck = (self.final_sumcheck_rounds > 0).then(|| {
+        // Optional final sumcheck, under its own delegation bracket.
+        //
+        // A run with no closing rounds delegates nothing, so no bracket is played.
+        let final_sumcheck = transcript.delegate_final_fold(|challenger| {
             let mut sumcheck_data: SumcheckData<F, EF> = SumcheckData::default();
             round_state.sumcheck_prover.compute_sumcheck_polynomials(
                 &mut sumcheck_data,

@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
@@ -61,7 +62,7 @@ where
 impl<EF, F, Dft, MT, Challenger, L> MultilinearPcs<EF, Challenger>
     for WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + PrimeField64 + Ord,
+    F: TwoAdicField + PrimeField64 + TranscriptField + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     MT: Mmcs<F>,
@@ -125,14 +126,13 @@ where
             .collect::<Vec<_>>();
 
         // The claims are bound and the WHIR run starts here.
-        // Its seed therefore lands here, ahead of the run's first challenge.
-        self.seed_transcript(challenger);
-
+        // Its driver therefore seeds here, ahead of the run's first challenge.
         let whir = self.prove(
             initial_ood_answers,
             challenger,
             prover_data.layout,
             prover_data.merkle_data,
+            protocol.num_openings(),
         );
 
         PcsProof { whir, evals }
@@ -184,9 +184,12 @@ where
         }
 
         // The claims are bound and the WHIR run starts here.
-        // Its seed therefore lands here, ahead of the run's first challenge.
-        self.seed_transcript(challenger);
-
+        // Its driver therefore seeds here, ahead of the run's first challenge.
+        //
+        // The batching challenge is drawn inside the run's first bracket.
+        // The layout therefore hands over a builder, not a finished constraint.
+        //
+        // The claim budget is a configuration check, so it runs before the run starts.
         self.config.validate_initial_claims(
             protocol
                 .iter_openings()
@@ -194,18 +197,13 @@ where
                 .sum::<usize>()
                 .saturating_add(self.commitment_ood_samples),
         )?;
-        let alpha = challenger.sample_algebra_element();
-        let constraint = layout_verifier.constraint(alpha);
-        let mut claimed_eval = EF::ZERO;
-        constraint.combine_evals(&mut claimed_eval);
-
         let verifier = WhirVerifier::new(&self.config, &self.mmcs, L::variable_order());
         verifier.verify(
             &proof.whir,
             challenger,
             commitment,
-            constraint,
-            claimed_eval,
+            protocol.num_openings(),
+            |alpha| layout_verifier.constraint(alpha),
         )?;
 
         Ok(())
@@ -215,7 +213,7 @@ where
 impl<EF, F, Dft, MT, Challenger, L> PrescribedPointPcs<EF, Challenger>
     for WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + PrimeField64 + Ord,
+    F: TwoAdicField + PrimeField64 + TranscriptField + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     MT: Mmcs<F>,
@@ -264,14 +262,13 @@ where
             .collect::<Vec<_>>();
 
         // The claims are bound and the WHIR run starts here.
-        // Its seed therefore lands here, ahead of the run's first challenge.
-        self.seed_transcript(challenger);
-
+        // Its driver therefore seeds here, ahead of the run's first challenge.
         let whir = self.prove(
             initial_ood_answers,
             challenger,
             prover_data.layout,
             prover_data.merkle_data,
+            protocol.num_openings(),
         );
 
         PcsProof { whir, evals }
@@ -326,9 +323,9 @@ where
         }
 
         // The claims are bound and the WHIR run starts here.
-        // Its seed therefore lands here, ahead of the run's first challenge.
-        self.seed_transcript(challenger);
-
+        // Its driver therefore seeds here, ahead of the run's first challenge.
+        //
+        // The claim budget is a configuration check, so it runs before the run starts.
         self.config.validate_initial_claims(
             protocol
                 .iter_openings()
@@ -336,18 +333,13 @@ where
                 .sum::<usize>()
                 .saturating_add(self.commitment_ood_samples),
         )?;
-        let alpha = challenger.sample_algebra_element();
-        let constraint = layout_verifier.constraint(alpha);
-        let mut claimed_eval = EF::ZERO;
-        constraint.combine_evals(&mut claimed_eval);
-
         let verifier = WhirVerifier::new(&self.config, &self.mmcs, L::variable_order());
         verifier.verify(
             &proof.whir,
             challenger,
             commitment,
-            constraint,
-            claimed_eval,
+            protocol.num_openings(),
+            |alpha| layout_verifier.constraint(alpha),
         )?;
 
         // The opening verified.

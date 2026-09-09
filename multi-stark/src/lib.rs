@@ -29,6 +29,7 @@ pub mod prover;
 pub mod rounds;
 pub mod security;
 pub mod selectors;
+pub mod transcript;
 pub mod verifier;
 pub mod zerocheck;
 

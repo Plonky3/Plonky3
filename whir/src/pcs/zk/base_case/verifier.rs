@@ -41,7 +41,7 @@ where
     /// # Checks
     ///
     /// ```text
-    ///     0. pin every length of the statement and the proof
+    ///     0. pin every length, and the witness a zero difficulty leaves unread
     ///     1. replay the transcript    commitments, mu_g, gamma, reveals
     ///     2. target check             claim transfers onto the reveals
     ///     3. proof of work
@@ -138,6 +138,14 @@ where
                 mask.randomness.len(),
                 shape.randomness_len,
             )?;
+        }
+
+        // Still check 0: a zero-difficulty grind leaves the witness unread, so pin it.
+        //
+        //     pow_bits = 0 -> prover emits zero, verifier reads nothing -> pin it here
+        //     pow_bits > 0 -> prover grinds,     verifier resamples     -> check 3 pins it
+        if self.config.pow_bits == 0 && proof.pow_witness != F::ZERO {
+            return Err(BaseCaseZkError::NonCanonicalPowWitness);
         }
 
         // Check 1: replay the prover's moves into the Fiat-Shamir sponge.

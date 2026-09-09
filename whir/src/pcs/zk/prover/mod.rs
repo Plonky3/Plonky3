@@ -17,7 +17,9 @@ use masks::{ProverMasks, fold_limb_chunks};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, PackedValue, PrimeCharacteristicRing, TwoAdicField, dot_product};
+use p3_field::{
+    ExtensionField, PackedValue, PrimeCharacteristicRing, PrimeField64, TwoAdicField, dot_product,
+};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
@@ -122,6 +124,9 @@ where
     /// `f(point_i) = eval_i`.
     ///
     /// The claims must already be bound to the transcript by the caller.
+    ///
+    /// Each masked sumcheck batch seeds a typed sub-transcript of its own from this sponge.
+    /// The base-field bound is what lets that sub-transcript encode its seed.
     #[instrument(skip_all)]
     #[allow(clippy::too_many_lines)]
     pub fn prove<R: Rng>(
@@ -130,7 +135,10 @@ where
         claims: &[(Point<EF>, EF)],
         challenger: &mut Challenger,
         rng: &mut R,
-    ) -> ZkWhirProof<F, EF, MT> {
+    ) -> ZkWhirProof<F, EF, MT>
+    where
+        F: PrimeField64,
+    {
         let config = self.config;
         config
             .validate_initial_claims(claims.len())

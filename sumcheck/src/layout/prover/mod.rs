@@ -12,6 +12,7 @@ mod suffix;
 use alloc::vec::Vec;
 
 pub use claims::StackedClaims;
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, Mmcs};
 use p3_field::{ExtensionField, Field};
@@ -183,6 +184,7 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         challenger: &mut Ch,
     ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
+        F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
 }
 
