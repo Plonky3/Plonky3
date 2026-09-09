@@ -980,13 +980,16 @@ fn verify_rejects_tampered_main_commitment() {
         &mut challenger(),
     )
     .unwrap_err();
-    match err {
-        VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position, reason }) => {
-            assert_eq!(position, 0);
-            assert_eq!(reason, "Base field Merkle multiproof verification failed");
-        }
-        other => panic!("expected a Merkle opening rejection, got {other:?}"),
-    }
+    // The variant and the placeholder position are the assertion.
+    //
+    // The wording belongs to the commitment scheme, so it is not pinned here.
+    assert!(
+        matches!(
+            err,
+            VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position: 0, .. })
+        ),
+        "expected a Merkle opening rejection, got {err:?}"
+    );
 }
 
 const WHIR_FIXTURE: &str = "tests/fixtures/multi_stark_whir_v0_8_0.postcard";

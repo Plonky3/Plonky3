@@ -135,8 +135,14 @@ impl SumcheckShape {
         //     evaluation basis:  [h(0), h(inf)]
         //     projective basis:  [s(1), s(inf)]
         //
-        // Matching every variant here is what turns a future reading of some other width
-        // into a compile error, rather than a second protocol sharing this description.
+        // Matching every variant forces a new reading to be given a width here.
+        //
+        // That is the whole of what the match buys:
+        //
+        //     another width         -> this line must change, so the description changes
+        //     another step sequence -> a copied arm compiles and shares this description
+        //
+        // Readings that agree on width and sequence are separated only by the instance byte.
         let values_per_round = match self.basis {
             Basis::Evaluation => VALUES_PER_ROUND,
             Basis::Projective => VALUES_PER_ROUND,

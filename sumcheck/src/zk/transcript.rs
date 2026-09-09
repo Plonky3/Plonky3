@@ -2,7 +2,7 @@
 //!
 //! One description of everything a masked batch absorbs.
 //!
-//! Prover, verifier and simulator all drive that same description.
+//! Both provers, both verifiers and both witness-free simulators drive that same description.
 //!
 //! # Shape
 //!
@@ -38,9 +38,12 @@
 //!
 //! It seeds a transcript of its own from a borrowed sponge, and hands the sponge back.
 //!
-//! The surrounding protocol brackets this run inside its own description.
+//! ```text
+//!     caller's fingerprint  ->  seeded first, and may restate this batch's numbers
+//!     delegation markers    ->  none, so the run is no step of the caller's description
+//! ```
 //!
-//! That is what lets the two descriptions be written independently and still compose.
+//! The two descriptions compose through the order their seeds reach the sponge.
 //!
 //! # What the shape binds
 //!
@@ -65,9 +68,9 @@
 //!
 //! # Simulator
 //!
-//! The witness-free simulator of Lemma 6.4 plays this same description.
+//! The witness-free simulators of Lemma 6.4 play this same description, one per prelude.
 //!
-//! Hiding holds only while its transcript is indistinguishable from the prover's.
+//! Hiding holds only while a simulator's transcript is indistinguishable from its prover's.
 //!
 //! A divergence between the two is a loud pattern failure here, not a silent loss of hiding.
 
@@ -419,6 +422,15 @@ where
         }
     }
 
+    /// The numbers this batch was described with.
+    ///
+    /// Seeding consumed them, so the driver holds the only copy that matches the sponge.
+    /// A helper reads them here rather than taking a second copy it cannot check.
+    #[must_use]
+    pub const fn shape(&self) -> ZkSumcheckShape {
+        self.shape
+    }
+
     /// Draw the challenge that weights the claims a layout recorded.
     ///
     /// # Panics
@@ -563,6 +575,14 @@ where
         }
     }
 
+    /// The numbers this batch was described with.
+    ///
+    /// Mirrors the prover-side accessor, so the shared replay body reads either side the same way.
+    #[must_use]
+    pub const fn shape(&self) -> ZkSumcheckShape {
+        self.shape
+    }
+
     /// Draw the challenge that weights the claims this verifier recorded.
     ///
     /// # Panics
@@ -678,6 +698,18 @@ where
             .state
             .challenge_extension::<F, EF, FieldToFieldCodec<F>>(ROUND_CHALLENGE)
             .into_inner())
+    }
+
+    /// Release the completeness check without playing the steps that remain.
+    ///
+    /// A caller that rejects a proof part-way through the description calls this.
+    ///
+    /// The check is there to catch a description left half-played by mistake.
+    /// A rejection is not that, and its drop-time panic would bury the rejection.
+    ///
+    /// Idempotent, so a step that already released the check may be aborted again.
+    pub fn abort(&mut self) {
+        self.state.abort();
     }
 
     /// Close the transcript once every described step has been played.

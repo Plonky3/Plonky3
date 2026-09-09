@@ -122,6 +122,8 @@ struct PreprocessedOpening;
 ///
 /// The pair absorbs nothing.
 /// What it records is that a sub-protocol runs at this position, under its own seed.
+///
+/// The driver's opener and closer append this pair to their pattern record and touch nothing else, so a marker has no path to the sponge.
 fn delegation<T: ?Sized>(label: Label) -> [Interaction; 2] {
     [
         Interaction::marker::<T>(Hierarchy::Begin, Kind::Protocol, label),
@@ -682,6 +684,7 @@ where
 
 /// A statement-level transcript step the batch failed to satisfy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum MultiStarkTranscriptFailure {
     /// The described preprocessed-commitment step arrived with no commitment.
     #[error("{tables} preprocessed table(s) described but the verifying key carries no commitment")]
@@ -717,6 +720,7 @@ mod tests {
     extern crate std;
 
     use alloc::vec;
+    use core::ops::Range;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
@@ -763,6 +767,18 @@ mod tests {
         }
     }
 
+    /// Whether two shapes seed a sponge identically, compared on the preimage not a sample.
+    ///
+    /// The preimage is the pattern fingerprint followed by the instance label.
+    /// Comparing it rather than one sampled element keeps the comparison exact.
+    fn seeds_agree(left: &MultiStarkShape, right: &MultiStarkShape) -> bool {
+        let left = left.domain_separator::<F>();
+        let right = right.domain_separator::<F>();
+
+        left.pattern().pattern_hash() == right.pattern().pattern_hash()
+            && left.instance_label() == right.instance_label()
+    }
+
     /// First challenge a shape's seed produces on a fresh sponge.
     fn first_challenge(shape: &MultiStarkShape) -> F {
         let mut challenger = fresh_challenger();
@@ -772,32 +788,53 @@ mod tests {
 
     /// Every field of the shape, each moved one step away from `base_shape`.
     ///
-    /// One entry per configuration knob, so a knob added without a binding shows up here.
+    /// The batch and one of its instances are destructured below with no rest pattern.
+    /// Both are destructured, since a new knob can land on either struct.
+    /// Every binding then feeds the row that covers it, so an unread field is a build failure.
+    ///
+    /// The enforcement is weaker than it looks.
+    /// A new field trips the missing-field error at the baseline's struct literals first.
+    /// What is enforced is that the author must come through here, not that a row appears.
     fn one_step_from_base() -> Vec<(&'static str, MultiStarkShape)> {
+        let MultiStarkShape {
+            instances,
+            pow_bits,
+        } = base_shape();
+        let num_instances = instances.len();
+        let MultiStarkInstanceShape {
+            num_variables,
+            main_width,
+            preprocessed_width,
+            num_public_values,
+        } = instances
+            .into_iter()
+            .next()
+            .expect("the baseline batch is not empty");
+
         let mut mutations = Vec::new();
 
         let mut shape = base_shape();
-        shape.pow_bits += 1;
+        shape.pow_bits = pow_bits + 1;
         mutations.push(("pow_bits", shape));
 
         let mut shape = base_shape();
-        shape.instances.pop();
+        shape.instances.truncate(num_instances - 1);
         mutations.push(("instances.len", shape));
 
         let mut shape = base_shape();
-        shape.instances[0].num_variables += 1;
+        shape.instances[0].num_variables = num_variables + 1;
         mutations.push(("instance.num_variables", shape));
 
         let mut shape = base_shape();
-        shape.instances[0].main_width += 1;
+        shape.instances[0].main_width = main_width + 1;
         mutations.push(("instance.main_width", shape));
 
         let mut shape = base_shape();
-        shape.instances[0].preprocessed_width += 1;
+        shape.instances[0].preprocessed_width = preprocessed_width + 1;
         mutations.push(("instance.preprocessed_width", shape));
 
         let mut shape = base_shape();
-        shape.instances[0].num_public_values += 1;
+        shape.instances[0].num_public_values = num_public_values + 1;
         mutations.push(("instance.num_public_values", shape));
 
         mutations
@@ -886,8 +923,6 @@ mod tests {
         // Baseline: the two-instance shape, seeded and sampled once.
         let baseline = first_challenge(&base_shape());
 
-        // Each mutation moves exactly one field one step.
-        //
         // A field the fingerprint covers moves the seed through the step sequence.
         // A field it does not must move it through the instance label instead.
         for (field, shape) in one_step_from_base() {
@@ -1233,8 +1268,11 @@ mod tests {
         drop(transcript);
     }
 
-    /// A shape drawn from the same knobs the walk above perturbs.
-    fn arbitrary_shape() -> impl Strategy<Value = MultiStarkShape> {
+    /// A shape drawn from the same knobs the walk above perturbs, over a given batch size.
+    ///
+    /// The size is a parameter rather than fixed, so a property needing two instances draws two.
+    /// Narrowing the draw beats filtering it, since a rejected case is a case that did no work.
+    fn arbitrary_shape_sized(instances: Range<usize>) -> impl Strategy<Value = MultiStarkShape> {
         let instance = (1_usize..4, 1_usize..4, 0_usize..3, 0_usize..4).prop_map(
             |(num_variables, main_width, preprocessed_width, num_public_values)| {
                 MultiStarkInstanceShape {
@@ -1246,12 +1284,24 @@ mod tests {
             },
         );
 
-        (proptest::collection::vec(instance, 1..4), 0_usize..5).prop_map(|(instances, pow_bits)| {
-            MultiStarkShape {
+        (proptest::collection::vec(instance, instances), 0_usize..5).prop_map(
+            |(instances, pow_bits)| MultiStarkShape {
                 instances,
                 pow_bits,
-            }
-        })
+            },
+        )
+    }
+
+    /// Every legal batch size, the single-instance batch included.
+    fn arbitrary_shape() -> impl Strategy<Value = MultiStarkShape> {
+        arbitrary_shape_sized(1..4)
+    }
+
+    /// Only the batch sizes a permutation can reorder.
+    ///
+    /// A one-instance batch has no permutation but the identity, so it is left out.
+    fn arbitrary_reorderable_shape() -> impl Strategy<Value = MultiStarkShape> {
+        arbitrary_shape_sized(2..4)
     }
 
     proptest! {
@@ -1278,17 +1328,43 @@ mod tests {
             right in arbitrary_shape(),
         ) {
             // Soundness over random batches: distinct descriptions land on distinct seeds.
+            prop_assert_eq!(left == right, seeds_agree(&left, &right));
+        }
+
+        #[test]
+        fn permuting_the_instances_of_a_batch_moves_the_seed(
+            shape in arbitrary_reorderable_shape(),
+        ) {
+            // Soundness over random batches: the batch order is part of the statement.
             //
-            // The seed preimage is the fingerprint followed by the instance label.
-            // Comparing the preimage rather than one sampled element keeps this exact.
-            let left_seed = left.domain_separator::<F>();
-            let right_seed = right.domain_separator::<F>();
+            //     public-value counts  ->  step lengths, so the fingerprint holds their order
+            //     arities and widths   ->  instance label, written in the same order
+            //
+            // Every rotation and the reversal are tried, which is every order of a two-instance batch.
+            //
+            // Why the draw starts at two instances: a one-instance batch offers no rotation and a reversal equal to itself.
+            // Every case then reaches at least one real comparison below.
+            let rotations = (1..shape.instances.len()).map(|shift| {
+                let mut rotated = shape.clone();
+                rotated.instances.rotate_left(shift);
+                rotated
+            });
+            let mut reversed = shape.clone();
+            reversed.instances.reverse();
 
-            let seeds_agree = left_seed.pattern().pattern_hash()
-                == right_seed.pattern().pattern_hash()
-                && left_seed.instance_label() == right_seed.instance_label();
+            for permuted in rotations.chain(core::iter::once(reversed)) {
+                // A batch of interchangeable instances is left where it was by a permutation.
+                if permuted == shape {
+                    continue;
+                }
 
-            prop_assert_eq!(left == right, seeds_agree);
+                prop_assert!(
+                    !seeds_agree(&shape, &permuted),
+                    "{:?} and its permutation {:?} share a seed",
+                    shape.instances,
+                    permuted.instances,
+                );
+            }
         }
     }
 }

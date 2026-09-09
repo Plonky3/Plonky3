@@ -452,10 +452,10 @@ mod tests {
 
     #[test]
     fn every_field_of_the_plan_reaches_the_lookup_seed() {
-        // Walk the shape field by field, perturbing one number at a time.
+        // Each row below perturbs the shape and asserts the seed moved with it.
         //
-        // The step sequence is the same for every batch, so none of these can ride
-        // in the fingerprint. This walk is the check that the label carries them all.
+        // Every batch describes one step sequence, so none of these can ride in the fingerprint.
+        // This walk is the check that the label carries them all.
         lookup_field_moves_the_seed("num_variables", |s| s.num_variables += 1);
         lookup_field_moves_the_seed("max_width", |s| s.max_width += 1);
         lookup_field_moves_the_seed("num_buses", |s| s.num_buses += 1);

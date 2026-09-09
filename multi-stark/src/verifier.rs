@@ -97,7 +97,17 @@ where
 ///     8. recompute the batched constraint at r and match the reduced sum
 /// ```
 ///
-/// Both sides walk one pattern, so a step either side skips or reorders is rejected.
+/// Both sides walk one pattern, and each driver checks only its own party against it:
+///
+/// ```text
+///     this verifier misplaces a step  ->  its own driver refuses the call
+///     the prover skips an absorb      ->  the sponges diverge, so a later check fails
+///     the prover skips a bracket      ->  the delegated verification rejects on its own
+/// ```
+///
+/// Why the brackets absorb nothing: a driver's opener and closer only append a marker to its own pattern record, and neither reaches the sponge.
+///
+/// That holds by construction on both sides rather than by test, so a skipped delegation is caught by the callee and never here.
 ///
 /// Each AIR instance is evaluated at the suffix of the common point matching its
 /// trace height. Main openings are returned in instance order. Preprocessed
@@ -231,18 +241,19 @@ where
         }
     };
 
-    // Invariant: no early return may cross the span from here to the driver's `finish`.
+    // Invariant: a return between here and the driver's `finish` must release the driver first.
     //
-    //     main opening           -> Begin, the scheme's own run, End, on any outcome
-    //     preprocessed opening   -> the same, when the batch describes one
-    //     finish                 -> every described step replayed
-    //     rejection              -> propagated afterwards, never across a live driver
+    //     main opening            -> Begin, the scheme's own run, End, on any outcome
+    //     main rejection          -> abort, then return, with the preprocessed step unplayed
+    //     preprocessed opening    -> the same bracket, when the batch describes one
+    //     finish                  -> every described step replayed
+    //     preprocessed rejection  -> travels past `finish`, since no described step follows it
     //
-    // Neither opening feeds the other, so both rejections travel past the driver as results.
+    // A rejected batch with preprocessed columns therefore costs one opening, not two.
 
     // 6. Open the committed main trace tables at their suffixes of the bound point.
     // The returned values are bound to the main commitment.
-    let opened_main = transcript.main_opening(|challenger| {
+    let main_evals = match transcript.main_opening(|challenger| {
         config.pcs().verify_at(
             &proof.commitment,
             &proof.opening,
@@ -250,7 +261,14 @@ where
             &instances.main_points(&reduction.point),
             challenger,
         )
-    });
+    }) {
+        Ok(evals) => evals,
+        // Nothing below can change this verdict, so the preprocessed opening never runs.
+        Err(error) => {
+            transcript.abort();
+            return Err(VerificationError::Opening(error));
+        }
+    };
 
     // 7. Open the preprocessed tables at their suffixes of the same bound point.
     // The owned batches are kept local so the closing check can borrow them.
@@ -273,7 +291,6 @@ where
     // Every described step has now been replayed.
     transcript.finish();
 
-    let main_evals = opened_main.map_err(VerificationError::Opening)?;
     let preprocessed_evals = opened_preprocessed
         .transpose()
         .map_err(VerificationError::Opening)?;

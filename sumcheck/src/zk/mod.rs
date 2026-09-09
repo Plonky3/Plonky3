@@ -47,10 +47,29 @@
 //! # Module layout
 //!
 //! - Proof record and mask oracle handle.
-//! - Fiat-Shamir description of one masked batch, driven by all three parties.
+//! - Fiat-Shamir description of one masked batch, driven by every party.
 //! - Prover-side sumcheck with mask sampling and round-polynomial assembly.
 //! - Verifier-side replay with the dropped-coefficient reconstruction.
-//! - Witness-free simulator used to prove honest-verifier zero-knowledge.
+//! - Witness-free simulators, one per prelude, used to prove honest-verifier zero-knowledge.
+//!
+//! # Two preludes, and the scope of each
+//!
+//! A masked batch reaches its target one of two ways, and the description names which:
+//!
+//! ```text
+//!     recorded claims  ->  the target is derived from the claims a verifier recorded
+//!     inherited claim  ->  the target arrives as public input and is bound first
+//! ```
+//!
+//! The composed WHIR pipeline plays the inherited one, at every batch, on both sides.
+//!
+//! The recorded-claims prelude is this crate's own standalone surface instead.
+//! No in-tree pipeline plays it: its entry points serve callers who drive a masked batch directly, and it stays supported on that basis.
+//!
+//! Both preludes carry a witness-free simulator, so neither ships without its zero-knowledge argument.
+//!
+//! Scope, so a future reader can act on it: a third prelude owes a third simulator.
+//! Retiring the recorded-claims prelude means retiring the public entry points that expose it, which is an API decision rather than a change inside this module.
 //!
 //! # Layout coverage
 //!
@@ -68,6 +87,51 @@
 //! A prover treats a violation as its own configuration bug.
 //!
 //! A verifier reports it.
+//!
+//! # Divergences from the paper
+//!
+//! ## `ell_zk >= 3`, against the paper's `ell_zk >= 2`
+//!
+//! The round polynomial here is a product of two multilinears, so it is quadratic in `X`.
+//!
+//! ```text
+//!     h_size = max(ell_zk, 3)
+//!
+//!     ell_zk = 2  ->  mask covers slots 0, 1 only, and slot 2 carries eps * c_inf alone
+//!     ell_zk = 3  ->  mask covers slot 2 as well
+//! ```
+//!
+//! At `ell_zk = 2` the quadratic coefficient would ship unmasked, so the bound is deliberately one higher.
+//!
+//! ## The `aux * 2^{-j}` carry
+//!
+//! An inherited batch adds an auxiliary constant to its target, matching Definition 5.8.
+//!
+//! The carry is the normalisation that makes it behave like a constant function on the cube.
+//!
+//! ```text
+//!     AUX * 2^{-k} at every point of {0,1}^k
+//!
+//!     round-j partial sum  ->  2^{k-j} * AUX * 2^{-k}  =  AUX * 2^{-j}
+//!     cube total           ->  2^{k}   * AUX * 2^{-k}  =  AUX
+//! ```
+//!
+//! Round `j` therefore adds `eps * AUX * 2^{-j}` to its constant slot, and the residual carries `eps * AUX * 2^{-k}`.
+//!
+//! ## Compiled hiding is computational, not perfect
+//!
+//! Lemma 6.4 is proved for an IOR whose masks are oracles, with a simulator answering queried positions.
+//!
+//! ```text
+//!     paper     ->  mask oracle, only the queried positions are ever seen
+//!     this code ->  the whole mask codeword committed under one MMCS root
+//! ```
+//!
+//! A root determines the masks information-theoretically, so indistinguishability of the commits rests on the commitment hiding a high-entropy leaf set.
+//!
+//! Perfect indistinguishability still holds for everything the simulator itself emits.
+//!
+//! This is the standard IOR-to-argument compilation step, not a defect of the construction.
 //!
 //! # References
 //!
@@ -87,6 +151,6 @@ pub use data::{
     mask_residual_covectors, mask_residual_covectors_from_shape,
 };
 pub use prover::{ZkLayout, ZkPrefixProver, ZkProver, ZkSuffixProver, stack_codewords};
-pub use simulator::simulate_classic_unpacked;
+pub use simulator::{simulate_classic_unpacked, simulate_classic_unpacked_claim};
 pub use transcript::{ZkPrelude, ZkProverTranscript, ZkSumcheckShape, ZkVerifierTranscript};
 pub use verifier::ZkVerifier;

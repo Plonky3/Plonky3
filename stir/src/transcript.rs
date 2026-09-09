@@ -798,6 +798,7 @@ fn close(steps: &mut Vec<Interaction>, label: &'static str) {
 ///
 /// A count carries both the number the run was described with and the number supplied.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TranscriptFailure {
     /// A grinding witness did not meet the difficulty its step requires.
     #[error("{round}: {stage} proof-of-work witness clears fewer than {bits} bits")]

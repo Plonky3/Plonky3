@@ -128,10 +128,9 @@ where
     ///
     /// # Arguments
     ///
-    /// - `transcript`: driver positioned just after the prelude.
+    /// - `transcript`: driver positioned just after the prelude, and the source of the shape.
     /// - `zk_data`: the proof record, already counted against the shape.
     /// - `mask_commitment`: the batch's interleaved mask oracle.
-    /// - `shape`: the numbers the description was built from.
     /// - `claimed_sum`: the scalar the batch runs against.
     ///
     /// # Errors
@@ -141,7 +140,6 @@ where
         transcript: &mut ZkVerifierTranscript<'_, Ch, F, EF>,
         zk_data: &ZkSumcheckData<F, EF>,
         mask_commitment: &M::Commitment,
-        shape: ZkSumcheckShape,
         claimed_sum: EF,
     ) -> Result<ZkVerifierHandoff<EF>, SumcheckError>
     where
@@ -149,6 +147,9 @@ where
         M: Mmcs<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
+        // The shape the driver was seeded with, so the round count cannot drift from the description.
+        let shape = transcript.shape();
+
         let eps = transcript.masks(mask_commitment.clone(), zk_data.mu_tilde);
 
         let mut target: EF = eps * claimed_sum + zk_data.mu_tilde;
@@ -288,8 +289,10 @@ where
         let mu = self.inner.sum(alpha);
 
         // Phase 3: bind the mask oracle and mu_tilde, draw eps, and walk the round chain.
-        let handoff =
-            Self::replay_claim::<M, _>(&mut transcript, zk_data, mask_commitment, shape, mu)?;
+        //
+        // A rejection releases the driver here rather than relying on the step that raised it.
+        let handoff = Self::replay_claim::<M, _>(&mut transcript, zk_data, mask_commitment, mu)
+            .inspect_err(|_| transcript.abort())?;
 
         // Every described step was replayed, so the sponge goes back to the caller.
         transcript.finish();
@@ -357,13 +360,10 @@ where
         let mut transcript = ZkVerifierTranscript::<Ch, F, EF>::new(challenger, shape);
         transcript.bind_claim(claimed_sum);
 
-        let handoff = Self::replay_claim::<M, _>(
-            &mut transcript,
-            zk_data,
-            mask_commitment,
-            shape,
-            claimed_sum,
-        )?;
+        // A rejection releases the driver here rather than relying on the step that raised it.
+        let handoff =
+            Self::replay_claim::<M, _>(&mut transcript, zk_data, mask_commitment, claimed_sum)
+                .inspect_err(|_| transcript.abort())?;
 
         transcript.finish();
 

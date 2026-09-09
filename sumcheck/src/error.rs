@@ -37,7 +37,9 @@ pub enum SumcheckError {
         difficulty: usize,
     },
 
-    /// The proof carries fewer PoW witnesses than sumcheck rounds.
+    /// The witness count is not the one the difficulty fixes.
+    ///
+    /// Zero difficulty admits no witnesses, and a positive one admits exactly one per round.
     #[error("Sumcheck PoW witness count mismatch: expected {expected}, got {actual}")]
     PowWitnessCountMismatch {
         /// Witness count the configuration fixes.
