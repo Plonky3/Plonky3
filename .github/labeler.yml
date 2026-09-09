@@ -34,8 +34,3 @@
 'security':
   - changed-files:
       - any-glob-to-any-file: ['security/**', 'audits/**']
-
-# Add 'release' label to any changes to release tooling and changelog files.
-'release':
-  - changed-files:
-      - any-glob-to-any-file: ['release-plz.toml', 'cliff.toml', 'RELEASING.md', 'CHANGELOG.md', '**/CHANGELOG.md', 'create_release.sh']
