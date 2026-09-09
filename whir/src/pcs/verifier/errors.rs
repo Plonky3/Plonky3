@@ -5,6 +5,8 @@ use alloc::string::String;
 use p3_sumcheck::SumcheckError;
 use thiserror::Error;
 
+use crate::transcript::TranscriptFailure;
+
 /// Errors during WHIR proof verification.
 #[derive(Error, Debug)]
 pub enum VerifierError {
@@ -100,4 +102,16 @@ pub enum VerifierError {
     /// Final polynomial has the wrong number of evaluations.
     #[error("Final polynomial length mismatch: expected {expected}, got {actual}")]
     FinalPolyLengthMismatch { expected: usize, actual: usize },
+}
+
+impl From<TranscriptFailure> for VerifierError {
+    fn from(failure: TranscriptFailure) -> Self {
+        match failure {
+            TranscriptFailure::PowWitness { .. } => Self::InvalidPowWitness,
+            TranscriptFailure::FinalPolyLength { expected, got } => Self::FinalPolyLengthMismatch {
+                expected,
+                actual: got,
+            },
+        }
+    }
 }
