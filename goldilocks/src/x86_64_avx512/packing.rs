@@ -147,6 +147,19 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
         match exp {
             0 => *self,
             1 => self.halve(),
+            2..=32 => unsafe {
+                let x = self.to_vector();
+                let lo = _mm512_and_si512(x, _mm512_set1_epi64((1i64 << exp) - 1));
+                let hi = _mm512_srl_epi64(x, _mm_cvtsi64_si128(exp as i64));
+                let a = _mm512_add_epi64(
+                    hi,
+                    _mm512_sll_epi64(lo, _mm_cvtsi64_si128((32 - exp) as i64)),
+                );
+                let b = _mm512_sll_epi64(lo, _mm_cvtsi64_si128((64 - exp) as i64));
+                // 2^-exp = 2^(32-exp) - 2^(64-exp) mod P. Both a and b are
+                // below P, so a - b > -P and one borrow correction suffices.
+                Self::from_vector(sub_no_double_overflow_64_64(a, b))
+            },
             _ => *self * Self::broadcast(Goldilocks::power_of_two(192 - exp)),
         }
     }
