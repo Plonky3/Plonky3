@@ -24,7 +24,7 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{InjectiveMonomial, PrimeCharacteristicRing};
+use p3_field::{InjectiveMonomial, PrimeCharacteristicRing, PrimeField64};
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
     InternalLayerConstructor, MDSMat4, mds_light_permutation,
@@ -39,7 +39,7 @@ use crate::{Goldilocks, Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayer
 /// external rounds, where every state element is S-box'd and batching by stage matters.
 #[inline(always)]
 fn add_rc_and_sbox(val: &mut PackedGoldilocksWasmSimd128, rc: PackedGoldilocksWasmSimd128) {
-    *val = (*val + rc).injective_exp_n();
+    *val = val.add_canonical(rc).injective_exp_n();
 }
 
 /// Apply the Poseidon2 S-box (`x^7`) to every element of a packed wasm32 state.
@@ -78,7 +78,7 @@ fn external_round<const WIDTH: usize>(
     rc: &[PackedGoldilocksWasmSimd128; WIDTH],
 ) {
     for i in 0..WIDTH {
-        state[i] += rc[i];
+        state[i] = state[i].add_canonical(rc[i]);
     }
     sbox_array(state);
     mds_light_permutation(state, &MDSMat4);
@@ -109,22 +109,22 @@ fn internal_round_goldilocks_8(
     let sum = sum_tail + s0;
 
     // V[0] = -2
-    state[0] = sum - (s0 + s0);
+    state[0] = sum_tail - s0;
     // V[1] = 1
     state[1] = sum + s1;
     // V[2] = 2
-    state[2] = sum + (s2 + s2);
+    state[2] = sum + s2.double();
     // V[3] = 1/2
     state[3] = sum + s3.halve();
     // V[4] = 3
-    state[4] = sum + (s4 + s4 + s4);
+    state[4] = sum + (s4.double() + s4);
     // V[5] = -1/2
     state[5] = sum - s5.halve();
     // V[6] = -3
-    state[6] = sum - (s6 + s6 + s6);
+    state[6] = sum - (s6.double() + s6);
     // V[7] = -4
-    let two_s7 = s7 + s7;
-    state[7] = sum - (two_s7 + two_s7);
+    let two_s7 = s7.double();
+    state[7] = sum - two_s7.double();
 }
 
 /// Apply one internal round of the width-12 Goldilocks Poseidon2 internal linear layer to a
@@ -155,25 +155,25 @@ fn internal_round_goldilocks_12(
     let sum = sum_tail + s0;
 
     // V[0] = -2
-    state[0] = sum - (s0 + s0);
+    state[0] = sum_tail - s0;
     // V[1] = 1
     state[1] = sum + s1;
     // V[2] = 2
-    state[2] = sum + (s2 + s2);
+    state[2] = sum + s2.double();
     // V[3] = 1/2
     state[3] = sum + s3.halve();
     // V[4] = 3
-    state[4] = sum + (s4 + s4 + s4);
+    state[4] = sum + (s4.double() + s4);
     // V[5] = 4
-    let two_s5 = s5 + s5;
-    state[5] = sum + (two_s5 + two_s5);
+    let two_s5 = s5.double();
+    state[5] = sum + two_s5.double();
     // V[6] = -1/2
     state[6] = sum - s6.halve();
     // V[7] = -3
-    state[7] = sum - (s7 + s7 + s7);
+    state[7] = sum - (s7.double() + s7);
     // V[8] = -4
-    let two_s8 = s8 + s8;
-    state[8] = sum - (two_s8 + two_s8);
+    let two_s8 = s8.double();
+    state[8] = sum - two_s8.double();
     // V[9] = 1/2^2
     state[9] = sum + s9.div_2exp_u64(2);
     // V[10] = -1/2^2
@@ -214,25 +214,25 @@ fn internal_round_goldilocks_16(
     let sum = sum_tail + s0;
 
     // V[0] = -2
-    state[0] = sum - (s0 + s0);
+    state[0] = sum_tail - s0;
     // V[1] = 1
     state[1] = sum + s1;
     // V[2] = 2
-    state[2] = sum + (s2 + s2);
+    state[2] = sum + s2.double();
     // V[3] = 1/2
     state[3] = sum + s3.halve();
     // V[4] = 3
-    state[4] = sum + (s4 + s4 + s4);
+    state[4] = sum + (s4.double() + s4);
     // V[5] = 4
-    let two_s5 = s5 + s5;
-    state[5] = sum + (two_s5 + two_s5);
+    let two_s5 = s5.double();
+    state[5] = sum + two_s5.double();
     // V[6] = -1/2
     state[6] = sum - s6.halve();
     // V[7] = -3
-    state[7] = sum - (s7 + s7 + s7);
+    state[7] = sum - (s7.double() + s7);
     // V[8] = -4
-    let two_s8 = s8 + s8;
-    state[8] = sum - (two_s8 + two_s8);
+    let two_s8 = s8.double();
+    state[8] = sum - two_s8.double();
     // V[9] = 1/2^3
     state[9] = sum + s9.div_2exp_u64(3);
     // V[10] = 1/2^4
@@ -263,7 +263,7 @@ impl InternalLayerConstructor<Goldilocks> for Poseidon2InternalLayerGoldilocksWa
         let packed_internal_constants = internal_constants
             .iter()
             .copied()
-            .map(PackedGoldilocksWasmSimd128::from)
+            .map(|rc| PackedGoldilocksWasmSimd128::from(Goldilocks::new(rc.as_canonical_u64())))
             .collect();
         let inner = Poseidon2InternalLayerGoldilocks::new_from_constants(internal_constants);
         Self {
@@ -367,7 +367,9 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
     for Poseidon2ExternalLayerGoldilocksWasmSimd128<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
-        let pack_round = |rc: &[Goldilocks; WIDTH]| rc.map(PackedGoldilocksWasmSimd128::from);
+        let pack_round = |rc: &[Goldilocks; WIDTH]| {
+            rc.map(|rc| PackedGoldilocksWasmSimd128::from(Goldilocks::new(rc.as_canonical_u64())))
+        };
         let packed_initial_external_constants = external_constants
             .get_initial_constants()
             .iter()
@@ -444,7 +446,8 @@ mod tests {
         packed_perm: &impl Permutation<[PackedGoldilocksWasmSimd128; WIDTH]>,
         rng: &mut SmallRng,
     ) {
-        let lanes: [[Goldilocks; WIDTH]; PACKING_WIDTH] = core::array::from_fn(|_| rng.random());
+        let lanes: [[Goldilocks; WIDTH]; PACKING_WIDTH] =
+            core::array::from_fn(|_| core::array::from_fn(|_| Goldilocks::new(rng.random())));
 
         let mut packed_state: [PackedGoldilocksWasmSimd128; WIDTH] =
             core::array::from_fn(|i| PackedGoldilocksWasmSimd128::from_fn(|l| lanes[l][i]));
@@ -483,6 +486,36 @@ mod tests {
         let perm = default_goldilocks_poseidon2_16();
         assert_packed_matches_scalar(&perm, &perm, &mut rng);
     }
+
+    macro_rules! test_noncanonical_constants {
+        ($name:ident, $width:literal) => {
+            #[test]
+            fn $name() {
+                let mut rng = SmallRng::seed_from_u64(0xCA110 + $width);
+                let constants = [
+                    Goldilocks::new(crate::P),
+                    Goldilocks::new(crate::P + 1),
+                    Goldilocks::new(u64::MAX),
+                ];
+                let external = ExternalLayerConstants::new(
+                    constants.map(|rc| [rc; $width]).to_vec(),
+                    constants.map(|rc| [rc; $width]).to_vec(),
+                );
+                let perm: p3_poseidon2::Poseidon2<
+                    Goldilocks,
+                    Poseidon2ExternalLayerGoldilocksWasmSimd128<$width>,
+                    Poseidon2InternalLayerGoldilocksWasmSimd128,
+                    $width,
+                    GOLDILOCKS_S_BOX_DEGREE,
+                > = p3_poseidon2::Poseidon2::new(external, constants.to_vec());
+                assert_packed_matches_scalar(&perm, &perm, &mut rng);
+            }
+        };
+    }
+
+    test_noncanonical_constants!(noncanonical_round_constants_match_scalar_width_8, 8);
+    test_noncanonical_constants!(noncanonical_round_constants_match_scalar_width_12, 12);
+    test_noncanonical_constants!(noncanonical_round_constants_match_scalar_width_16, 16);
 
     /// Width 20 has no default constructor or known-answer test anywhere in this crate (its
     /// diagonal constants are undocumented), so there is no `default_goldilocks_poseidon2_20`
