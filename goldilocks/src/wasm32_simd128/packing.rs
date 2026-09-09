@@ -169,6 +169,16 @@ impl PrimeCharacteristicRing for PackedGoldilocksWasmSimd128 {
         match exp {
             0 => *self,
             1 => self.halve(),
+            2..=32 => {
+                let x = self.to_vector();
+                let lo = v128_and(x, u64x2_splat((1u64 << exp) - 1));
+                let hi = u64x2_shr(x, exp as u32);
+                let a = i64x2_add(hi, i64x2_shl(lo, (32 - exp) as u32));
+                let b = i64x2_shl(lo, (64 - exp) as u32);
+                // 2^-exp = 2^(32-exp) - 2^(64-exp) mod P. Both a and b are
+                // below P; in particular b <= 2^64 - 2^32, as required by the helper.
+                Self::from_vector(shift(sub_small_64s_64_s(shift(a), b)))
+            }
             _ => *self * Self::broadcast(Goldilocks::power_of_two(192 - exp)),
         }
     }
