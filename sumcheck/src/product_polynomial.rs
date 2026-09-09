@@ -30,7 +30,7 @@ use tracing::instrument;
 use crate::SumcheckData;
 use crate::constraints::Constraint;
 use crate::strategy::{
-    Basis, FoldBuffers, RoundMessage, VariableOrder, fold_and_round_coefficients_prefix,
+    Basis, RoundMessage, VariableOrder, fold_and_round_coefficients_prefix,
     fold_and_round_coefficients_suffix,
 };
 
@@ -143,10 +143,6 @@ pub struct ProductPolynomial<F: Field, EF: ExtensionField<F>> {
     inner: MaybePacked<F, EF>,
     /// Variable-binding direction consulted once per round.
     order: VariableOrder,
-    /// Destination buffers the fused suffix pass writes its bound tables into.
-    ///
-    /// Stays empty for a prefix-ordered pair, which binds in place.
-    buffers: FoldBuffers<EF>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
@@ -206,7 +202,6 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         let mut poly = Self {
             inner: MaybePacked::Packed { evals, weights },
             order,
-            buffers: FoldBuffers::new(),
         };
 
         // Corner case: if the input is already small, switch to scalar mode.
@@ -225,7 +220,6 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         Self {
             inner: MaybePacked::Unpacked { evals, weights },
             order,
-            buffers: FoldBuffers::new(),
         }
     }
 
@@ -526,7 +520,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
             },
             VariableOrder::Suffix => match &mut self.inner {
                 MaybePacked::Unpacked { evals, weights } => {
-                    fold_and_round_coefficients_suffix(evals, weights, &mut self.buffers, r)
+                    fold_and_round_coefficients_suffix(evals, weights, r)
                 }
                 // The lanes carry the last variables.
                 //

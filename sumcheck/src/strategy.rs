@@ -633,50 +633,6 @@ where
     }
 }
 
-/// Destination buffers for the out-of-place suffix fused pass.
-///
-/// One pair of buffers serves every round of a sumcheck.
-///
-/// A round writes its bound tables into the buffers, then the two trade places.
-///
-/// ```text
-///     round 1:  tables 2^n     buffers  0        -> destination 2^{n-1}
-///     round 2:  tables 2^{n-1} buffers 2^n       -> destination 2^{n-2}
-///     round 3:  tables 2^{n-2} buffers 2^{n-1}   -> destination 2^{n-3}
-/// ```
-///
-/// The two slots alternate and every round halves.
-///
-/// So the storage a round hands over is four times the length the next round writes.
-///
-/// The resize below releases an overshoot that large rather than holding it.
-/// The footprint therefore follows the tables down.
-///
-/// The first round's full-size allocation is released rather than pinned until drop.
-#[derive(Debug, Clone)]
-pub struct FoldBuffers<A> {
-    /// Destination for the bound evaluation table.
-    evals: Vec<A>,
-    /// Destination for the bound weight table.
-    weights: Vec<A>,
-}
-
-impl<A> Default for FoldBuffers<A> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<A> FoldBuffers<A> {
-    /// Creates empty buffers, to be sized by the first round that uses them.
-    pub const fn new() -> Self {
-        Self {
-            evals: Vec::new(),
-            weights: Vec::new(),
-        }
-    }
-}
-
 /// Binds a suffix variable and measures the bound pair's round message in one pass.
 ///
 /// # Overview
@@ -742,7 +698,6 @@ impl<A> FoldBuffers<A> {
 /// - `evals` - evaluation table, before this binding.
 /// - `weights` - weight table, before this binding.
 ///
-/// - `buffers` - destination buffers, resized here and traded with the tables.
 /// - `r` - challenge the round variable binds to.
 ///
 /// # Returns
@@ -755,6 +710,8 @@ impl<A> FoldBuffers<A> {
 /// O(2^n), at the same multiply count as binding and measuring separately.
 /// What it saves is one pass over the bound tables.
 ///
+/// One half-length allocation per table per round, released as the round ends.
+///
 /// # Panics
 ///
 /// - The two tables must have the same length.
@@ -763,99 +720,32 @@ impl<A> FoldBuffers<A> {
 pub fn fold_and_round_coefficients_suffix<A, Ch>(
     evals: &mut Poly<A>,
     weights: &mut Poly<A>,
-    buffers: &mut FoldBuffers<A>,
     r: Ch,
 ) -> RoundMessage<A>
 where
     A: Algebra<Ch> + Copy + Send + Sync,
     Ch: Copy + Send + Sync,
 {
-    let message = bind_and_measure_pairs(
-        evals.as_slice(),
-        weights.as_slice(),
-        &mut buffers.evals,
-        &mut buffers.weights,
-        r,
-    );
+    let (bound_evals, bound_weights, message) =
+        bind_and_measure_pairs(evals.as_slice(), weights.as_slice(), r);
 
-    // Trade places.
+    // Installing the bound halves drops the sources.
     //
-    //     bound buffers  ->  become the tables
-    //     old storage    ->  becomes the next round's destination
-    swap_storage(evals, &mut buffers.evals);
-    swap_storage(weights, &mut buffers.weights);
+    // So what stays resident between rounds is one half-length table per side.
+    *evals = Poly::new(bound_evals);
+    *weights = Poly::new(bound_weights);
 
     message
 }
 
-/// Hands a buffer to a table and takes the table's old storage as the buffer.
-///
-/// The old storage is twice the length of the buffer replacing it.
-///
-/// The next round writes only a quarter of that.
-///
-/// Whether so much room is worth keeping is decided when the destination is resized.
-#[inline]
-fn swap_storage<A>(table: &mut Poly<A>, buffer: &mut Vec<A>) {
-    let bound = core::mem::take(buffer);
-    *buffer = core::mem::replace(table, Poly::new(bound)).into_evals();
-}
-
-/// Gives a destination buffer the length one round writes.
-///
-/// A buffer handed back by an earlier round is longer than this round needs.
-/// Keeping the whole of it is what turns a reused buffer into retained memory:
-///
-/// ```text
-///     capacity <= 2 * len : length update, nothing allocated
-///     capacity >  2 * len : released, then a fresh `len`-entry allocation
-/// ```
-///
-/// Two is the smallest factor that still lets a buffer survive one halving.
-///
-/// That single halving is the reuse the exchange above is built around.
-///
-/// The first round hands over storage four times the next destination.
-///
-/// So that round is the one whose full-size allocation is released rather than held.
-///
-/// Footprint per side is then the live table plus at most twice its length:
-///
-/// ```text
-///     after round i:  table 2^{n-i}  +  buffer <= 2^{n-i+1}
-/// ```
-///
-/// A replacement is allocated already zeroed, so no userspace pass fills it.
-///
-/// Every entry is overwritten before anything reads it, so the values do not matter.
-#[inline]
-fn resize_destination<A>(buffer: &mut Vec<A>, len: usize)
-where
-    A: PrimeCharacteristicRing,
-{
-    // Reuse: the buffer already covers this round and does not overshoot it badly.
-    if buffer.len() >= len && buffer.capacity() <= 2 * len {
-        buffer.truncate(len);
-        return;
-    }
-
-    // Released before the replacement is asked for, so the two never coexist.
-    drop(core::mem::take(buffer));
-    *buffer = A::zero_vec(len);
-}
-
 /// The pass behind the binding above, over the raw tables.
 ///
-/// The destinations are resized to the bound length and fully overwritten.
-///
-/// So whatever they held before is never read.
+/// Returns the two bound half-length tables beside the round message.
 fn bind_and_measure_pairs<A, Ch>(
     evals: &[A],
     weights: &[A],
-    evals_out: &mut Vec<A>,
-    weights_out: &mut Vec<A>,
     r: Ch,
-) -> RoundMessage<A>
+) -> (Vec<A>, Vec<A>, RoundMessage<A>)
 where
     A: Algebra<Ch> + Copy + Send + Sync,
     Ch: Copy + Send + Sync,
@@ -877,9 +767,11 @@ where
     // That puts about as much work in one task as a measuring pass does at its own gate.
     let threaded = evals.len() > PAR_THRESHOLD;
 
-    // Size the destinations to the bound length.
-    resize_destination(evals_out, half);
-    resize_destination(weights_out, half);
+    // Destinations at the bound length, one per side.
+    //
+    // Allocating zeroed costs no userspace fill, and every entry is overwritten before a read.
+    let mut evals_out = A::zero_vec(half);
+    let mut weights_out = A::zero_vec(half);
 
     // Bound index positions one block writes before measuring them.
     //
@@ -929,7 +821,7 @@ where
             })
     };
 
-    RoundMessage { c_a, c_inf }
+    (evals_out, weights_out, RoundMessage { c_a, c_inf })
 }
 
 /// Computes the round message for a suffix-binding sumcheck round.
@@ -1293,12 +1185,18 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
 
     /// Returns the number of remaining (unbound) variables.
     ///
-    /// An outstanding binding has already consumed a variable.
+    /// A held binding has already consumed a variable.
     ///
     /// The tables are still the length they had before it.
     /// Subtracting it is exact, so the answer costs no pass over the data.
     pub fn num_variables(&self) -> usize {
-        self.poly.num_variables() - usize::from(self.outstanding.is_some())
+        // A binding is only ever held on a pair that still has a variable to bind.
+        debug_assert!(!(self.outstanding.is_some() && self.poly.num_variables() == 0));
+
+        // Saturating, so the count of a fully bound pair stays zero rather than wrapping.
+        self.poly
+            .num_variables()
+            .saturating_sub(usize::from(self.outstanding.is_some()))
     }
 
     /// Applies an outstanding binding, so the tables are current with the claim.
@@ -1375,10 +1273,12 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     ///
     /// The second would overwrite the first and lose a variable.
     pub(crate) fn hold(&mut self, r: EF) {
+        // Checked before the write, so a rejected challenge leaves the held one intact.
         assert!(
-            self.outstanding.replace(r).is_none(),
+            self.outstanding.is_none(),
             "a challenge is already outstanding"
         );
+        self.outstanding = Some(r);
     }
 
     /// Advances the running claim to the round polynomial at the challenge.
@@ -1826,13 +1726,8 @@ mod tests {
             // Fused arm: one pass binds both tables and measures the bound pair.
             let mut got_evals = Poly::new(evals);
             let mut got_weights = Poly::new(weights);
-            let mut buffers = super::FoldBuffers::new();
-            let got = super::fold_and_round_coefficients_suffix(
-                &mut got_evals,
-                &mut got_weights,
-                &mut buffers,
-                r,
-            );
+            let got =
+                super::fold_and_round_coefficients_suffix(&mut got_evals, &mut got_weights, r);
 
             // The bound tables must agree entry for entry.
             prop_assert_eq!(got_evals.as_slice(), want_evals.as_slice());
@@ -1845,25 +1740,16 @@ mod tests {
     }
 
     #[test]
-    fn reused_fold_buffers_bind_every_suffix_round_correctly() {
-        // Invariant: one pair of buffers serves a whole sumcheck.
+    fn every_suffix_round_binds_correctly_and_keeps_only_the_live_table() {
+        // Invariant: a round replaces both tables with half-length ones and frees the sources.
         //
-        // The tables and the buffers trade places each round.
-        // A buffer therefore arrives holding entries from two rounds ago.
-        //
-        // Every destination entry is written before it is read.
-        // Those stale entries can never reach a round message.
-        //
-        // The footprint is checked alongside the values.
-        // A buffer never holds more than twice the live table.
-        //
-        // So what the pair retains halves with the rounds, rather than staying at round one's.
+        // So every round of a ladder agrees with binding and measuring separately.
         //
         // Fixture state: 2^15 paired entries, bound down to 4.
         // The first rounds run the threaded branch, the last ones the serial branch.
         //
-        //     round 1: tables 2^15 -> 2^14      buffers sized
-        //     round 2: tables 2^14 -> 2^13      round-1 storage handed back
+        //     round 1: tables 2^15 -> 2^14
+        //     round 2: tables 2^14 -> 2^13
         //     ...
         //     round 13: tables 4 -> 2           the shortest fusable table
         const NUM_VARIABLES: usize = 15;
@@ -1876,10 +1762,9 @@ mod tests {
         let mut want_evals = evals.clone();
         let mut want_weights = weights.clone();
 
-        // Arm under test: one pass per round, into buffers reused throughout.
+        // Arm under test: one pass per round, each allocating the half it writes.
         let mut got_evals = evals;
         let mut got_weights = weights;
-        let mut buffers = super::FoldBuffers::new();
 
         // Stop with four entries left: below that the pass has no variable to measure.
         for round in 0..NUM_VARIABLES - 1 {
@@ -1890,12 +1775,8 @@ mod tests {
             let want =
                 super::sumcheck_coefficients_suffix(want_evals.as_slice(), want_weights.as_slice());
 
-            let got = super::fold_and_round_coefficients_suffix(
-                &mut got_evals,
-                &mut got_weights,
-                &mut buffers,
-                r,
-            );
+            let got =
+                super::fold_and_round_coefficients_suffix(&mut got_evals, &mut got_weights, r);
 
             assert_eq!(got_evals.as_slice(), want_evals.as_slice(), "round {round}");
             assert_eq!(
@@ -1906,20 +1787,37 @@ mod tests {
             assert_eq!(got.c_a, want.c_a, "round {round}");
             assert_eq!(got.c_inf, want.c_inf, "round {round}");
 
-            // The buffer now holds the storage the table just handed over.
-            // Keeping more than twice the live table would pin memory no round reaches.
-            let live = got_evals.as_slice().len();
-            assert!(
-                buffers.evals.capacity() <= 2 * live,
-                "round {round}: evals buffer holds {} for a table of {live}",
-                buffers.evals.capacity()
-            );
-            assert!(
-                buffers.weights.capacity() <= 2 * live,
-                "round {round}: weights buffer holds {} for a table of {live}",
-                buffers.weights.capacity()
-            );
+            // Binding halves both tables, so the next round starts from half this length.
+            //
+            //     round 0 leaves 2^14, round 1 leaves 2^13, and so on down to 2
+            let live = 1 << (NUM_VARIABLES - 1 - round);
+            assert_eq!(got_evals.num_evals(), live, "round {round}");
+            assert_eq!(got_weights.num_evals(), live, "round {round}");
         }
+    }
+
+    #[test]
+    fn the_fused_suffix_pass_allocates_exactly_the_bound_half() {
+        // Invariant: a round's destination is sized to the bound length and nothing more.
+        //
+        // The source is freed when the bound halves are installed, so the pair never holds
+        // a spare destination between rounds.
+        //
+        // Slack in either destination would be memory no later round reaches.
+        //
+        // Fixture state: 2^10 paired entries, so the bound half is 2^9.
+        let mut rng = SmallRng::seed_from_u64(0xA11C);
+        let evals: Vec<EF> = (0..1 << 10).map(|_| rng.random()).collect();
+        let weights: Vec<EF> = (0..1 << 10).map(|_| rng.random()).collect();
+        let r: EF = rng.random();
+
+        let (bound_evals, bound_weights, _) = super::bind_and_measure_pairs(&evals, &weights, r);
+
+        //     source 2^10  ->  destination 2^9, allocated at exactly that size
+        assert_eq!(bound_evals.len(), 1 << 9);
+        assert_eq!(bound_evals.capacity(), 1 << 9);
+        assert_eq!(bound_weights.len(), 1 << 9);
+        assert_eq!(bound_weights.capacity(), 1 << 9);
     }
 
     #[test]
@@ -1931,13 +1829,7 @@ mod tests {
         // Producing no tiles and reporting a zero message would look like a real round.
         let mut evals = Poly::new(vec![EF::ONE; 2]);
         let mut weights = Poly::new(vec![EF::ONE; 2]);
-        let mut buffers = super::FoldBuffers::new();
-        let _ = super::fold_and_round_coefficients_suffix(
-            &mut evals,
-            &mut weights,
-            &mut buffers,
-            EF::ONE,
-        );
+        let _ = super::fold_and_round_coefficients_suffix(&mut evals, &mut weights, EF::ONE);
     }
 
     #[test]
@@ -2206,15 +2098,22 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a challenge is already outstanding")]
     fn holding_a_second_challenge_without_settling_is_rejected() {
+        extern crate std;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
         use crate::product_polynomial::ProductPolynomial;
 
-        // Invariant: at most one binding is ever outstanding.
+        // Invariant: at most one binding is ever held.
         //
         // Two unapplied bindings cannot be fused into a single pass.
         //
         // The second would overwrite the first and lose a variable with nothing noticing.
+        //
+        // Fixture state: four paired entries, one challenge already held.
+        //
+        //     held    : ONE
+        //     offered : TWO   -> rejected, and ONE must survive the rejection
         let evals = Poly::new(vec![EF::ONE; 4]);
         let weights = Poly::new(vec![EF::TWO; 4]);
         let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
@@ -2222,7 +2121,15 @@ mod tests {
         let mut prover = super::SumcheckProver::new(poly, sum);
 
         prover.hold(EF::ONE);
-        prover.hold(EF::TWO);
+
+        // The rejection is a panic, caught so the state left behind can be inspected.
+        let rejected = catch_unwind(AssertUnwindSafe(|| prover.hold(EF::TWO)));
+        assert!(rejected.is_err());
+
+        // The rejected challenge must not have displaced the held one.
+        //
+        // Writing before checking would leave the second here and lose the first.
+        assert_eq!(prover.outstanding, Some(EF::ONE));
     }
 
     #[test]

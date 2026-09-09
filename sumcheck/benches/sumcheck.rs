@@ -74,6 +74,14 @@ const ROUND_SIZES: &[usize] = &[16, 18, 20];
 /// Each case folds all the way down to a constant, so the grid stays modest.
 const PROVER_SIZES: &[usize] = &[12, 16, 20];
 
+/// Variable counts for the one-round-at-a-time drive.
+///
+/// The binary PCS asks for a single round between each codeword fold and commitment.
+///
+/// The grid spans the whole ladder it drives, from a table below the parallel
+/// threshold up to a production-scale one.
+const SINGLE_ROUND_SIZES: &[usize] = &[8, 12, 16, 20];
+
 /// Variable counts for the stacked-layout preprocessing handoff.
 const LAYOUT_SIZES: &[usize] = &[16, 18, 20];
 
@@ -613,6 +621,100 @@ where
     group.finish();
 }
 
+/// Benches a sumcheck driven one round per call, fused against binding each round.
+///
+/// This is the shape the binary PCS uses: it interleaves a codeword fold and a Merkle
+/// commitment between rounds, so it can never ask for several rounds at once.
+///
+/// Two arms over the identical ladder:
+///
+/// ```text
+///     fused           : the challenge is held and the next round's pass absorbs it
+///     bind_each_round : the challenge is applied on the spot, so the next round
+///                       measures in a pass of its own
+/// ```
+///
+/// The difference between them is one pass over both tables per round.
+fn bench_single_round_drive<B: BenchField>(c: &mut Criterion)
+where
+    StandardUniform: Distribution<B::F> + Distribution<B::EF>,
+{
+    let mut group = c.benchmark_group(format!("sumcheck/{}/single_round_drive", B::NAME));
+
+    // A full ladder per iteration, so keep the sample count low.
+    group.sample_size(10);
+
+    for &k in SINGLE_ROUND_SIZES {
+        group.throughput(Throughput::Elements(1 << k));
+        let label = format!("k{k}");
+        let mut rng = rng_for(0x0007, k);
+
+        for (order, name) in ORDERS {
+            // Prover seeded with a sum that matches its polynomial pair.
+            let poly = rand_product_poly::<B>(order, &mut rng, k);
+            let prover = SumcheckProver::new(poly.clone(), poly.dot_product());
+            let challenger = B::challenger();
+
+            // Fused arm: every round after the first absorbs the previous challenge.
+            group.bench_with_input(
+                BenchmarkId::new(format!("fused_{name}"), &label),
+                &k,
+                |b, &k| {
+                    b.iter_batched(
+                        || (prover.clone(), challenger.clone()),
+                        |(mut prover, mut challenger)| {
+                            let mut data = SumcheckData::<B::F, B::EF>::default();
+                            // One round per call, exactly as the binary PCS asks for them.
+                            for _ in 0..k {
+                                let r = prover.compute_sumcheck_polynomials(
+                                    &mut data,
+                                    &mut challenger,
+                                    1,
+                                    0,
+                                    None,
+                                );
+                                black_box(r);
+                            }
+                            black_box(data);
+                        },
+                        BatchSize::LargeInput,
+                    );
+                },
+            );
+
+            // Reference arm: settling after each round leaves the next one a plain measure.
+            group.bench_with_input(
+                BenchmarkId::new(format!("bind_each_round_{name}"), &label),
+                &k,
+                |b, &k| {
+                    b.iter_batched(
+                        || (prover.clone(), challenger.clone()),
+                        |(mut prover, mut challenger)| {
+                            let mut data = SumcheckData::<B::F, B::EF>::default();
+                            for _ in 0..k {
+                                let r = prover.compute_sumcheck_polynomials(
+                                    &mut data,
+                                    &mut challenger,
+                                    1,
+                                    0,
+                                    None,
+                                );
+                                // Applying the challenge now is the second pass per round.
+                                prover.settle();
+                                black_box(r);
+                            }
+                            black_box(data);
+                        },
+                        BatchSize::LargeInput,
+                    );
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
 /// Benches the stacked-layout preprocessing handoff for both prover modes.
 ///
 /// - Prefix-first binding runs the first rounds in SIMD-packed arithmetic.
@@ -827,6 +929,11 @@ fn layout(c: &mut Criterion) {
     bench_layout::<KoalaBear4>(c);
 }
 
+fn single_round_drive(c: &mut Criterion) {
+    bench_single_round_drive::<BabyBear4>(c);
+    bench_single_round_drive::<KoalaBear4>(c);
+}
+
 criterion_group!(
     benches,
     round_coefficients,
@@ -834,6 +941,7 @@ criterion_group!(
     dot_product,
     product_round,
     prover,
+    single_round_drive,
     combine,
     layout,
     bench_zk_residual,

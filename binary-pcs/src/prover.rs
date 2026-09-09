@@ -246,15 +246,13 @@ where
     // The last round's challenge is discarded rather than applied.
     //
     // The codeword fold, not the sumcheck tables, carries the folded message forward.
-    // The sumcheck goes out of scope here with nothing else reading it.
-    // A final binding pass would only compute a table nobody looks at.
+    // The returned tuple holds no sumcheck state, so nothing downstream can read the tables.
+    // A final binding pass would only produce a table nobody looks at.
     //
-    // A debug build applies it anyway, purely to check the claim against it.
-    // `settle` is where that check lives, so this is the last binding's only validation.
+    // A debug build applies it anyway, purely to check the claim against the pair it binds.
+    // That is the last held binding's only validation, in any profile.
     #[cfg(debug_assertions)]
     sumcheck.settle();
-
-    drop(sumcheck);
 
     (
         merkle_data,
