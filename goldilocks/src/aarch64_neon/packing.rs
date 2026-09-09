@@ -195,6 +195,10 @@ impl PrimeCharacteristicRing for PackedGoldilocksNeon {
 
     #[inline]
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        #[cfg(target_feature = "sve2")]
+        if N >= 32 {
+            return sve2_packed_dot_delayed_with_chunk_limit(lhs, rhs, u32::MAX as usize);
+        }
         Self::from_fn(|lane| {
             let lhs_lane: [Goldilocks; N] = core::array::from_fn(|i| lhs[i].as_slice()[lane]);
             let rhs_lane: [Goldilocks; N] = core::array::from_fn(|i| rhs[i].as_slice()[lane]);
@@ -389,17 +393,48 @@ fn sve2_mixed_dot_delayed_with_chunk_limit(
     if a.len() <= chunk_limit {
         // SAFETY: Both slices have the same nonzero length, bounded by
         // chunk_limit <= u32::MAX.
-        return unsafe { sve2_mixed_dot_chunk(a, f) };
+        return unsafe { sve2_dot_chunk::<false>(a, f.as_ptr().cast()) };
     }
 
     let mut chunks = a.chunks(chunk_limit).zip(f.chunks(chunk_limit));
     let (first_a, first_f) = chunks.next().expect("a is nonempty");
     // SAFETY: `chunks` produces equally sized, nonempty chunks no longer than
     // `chunk_limit`, which is bounded by u32::MAX above.
-    let mut sum = unsafe { sve2_mixed_dot_chunk(first_a, first_f) };
+    let mut sum = unsafe { sve2_dot_chunk::<false>(first_a, first_f.as_ptr().cast()) };
     for (a_chunk, f_chunk) in chunks {
         // SAFETY: Same invariants as the first chunk.
-        sum += unsafe { sve2_mixed_dot_chunk(a_chunk, f_chunk) };
+        sum += unsafe { sve2_dot_chunk::<false>(a_chunk, f_chunk.as_ptr().cast()) };
+    }
+    sum
+}
+
+#[cfg(target_feature = "sve2")]
+#[inline]
+fn sve2_packed_dot_delayed_with_chunk_limit(
+    lhs: &[PackedGoldilocksNeon],
+    rhs: &[PackedGoldilocksNeon],
+    chunk_limit: usize,
+) -> PackedGoldilocksNeon {
+    assert_eq!(lhs.len(), rhs.len());
+    if lhs.is_empty() {
+        return PackedGoldilocksNeon::ZERO;
+    }
+    assert!((1..=u32::MAX as usize).contains(&chunk_limit));
+
+    if lhs.len() <= chunk_limit {
+        // SAFETY: Both slices have the same nonzero length, bounded by
+        // u32::MAX, and rhs contains that many readable two-lane packed values.
+        return unsafe { sve2_dot_chunk::<true>(lhs, rhs.as_ptr().cast()) };
+    }
+
+    let mut chunks = lhs.chunks(chunk_limit).zip(rhs.chunks(chunk_limit));
+    let (first_lhs, first_rhs) = chunks.next().expect("lhs is nonempty");
+    // SAFETY: Equal-length typed slices produce equally sized, nonempty chunks
+    // of at most u32::MAX readable packed values.
+    let mut sum = unsafe { sve2_dot_chunk::<true>(first_lhs, first_rhs.as_ptr().cast()) };
+    for (lhs_chunk, rhs_chunk) in chunks {
+        // SAFETY: Same invariants as the first chunk.
+        sum += unsafe { sve2_dot_chunk::<true>(lhs_chunk, rhs_chunk.as_ptr().cast()) };
     }
     sum
 }
@@ -408,52 +443,65 @@ fn sve2_mixed_dot_delayed_with_chunk_limit(
 ///
 /// # Safety
 ///
-/// Both slices must have the same nonzero length, at most `u32::MAX`.
+/// `a` must have nonzero length, at most `u32::MAX`. `rhs` must point to at
+/// least `a.len()` readable two-u64 packed values when `PACKED_RHS` is true,
+/// or `a.len()` readable u64 scalars otherwise. Loads and byte strides are
+/// fixed to these representations, independently of the hardware SVE length.
 #[cfg(target_feature = "sve2")]
 #[inline]
-unsafe fn sve2_mixed_dot_chunk(
+unsafe fn sve2_dot_chunk<const PACKED_RHS: bool>(
     a: &[PackedGoldilocksNeon],
-    f: &[Goldilocks],
+    rhs: *const u64,
 ) -> PackedGoldilocksNeon {
     let lo: uint64x2_t;
     let hi_raw: uint64x2_t;
     let hi_wraps: uint64x2_t;
     let lo_wraps: uint64x2_t;
+    macro_rules! accumulate {
+        ($rhs_load:literal, $rhs_stride:literal) => {
+            core::arch::asm!(
+                "ptrue p7.d, vl2",
+                "dup   z0.d, #0",
+                "dup   z1.d, #0",
+                "dup   z2.d, #0",
+                "dup   z3.d, #0",
+                "dup   z31.d, #1",
+                "2:",
+                "ld1d  {{ z4.d }}, p7/z, [{ap}]",
+                $rhs_load,
+                "mul   z6.d, z4.d, z5.d",
+                "umulh z7.d, z4.d, z5.d",
+                "add   z0.d, z0.d, z6.d",
+                "cmplo p1.d, p7/z, z0.d, z6.d",
+                "add   z3.d, p1/m, z3.d, z31.d",
+                "add   z1.d, z1.d, z7.d",
+                "cmplo p2.d, p7/z, z1.d, z7.d",
+                "add   z2.d, p2/m, z2.d, z31.d",
+                "add   {ap}, {ap}, #16",
+                "add   {fp}, {fp}, #{rhs_stride}",
+                "subs  {cnt}, {cnt}, #1",
+                "b.ne  2b",
+                ap = inout(reg) a.as_ptr() as *const u64 => _,
+                fp = inout(reg) rhs => _,
+                cnt = inout(reg) a.len() => _,
+                rhs_stride = const $rhs_stride,
+                out("v0") lo,
+                out("v1") hi_raw,
+                out("v2") hi_wraps,
+                out("v3") lo_wraps,
+                out("v4") _,
+                out("v5") _, out("v6") _, out("v7") _, out("v31") _,
+                out("p1") _, out("p2") _, out("p7") _,
+                options(readonly, nostack),
+            );
+        };
+    }
     unsafe {
-        core::arch::asm!(
-            "ptrue p7.d, vl2",
-            "dup   z0.d, #0",
-            "dup   z1.d, #0",
-            "dup   z2.d, #0",
-            "dup   z3.d, #0",
-            "dup   z31.d, #1",
-            "2:",
-            "ld1d  {{ z4.d }}, p7/z, [{ap}]",
-            "ld1rd {{ z5.d }}, p7/z, [{fp}]",
-            "mul   z6.d, z4.d, z5.d",
-            "umulh z7.d, z4.d, z5.d",
-            "add   z0.d, z0.d, z6.d",
-            "cmplo p1.d, p7/z, z0.d, z6.d",
-            "add   z3.d, p1/m, z3.d, z31.d",
-            "add   z1.d, z1.d, z7.d",
-            "cmplo p2.d, p7/z, z1.d, z7.d",
-            "add   z2.d, p2/m, z2.d, z31.d",
-            "add   {ap}, {ap}, #16",
-            "add   {fp}, {fp}, #8",
-            "subs  {cnt}, {cnt}, #1",
-            "b.ne  2b",
-            ap = inout(reg) a.as_ptr() as *const u64 => _,
-            fp = inout(reg) f.as_ptr() as *const u64 => _,
-            cnt = inout(reg) a.len() => _,
-            out("v0") lo,
-            out("v1") hi_raw,
-            out("v2") hi_wraps,
-            out("v3") lo_wraps,
-            out("v4") _,
-            out("v5") _, out("v6") _, out("v7") _, out("v31") _,
-            out("p1") _, out("p2") _, out("p7") _,
-            options(readonly, nostack),
-        );
+        if PACKED_RHS {
+            accumulate!("ld1d  {{ z5.d }}, p7/z, [{fp}]", 16);
+        } else {
+            accumulate!("ld1rd {{ z5.d }}, p7/z, [{fp}]", 8);
+        }
     }
     PackedGoldilocksNeon::from_vector(reduce_sve2_dot_accumulators(lo, hi_raw, hi_wraps, lo_wraps))
 }
@@ -461,7 +509,7 @@ unsafe fn sve2_mixed_dot_chunk(
 /// Reduce the four exact accumulator limbs for one bounded SVE2 dot chunk.
 ///
 /// The caller must ensure the resulting top carry is at most
-/// `u32::MAX - 1`; `sve2_mixed_dot_chunk` establishes this via its length cap.
+/// `u32::MAX - 1`; `sve2_dot_chunk` establishes this via its length cap.
 #[cfg(any(target_feature = "sve2", test))]
 #[inline]
 fn reduce_sve2_dot_accumulators(
@@ -1065,6 +1113,54 @@ mod mixed_dot_tests {
         case::<4>(4);
         case::<7>(7);
         case::<100>(100);
+    }
+
+    #[cfg(target_feature = "sve2")]
+    #[test]
+    fn sve2_packed_dot_forced_small_chunks_match_reference() {
+        let mut rng = SmallRng::seed_from_u64(0x0005_E29B);
+        for len in [0, 1, 2, 3, 4, 5, 6, 7, 16, 64, 129] {
+            for maximum in [false, true] {
+                let mut inputs = || {
+                    (0..len)
+                        .map(|_| {
+                            PackedGoldilocksNeon::from_fn(|_| {
+                                Goldilocks::new(if maximum { u64::MAX } else { rng.random() })
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let lhs = inputs();
+                let rhs = inputs();
+                let got = sve2_packed_dot_delayed_with_chunk_limit(&lhs, &rhs, 3);
+                for lane in 0..WIDTH {
+                    let coeffs = rhs.iter().map(|v| v.as_slice()[lane]).collect::<Vec<_>>();
+                    assert_eq!(
+                        got.as_slice()[lane].as_canonical_u64(),
+                        dot_ref(&lhs, &coeffs, lane),
+                        "lane {lane}, len={len}, maximum={maximum}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(target_feature = "sve2")]
+    #[test]
+    fn sve2_packed_dot_slice_driver_rejects_mismatched_lengths() {
+        let values = [PackedGoldilocksNeon::ONE; 4];
+        for (lhs_len, rhs_len) in [(0, 1), (1, 0), (2, 3), (3, 2), (3, 4), (4, 3)] {
+            assert!(
+                std::panic::catch_unwind(|| {
+                    sve2_packed_dot_delayed_with_chunk_limit(
+                        &values[..lhs_len],
+                        &values[..rhs_len],
+                        3,
+                    )
+                })
+                .is_err()
+            );
+        }
     }
 
     #[cfg(target_feature = "sve2")]
