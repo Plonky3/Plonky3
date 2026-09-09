@@ -45,6 +45,26 @@
 //! that regime states (mutual correlated agreement up to capacity, the standard WHIR/ACFY
 //! conjecture, charged the same error the crate already prices).
 //!
+//! **PCS accounting**: alpha batching and all subsequent `Combine` challenges share
+//! one grind and one joint error budget. Each class counts every column at every
+//! requested point across the pooled commitments. Round zero's `eta` satisfies that
+//! budget at STIR's own proximity radius; queries are then derived from that `eta`.
+//! Later folding/query grinds and unprotected OOD/Ans checks retain separate budgets.
+//! PCS schedules use floor(log2(|E|)), with a further bit reserved under Johnson to
+//! upper-bound the positive terms omitted by the shared proximity-gap approximation.
+//! Grouping checks Combine feasibility before commitment, when opening-point counts
+//! are unknown. The actual pooled width/point counts can still make an opening
+//! infeasible: `Pcs::open` then panics, while `Pcs::verify` returns a configuration
+//! error. Opening never repartitions matrices already committed to a shared domain.
+//!
+//! **Extraction relation**: quotients are tested at degree `< d`, where `d` is their
+//! native matrix height. Correlated agreement therefore reconstructs original
+//! polynomials of degree **at most `d`**, not strictly below `d`. Opening points must
+//! lie outside their matrix's shared LDE coset; this is checked independently of
+//! the query positions. Agreement on more than `d` positions makes all reconstructed
+//! polynomials for one column identical across its opening points. Callers must
+//! account for this degree allowance in their own relation and soundness budget.
+//!
 //! **Cost profile**: merging classes onto one domain makes opening and verification cheaper —
 //! one STIR instance instead of one per height class — and committing more expensive, and the
 //! spread cap is what bounds the second. A matrix at native height `2^h` in a group whose
@@ -91,6 +111,7 @@ use tracing::instrument;
 
 use crate::config::{StirConfig, StirConfigError, StirOptions, StirParameters};
 use crate::error::{ProofShapeError, StirError};
+use crate::pcs_budget::PcsBatch;
 use crate::proof::StirProof;
 use crate::prover::prove_stir_multi_from_codewords;
 use crate::utils::{combine_on_coset, eval_degree_correction};
@@ -274,13 +295,9 @@ fn lde_views<'a, Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>>(
         .collect()
 }
 
-/// Key identifying a derived STIR config: the bucket's degree plus, when §7's `Combine` runs,
-/// the class count and multiplicity that size round 0's `eta`, plus the per-class
-/// quotient counts and native degrees used by the PCS's initial alpha batches.
-///
-/// `(log_stir_degree, 1, 0, batches)` is a no-`Combine` key; it cannot collide with a
-/// `Combine` key, since [`StirConfig::try_new_with_combine`] rejects `num_classes < 2`.
-type StirConfigKey = (usize, usize, u64, Vec<(usize, usize)>);
+/// Degree, Combine shape, and actual per-class alpha counts. `None` distinguishes
+/// commit-time probes from opening budgets, including a one-opening singleton.
+type StirConfigKey = (usize, usize, u64, Option<Vec<(usize, usize)>>);
 
 /// STIR configs derived on demand, memoized by [`StirConfigKey`].
 type StirConfigCache<Val, Challenge, StirMmcs, Challenger> = Arc<
@@ -318,6 +335,7 @@ pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> 
     input_mmcs: InputMmcs,
     stir: StirParameters<StirMmcs>,
     options: StirOptions,
+    batch_proof_of_work_bits: usize,
     /// Maximum `h_max - h_min`, in octaves, among the native heights sharing one LDE domain.
     ///
     /// `0` puts every distinct native height on its own domain, so `Combine` never runs and
@@ -327,10 +345,9 @@ pub struct TwoAdicStirPcs<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger> 
     /// `StirConfig::try_new` runs an 80-iteration floating-point bisection per stage to
     /// derive sound round parameters. `open`/`verify` re-derive it per LDE-height bucket, and
     /// bucket shapes recur across calls and across proofs of the same statement, so caching
-    /// them here avoids repeating that derivation every time. `Combine` configs are keyed by
-    /// their `(num_classes, ell)` alongside the degree: with matrices sharing one domain, a
-    /// commitment holding several native heights always takes the `Combine` branch, so a
-    /// degree-only key would miss on exactly the shape this PCS exists for.
+    /// them here avoids repeating that derivation every time. Keys include the degree,
+    /// Combine shape and per-class alpha counts, and distinguish commit-time feasibility
+    /// probes from actual opening schedules.
     config_cache: StirConfigCache<Val, Challenge, StirMmcs, Challenger>,
 }
 
@@ -343,6 +360,7 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
             input_mmcs,
             stir,
             options: StirOptions::default(),
+            batch_proof_of_work_bits: 0,
             max_log_height_spread: DEFAULT_MAX_LOG_HEIGHT_SPREAD,
             config_cache: Arc::new(RwLock::new(alloc::collections::BTreeMap::new())),
         }
@@ -361,6 +379,49 @@ impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
     /// Options used to derive this PCS instance's STIR schedules.
     pub const fn options(&self) -> StirOptions {
         self.options
+    }
+
+    /// Grind after absorbing all opening claims and immediately before sampling `alpha`.
+    ///
+    /// Defaults to zero. Both sides must agree on the difficulty. The PCS carries one
+    /// witness for the whole opening batch, regardless of its number of height buckets.
+    /// This credits retries of the joint alpha/`Combine` challenge block. It can lower
+    /// round zero's `eta` and query count, and admit more native heights per group.
+    /// Configure it **before committing**, identically on the prover and verifier,
+    /// because it affects the committed layout. Changing it detaches cached schedules.
+    /// [`StirParameters::max_pow_bits`] applies only to STIR's later grinding sites.
+    ///
+    /// # Panics
+    ///
+    /// If the difficulty cannot be sampled from a base-field element and a `usize`.
+    #[must_use]
+    pub fn with_batch_proof_of_work_bits(mut self, bits: usize) -> Self
+    where
+        Val: PrimeField64,
+    {
+        assert!(
+            bits < Val::bits().min(usize::BITS as usize),
+            "invalid batching PoW difficulty"
+        );
+        self.batch_proof_of_work_bits = bits;
+        self.config_cache = Arc::new(RwLock::new(alloc::collections::BTreeMap::new()));
+        self
+    }
+
+    /// Difficulty of the PCS opening-batching grind.
+    pub const fn batch_proof_of_work_bits(&self) -> usize {
+        self.batch_proof_of_work_bits
+    }
+
+    /// PCS-owned grinding metadata for an opening-batching security term.
+    ///
+    /// The PCS internally credits this site once to its joint alpha/`Combine` error.
+    /// This metadata does not include the caller's outer protocol or hash-security terms.
+    pub const fn grinding_sites(&self) -> p3_security::GrindingSites {
+        p3_security::GrindingSites {
+            batch_combination: self.batch_proof_of_work_bits,
+            ..p3_security::GrindingSites::NONE
+        }
     }
 
     /// Override how wide a native-height spread may share one LDE domain.
@@ -447,18 +508,46 @@ where
     StirMmcs: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger<Witness = Val>,
 {
-    /// Returns the derived STIR config for one bucket, computing and caching it on first use.
+    /// A commit-time Combine feasibility probe, computed and cached on first use.
     ///
     /// `combine` carries the bucket's `(num_classes, ell)` when more than one native-height
     /// class shares its domain and §7's `Combine` therefore runs, and is `None` otherwise.
+    /// Opening multiplicities are unknown at commit time. This probe cannot substitute
+    /// for `get_or_try_compute_pcs_config` when constructing or verifying a proof.
     fn get_or_try_compute_stir_config(
         &self,
         log_stir_degree: usize,
         combine: Option<(usize, u64)>,
-        quotient_batches: &[(usize, usize)],
     ) -> Result<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>, StirConfigError> {
-        let (classes, ell) = combine.unwrap_or((1, 0));
-        let key: StirConfigKey = (log_stir_degree, classes, ell, quotient_batches.to_vec());
+        self.get_or_try_compute_config(log_stir_degree, combine, None)
+    }
+
+    /// Derive from every alpha contribution in this opening batch, across commitments.
+    fn get_or_try_compute_pcs_config(
+        &self,
+        log_stir_degree: usize,
+        classes: &[(usize, usize)],
+    ) -> Result<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>, StirConfigError> {
+        if classes.is_empty() {
+            return Err(StirConfigError::InvalidPcsBatch);
+        }
+        let combine = crate::pcs_budget::combine_requirement(log_stir_degree, classes)?;
+        self.get_or_try_compute_config(log_stir_degree, combine, Some(classes))
+    }
+
+    fn get_or_try_compute_config(
+        &self,
+        log_stir_degree: usize,
+        combine: Option<(usize, u64)>,
+        classes: Option<&[(usize, usize)]>,
+    ) -> Result<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>, StirConfigError> {
+        let (num_classes, ell) = combine.unwrap_or((1, 0));
+        let key: StirConfigKey = (
+            log_stir_degree,
+            num_classes,
+            ell,
+            classes.map(<[_]>::to_vec),
+        );
 
         if let Some(config) = self.config_cache.read().get(&key) {
             return Ok(config.clone());
@@ -469,11 +558,14 @@ where
         // whole derivation — under rayon, possibly while the holder is descheduled. The
         // derivation is idempotent, so a racing duplicate is harmless: the loser's `Arc` is
         // simply dropped in favour of whichever landed first.
-        let config = Arc::new(StirConfig::try_new_with_batching(
+        let config = Arc::new(StirConfig::try_new_with_pcs_batch(
             log_stir_degree,
             self.stir.clone(),
-            quotient_batches,
-            combine,
+            PcsBatch {
+                classes: classes.unwrap_or(&[]),
+                combine,
+                pow_bits: self.batch_proof_of_work_bits,
+            },
             self.options,
         )?);
 
@@ -482,18 +574,6 @@ where
             return Ok(config);
         }
         Ok(cache.entry(key).or_insert(config).clone())
-    }
-
-    /// Like [`Self::get_or_try_compute_stir_config`], but panics on an infeasible config —
-    /// for use on the prover side, where `open` cannot return a `Result`.
-    fn get_or_compute_stir_config(
-        &self,
-        log_stir_degree: usize,
-        combine: Option<(usize, u64)>,
-        quotient_batches: &[(usize, usize)],
-    ) -> Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>> {
-        self.get_or_try_compute_stir_config(log_stir_degree, combine, quotient_batches)
-            .unwrap_or_else(|e| panic!("{e}"))
     }
 
     /// Log2 STIR degree of a bucket whose shared LDE domain has size `2^log_lde_height`.
@@ -519,15 +599,20 @@ where
     /// every group topped at `tallest`, across all commitments opened together, and merges
     /// their classes into one `Combine`. Adding a class raises Lemma 4.13's `ell` by
     /// `2^tallest + 1 - 2^h > 0`, so the full band maximizes `ell` over every subset that
-    /// could form, and a width feasible for it is feasible for whatever union actually shows
-    /// up. Since the width depends only on `tallest` and this PCS's parameters, every
+    /// could form, and its Combine error bounds whatever union actually shows up.
+    /// The batch grind is credited here because it precedes every Combine challenge.
+    /// Since the width depends only on `tallest` and this PCS's parameters, every
     /// commitment independently agrees on it.
+    ///
+    /// This is a necessary feasibility check. Widths and opening-point counts can
+    /// still make the *joint* budget infeasible. `open` then panics (the PCS trait
+    /// has no fallible opening API), while `verify` returns a configuration error.
+    /// Opening never changes an already committed layout to make its budget fit.
     ///
     /// A width of `0` runs no `Combine` at all, so this always terminates: in the worst case
     /// every distinct height gets its own domain and its own STIR instance.
     ///
-    /// The configs derived while probing are served from the same cache the bucket
-    /// construction later reads, so a repeated shape pays for them once.
+    /// Probes and full opening schedules use distinct entries in the same bounded cache.
     fn combine_band_width(&self, tallest: usize, lowest: usize) -> usize {
         let log_stir_degree = self.log_stir_degree(tallest + self.stir.log_blowup);
         let max_width = self
@@ -539,7 +624,7 @@ where
         while width < max_width {
             let band: Vec<usize> = (0..=width + 1).map(|i| tallest - i).collect();
             if self
-                .get_or_try_compute_stir_config(log_stir_degree, Self::combine_key(&band), &[])
+                .get_or_try_compute_stir_config(log_stir_degree, Self::combine_key(&band))
                 .is_err()
             {
                 break;
@@ -676,6 +761,7 @@ type ProverDataWithPoints<'a, Val, InputMmcs, Challenge> =
 
 /// Everything `open` settles before STIR runs.
 struct PreparedOpen<Val, Challenge, StirMmcs, Challenger> {
+    batch_pow_witness: Option<Val>,
     /// Claimed evaluations, already absorbed into the transcript.
     opened_values: OpenedValues<Challenge>,
     /// Distinct shared LDE heights across every commitment's groups, descending: one STIR
@@ -738,6 +824,30 @@ where
                  }| data.matrix_layout(),
             )
             .collect();
+
+        // The quotient must be defined throughout each matrix's *shared* domain,
+        // not just its native interpolation domain or the eventual query set.
+        for ((mats, points), layout) in mats_and_points.iter().zip(&matrix_layouts) {
+            assert_eq!(
+                mats.len(),
+                points.len(),
+                "one point list per committed matrix is required"
+            );
+            for ((mat, points), &(_, log_lde_height)) in mats.iter().zip(points.iter()).zip(layout)
+            {
+                assert!(mat.width() > 0, "opening a matrix with zero columns");
+                assert!(
+                    !points.is_empty(),
+                    "matrix was opened at no points; every committed matrix must be opened at least once"
+                );
+                for &point in points {
+                    assert!(
+                        !opening_point_in_domain::<Val, Challenge>(point, log_lde_height),
+                        "opening point lies in its shared LDE domain"
+                    );
+                }
+            }
+        }
 
         let (global_max_height, global_max_width) = mats_and_points
             .iter()
@@ -817,7 +927,12 @@ where
         // height) class. Every matrix in a class lives on the same physical domain (its
         // commitment's shared domain) and shares the same claimed degree, both required to
         // alpha-batch them together and, later, for `Combine` to merge classes soundly.
-        let alpha: Challenge = challenger.sample_algebra_element();
+        // Claims are fixed before the grind. No prover message may intervene between
+        // this site and `alpha`, or a retry could bypass the work just paid.
+        let (alpha, batch_pow_witness) = crate::batch_transcript::prove::<Val, Challenge, _>(
+            challenger,
+            self.batch_proof_of_work_bits,
+        );
         let packed_alpha_powers =
             Challenge::ExtensionPacking::packed_ext_powers_capped(alpha, global_max_width)
                 .collect_vec();
@@ -866,7 +981,9 @@ where
                 for (point, ys) in points_for_mat.iter().zip(opened_for_mat.iter()) {
                     let height_count = num_reduced.entry(key).or_insert(0);
                     let alpha_pow_offset = alpha.exp_u64(*height_count as u64);
-                    *height_count += ys.len();
+                    *height_count = height_count
+                        .checked_add(ys.len())
+                        .expect("PCS opening-batching multiplicity overflow");
 
                     let full_height = mat.height();
                     let inv_denom = &inv_denoms.get(point).unwrap()[..full_height];
@@ -923,15 +1040,12 @@ where
                 .zip(&bucket_native_heights)
                 .map(|(&log_h, native_heights)| {
                     let log_stir_degree = self.log_stir_degree(log_h);
-                    self.get_or_compute_stir_config(
-                        log_stir_degree,
-                        Self::combine_key(native_heights),
-                        &num_reduced
-                            .iter()
-                            .filter(|((h, _), _)| *h == log_h)
-                            .map(|(&(_, log_degree), &count)| (log_degree, count))
-                            .collect::<Vec<_>>(),
-                    )
+                    let classes: Vec<_> = native_heights
+                        .iter()
+                        .map(|&height| (height, num_reduced[&(log_h, height)]))
+                        .collect();
+                    self.get_or_try_compute_pcs_config(log_stir_degree, &classes)
+                        .unwrap_or_else(|e| panic!("{e}"))
                 })
                 .collect();
 
@@ -947,6 +1061,7 @@ where
             .collect();
 
         PreparedOpen {
+            batch_pow_witness,
             opened_values: all_opened_values,
             bucket_log_heights,
             stir_configs,
@@ -983,6 +1098,7 @@ where
         StirPcsProof<Val, Challenge, InputMmcs, StirMmcs>,
     ) {
         let PreparedOpen {
+            batch_pow_witness,
             opened_values,
             bucket_log_heights,
             stir_configs,
@@ -1027,7 +1143,13 @@ where
             })
             .collect();
 
-        (opened_values, bucket_proofs)
+        (
+            opened_values,
+            StirPcsProof {
+                batch_pow_witness,
+                buckets: bucket_proofs,
+            },
+        )
     }
 }
 
@@ -1162,6 +1284,16 @@ where
                 if point_claims.is_empty() {
                     return Err(StirError::MatrixWithoutOpeningPoints { commitment, matrix });
                 }
+                let width = point_claims[0].values.len();
+                for (point, claim) in point_claims.iter().enumerate() {
+                    if width == 0 || claim.values.len() != width {
+                        return Err(StirError::InvalidOpeningWidth {
+                            commitment,
+                            matrix,
+                            point,
+                        });
+                    }
+                }
             }
         }
 
@@ -1186,7 +1318,12 @@ where
             }
         }
 
-        let alpha: Challenge = challenger.sample_algebra_element();
+        let alpha: Challenge = crate::batch_transcript::verify(
+            challenger,
+            self.batch_proof_of_work_bits,
+            proof.batch_pow_witness,
+        )?;
+        let proof = &proof.buckets;
 
         // Reproduce each commitment's shared-domain layout from the claimed domain sizes,
         // exactly as `commit` derived it from the committed ones. Nothing about the layout
@@ -1236,6 +1373,24 @@ where
                     .collect()
             })
             .collect();
+
+        for (commitment, (claims, heights)) in commitments_with_opening_points
+            .iter()
+            .zip(&matrix_lde_heights)
+            .enumerate()
+        {
+            for (matrix, (claim, &height)) in claims.matrices.iter().zip(heights).enumerate() {
+                for (point, opening) in claim.points.iter().enumerate() {
+                    if opening_point_in_domain::<Val, Challenge>(opening.point, height) {
+                        return Err(StirError::OpeningPointInDomain {
+                            commitment,
+                            matrix,
+                            point,
+                        });
+                    }
+                }
+            }
+        }
 
         // Distinct outer buckets (shared LDE heights), descending. Must match the prover's
         // bucket iteration order.
@@ -1338,7 +1493,9 @@ where
                                     .map(|PointOpening { values: vals, .. }| {
                                         let count = class_num_reduced.entry(key).or_insert(0);
                                         let offset = alpha.exp_u64(*count as u64);
-                                        *count += vals.len();
+                                        *count = count
+                                            .checked_add(vals.len())
+                                            .ok_or(StirConfigError::PcsBatchMultiplicityOverflow)?;
 
                                         let y_combined: Challenge = vals
                                             .iter()
@@ -1346,15 +1503,16 @@ where
                                             .map(|(&y, &ap)| y * ap)
                                             .sum();
 
-                                        (offset, y_combined)
+                                        Ok((offset, y_combined))
                                     })
-                                    .collect()
+                                    .collect::<Result<Vec<_>, StirConfigError>>()
                             },
                         )
-                        .collect()
+                        .collect::<Result<Vec<_>, _>>()
                 },
             )
-            .collect();
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StirError::Config)?;
 
         // SHAPE CHECK: every bucket's input_openings has one slot per public commitment.
         // Without this, a malicious proof could omit trailing commitments — a `zip` would
@@ -1414,15 +1572,11 @@ where
                 .zip(&bucket_native_heights)
                 .map(|(&log_h, native_heights)| {
                     let log_stir_degree = self.log_stir_degree(log_h);
-                    self.get_or_try_compute_stir_config(
-                        log_stir_degree,
-                        Self::combine_key(native_heights),
-                        &class_num_reduced
-                            .iter()
-                            .filter(|((h, _), _)| *h == log_h)
-                            .map(|(&(_, log_degree), &count)| (log_degree, count))
-                            .collect::<Vec<_>>(),
-                    )
+                    let classes: Vec<_> = native_heights
+                        .iter()
+                        .map(|&height| (height, class_num_reduced[&(log_h, height)]))
+                        .collect();
+                    self.get_or_try_compute_pcs_config(log_stir_degree, &classes)
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(StirError::Config)?;
@@ -1917,10 +2071,29 @@ where
 /// - `input_openings[commit_idx]`: one shared multi-opening proof for that commitment's rows
 ///   at the bucket's queried positions, `None` if the commitment has no group at this
 ///   bucket's LDE height.
-type StirPcsProof<Val, Challenge, InputMmcs, StirMmcs> = Vec<(
+type StirPcsBucket<Val, Challenge, InputMmcs, StirMmcs> = (
     StirProof<Challenge, StirMmcs, Val>,
     Vec<Option<InputOpenings<Val, InputMmcs>>>,
-)>;
+);
+
+/// A PCS opening proof, with one optional batching witness shared by every height bucket.
+///
+/// The witness belongs to the PCS: standalone STIR proofs do not sample `alpha`.
+/// The optional field is serialized even when grinding is disabled, so this encoding
+/// differs from the former bare vector of bucket proofs.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound = "")]
+pub struct StirPcsProof<
+    Val: Field,
+    Challenge: Field,
+    InputMmcs: Mmcs<Val>,
+    StirMmcs: Mmcs<Challenge>,
+> {
+    /// Present exactly when the PCS's batching difficulty is positive.
+    pub batch_pow_witness: Option<Val>,
+    /// STIR proofs and input openings in descending shared LDE height.
+    pub buckets: Vec<StirPcsBucket<Val, Challenge, InputMmcs, StirMmcs>>,
+}
 
 /// Source of an external initial oracle's fibers, for the STIR verifier's `None`: this PCS
 /// has STIR commit the initial oracle itself, so no such source ever exists.
@@ -2117,6 +2290,13 @@ where
 }
 
 type MatricesAndPoints<'a, F, EF> = (Vec<RowMajorMatrixView<'a, F>>, &'a Vec<Vec<EF>>);
+
+fn opening_point_in_domain<F: TwoAdicField, EF: ExtensionField<F>>(
+    point: EF,
+    log_domain_size: usize,
+) -> bool {
+    (point * F::GENERATOR.inverse()).exp_power_of_2(log_domain_size) == EF::ONE
+}
 
 /// Compute `1/(z - x)` for all coset elements `x`, batched over all unique points `z`.
 fn compute_inverse_denominators<'a, F: TwoAdicField, EF: ExtensionField<F>>(
@@ -2315,6 +2495,17 @@ mod tests {
     >;
     type TestConfig = StirConfig<TestVal, EF, TestStirMmcs, TestChallenger>;
 
+    impl TestPcs {
+        fn get_or_compute_stir_config(
+            &self,
+            log_degree: usize,
+            combine: Option<(usize, u64)>,
+        ) -> Arc<TestConfig> {
+            self.get_or_try_compute_stir_config(log_degree, combine)
+                .unwrap()
+        }
+    }
+
     /// Every value the schedule derives, in one comparable string. `StirConfig` has no
     /// `PartialEq`, and only the derived schedule matters here — the `mmcs` field is cloned
     /// straight from the shared parameters.
@@ -2357,6 +2548,114 @@ mod tests {
         };
         TwoAdicStirPcs::new(Radix2DitParallel::default(), val_mmcs, stir)
             .with_max_log_height_spread(max_log_height_spread)
+    }
+
+    #[test]
+    fn batch_grinding_is_enforced_across_pcs_layouts() {
+        for spread in [0, DEFAULT_MAX_LOG_HEIGHT_SPREAD] {
+            let pcs = test_pcs_with(spread, SecurityAssumption::CapacityBound, 32)
+                .with_batch_proof_of_work_bits(8);
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(42);
+            let mut base = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
+            let domains = [6, 4].map(|log_h| pcs.natural_domain_for_degree(1 << log_h));
+            let matrices = domains.map(|domain| {
+                (
+                    domain,
+                    RowMajorMatrix::<TestVal>::rand(&mut rng, domain.size(), 3),
+                )
+            });
+            let (commitment, data) = pcs.commit(matrices);
+            base.observe(commitment.clone());
+            let point: EF = base.sample_algebra_element();
+            let mut prover = base.clone();
+            let (values, proof) = pcs.open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![point]; 2],
+                }],
+                &mut prover,
+            );
+            // Replay just the claims and batching site independently of `prepare_open`.
+            // Moving the prover's grind before a claim or after alpha breaks this check.
+            let mut batch_replay = base.clone();
+            for claim in values.iter().flatten().flatten() {
+                batch_replay.observe_algebra_slice(claim);
+            }
+            let _: EF = crate::batch_transcript::verify::<TestVal, EF, _, (), ()>(
+                &mut batch_replay,
+                8,
+                proof.batch_pow_witness,
+            )
+            .expect("the witness must bind all claims before alpha is sampled");
+            let claims: Vec<_> = vec![
+                (
+                    commitment,
+                    domains
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, domain)| (domain, vec![(point, values[0][i][0].clone())]))
+                        .collect(),
+                )
+                    .into(),
+            ];
+            let mut verifier = base.clone();
+            pcs.verify(claims.clone(), &proof, &mut verifier).unwrap();
+            assert_eq!(
+                prover.sample_algebra_element::<EF>(),
+                verifier.sample_algebra_element::<EF>(),
+            );
+            assert!(proof.batch_pow_witness.is_some());
+            assert_eq!(proof.buckets.len(), if spread == 0 { 2 } else { 1 });
+            let bytes = postcard::to_allocvec(&proof).unwrap();
+            let decoded = postcard::from_bytes(&bytes).unwrap();
+            pcs.verify(claims.clone(), &decoded, &mut base.clone())
+                .unwrap();
+
+            let mut missing = proof.clone();
+            missing.batch_pow_witness = None;
+            assert!(matches!(
+                pcs.verify(claims.clone(), &missing, &mut base.clone()),
+                Err(StirError::InvalidProofShape(
+                    ProofShapeError::BatchPowWitness { .. }
+                ))
+            ));
+
+            // A verifier that skips the new PoW check may still reject at a later Merkle
+            // check. Require the dedicated error to catch that missing enforcement.
+            let mut invalid = proof.clone();
+            let rejects_pow = (0..256).any(|candidate| {
+                invalid.batch_pow_witness = Some(TestVal::from_u64(candidate));
+                matches!(
+                    pcs.verify(claims.clone(), &invalid, &mut base.clone()),
+                    Err(StirError::InvalidBatchPowWitness { bits: 8 })
+                )
+            });
+            assert!(
+                rejects_pow,
+                "an invalid batching witness must be rejected at its site"
+            );
+
+            let unground = pcs.clone().with_batch_proof_of_work_bits(0);
+            assert_eq!(pcs.grinding_sites().batch_combination, 8);
+            assert_eq!(unground.grinding_sites(), p3_security::GrindingSites::NONE);
+            // A probe with no alpha or Combine error has no batch work to credit.
+            assert_eq!(
+                schedule_fingerprint(&pcs.get_or_compute_stir_config(6, None)),
+                schedule_fingerprint(&unground.get_or_compute_stir_config(6, None)),
+            );
+            assert!(matches!(
+                unground.verify(claims.clone(), &proof, &mut base.clone()),
+                Err(StirError::InvalidProofShape(
+                    ProofShapeError::BatchPowWitness { .. }
+                ))
+            ));
+            assert!(
+                pcs.clone()
+                    .with_batch_proof_of_work_bits(7)
+                    .verify(claims, &proof, &mut base.clone())
+                    .is_err()
+            );
+        }
     }
 
     /// Group sizes of the plan for `log_native_heights`, in descending LDE height.
@@ -2473,6 +2772,403 @@ mod tests {
         assert_eq!(plan.log_lde_heights, vec![13]);
     }
 
+    #[test]
+    fn batch_grinding_reduces_combine_queries_after_warming_a_clone() {
+        let original = test_pcs_with(2, SecurityAssumption::CapacityBound, 72);
+        let combine = TestPcs::combine_key(&[20, 19]);
+        let before = original.get_or_compute_stir_config(20, combine);
+        let grinded = original.clone().with_batch_proof_of_work_bits(8);
+        let after = grinded.get_or_compute_stir_config(20, combine);
+        assert!(after.round_configs[0].eta < before.round_configs[0].eta);
+        assert!(after.round_configs[0].num_queries < before.round_configs[0].num_queries);
+        assert_eq!(
+            original
+                .get_or_compute_stir_config(20, combine)
+                .round_configs[0]
+                .num_queries,
+            before.round_configs[0].num_queries,
+        );
+    }
+
+    #[test]
+    fn batch_grinding_makes_a_previously_split_group_feasible() {
+        let mut original = test_pcs_with(2, SecurityAssumption::CapacityBound, 80);
+        // Keep the later STIR rounds feasible independently of the PCS block.
+        original.stir.max_pow_bits = 8;
+        assert_eq!(original.plan_groups(&[20, 19]).log_lde_heights, [21, 20]);
+        let grinded = original.with_batch_proof_of_work_bits(8);
+        assert_eq!(grinded.plan_groups(&[20, 19]).log_lde_heights, [21]);
+    }
+
+    #[test]
+    fn opening_budgets_do_not_alias_probes_or_other_alpha_counts() {
+        let pcs = test_pcs_with(2, SecurityAssumption::CapacityBound, 72);
+        let probe = pcs.get_or_compute_stir_config(20, TestPcs::combine_key(&[20, 19]));
+        let narrow = pcs
+            .get_or_try_compute_pcs_config(20, &[(20, 1), (19, 1)])
+            .unwrap();
+        let wide = pcs
+            .get_or_try_compute_pcs_config(20, &[(20, 1 << 20), (19, 1)])
+            .unwrap();
+        assert!(!Arc::ptr_eq(&probe, &narrow));
+        assert!(wide.round_configs[0].eta > narrow.round_configs[0].eta);
+        assert!(wide.round_configs[0].num_queries > narrow.round_configs[0].num_queries);
+        assert!(Arc::ptr_eq(
+            &wide,
+            &pcs.get_or_try_compute_pcs_config(20, &[(20, 1 << 20), (19, 1)])
+                .unwrap()
+        ));
+        assert!(
+            pcs.get_or_try_compute_pcs_config(20, &[(20, 1 << 30), (19, 1)])
+                .is_err()
+        );
+        // An opening can be infeasible although commitment-time grouping succeeded.
+        assert_eq!(pcs.plan_groups(&[20, 19]).log_lde_heights, [21]);
+    }
+
+    #[test]
+    fn pooled_commitments_count_every_column_at_every_point() {
+        let pcs = test_pcs_with(0, SecurityAssumption::CapacityBound, 32);
+        let mut rng = SmallRng::seed_from_u64(6);
+        let domain = pcs.natural_domain_for_degree(64);
+        let (a, ad) = pcs.commit([(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 64, 3))]);
+        let (b, bd) = pcs.commit([(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 64, 5))]);
+        let mut base = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
+        base.observe(a.clone());
+        base.observe(b.clone());
+        let z: EF = base.sample_algebra_element();
+        let zz: EF = base.sample_algebra_element();
+        let requests = vec![
+            OpeningRequest {
+                prover_data: &ad,
+                points: vec![vec![z, zz]],
+            },
+            OpeningRequest {
+                prover_data: &bd,
+                points: vec![vec![z]],
+            },
+        ];
+        let mut prover = base.clone();
+        let prepared = pcs.prepare_open(&requests, &mut prover);
+        // 3 columns at two points plus 5 columns at one point = 11 powers.
+        let expected = pcs.get_or_try_compute_pcs_config(6, &[(6, 11)]).unwrap();
+        assert!(Arc::ptr_eq(&prepared.stir_configs[0], &expected));
+        let (values, proof) = pcs.prove_buckets(&[&ad, &bd], prepared, &mut prover);
+        let claims = vec![
+            (
+                a,
+                vec![(
+                    domain,
+                    vec![(z, values[0][0][0].clone()), (zz, values[0][0][1].clone())],
+                )],
+            )
+                .into(),
+            (b, vec![(domain, vec![(z, values[1][0][0].clone())])]).into(),
+        ];
+        // A fresh verifier must derive the same shape without relying on a prover-warmed cache.
+        let verifier_pcs = pcs.with_batch_proof_of_work_bits(0);
+        let mut verifier = base;
+        verifier_pcs.verify(claims, &proof, &mut verifier).unwrap();
+        assert_eq!(
+            prover.sample_algebra_element::<EF>(),
+            verifier.sample_algebra_element::<EF>()
+        );
+        assert!(
+            verifier_pcs
+                .config_cache
+                .read()
+                .contains_key(&(6, 1, 0, Some(vec![(6, 11)])))
+        );
+    }
+
+    #[test]
+    fn verifier_rejects_in_domain_points_and_inconsistent_widths_before_queries() {
+        let pcs = test_pcs_with(2, SecurityAssumption::CapacityBound, 32);
+        let mut rng = SmallRng::seed_from_u64(5);
+        let domains = [6, 4].map(|h| pcs.natural_domain_for_degree(1 << h));
+        let (commitment, _) = pcs
+            .commit(domains.map(|d| (d, RowMajorMatrix::<TestVal>::rand(&mut rng, d.size(), 2))));
+        let bad = EF::from(TestVal::GENERATOR * TestVal::two_adic_generator(7));
+        let mut challenger = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
+        let claims = vec![
+            (
+                commitment.clone(),
+                vec![
+                    (domains[0], vec![(EF::ZERO, vec![EF::ZERO; 2])]),
+                    (domains[1], vec![(bad, vec![EF::ZERO; 2])]),
+                ],
+            )
+                .into(),
+        ];
+        let proof = StirPcsProof {
+            batch_pow_witness: None,
+            buckets: vec![],
+        };
+        assert!(matches!(
+            pcs.verify(claims, &proof, &mut challenger),
+            Err(StirError::OpeningPointInDomain {
+                commitment: 0,
+                matrix: 1,
+                point: 0
+            })
+        ));
+        let claims = vec![
+            (
+                commitment,
+                vec![
+                    (
+                        domains[0],
+                        vec![(EF::ZERO, vec![EF::ZERO; 2]), (EF::ONE, vec![EF::ZERO; 3])],
+                    ),
+                    (domains[1], vec![(EF::ZERO, vec![EF::ZERO; 2])]),
+                ],
+            )
+                .into(),
+        ];
+        assert!(matches!(
+            pcs.verify(claims, &proof, &mut challenger),
+            Err(StirError::InvalidOpeningWidth {
+                commitment: 0,
+                matrix: 0,
+                point: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn constant_only_buckets_cannot_claim_an_unenforced_native_degree() {
+        let (pcs, params) = test_pcs_and_params();
+        assert!(pcs.get_or_try_compute_pcs_config(1, &[(0, 2)]).is_err());
+        assert!(matches!(
+            TestConfig::try_new_with_pcs_batch(
+                6,
+                params,
+                PcsBatch {
+                    classes: &[(6, 2)],
+                    combine: None,
+                    pow_bits: 32
+                },
+                StirOptions::default()
+            ),
+            Err(StirConfigError::InvalidPcsBatchPowBits { .. })
+        ));
+    }
+
+    #[test]
+    fn pcs_schedules_meet_every_budget_without_lending_batch_work_to_later_rounds() {
+        use crate::soundness::StirSoundness;
+        for assumption in [
+            SecurityAssumption::CapacityBound,
+            SecurityAssumption::JohnsonBound,
+        ] {
+            for log_degree in [2, 8, 20] {
+                for batch_bits in [16, 24] {
+                    for early_stop in [None, Some(2)] {
+                        let mut pcs = test_pcs_with(2, assumption, 64)
+                            .with_batch_proof_of_work_bits(batch_bits)
+                            .with_options(StirOptions {
+                                max_log_final_poly_len: early_stop,
+                                ..Default::default()
+                            });
+                        pcs.stir.max_pow_bits = 8;
+                        let classes = [(log_degree, 64), (log_degree - 1, 32)];
+                        let config = pcs
+                            .get_or_try_compute_pcs_config(log_degree, &classes)
+                            .unwrap();
+                        let target =
+                            64. + libm::ceil(libm::log2((6 * config.num_rounds() + 4) as f64));
+                        let field_bits = crate::pcs_budget::field_bits::<EF>(assumption);
+                        let batch = PcsBatch {
+                            classes: &classes,
+                            combine: crate::pcs_budget::combine_requirement(log_degree, &classes)
+                                .unwrap(),
+                            pow_bits: batch_bits,
+                        };
+                        let first_eta = config
+                            .round_configs
+                            .first()
+                            .map_or(config.final_eta, |r| r.eta);
+                        assert!(
+                            batch.algebraic_bits(assumption, field_bits, log_degree, 1, first_eta)
+                                + batch_bits as f64
+                                >= target - 1e-9
+                        );
+                        for r in &config.round_configs {
+                            let rate = r.log_domain_size - r.log_degree;
+                            assert!(
+                                assumption.stir_query_pow_eligible_bits(
+                                    field_bits,
+                                    r.log_degree,
+                                    rate,
+                                    r.eta,
+                                    r.num_queries,
+                                    r.num_ood_samples
+                                ) + r.pow_bits as f64
+                                    >= target - 1e-9
+                            );
+                            assert!(
+                                assumption.stir_query_unprotected_bits(
+                                    field_bits,
+                                    r.log_degree,
+                                    rate,
+                                    r.eta,
+                                    r.num_queries,
+                                    r.num_ood_samples
+                                ) >= target - 1e-9
+                            );
+                            assert!(
+                                assumption.fold_algebraic_bits_at_log_eta(
+                                    field_bits,
+                                    r.log_degree,
+                                    rate,
+                                    libm::log2(r.eta)
+                                ) + r.folding_pow_bits as f64
+                                    >= target - 1e-9
+                            );
+                        }
+                        let (degree, rate) =
+                            config.round_configs.last().map_or((log_degree, 1), |r| {
+                                let degree = r.log_degree - r.log_folding_factor;
+                                (degree, r.log_domain_size - 1 - degree)
+                            });
+                        assert!(
+                            assumption.stir_final_query_algebraic_bits(
+                                rate,
+                                config.final_eta,
+                                config.final_queries
+                            ) + config.final_pow_bits as f64
+                                >= target - 1e-9
+                        );
+                        assert!(
+                            assumption.fold_algebraic_bits_at_log_eta(
+                                field_bits,
+                                degree,
+                                rate,
+                                libm::log2(config.final_eta)
+                            ) + config.final_folding_pow_bits as f64
+                                >= target - 1e-9
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn verifier_returns_a_config_error_for_an_infeasible_opening_shape() {
+        let mut pcs = test_pcs_with(0, SecurityAssumption::CapacityBound, 110);
+        pcs.stir.max_pow_bits = 20;
+        let mut rng = SmallRng::seed_from_u64(19);
+        let domain = pcs.natural_domain_for_degree(64);
+        let (commitment, _) =
+            pcs.commit([(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 64, 1))]);
+        let proof = StirPcsProof {
+            batch_pow_witness: None,
+            buckets: vec![(
+                StirProof {
+                    initial_commitment: None,
+                    round_proofs: vec![],
+                    final_polynomial: vec![],
+                    final_folding_pow_witness: TestVal::ZERO,
+                    final_pow_witness: TestVal::ZERO,
+                    final_query_openings: None,
+                },
+                vec![None],
+            )],
+        };
+        let claims = vec![
+            (
+                commitment,
+                vec![(domain, vec![(EF::ONE, vec![EF::ZERO; 1024])])],
+            )
+                .into(),
+        ];
+        let mut challenger = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
+        assert!(matches!(
+            pcs.verify(claims, &proof, &mut challenger),
+            Err(StirError::Config(StirConfigError::EtaInfeasibleForTarget {
+                label: "PCS joint alpha/Combine bound",
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn batch_grinding_reduces_serialized_pcs_proofs() {
+        let mut original = test_pcs_with(2, SecurityAssumption::CapacityBound, 92);
+        original.stir.max_pow_bits = 8;
+        let grinded = original.clone().with_batch_proof_of_work_bits(8);
+        let mut rng = SmallRng::seed_from_u64(29);
+        let domains = [10, 9, 8].map(|h| original.natural_domain_for_degree(1 << h));
+        let matrices =
+            domains.map(|d| (d, RowMajorMatrix::<TestVal>::rand(&mut rng, d.size(), 16)));
+        let mut sizes = Vec::new();
+        let mut queries = Vec::new();
+        for pcs in [&original, &grinded] {
+            let (commitment, data) = pcs.commit(matrices.clone());
+            assert_eq!(commitment.len(), 1, "compare the same grouped layout");
+            let mut base =
+                TestChallenger::new(TestPerm::new_from_rng_128(&mut SmallRng::seed_from_u64(30)));
+            base.observe(commitment.clone());
+            let z: EF = base.sample_algebra_element();
+            let mut prover = base.clone();
+            let prepared = pcs.prepare_open(
+                &[OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![z]; 3],
+                }],
+                &mut prover,
+            );
+            queries.push(prepared.stir_configs[0].round_configs[0].num_queries);
+            let (values, proof) = pcs.prove_buckets(&[&data], prepared, &mut prover);
+            let claims = vec![
+                (
+                    commitment,
+                    domains
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &d)| (d, vec![(z, values[0][i][0].clone())]))
+                        .collect(),
+                )
+                    .into(),
+            ];
+            let mut verifier = base;
+            pcs.verify(claims, &proof, &mut verifier).unwrap();
+            assert_eq!(
+                prover.sample_algebra_element::<EF>(),
+                verifier.sample_algebra_element::<EF>()
+            );
+            sizes.push(postcard::to_allocvec(&proof).unwrap().len());
+        }
+        assert!(queries[1] < queries[0], "first-round queries: {queries:?}");
+        assert!(sizes[1] < sizes[0], "serialized proof bytes: {sizes:?}");
+        std::println!("PCS batch grind 0 -> 8 bits: queries {queries:?}, proof bytes {sizes:?}");
+    }
+
+    #[test]
+    #[should_panic(expected = "opening point lies in its shared LDE domain")]
+    fn opening_inside_shared_domain_is_rejected_before_inversion() {
+        let pcs = test_pcs_with(2, SecurityAssumption::CapacityBound, 32);
+        let mut rng = SmallRng::seed_from_u64(5);
+        let domains = [6, 4].map(|h| pcs.natural_domain_for_degree(1 << h));
+        let (_, data) = pcs
+            .commit(domains.map(|d| (d, RowMajorMatrix::<TestVal>::rand(&mut rng, d.size(), 2))));
+        // In GEN*H_128, but outside the short matrix's GEN*H_16 domain.
+        let bad = EF::from(TestVal::GENERATOR * TestVal::two_adic_generator(7));
+        assert_ne!(
+            (bad * TestVal::GENERATOR.inverse()).exp_power_of_2(4),
+            EF::ONE
+        );
+        let mut challenger = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
+        pcs.prepare_open(
+            &[OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![EF::ZERO], vec![bad]],
+            }],
+            &mut challenger,
+        );
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -2564,21 +3260,15 @@ mod tests {
 
     #[test]
     fn band_feasibility_implies_subset_feasibility() {
-        // `combine_band_width` probes the *whole* band `[tallest - w, tallest]` and then lets
-        // any subset of it containing `tallest` form a group, on the argument that the full
-        // band maximizes Lemma 4.13's `ell` over every subset that could form. That argument
-        // is what keeps the probe conservative, and it is load bearing: if it stopped holding,
-        // the probe would call a width feasible, the bucket's actual class set would be a
-        // strict subset whose config comes back `Err`, and `open` would panic on the prover at
-        // exactly a parameter set the fallback exists to rescue. The quantifier is "every
-        // subset", so this checks every subset rather than sampling them.
+        // The whole band's Combine error must bound every pooled class subset,
+        // with or without the PCS grind. Alpha counts are checked separately at opening.
         for soundness_type in [
             SecurityAssumption::CapacityBound,
             SecurityAssumption::JohnsonBound,
         ] {
             for security_level in [32usize, 64, 80] {
                 for log_blowup in [1usize, 2] {
-                    for max_pow_bits in [0usize, 16] {
+                    for (max_pow_bits, batch_bits) in [(0usize, 0), (16, 0), (16, 8)] {
                         let params =
                             test_params(soundness_type, security_level, log_blowup, max_pow_bits);
                         for log_d_star in [6usize, 10, 14] {
@@ -2587,11 +3277,15 @@ mod tests {
                                     (0..=w).map(|i| log_d_star - i).collect::<Vec<_>>();
                                 let (n, ell) = TestPcs::combine_key(&band)
                                     .expect("a band of width >= 1 holds two classes");
-                                if TestConfig::try_new_with_combine(
+                                if TestConfig::try_new_with_pcs_batch(
                                     log_d_star,
                                     params.clone(),
-                                    n,
-                                    ell,
+                                    PcsBatch {
+                                        classes: &[],
+                                        combine: Some((n, ell)),
+                                        pow_bits: batch_bits,
+                                    },
+                                    StirOptions::default(),
                                 )
                                 .is_err()
                                 {
@@ -2611,17 +3305,21 @@ mod tests {
                                         continue;
                                     };
                                     assert!(
-                                        TestConfig::try_new_with_combine(
+                                        TestConfig::try_new_with_pcs_batch(
                                             log_d_star,
                                             params.clone(),
-                                            sub_n,
-                                            sub_ell,
+                                            PcsBatch {
+                                                classes: &[],
+                                                combine: Some((sub_n, sub_ell)),
+                                                pow_bits: batch_bits
+                                            },
+                                            StirOptions::default(),
                                         )
                                         .is_ok(),
                                         "band [{}..{log_d_star}] configures but subset \
                                          {subset:?} does not, at {soundness_type:?} \
                                          security_level={security_level} \
-                                         log_blowup={log_blowup} max_pow_bits={max_pow_bits}",
+                                         log_blowup={log_blowup} max_pow_bits={max_pow_bits} batch_bits={batch_bits}",
                                         log_d_star - w,
                                     );
                                 }
@@ -2653,7 +3351,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "initial PCS quotient combination")]
+    #[should_panic(expected = "PCS joint alpha/Combine bound")]
     fn pcs_rejects_infeasible_quotient_batching() {
         let mut pcs = test_pcs_with(0, SecurityAssumption::CapacityBound, 100);
         pcs.stir.max_pow_bits = 16;
@@ -2735,21 +3433,22 @@ mod tests {
         ];
 
         for (log_stir_degree, combine) in shapes {
-            let expected = match combine {
-                Some((num_classes, ell)) => TestConfig::try_new_with_combine(
-                    log_stir_degree,
-                    stir.clone(),
-                    num_classes,
-                    ell,
-                ),
-                None => TestConfig::try_new(log_stir_degree, stir.clone()),
-            }
+            let expected = TestConfig::try_new_with_pcs_batch(
+                log_stir_degree,
+                stir.clone(),
+                PcsBatch {
+                    classes: &[],
+                    combine,
+                    pow_bits: 0,
+                },
+                StirOptions::default(),
+            )
             .expect("feasible shape");
 
             // Twice: the first call populates the entry, the second must return the same one.
             for round in 0..2 {
                 let cached = pcs
-                    .get_or_try_compute_stir_config(log_stir_degree, combine, &[])
+                    .get_or_try_compute_stir_config(log_stir_degree, combine)
                     .expect("feasible shape");
                 assert_eq!(
                     schedule_fingerprint(&cached),
@@ -2766,20 +3465,19 @@ mod tests {
     #[test]
     fn cache_keeps_each_native_class_quotient_count() {
         let pcs = test_pcs_with(3, SecurityAssumption::CapacityBound, 32);
-        let combine = TestPcs::combine_key(&[8, 5]);
         let first = pcs
-            .get_or_try_compute_stir_config(8, combine, &[(5, 2), (8, 512)])
+            .get_or_try_compute_pcs_config(8, &[(8, 512), (5, 2)])
             .unwrap();
         let second = pcs
-            .get_or_try_compute_stir_config(8, combine, &[(5, 512), (8, 2)])
+            .get_or_try_compute_pcs_config(8, &[(8, 2), (5, 512)])
             .unwrap();
         assert!(!Arc::ptr_eq(&first, &second));
         assert_ne!(
             first.initial_batching_error(),
             second.initial_batching_error()
         );
-        assert_eq!(first.quotient_batches, vec![(5, 2), (8, 512)]);
-        assert_eq!(second.quotient_batches, vec![(5, 512), (8, 2)]);
+        assert_eq!(first.quotient_batches, vec![(8, 512), (5, 2)]);
+        assert_eq!(second.quotient_batches, vec![(8, 2), (5, 512)]);
     }
 
     #[test]
@@ -2789,7 +3487,7 @@ mod tests {
         for (degree, combine) in shapes {
             assert_eq!(
                 original
-                    .get_or_compute_stir_config(degree, combine, &[])
+                    .get_or_compute_stir_config(degree, combine)
                     .num_rounds(),
                 3
             );
@@ -2802,17 +3500,18 @@ mod tests {
         assert_eq!(original.options(), crate::StirOptions::default());
         assert_eq!(early.options(), options);
         for (degree, combine) in shapes {
-            let expected = match combine {
-                Some((classes, ell)) => TestConfig::new_with_combine_and_options(
-                    degree,
-                    params.clone(),
-                    classes,
-                    ell,
-                    options,
-                ),
-                None => TestConfig::new_with_options(degree, params.clone(), options),
-            };
-            let actual = early.get_or_compute_stir_config(degree, combine, &[]);
+            let expected = TestConfig::try_new_with_pcs_batch(
+                degree,
+                params.clone(),
+                PcsBatch {
+                    classes: &[],
+                    combine,
+                    pow_bits: 0,
+                },
+                options,
+            )
+            .unwrap();
+            let actual = early.get_or_compute_stir_config(degree, combine);
             assert_eq!(actual.num_rounds(), 1);
             assert_eq!(
                 schedule_fingerprint(&actual),
@@ -2820,7 +3519,7 @@ mod tests {
             );
             assert_eq!(
                 original
-                    .get_or_compute_stir_config(degree, combine, &[])
+                    .get_or_compute_stir_config(degree, combine)
                     .num_rounds(),
                 3
             );
@@ -3273,8 +3972,7 @@ mod tests {
         // A garbage claim shape must not be able to occupy a cache slot permanently.
         let (pcs, _) = test_pcs_and_params();
         assert!(
-            pcs.get_or_try_compute_stir_config(8, Some((2, 1)), &[])
-                .is_err(),
+            pcs.get_or_try_compute_stir_config(8, Some((2, 1))).is_err(),
             "ell below the class count must be rejected"
         );
         assert!(pcs.config_cache.read().is_empty());

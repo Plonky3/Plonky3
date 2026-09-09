@@ -1,7 +1,7 @@
 //! Benchmarks for [`TwoAdicStirPcs`] across LDE-height buckets.
 //!
 //! Matrices sharing an LDE height form one bucket. `max_pow_bits` is set high so grind-sharing
-//! dominates `open()`.
+//! dominates `open()`. The PCS also grinds 16 bits before its batching challenges.
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger};
@@ -62,7 +62,7 @@ fn make_pcs() -> (MyPcs, Challenger) {
     };
 
     (
-        MyPcs::new(Dft::default(), val_mmcs, stir_params),
+        MyPcs::new(Dft::default(), val_mmcs, stir_params).with_batch_proof_of_work_bits(16),
         Challenger::new(perm),
     )
 }

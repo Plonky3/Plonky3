@@ -214,6 +214,7 @@ fn circle_pcs_cases() -> Vec<Case> {
     let plain = CirclePcsShape {
         opened_widths: vec![vec![vec![3, 1]]],
         num_commit_rounds: 1,
+        batch_pow_bits: 0,
         commit_pow_bits: 0,
         query_pow_bits: 0,
         num_queries: 2,

@@ -133,6 +133,10 @@ const STIR_FIXTURE: &str = "tests/fixtures/uni_stark_stir_v0_8_0.postcard";
 const MIN_TRACE_HEIGHT: usize = 1 << 2;
 
 fn make_config() -> MyConfig {
+    make_config_with_batch_pow(0)
+}
+
+fn make_config_with_batch_pow(bits: usize) -> MyConfig {
     let mut rng = SmallRng::seed_from_u64(1);
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
@@ -149,7 +153,7 @@ fn make_config() -> MyConfig {
         max_pow_bits: 20,
         mmcs: challenge_mmcs,
     };
-    let pcs = Pcs::new(dft, val_mmcs, stir_params);
+    let pcs = Pcs::new(dft, val_mmcs, stir_params).with_batch_proof_of_work_bits(bits);
     let challenger = Challenger::new(perm);
     MyConfig::new(pcs, challenger)
 }
@@ -193,6 +197,17 @@ fn test_smallest_trace() {
 #[test]
 fn test_public_value() {
     test_public_value_impl(1 << 3, 21);
+}
+
+#[test]
+fn test_public_value_with_batch_grinding() {
+    let config = make_config_with_batch_pow(8);
+    let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
+    let proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    let bytes = postcard::to_allocvec(&proof).unwrap();
+    let decoded = postcard::from_bytes(&bytes).unwrap();
+    verify(&config, &FibonacciAir {}, &decoded, &pis).unwrap();
 }
 
 #[test]
