@@ -494,21 +494,30 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         //
         // One item is one matrix row, weighted into every one of the N accumulators.
         //
-        // Reading the row is the smaller half of that.
+        // Reading the row is the smaller part of that:
         //
-        //     traffic : one packed row, plus the N weights it is scaled by
-        //     arith   : N packed columns of base-by-extension multiply-accumulate
+        //     traffic : one packed row, plus the N weights it scales
+        //     arith   : N packed multiply-accumulates, each a packed extension by a packed base
         //
-        // A multiply-accumulate is charged two extension widths, as the eq contractions are.
+        // Measured on Zen 5, one such step costs about seven extension widths, steady across
+        // matrix widths from 16 to 512 columns at four weight vectors:
         //
-        // Pricing the row by traffic alone would leave a tall compute-bound matrix on one core.
+        //     columns   real bytes per row   widths per step
+        //          16                  602               7.4
+        //          64                 2235               7.5
+        //         256                 8716               7.4
+        //         512                17424               7.5
+        //
+        // Pricing the row by traffic alone puts the gate about seven times too high, which
+        // leaves a compute-bound matrix fully serial: at 64 columns and 512 rows that costs
+        // 114 us against 19 us split.
         //
         // The floor collapses the split to a single chunk on a small matrix.
         //
         // Below that size the work is not worth handing to another worker.
         let row_bytes = packed_width * size_of::<T::Packing>()
             + size_of::<FieldArray<EF, N>>()
-            + 2 * N * packed_width * size_of::<EF>();
+            + 7 * N * packed_width * size_of::<EF>();
         // The floor is never zero, so the chunk length is always usable as a divisor.
         let chunk_rows = height
             .div_ceil((4 * current_num_threads()).clamp(1, height.max(1)))
