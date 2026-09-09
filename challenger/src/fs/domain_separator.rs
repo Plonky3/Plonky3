@@ -127,9 +127,27 @@ impl<U: Unit> DomainSeparator<U> {
         &self.pattern
     }
 
-    /// Absorb the seed into the sponge.
+    /// Assemble the byte stream the seed is absorbed from.
     ///
     /// Wire layout: `[protocol_id | pattern_hash | len_be_4_bytes | label | DOMAIN_TAG]`.
+    ///
+    /// The stream is assembled before any alphabet sees it, so it does not depend on `U`.
+    /// It is the whole per-instance binding, and nothing else is absorbed at seeding time.
+    pub(crate) fn seed_bytes(&self) -> Vec<u8> {
+        let mut seed = Vec::with_capacity(PROTOCOL_ID_LEN + 32 + 4 + self.instance_label.len() + 1);
+        seed.extend_from_slice(&self.protocol_id);
+        // Pattern shape is part of the seed: distinct shapes cannot collide.
+        seed.extend_from_slice(&self.pattern.pattern_hash());
+        // Length prefix prevents two labels of different lengths from colliding.
+        let len = self.instance_label.len() as u32;
+        seed.extend_from_slice(&len.to_be_bytes());
+        seed.extend_from_slice(&self.instance_label);
+        // Terminator stops later absorbs from extending the seed.
+        seed.push(DOMAIN_TAG);
+        seed
+    }
+
+    /// Absorb the seed into the sponge.
     ///
     /// The byte stream is built first, then handed to the alphabet:
     /// a byte sponge takes it verbatim, a field sponge packs it into elements.
@@ -141,17 +159,7 @@ impl<U: Unit> DomainSeparator<U> {
     where
         C: CanObserve<U::Item>,
     {
-        let mut seed = Vec::with_capacity(PROTOCOL_ID_LEN + 32 + 4 + self.instance_label.len() + 1);
-        seed.extend_from_slice(&self.protocol_id);
-        // Pattern shape is part of the seed: distinct shapes cannot collide.
-        seed.extend_from_slice(&self.pattern.pattern_hash());
-        // Length prefix prevents two labels of different lengths from colliding.
-        let len = self.instance_label.len() as u32;
-        seed.extend_from_slice(&len.to_be_bytes());
-        seed.extend_from_slice(&self.instance_label);
-        // Terminator stops later absorbs from extending the seed.
-        seed.push(DOMAIN_TAG);
-        U::observe_bytes(challenger, &seed);
+        U::observe_bytes(challenger, &self.seed_bytes());
     }
 }
 
@@ -164,24 +172,12 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
 
     use super::*;
-    use crate::CanObserve;
     use crate::fs::pattern::{Hierarchy, Interaction, InteractionPattern, Kind, Length};
     use crate::fs::unit::FieldUnit;
+    use crate::testing::Recorder;
 
     /// Concrete field exercised in this module's tests.
     type F = BabyBear;
-
-    /// Captures every absorbed value in order.
-    #[derive(Default)]
-    struct Recorder<T> {
-        buf: Vec<T>,
-    }
-
-    impl<T> CanObserve<T> for Recorder<T> {
-        fn observe(&mut self, value: T) {
-            self.buf.push(value);
-        }
-    }
 
     fn empty_pattern() -> InteractionPattern {
         InteractionPattern::new(Vec::new()).unwrap()
@@ -241,19 +237,19 @@ mod tests {
         const LABEL: usize = LEN + 4;
 
         // Label region is 4 length bytes plus the 5 payload bytes.
-        assert_eq!(rec.buf.len(), PROTOCOL_ID_LEN + 32 + 4 + 9 + 1);
-        assert_eq!(rec.buf[0], 7);
-        assert_eq!(&rec.buf[1..3], b"p3");
-        assert!(rec.buf[3..NAME_LEN_INDEX].iter().all(|&b| b == 0));
-        assert_eq!(rec.buf[NAME_LEN_INDEX], 2);
+        assert_eq!(rec.absorbed().len(), PROTOCOL_ID_LEN + 32 + 4 + 9 + 1);
+        assert_eq!(rec.absorbed()[0], 7);
+        assert_eq!(&rec.absorbed()[1..3], b"p3");
+        assert!(rec.absorbed()[3..NAME_LEN_INDEX].iter().all(|&b| b == 0));
+        assert_eq!(rec.absorbed()[NAME_LEN_INDEX], 2);
         // Pattern fingerprint is bound automatically right after the identifier.
-        assert_eq!(&rec.buf[HASH..LEN], &expected_hash);
+        assert_eq!(&rec.absorbed()[HASH..LEN], &expected_hash);
         // Big-endian length prefix of the whole label region.
-        assert_eq!(&rec.buf[LEN..LABEL], &[0, 0, 0, 9]);
+        assert_eq!(&rec.absorbed()[LEN..LABEL], &[0, 0, 0, 9]);
         // Delimiter of the single chunk, then its payload.
-        assert_eq!(&rec.buf[LABEL..LABEL + 4], &[0, 0, 0, 5]);
-        assert_eq!(&rec.buf[LABEL + 4..LABEL + 9], b"hello");
-        assert_eq!(rec.buf[LABEL + 9], DOMAIN_TAG);
+        assert_eq!(&rec.absorbed()[LABEL..LABEL + 4], &[0, 0, 0, 5]);
+        assert_eq!(&rec.absorbed()[LABEL + 4..LABEL + 9], b"hello");
+        assert_eq!(rec.absorbed()[LABEL + 9], DOMAIN_TAG);
     }
 
     #[test]
@@ -265,7 +261,7 @@ mod tests {
         let mut rb = Recorder::<u8>::default();
         a.seed(&mut ra);
         b.seed(&mut rb);
-        assert_ne!(ra.buf, rb.buf);
+        assert_ne!(ra.absorbed(), rb.absorbed());
     }
 
     #[test]
@@ -279,7 +275,7 @@ mod tests {
         let mut rb = Recorder::<u8>::default();
         a.seed(&mut ra);
         b.seed(&mut rb);
-        assert_ne!(ra.buf, rb.buf);
+        assert_ne!(ra.absorbed(), rb.absorbed());
     }
 
     #[test]
@@ -299,7 +295,7 @@ mod tests {
         let mut rg = Recorder::<u8>::default();
         split.seed(&mut rs);
         glued.seed(&mut rg);
-        assert_ne!(rs.buf, rg.buf);
+        assert_ne!(rs.absorbed(), rg.absorbed());
     }
 
     #[test]
@@ -329,7 +325,7 @@ mod tests {
         let mut rb = Recorder::<u8>::default();
         a.seed(&mut ra);
         b.seed(&mut rb);
-        assert_ne!(ra.buf, rb.buf);
+        assert_ne!(ra.absorbed(), rb.absorbed());
     }
 
     #[test]
@@ -343,8 +339,8 @@ mod tests {
 
         // Seed is 64 + 32 + 4 + 0 + 1 = 101 bytes, packed 3 bytes per element,
         // behind one leading length element.
-        assert_eq!(rec.buf.len(), 1 + 101_usize.div_ceil(3));
-        assert_eq!(rec.buf[0], F::from_u32(101));
+        assert_eq!(rec.absorbed().len(), 1 + 101_usize.div_ceil(3));
+        assert_eq!(rec.absorbed()[0], F::from_u32(101));
     }
 
     #[test]
@@ -356,6 +352,6 @@ mod tests {
         let mut rb = Recorder::<F>::default();
         a.seed(&mut ra);
         b.seed(&mut rb);
-        assert_ne!(ra.buf, rb.buf);
+        assert_ne!(ra.absorbed(), rb.absorbed());
     }
 }

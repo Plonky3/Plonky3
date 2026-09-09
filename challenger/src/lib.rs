@@ -17,6 +17,8 @@ mod grinding_challenger;
 mod hash_challenger;
 mod multi_field_challenger;
 mod serializing_challenger;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod testing;
 
 use alloc::vec::Vec;
 use core::array;

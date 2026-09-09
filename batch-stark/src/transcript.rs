@@ -1002,6 +1002,7 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::testing::{SeedDigest, assert_seeds_pairwise_distinct, seed_digest};
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
@@ -1039,12 +1040,11 @@ mod tests {
         }
     }
 
-    /// The first challenge a shape's seed produces.
-    fn first_challenge(shape: &BatchShape) -> F {
-        let mut challenger = fresh_challenger();
-        let separator = shape.domain_separator::<F, EF>();
-        separator.seed(&mut challenger);
-        challenger.sample()
+    /// The digest of the byte stream a shape seeds its sponge with.
+    ///
+    /// Comparing seed streams, rather than a sampled challenge, keeps the sponge out of it.
+    fn seed_of(shape: &BatchShape) -> SeedDigest {
+        seed_digest(&shape.domain_separator::<F, EF>())
     }
 
     /// One mutation of the plain shape per field a reader can set.
@@ -1095,21 +1095,22 @@ mod tests {
     }
 
     #[test]
-    fn every_configuration_knob_reaches_the_seed() {
+    fn no_two_configurations_of_the_shape_share_a_seed() {
         // A knob invisible to the seed is a knob the two sides can silently disagree on.
         //
-        // Some ride the pattern fingerprint, others the instance label.
-        // Which of the two carries a given knob is an implementation detail.
-        // That the seed moves at all is not.
-        let baseline = first_challenge(&plain_shape());
+        //     plain shape in the set  ->  every knob has to reach the seed
+        //     pairwise over the set   ->  no two knobs may land on one seed
+        //
+        // Which of the fingerprint and the label carries a given knob is an implementation detail.
+        // That every knob lands on a seed of its own is not.
+        let mut seeds = vec![("plain", seed_of(&plain_shape()))];
+        seeds.extend(
+            one_mutation_per_field()
+                .iter()
+                .map(|(field, shape)| (*field, seed_of(shape))),
+        );
 
-        for (field, mutated) in one_mutation_per_field() {
-            assert_ne!(
-                baseline,
-                first_challenge(&mutated),
-                "changing `{field}` left the seed where it was",
-            );
-        }
+        assert_seeds_pairwise_distinct(&seeds);
     }
 
     #[test]
@@ -1124,7 +1125,7 @@ mod tests {
         let mut descending = ascending.clone();
         descending.trace_widths.reverse();
 
-        assert_ne!(first_challenge(&ascending), first_challenge(&descending));
+        assert_ne!(seed_of(&ascending), seed_of(&descending));
     }
 
     #[test]
@@ -1140,7 +1141,7 @@ mod tests {
         let mut two = one.clone();
         two.num_lookup_instances = 2;
 
-        assert_ne!(first_challenge(&one), first_challenge(&two));
+        assert_ne!(seed_of(&one), seed_of(&two));
     }
 
     #[test]
@@ -1151,7 +1152,7 @@ mod tests {
         let mut ground = ungrounded.clone();
         ground.ood_pow_bits = 1;
 
-        assert_ne!(first_challenge(&ungrounded), first_challenge(&ground));
+        assert_ne!(seed_of(&ungrounded), seed_of(&ground));
     }
 
     #[test]
