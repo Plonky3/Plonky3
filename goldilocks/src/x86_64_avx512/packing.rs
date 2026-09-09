@@ -132,6 +132,26 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     }
 
     #[inline]
+    fn mul_2exp_u64(&self, mut exp: u64) -> Self {
+        exp %= 192;
+        match exp {
+            0 => *self,
+            1 => self.double(),
+            _ => *self * Self::broadcast(Goldilocks::power_of_two(exp)),
+        }
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, mut exp: u64) -> Self {
+        exp %= 192;
+        match exp {
+            0 => *self,
+            1 => self.halve(),
+            _ => *self * Self::broadcast(Goldilocks::power_of_two(192 - exp)),
+        }
+    }
+
+    #[inline]
     fn square(&self) -> Self {
         Self::from_vector(square(self.to_vector()))
     }

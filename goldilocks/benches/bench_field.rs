@@ -16,6 +16,7 @@ use p3_field_testing::{
     benchmark_mul_throughput, benchmark_sum_array,
 };
 use p3_goldilocks::Goldilocks;
+use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -133,6 +134,65 @@ fn bench_large_integer_conversion(c: &mut Criterion) {
     });
 }
 
+fn benchmark_packed_fixed_power<R, const REPS: usize, const EXP: u64>(c: &mut Criterion, name: &str)
+where
+    R: PrimeCharacteristicRing + Copy,
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = SmallRng::seed_from_u64(0x2E80_2E80 + EXP);
+    let input = (0..REPS).map(|_| rng.random::<R>()).collect::<Vec<_>>();
+    let mut mul_input = input.clone();
+    let mut div_input = input;
+
+    c.bench_function(&format!("{name} mul_2exp_u64 fixed {EXP}"), |b| {
+        b.iter(|| {
+            mul_input
+                .iter_mut()
+                .for_each(|value| *value = value.mul_2exp_u64(EXP));
+            black_box(mul_input.as_slice());
+        });
+    });
+    c.bench_function(&format!("{name} div_2exp_u64 fixed {EXP}"), |b| {
+        b.iter(|| {
+            div_input
+                .iter_mut()
+                .for_each(|value| *value = value.div_2exp_u64(EXP));
+            black_box(div_input.as_slice());
+        });
+    });
+}
+
+fn benchmark_packed_runtime_powers<R, const REPS: usize>(c: &mut Criterion, name: &str)
+where
+    R: PrimeCharacteristicRing + Copy,
+    StandardUniform: Distribution<R>,
+{
+    let mut rng = SmallRng::seed_from_u64(0x2E80_2E80_5EED);
+    let input = (0..REPS).map(|_| rng.random::<R>()).collect::<Vec<_>>();
+    let exponents = (0..REPS).map(|_| rng.random::<u64>()).collect::<Vec<_>>();
+    let mut mul_input = input.clone();
+    let mut div_input = input;
+
+    c.bench_function(&format!("{name} mul_2exp_u64 runtime"), |b| {
+        b.iter(|| {
+            mul_input
+                .iter_mut()
+                .zip(&exponents)
+                .for_each(|(value, &exp)| *value = value.mul_2exp_u64(black_box(exp)));
+            black_box(mul_input.as_slice());
+        });
+    });
+    c.bench_function(&format!("{name} div_2exp_u64 runtime"), |b| {
+        b.iter(|| {
+            div_input
+                .iter_mut()
+                .zip(&exponents)
+                .for_each(|(value, &exp)| *value = value.div_2exp_u64(black_box(exp)));
+            black_box(div_input.as_slice());
+        });
+    });
+}
+
 fn bench_packedfield(c: &mut Criterion) {
     let name = type_name::<<F as Field>::Packing>().to_string();
     type PF = <F as Field>::Packing;
@@ -147,6 +207,12 @@ fn bench_packedfield(c: &mut Criterion) {
     benchmark_sub_throughput::<<F as Field>::Packing, REPS>(c, &name);
     benchmark_mul_latency::<<F as Field>::Packing, L_REPS>(c, &name);
     benchmark_mul_throughput::<<F as Field>::Packing, REPS>(c, &name);
+
+    benchmark_packed_fixed_power::<PF, REPS, 1>(c, &name);
+    benchmark_packed_fixed_power::<PF, REPS, 5>(c, &name);
+    benchmark_packed_fixed_power::<PF, REPS, 32>(c, &name);
+    benchmark_packed_fixed_power::<PF, REPS, 63>(c, &name);
+    benchmark_packed_runtime_powers::<PF, REPS>(c, &name);
 
     benchmark_dot_array::<<F as Field>::Packing, 1>(c, &name);
     benchmark_dot_array::<<F as Field>::Packing, 2>(c, &name);

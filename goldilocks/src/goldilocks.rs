@@ -172,6 +172,28 @@ impl Goldilocks {
         }
         powers_of_two
     };
+
+    /// Returns the canonical coefficient 2^exp mod P for packed multiplication.
+    #[cfg(any(
+        test,
+        all(target_arch = "aarch64", target_feature = "neon"),
+        all(
+            target_arch = "x86_64",
+            any(target_feature = "avx2", target_feature = "avx512f")
+        ),
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
+    #[inline]
+    pub(crate) const fn power_of_two(exp: u64) -> Self {
+        // 2^96 = -1 mod P, so powers repeat with period 192.
+        let exp = (exp % 192) as usize;
+        if exp < 96 {
+            Self::POWERS_OF_TWO[exp]
+        } else {
+            // Every table entry is nonzero and canonical, so this cannot underflow.
+            Self::new(Self::ORDER_U64 - Self::POWERS_OF_TWO[exp - 96].value)
+        }
+    }
 }
 
 impl PartialEq for Goldilocks {
@@ -945,6 +967,82 @@ mod tests {
         check_length!(rng, 63, 8);
         check_length!(rng, 64, 8);
         check_length!(rng, 129, 4);
+    }
+
+    #[test]
+    fn power_of_two_coefficient_matches_generic_exponentiation() {
+        for exp in (0..384).chain([1 << 32, 1 << 63, u64::MAX - 1, u64::MAX]) {
+            let coefficient = F::power_of_two(exp);
+            assert_eq!(coefficient, F::TWO.exp_u64(exp), "exp = {exp}");
+            assert!(
+                coefficient.value < P,
+                "noncanonical coefficient: exp = {exp}"
+            );
+            assert_eq!(
+                coefficient * F::power_of_two(192 - exp % 192),
+                F::ONE,
+                "inverse coefficient: exp = {exp}"
+            );
+        }
+    }
+
+    #[test]
+    fn packed_powers_of_two_match_scalar_oracle_for_arbitrary_representatives() {
+        type PF = <F as Field>::Packing;
+
+        const EXPONENTS: [u64; 13] = [0, 1, 2, 3, 5, 31, 32, 63, 95, 96, 191, 192, u64::MAX];
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            (1 << 32) - 2,
+            (1 << 32) - 1,
+            1 << 32,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX,
+        ];
+
+        let check = |raw: &[u64]| {
+            assert_eq!(raw.len(), PF::WIDTH);
+            let input = PF::from_fn(|lane| F::new(raw[lane]));
+
+            for exp in EXPONENTS {
+                let power = F::TWO.exp_u64(exp);
+                let product = input.mul_2exp_u64(exp);
+                let quotient = input.div_2exp_u64(exp);
+
+                for (lane, &raw) in raw.iter().enumerate() {
+                    let scalar = F::new(raw);
+                    assert_eq!(
+                        product.as_slice()[lane],
+                        scalar * power,
+                        "mul: raw = {raw:#018x}, exp = {exp}, lane = {lane}"
+                    );
+                    assert_eq!(
+                        quotient.as_slice()[lane],
+                        scalar / power,
+                        "div: raw = {raw:#018x}, exp = {exp}, lane = {lane}"
+                    );
+                }
+            }
+        };
+
+        for offset in 0..RAW_EDGES.len() {
+            let raw = (0..PF::WIDTH)
+                .map(|lane| RAW_EDGES[(offset + lane) % RAW_EDGES.len()])
+                .collect::<Vec<_>>();
+            check(&raw);
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x2E80_2E80_5EED);
+        for _ in 0..256 {
+            let raw = (0..PF::WIDTH)
+                .map(|_| rng.random::<u64>())
+                .collect::<Vec<_>>();
+            check(&raw);
+        }
     }
 
     #[test]
