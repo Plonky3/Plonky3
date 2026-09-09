@@ -496,6 +496,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::fs::TypeTag;
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
@@ -529,6 +530,13 @@ mod tests {
         }
     }
 
+    /// The shape every mutation below is measured against.
+    ///
+    /// Three rounds, so a per-round step is described more than once.
+    fn plain_shape() -> FriShape {
+        shape_with(vec![3, 3, 2])
+    }
+
     /// The first challenge a shape's seed produces.
     fn first_challenge(shape: &FriShape) -> F {
         let mut challenger = fresh_challenger();
@@ -537,19 +545,171 @@ mod tests {
         challenger.sample()
     }
 
-    #[test]
-    fn the_arity_of_every_round_reaches_the_seed() {
-        // Reorderings share a round count, a total, and therefore a step sequence.
+    /// Every field of the shape, each moved one step away from `plain_shape`.
+    ///
+    /// One entry per configuration knob.
+    /// A field added to the shape stops the destructuring below from compiling.
+    ///
+    /// The schedule is a vector, so it contributes one entry per way of moving it.
+    fn one_step_from_plain() -> Vec<(&'static str, FriShape)> {
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        // The bindings go unused, since naming the fields is all this has to do.
+        let FriShape {
+            log_arities: _,
+            final_poly_len: _,
+            commit_pow_bits: _,
+            query_pow_bits: _,
+            num_queries: _,
+            index_bits: _,
+            log_blowup: _,
+            max_log_arity: _,
+        } = plain_shape();
+
+        let mut mutations = Vec::new();
+
+        // The closing round folds by one more, at an unchanged round count.
+        let mut shape = plain_shape();
+        shape.log_arities[2] += 1;
+        mutations.push(("log_arities value", shape));
+
+        // One more round, which the pattern loop turns into one more group of steps.
+        let mut shape = plain_shape();
+        shape.log_arities.push(2);
+        mutations.push(("log_arities length", shape));
+
+        // A reordering keeps the round count, the total, and the step sequence.
         //
         //     [3, 3, 2]  folds 8 -> 5 -> 2 -> 0
         //     [2, 3, 3]  folds 8 -> 6 -> 3 -> 0
         //
         // Reachable as inputs [10] against [10, 8] at the same cap.
         // Only the instance label separates them, so it must carry the values.
-        let descending = first_challenge(&shape_with(vec![3, 3, 2]));
-        let ascending = first_challenge(&shape_with(vec![2, 3, 3]));
+        let mut shape = plain_shape();
+        shape.log_arities.reverse();
+        mutations.push(("log_arities order", shape));
 
-        assert_ne!(descending, ascending);
+        // One more coefficient the final polynomial's fixed-length step declares.
+        let mut shape = plain_shape();
+        shape.final_poly_len += 1;
+        mutations.push(("final_poly_len", shape));
+
+        // Elided at zero, so this is the transition where the step appears at all.
+        // It appears once per round, which is why the plain shape runs three.
+        let mut shape = plain_shape();
+        shape.commit_pow_bits += 1;
+        mutations.push(("commit_pow_bits", shape));
+
+        // Elided at zero too, so again the transition is the step's presence.
+        let mut shape = plain_shape();
+        shape.query_pow_bits += 1;
+        mutations.push(("query_pow_bits", shape));
+
+        // One more index drawn, which is the fixed length of the query step.
+        let mut shape = plain_shape();
+        shape.num_queries += 1;
+        mutations.push(("num_queries", shape));
+
+        // One more bit per index, which the query step carries in its type tag.
+        let mut shape = plain_shape();
+        shape.index_bits += 1;
+        mutations.push(("index_bits", shape));
+
+        // Blowup and arity cap leave every step exactly where it was.
+        // They still change what the protocol is, so the instance label carries them.
+        let mut shape = plain_shape();
+        shape.log_blowup += 1;
+        mutations.push(("log_blowup", shape));
+
+        let mut shape = plain_shape();
+        shape.max_log_arity += 1;
+        mutations.push(("max_log_arity", shape));
+
+        mutations
+    }
+
+    #[test]
+    fn every_field_of_the_shape_reaches_the_seed() {
+        // Baseline: the plain shape, seeded and sampled once.
+        let baseline = first_challenge(&plain_shape());
+
+        // Each mutation moves exactly one field one step.
+        //
+        // A field the fingerprint covers moves the seed through the step sequence.
+        // A field it does not must move it through the instance label instead.
+        for (field, shape) in one_step_from_plain() {
+            assert_ne!(
+                baseline,
+                first_challenge(&shape),
+                "changing `{field}` left the seed where it was",
+            );
+        }
+    }
+
+    #[test]
+    fn no_two_one_step_mutations_collide() {
+        // Invariant: the knobs are separated from each other, not merely from the baseline.
+        //
+        // Two knobs bound as one number would agree here while both differing from the baseline.
+        let mutations = one_step_from_plain();
+
+        for (i, (left_field, left)) in mutations.iter().enumerate() {
+            for (right_field, right) in &mutations[i + 1..] {
+                assert_ne!(
+                    first_challenge(left),
+                    first_challenge(right),
+                    "`{left_field}` and `{right_field}` land on the same seed",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_grinding_step_that_is_already_present_still_binds_its_difficulty() {
+        // Both difficulties are elided at zero, so a bump off zero only proves presence.
+        //
+        //     0 -> 1   the step joins the sequence
+        //     1 -> 2   the step that is already there declares one more bit
+        //
+        // The second transition is the one the step's `Length::Fixed` carries.
+        let mut commit_one = plain_shape();
+        commit_one.commit_pow_bits = 1;
+        let mut commit_two = commit_one.clone();
+        commit_two.commit_pow_bits = 2;
+
+        assert_ne!(first_challenge(&commit_one), first_challenge(&commit_two));
+
+        let mut query_one = plain_shape();
+        query_one.query_pow_bits = 1;
+        let mut query_two = query_one.clone();
+        query_two.query_pow_bits = 2;
+
+        assert_ne!(first_challenge(&query_one), first_challenge(&query_two));
+    }
+
+    #[test]
+    fn the_query_index_width_is_described_where_the_indices_are_drawn() {
+        // A run draws `log_global_max_height + extra_query_index_bits` bits per query.
+        // A narrower draw shrinks the query space, and the proximity-test soundness error with it.
+        //
+        // That width is not a length: the length of the step is how many indices it draws.
+        // It reaches the fingerprint through the type tag instead, which is what this pins.
+        let shape = plain_shape();
+        let pattern = shape.pattern::<F, EF>();
+
+        let drawn: Vec<_> = pattern
+            .interactions()
+            .iter()
+            .filter(|step| step.label() == QUERY_INDICES)
+            .collect();
+
+        assert_eq!(drawn.len(), 1, "every index is drawn at one step");
+        assert_eq!(
+            drawn[0].type_tag(),
+            TypeTag::Bits {
+                width: shape.index_bits
+            },
+        );
+        assert_eq!(drawn[0].length(), Length::Fixed(shape.num_queries));
     }
 
     #[test]

@@ -564,6 +564,13 @@ mod tests {
         }
     }
 
+    /// The shape every mutation below is measured against.
+    ///
+    /// One commitment, one matrix, two openings of unequal width.
+    fn plain_shape() -> PcsShape {
+        shape_with(vec![vec![vec![3, 1]]])
+    }
+
     /// The first challenge a shape's seed produces.
     fn first_challenge(shape: &PcsShape) -> F {
         let mut challenger = fresh_challenger();
@@ -572,16 +579,65 @@ mod tests {
         challenger.sample()
     }
 
-    #[test]
-    fn the_width_of_every_opening_reaches_the_seed() {
-        // Widths drive the `Length::Fixed` of each step, so they ride the fingerprint.
+    /// Every field of the shape, each moved one step away from `plain_shape`.
+    ///
+    /// One entry per configuration knob.
+    /// A field added to the shape stops the destructuring below from compiling.
+    ///
+    /// The counts are nested vectors, so they contribute one entry per way of moving them.
+    fn one_step_from_plain() -> Vec<(&'static str, PcsShape)> {
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        // The bindings go unused, since naming the fields is all this has to do.
+        let PcsShape {
+            claimed_evaluation_counts: _,
+            batch_pow_bits: _,
+        } = plain_shape();
+
+        let mut mutations = Vec::new();
+
+        // One more claimed evaluation in the first opening's fixed-length step.
+        let mut shape = plain_shape();
+        shape.claimed_evaluation_counts[0][0][0] += 1;
+        mutations.push(("claimed_evaluation_counts value", shape));
+
+        // One more opening, which is one more step.
+        let mut shape = plain_shape();
+        shape.claimed_evaluation_counts[0][0].push(2);
+        mutations.push(("claimed_evaluation_counts length", shape));
+
+        // A reordering keeps the openings and their widths, and swaps the order they arrive in.
         //
         //     [[[3, 1]]]  absorbs 3 values then 1
         //     [[[1, 3]]]  absorbs 1 value then 3
-        let wide_first = first_challenge(&shape_with(vec![vec![vec![3, 1]]]));
-        let narrow_first = first_challenge(&shape_with(vec![vec![vec![1, 3]]]));
+        let mut shape = plain_shape();
+        shape.claimed_evaluation_counts[0][0].reverse();
+        mutations.push(("claimed_evaluation_counts order", shape));
 
-        assert_ne!(wide_first, narrow_first);
+        // Elided at zero, so this is the transition where the grinding step appears at all.
+        // A shorter sequence, not a cheaper one.
+        let mut shape = plain_shape();
+        shape.batch_pow_bits += 1;
+        mutations.push(("batch_pow_bits", shape));
+
+        mutations
+    }
+
+    #[test]
+    fn every_field_of_the_shape_reaches_the_seed() {
+        // Baseline: the plain shape, seeded and sampled once.
+        let baseline = first_challenge(&plain_shape());
+
+        // Each mutation moves exactly one field one step.
+        //
+        // A field the fingerprint covers moves the seed through the step sequence.
+        // A field it does not must move it through the instance label instead.
+        for (field, shape) in one_step_from_plain() {
+            assert_ne!(
+                baseline,
+                first_challenge(&shape),
+                "changing `{field}` left the seed where it was",
+            );
+        }
     }
 
     #[test]
@@ -611,25 +667,19 @@ mod tests {
     }
 
     #[test]
-    fn the_batch_grinding_difficulty_reaches_the_seed() {
-        // The difficulty is the fixed length of the grinding step, so it rides the fingerprint.
-        // Nothing else in the shape changes between these two runs.
-        let mut ground = shape_with(vec![vec![vec![2]]]);
-        ground.batch_pow_bits = 4;
+    fn a_grinding_step_that_is_already_present_still_binds_its_difficulty() {
+        // The step is elided at zero, so a bump off zero only proves presence.
+        //
+        //     0 -> 1   the step joins the sequence
+        //     1 -> 2   the step that is already there declares one more bit
+        //
+        // The second transition is the one the step's `Length::Fixed` carries.
+        let mut ground = plain_shape();
+        ground.batch_pow_bits = 1;
         let mut ground_harder = ground.clone();
-        ground_harder.batch_pow_bits = 5;
+        ground_harder.batch_pow_bits = 2;
 
         assert_ne!(first_challenge(&ground), first_challenge(&ground_harder));
-    }
-
-    #[test]
-    fn a_run_with_no_grinding_differs_from_one_with_a_single_bit() {
-        // At zero bits the step is absent, which is a shorter sequence, not a cheaper one.
-        let ungrounded = shape_with(vec![vec![vec![2]]]);
-        let mut ground = ungrounded.clone();
-        ground.batch_pow_bits = 1;
-
-        assert_ne!(first_challenge(&ungrounded), first_challenge(&ground));
     }
 
     #[test]
@@ -690,7 +740,7 @@ mod tests {
         // Invariant: the markers are structural.
         // They record the delegation, and absorb nothing.
         //
-        // Fixture state: two runs over the same shape, one bracketing an empty delegation.
+        // Fixture state: the two sides over the same shape, each bracketing an empty delegation.
         let shape = shape_with(vec![vec![vec![1]]]);
         let claims: Vec<CommitmentWithOpeningPoints<EF, (), ()>> =
             vec![((), vec![((), vec![(EF::ONE, vec![EF::ONE])])]).into()];
