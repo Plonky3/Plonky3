@@ -1,5 +1,6 @@
 use core::borrow::BorrowMut;
 
+use p3_maybe_rayon::PARALLEL_ENABLED;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use tracing::instrument;
@@ -61,18 +62,21 @@ where
     // will never try and access a particular slice of data more than once
     // across all parallel threads. Hence the following code is safe and does
     // not trigger undefined behaviour.
-    let swap = |i| {
+    let swap = |i, use_outline| {
         let values = values as *mut F;
         let j = reverse_bits_len(i, log_h);
         if i < j {
-            unsafe { swap_rows_raw(values, w, i, j) };
+            unsafe { swap_rows_raw(values, w, i, j, use_outline) };
         }
     };
     // Total matrix bytes, not rows: avoid scheduling overhead for inputs up to 32 KiB.
     if total_bytes <= 32 * 1024 {
-        (0..h).for_each(swap);
+        (0..h).for_each(|i| swap(i, true));
     } else {
-        (0..h).into_par_iter().for_each(swap);
+        // Keep Rayon jobs, including one-worker pools, free of a helper call per row pair.
+        (0..h)
+            .into_par_iter()
+            .for_each(|i| swap(i, !PARALLEL_ENABLED));
     }
 }
 
@@ -106,12 +110,24 @@ pub fn swap_rows<F: Clone + Send + Sync>(mat: &mut RowMajorMatrix<F>, i: usize, 
 /// - `w`: The matrix width (number of columns).
 /// - `i`: The first row index.
 /// - `j`: The second row index.
-unsafe fn swap_rows_raw<F>(mat: *mut F, w: usize, i: usize, j: usize) {
+/// - `use_outline`: Whether wide row swaps may use the separate slice helper.
+unsafe fn swap_rows_raw<F>(mat: *mut F, w: usize, i: usize, j: usize, use_outline: bool) {
     unsafe {
         let row_i = core::slice::from_raw_parts_mut(mat.add(i * w), w);
         let row_j = core::slice::from_raw_parts_mut(mat.add(j * w), w);
-        row_i.swap_with_slice(row_j);
+        // Row bytes: amortize the function call while keeping small swaps inline.
+        if use_outline && core::mem::size_of_val(row_i) >= 64 {
+            swap_row_slices(row_i, row_j);
+        } else {
+            row_i.swap_with_slice(row_j);
+        }
     }
+}
+
+// Keep disjoint row slices at a function boundary so the swap loop retains noalias information.
+#[inline(never)]
+fn swap_row_slices<F>(row_i: &mut [F], row_j: &mut [F]) {
+    row_i.swap_with_slice(row_j);
 }
 
 #[cfg(test)]
@@ -159,7 +175,7 @@ mod tests {
         );
         let ptr = matrix.values.as_mut_ptr();
         unsafe {
-            swap_rows_raw(ptr, matrix.width(), 0, 2);
+            swap_rows_raw(ptr, matrix.width(), 0, 2, false);
         }
 
         assert_eq!(
