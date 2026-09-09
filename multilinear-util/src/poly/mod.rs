@@ -564,23 +564,43 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         //
         // The in-place pass rewrites the table as it walks it, which no split can do.
         // Only a loop worth splitting pays for the half-size buffer a split needs.
-        if !should_split(mid, 3 * size_of::<A>()) {
-            // Output index `i` reads inputs `2i` and `2i + 1`, both at or ahead
-            // of the write position, so no slot is overwritten before it is read.
-            for i in 0..mid {
-                let lo = self.0[2 * i];
-                let hi = self.0[2 * i + 1];
-                self.0[i] = (hi - lo) * r + lo;
-            }
-            self.0.truncate(mid);
+        if should_split(mid, 3 * size_of::<A>()) {
+            self.fix_suffix_var_mut_split(r, mid);
         } else {
-            let folded: Vec<_> = self
-                .0
-                .par_chunks(2)
-                .map(|a| (a[1] - a[0]) * r + a[0])
-                .collect();
-            self.0 = folded;
+            self.fix_suffix_var_mut_whole(r, mid);
         }
+    }
+
+    /// The suffix fold as one pass, rewriting the table in place.
+    fn fix_suffix_var_mut_whole<F: Copy + Send + Sync>(&mut self, r: F, mid: usize)
+    where
+        A: Algebra<F>,
+    {
+        // Output index `i` reads inputs `2i` and `2i + 1`, both at or ahead
+        // of the write position, so no slot is overwritten before it is read.
+        for i in 0..mid {
+            let lo = self.0[2 * i];
+            let hi = self.0[2 * i + 1];
+            self.0[i] = (hi - lo) * r + lo;
+        }
+        self.0.truncate(mid);
+    }
+
+    /// The suffix fold as a split, collecting the folded pairs into a half-size buffer.
+    fn fix_suffix_var_mut_split<F: Copy + Send + Sync>(&mut self, r: F, mid: usize)
+    where
+        A: Algebra<F>,
+    {
+        // The same floor the gate used, so the split is cut into cache-sized tasks
+        // rather than left to rayon's unbounded halving.
+        let folded: Vec<_> = self
+            .0
+            .par_chunks(2)
+            .with_min_task_bytes(3 * size_of::<A>())
+            .map(|a| (a[1] - a[0]) * r + a[0])
+            .collect();
+        debug_assert_eq!(folded.len(), mid);
+        self.0 = folded;
     }
 }
 
@@ -1722,6 +1742,30 @@ pub(crate) mod test {
     }
 
     proptest! {
+        #[test]
+        fn prop_both_suffix_fold_arms_agree(n in 1usize..=12, seed in any::<u64>()) {
+            // Invariant: the gate that picks an arm moves with the pool and with the
+            // element width, so both arms run in production on some host.
+            //
+            // The in-place pass rewrites the table as it walks it; the split pass builds a
+            // half-size buffer instead.
+            //
+            // Two structurally different algorithms, so equality has to be pinned directly
+            // rather than inferred from whichever arm the host happens to take.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let evals: Vec<F> = (0..1usize << n).map(|_| rng.random()).collect();
+            let r: F = rng.random();
+            let mid = evals.len() / 2;
+
+            let mut whole = Poly::new(evals.clone());
+            whole.fix_suffix_var_mut_whole(r, mid);
+
+            let mut split = Poly::new(evals);
+            split.fix_suffix_var_mut_split(r, mid);
+
+            prop_assert_eq!(whole.as_slice(), split.as_slice());
+        }
+
         #[test]
         fn prop_compress_dimensions(
             n in 1usize..=10,

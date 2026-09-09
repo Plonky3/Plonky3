@@ -35,13 +35,16 @@
 //!
 //! A pool of one worker never splits at all, which is also what a build without rayon gets.
 //!
-//! # Environment overrides
+//! # Overrides
 //!
 //! - `P3_MIN_PARALLEL_NS` fixes the serial time a loop must be worth, ignoring the pool size.
 //! - `P3_MAX_TASK_NS` sets the time budget one task holds once a loop does split.
 //! - Setting both to `0` restores rayon's own unbounded splitting, for an A/B run.
 //!
-//! Both are read once and then cached for the process.
+//! A caller that would rather not depend on the ambient environment sets both from code.
+//!
+//! Either way the budgets are fixed once and then hold for the rest of the process.
+//! The first parallel loop fixes them, so a change after that point is refused.
 //!
 //! # Examples
 //!
@@ -50,14 +53,14 @@
 //!
 //! let data = vec![1u64; 1 << 10];
 //!
-//! // One item is one 8-byte read, so 8 KiB moved in total.
-//! // That is under the parallel budget, so this loop runs as a single task.
+//! // An adapter changes only how the loop is divided, never what it covers.
 //! let sum: u64 = data.par_iter().with_min_task::<u64>().sum();
 //! assert_eq!(sum, 1 << 10);
 //!
 //! // A call site that picks its own chunk length asks for the floor directly.
+//! // The answer moves with the pool and with any override, so only its range is fixed.
 //! let chunk = min_task_len(data.len(), size_of::<u64>());
-//! assert_eq!(chunk, data.len());
+//! assert!((1..=data.len()).contains(&chunk));
 //! ```
 
 use super::prelude::*;
@@ -96,19 +99,36 @@ const PICOS_PER_BYTE: u64 = 100;
 /// How much real work that is depends on how closely a body matches the rate.
 /// A narrow-field fold is priced about 1.6x high, so its gate sits nearer one dispatch.
 ///
-/// Both dispatch figures come from large pools.
+/// Linear in the worker count down to two, from the length at which the same fold first
+/// beats itself run whole:
 ///
-/// The rule is extrapolated through the origin down to two workers, which is not measured.
+/// ```text
+///     workers   break-even serial work   per worker
+///           2                   0.76 us      0.38 us
+///           4                   1.51 us      0.38 us
+///           8                   3.00 us      0.37 us
+///          16                   6.02 us      0.38 us
+///          32                  12.06 us      0.38 us
+/// ```
+///
+/// Taken on a host shared with other work, so the constant is good to about a factor of two.
+/// Pools past 32 workers are still extrapolated.
 const MIN_PARALLEL_PICOS_PER_WORKER: u64 = 625_000;
 
 /// Time one task holds once a loop does split, in picoseconds.
 ///
 /// - The cap keeps a task's working set inside L1 or L2.
-/// - It also leaves a long loop more tasks than workers, which work stealing then balances.
+/// - It also bounds how finely work stealing may cut, which nothing else does.
 ///
 /// ```text
 ///     2 us at 100 ps per byte = 20 KiB moved per task
 /// ```
+///
+/// A floor only ever forbids a split, so it never produces a task rayon would not have made.
+///
+/// An uncontended loop stops at roughly one leaf per worker on its own.
+///
+/// Stealing a task resets that budget, so a contended loop keeps halving until the floor stops it.
 ///
 /// Measured on the same fold kernel, tasks of that size beat both alternatives:
 ///
@@ -137,17 +157,54 @@ impl Budget {
     };
 }
 
+/// The budgets a caller may fix in place of the environment, in nanoseconds.
+///
+/// A build without rayon never splits, so it has nothing to configure and offers no setter.
+#[cfg(feature = "parallel")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskBudget {
+    /// Serial time a loop must be worth before splitting pays.
+    ///
+    /// Absent means scale it with the number of workers.
+    pub min_parallel_ns: Option<u64>,
+    /// Time one task holds once a loop splits.
+    pub max_task_ns: u64,
+}
+
+/// Returned when the budgets are already fixed and can no longer be changed.
+#[cfg(feature = "parallel")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskBudgetLocked;
+
+/// The process-wide budgets, fixed by whichever of a caller or the first loop gets there first.
+#[cfg(feature = "parallel")]
+static BUDGET: std::sync::OnceLock<Budget> = std::sync::OnceLock::new();
+
+/// Fixes the budgets for the rest of the process, in place of the environment.
+///
+/// Call this before the first parallel loop runs, since that is what otherwise fixes them.
+///
+/// # Errors
+///
+/// Fails, changing nothing, once the budgets are fixed.
+#[cfg(feature = "parallel")]
+pub fn set_task_budget(budget: TaskBudget) -> Result<(), TaskBudgetLocked> {
+    // Nanoseconds at the boundary, picoseconds inside, so a caller never sees the finer unit.
+    BUDGET
+        .set(Budget {
+            min_parallel_picos: budget.min_parallel_ns.map(|ns| ns.saturating_mul(1_000)),
+            max_task_picos: budget.max_task_ns.saturating_mul(1_000),
+        })
+        .map_err(|_| TaskBudgetLocked)
+}
+
 /// Reads the budgets from the environment, falling back to the compiled-in values.
 ///
 /// The environment is read once, then cached for the process.
 /// A floor is computed on entry to every parallel loop, so the read cannot be repeated.
 #[cfg(feature = "parallel")]
 fn budget() -> Budget {
-    use std::sync::OnceLock;
-
-    static V: OnceLock<Budget> = OnceLock::new();
-
-    *V.get_or_init(|| {
+    *BUDGET.get_or_init(|| {
         // Overrides are given in nanoseconds and stored in picoseconds.
         //
         // A budget is a tuning knob, so a typo falls back instead of taking the process down.
@@ -222,9 +279,9 @@ fn min_task_len_with(budget: Budget, threads: usize, len: usize, item_bytes: usi
         return len.max(1);
     }
 
-    // Phase 4: one task per worker is the coarsest split worth making.
+    // Phase 4: one task per worker is the coarsest split worth allowing.
     //
-    // The cap then cuts that further, which keeps a long loop's tasks cache resident.
+    // The cap then lowers the floor further, so a stolen task can still be cut cache-sized.
     let per_worker = total / threads as u64;
     let task_picos = if per_worker < budget.max_task_picos {
         per_worker
@@ -265,6 +322,10 @@ pub fn min_task_len(len: usize, item_bytes: usize) -> usize {
 /// Reach for this only where the two paths differ in more than how the work is divided.
 ///
 /// An in-place pass that rewrites its buffer as it walks it is the usual case.
+///
+/// The answer moves with the pool, so both arms run somewhere.
+/// They must agree on every input, bit for bit, and a test has to pin that directly.
+/// Growing a fixture until the host happens to split checks one arm on one machine.
 ///
 /// # Arguments
 ///
@@ -395,16 +456,20 @@ mod tests {
     }
 
     #[test]
-    fn tasks_are_capped_below_one_per_worker() {
-        // A loop long enough for the cap to bind yields far more tasks than workers.
-        // That is what keeps each task cache resident and leaves slack for stealing.
+    fn the_cap_lowers_the_floor_below_one_task_per_worker() {
+        // Invariant: this is a statement about the floor, not about how many tasks are made.
+        //
+        // A floor only forbids a split, so it is a ceiling on how finely stealing may cut.
+        //
+        // Fixture state: a loop long enough for the cap to bind.
+        //     -> the floor drops below one worker's share, leaving room to cut further
         let len = 1 << 22;
         let floor = min_task_len_with(B, T, len, 4);
         assert!(len / floor > T);
 
         // Just past the parallel budget the cap does not bind.
         //
-        // One task per worker is then the coarsest split made.
+        // One worker's share is then the smallest piece the floor allows.
         //
         //     50001 items worth 20.0 us, over 32 workers = 625 ns per task
         let len = 50_001;
@@ -502,6 +567,22 @@ mod tests {
         assert_eq!(current_num_threads(), 1);
         assert_eq!(min_task_len(1 << 19, 12), 1 << 19);
         assert!(!should_split(1 << 19, 12));
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn the_budgets_can_only_be_fixed_once() {
+        // Invariant: the budgets hold for the whole process, so a later change is refused.
+        //
+        // Every other test in this binary reads them, and the order tests run in is not
+        // fixed, so the first call here may already be too late.
+        // Whichever way that lands, the call after it must fail.
+        let budget = TaskBudget {
+            min_parallel_ns: Some(1_000),
+            max_task_ns: 2_000,
+        };
+        let _ = set_task_budget(budget);
+        assert_eq!(set_task_budget(budget), Err(TaskBudgetLocked));
     }
 
     #[test]
