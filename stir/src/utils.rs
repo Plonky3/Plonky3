@@ -36,13 +36,32 @@ pub fn eval_poly<F: Field>(poly: &[F], point: F) -> F {
 /// Falls back to plain [`eval_poly`] for inputs too small to amortize the parallel
 /// dispatch.
 pub fn eval_poly_parallel<F: Field>(poly: &[F], point: F) -> F {
-    const MIN_PARALLEL_LEN: usize = 4096;
-    if poly.len() < MIN_PARALLEL_LEN {
+    // One item is one coefficient folded into a running accumulator.
+    //
+    // Each step waits on the previous multiply.
+    //
+    // So the loop has no instruction-level parallelism to hide behind.
+    //
+    // It runs slower than a stream of the same width.
+    //
+    //     measured  : 2.7 ns per 4-byte coefficient -> 675 ps per byte
+    //     streaming :                                    100 ps per byte
+    //     -> one coefficient is charged as seven
+    let chunk_size = min_task_len(poly.len(), 7 * size_of::<F>());
+    // A chunk spanning the whole polynomial means the split would never pay.
+    if chunk_size >= poly.len() {
         return eval_poly(poly, point);
     }
 
-    let num_chunks = current_num_threads().max(1);
-    let chunk_size = poly.len().div_ceil(num_chunks);
+    // The chunk length is a cache-sized task, so the count grows with the polynomial:
+    //
+    //     4-byte field      : about  714 coefficients per chunk
+    //     16-byte extension : about  178
+    //
+    // So a 2^22-coefficient extension polynomial makes roughly 23.5k chunks, not one per worker.
+    // The partial sums are collected into a vector of that length, then folded back serially.
+    // Both stay far below the Horner work itself, which is one multiply-add per coefficient.
+
     let point_pow_chunk = point.exp_u64(chunk_size as u64);
 
     poly.par_chunks(chunk_size)
