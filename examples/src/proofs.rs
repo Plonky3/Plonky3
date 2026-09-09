@@ -35,10 +35,22 @@ const EXAMPLE_SECURITY_BITS: usize = 100;
 /// PCS batching grind used by the STIR examples.
 const STIR_BATCH_POW_BITS: usize = 16;
 
+/// Circle's wide opening batches also need grinding to reach the shared target.
+const CIRCLE_BATCH_POW_BITS: usize = 16;
+
 /// Choose the fewest queries meeting the target, including the random-words correction.
 fn example_fri_parameters<EF: Field, M>(mut params: FriParameters<M>) -> FriParameters<M> {
+    // More queries cannot repair an algebraic bound below the target.
     assert!(
-        EF::bits() > EXAMPLE_SECURITY_BITS,
+        ConjecturedSecurity::compute_ldt_only(
+            params.log_blowup,
+            usize::MAX,
+            params.query_proof_of_work_bits,
+            128,
+            EF::bits(),
+        )
+        .security_bits
+            >= EXAMPLE_SECURITY_BITS,
         "challenge field is too small for the example security target"
     );
     params.num_queries =
@@ -56,6 +68,13 @@ fn example_fri_parameters<EF: Field, M>(mut params: FriParameters<M>) -> FriPara
         params.num_queries += 1;
     }
     params
+}
+
+fn example_circle_parameters<EF: Field, M>(mmcs: M) -> FriParameters<M> {
+    example_fri_parameters::<EF, _>(FriParameters {
+        batch_proof_of_work_bits: CIRCLE_BATCH_POW_BITS,
+        ..FriParameters::new_benchmark(mmcs)
+    })
 }
 
 /// Result type for Keccak-based two-adic proofs
@@ -354,7 +373,7 @@ pub fn prove_m31_keccak<
     let val_mmcs = get_keccak_mmcs(0);
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
-    let fri_params = example_fri_parameters::<EF, _>(FriParameters::new_benchmark(challenge_mmcs));
+    let fri_params = example_circle_parameters::<EF, _>(challenge_mmcs);
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
@@ -410,7 +429,7 @@ where
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
-    let fri_params = example_fri_parameters::<EF, _>(FriParameters::new_benchmark(challenge_mmcs));
+    let fri_params = example_circle_parameters::<EF, _>(challenge_mmcs);
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
@@ -545,5 +564,25 @@ mod tests {
         check_fri_target::<BinomialExtensionField<BabyBear, 4>>();
         check_fri_target::<BinomialExtensionField<KoalaBear, 4>>();
         check_fri_target::<QM31>();
+    }
+
+    #[test]
+    fn circle_keccak_at_height_18_reaches_100_bits_including_batching() {
+        let params = example_circle_parameters::<QM31, _>(());
+        let air = p3_keccak_air::KeccakAir {};
+        let security = StarkSecurityParams::from_air::<Mersenne31, QM31, _>(
+            params.security_regime(),
+            &air,
+            AirLayout::from_air::<Mersenne31>(&air),
+            QM31::bits(),
+            128,
+            2,
+            OpeningShape::Circle,
+            params.grinding_sites(),
+        );
+        assert_eq!(
+            ConjecturedSecurity::compute_from_params(&security, 18).security_bits,
+            100
+        );
     }
 }
