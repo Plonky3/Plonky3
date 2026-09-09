@@ -57,14 +57,21 @@ pub mod neon;
 ))]
 pub use neon::*;
 
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+pub mod wasm32_simd128;
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+pub use wasm32_simd128::*;
+
 #[cfg(not(any(
     all(target_arch = "aarch64", target_feature = "neon"),
-    target_arch = "x86_64"
+    target_arch = "x86_64",
+    all(target_arch = "wasm32", target_feature = "simd128")
 )))]
 mod fallback;
 #[cfg(not(any(
     all(target_arch = "aarch64", target_feature = "neon"),
-    target_arch = "x86_64"
+    target_arch = "x86_64",
+    all(target_arch = "wasm32", target_feature = "simd128")
 )))]
 pub use fallback::*;
 
@@ -385,6 +392,57 @@ mod tests {
             Keccak256Hash.hash_many(&messages, &mut batched);
 
             prop_assert_eq!(batched, reference(&messages, len, count));
+        }
+    }
+
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    mod wasm_simd_tests {
+        use tiny_keccak::keccakf;
+
+        use super::*;
+
+        fn permute_packed(states: [[u64; 25]; 2]) -> [[u64; 25]; 2] {
+            let mut packed = core::array::from_fn(|word| [states[0][word], states[1][word]]);
+            KeccakF.permute_mut(&mut packed);
+            core::array::from_fn(|lane| core::array::from_fn(|word| packed[word][lane]))
+        }
+
+        fn permute_scalar(mut states: [[u64; 25]; 2]) -> [[u64; 25]; 2] {
+            keccakf(&mut states[0]);
+            keccakf(&mut states[1]);
+            states
+        }
+
+        #[test]
+        fn simd_permutation_matches_scalar_for_zero_and_ones() {
+            let states = [[0; 25], [u64::MAX; 25]];
+            assert_eq!(permute_packed(states), permute_scalar(states));
+        }
+
+        #[test]
+        fn simd_lanes_do_not_influence_each_other() {
+            let lane0 =
+                core::array::from_fn(|i| 0x9e37_79b9_7f4a_7c15u64.wrapping_mul(i as u64 + 1));
+            let lane1_a = core::array::from_fn(|i| (i as u64).rotate_left(i as u32));
+            let lane1_b = core::array::from_fn(|i| !(i as u64).wrapping_mul(0x0101_0101_0101_0101));
+
+            let output_a = permute_packed([lane0, lane1_a]);
+            let output_b = permute_packed([lane0, lane1_b]);
+
+            assert_eq!(output_a[0], output_b[0]);
+            assert_eq!(output_a, permute_scalar([lane0, lane1_a]));
+            assert_eq!(output_b, permute_scalar([lane0, lane1_b]));
+        }
+
+        proptest! {
+            #[test]
+            fn simd_permutation_matches_scalar_for_arbitrary_words(
+                states in prop::array::uniform2(prop::array::uniform25(any::<u64>()))
+            ) {
+                let expected = permute_scalar(states);
+                let computed = permute_packed(states);
+                prop_assert_eq!(computed, expected);
+            }
         }
     }
 }
