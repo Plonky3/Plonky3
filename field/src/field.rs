@@ -699,6 +699,21 @@ pub trait Algebra<F>:
     + Mul<F, Output = Self>
     + MulAssign<F>
 {
+    /// Square `a[0] + a[1] X` modulo `X^2 - w`.
+    ///
+    /// Returns `[a[0]^2 + w * a[1]^2, 2 * a[0] * a[1]]` for arbitrary `w`.
+    /// The default uses a dot product to share reduction work; packed algebras can
+    /// override it when dedicated squaring is cheaper than the two-product reduction.
+    #[must_use]
+    #[inline]
+    fn quadratic_extension_square(a: &[Self; 2], w: F) -> [Self; 2] {
+        let a1_w = a[1].dup() * w;
+        [
+            Self::dot_product(a, &[a[0].dup(), a1_w]),
+            a[0].dup() * a[1].double(),
+        ]
+    }
+
     /// Dot product between algebra elements and base field scalars.
     ///
     /// Given arrays `a` (algebra) and `f` (scalars), computes:
