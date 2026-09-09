@@ -127,10 +127,16 @@ impl<F, EF> GenericDegreeProof<F, EF> {
         // Seeded from the same numbers the prover seeded with.
         //
         // Each round polynomial is one described step of exactly `degree` evaluations.
+        // The described width is what checks it, so no separate width sweep runs first.
         //
         //     described step:  Fixed(degree) evaluations
         //     proof carries:   evals.len()
-        //     mismatch      -> the round rejects, absorbing nothing
+        //     mismatch      -> that round rejects
+        //
+        // The rejection happens at the offending round, not before the replay.
+        // A proof whose round 3 carries the wrong width has rounds 0 to 2 absorbed first.
+        //
+        // The verdict is unaffected: the sponge is dropped on the error path and never reused.
         let shape = GenericDegreeShape::new(num_rounds, degree, pow_bits);
         let mut transcript =
             VerifierTranscript::<Challenger, F, EF>::new(challenger, shape, self.claimed_sum);
@@ -141,7 +147,15 @@ impl<F, EF> GenericDegreeProof<F, EF> {
         let mut running_sum = self.claimed_sum;
         let mut challenges = Vec::with_capacity(num_rounds);
 
-        for (round, evals) in self.round_polys.iter().enumerate() {
+        // Driven by the same number the description was built from, not by the proof's length.
+        //
+        // The two agree only because of the round-count check above.
+        // Reading the count once keeps the loop and the description from ever disagreeing.
+        //
+        // Both indices below are in bounds by the two checks above.
+        for round in 0..num_rounds {
+            let evals = &self.round_polys[round];
+
             // One call binds the polynomial, re-checks the grind, and draws the challenge.
             let witness = (pow_bits > 0).then(|| self.pow_witnesses[round]);
             let challenge = transcript.round(evals, witness)?;

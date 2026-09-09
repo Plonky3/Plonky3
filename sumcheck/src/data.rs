@@ -165,7 +165,18 @@ impl<F, EF> SumcheckData<F, EF> {
 
         let mut randomness = Vec::with_capacity(expected_rounds);
 
-        for (round, &[c_a, c_inf]) in self.polynomial_evaluations.iter().enumerate() {
+        // Driven by the same number the description was built from, not by the proof's length.
+        //
+        // The two agree only because of the round-count check above.
+        // Reading the count once keeps the loop and the description from ever disagreeing:
+        //
+        //     too few iterations  -> steps left unplayed, and closing the transcript panics
+        //     too many            -> a step past the end of the description, which panics
+        //
+        // Both indices below are in bounds by the two checks above.
+        for round in 0..expected_rounds {
+            let [c_a, c_inf] = self.polynomial_evaluations[round];
+
             // One call binds both values, re-checks the grind, and draws the challenge.
             //
             // A rejection here releases the driver's completeness check on its way out.

@@ -439,6 +439,12 @@ mod tests {
                 actual: 2,
             }
         );
+
+        // The rejection leaves round 0 half-played, with rounds 0 and 1 still described.
+        //
+        // Absorbing the width error is what releases the completeness check.
+        // Without that release this drop panics on top of an error already on its way out.
+        drop(transcript);
     }
 
     #[test]

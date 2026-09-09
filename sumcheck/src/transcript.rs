@@ -47,6 +47,9 @@
 //! The basis does not change it.
 //! It renames the two values a round sends without moving a single step.
 //! It is bound as an instance label instead.
+//!
+//! No shipped prover or verifier drives the projective reading yet.
+//! The label makes the two seeds differ before one exists.
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -127,6 +130,18 @@ impl SumcheckShape {
         F: TranscriptField,
         EF: ExtensionField<F>,
     {
+        // Both readings send two values per round, so both describe the same steps.
+        //
+        //     evaluation basis:  [h(0), h(inf)]
+        //     projective basis:  [s(1), s(inf)]
+        //
+        // Matching every variant here is what turns a future reading of some other width
+        // into a compile error, rather than a second protocol sharing this description.
+        let values_per_round = match self.basis {
+            Basis::Evaluation => VALUES_PER_ROUND,
+            Basis::Projective => VALUES_PER_ROUND,
+        };
+
         // Up to three steps per round.
         let mut steps = Vec::with_capacity(3 * self.num_rounds);
 
@@ -136,7 +151,7 @@ impl SumcheckShape {
                 Hierarchy::Atomic,
                 Kind::Message,
                 ROUND_POLY,
-                Length::Fixed(VALUES_PER_ROUND),
+                Length::Fixed(values_per_round),
             ));
 
             // Grinding sits between the polynomial and the challenge it protects.
@@ -178,6 +193,9 @@ impl SumcheckShape {
     ///
     /// Both are two extension elements followed by one challenge.
     /// Only the instance label separates two runs that disagree on which reading is meant.
+    ///
+    /// Every shipped driver picks the evaluation reading, so no live pair can disagree today.
+    /// The label is what keeps the two apart once a projective driver exists.
     #[must_use]
     pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
     where
