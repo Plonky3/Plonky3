@@ -275,11 +275,12 @@ fn lde_views<'a, Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>>(
 }
 
 /// Key identifying a derived STIR config: the bucket's degree plus, when §7's `Combine` runs,
-/// the class count and multiplicity that size round 0's `eta`.
+/// the class count and multiplicity that size round 0's `eta`, plus the per-class
+/// quotient counts and native degrees used by the PCS's initial alpha batches.
 ///
-/// `(log_stir_degree, 1, 0)` is the canonical no-`Combine` key; it cannot collide with a
+/// `(log_stir_degree, 1, 0, batches)` is a no-`Combine` key; it cannot collide with a
 /// `Combine` key, since [`StirConfig::try_new_with_combine`] rejects `num_classes < 2`.
-type StirConfigKey = (usize, usize, u64);
+type StirConfigKey = (usize, usize, u64, Vec<(usize, usize)>);
 
 /// STIR configs derived on demand, memoized by [`StirConfigKey`].
 type StirConfigCache<Val, Challenge, StirMmcs, Challenger> = Arc<
@@ -454,10 +455,10 @@ where
         &self,
         log_stir_degree: usize,
         combine: Option<(usize, u64)>,
+        quotient_batches: &[(usize, usize)],
     ) -> Result<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>, StirConfigError> {
-        let key: StirConfigKey = combine.map_or((log_stir_degree, 1, 0), |(classes, ell)| {
-            (log_stir_degree, classes, ell)
-        });
+        let (classes, ell) = combine.unwrap_or((1, 0));
+        let key: StirConfigKey = (log_stir_degree, classes, ell, quotient_batches.to_vec());
 
         if let Some(config) = self.config_cache.read().get(&key) {
             return Ok(config.clone());
@@ -468,18 +469,13 @@ where
         // whole derivation — under rayon, possibly while the holder is descheduled. The
         // derivation is idempotent, so a racing duplicate is harmless: the loser's `Arc` is
         // simply dropped in favour of whichever landed first.
-        let config = Arc::new(match combine {
-            Some((num_classes, ell)) => StirConfig::try_new_with_combine_and_options(
-                log_stir_degree,
-                self.stir.clone(),
-                num_classes,
-                ell,
-                self.options,
-            )?,
-            None => {
-                StirConfig::try_new_with_options(log_stir_degree, self.stir.clone(), self.options)?
-            }
-        });
+        let config = Arc::new(StirConfig::try_new_with_batching(
+            log_stir_degree,
+            self.stir.clone(),
+            quotient_batches,
+            combine,
+            self.options,
+        )?);
 
         let mut cache = self.config_cache.write();
         if cache.len() >= CONFIG_CACHE_CAPACITY && !cache.contains_key(&key) {
@@ -494,8 +490,9 @@ where
         &self,
         log_stir_degree: usize,
         combine: Option<(usize, u64)>,
+        quotient_batches: &[(usize, usize)],
     ) -> Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>> {
-        self.get_or_try_compute_stir_config(log_stir_degree, combine)
+        self.get_or_try_compute_stir_config(log_stir_degree, combine, quotient_batches)
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
@@ -542,7 +539,7 @@ where
         while width < max_width {
             let band: Vec<usize> = (0..=width + 1).map(|i| tallest - i).collect();
             if self
-                .get_or_try_compute_stir_config(log_stir_degree, Self::combine_key(&band))
+                .get_or_try_compute_stir_config(log_stir_degree, Self::combine_key(&band), &[])
                 .is_err()
             {
                 break;
@@ -929,6 +926,11 @@ where
                     self.get_or_compute_stir_config(
                         log_stir_degree,
                         Self::combine_key(native_heights),
+                        &num_reduced
+                            .iter()
+                            .filter(|((h, _), _)| *h == log_h)
+                            .map(|(&(_, log_degree), &count)| (log_degree, count))
+                            .collect::<Vec<_>>(),
                     )
                 })
                 .collect();
@@ -1415,6 +1417,11 @@ where
                     self.get_or_try_compute_stir_config(
                         log_stir_degree,
                         Self::combine_key(native_heights),
+                        &class_num_reduced
+                            .iter()
+                            .filter(|((h, _), _)| *h == log_h)
+                            .map(|(&(_, log_degree), &count)| (log_degree, count))
+                            .collect::<Vec<_>>(),
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()
@@ -2646,6 +2653,72 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "initial PCS quotient combination")]
+    fn pcs_rejects_infeasible_quotient_batching() {
+        let mut pcs = test_pcs_with(0, SecurityAssumption::CapacityBound, 100);
+        pcs.stir.max_pow_bits = 16;
+        let mut rng = SmallRng::seed_from_u64(923);
+        let mut challenger = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
+        let domain = <TestPcs as Pcs<EF, TestChallenger>>::natural_domain_for_degree(&pcs, 256);
+        // Two points for 1024 columns means 2048 quotients in one alpha batch.
+        let (commitment, data) = <TestPcs as Pcs<EF, TestChallenger>>::commit(
+            &pcs,
+            vec![(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 256, 1024))],
+        );
+        challenger.observe(commitment);
+        let points = vec![
+            challenger.sample_algebra_element(),
+            challenger.sample_algebra_element(),
+        ];
+        let _ = pcs.prepare_open(
+            &[OpeningRequest {
+                prover_data: &data,
+                points: vec![points],
+            }],
+            &mut challenger,
+        );
+    }
+
+    #[test]
+    fn pcs_quotient_batching_reaches_the_security_target() {
+        let mut pcs = test_pcs_with(0, SecurityAssumption::CapacityBound, 100);
+        pcs.stir.max_pow_bits = 16;
+        let mut rng = SmallRng::seed_from_u64(924);
+        let mut challenger = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
+        let domain = <TestPcs as Pcs<EF, TestChallenger>>::natural_domain_for_degree(&pcs, 256);
+        let (commitment, data) = <TestPcs as Pcs<EF, TestChallenger>>::commit(
+            &pcs,
+            vec![(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 256, 32))],
+        );
+        challenger.observe(commitment);
+        let points = [
+            challenger.sample_algebra_element(),
+            challenger.sample_algebra_element(),
+        ];
+        // Warming the same-degree cache with one point must not underbudget two points.
+        for num_points in [1, 2] {
+            let prepared = pcs.prepare_open(
+                &[OpeningRequest {
+                    prover_data: &data,
+                    points: vec![points[..num_points].to_vec()],
+                }],
+                &mut challenger.clone(),
+            );
+            let config = &prepared.stir_configs[0];
+            assert_eq!(config.quotient_batches, vec![(8, 32 * num_points)]);
+            // Capacity bound, independently evaluated at the config's initial eta.
+            let batching_bits = 123. - libm::log2((32 * num_points - 1) as f64) - 8. - 2.
+                + libm::log2(config.round_configs[0].eta);
+            // Four folds have 22 error terms after adding PCS batching: ceil(log2 22)=5.
+            assert!(
+                batching_bits >= 105. - 1e-10,
+                "batching only retains {batching_bits} bits"
+            );
+            assert!((config.initial_batching_error() - batching_bits).abs() < 1e-10);
+        }
+    }
+
+    #[test]
     fn cached_configs_match_a_fresh_derivation() {
         // An under-specified cache key is silent in the worst way: a proof produced under one
         // config and checked under another. Deriving the same shapes twice through the cache
@@ -2676,7 +2749,7 @@ mod tests {
             // Twice: the first call populates the entry, the second must return the same one.
             for round in 0..2 {
                 let cached = pcs
-                    .get_or_try_compute_stir_config(log_stir_degree, combine)
+                    .get_or_try_compute_stir_config(log_stir_degree, combine, &[])
                     .expect("feasible shape");
                 assert_eq!(
                     schedule_fingerprint(&cached),
@@ -2691,13 +2764,32 @@ mod tests {
     }
 
     #[test]
+    fn cache_keeps_each_native_class_quotient_count() {
+        let pcs = test_pcs_with(3, SecurityAssumption::CapacityBound, 32);
+        let combine = TestPcs::combine_key(&[8, 5]);
+        let first = pcs
+            .get_or_try_compute_stir_config(8, combine, &[(5, 2), (8, 512)])
+            .unwrap();
+        let second = pcs
+            .get_or_try_compute_stir_config(8, combine, &[(5, 512), (8, 2)])
+            .unwrap();
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert_ne!(
+            first.initial_batching_error(),
+            second.initial_batching_error()
+        );
+        assert_eq!(first.quotient_batches, vec![(5, 2), (8, 512)]);
+        assert_eq!(second.quotient_batches, vec![(5, 512), (8, 2)]);
+    }
+
+    #[test]
     fn early_stop_options_keep_warm_clone_caches_and_proofs_independent() {
         let (original, params) = test_pcs_and_params();
         let shapes = [(8, None), (8, Some((2, 194)))];
         for (degree, combine) in shapes {
             assert_eq!(
                 original
-                    .get_or_compute_stir_config(degree, combine)
+                    .get_or_compute_stir_config(degree, combine, &[])
                     .num_rounds(),
                 3
             );
@@ -2720,7 +2812,7 @@ mod tests {
                 ),
                 None => TestConfig::new_with_options(degree, params.clone(), options),
             };
-            let actual = early.get_or_compute_stir_config(degree, combine);
+            let actual = early.get_or_compute_stir_config(degree, combine, &[]);
             assert_eq!(actual.num_rounds(), 1);
             assert_eq!(
                 schedule_fingerprint(&actual),
@@ -2728,7 +2820,7 @@ mod tests {
             );
             assert_eq!(
                 original
-                    .get_or_compute_stir_config(degree, combine)
+                    .get_or_compute_stir_config(degree, combine, &[])
                     .num_rounds(),
                 3
             );
@@ -3181,7 +3273,8 @@ mod tests {
         // A garbage claim shape must not be able to occupy a cache slot permanently.
         let (pcs, _) = test_pcs_and_params();
         assert!(
-            pcs.get_or_try_compute_stir_config(8, Some((2, 1))).is_err(),
+            pcs.get_or_try_compute_stir_config(8, Some((2, 1)), &[])
+                .is_err(),
             "ell below the class count must be rejected"
         );
         assert!(pcs.config_cache.read().is_empty());

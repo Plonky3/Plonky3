@@ -50,6 +50,7 @@ const FOLDING: usize = 2;
 struct WhirConfigForTest {
     /// The WHIR commitment scheme, fixed to one stacked-table arity.
     pcs: TestPcs,
+    collision_bits: Option<usize>,
 }
 
 impl MultiStarkConfig for WhirConfigForTest {
@@ -60,6 +61,10 @@ impl MultiStarkConfig for WhirConfigForTest {
 
     fn pcs(&self) -> &TestPcs {
         &self.pcs
+    }
+
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        self.collision_bits
     }
 
     fn min_num_variables(&self) -> usize {
@@ -132,6 +137,7 @@ fn config_for_stacked(stacked_num_variables: usize) -> WhirConfigForTest {
     let whir_config = WhirConfig::new(stacked_num_variables, params).unwrap();
     WhirConfigForTest {
         pcs: TestPcs::new(whir_config, MyDft::default(), mmcs),
+        collision_bits: None,
     }
 }
 
@@ -273,6 +279,247 @@ fn fib_public_values_for_trace(trace: &RowMajorMatrix<F>) -> [F; 3] {
     let n = trace.values.len() / NUM_COLS;
     let last = trace.values[(n - 1) * NUM_COLS + 1];
     [trace.values[0], trace.values[1], last]
+}
+
+#[test]
+fn security_rejects_missing_collision_evidence() {
+    let config = config_for(4, NUM_COLS);
+    let air = FibAir;
+    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let public = fib_public_values(16);
+    let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &public)]);
+    let report = p3_multi_stark::security_report(&config, &instances).unwrap();
+    assert_eq!(report.security_bits(), None);
+    assert!(report.require_security(1).is_err());
+}
+
+#[test]
+fn security_rejects_verifier_height_overflow_without_panicking() {
+    let config = config_for(4, NUM_COLS);
+    let air = FibAir;
+    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let public = fib_public_values(16);
+    let instances = VerifierInstances::new(vec![VerifierInstance::new(
+        &air,
+        &vk,
+        usize::BITS as usize,
+        &public,
+    )]);
+    assert!(p3_multi_stark::security_report(&config, &instances).is_err());
+}
+
+#[test]
+fn security_checked_whir_roundtrip_and_target_rejection() {
+    use p3_challenger::CanSample;
+    use p3_multi_stark::{
+        SecurityError, prove_with_security, security_report, verify_with_security,
+    };
+
+    let mut config = config_for(4, NUM_COLS);
+    config.collision_bits = Some(100);
+    let air = FibAir;
+    let (pk, vk) = setup(&config, &[&air], &mut challenger());
+    let public = fib_public_values(16);
+    let verifier_instances =
+        || VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &public)]);
+    let prover_instances = || {
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(fib_trace(16).transpose()),
+            &pk,
+            &public,
+        )])
+    };
+    let report = security_report(&config, &verifier_instances()).unwrap();
+    let bits = report.security_bits().unwrap();
+    // CapacityBound at stacked arity 5 and rate 1/2 has L = 2560.
+    // Four degree-three sumcheck rounds cost 12/q for each candidate trace.
+    let sumcheck_bits = report
+        .terms()
+        .iter()
+        .find(|term| term.label == "constraint-sumcheck")
+        .unwrap()
+        .bits
+        .bits();
+    assert!((sumcheck_bits - (123.0 - 12f64.log2() - 2560f64.log2())).abs() < 1e-10);
+    let pcs_bits = report
+        .terms()
+        .iter()
+        .find(|term| term.label == "main-pcs")
+        .unwrap()
+        .bits
+        .bits();
+    assert!(
+        bits >= 20.0 && bits <= pcs_bits,
+        "composed {bits}, PCS {pcs_bits}"
+    );
+    assert!(
+        report
+            .terms()
+            .iter()
+            .any(|term| term.label == "constraint-sumcheck")
+    );
+
+    let mut rejected = challenger();
+    assert!(matches!(
+        prove_with_security(&config, prover_instances(), 0, 100, &mut rejected),
+        Err(SecurityError::InsufficientSecurity { .. })
+    ));
+    let after_rejection: F = rejected.sample();
+    let untouched: F = challenger().sample();
+    assert_eq!(after_rejection, untouched);
+
+    let proof = prove_with_security(&config, prover_instances(), 0, 20, &mut challenger()).unwrap();
+    verify_with_security(
+        &config,
+        verifier_instances(),
+        &proof,
+        0,
+        20,
+        &mut challenger(),
+    )
+    .unwrap();
+    let mut rejected = challenger();
+    assert!(matches!(
+        verify_with_security(&config, verifier_instances(), &proof, 0, 100, &mut rejected),
+        Err(VerificationError::Security(
+            SecurityError::InsufficientSecurity { .. }
+        ))
+    ));
+    let after_rejection: F = rejected.sample();
+    assert_eq!(after_rejection, untouched);
+}
+
+#[test]
+fn security_checked_lookup_accounts_for_every_reduction() {
+    use p3_multi_stark::{prove_with_security, security_report, verify_with_security};
+
+    let mut config = config_for(4, 2);
+    config.collision_bits = Some(100);
+    let air = LocalPermutationLookupAir;
+    let (pk, vk) = setup(&config, &[&air], &mut challenger());
+    let verifier_instances =
+        || VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
+    let report = security_report(&config, &verifier_instances()).unwrap();
+    for (label, roots) in [
+        ("logup-fingerprint", 96f64),
+        ("fractional-gkr", 40f64),
+        ("lookup-opening-link", 1f64),
+        ("lookup-air-link", 1f64),
+    ] {
+        let term = report
+            .terms()
+            .iter()
+            .find(|term| term.label == label)
+            .unwrap_or_else(|| panic!("missing {label}"));
+        assert!((term.bits.bits() - (123.0 - roots.log2() - 2560f64.log2())).abs() < 1e-10);
+    }
+    let proof = prove_with_security(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(permutation_trace(16).transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        20,
+        &mut challenger(),
+    )
+    .unwrap();
+    verify_with_security(
+        &config,
+        verifier_instances(),
+        &proof,
+        0,
+        20,
+        &mut challenger(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn security_rejects_degree_underhints_in_all_build_profiles() {
+    struct UnderhintAir;
+    impl<X> BaseAir<X> for UnderhintAir {
+        fn width(&self) -> usize {
+            1
+        }
+        fn max_constraint_degree(&self) -> Option<usize> {
+            Some(1)
+        }
+    }
+    impl<AB: AirBuilder> Air<AB> for UnderhintAir {
+        fn eval(&self, builder: &mut AB) {
+            let x = builder.main().current_slice()[0];
+            builder.assert_zero(x * x);
+        }
+    }
+    let config = config_for(4, 1);
+    let air = UnderhintAir;
+    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
+    assert!(matches!(
+        p3_multi_stark::security_report(&config, &instances),
+        Err(p3_multi_stark::SecurityError::InvalidShape(_))
+    ));
+}
+
+#[test]
+fn security_small_base_challenges_cannot_claim_a_large_target() {
+    type BaseLayout = PrefixProver<F, F>;
+    type BasePcs = WhirProver<F, F, MyDft, MyMmcs, MyChallenger, BaseLayout>;
+    struct BaseConfig(BasePcs);
+    impl MultiStarkConfig for BaseConfig {
+        type Val = F;
+        type Challenge = F;
+        type Challenger = MyChallenger;
+        type Pcs = BasePcs;
+        fn pcs(&self) -> &BasePcs {
+            &self.0
+        }
+        fn collision_resistance_bits(&self) -> Option<usize> {
+            Some(100)
+        }
+        fn min_num_variables(&self) -> usize {
+            FOLDING
+        }
+        fn build_witness(&self, tables: Vec<Table<F>>) -> Witness<F> {
+            BaseLayout::new_witness(tables, FOLDING)
+        }
+        fn committed_table<'a>(
+            &self,
+            data: &'a p3_whir::WhirProverData<F, F, MyMmcs, BaseLayout>,
+            index: usize,
+        ) -> &'a Table<F> {
+            data.table(index)
+        }
+    }
+    let folding = FoldingFactor::Constant(FOLDING);
+    let whir = WhirConfig::new(
+        5,
+        ProtocolParameters {
+            security_level: 16,
+            pow_bits: 0,
+            round_log_inv_rates: default_round_log_inv_rates(5, &folding),
+            folding_factor: folding,
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        },
+    )
+    .unwrap();
+    let mmcs = MyMmcs::new(MyHash::new(perm()), MyCompress::new(perm()), 0);
+    let config = BaseConfig(BasePcs::new(whir, MyDft::default(), mmcs));
+    let air = FibAir;
+    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let public = fib_public_values(16);
+    let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &public)]);
+    let report = p3_multi_stark::security_report(&config, &instances).unwrap();
+    assert!(report.security_bits().unwrap() < 31.0);
+    assert!(matches!(
+        report.require_security(100),
+        Err(p3_multi_stark::SecurityError::InsufficientSecurity { .. })
+    ));
 }
 
 #[test]
@@ -456,24 +703,27 @@ fn prove_verify_mixed_height_fibonacci_roundtrips() {
     // Size the config for the stacked cell count the layout planner computes.
     // That count is the summed cells across both tables, rounded up to a power of two.
     let cells = NUM_COLS * n_a + NUM_COLS * n_b;
-    let config = config_for_stacked(log2_ceil_usize(cells));
+    let mut config = config_for_stacked(log2_ceil_usize(cells));
+    config.collision_bits = Some(100);
     let airs = [&air, &air];
 
     // One setup, then one proof binding both traces under a shared commitment.
     let (pk, vk) = setup(&config, &airs, &mut challenger());
 
-    let proof = prove(
+    let proof = p3_multi_stark::prove_with_security(
         &config,
         ProverInstances::new(vec![
             ProverInstance::new(&air, Table::new(trace_a.transpose()), &pk, &pis_a),
             ProverInstance::new(&air, Table::new(trace_b.transpose()), &pk, &pis_b),
         ]),
         0,
+        20,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // Both instances verify against the shared proof, each at its own height.
-    verify(
+    p3_multi_stark::verify_with_security(
         &config,
         VerifierInstances::new(vec![
             VerifierInstance::new(&air, &vk, log_a, &pis_a),
@@ -481,6 +731,7 @@ fn prove_verify_mixed_height_fibonacci_roundtrips() {
         ]),
         &proof,
         0,
+        20,
         &mut challenger(),
     )
     .expect("honest mixed-height batched proof must verify");

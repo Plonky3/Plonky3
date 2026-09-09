@@ -59,7 +59,8 @@ use p3_util::log2_strict_usize;
 use crate::parameters::{FoldingFactor, SecurityAssumption, WhirConfig};
 
 /// Version byte bound into the transcript seed.
-const VERSION: u8 = 1;
+// Version 2 reserves the constant batching coefficient for the carried claim.
+const VERSION: u8 = 2;
 
 /// Protocol name bound into the transcript seed.
 const NAME: &[u8] = b"p3-whir";

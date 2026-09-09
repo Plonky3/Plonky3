@@ -158,7 +158,7 @@ pub struct AirZerocheck<'a, A> {
 /// Panics if the AIR declares mutually-exclusive interactions.
 /// Panics if a declared family is constant, since a constant has no round polynomial.
 /// Panics if the AIR declares neither constraints nor interactions.
-fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
+pub(crate) fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
 where
     F: Field,
     EF: ExtensionField<F>,

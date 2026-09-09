@@ -262,6 +262,21 @@ mod tests {
     }
 
     #[test]
+    fn security_preserves_large_base_fields_but_requires_pcs_evidence() {
+        let config = config(4);
+        let (_, public) = trace(4);
+        let (_, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
+        let instances =
+            VerifierInstances::new(vec![VerifierInstance::new(&RecurrenceAir, &vk, 4, &public)]);
+        let report = p3_multi_stark::security_report(&config, &instances).unwrap();
+        // GF(2^128) needs no extension to give high-security AIR challenges.
+        assert!(report.terms().iter().all(|term| term.bits.bits() >= 120.0));
+        // BinaryPcs has not supplied a full prescribed-opening assessment.
+        assert!(report.unassessed_components().contains(&"main-pcs"));
+        assert!(report.require_security(100).is_err());
+    }
+
+    #[test]
     fn rejects_changed_public_values() {
         for index in 0..3 {
             let mut fixture = Fixture::new(3, 0);

@@ -13,6 +13,7 @@ use crate::folder::VerifierAir;
 use crate::lookup::{LookupError, verify_lookup};
 use crate::opening::TableOpening;
 use crate::proof::MultiStarkProof;
+use crate::security::{SecurityError, security_report};
 use crate::zerocheck::{AirZerocheck, ZerocheckError};
 
 /// Reasons the multilinear AIR verifier rejects a proof.
@@ -21,6 +22,9 @@ pub enum VerificationError<E>
 where
     E: Debug,
 {
+    /// Security evidence is missing or the requested bound is not met.
+    #[error("security: {0}")]
+    Security(SecurityError),
     /// The zerocheck reduction or its closing constraint check failed.
     #[error("zerocheck: {0}")]
     Zerocheck(ZerocheckError),
@@ -46,7 +50,40 @@ where
     },
 }
 
+/// Verify only when the verifier's statement meets the requested security target.
+///
+/// The report uses trusted AIR declarations and verifier dimensions, never proof
+/// counts. Missing PCS or collision evidence fails closed before the transcript
+/// is touched. The result inherits the configured PCS assumptions; see
+/// [`security_report`]. Other verifier preconditions are the same as [`verify`].
+pub fn verify_with_security<'a, C, A>(
+    config: &C,
+    instances: VerifierInstances<'a, C, A>,
+    proof: &MultiStarkProof<C>,
+    pow_bits: usize,
+    target_bits: usize,
+    challenger: &mut C::Challenger,
+) -> Result<(), VerificationError<PcsError<C>>>
+where
+    C: MultiStarkConfig,
+    C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
+    C::Challenger: FieldChallenger<C::Val>
+        + GrindingChallenger<Witness = C::Val>
+        + CanSampleUniformBits<C::Val>
+        + CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    A: VerifierAir<C::Val, C::Challenge>,
+{
+    security_report(config, &instances)
+        .and_then(|report| report.require_security(target_bits))
+        .map_err(VerificationError::Security)?;
+    verify(config, instances, proof, pow_bits, challenger)
+}
+
 /// Verify a complete batched multilinear AIR proof.
+///
+/// This entry point enforces no minimum security level. Use [`verify_with_security`]
+/// when verification must meet a security target, including the AIR and lookup reductions.
 ///
 /// The verifier replays the prover's transcript in the same order:
 ///

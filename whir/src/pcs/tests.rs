@@ -8,13 +8,14 @@ use p3_challenger::{CanObserve, DuplexChallenger};
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, Witness};
 use p3_sumcheck::test_util::{random_table_specs, table_specs_to_tables};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -54,6 +55,94 @@ fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFac
         rates.push(rate);
     }
     rates
+}
+
+#[test]
+#[should_panic(expected = "initial claim combination")]
+fn rejects_opening_batches_below_target_security() {
+    type L = PrefixProver<F, EF>;
+    let mut rng = SmallRng::seed_from_u64(946);
+    let witness = L::new_witness(vec![Table::rand(&mut rng, 1, 6)], 4);
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(6, 1),
+        vec![OpeningBatch::new(vec![0], vec![]); 1 << 14],
+    )]);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+    let config = WhirConfig::new(
+        witness.num_variables(),
+        ProtocolParameters {
+            security_level: 100,
+            pow_bits: 0,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        },
+    )
+    .unwrap();
+    let pcs = TestWhirPcs::<L>::new(config, MyDft::default(), mmcs);
+    let mut challenger = challenger();
+    let (_, data) = pcs.commit(witness, &mut challenger);
+    // The unground alpha batch retains <100 bits, although every fold reaches 100.
+    let _ = pcs.open(data, protocol, &mut challenger);
+}
+
+#[test]
+fn both_verifiers_reject_infeasible_claim_counts_before_sumcheck() {
+    type L = PrefixProver<F, EF>;
+    const FOLDING: usize = 4;
+    // The prefix handoff must retain a full SIMD vector after the initial fold.
+    let num_variables = FOLDING + log2_strict_usize(PackedF::WIDTH);
+    let mut rng = SmallRng::seed_from_u64(947);
+    let witness = L::new_witness(vec![Table::rand(&mut rng, 1, num_variables)], FOLDING);
+    let small_protocol = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(num_variables, 1),
+        vec![OpeningBatch::new(vec![0], vec![0])],
+    )]);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+    let config = WhirConfig::new_with_initial_claims(
+        num_variables,
+        ProtocolParameters {
+            security_level: 100,
+            pow_bits: 0,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(FOLDING),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        },
+        2,
+    )
+    .unwrap();
+    let pcs = TestWhirPcs::<L>::new(config, MyDft::default(), mmcs);
+    let mut prover_challenger = challenger();
+    let (commitment, data) = pcs.commit(witness, &mut prover_challenger);
+    let mut proof = pcs.open(data, small_protocol, &mut prover_challenger);
+    // Each batch contributes both a current and a successor claim; counting only
+    // batches or only current columns misses a factor of two.
+    let num_batches = 1 << 12;
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(num_variables, 1),
+        vec![OpeningBatch::new(vec![0], vec![0]); num_batches],
+    )]);
+    proof.evals = vec![proof.evals[0].clone(); num_batches];
+    let check = |err| match err {
+        VerifierError::Config(crate::WhirConfigError::InitialClaimsBelowTarget {
+            num_claims,
+            ..
+        }) => assert_eq!(num_claims, 2 * num_batches + pcs.commitment_ood_samples),
+        other => panic!("unexpected error: {other}"),
+    };
+    check(
+        pcs.verify(&commitment, &proof, &mut challenger(), protocol.clone())
+            .unwrap_err(),
+    );
+    let points = vec![Point::new(vec![EF::ONE; num_variables]); num_batches];
+    check(
+        pcs.verify_at(&commitment, &proof, &protocol, &points, &mut challenger())
+            .unwrap_err(),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]

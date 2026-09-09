@@ -2,6 +2,7 @@
 //!
 //! - Measures prover time, verifier time, and serialized proof size.
 //! - Both pipelines run the same polynomial size and round structure.
+//! - Both main pipelines use a quintic extension and target 100 bits per phase.
 //! - Eprint 2026/391 predicts a `1 + o(1)` overhead.
 
 use std::time::Duration;
@@ -14,7 +15,7 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::{BinomialExtensionField, QuinticTrinomialExtensionField};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
@@ -29,7 +30,7 @@ use rand::SeedableRng;
 use rand::rngs::{SmallRng, StdRng};
 
 type F = KoalaBear;
-type EF = BinomialExtensionField<F, 4>;
+type EF = QuinticTrinomialExtensionField<F>;
 type OcticEF = BinomialExtensionField<F, 8>;
 
 type Poseidon16 = Poseidon2KoalaBear<16>;
@@ -49,6 +50,7 @@ type OcticZkPcs = HidingWhirPcs<OcticEF, F, Dft, Mmcs, Challenger, StdRng>;
 const SIZES: [usize; 2] = [16, 18];
 const FOLDING: usize = 4;
 const LOG_INV_RATE: usize = 2;
+// Target for each configured error term; total soundness requires their union bound.
 const SECURITY_LEVEL: usize = 100;
 const OCTIC_OPEN_SIZES: [usize; 3] = [18, 19, 20];
 
@@ -100,7 +102,7 @@ fn challenger() -> Challenger {
 
 /// Benchmarks the plain (non-hiding) prover for one size.
 fn bench_plain(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
-    let config = WhirConfig::new(num_variables, protocol_params()).unwrap();
+    let config = WhirConfig::new_with_initial_claims(num_variables, protocol_params(), 1).unwrap();
     let pcs = PlainPcs::new(config, Dft::default(), mmcs());
 
     let mut rng = SmallRng::seed_from_u64(3);
@@ -160,7 +162,7 @@ fn bench_zk(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
 /// Reports serialized proof sizes side by side (printed once, not measured).
 fn report_proof_sizes(num_variables: usize) {
     // Plain proof size.
-    let config = WhirConfig::new(num_variables, protocol_params()).unwrap();
+    let config = WhirConfig::new_with_initial_claims(num_variables, protocol_params(), 1).unwrap();
     let pcs = PlainPcs::new(config, Dft::default(), mmcs());
     let mut rng = SmallRng::seed_from_u64(3);
     let table = Table::rand(&mut rng, 1, num_variables);

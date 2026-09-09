@@ -91,7 +91,11 @@ where
     /// Type of the output of `get_evaluations_on_domain`.
     type EvaluationsOnDomain<'a>: Matrix<Val<Self::Domain>> + 'a;
 
-    /// Set to true to activate randomization and achieve zero-knowledge.
+    /// Whether to activate the STARK's randomized layout and masking protocol.
+    ///
+    /// Hiding implementations must enforce their trace-size and opening budgets.
+    /// The flag alone does not certify caller-supplied commitments, randomness,
+    /// or an arbitrary use of the underlying opening protocol.
     const ZK: bool;
 
     /// The base-2 logarithm of the largest evaluation domain this PCS can construct.
