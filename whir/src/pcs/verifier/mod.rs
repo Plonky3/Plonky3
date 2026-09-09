@@ -18,10 +18,10 @@ use p3_sumcheck::verify_final_sumcheck_rounds;
 use tracing::instrument;
 
 use super::committer::reader::ParsedCommitment;
-use super::utils::get_challenge_stir_queries;
 use crate::alloc::string::ToString;
 use crate::parameters::{RoundConfig, WhirConfig};
 use crate::pcs::proof::{QueryOpenings, WhirProof};
+use crate::transcript::{WhirShape, WhirVerifierTranscript};
 
 pub mod errors;
 
@@ -86,19 +86,36 @@ where
 
     /// Verify a WHIR proof against a commitment and statement.
     ///
-    /// Returns the folding randomness point on success.
+    /// # Arguments
+    ///
+    /// - `proof`: the opening proof to replay.
+    /// - `challenger`: the sponge the whole proof shares, borrowed for this run.
+    /// - `parsed_commitment`: the initial commitment the run opens.
+    /// - `num_opening_claims`: opening claims the caller bound before this run.
+    /// - `initial_constraint`: builds the batched claim from the challenge drawn here.
+    ///
+    /// The batching challenge is drawn inside the initial delegation bracket.
+    /// The caller therefore hands over a builder, not a finished constraint.
+    ///
+    /// # Returns
+    ///
+    /// The folding randomness point on success.
+    ///
+    /// # Errors
+    ///
+    /// Any rejection the replay raises, transcript failures included.
     #[instrument(skip_all)]
-    #[allow(clippy::too_many_lines)]
-    pub fn verify(
+    pub fn verify<MakeConstraint>(
         &self,
         proof: &WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
         parsed_commitment: &MT::Commitment,
-        initial_constraint: Constraint<F, EF>,
-        mut claimed_eval: EF,
+        num_opening_claims: usize,
+        initial_constraint: MakeConstraint,
     ) -> Result<Point<EF>, VerifierError>
     where
         Challenger: CanObserve<MT::Commitment>,
+        MakeConstraint: FnOnce(EF) -> Constraint<F, EF>,
     {
         // Reject a proof that carries the wrong number of rounds before any
         // transcript work. The per-round commitment slot is checked further
@@ -111,22 +128,71 @@ where
             });
         }
 
+        // One driver spans the whole run, so the description is walked exactly once.
+        let shape = WhirShape::new(self.config, num_opening_claims);
+        let mut transcript = WhirVerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
+
+        // A rejection releases the driver's completeness check on its way out.
+        // Dropping an unfinished driver otherwise panics on top of the error.
+        match self.replay(
+            proof,
+            &mut transcript,
+            parsed_commitment,
+            initial_constraint,
+        ) {
+            Ok(randomness) => {
+                transcript.finish();
+                Ok(randomness)
+            }
+            Err(err) => {
+                transcript.abort();
+                Err(err)
+            }
+        }
+    }
+
+    /// Replay every described step against the proof.
+    ///
+    /// # Errors
+    ///
+    /// Any rejection a step raises, or any consistency check that fails.
+    #[allow(clippy::too_many_lines)]
+    fn replay<MakeConstraint>(
+        &self,
+        proof: &WhirProof<F, EF, MT>,
+        transcript: &mut WhirVerifierTranscript<'_, Challenger, F, EF>,
+        parsed_commitment: &MT::Commitment,
+        initial_constraint: MakeConstraint,
+    ) -> Result<Point<EF>, VerifierError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+        MakeConstraint: FnOnce(EF) -> Constraint<F, EF>,
+    {
         let mut constraints = Vec::new();
         let mut round_folding_randomness = Vec::new();
         let mut prev_commitment = parsed_commitment.clone();
 
-        constraints.push(initial_constraint);
-
+        // The delegate draws the claim-batching challenge, then replays its own rounds.
+        //
         // Initial sumcheck rounds == first-round folding factor.
         // `verify_rounds` rejects a proof that carries the wrong number of rounds.
-        let folding_randomness = proof.initial_sumcheck.verify_rounds(
-            challenger,
-            &mut claimed_eval,
-            self.round_folding_factor(0),
-            self.starting_folding_pow_bits,
-            Basis::Evaluation,
-        )?;
-        round_folding_randomness.push(folding_randomness);
+        let (constraint, mut claimed_eval, folding_randomness) =
+            transcript.delegate_initial_fold(|challenger| {
+                let alpha: EF = challenger.sample_algebra_element();
+                let constraint = initial_constraint(alpha);
+                let mut claimed_eval = EF::ZERO;
+                constraint.combine_evals(&mut claimed_eval);
+                let randomness = proof.initial_sumcheck.verify_rounds(
+                    challenger,
+                    &mut claimed_eval,
+                    self.round_folding_factor(0),
+                    self.starting_folding_pow_bits,
+                    Basis::Evaluation,
+                );
+                (constraint, claimed_eval, randomness)
+            });
+        constraints.push(constraint);
+        round_folding_randomness.push(folding_randomness?);
 
         // Verify each intermediate round.
         for round_index in 0..self.n_rounds() {
@@ -136,7 +202,7 @@ where
             // so only a missing commitment slot can fail here.
             let new_commitment = ParsedCommitment::<_, MT::Commitment>::parse_with_round(
                 proof,
-                challenger,
+                transcript,
                 round_params.num_variables,
                 round_params.ood_samples,
                 round_index,
@@ -148,7 +214,7 @@ where
                 .ok_or(VerifierError::MissingFoldingRandomness { round: round_index })?;
             let stir_statement = self.verify_stir_challenges(
                 proof,
-                challenger,
+                transcript,
                 round_params,
                 &prev_commitment,
                 current_folding_randomness,
@@ -156,12 +222,18 @@ where
             )?;
 
             // Rebuild the same batched constraint the prover formed for this round.
-            // The out-of-domain claims form the equality group.
-            // The query openings form the selection group.
-            // The challenge sampled here matches the prover's, weighting the groups
-            // by its successive powers so both sides combine the claims identically.
+            //
+            //     out-of-domain claims  ->  the equality group
+            //     query openings        ->  the selection group
+            //
+            // The challenge drawn here weights the two groups by its successive powers.
+            //
+            // Both sides therefore combine the claims identically.
+            //
+            // The carried claim keeps the constant coefficient, so a fresh group
+            // never shares a power with it.
             let constraint = Constraint::new_with_existing_claim(
-                challenger.sample_algebra_element(),
+                transcript.round_batching(),
                 new_commitment.ood_statement.num_variables(),
                 vec![
                     Statements::Eq(new_commitment.ood_statement.clone()),
@@ -173,33 +245,30 @@ where
 
             // Intermediate-round sumcheck rounds == next-round folding factor.
             // `verify_rounds` rejects a wrong count instead of desyncing Fiat-Shamir.
-            let folding_randomness = proof.rounds[round_index].sumcheck.verify_rounds(
-                challenger,
-                &mut claimed_eval,
-                self.round_folding_factor(round_index + 1),
-                round_params.folding_pow_bits,
-                Basis::Evaluation,
-            )?;
+            let folding_randomness = transcript.delegate_round_fold(|challenger| {
+                proof.rounds[round_index].sumcheck.verify_rounds(
+                    challenger,
+                    &mut claimed_eval,
+                    self.round_folding_factor(round_index + 1),
+                    round_params.folding_pow_bits,
+                    Basis::Evaluation,
+                )
+            })?;
             round_folding_randomness.push(folding_randomness);
 
             prev_commitment = new_commitment.root;
         }
 
         // Final round: receive the polynomial in the clear.
+        //
+        // The step records how many evaluations it accepts.
+        // A proof carrying another count is rejected instead of desyncing.
         let final_evaluations = proof
             .final_poly
             .as_ref()
             .ok_or(VerifierError::MissingFinalPoly)?;
         let final_round_config = self.final_round_config();
-        let expected_final_poly_len = 1usize << final_round_config.num_variables;
-        let actual_final_poly_len = final_evaluations.num_evals();
-        if actual_final_poly_len != expected_final_poly_len {
-            return Err(VerifierError::FinalPolyLengthMismatch {
-                expected: expected_final_poly_len,
-                actual: actual_final_poly_len,
-            });
-        }
-        challenger.observe_algebra_slice(final_evaluations.as_slice());
+        transcript.final_poly(final_evaluations.as_slice())?;
 
         // Verify final STIR challenges.
         let final_round_folding_randomness = round_folding_randomness.last().ok_or_else(|| {
@@ -209,7 +278,7 @@ where
         })?;
         let stir_statement = self.verify_stir_challenges(
             proof,
-            challenger,
+            transcript,
             &final_round_config,
             &prev_commitment,
             final_round_folding_randomness,
@@ -224,14 +293,20 @@ where
                 details: "STIR constraint verification failed on final polynomial".to_string(),
             })?;
 
-        let final_sumcheck_randomness = verify_final_sumcheck_rounds(
-            proof.final_sumcheck.as_ref(),
-            challenger,
-            &mut claimed_eval,
-            self.final_sumcheck_rounds,
-            self.final_folding_pow_bits,
-            Basis::Evaluation,
-        )?;
+        // A run with no closing rounds delegates nothing, so no bracket is played.
+        let final_sumcheck_randomness = transcript
+            .delegate_final_fold(|challenger| {
+                verify_final_sumcheck_rounds(
+                    proof.final_sumcheck.as_ref(),
+                    challenger,
+                    &mut claimed_eval,
+                    self.final_sumcheck_rounds,
+                    self.final_folding_pow_bits,
+                    Basis::Evaluation,
+                )
+            })
+            .transpose()?
+            .unwrap_or_else(|| Point::new(Vec::new()));
         round_folding_randomness.push(final_sumcheck_randomness.clone());
 
         // Compute the full folding randomness across all rounds.
@@ -272,7 +347,7 @@ where
     fn verify_stir_challenges(
         &self,
         proof: &WhirProof<F, EF, MT>,
-        challenger: &mut Challenger,
+        transcript: &mut WhirVerifierTranscript<'_, Challenger, F, EF>,
         params: &RoundConfig<F>,
         commitment: &MT::Commitment,
         folding_randomness: &Point<EF>,
@@ -286,17 +361,10 @@ where
         } else {
             proof.final_pow_witness
         };
-        if params.pow_bits > 0 && !challenger.check_witness(params.pow_bits, pow_witness) {
-            return Err(VerifierError::InvalidPowWitness);
-        }
+        transcript.query_pow(round_index, pow_witness)?;
 
         // Sample STIR query positions.
-        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F>(
-            params.domain_size,
-            params.folding_factor,
-            params.num_queries,
-            challenger,
-        );
+        let stir_challenges_indexes = transcript.query_indices(round_index);
 
         let dimensions = vec![Dimensions {
             height: params.domain_size >> params.folding_factor,

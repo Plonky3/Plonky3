@@ -739,7 +739,7 @@ mod tests {
             .seed(&mut hiding_challenger);
 
         let mut plain_challenger = fresh_challenger();
-        WhirShape::new(&plain)
+        WhirShape::new(&plain, 1)
             .domain_separator::<F, EF>()
             .seed(&mut plain_challenger);
 
