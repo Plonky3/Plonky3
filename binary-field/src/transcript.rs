@@ -124,28 +124,18 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use p3_challenger::testing::Recorder;
+
     use super::*;
 
     /// Width of the length field written ahead of a seed, in bytes.
     const SEED_LEN_BYTES: usize = 8;
 
-    /// Captures every absorbed element in order.
-    #[derive(Default)]
-    struct Recorder<T> {
-        seen: Vec<T>,
-    }
-
-    impl<T> CanObserve<T> for Recorder<T> {
-        fn observe(&mut self, value: T) {
-            self.seen.push(value);
-        }
-    }
-
     /// The elements one byte string packs into at a given level.
     fn packed<F: TranscriptField>(bytes: &[u8]) -> Vec<F> {
         let mut recorder = Recorder::default();
         F::observe_seed(&mut recorder, bytes);
-        recorder.seen
+        recorder.into_absorbed()
     }
 
     #[test]

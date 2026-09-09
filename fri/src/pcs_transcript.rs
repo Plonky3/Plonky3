@@ -537,6 +537,7 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::testing::{SeedDigest, assert_seeds_pairwise_distinct, seed_digest};
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
@@ -571,12 +572,11 @@ mod tests {
         shape_with(vec![vec![vec![3, 1]]])
     }
 
-    /// The first challenge a shape's seed produces.
-    fn first_challenge(shape: &PcsShape) -> F {
-        let mut challenger = fresh_challenger();
-        let separator = shape.domain_separator::<F, EF>();
-        separator.seed(&mut challenger);
-        challenger.sample()
+    /// The digest of the byte stream a shape seeds its sponge with.
+    ///
+    /// Comparing seed streams, rather than a sampled challenge, keeps the sponge out of it.
+    fn seed_of(shape: &PcsShape) -> SeedDigest {
+        seed_digest(&shape.domain_separator::<F, EF>())
     }
 
     /// Every field of the shape, each moved one step away from `plain_shape`.
@@ -623,21 +623,21 @@ mod tests {
     }
 
     #[test]
-    fn every_field_of_the_shape_reaches_the_seed() {
-        // Baseline: the plain shape, seeded and sampled once.
-        let baseline = first_challenge(&plain_shape());
-
-        // Each mutation moves exactly one field one step.
+    fn no_two_configurations_of_the_shape_share_a_seed() {
+        // Invariant: the knobs are separated from each other, not merely from a baseline.
         //
-        // A field the fingerprint covers moves the seed through the step sequence.
-        // A field it does not must move it through the instance label instead.
-        for (field, shape) in one_step_from_plain() {
-            assert_ne!(
-                baseline,
-                first_challenge(&shape),
-                "changing `{field}` left the seed where it was",
-            );
-        }
+        //     plain shape in the set  ->  every knob has to reach the seed
+        //     pairwise over the set   ->  no two knobs may land on one seed
+        //
+        // Two knobs bound as one number differ from the baseline and still agree with each other.
+        let mut seeds = vec![("plain", seed_of(&plain_shape()))];
+        seeds.extend(
+            one_step_from_plain()
+                .iter()
+                .map(|(field, shape)| (*field, seed_of(shape))),
+        );
+
+        assert_seeds_pairwise_distinct(&seeds);
     }
 
     #[test]
@@ -648,8 +648,8 @@ mod tests {
         //     one commitment, one matrix, two points         ->  [3, 3]
         //
         // Only the instance label separates them, so it must carry the grouping.
-        let two_matrices = first_challenge(&shape_with(vec![vec![vec![3], vec![3]]]));
-        let two_points = first_challenge(&shape_with(vec![vec![vec![3, 3]]]));
+        let two_matrices = seed_of(&shape_with(vec![vec![vec![3], vec![3]]]));
+        let two_points = seed_of(&shape_with(vec![vec![vec![3, 3]]]));
 
         assert_ne!(two_matrices, two_points);
     }
@@ -660,8 +660,8 @@ mod tests {
         //
         //     two commitments of one matrix   ->  [3, 3]
         //     one commitment of two matrices  ->  [3, 3]
-        let two_commitments = first_challenge(&shape_with(vec![vec![vec![3]], vec![vec![3]]]));
-        let one_commitment = first_challenge(&shape_with(vec![vec![vec![3], vec![3]]]));
+        let two_commitments = seed_of(&shape_with(vec![vec![vec![3]], vec![vec![3]]]));
+        let one_commitment = seed_of(&shape_with(vec![vec![vec![3], vec![3]]]));
 
         assert_ne!(two_commitments, one_commitment);
     }
@@ -679,7 +679,7 @@ mod tests {
         let mut ground_harder = ground.clone();
         ground_harder.batch_pow_bits = 2;
 
-        assert_ne!(first_challenge(&ground), first_challenge(&ground_harder));
+        assert_ne!(seed_of(&ground), seed_of(&ground_harder));
     }
 
     #[test]

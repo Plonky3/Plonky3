@@ -11,6 +11,8 @@ categories.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+# Shared transcript-seed checks, pulled in as a dev-dependency by consumers.
+test-utils = []
 
 [dependencies]
 p3-field.workspace = true

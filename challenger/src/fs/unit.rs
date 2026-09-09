@@ -73,32 +73,20 @@ impl<F: TranscriptField> Unit for FieldUnit<F> {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
-    use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
 
     use super::*;
-
-    /// Records every absorbed element in order.
-    #[derive(Default)]
-    struct Recorder<T> {
-        seen: Vec<T>,
-    }
-
-    impl<T> CanObserve<T> for Recorder<T> {
-        fn observe(&mut self, value: T) {
-            self.seen.push(value);
-        }
-    }
+    use crate::testing::Recorder;
 
     #[test]
     fn byte_unit_absorbs_the_string_verbatim() {
         // A byte sponge sees exactly the bytes it was handed.
         let mut rec = Recorder::<u8>::default();
         <u8 as Unit>::observe_bytes(&mut rec, &[1, 2, 3]);
-        assert_eq!(rec.seen, vec![1u8, 2, 3]);
+        assert_eq!(rec.absorbed(), vec![1u8, 2, 3]);
     }
 
     #[test]
@@ -117,12 +105,12 @@ mod tests {
         FieldUnit::<BabyBear>::observe_bytes(&mut rec, &[0x01, 0x02, 0x03, 0x04]);
 
         // Leading element carries the byte count.
-        assert_eq!(rec.seen[0], BabyBear::from_u32(4));
+        assert_eq!(rec.absorbed()[0], BabyBear::from_u32(4));
         // First chunk is 0x030201 read little-endian.
-        assert_eq!(rec.seen[1], BabyBear::from_u32(0x03_02_01));
+        assert_eq!(rec.absorbed()[1], BabyBear::from_u32(0x03_02_01));
         // Trailing chunk holds the single remaining byte.
-        assert_eq!(rec.seen[2], BabyBear::from_u32(0x04));
-        assert_eq!(rec.seen.len(), 3);
+        assert_eq!(rec.absorbed()[2], BabyBear::from_u32(0x04));
+        assert_eq!(rec.absorbed().len(), 3);
     }
 
     #[test]
@@ -134,7 +122,7 @@ mod tests {
         let mut padded = Recorder::<BabyBear>::default();
         FieldUnit::<BabyBear>::observe_bytes(&mut short, &[0xaa]);
         FieldUnit::<BabyBear>::observe_bytes(&mut padded, &[0xaa, 0x00]);
-        assert_ne!(short.seen, padded.seen);
+        assert_ne!(short.absorbed(), padded.absorbed());
     }
 
     #[test]
@@ -142,6 +130,6 @@ mod tests {
         // Boundary: an empty payload still absorbs its length element.
         let mut rec = Recorder::<BabyBear>::default();
         FieldUnit::<BabyBear>::observe_bytes(&mut rec, &[]);
-        assert_eq!(rec.seen, vec![BabyBear::ZERO]);
+        assert_eq!(rec.absorbed(), vec![BabyBear::ZERO]);
     }
 }
