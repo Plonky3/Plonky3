@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::arch::aarch64::{
-    uint64x2_t, vaddq_u64, vandq_u64, vdupq_n_u64, vgetq_lane_u64, vsetq_lane_u64, vshrq_n_u64,
-    vsubq_u64,
+    uint64x2_t, vaddq_u64, vandq_u64, vcltq_u64, vdupq_n_s64, vdupq_n_u64, vgetq_lane_u64,
+    vsetq_lane_u64, vshlq_u64, vshrq_n_u64, vsubq_u64,
 };
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
@@ -22,7 +22,6 @@ use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
-#[cfg(any(target_feature = "sve2", test))]
 use super::utils::EPSILON;
 use crate::{Goldilocks, P};
 
@@ -134,6 +133,18 @@ impl PrimeCharacteristicRing for PackedGoldilocksNeon {
         match exp {
             0 => *self,
             1 => self.halve(),
+            2..=32 => unsafe {
+                let x = self.to_vector();
+                let lo = vandq_u64(x, vdupq_n_u64((1u64 << exp) - 1));
+                let hi = vshlq_u64(x, vdupq_n_s64(-(exp as i64)));
+                let a = vaddq_u64(hi, vshlq_u64(lo, vdupq_n_s64((32 - exp) as i64)));
+                let b = vshlq_u64(lo, vdupq_n_s64((64 - exp) as i64));
+                // 2^-exp = 2^(32-exp) - 2^(64-exp) mod P. Both a and b are
+                // below P, so a - b > -P and one borrow correction suffices.
+                let borrow = vcltq_u64(a, b);
+                let correction = vandq_u64(borrow, vdupq_n_u64(EPSILON));
+                Self::from_vector(vsubq_u64(vsubq_u64(a, b), correction))
+            },
             _ => *self * Self::broadcast(Goldilocks::power_of_two(192 - exp)),
         }
     }

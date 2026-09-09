@@ -990,7 +990,25 @@ mod tests {
     fn packed_powers_of_two_match_scalar_oracle_for_arbitrary_representatives() {
         type PF = <F as Field>::Packing;
 
-        const EXPONENTS: [u64; 13] = [0, 1, 2, 3, 5, 31, 32, 63, 95, 96, 191, 192, u64::MAX];
+        const EXPONENTS: [u64; 17] = [
+            0,
+            1,
+            2,
+            3,
+            5,
+            31,
+            32,
+            33,
+            63,
+            95,
+            96,
+            191,
+            192,
+            194,
+            224,
+            225,
+            u64::MAX,
+        ];
         const RAW_EDGES: [u64; 10] = [
             0,
             1,
