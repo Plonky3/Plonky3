@@ -415,7 +415,7 @@ where
         challenger: &mut Challenger,
     ) -> Self::Proof {
         self.try_open(prover_data, &protocol, challenger)
-            .expect("invalid binary PCS opening protocol")
+            .unwrap_or_else(|e| panic!("invalid binary PCS opening protocol: {e}"))
     }
 
     fn verify(
@@ -462,7 +462,7 @@ where
         challenger: &mut Challenger,
     ) -> Self::Proof {
         self.try_open_at(prover_data, protocol, points, challenger)
-            .expect("invalid binary PCS prescribed opening protocol")
+            .unwrap_or_else(|e| panic!("invalid binary PCS prescribed opening protocol: {e}"))
     }
 
     /// Verifies an opening proof against `points` instead of sampling each opening point from
