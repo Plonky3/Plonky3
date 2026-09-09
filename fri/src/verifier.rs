@@ -182,6 +182,19 @@ where
         expected: usize,
         got: usize,
     },
+    #[error("hiding PCS requires at least {required} random codewords, got {got}")]
+    InsufficientHidingRandomCodewords { required: usize, got: usize },
+    #[error(
+        "hiding PCS round {round}, matrix {matrix}: insufficient hiding budget: {mask_height} mask values, {num_queries} queries, {num_opening_points} opening points, extension degree {extension_degree}"
+    )]
+    HidingBudgetExceeded {
+        round: usize,
+        matrix: usize,
+        mask_height: usize,
+        num_queries: usize,
+        num_opening_points: usize,
+        extension_degree: usize,
+    },
     #[error("commit phase MMCS error: {0:?}")]
     CommitPhaseMmcsError(CommitMmcsErr),
     #[error("input error: {0:?}")]

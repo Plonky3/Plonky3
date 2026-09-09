@@ -205,7 +205,7 @@ fn a_tampered_quotient_commitment_is_rejected() {
 fn a_tampered_randomization_commitment_is_rejected() {
     // Fixture state: a zero-knowledge proof, which carries a randomization commitment.
     let config = make_zk_config();
-    let trace = square_trace::<Val>(1 << LOG_DEGREE);
+    let trace = square_trace::<Val>(1 << 5);
     let mut proof = prove(&config, &SquareAir::<0>, trace, &[]);
 
     verify(&config, &SquareAir::<0>, &proof, &[]).expect("an untouched proof verifies");

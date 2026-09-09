@@ -865,8 +865,8 @@ fn test_periodic_air_zk() -> Result<(), impl Debug> {
 fn test_two_instances_zk() -> Result<(), impl Debug> {
     let config = make_config_zk(1337);
 
-    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows
-    let (air_mul, mul_trace, mul_pis) = create_mul_instance(4, 2); // 16 rows, 2 reps
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(5); // 32 rows
+    let (air_mul, mul_trace, mul_pis) = create_mul_instance(5, 2); // 32 rows, 2 reps
 
     let instances = vec![
         StarkInstance {
@@ -1042,8 +1042,8 @@ fn test_degree_bits_too_small_for_zk_rejected() -> Result<(), Box<dyn std::error
     // ZK-enabled config — is_zk = 1, meaning degree_bits must be >= 1.
     let config = make_config_zk(1337);
 
-    // Build a valid Fibonacci proof with a 2^4 = 16-row trace.
-    let (air_fib, trace, fib_pis) = create_fib_instance(4);
+    // Build a valid Fibonacci proof with a 2^5 = 32-row trace.
+    let (air_fib, trace, fib_pis) = create_fib_instance(5);
     let instances = vec![StarkInstance {
         air: &air_fib,
         trace: &trace,
@@ -2353,7 +2353,7 @@ fn a_tampered_degree_bit_is_rejected() {
 fn a_substituted_randomization_commitment_is_rejected() {
     let config = make_config_zk(1337);
 
-    let (air_fib, fib_trace, fib_pis) = create_fib_instance(4);
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(5);
     let instances = vec![StarkInstance {
         air: &air_fib,
         trace: &fib_trace,
@@ -2484,7 +2484,7 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
         vec!["MulFib".to_string(), "MulFib".to_string()],
     ); // both
 
-    let log_height = 4;
+    let log_height = 5;
     let height = 1 << log_height;
 
     let fibonacci_air = FibonacciAir {
@@ -2495,7 +2495,11 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
 
     let mul_trace = mul_trace::<Val>(height, 2);
     let fib_trace = fib_trace::<Val>(0, 1, height);
-    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+    let fib_pis = vec![
+        Val::from_u64(0),
+        Val::from_u64(1),
+        Val::from_u64(fib_n(height)),
+    ];
 
     // Use the enum wrapper for heterogeneous types
     let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
