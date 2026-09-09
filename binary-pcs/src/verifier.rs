@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use p3_binary_field::BinaryField128;
 use p3_challenger::{CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::Field;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Dimensions;
 use p3_util::log2_strict_usize;
 
@@ -188,6 +188,37 @@ where
     Ok(())
 }
 
+/// Checks that a zero-difficulty proof carries the one grinding witness a zero budget admits,
+/// before any transcript operation.
+///
+/// A positive budget needs no check here: the witness is absorbed and its sampled bits are
+/// compared, so the difficulty itself pins the field.
+//
+// Why: `GrindingChallenger::check_witness` returns `true` at `bits == 0` without absorbing,
+// which leaves `proof.pow_witness` compared against nothing and free to be any value.
+//
+//     pow_bits = 0 -> prover emits zero, verifier reads nothing -> pin the field here
+//     pow_bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
+//
+// Assumption: the honest prover's grind at zero bits is pinned to the zero witness.
+// A grinding path that leaves the zero-bit witness unconstrained needs this check revisited.
+// The pin is asserted by `zero_difficulty_grinding_is_pinned_to_the_zero_witness` below.
+pub(crate) fn check_canonical_pow_witness<MT>(
+    config: &BinaryPcsConfig,
+    proof: &BinaryPcsProof<MT>,
+) -> Result<(), BinaryPcsError<MT::Error>>
+where
+    MT: Mmcs<BinaryField128>,
+{
+    if config.pow_bits() == 0 && proof.pow_witness != BinaryField128::ZERO {
+        return Err(BinaryPcsError::NonCanonicalPowWitness {
+            actual: proof.pow_witness,
+        });
+    }
+
+    Ok(())
+}
+
 /// Verifies the query phase of an opening proof: the single grind, the sampled query
 /// indices, every round's Merkle multiproof, and the fold-consistency chain tying each round
 /// to the next.
@@ -223,6 +254,7 @@ where
     // Structural checks: every one derivable from `config` and the proof's own declared
     // lengths, none needing the transcript.
     check_round_and_final_lengths(config, proof)?;
+    check_canonical_pow_witness(config, proof)?;
 
     let domain_size = config.domain_size();
     let target_queries = config
@@ -322,7 +354,7 @@ mod tests {
     use p3_binary_field::BinaryField128;
     use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
     use p3_commit::Mmcs;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::layout::{Layout, SuffixProver, Table};
@@ -348,6 +380,35 @@ mod tests {
             pow_bits: 4,
             security_level: 40,
         }
+    }
+
+    #[test]
+    fn zero_difficulty_grinding_is_pinned_to_the_zero_witness() {
+        // Invariant: this crate's challenger grinds to the zero witness at a zero budget.
+        //
+        //              grind                     check
+        //     0 bits   zero, absorbing nothing   true, absorbing nothing
+        //     4 bits   a search that absorbs     resamples and compares
+        //
+        // Zero is therefore the only witness an honest prover emits at a zero budget.
+        //
+        // Nothing in the transcript binds the field there, so the check above has to.
+        assert_eq!(challenger().grind(0), F::ZERO);
+
+        // The complementary half: a zero-bit witness check accepts every value handed to it.
+        for witness in [F::ZERO, F::ONE, F::GENERATOR] {
+            assert!(challenger().check_witness(0, witness));
+        }
+
+        // A positive budget needs no such check, because there the difficulty pins the field.
+        assert!(challenger().check_witness(4, challenger().grind(4)));
+
+        // Excluded case: the uniform-grinding pair, which inverts both facts above.
+        // Its grind has no zero-bit shortcut, so at zero bits an arbitrary candidate wins.
+        // Its check absorbs at every difficulty, so there the transcript binds the witness.
+        //
+        // A challenger whose zero-bit grind is unconstrained fails the first assertion here.
+        // Moving the query phase's single grind onto that pair needs the check revisited too.
     }
 
     #[test]

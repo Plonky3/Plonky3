@@ -1,5 +1,6 @@
 //! Typed reasons an opening proof was rejected.
 
+use p3_binary_field::BinaryField128;
 use thiserror::Error;
 
 /// Why an opening proof was rejected.
@@ -101,4 +102,18 @@ pub enum BinaryPcsError<MmcsError> {
     /// `pow_witnesses` for the same reason.
     #[error("the sumcheck data carries {actual} PoW witnesses, expected none")]
     NonEmptyPowWitnesses { actual: usize },
+
+    /// The grinding witness is not the value a zero difficulty budget admits.
+    ///
+    /// Checked before any transcript operation, like every other proof-shape check here.
+    //
+    // Why: at `pow_bits = 0` neither side touches the sponge.
+    //
+    //     prover  : grind(0)            -> returns zero, absorbs nothing
+    //     verifier: check_witness(0, w) -> returns true, absorbs nothing
+    //
+    // `pow_witness` is then bound to nothing: any value rides along and still verifies.
+    // Zero is the only value an honest prover emits, so zero is the only value accepted.
+    #[error("the grinding witness is {actual} at zero difficulty, expected zero")]
+    NonCanonicalPowWitness { actual: BinaryField128 },
 }
