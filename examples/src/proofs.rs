@@ -16,8 +16,8 @@ use p3_mersenne_31::{Mersenne31, QM31};
 use p3_stir::{SecurityAssumption, StirParameters, TwoAdicStirPcs};
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{
-    AirLayout, OpeningShape, PcsError, Proof, StarkGenericConfig, StarkSecurityParams,
-    VerificationError, prove, verify,
+    AirLayout, ConjecturedSecurity, OpeningShape, PcsError, Proof, StarkGenericConfig,
+    StarkSecurityParams, VerificationError, prove, verify,
 };
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
@@ -29,8 +29,34 @@ use crate::types::{
     Poseidon2StarkConfig, StirKeccakStarkConfig, StirPoseidon2StarkConfig,
 };
 
+/// Conjectured security target shared by the example PCS configurations.
+const EXAMPLE_SECURITY_BITS: usize = 100;
+
 /// PCS batching grind used by the STIR examples.
 const STIR_BATCH_POW_BITS: usize = 16;
+
+/// Choose the fewest queries meeting the target, including the random-words correction.
+fn example_fri_parameters<EF: Field, M>(mut params: FriParameters<M>) -> FriParameters<M> {
+    assert!(
+        EF::bits() > EXAMPLE_SECURITY_BITS,
+        "challenge field is too small for the example security target"
+    );
+    params.num_queries =
+        (EXAMPLE_SECURITY_BITS - params.query_proof_of_work_bits).div_ceil(params.log_blowup);
+    while ConjecturedSecurity::compute_ldt_only(
+        params.log_blowup,
+        params.num_queries,
+        params.query_proof_of_work_bits,
+        128,
+        EF::bits(),
+    )
+    .security_bits
+        < EXAMPLE_SECURITY_BITS
+    {
+        params.num_queries += 1;
+    }
+    params
+}
 
 /// Result type for Keccak-based two-adic proofs
 type KeccakTwoAdicResult<F, EF, DFT> =
@@ -111,7 +137,8 @@ where
     let val_mmcs = get_keccak_mmcs(3);
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
-    let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
+    let fri_params =
+        example_fri_parameters::<EF, _>(FriParameters::new_benchmark_high_arity(challenge_mmcs));
 
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
@@ -169,7 +196,8 @@ where
     let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone(), 3);
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
-    let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
+    let fri_params =
+        example_fri_parameters::<EF, _>(FriParameters::new_benchmark_high_arity(challenge_mmcs));
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
@@ -226,7 +254,7 @@ where
         log_folding_factor: 2,
         log_starting_folding_factor: 2,
         soundness_type: SecurityAssumption::CapacityBound,
-        security_level: 100,
+        security_level: EXAMPLE_SECURITY_BITS,
         max_pow_bits: 20,
         mmcs: challenge_mmcs,
     };
@@ -282,7 +310,7 @@ where
         log_folding_factor: 2,
         log_starting_folding_factor: 2,
         soundness_type: SecurityAssumption::CapacityBound,
-        security_level: 100,
+        security_level: EXAMPLE_SECURITY_BITS,
         max_pow_bits: 20,
         mmcs: challenge_mmcs,
     };
@@ -326,7 +354,7 @@ pub fn prove_m31_keccak<
     let val_mmcs = get_keccak_mmcs(0);
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
-    let fri_params = FriParameters::new_benchmark(challenge_mmcs);
+    let fri_params = example_fri_parameters::<EF, _>(FriParameters::new_benchmark(challenge_mmcs));
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
@@ -382,7 +410,7 @@ where
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
-    let fri_params = FriParameters::new_benchmark(challenge_mmcs);
+    let fri_params = example_fri_parameters::<EF, _>(FriParameters::new_benchmark(challenge_mmcs));
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
@@ -481,4 +509,41 @@ pub fn report_stir_security_level(security_level: usize, max_pow_bits: usize) {
          {STIR_BATCH_POW_BITS} batching grind bits); this excludes the STARK-level \
          (DEEP-ALI/batching) terms `--pcs fri` reports separately"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_koala_bear::KoalaBear;
+
+    use super::*;
+
+    fn check_fri_target<EF: Field>() {
+        for params in [
+            FriParameters::new_benchmark(()),
+            FriParameters::new_benchmark_high_arity(()),
+        ] {
+            let params = example_fri_parameters::<EF, _>(params);
+            let bits = |queries| {
+                ConjecturedSecurity::compute_ldt_only(
+                    params.log_blowup,
+                    queries,
+                    params.query_proof_of_work_bits,
+                    128,
+                    EF::bits(),
+                )
+                .security_bits
+            };
+            assert_eq!(bits(params.num_queries), 100);
+            assert!(bits(params.num_queries - 1) < 100);
+        }
+    }
+
+    #[test]
+    fn fri_examples_use_the_fewest_queries_for_100_bits() {
+        check_fri_target::<BinomialExtensionField<BabyBear, 4>>();
+        check_fri_target::<BinomialExtensionField<KoalaBear, 4>>();
+        check_fri_target::<QM31>();
+    }
 }
