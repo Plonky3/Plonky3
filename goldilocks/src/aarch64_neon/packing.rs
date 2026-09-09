@@ -119,6 +119,50 @@ impl PrimeCharacteristicRing for PackedGoldilocksNeon {
     }
 
     #[inline]
+    fn sum_array<const N: usize>(input: &[Self]) -> Self {
+        assert_eq!(N, input.len());
+        match N {
+            0 => Self::ZERO,
+            1 => input[0],
+            2 => input[0] + input[1],
+            3 => input[0] + input[1] + input[2],
+            4 => (input[0] + input[1]) + (input[2] + input[3]),
+            5 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<1>(&input[4..]),
+            6 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<2>(&input[4..]),
+            7 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<3>(&input[4..]),
+            8 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<4>(&input[4..]),
+            9..=63 => {
+                // Keep the existing eight-term trees for short sums: carry bookkeeping
+                // adds latency until enough independent work amortizes the final fold.
+                let mut acc = Self::sum_array::<8>(&input[..8]);
+                for i in (16..=N).step_by(8) {
+                    acc += Self::sum_array::<8>(&input[(i - 8)..i]);
+                }
+                let tail = &input[(8 * (N / 8))..];
+                match N & 7 {
+                    0 => acc,
+                    1 => acc + Self::sum_array::<1>(tail),
+                    2 => acc + Self::sum_array::<2>(tail),
+                    3 => acc + Self::sum_array::<3>(tail),
+                    4 => acc + Self::sum_array::<4>(tail),
+                    5 => acc + Self::sum_array::<5>(tail),
+                    6 => acc + Self::sum_array::<6>(tail),
+                    7 => acc + Self::sum_array::<7>(tail),
+                    _ => unreachable!(),
+                }
+            }
+            _ => {
+                let mut chunks = input.chunks(64);
+                let mut sum = sum_chunk(chunks.next().expect("N is nonzero"));
+                for chunk in chunks {
+                    sum += sum_chunk(chunk);
+                }
+                sum
+            }
+        }
+    }
+
+    #[inline]
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
         Self::from_fn(|lane| {
             let lhs_lane: [Goldilocks; N] = core::array::from_fn(|i| lhs[i].as_slice()[lane]);
@@ -152,6 +196,95 @@ impl_mul_base_field!(PackedGoldilocksNeon, Goldilocks);
 impl_div_methods!(PackedGoldilocksNeon, Goldilocks);
 impl_packed_field_div!(PackedGoldilocksNeon);
 impl_sum_prod_base_field!(PackedGoldilocksNeon, Goldilocks);
+
+/// Sum at most 64 raw u64 values per lane, delaying the Goldilocks fold.
+#[inline]
+fn sum_chunk(input: &[PackedGoldilocksNeon]) -> PackedGoldilocksNeon {
+    debug_assert!((1..=64).contains(&input.len()));
+    unsafe {
+        use core::arch::aarch64::{vcgtq_u64, vshlq_n_u64, vsraq_n_u64};
+
+        let zero = vdupq_n_u64(0);
+        let (lo, carries) = if input.len() < 4 {
+            // A short final chunk only needs one dependency chain.
+            let mut lo = input[0].to_vector();
+            let mut carries = zero;
+            for term in &input[1..] {
+                let next = vaddq_u64(lo, term.to_vector());
+                carries = vsubq_u64(carries, vcgtq_u64(lo, next));
+                lo = next;
+            }
+            (lo, carries)
+        } else {
+            let (groups, remainder) = input.as_chunks::<4>();
+            let (first, groups) = groups.split_first().unwrap();
+            let mut lo0 = first[0].to_vector();
+            let mut lo1 = first[1].to_vector();
+            let mut lo2 = first[2].to_vector();
+            let mut lo3 = first[3].to_vector();
+            let mut carries0 = zero;
+            let mut carries1 = zero;
+            let mut carries2 = zero;
+            let mut carries3 = zero;
+
+            // Keep four independent chains explicit, without an indexed accumulator array.
+            // Subtracting each all-ones overflow mask increments its exact wrap count.
+            for values in groups {
+                let next0 = vaddq_u64(lo0, values[0].to_vector());
+                carries0 = vsubq_u64(carries0, vcgtq_u64(lo0, next0));
+                lo0 = next0;
+
+                let next1 = vaddq_u64(lo1, values[1].to_vector());
+                carries1 = vsubq_u64(carries1, vcgtq_u64(lo1, next1));
+                lo1 = next1;
+
+                let next2 = vaddq_u64(lo2, values[2].to_vector());
+                carries2 = vsubq_u64(carries2, vcgtq_u64(lo2, next2));
+                lo2 = next2;
+
+                let next3 = vaddq_u64(lo3, values[3].to_vector());
+                carries3 = vsubq_u64(carries3, vcgtq_u64(lo3, next3));
+                lo3 = next3;
+            }
+
+            // Distribute the one-to-three remainder terms across distinct chains.
+            if let Some(value) = remainder.first() {
+                let next = vaddq_u64(lo0, value.to_vector());
+                carries0 = vsubq_u64(carries0, vcgtq_u64(lo0, next));
+                lo0 = next;
+            }
+            if let Some(value) = remainder.get(1) {
+                let next = vaddq_u64(lo1, value.to_vector());
+                carries1 = vsubq_u64(carries1, vcgtq_u64(lo1, next));
+                lo1 = next;
+            }
+            if let Some(value) = remainder.get(2) {
+                let next = vaddq_u64(lo2, value.to_vector());
+                carries2 = vsubq_u64(carries2, vcgtq_u64(lo2, next));
+                lo2 = next;
+            }
+
+            // Merge the exact states in a balanced tree. Include each low-word overflow
+            // alongside both input carry counts, so the final count is at most len - 1.
+            let lo01 = vaddq_u64(lo0, lo1);
+            let carries01 = vsubq_u64(vaddq_u64(carries0, carries1), vcgtq_u64(lo0, lo01));
+            let lo23 = vaddq_u64(lo2, lo3);
+            let carries23 = vsubq_u64(vaddq_u64(carries2, carries3), vcgtq_u64(lo2, lo23));
+            let lo = vaddq_u64(lo01, lo23);
+            let carries = vsubq_u64(vaddq_u64(carries01, carries23), vcgtq_u64(lo01, lo));
+            (lo, carries)
+        };
+
+        // The exact sum is lo + carries * 2^64, including noncanonical inputs.
+        // There are at most 63 carries, so correction = carries * EPSILON < P.
+        let correction = vsubq_u64(vshlq_n_u64::<32>(carries), carries);
+        let sum = vaddq_u64(lo, correction);
+        let overflow = vcgtq_u64(lo, sum);
+        // On overflow, sum <= correction - 1, so sum + EPSILON <= 64 * EPSILON - 1 < P.
+        // The all-ones overflow mask shifted right by 32 is exactly EPSILON.
+        PackedGoldilocksNeon::from_vector(vsraq_n_u64::<32>(sum, overflow))
+    }
+}
 
 impl Algebra<Goldilocks> for PackedGoldilocksNeon {
     // With the delayed-reduction dot product below, one 192-bit reduction is
@@ -597,6 +730,33 @@ mod tests {
                 "square residue lane {lane}: a={:#x}",
                 a[lane]
             );
+        }
+    }
+
+    #[test]
+    fn sum_chunk_carry_boundaries() {
+        for len in [1, 2, 3, 4, 9, 10, 11, 15, 16, 31, 32, 63, 64] {
+            for full_terms in 0..=len {
+                let input = (0..len)
+                    .map(|i| {
+                        PackedGoldilocksNeon(Goldilocks::new_array([
+                            if i < full_terms { u64::MAX } else { 0 },
+                            if i < full_terms { 1 } else { u64::MAX },
+                        ]))
+                    })
+                    .collect::<alloc::vec::Vec<_>>();
+                let actual = super::sum_chunk(&input);
+                for lane in 0..WIDTH {
+                    let expected = input.iter().fold(0u128, |sum, term| {
+                        (sum + u128::from(term.0[lane].value)) % u128::from(super::P)
+                    }) as u64;
+                    assert_eq!(
+                        actual.0[lane].value % super::P,
+                        expected,
+                        "len={len}, full_terms={full_terms}, lane={lane}"
+                    );
+                }
+            }
         }
     }
 

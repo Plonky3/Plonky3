@@ -942,6 +942,7 @@ mod tests {
         check_length!(rng, 12, 16);
         check_length!(rng, 16, 16);
         check_length!(rng, 32, 16);
+        check_length!(rng, 63, 8);
         check_length!(rng, 64, 8);
         check_length!(rng, 129, 4);
     }
