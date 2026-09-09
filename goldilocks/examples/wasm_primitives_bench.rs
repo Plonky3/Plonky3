@@ -179,7 +179,7 @@ mod bench {
         dots!(3);
         dots!(4);
         dots!(8);
-        for len in [64, 256] {
+        for len in [1, 2, 3, 4, 8, 16, 31, 63, 64, 65, 127, 255, 256] {
             let initial: Vec<PF> = (0..len).map(packed).collect();
             let f: Vec<F> = (17..len + 17).map(field).collect();
             measure(filter, &format!("mixed_lc{len}"), 50_000, PF::WIDTH, |n| {
