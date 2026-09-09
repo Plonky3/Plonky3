@@ -77,6 +77,10 @@ impl MultiStarkConfig for WhirConfigForTest {
         &self.pcs
     }
 
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        Some(100)
+    }
+
     fn preprocessed_pcs(&self) -> &TestPcs {
         &self.preprocessed_pcs
     }
@@ -259,7 +263,7 @@ fn prove_verify_preprocessed_roundtrips() {
     // Commit the preprocessed trace once, so both keys carry its commitment.
     let (pk, vk) = setup(&config, &airs, &mut challenger());
 
-    let proof = prove(
+    let proof = p3_multi_stark::prove_with_security(
         &config,
         ProverInstances::new(vec![ProverInstance::new(
             &air,
@@ -268,19 +272,52 @@ fn prove_verify_preprocessed_roundtrips() {
             &[],
         )]),
         0,
+        20,
         &mut challenger(),
-    );
+    )
+    .unwrap();
     // The preprocessed opening is present, matching the AIR's declared trace.
     assert!(proof.preprocessed_opening.is_some());
 
-    verify(
+    p3_multi_stark::verify_with_security(
         &config,
         VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
         &proof,
         0,
+        20,
         &mut challenger(),
     )
     .expect("honest preprocessed proof must verify");
+}
+
+#[test]
+fn security_requires_the_actual_preprocessed_opening_shape() {
+    let mut config = config_for(4);
+    let air = PreprocessedAir { height: 16 };
+    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
+    let report = p3_multi_stark::security_report(&config, &instances).unwrap();
+    // Main and preprocessed commitments leave 2560 and 1280 candidates.
+    // A joint trace choice requires a union over their Cartesian product.
+    let sumcheck_bits = report
+        .terms()
+        .iter()
+        .find(|term| term.label == "constraint-sumcheck")
+        .unwrap()
+        .bits
+        .bits();
+    assert!((sumcheck_bits - (123.0 - 12f64.log2() - (2560f64 * 1280f64).log2())).abs() < 1e-10);
+    assert!(
+        report
+            .terms()
+            .iter()
+            .any(|term| term.label == "preprocessed-pcs")
+    );
+    report.require_security(20).unwrap();
+    config.preprocessed_pcs = pcs_for(5, PREPROCESSED_WIDTH);
+    let report = p3_multi_stark::security_report(&config, &instances).unwrap();
+    assert_eq!(report.security_bits(), None);
+    assert!(report.unassessed_components().contains(&"preprocessed-pcs"));
 }
 
 #[test]

@@ -95,7 +95,7 @@ where
     /// AIR whose constraints are proved.
     pub(super) air: &'a A,
     /// Public values forwarded to the AIR.
-    public_values: &'a [C::Val],
+    pub(super) public_values: &'a [C::Val],
     /// Base-two logarithm of this instance's main trace height.
     num_variables: usize,
 }
@@ -199,6 +199,19 @@ impl<'a, C, A> ProverInstances<'a, C, A>
 where
     C: MultiStarkConfig,
 {
+    pub(super) fn statement(&self) -> Instances<'a, C, A> {
+        Instances(
+            self.0
+                .iter()
+                .map(|instance| Instance {
+                    air: instance.air,
+                    public_values: instance.public_values,
+                    num_variables: instance.table.num_variables(),
+                })
+                .collect(),
+        )
+    }
+
     /// Create a prover-side batch in proof order.
     ///
     /// The order must match the AIR order used at setup.
@@ -250,6 +263,19 @@ impl<'a, C, A> VerifierInstances<'a, C, A>
 where
     C: MultiStarkConfig,
 {
+    pub(super) fn statement(&self) -> Instances<'a, C, A> {
+        Instances(
+            self.0
+                .iter()
+                .map(|instance| Instance {
+                    air: instance.air,
+                    public_values: instance.public_values,
+                    num_variables: instance.num_variables,
+                })
+                .collect(),
+        )
+    }
+
     /// Create a verifier-side batch in proof order.
     ///
     /// The order must match the prover-side batch order and the AIR order used at setup.

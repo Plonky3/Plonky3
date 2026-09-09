@@ -13,9 +13,43 @@ use crate::folder::ProverAir;
 use crate::instance::ProverParts;
 use crate::lookup::prove_lookup;
 use crate::proof::MultiStarkProof;
+use crate::security::{SecurityError, assess_statement};
 use crate::zerocheck::AirZerocheck;
 
+/// Prove only when the complete statement's security assessment meets `target_bits`.
+///
+/// Missing PCS or collision evidence is an error. Assessment happens before any
+/// commitment, grinding, or transcript mutation. The bound inherits the configured
+/// PCS assumptions; see [`crate::security_report`]. Other prover preconditions
+/// and their panics are the same as [`prove`].
+pub fn prove_with_security<'a, C, A>(
+    config: &C,
+    instances: ProverInstances<'a, C, A>,
+    pow_bits: usize,
+    target_bits: usize,
+    challenger: &mut C::Challenger,
+) -> Result<MultiStarkProof<C>, SecurityError>
+where
+    C: MultiStarkConfig,
+    C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
+    C::Challenger: FieldChallenger<C::Val>
+        + GrindingChallenger<Witness = C::Val>
+        + CanSampleUniformBits<C::Val>
+        + CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    ProverData<C>: Clone,
+    A: ProverAir<C::Val, C::Challenge>,
+    <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking:
+        From<C::Challenge> + From<<C::Val as Field>::Packing>,
+{
+    assess_statement(config, &instances.statement())?.require_security(target_bits)?;
+    Ok(prove(config, instances, pow_bits, challenger))
+}
+
 /// Prove that a batch of AIR instances is satisfied by committed execution traces.
+///
+/// This entry point enforces no minimum security level. Use [`prove_with_security`]
+/// to assess all reduction and opening terms and reject unsupported or weak parameters.
 ///
 /// The phases share one transcript:
 ///

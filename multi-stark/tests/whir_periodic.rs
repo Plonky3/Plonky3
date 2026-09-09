@@ -85,6 +85,10 @@ impl MultiStarkConfig for WhirConfigForTest {
         &self.pcs
     }
 
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        Some(100)
+    }
+
     fn preprocessed_pcs(&self) -> &TestPcs {
         &self.preprocessed_pcs
     }
@@ -239,7 +243,7 @@ fn prove_verify_periodic_roundtrips() {
     // Setup therefore commits nothing and yields empty keys.
     let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger());
 
-    let proof = prove(
+    let proof = p3_multi_stark::prove_with_security(
         &config,
         ProverInstances::new(vec![ProverInstance::new(
             &PeriodicAir,
@@ -248,13 +252,15 @@ fn prove_verify_periodic_roundtrips() {
             &[],
         )]),
         0,
+        20,
         &mut challenger(),
-    );
+    )
+    .unwrap();
     // Nothing was committed at setup.
     // There is therefore no preprocessed opening to carry.
     assert!(proof.preprocessed_opening.is_none());
 
-    verify(
+    p3_multi_stark::verify_with_security(
         &config,
         VerifierInstances::new(vec![VerifierInstance::new(
             &PeriodicAir,
@@ -264,9 +270,38 @@ fn prove_verify_periodic_roundtrips() {
         )]),
         &proof,
         0,
+        20,
         &mut challenger(),
     )
     .expect("honest periodic proof must verify");
+}
+
+#[test]
+fn security_rejects_invalid_periodic_metadata() {
+    struct InvalidPeriod;
+    impl BaseAir<F> for InvalidPeriod {
+        fn width(&self) -> usize {
+            1
+        }
+        fn num_periodic_columns(&self) -> usize {
+            1
+        }
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            Cow::Owned(vec![vec![F::ONE; 3]])
+        }
+    }
+    impl<AB: AirBuilder<F = F>> Air<AB> for InvalidPeriod {
+        fn eval(&self, builder: &mut AB) {
+            let x = builder.main().current_slice()[0];
+            let periodic = builder.periodic_values()[0];
+            builder.assert_eq(x, periodic);
+        }
+    }
+    let config = config_for(4, 1);
+    let air = InvalidPeriod;
+    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
+    assert!(p3_multi_stark::security_report(&config, &instances).is_err());
 }
 
 #[test]

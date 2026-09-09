@@ -48,6 +48,7 @@ pub mod air;
 pub mod deep;
 pub mod grinding;
 pub mod logup;
+pub mod multilinear;
 
 pub mod ldt;
 
