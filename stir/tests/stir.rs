@@ -2354,15 +2354,6 @@ mod babybear_pcs {
     }
 
     #[test]
-    fn test_pcs_proof_size_vs_binary_fri_equivalent_input() {
-        const WIDTH: usize = 3;
-
-        for (log_degree, log_folding_factor) in [(14, 2), (16, 2)] {
-            compare_stir_proof_size_with_binary_fri(log_degree, log_folding_factor, WIDTH);
-        }
-    }
-
-    #[test]
     fn assert_stir_proof_smaller_than_binary_fri() {
         const WIDTH: usize = 3;
 

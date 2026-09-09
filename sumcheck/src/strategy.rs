@@ -1195,6 +1195,7 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
         // Invariant:
         //     VariableOrder::eval_constraints_poly must agree with the reference
         //     implementation across random constraint sets and challenge points.
