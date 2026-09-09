@@ -22,6 +22,10 @@ env:
 jobs:
   whir_exhaustive:
     name: WHIR exhaustive tests
+    env:
+      # Optimize the exhaustive sweep while retaining the test profile's
+      # debug assertions and overflow checks.
+      CARGO_PROFILE_TEST_OPT_LEVEL: 1
     strategy:
       matrix:
         include:

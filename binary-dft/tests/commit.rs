@@ -113,16 +113,26 @@ fn polynomial_commit_matches_naive_for_both_orders() {
     let mmcs = mmcs();
     for folding in [0, 2, 4, 6] {
         for rate in [1, 2, 3] {
+            let mut unfolded_root = None;
             for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
-                let message = match order {
-                    VariableOrder::Prefix => {
-                        RowMajorMatrixView::new(&values, 1 << (8 - folding)).transpose()
-                    }
-                    VariableOrder::Suffix => RowMajorMatrix::new(values.clone(), 1 << folding),
+                let reference_root = || {
+                    let message = match order {
+                        VariableOrder::Prefix => {
+                            RowMajorMatrixView::new(&values, 1 << (8 - folding)).transpose()
+                        }
+                        VariableOrder::Suffix => RowMajorMatrix::new(values.clone(), 1 << folding),
+                    };
+                    let expected = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default()
+                        .encode_batch(message, rate);
+                    mmcs.commit_matrix(expected).0
                 };
-                let expected = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default()
-                    .encode_batch(message, rate);
-                let (expected_root, _) = mmcs.commit_matrix(expected);
+                // Without folding, both orders have the same single-column message.
+                // Share its expensive reference encoding, but check both production paths.
+                let expected_root = if folding == 0 {
+                    unfolded_root.get_or_insert_with(reference_root).clone()
+                } else {
+                    reference_root()
+                };
                 let (root, _) = commit_base(
                     order,
                     &AdditiveRsEncoder::<F>::default(),
