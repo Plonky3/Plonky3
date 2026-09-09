@@ -2206,6 +2206,7 @@ pub(crate) mod test {
     }
 
     #[test]
+    #[ignore = "sweeps k up to 2^20; run from heavy CI"]
     fn test_compress_suffix() {
         let mut rng = SmallRng::seed_from_u64(0);
         for k in 1..=20 {

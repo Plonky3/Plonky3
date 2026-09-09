@@ -14,6 +14,8 @@ mod pcs;
 mod proof;
 mod prover;
 #[cfg(test)]
+mod security_tests;
+#[cfg(test)]
 pub(crate) mod test_util;
 mod verifier;
 

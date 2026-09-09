@@ -12,6 +12,7 @@ categories.workspace = true
 [features]
 neon = ["blake3/neon"]
 parallel = ["blake3/rayon"]
+wasm32-simd = ["blake3/wasm32_simd"]
 
 [dependencies]
 p3-symmetric.workspace = true

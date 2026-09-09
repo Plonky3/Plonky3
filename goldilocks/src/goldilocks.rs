@@ -298,6 +298,12 @@ impl PrimeCharacteristicRing for Goldilocks {
         Self::new(half.wrapping_add(mask & HALF_P_PLUS_1))
     }
 
+    #[cfg(target_arch = "wasm32")]
+    #[inline]
+    fn square(&self) -> Self {
+        reduce128(square_wide(self.value))
+    }
+
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // In the Goldilocks field, 2^96 = -1 mod P and 2^192 = 1 mod P.
@@ -359,7 +365,7 @@ impl PrimeCharacteristicRing for Goldilocks {
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
         // The constant OFFSET has 2 important properties:
         // 1. It is a multiple of P.
-        // 2. It is greater than the maximum possible value of the sum of the products of two u64s.
+        // 2. It is greater than the maximum possible product of two u64s.
         const OFFSET: u128 = ((P as u128) << 64) - (P as u128) + ((P as u128) << 32);
         const {
             assert!((N as u32) <= (1 << 31));
@@ -370,8 +376,8 @@ impl PrimeCharacteristicRing for Goldilocks {
             2 => {
                 // We unroll the N = 2 case as it is slightly faster and this is an important case
                 // as a major use is in extension field arithmetic and Goldilocks has a degree 2 extension.
-                let long_prod_0 = (lhs[0].value as u128) * (rhs[0].value as u128);
-                let long_prod_1 = (lhs[1].value as u128) * (rhs[1].value as u128);
+                let long_prod_0 = mul_wide(lhs[0].value, rhs[0].value);
+                let long_prod_1 = mul_wide(lhs[1].value, rhs[1].value);
 
                 // We know that long_prod_0, long_prod_1 < OFFSET.
                 // Thus if long_prod_0 + long_prod_1 overflows, we can just subtract OFFSET.
@@ -388,7 +394,7 @@ impl PrimeCharacteristicRing for Goldilocks {
                 let (lo_plus_hi, hi) = lhs
                     .iter()
                     .zip(rhs)
-                    .map(|(x, y)| (x.value as u128) * (y.value as u128))
+                    .map(|(x, y)| mul_wide(x.value, y.value))
                     .fold((0_u128, 0_u64), |(acc_lo, acc_hi), val| {
                         // Split val into (hi, lo) where hi is the upper 32 bits and lo is the lower 96 bits.
                         let val_hi = (val >> 96) as u64;
@@ -749,8 +755,54 @@ impl Mul for Goldilocks {
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        reduce128(u128::from(self.value) * u128::from(rhs.value))
+        reduce128(mul_wide(self.value, rhs.value))
     }
+}
+
+/// Full-width product. Explicit 32-bit limbs avoid the out-of-line `__multi3`
+/// lowering of a `u128` multiplication on wasm, which has native `i64.mul`.
+#[inline]
+fn mul_wide(x: u64, y: u64) -> u128 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        u128::from(x) * u128::from(y)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let x_lo = x & Goldilocks::NEG_ORDER;
+        let x_hi = x >> 32;
+        let y_lo = y & Goldilocks::NEG_ORDER;
+        let y_hi = y >> 32;
+        let ll = x_lo * y_lo;
+        let lh = x_lo * y_hi;
+        let hl = x_hi * y_lo;
+        let hh = x_hi * y_hi;
+
+        // Each partial product is at most (2^32 - 1)^2. Adding one
+        // 32-bit carry therefore fits in u64, without wrapping.
+        let t0 = hl + (ll >> 32);
+        let t1 = lh + (t0 & Goldilocks::NEG_ORDER);
+        let hi = hh + (t0 >> 32) + (t1 >> 32);
+        let lo = (ll & Goldilocks::NEG_ORDER) | (t1 << 32);
+        (u128::from(hi) << 64) | u128::from(lo)
+    }
+}
+
+/// Squaring shares its two cross products, requiring only three `i64.mul`s.
+#[cfg(target_arch = "wasm32")]
+#[inline]
+fn square_wide(x: u64) -> u128 {
+    let lo = x & Goldilocks::NEG_ORDER;
+    let hi = x >> 32;
+    let ll = lo * lo;
+    let lh = lo * hi;
+    let hh = hi * hi;
+    // x^2 = ll + lh*2^33 + hh*2^64. Adding ll>>33 to lh cannot
+    // overflow: lh <= (2^32 - 1)^2 and ll>>33 < 2^31.
+    let middle = lh + (ll >> 33);
+    let product_hi = hh + (middle >> 31);
+    let product_lo = ll.wrapping_add(lh << 33);
+    (u128::from(product_hi) << 64) | u128::from(product_lo)
 }
 
 impl_add_assign!(Goldilocks);
@@ -892,6 +944,50 @@ mod tests {
 
     type F = Goldilocks;
     type EF = BinomialExtensionField<F, 5>;
+
+    /// Check both product limbs, not just the residue: a lost carry could otherwise
+    /// be hidden by the field reduction. Includes noncanonical field representatives.
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn wasm_wide_products_match_u128_oracle() {
+        const EDGES: [u64; 12] = [
+            0,
+            1,
+            (1 << 32) - 2,
+            (1 << 32) - 1,
+            1 << 32,
+            (1 << 32) + 1,
+            (1 << 63) - 1,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX,
+        ];
+        let check = |a: u64, b: u64| {
+            let product = u128::from(a) * u128::from(b);
+            let square = u128::from(a) * u128::from(a);
+            assert_eq!(mul_wide(a, b), product, "a={a}, b={b}");
+            assert_eq!(square_wide(a), square, "a={a}");
+            assert_eq!(
+                (F::new(a) * F::new(b)).as_canonical_u64(),
+                (product % u128::from(P)) as u64
+            );
+            assert_eq!(
+                F::new(a).square().as_canonical_u64(),
+                (square % u128::from(P)) as u64
+            );
+        };
+        for a in EDGES {
+            for b in EDGES {
+                check(a, b);
+            }
+        }
+        let mut rng = SmallRng::seed_from_u64(0x64_32_CA77);
+        for _ in 0..10_000 {
+            check(rng.random(), rng.random());
+        }
+    }
 
     /// Compare every packed lane with an independent full-u64 sum modulo the field order.
     /// This avoids using the scalar Goldilocks sum as the oracle because it also delays reduction.

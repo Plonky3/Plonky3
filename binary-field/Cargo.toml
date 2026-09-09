@@ -28,6 +28,7 @@ serde = { workspace = true, features = ["derive"] }
 tracing.workspace = true
 
 [dev-dependencies]
+p3-challenger = { workspace = true, features = ["test-utils"] }
 p3-field-testing.workspace = true
 p3-keccak.workspace = true
 

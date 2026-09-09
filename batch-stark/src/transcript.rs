@@ -57,6 +57,9 @@
 //! A prover who learns `zeta` first fits the quotient to agree at that one point.
 //!
 //! Each grind prices one retry of such a search at `2^bits`.
+//!
+//! A grind of zero bits prices nothing, and absorbs nothing either.
+//! Its witness is pinned to the one value a free search returns, so the field stays unique.
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -139,6 +142,7 @@ struct OpeningArgument;
 ///
 /// Every other described step is replayed against data the caller validated first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum BatchTranscriptFailure {
     /// The witness guarding the lookup challenges misses its difficulty.
     #[error("lookup phase PoW witness does not meet the required {bits} bits")]
@@ -155,12 +159,37 @@ pub enum BatchTranscriptFailure {
     /// A batch that samples no lookup challenge still carries a witness for one.
     #[error("a batch with no lookups carries a lookup PoW witness")]
     UnexpectedLookupPowWitness,
+    /// The lookup witness is not the value a zero-difficulty step admits.
+    ///
+    /// A free search has one answer, and the proof carries a different one.
+    //
+    // Why: a zero-difficulty step absorbs nothing and compares nothing.
+    //
+    //     bits = 0 -> the witness is skipped, alpha and beta follow -> the value floats free
+    //     bits > 0 -> absorbed, bits resampled                      -> the grind pins it
+    //
+    // The step is described whatever the difficulty, so the pattern pins the bit count.
+    // A bit count is not a value, so any value rides along and the proof still verifies.
+    #[error("lookup phase PoW witness is nonzero at zero difficulty, expected zero")]
+    NonCanonicalLookupPowWitness,
     /// The witness guarding the out-of-domain point misses its difficulty.
     #[error("out-of-domain phase PoW witness does not meet the required {bits} bits")]
     OodPowWitness {
         /// Grinding difficulty the step requires.
         bits: usize,
     },
+    /// The out-of-domain witness is not the value a zero-difficulty step admits.
+    ///
+    /// A free search has one answer, and the proof carries a different one.
+    //
+    // Why: a zero-difficulty step absorbs nothing and compares nothing.
+    //
+    //     bits = 0 -> the witness is skipped, zeta follows -> the value floats free
+    //     bits > 0 -> absorbed, bits resampled             -> the grind pins it
+    //
+    // Left unpinned, the field is a second encoding of one and the same statement.
+    #[error("out-of-domain phase PoW witness is nonzero at zero difficulty, expected zero")]
+    NonCanonicalOodPowWitness,
 }
 
 /// Numbers that fix the transcript of one batch-STARK run.
@@ -795,6 +824,7 @@ where
     /// - The batch declares a lookup and the proof carries no witness.
     /// - The batch declares none and the proof carries one anyway.
     /// - The witness misses the difficulty its step requires.
+    /// - The difficulty is zero and the witness is not the value a free search returns.
     pub fn lookup_phase<LG, L>(
         &mut self,
         all_lookups: &[L],
@@ -826,6 +856,19 @@ where
             self.state.abort();
             return Err(BatchTranscriptFailure::MissingLookupPowWitness { bits });
         };
+
+        // A zero-difficulty step reads the witness without absorbing or comparing it.
+        //
+        //     bits = 0 -> prover emits zero, nothing is absorbed -> pin the value here
+        //     bits > 0 -> prover grinds,     bits are resampled  -> the grind pins it
+        //
+        // The check sits ahead of the step, so nothing has entered the sponge yet.
+        // Releasing the completeness check keeps this rejection the only failure.
+        if bits == 0 && witness != F::ZERO {
+            self.state.abort();
+            return Err(BatchTranscriptFailure::NonCanonicalLookupPowWitness);
+        }
+
         self.state
             .observe_pow(LOOKUP_POW, bits, witness)
             .map_err(|_| BatchTranscriptFailure::LookupPowWitness { bits })?;
@@ -888,9 +931,22 @@ where
     ///
     /// # Errors
     ///
-    /// When the witness misses the difficulty its step requires.
+    /// - The witness misses the difficulty its step requires.
+    /// - The difficulty is zero and the witness is not the value a free search returns.
     pub fn ood_phase(&mut self, witness: F) -> Result<EF, BatchTranscriptFailure> {
         let bits = self.shape.ood_pow_bits;
+
+        // A zero-difficulty step reads the witness without absorbing or comparing it.
+        //
+        //     bits = 0 -> prover emits zero, nothing is absorbed -> pin the value here
+        //     bits > 0 -> prover grinds,     bits are resampled  -> the grind pins it
+        //
+        // The check sits ahead of the step, so zeta is not drawn on a rejected proof.
+        // Releasing the completeness check keeps this rejection the only failure.
+        if bits == 0 && witness != F::ZERO {
+            self.state.abort();
+            return Err(BatchTranscriptFailure::NonCanonicalOodPowWitness);
+        }
 
         self.state
             .observe_pow(OOD_POW, bits, witness)
@@ -945,12 +1001,20 @@ where
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use core::str::from_utf8;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::testing::{
+        SeedDigest, assert_seeds_pairwise_distinct, pow_difficulties, seed_digest,
+    };
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_lookup::logup::LogUpGadget;
+    use p3_security::grinding::{
+        GRINDING_VOCABULARY, GrindingBudget, GrindingSite, GrindingSites, RecordedGrind,
+        ZeroBitConvention, grinding_step,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -984,12 +1048,11 @@ mod tests {
         }
     }
 
-    /// The first challenge a shape's seed produces.
-    fn first_challenge(shape: &BatchShape) -> F {
-        let mut challenger = fresh_challenger();
-        let separator = shape.domain_separator::<F, EF>();
-        separator.seed(&mut challenger);
-        challenger.sample()
+    /// The digest of the byte stream a shape seeds its sponge with.
+    ///
+    /// Comparing seed streams, rather than a sampled challenge, keeps the sponge out of it.
+    fn seed_of(shape: &BatchShape) -> SeedDigest {
+        seed_digest(&shape.domain_separator::<F, EF>())
     }
 
     /// One mutation of the plain shape per field a reader can set.
@@ -1040,21 +1103,22 @@ mod tests {
     }
 
     #[test]
-    fn every_configuration_knob_reaches_the_seed() {
+    fn no_two_configurations_of_the_shape_share_a_seed() {
         // A knob invisible to the seed is a knob the two sides can silently disagree on.
         //
-        // Some ride the pattern fingerprint, others the instance label.
-        // Which of the two carries a given knob is an implementation detail.
-        // That the seed moves at all is not.
-        let baseline = first_challenge(&plain_shape());
+        //     plain shape in the set  ->  every knob has to reach the seed
+        //     pairwise over the set   ->  no two knobs may land on one seed
+        //
+        // Which of the fingerprint and the label carries a given knob is an implementation detail.
+        // That every knob lands on a seed of its own is not.
+        let mut seeds = vec![("plain", seed_of(&plain_shape()))];
+        seeds.extend(
+            one_mutation_per_field()
+                .iter()
+                .map(|(field, shape)| (*field, seed_of(shape))),
+        );
 
-        for (field, mutated) in one_mutation_per_field() {
-            assert_ne!(
-                baseline,
-                first_challenge(&mutated),
-                "changing `{field}` left the seed where it was",
-            );
-        }
+        assert_seeds_pairwise_distinct(&seeds);
     }
 
     #[test]
@@ -1069,7 +1133,7 @@ mod tests {
         let mut descending = ascending.clone();
         descending.trace_widths.reverse();
 
-        assert_ne!(first_challenge(&ascending), first_challenge(&descending));
+        assert_ne!(seed_of(&ascending), seed_of(&descending));
     }
 
     #[test]
@@ -1085,7 +1149,7 @@ mod tests {
         let mut two = one.clone();
         two.num_lookup_instances = 2;
 
-        assert_ne!(first_challenge(&one), first_challenge(&two));
+        assert_ne!(seed_of(&one), seed_of(&two));
     }
 
     #[test]
@@ -1096,7 +1160,7 @@ mod tests {
         let mut ground = ungrounded.clone();
         ground.ood_pow_bits = 1;
 
-        assert_ne!(first_challenge(&ungrounded), first_challenge(&ground));
+        assert_ne!(seed_of(&ungrounded), seed_of(&ground));
     }
 
     #[test]
@@ -1139,6 +1203,30 @@ mod tests {
     }
 
     #[test]
+    fn a_lookup_witness_at_zero_difficulty_must_be_the_canonical_zero() {
+        // Described run: two instances, one declaring a lookup, and a free grind.
+        //
+        //     required:  the one witness a search of zero bits returns
+        //     supplied:  a value no search could have produced
+        //
+        // The step is described here whatever the difficulty, so the count is already bound.
+        // A count is not a value, so the value is checked on its own.
+        let mut shape = plain_shape();
+        shape.num_lookup_instances = 1;
+        assert_eq!(shape.lookup_pow_bits, 0);
+
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            BatchVerifierTranscript::<Ch, F, EF, [F; 8]>::new(&mut challenger, shape);
+
+        let err = transcript
+            .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), Some(F::ONE))
+            .expect_err("a nonzero witness at zero difficulty must error");
+
+        assert_eq!(err, BatchTranscriptFailure::NonCanonicalLookupPowWitness);
+    }
+
+    #[test]
     fn an_out_of_domain_witness_below_its_difficulty_is_rejected() {
         // Described run: two instances and a grind of 12 bits before the point is drawn.
         //
@@ -1165,6 +1253,35 @@ mod tests {
             .expect_err("a witness below the required difficulty must error");
 
         assert_eq!(err, BatchTranscriptFailure::OodPowWitness { bits: 12 });
+    }
+
+    #[test]
+    fn an_out_of_domain_witness_at_zero_difficulty_must_be_the_canonical_zero() {
+        // Described run: two instances and a free grind before the point is drawn.
+        //
+        //     required:  the one witness a search of zero bits returns
+        //     supplied:  a value no search could have produced
+        let shape = plain_shape();
+        assert_eq!(shape.ood_pow_bits, 0);
+
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            BatchVerifierTranscript::<Ch, F, EF, [F; 8]>::new(&mut challenger, shape);
+
+        transcript.instance_bindings(&[4, 5]);
+        transcript.main_phase([F::ONE; 8], &[&[] as &[F], &[F::ONE]]);
+        transcript.preprocessed_phase(None);
+        transcript
+            .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), None)
+            .expect("a batch with no lookups replays with no witness");
+        let _alpha = transcript.permutation_phase(None, &[]);
+        transcript.quotient_phase([F::ZERO; 8], None);
+
+        let err = transcript
+            .ood_phase(F::ONE)
+            .expect_err("a nonzero witness at zero difficulty must error");
+
+        assert_eq!(err, BatchTranscriptFailure::NonCanonicalOodPowWitness);
     }
 
     #[test]
@@ -1219,5 +1336,84 @@ mod tests {
         let verifier_next: F = verifier_challenger.sample();
         let prover_next: F = prover_challenger.sample();
         assert_eq!(verifier_next, prover_next);
+    }
+    /// This protocol's name, as the vocabulary table keys it.
+    fn protocol() -> &'static str {
+        from_utf8(NAME).expect("the protocol name is ASCII")
+    }
+
+    /// Every grind `shape` describes, keyed for the security model's check.
+    fn recorded_grinds(shape: &BatchShape) -> Vec<RecordedGrind> {
+        pow_difficulties(&shape.pattern::<F, EF>())
+            .into_iter()
+            .map(|(label, bits)| RecordedGrind::new(protocol(), label, bits))
+            .collect()
+    }
+
+    #[test]
+    fn the_grinding_vocabulary_maps_both_grinds_this_protocol_describes() {
+        // The out-of-domain step is described whatever its difficulty.
+        let ood = grinding_step(protocol(), OOD_POW).expect("the out-of-domain grind is mapped");
+        assert_eq!(ood.site, GrindingSite::OutOfDomain);
+        assert_eq!(ood.zero_bits, ZeroBitConvention::Always);
+
+        // The lookup step is described only while the lookup phase runs.
+        let lookup = grinding_step(protocol(), LOOKUP_POW).expect("the lookup grind is mapped");
+        assert_eq!(lookup.site, GrindingSite::LookupChallenge);
+        assert_eq!(lookup.zero_bits, ZeroBitConvention::WhenPhaseRuns);
+
+        // Two grinds described, so two rows.
+        assert_eq!(
+            GRINDING_VOCABULARY
+                .iter()
+                .filter(|step| step.protocol == protocol())
+                .count(),
+            2,
+        );
+    }
+
+    #[test]
+    fn both_grinds_carry_the_difficulties_the_model_credits() {
+        // Invariant: the two conventions this protocol uses both hold.
+        //
+        //     ood_pow     always described, zero included
+        //     lookup_pow  described iff an instance declares a lookup
+        for ood_pow_bits in [0, 1, 8] {
+            for lookup_pow_bits in [0, 1, 12] {
+                for num_lookup_instances in [0, 2] {
+                    let shape = BatchShape {
+                        num_lookup_instances,
+                        lookup_pow_bits,
+                        ood_pow_bits,
+                        ..plain_shape()
+                    };
+
+                    GrindingBudget::from_sites(&GrindingSites {
+                        out_of_domain: ood_pow_bits,
+                        lookup_challenge: lookup_pow_bits,
+                        ..GrindingSites::NONE
+                    })
+                    .check(&[protocol()], &recorded_grinds(&shape))
+                    .unwrap_or_else(|mismatch| panic!("{mismatch}"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_zero_bit_out_of_domain_grind_is_described_rather_than_elided() {
+        // Why: the witness travels in the proof whatever the difficulty.
+        //
+        // The step is therefore described at zero bits, unlike every elided site.
+        // Reading its absence as zero bits would be reading the wrong convention.
+        let shape = BatchShape {
+            ood_pow_bits: 0,
+            ..plain_shape()
+        };
+
+        assert_eq!(
+            recorded_grinds(&shape),
+            vec![RecordedGrind::new(protocol(), OOD_POW, 0)],
+        );
     }
 }

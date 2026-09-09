@@ -1036,14 +1036,20 @@ where
         // [grind folding_pow_bits], shared across every active instance's local round.
         let folding_pow_witness = transcript.folding_pow(r);
 
-        // Phase 1: per-instance folding challenge, fold, commit, and absorb the commitment.
+        // Sample every folding challenge before absorbing any commitment. Otherwise a
+        // prover can vary an earlier instance's commitment to resample later challenges
+        // without repeating the shared grind.
+        let gammas: Vec<EF> = active.iter().map(|_| transcript.fold_challenge()).collect();
+
+        // Phase 1: fold at the fixed challenges, commit, and absorb the commitments.
         struct Phase1<'a, F, EF: Field, Dft, M: Mmcs<EF>, Challenger> {
             rp: RoundProver<'a, F, EF, Dft, M, Challenger>,
             commit: M::Commitment,
         }
         let phase1: Vec<Phase1<'_, F, EF, Dft, M, Challenger>> = active
             .iter()
-            .map(|&i| {
+            .zip(gammas)
+            .map(|(&i, gamma)| {
                 let local_r = r - offset(i);
                 let mut rp = RoundProver::new(
                     configs[i],
@@ -1052,7 +1058,6 @@ where
                     states[i].shift,
                     states[i].log_domain,
                 );
-                let gamma = transcript.fold_challenge();
                 let commit = rp.fold_and_commit(
                     &states[i].oracle,
                     states[i].shift,
@@ -1180,11 +1185,13 @@ where
     // Final round: every instance reaches it on this same global step (right-alignment).
     let final_folding_pow_witness = transcript.final_folding_pow();
 
+    // Final polynomials are prover messages too: fix every challenge before sending one.
+    let final_gammas: Vec<EF> = (0..b).map(|_| transcript.final_fold_challenge()).collect();
+
     let mut final_provers: Vec<FinalRoundProver<'_, F, EF, Dft, M, Challenger>> =
         Vec::with_capacity(b);
-    for i in 0..b {
+    for (i, final_gamma) in final_gammas.into_iter().enumerate() {
         let mut frp = FinalRoundProver::new(configs[i], dft, states[i].shift, states[i].log_domain);
-        let final_gamma = transcript.final_fold_challenge();
         let final_poly = frp.fold_and_derive(&states[i].oracle, final_gamma);
         transcript.final_polynomial(final_poly);
         final_provers.push(frp);

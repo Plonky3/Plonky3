@@ -229,6 +229,7 @@ fn zk_whir_end_to_end_no_rounds() {
 }
 
 #[test]
+#[ignore = "full ZK-WHIR prove/verify at 2^17 variables; run from heavy CI"]
 fn zk_whir_end_to_end_multi_round() {
     // Two code-switching rounds with mixed folding factors and grinding,
     // so the round-to-round oracle carry path is exercised.
@@ -261,6 +262,7 @@ fn zk_whir_end_to_end_partial_final_fold() {
 }
 
 #[test]
+#[ignore = "full ZK-WHIR prove at 2^17 variables; run from heavy CI"]
 fn zk_whir_code_switch_overhead_accounting() {
     // Construction 9.7 per-round overhead (eprint 2026/391, #1587):
     //
@@ -517,6 +519,37 @@ fn zk_whir_rejects_tampered_pow_witness() {
 }
 
 #[test]
+fn zk_whir_rejects_noncanonical_pow_witnesses_at_zero_difficulty() {
+    // Fixture state: the canonical shape grinds nowhere, so every site asks for no work.
+    //
+    //     pow_bits = 0  ->  check_witness returns true without absorbing
+    //     pow_bits > 0  ->  the witness is absorbed and its bits resampled
+    //
+    // Mutation: rewrite the code-switching round's witness, then the base case's.
+    // Neither reaches the sponge, so only a canonical-value check can reject them.
+    let proven = Setup::new(22).prove();
+
+    // The honest prover writes zero into every slot it pays no work for.
+    assert!(proven.proof.rounds.iter().all(|r| r.pow_witness == F::ZERO));
+    assert_eq!(proven.proof.base_case.pow_witness, F::ZERO);
+    proven.verify().expect("an ungrounded proof must verify");
+
+    let mut mutated = Setup::new(22).prove();
+    mutated.proof.rounds[0].pow_witness = F::ONE;
+    assert_eq!(
+        mutated.verify().unwrap_err(),
+        ZkVerifierError::NonCanonicalPowWitness { round: 0 }
+    );
+
+    let mut mutated = Setup::new(22).prove();
+    mutated.proof.base_case.pow_witness = F::ONE;
+    assert_eq!(
+        mutated.verify().unwrap_err(),
+        ZkVerifierError::BaseCase(BaseCaseZkError::NonCanonicalPowWitness)
+    );
+}
+
+#[test]
 fn zk_whir_rejects_tampered_sumcheck_wire() {
     // Mutation: shift one coefficient of the first sumcheck wire.
     //
@@ -627,9 +660,13 @@ fn zk_whir_conditioned_witness_round_trip_accepts() {
     //
     // The per-component simulation tests live where the masks are drawn:
     //
-    //     masked sumcheck wires  ->  p3-sumcheck simulator tests
+    //     masked sumcheck wires  ->  p3-sumcheck inherited-claim simulator tests
     //     private OOD answers    ->  code_switch programmability tests
     //     one-time-pad reveals   ->  base case OTP test
+    //
+    // Every batch here inherits its claim, so the inherited-claim simulator covers these wires.
+    //
+    // The recorded-claims one plays a prelude no WHIR round reaches.
     let num_variables = 12;
     let mut rng = SmallRng::seed_from_u64(21);
 

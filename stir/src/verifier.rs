@@ -1145,10 +1145,12 @@ where
     // A proof carrying a different one is rejected before the description is built.
     check_described_lengths(config, proof, None)?;
 
-    let mut transcript = VerifierTranscript::<Challenger, F, EF>::new(
-        challenger,
-        StirShape::single(config, !initial_is_external),
-    );
+    // A zero-difficulty site leaves its witness unread, so the values are pinned before
+    // the transcript is seeded.
+    let shape = StirShape::single(config, !initial_is_external);
+    check_canonical_pow_witnesses(&shape, &[proof])?;
+
+    let mut transcript = VerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
 
     // Single release point for the driver's completeness check.
     //
@@ -1373,6 +1375,12 @@ where
         check_described_lengths(configs[i], proofs[i], Some(i))?;
     }
 
+    // A zero-difficulty site leaves its witness unread, so the values are pinned before
+    // the agreement check below, which on its own would admit a whole batch rewritten to
+    // one shared wrong value.
+    let shape = StirShape::new(configs, !initial_is_external);
+    check_canonical_pow_witnesses(&shape, proofs)?;
+
     // A shared grind is checked once, so every active instance must carry the same witness.
     check_replicated_witnesses(configs, proofs)?;
 
@@ -1390,10 +1398,7 @@ where
         }
     };
 
-    let mut transcript = VerifierTranscript::<Challenger, F, EF>::new(
-        challenger,
-        StirShape::new(configs, !initial_is_external),
-    );
+    let mut transcript = VerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
 
     // Single release point for the driver's completeness check.
     //
@@ -1412,6 +1417,91 @@ where
             Err(err)
         }
     }
+}
+
+/// Require every witness a zero-difficulty site leaves unread to carry zero.
+///
+/// A site's difficulty is the largest any instance active there asks for, so the check
+/// reads it from the shape the transcript is described with rather than from one config.
+///
+/// A positive difficulty needs no check: there the witness is absorbed and its bits are
+/// resampled, so the grind itself pins the field.
+///
+/// # Errors
+///
+/// When an instance carries a nonzero witness at a site that asks for no work.
+//
+// Why: at zero difficulty neither side touches the sponge.
+//
+//     bits = 0 -> prover emits zero, `replay_pow` returns Ok without reading -> pin here
+//     bits > 0 -> prover grinds,     the sponge resamples the witness's bits -> grind pins
+//
+// Invariant: this runs before `check_replicated_witnesses`, and pins each instance
+// against zero rather than against its neighbours.
+//
+//     agreement only -> a batch rewritten to one shared wrong value passes
+//     zero per copy  -> every rewrite is caught, agreeing or not
+fn check_canonical_pow_witnesses<F, EF, M, IE>(
+    shape: &StirShape,
+    proofs: &[&StirProof<EF, M, F>],
+) -> Result<(), StirError<M::Error, IE>>
+where
+    F: Field,
+    EF: Field,
+    M: Mmcs<EF>,
+{
+    // Intermediate rounds: right-aligned, so only the instances active at a global round
+    // carry a witness for it.
+    for round in 0..shape.max_rounds() {
+        for (stage, bits) in [
+            (GrindStage::Folding, shape.folding_pow_bits(round)),
+            (GrindStage::Query, shape.query_pow_bits(round)),
+        ] {
+            if bits > 0 {
+                continue;
+            }
+            for instance in shape.active(round) {
+                let round_proof =
+                    &proofs[instance].round_proofs[shape.local_round(round, instance)];
+                let witness = match stage {
+                    GrindStage::Folding => round_proof.folding_pow_witness,
+                    GrindStage::Query => round_proof.pow_witness,
+                };
+                if witness != F::ZERO {
+                    return Err(ProofShapeError::NonCanonicalPowWitness {
+                        round: RoundLabel::Round(round),
+                        stage,
+                    }
+                    .into());
+                }
+            }
+        }
+    }
+
+    // The final round is the one global step every instance reaches.
+    for (stage, bits) in [
+        (GrindStage::Folding, shape.final_folding_pow_bits()),
+        (GrindStage::Query, shape.final_pow_bits()),
+    ] {
+        if bits > 0 {
+            continue;
+        }
+        for proof in proofs {
+            let witness = match stage {
+                GrindStage::Folding => proof.final_folding_pow_witness,
+                GrindStage::Query => proof.final_pow_witness,
+            };
+            if witness != F::ZERO {
+                return Err(ProofShapeError::NonCanonicalPowWitness {
+                    round: RoundLabel::Final,
+                    stage,
+                }
+                .into());
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Require every active instance's replicated grinding witness to agree.
@@ -1553,11 +1643,14 @@ where
             proofs[active[0]].round_proofs[r - offset(active[0])].folding_pow_witness;
         transcript.folding_pow(r, folding_witness)?;
 
-        // Phase 1: per-instance folding challenge and commitment absorb.
+        // Fix every folding challenge before any prover response, so the shared grind
+        // protects all active instances.
         for (&i, rv) in active.iter().zip(rvs.iter_mut()) {
             let gamma = transcript.fold_challenge();
-            transcript.fold_commitment(proofs[i].round_proofs[r - offset(i)].commitment.clone());
             rv.set_gamma(gamma, shifts[i]);
+        }
+        for &i in &active {
+            transcript.fold_commitment(proofs[i].round_proofs[r - offset(i)].commitment.clone());
         }
 
         // Phase 2: per-instance OOD sampling and answer absorb.
@@ -1656,10 +1749,13 @@ where
     for i in 0..b {
         let final_gamma = transcript.final_fold_challenge();
         fvs[i].set_gamma(final_gamma, shifts[i]);
+    }
 
+    // As in intermediate rounds, no response may intervene in the challenge block.
+    for (i, proof) in proofs.iter().enumerate() {
         // The coefficient count is checked against the configuration before the
         // transcript starts.
-        transcript.final_polynomial(i, &proofs[i].final_polynomial)?;
+        transcript.final_polynomial(i, &proof.final_polynomial)?;
     }
 
     transcript.final_pow(proofs[0].final_pow_witness)?;

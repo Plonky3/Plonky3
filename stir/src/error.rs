@@ -53,6 +53,10 @@ impl Display for GrindStage {
 /// `got` is what the proof carried.
 #[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
 pub enum ProofShapeError {
+    /// The PCS requires one batching witness exactly when batching grinding is enabled.
+    #[error("batching proof-of-work witness presence: expected {expected}, got {got}")]
+    BatchPowWitness { expected: bool, got: bool },
+
     /// A batch takes one proof per configured instance.
     #[error("expected {expected} proofs, got {got}")]
     InstanceCount { expected: usize, got: usize },
@@ -144,6 +148,27 @@ pub enum ProofShapeError {
     #[error("{round}: replicated {stage} PoW witnesses disagree across batched instances")]
     ReplicatedWitnessMismatch {
         round: RoundLabel,
+        stage: GrindStage,
+    },
+
+    /// A grinding witness is not the value its site's zero difficulty admits.
+    ///
+    /// Checked before the replication check, which only forces the batched copies of a
+    /// shared site to agree with each other.
+    //
+    // Why: at zero difficulty neither side touches the sponge.
+    //
+    //     prover  : the grind returns zero and absorbs nothing
+    //     verifier: `replay_pow` returns `Ok(())` without reading the witness
+    //
+    // Agreement alone therefore admits a whole batch rewritten to one shared wrong value.
+    // Pinning zero per instance is what closes that: zero is the only value an honest
+    // prover emits, so zero is the only value accepted.
+    #[error("{round}: {stage} PoW witness is nonzero at zero difficulty, expected zero")]
+    NonCanonicalPowWitness {
+        /// Round whose grinding site asks for no work.
+        round: RoundLabel,
+        /// Site inside that round the unread witness belongs to.
         stage: GrindStage,
     },
 
@@ -243,6 +268,10 @@ pub enum ExternalSourceError {
 /// Errors returned by [`crate::verifier::verify_stir`].
 #[derive(Debug, Error, PartialEq)]
 pub enum StirError<MmcsError, InputError = ()> {
+    /// The PCS opening-batching witness failed its configured difficulty.
+    #[error("batching proof-of-work witness clears fewer than {bits} bits")]
+    InvalidBatchPowWitness { bits: usize },
+
     /// A proof-of-work witness failed verification.
     #[error("{round}: {stage} proof-of-work witness clears fewer than {bits} bits")]
     InvalidPowWitness {
@@ -287,6 +316,27 @@ pub enum StirError<MmcsError, InputError = ()> {
     #[error("commitment {commitment}, matrix {matrix}: opened at zero points")]
     MatrixWithoutOpeningPoints { commitment: usize, matrix: usize },
 
+    /// Every opening of a matrix must claim the same nonzero number of columns.
+    #[error(
+        "commitment {commitment}, matrix {matrix}, point {point}: inconsistent or zero opening width"
+    )]
+    InvalidOpeningWidth {
+        commitment: usize,
+        matrix: usize,
+        point: usize,
+    },
+
+    /// The PCS quotient/extraction argument requires every opening outside its
+    /// matrix's shared LDE coset, including points which queries did not sample.
+    #[error(
+        "commitment {commitment}, matrix {matrix}, point {point}: opening point lies in its shared LDE domain"
+    )]
+    OpeningPointInDomain {
+        commitment: usize,
+        matrix: usize,
+        point: usize,
+    },
+
     /// A claimed opening point coincides with a queried fiber lane.
     ///
     /// The quotient `(f(z) - f(x)) / (z - x)` is undefined there.
@@ -320,6 +370,7 @@ impl<E, IE> StirError<E, IE> {
     /// Map the `InputError` variant to a different type.
     pub fn map_input_err<IE2>(self, f: impl FnOnce(IE) -> IE2) -> StirError<E, IE2> {
         match self {
+            Self::InvalidBatchPowWitness { bits } => StirError::InvalidBatchPowWitness { bits },
             Self::InvalidPowWitness { round, stage, bits } => {
                 StirError::InvalidPowWitness { round, stage, bits }
             }
@@ -336,6 +387,24 @@ impl<E, IE> StirError<E, IE> {
             Self::MatrixWithoutOpeningPoints { commitment, matrix } => {
                 StirError::MatrixWithoutOpeningPoints { commitment, matrix }
             }
+            Self::InvalidOpeningWidth {
+                commitment,
+                matrix,
+                point,
+            } => StirError::InvalidOpeningWidth {
+                commitment,
+                matrix,
+                point,
+            },
+            Self::OpeningPointInDomain {
+                commitment,
+                matrix,
+                point,
+            } => StirError::OpeningPointInDomain {
+                commitment,
+                matrix,
+                point,
+            },
             Self::OpeningPointMatchesQueryPoint {
                 commitment,
                 matrix,

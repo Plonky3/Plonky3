@@ -677,6 +677,7 @@ where
 
 /// A transcript step the proof failed to satisfy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum StarkTranscriptFailure {
     /// The described preprocessed-commitment step arrived with no commitment.
     #[error(
@@ -705,10 +706,20 @@ pub enum StarkTranscriptFailure {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+    use core::str::from_utf8;
+
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::testing::{
+        SeedDigest, assert_seeds_pairwise_distinct, pow_difficulties, seed_digest,
+    };
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_security::grinding::{
+        GRINDING_VOCABULARY, GrindingBudget, GrindingSite, GrindingSites, RecordedGrind,
+        ZeroBitConvention, grinding_step,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -774,12 +785,11 @@ mod tests {
         }
     }
 
-    /// The first challenge a shape's seed produces.
-    fn first_challenge(shape: &StarkShape) -> F {
-        let mut challenger = fresh_challenger();
-        let separator = shape.domain_separator::<F, EF>();
-        separator.seed(&mut challenger);
-        challenger.sample()
+    /// The digest of the byte stream a shape seeds its sponge with.
+    ///
+    /// Comparing seed streams, rather than a sampled challenge, keeps the sponge out of it.
+    fn seed_of(shape: &StarkShape) -> SeedDigest {
+        seed_digest(&shape.domain_separator::<F, EF>())
     }
 
     /// Every field of the shape, each bumped by one step away from `plain_shape`.
@@ -836,39 +846,21 @@ mod tests {
     }
 
     #[test]
-    fn every_field_of_the_shape_reaches_the_seed() {
-        // Baseline: the plain shape, seeded and sampled once.
-        let baseline = first_challenge(&plain_shape());
-
-        // Each mutation moves exactly one field one step.
+    fn no_two_configurations_of_the_shape_share_a_seed() {
+        // Invariant: the knobs are separated from each other, not merely from a baseline.
         //
-        // A field the fingerprint covers moves the seed through the step sequence.
-        // A field it does not must move it through the instance label instead.
-        for (field, shape) in one_step_from_plain() {
-            assert_ne!(
-                baseline,
-                first_challenge(&shape),
-                "changing `{field}` left the seed where it was",
-            );
-        }
-    }
-
-    #[test]
-    fn no_two_one_step_mutations_collide() {
-        // Invariant: the knobs are separated from each other, not merely from the baseline.
+        //     plain shape in the set  ->  every knob has to reach the seed
+        //     pairwise over the set   ->  no two knobs may land on one seed
         //
-        // Two knobs bound as one number would agree here while both differing from the baseline.
-        let mutations = one_step_from_plain();
+        // Two knobs bound as one number differ from the baseline and still agree with each other.
+        let mut seeds = vec![("plain", seed_of(&plain_shape()))];
+        seeds.extend(
+            one_step_from_plain()
+                .iter()
+                .map(|(field, shape)| (*field, seed_of(shape))),
+        );
 
-        for (i, (left_field, left)) in mutations.iter().enumerate() {
-            for (right_field, right) in &mutations[i + 1..] {
-                assert_ne!(
-                    first_challenge(left),
-                    first_challenge(right),
-                    "`{left_field}` and `{right_field}` land on the same seed",
-                );
-            }
-        }
+        assert_seeds_pairwise_distinct(&seeds);
     }
 
     #[test]
@@ -886,25 +878,25 @@ mod tests {
         };
 
         let shape_of = |air: &ShapeAir| StarkShape::new::<F, _>(air, 0, 6, 6, 2, false, 0);
-        let baseline = first_challenge(&shape_of(&base));
+        let baseline = seed_of(&shape_of(&base));
 
         // A wider trace.
         let wider = ShapeAir { width: 5, ..base };
-        assert_ne!(baseline, first_challenge(&shape_of(&wider)));
+        assert_ne!(baseline, seed_of(&shape_of(&wider)));
 
         // One more public value.
         let more_public = ShapeAir {
             num_public_values: 3,
             ..base
         };
-        assert_ne!(baseline, first_challenge(&shape_of(&more_public)));
+        assert_ne!(baseline, seed_of(&shape_of(&more_public)));
 
         // One periodic column instead of none.
         let periodic = ShapeAir {
             num_periodic_columns: 1,
             ..base
         };
-        assert_ne!(baseline, first_challenge(&shape_of(&periodic)));
+        assert_ne!(baseline, seed_of(&shape_of(&periodic)));
     }
 
     #[test]
@@ -946,7 +938,7 @@ mod tests {
         let mut ground = ungrounded.clone();
         ground.ood_pow_bits = 1;
 
-        assert_ne!(first_challenge(&ungrounded), first_challenge(&ground));
+        assert_ne!(seed_of(&ungrounded), seed_of(&ground));
     }
 
     #[test]
@@ -1130,5 +1122,63 @@ mod tests {
         eight.finish();
 
         assert_ne!(seven_alpha, eight_alpha);
+    }
+    /// This protocol's name, as the vocabulary table keys it.
+    fn protocol() -> &'static str {
+        from_utf8(NAME).expect("the protocol name is ASCII")
+    }
+
+    #[test]
+    fn the_grinding_vocabulary_maps_the_one_grind_this_protocol_describes() {
+        // The security model keys its table on the name and the label bound here.
+        let ood = grinding_step(protocol(), OOD_POW).expect("the out-of-domain grind is mapped");
+        assert_eq!(ood.site, GrindingSite::OutOfDomain);
+        assert_eq!(ood.zero_bits, ZeroBitConvention::Elided);
+
+        // A uni-STARK has no lookups, so it describes no lookup grind and owns no second row.
+        assert_eq!(
+            GRINDING_VOCABULARY
+                .iter()
+                .filter(|step| step.protocol == protocol())
+                .count(),
+            1,
+        );
+    }
+
+    #[test]
+    fn the_out_of_domain_grind_carries_the_difficulty_the_model_credits() {
+        // Invariant: one number reaches the pattern and the report by two routes.
+        //
+        //     ood_pow_bits  --pattern-->        Kind::Pow Length::Fixed
+        //                   --GrindingSites-->  out_of_domain
+        //
+        // Elided at zero, so the sweep covers the step being absent and present.
+        for ood_pow_bits in [0, 1, 8] {
+            let shape = StarkShape {
+                log_ext_degree: 5,
+                log_degree: 5,
+                main_width: 2,
+                preprocessed_width: 0,
+                num_public_values: 1,
+                num_periodic_columns: 0,
+                num_quotient_chunks: 2,
+                opens_main_next_row: true,
+                opens_preprocessed_next_row: false,
+                has_randomization: false,
+                ood_pow_bits,
+            };
+
+            let recorded: Vec<_> = pow_difficulties(&shape.pattern::<F, EF>())
+                .into_iter()
+                .map(|(label, bits)| RecordedGrind::new(protocol(), label, bits))
+                .collect();
+
+            GrindingBudget::from_sites(&GrindingSites {
+                out_of_domain: ood_pow_bits,
+                ..GrindingSites::NONE
+            })
+            .check(&[protocol()], &recorded)
+            .unwrap_or_else(|mismatch| panic!("{mismatch}"));
+        }
     }
 }

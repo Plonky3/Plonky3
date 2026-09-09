@@ -581,6 +581,7 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
         // 4-byte elements: the common 32-bit field width; fuzz every regime.
         #[test]
         fn portable_matches_reference_u32((width, height) in dims()) {

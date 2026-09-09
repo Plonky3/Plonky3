@@ -105,6 +105,7 @@ fn prefix_prover_commits_over_a_binary_field() {
 
 /// The padded production path preserves both layouts and their independently encoded roots.
 #[test]
+#[ignore = "20-way naive-vs-fast binary NTT sweep; run from heavy CI"]
 fn polynomial_commit_matches_naive_for_both_orders() {
     use p3_matrix::dense::RowMajorMatrix;
 

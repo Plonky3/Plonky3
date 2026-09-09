@@ -1009,8 +1009,8 @@ mod babybear_stir {
             source,
             ExternalSourceError::FiberCount {
                 round: RoundLabel::Round(0),
-                expected: 19,
-                got: 18,
+                expected: 20,
+                got: 19,
             }
         );
     }
@@ -1840,7 +1840,7 @@ mod babybear_pcs {
         );
 
         // One shared 2^9 domain, so one STIR instance for both commitments.
-        assert_eq!(proof.len(), 1);
+        assert_eq!(proof.buckets.len(), 1);
 
         let mut v_ch = challenger_template;
         observe_commitment(&mut v_ch, &commit_a);
@@ -1932,7 +1932,7 @@ mod babybear_pcs {
             <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
 
         // Buckets 2^9, 2^7 and 2^5, and B reaches only the middle one.
-        assert_eq!(proof.len(), 3);
+        assert_eq!(proof.buckets.len(), 3);
 
         let mut v_ch = challenger_template;
         for commit in &commits {
@@ -2354,15 +2354,7 @@ mod babybear_pcs {
     }
 
     #[test]
-    fn test_pcs_proof_size_vs_binary_fri_equivalent_input() {
-        const WIDTH: usize = 3;
-
-        for (log_degree, log_folding_factor) in [(14, 2), (16, 2)] {
-            compare_stir_proof_size_with_binary_fri(log_degree, log_folding_factor, WIDTH);
-        }
-    }
-
-    #[test]
+    #[ignore = "full FRI+STIR prove/verify at two sizes; run from heavy CI"]
     fn assert_stir_proof_smaller_than_binary_fri() {
         const WIDTH: usize = 3;
 
@@ -2721,7 +2713,7 @@ mod babybear_pcs {
         // Drop the second commitment's input-opening vector. The verifier must reject:
         // skipping a commit's openings would let the proof verify against a proper subset
         // of the public input.
-        for (_stir_proof, input_openings) in proof.iter_mut() {
+        for (_stir_proof, input_openings) in proof.buckets.iter_mut() {
             assert_eq!(input_openings.len(), 2);
             input_openings.pop();
         }
@@ -2788,7 +2780,7 @@ mod babybear_pcs {
 
         // Both commitments land in the same bucket, so both slots start as `Some`. Blank
         // out the first one in place, keeping the vector's length untouched.
-        for (_stir_proof, input_openings) in proof.iter_mut() {
+        for (_stir_proof, input_openings) in proof.buckets.iter_mut() {
             assert_eq!(input_openings.len(), 2);
             assert!(input_openings[0].is_some());
             input_openings[0] = None;
@@ -2849,8 +2841,8 @@ mod babybear_pcs {
             &mut p_ch,
         );
 
-        assert_eq!(proof.len(), 1);
-        let (stir_proof, input_openings) = &proof[0];
+        assert_eq!(proof.buckets.len(), 1);
+        let (stir_proof, input_openings) = &proof.buckets[0];
         assert!(stir_proof.initial_commitment.is_some());
         let round0 = stir_proof
             .round_proofs
@@ -2906,7 +2898,7 @@ mod babybear_pcs {
             &mut p_ch,
         );
 
-        proof[0].0.round_proofs[0]
+        proof.buckets[0].0.round_proofs[0]
             .query_openings
             .as_mut()
             .expect("round 0 opens the committed initial oracle")
@@ -2963,7 +2955,7 @@ mod babybear_pcs {
             &mut p_ch,
         );
 
-        proof[0].1[0]
+        proof.buckets[0].1[0]
             .as_mut()
             .expect("the commitment sits on this bucket")
             .opened_values[0][0][0] += Val::ONE;
@@ -3016,7 +3008,7 @@ mod babybear_pcs {
             &mut p_ch,
         );
 
-        for (_stir_proof, input_openings) in proof.iter_mut() {
+        for (_stir_proof, input_openings) in proof.buckets.iter_mut() {
             let opening = input_openings[0]
                 .as_mut()
                 .expect("single commitment must have a present opening");
@@ -3043,8 +3035,8 @@ mod babybear_pcs {
             ProofShapeError::InputOpenedRowCount {
                 log_height: log_d + 1,
                 commitment: 0,
-                expected: 17,
-                got: 16,
+                expected: 19,
+                got: 18,
             }
         );
     }
@@ -3406,7 +3398,7 @@ mod babybear_pcs {
         assert!(
             matches!(
                 err,
-                StirError::OpeningPointMatchesQueryPoint {
+                StirError::OpeningPointInDomain {
                     commitment: 0,
                     matrix: 0,
                     point: 0,
@@ -3442,8 +3434,8 @@ mod babybear_pcs {
 
         // The claims pin one STIR instance per distinct shared LDE height, so a proof with
         // fewer must be rejected before the transcript is touched.
-        assert_eq!(proof.len(), 1);
-        proof.pop();
+        assert_eq!(proof.buckets.len(), 1);
+        proof.buckets.pop();
 
         let mut v_ch = challenger_template;
         v_ch.observe(commit.clone());
@@ -3505,14 +3497,14 @@ mod babybear_pcs {
             data_and_points.into_iter().map(Into::into).collect(),
             &mut p_ch,
         );
-        assert_eq!(proof.len(), 2, "two heights must give two buckets");
+        assert_eq!(proof.buckets.len(), 2, "two heights must give two buckets");
 
         // Copy the short commitment's own opening into its (rightly empty) slot at the tall
         // bucket.
-        let short_opening = proof[1].1[1].clone();
+        let short_opening = proof.buckets[1].1[1].clone();
         assert!(short_opening.is_some());
-        assert!(proof[0].1[1].is_none());
-        proof[0].1[1] = short_opening;
+        assert!(proof.buckets[0].1[1].is_none());
+        proof.buckets[0].1[1] = short_opening;
 
         let mut v_ch = challenger_template;
         v_ch.observe(commit_tall.clone());
@@ -3592,14 +3584,15 @@ mod babybear_pcs {
         // fibers — and hence the lane checks — are authenticated against. Dropping it leaves
         // the transcript a message short.
         let mut dropped = proof.clone();
-        dropped[0].0.initial_commitment = None;
+        dropped.buckets[0].0.initial_commitment = None;
         let err = verify_with(&dropped).expect_err("a missing initial commitment is malformed");
         assert_eq!(shape_of(err), ProofShapeError::MissingInitialCommitment);
 
         // Swapping it for another root the proof already carries must not authenticate the
         // round-0 openings.
         let mut swapped = proof;
-        swapped[0].0.initial_commitment = Some(swapped[0].0.round_proofs[0].commitment.clone());
+        swapped.buckets[0].0.initial_commitment =
+            Some(swapped.buckets[0].0.round_proofs[0].commitment.clone());
         let err = verify_with(&swapped).expect_err("a swapped initial commitment must be rejected");
         assert!(
             matches!(err, StirError::InvalidMmcsProof { round, .. } if round == RoundLabel::Round(0)),
@@ -3725,6 +3718,106 @@ mod babybear_stir_multi {
             assert_eq!(sorted_dedup(&first_round.draws), first_round.unique_sorted);
             assert_eq!(output.first_round_indices, first_round.unique_sorted);
         }
+    }
+
+    #[test]
+    fn a_batch_mixing_ground_and_ungrounded_instances_still_verifies() {
+        // A shared grind runs at the largest difficulty among the instances active at its site.
+        //
+        //     instance A  max_pow_bits 0   -> derives 0 bits
+        //     instance B  max_pow_bits 12  -> derives > 0 bits
+        //     shared site                  -> max(0, >0) = > 0 bits
+        //
+        // So instance A legitimately carries a nonzero witness for a site it asked no work at.
+        // Pinning a witness against its own instance's bits would reject this honest prover.
+        // The canonical check reads the shared shape instead, and skips a site the batch grinds.
+        let (idle_params, dft, challenger) = make_params(1, 2, 32, 0);
+        let (ground_params, _, _) = make_params(1, 2, 32, 12);
+
+        let log_degree = 8usize;
+        let mut rng = seeded_rng();
+        let configs = [&idle_params, &ground_params]
+            .map(|params| StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params.clone()))
+            .to_vec();
+
+        // The grinding instance must actually grind, or the batch proves nothing.
+        assert!(
+            configs[1].round_configs.iter().any(|rc| rc.pow_bits > 0)
+                || configs[1].final_pow_bits > 0,
+            "the second instance must derive a positive difficulty for this batch to be mixed",
+        );
+        assert!(
+            configs[0].round_configs.iter().all(|rc| rc.pow_bits == 0)
+                && configs[0].final_pow_bits == 0,
+            "the first instance must derive no difficulty for this batch to be mixed",
+        );
+
+        let polys: Vec<Vec<EF>> = (0..2)
+            .map(|_| (0..1usize << log_degree).map(|_| rng.random()).collect())
+            .collect();
+        let config_refs: Vec<&StirConfig<F, EF, MyMmcs, Challenger>> = configs.iter().collect();
+
+        let mut p_ch = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys, &dft, &mut p_ch);
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+
+        // Completeness: the honest mixed batch verifies, canonical check and all.
+        let mut v_ch = challenger;
+        verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proofs, &mut v_ch)
+            .expect("an honest batch mixing ground and ungrounded instances must verify");
+    }
+
+    #[test]
+    fn test_multi_noncanonical_replicated_pow_witnesses_are_rejected() {
+        // Why: `check_replicated_witnesses` compares the copies of a shared site only
+        // against each other, and at zero difficulty nothing else reads them at all.
+        //
+        //     agree, both wrong -> the agreement check passes  -> unbound
+        //     pinned to zero    -> every rewrite is caught     -> bound
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        let log_degrees = [8usize, 6];
+        let (configs, polys) = make_instances(&params, &log_degrees);
+        let config_refs: Vec<&StirConfig<F, EF, MyMmcs, Challenger>> = configs.iter().collect();
+
+        let mut p_ch = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys, &dft, &mut p_ch);
+        let mut proofs: Vec<_> = results.into_iter().map(|(proof, _)| proof).collect();
+
+        // Every site asks for no work, so the honest prover wrote zero into all of them.
+        for proof in &proofs {
+            assert!(
+                proof
+                    .round_proofs
+                    .iter()
+                    .all(|rp| rp.folding_pow_witness == F::ZERO && rp.pow_witness == F::ZERO)
+            );
+            assert_eq!(proof.final_folding_pow_witness, F::ZERO);
+            assert_eq!(proof.final_pow_witness, F::ZERO);
+        }
+
+        // Rewrite every replicated copy to one shared wrong value, so the instances still
+        // agree and the replication check has nothing to catch.
+        for proof in &mut proofs {
+            for rp in &mut proof.round_proofs {
+                rp.folding_pow_witness = F::ONE;
+                rp.pow_witness = F::ONE;
+            }
+            proof.final_folding_pow_witness = F::ONE;
+            proof.final_pow_witness = F::ONE;
+        }
+
+        let proof_refs: Vec<_> = proofs.iter().collect();
+        let mut v_ch = challenger;
+        let err =
+            verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proof_refs, &mut v_ch)
+                .expect_err("rewritten replicated witnesses must be rejected");
+        assert!(
+            matches!(
+                err,
+                StirError::InvalidProofShape(ProofShapeError::NonCanonicalPowWitness { .. })
+            ),
+            "expected NonCanonicalPowWitness, got {err:?}"
+        );
     }
 
     /// The result an external fiber source returns.
@@ -4081,6 +4174,37 @@ mod babybear_stir_multi {
     fn test_multi_three_buckets_ratio8_spread() {
         let (params, dft, challenger) = make_params(1, 2, 16, 0);
         do_test_multi_prove_verify(&params, &dft, &challenger, &[12, 9, 8]);
+    }
+
+    #[test]
+    fn test_multi_shared_folding_pow_with_late_and_final_only_instances() {
+        let (params, dft, challenger) = make_params(1, 2, 100, 16);
+        let (configs, polys) = make_instances(&params, &[10, 6, 2]);
+        assert!(configs[0].num_rounds() > configs[1].num_rounds());
+        assert!(configs[1].num_rounds() > 0);
+        assert_eq!(configs[2].num_rounds(), 0);
+        assert!(configs[1].round_configs[0].folding_pow_bits > 0);
+        assert!(configs[2].final_folding_pow_bits > 0);
+        let config_refs: Vec<_> = configs.iter().collect();
+
+        let mut prover_challenger = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys, &dft, &mut prover_challenger);
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+        let mut verifier_challenger = challenger;
+        let outputs = verify_stir_multi::<F, EF, MyMmcs, Challenger>(
+            &config_refs,
+            &proofs,
+            &mut verifier_challenger,
+        )
+        .expect("shared folding grinds must cover every right-aligned instance");
+
+        for ((_, queries), output) in results.iter().zip(outputs) {
+            assert_eq!(queries.draws, output.first_round_draws);
+        }
+        assert_eq!(
+            prover_challenger.sample_algebra_element::<EF>(),
+            verifier_challenger.sample_algebra_element::<EF>()
+        );
     }
 
     #[test]

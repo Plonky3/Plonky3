@@ -133,6 +133,10 @@ const STIR_FIXTURE: &str = "tests/fixtures/uni_stark_stir_v0_8_0.postcard";
 const MIN_TRACE_HEIGHT: usize = 1 << 2;
 
 fn make_config() -> MyConfig {
+    make_config_with_batch_pow(0)
+}
+
+fn make_config_with_batch_pow(bits: usize) -> MyConfig {
     let mut rng = SmallRng::seed_from_u64(1);
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
@@ -146,6 +150,32 @@ fn make_config() -> MyConfig {
         log_starting_folding_factor: 2,
         soundness_type: SecurityAssumption::CapacityBound,
         security_level: 100,
+        max_pow_bits: 20,
+        mmcs: challenge_mmcs,
+    };
+    let pcs = Pcs::new(dft, val_mmcs, stir_params).with_batch_proof_of_work_bits(bits);
+    let challenger = Challenger::new(perm);
+    MyConfig::new(pcs, challenger)
+}
+
+/// A lower-security config for tests that only exercise the prove/verify
+/// round trip, not the exact security parameters. `security_level` drives
+/// STIR's query count, so a smoke test that just needs a valid proof can
+/// use a much smaller value than `make_config`'s 100-bit target.
+fn make_fast_config() -> MyConfig {
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let hash = MyHash::new(perm.clone());
+    let compress = MyCompress::new(perm.clone());
+    let val_mmcs = ValMmcs::new(hash, compress, 0);
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let stir_params = StirParameters {
+        log_blowup: 1,
+        log_folding_factor: 2,
+        log_starting_folding_factor: 2,
+        soundness_type: SecurityAssumption::CapacityBound,
+        security_level: 32,
         max_pow_bits: 20,
         mmcs: challenge_mmcs,
     };
@@ -177,7 +207,7 @@ fn read_fixture(path: &str) -> std::io::Result<Vec<u8>> {
 /// n-th Fibonacci number expected to be x.
 fn test_public_value_impl(n: usize, x: u64) {
     let trace = generate_trace_rows::<Val>(0, 1, n);
-    let config = make_config();
+    let config = make_fast_config();
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
 
     let proof = prove(&config, &FibonacciAir {}, trace, &pis);
@@ -191,14 +221,27 @@ fn test_smallest_trace() {
 }
 
 #[test]
+#[ignore = "full STIR prove/verify round trip; run from heavy CI"]
 fn test_public_value() {
     test_public_value_impl(1 << 3, 21);
 }
 
 #[test]
+fn test_public_value_with_batch_grinding() {
+    let config = make_config_with_batch_pow(8);
+    let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
+    let proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    let bytes = postcard::to_allocvec(&proof).unwrap();
+    let decoded = postcard::from_bytes(&bytes).unwrap();
+    verify(&config, &FibonacciAir {}, &decoded, &pis).unwrap();
+}
+
+#[test]
+#[ignore = "full STIR prove/verify round trip; run from heavy CI"]
 fn test_short_public_values_rejected() {
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
-    let config = make_config();
+    let config = make_fast_config();
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
 
     let proof = prove(&config, &FibonacciAir {}, trace, &pis);

@@ -3,6 +3,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, dot_product};
 use p3_maybe_rayon::prelude::*;
@@ -16,9 +17,10 @@ use crate::layout::prover::{Layout, StackedClaims};
 use crate::layout::witness::Table;
 use crate::layout::{LayoutStrategy, Witness};
 use crate::product_polynomial::ProductPolynomial;
-use crate::strategy::{SumcheckProver, VariableOrder};
+use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
 use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
+use crate::transcript::{ProverTranscript, SumcheckShape};
 use crate::{Claim, SumcheckData, extrapolate_01inf};
 
 /// Stacked-sumcheck prover with suffix-first variable binding.
@@ -319,6 +321,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         challenger: &mut Ch,
     ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
+        F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Sanity: preprocessing cannot consume more rounds than the stacked arity.
@@ -349,6 +352,10 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         // First alpha power assigned to the virtual claims, sitting just past the concrete claims.
         // The claim count is fixed for the whole fold, so this exponentiation is loop-invariant.
         let alpha_base = alpha.exp_u64(n_claims as u64);
+
+        // One driver spans the whole preprocessing batch, so the description is walked exactly once.
+        let shape = SumcheckShape::new(self.claims.folding, pow_bits, Basis::Evaluation);
+        let mut transcript = ProverTranscript::<Ch, F, EF>::new(challenger, shape);
 
         for round_idx in 0..self.claims.folding {
             // Lagrange weights at the challenges sampled so far.
@@ -398,10 +405,13 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
             }
 
             // Observe coefficients, sample r, extrapolate the running sum.
-            let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
+            let r = sumcheck_data.observe_and_sample(&mut transcript, c0, c_inf);
             sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
             rs.push(r);
         }
+
+        // Require that every described step was played.
+        transcript.finish();
 
         // Stage D: materialise the residual product polynomial.
         //

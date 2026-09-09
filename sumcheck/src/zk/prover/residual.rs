@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, HornerIter};
@@ -10,9 +11,10 @@ use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncodingWithRandomness;
 use rand::Rng;
 
-use super::common::{observe_masks_and_mu_tilde, sample_masks};
+use super::common::{mask_endpoints, sample_masks};
 use super::round::{PlainPiece, RoundContext, RoundState, round_poly_to_wire};
 use crate::strategy::SumcheckProver;
+use crate::zk::transcript::{ZkProverTranscript, ZkSumcheckShape};
 use crate::zk::{ZkSumcheckData, ZkSumcheckHandoff};
 
 impl<F, EF> SumcheckProver<F, EF>
@@ -54,6 +56,11 @@ where
     /// - Only the weight side and the claim are scaled by `eps`.
     /// - The evaluation side stays the honest folded message.
     /// - An HVZK code-switch can therefore commit it verbatim.
+    ///
+    /// # Panics
+    ///
+    /// - The configuration cannot describe a masked batch.
+    /// - Folding factor exceeds the residual prover's arity.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     #[tracing::instrument(skip_all)]
     pub fn into_zk_sumcheck<Enc, M, R, Ch>(
@@ -68,42 +75,41 @@ where
         rng: &mut R,
     ) -> ZkSumcheckHandoff<F, EF, M>
     where
+        F: TranscriptField,
         Enc: ZkEncodingWithRandomness<EF>,
         Enc::Codeword: Matrix<EF>,
         M: Mmcs<EF>,
         R: Rng,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
-        assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
-        assert!(folding_factor >= 1, "sumcheck requires at least one round");
+        let ell_zk = encoding.message_len();
+
+        // This entry inherits its claim instead of batching recorded ones.
+        let shape = ZkSumcheckShape::new_inherited(folding_factor, ell_zk, pow_bits);
+
+        // Lemma 6.4 hypotheses, plus the one bound the transcript never sees.
+        shape
+            .validate::<F>()
+            .expect("a prover's own configuration must describe a masked batch");
         assert!(
             folding_factor <= self.num_variables(),
             "folding_factor must be <= residual prover arity",
         );
 
-        let ell_zk = encoding.message_len();
-        assert!(
-            ell_zk >= 3,
-            "mask degree ell_zk - 1 must cover the degree-2 plain piece (ell_zk >= 3)",
-        );
+        let mut transcript = ZkProverTranscript::<Ch, F, EF>::new(challenger, shape);
 
         // Unlike the layout-driven path, this entry receives a scalar claim
-        // directly, so bind it before the masking prelude samples `eps`.
+        // directly, so the description opens by binding it.
         //
         // The bound value is the joint claim, matching the verifier's view.
-        challenger.observe_algebra_element(self.claimed_sum() + aux_claim);
+        transcript.bind_claim(self.claimed_sum() + aux_claim);
 
         let (masks, mask_randomness, mask_oracle) =
-            sample_masks::<EF, _, _, _, _>(folding_factor, encoding, mmcs, challenger, rng);
-        let mut sum_future_endpoints = observe_masks_and_mu_tilde::<F, EF, _>(
-            &masks,
-            folding_factor,
-            ell_zk,
-            challenger,
-            zk_data,
-        );
+            sample_masks::<EF, _, _, _>(folding_factor, encoding, mmcs, rng);
+        let (mu_tilde, mut sum_future_endpoints) = mask_endpoints::<EF>(&masks, folding_factor);
+        zk_data.mu_tilde = mu_tilde;
 
-        let eps: EF = challenger.sample_algebra_element();
+        let eps: EF = transcript.masks(mask_oracle.0.clone(), mu_tilde);
         let mut rs = Vec::with_capacity(folding_factor);
         let mut mask_evals_at_gamma = Vec::with_capacity(folding_factor);
         let pow2: Vec<EF> = EF::TWO.powers().collect_n(folding_factor + 1);
@@ -149,14 +155,12 @@ where
                 },
             );
             let wire = round_poly_to_wire(&h);
-            challenger.observe_algebra_slice(&wire);
+
+            // One call binds the wire, grinds when enabled, and draws the challenge.
+            let (gamma, witness) = transcript.round(&wire);
             zk_data.round_coefficients.push(wire);
+            zk_data.pow_witnesses.extend(witness);
 
-            if pow_bits > 0 {
-                zk_data.pow_witnesses.push(challenger.grind(pow_bits));
-            }
-
-            let gamma: EF = challenger.sample_algebra_element();
             let mask_at_gamma = mask.iter().copied().horner(gamma);
             mask_evals_at_gamma.push(mask_at_gamma);
 
@@ -166,6 +170,9 @@ where
 
             rs.push(gamma);
         }
+
+        // Every described step has been played, so the sponge goes back to the caller.
+        transcript.finish();
 
         // The last challenge has no successor to fuse with.
         // The weight scaling below reads the tables, so it binds here.
@@ -320,6 +327,74 @@ mod tests {
             verifier_handoff.claimed_residual,
             prover_handoff.residual_prover.claimed_sum() + final_mask_residual,
         );
+    }
+
+    #[test]
+    fn a_verifier_handed_a_different_claim_diverges() {
+        // Invariant: the inherited claim is a described step, bound on both sides.
+        //
+        // Nothing inside this crate can compare the prover's scalar with the verifier's.
+        //
+        //     prover   ->  claimed_sum + aux_claim
+        //     verifier ->  whatever its caller supplies
+        //
+        // What the step buys is that a caller which disagrees moves `eps` and every challenge
+        // after it, so the residual handed back no longer matches the prover's.
+        //
+        // Fixture state: 3 variables, 2 rounds, mask length 4, no auxiliary claim.
+        let evals = Poly::new((1..=8).map(EF::from_u64).collect::<Vec<_>>());
+        let weights = Poly::new((11..=18).map(EF::from_u64).collect::<Vec<_>>());
+        let claimed_sum = dot_product::<EF, _, _>(
+            evals.as_slice().iter().copied(),
+            weights.as_slice().iter().copied(),
+        );
+        let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
+
+        let ell_zk = 4;
+        let folding_factor = 2;
+        let (perm, mmcs, encoding) = make_setup(41, ell_zk);
+        let mut prover_challenger = MyChallenger::new(perm.clone());
+        let mut rng = SmallRng::seed_from_u64(43);
+        let mut zk_data = ZkSumcheckData::<F, EF>::default();
+
+        let prover_handoff = SumcheckProver::new(poly, claimed_sum).into_zk_sumcheck(
+            &mut zk_data,
+            &encoding,
+            &mmcs,
+            folding_factor,
+            0,
+            EF::ZERO,
+            &mut prover_challenger,
+            &mut rng,
+        );
+        let mask_commitment = prover_handoff.mask_oracle.0.clone();
+
+        // One replay per claim, both from the same fresh sponge.
+        let replay = |claim: EF| {
+            let mut challenger = MyChallenger::new(perm.clone());
+            ZkVerifier::<F, EF>::verify_claim::<MyMmcs, _>(
+                &zk_data,
+                &mask_commitment,
+                ell_zk,
+                folding_factor,
+                0,
+                claim,
+                &mut challenger,
+            )
+            .expect("a well-shaped proof always replays")
+        };
+
+        let honest = replay(claimed_sum);
+        let tampered = replay(claimed_sum + EF::ONE);
+
+        // The claim is bound before `eps`, so the whole stream moves with it.
+        assert_ne!(honest.eps, tampered.eps);
+        assert_ne!(honest.randomness, tampered.randomness);
+        assert_ne!(honest.claimed_residual, tampered.claimed_residual);
+
+        // The honest replay is the one that matches the prover.
+        assert_eq!(honest.randomness, prover_handoff.randomness);
+        assert_eq!(honest.eps, prover_handoff.eps);
     }
 
     #[test]

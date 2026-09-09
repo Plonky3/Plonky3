@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn every_field_of_the_shape_reaches_the_seed() {
-        // Walk the shape field by field, perturbing one number at a time.
+        // Each row below perturbs the shape and asserts the seed moved with it.
         //
         // Some of these move the step sequence and some only the label.
         // The walk does not care which, only that the seed moves either way.

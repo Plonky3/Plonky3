@@ -607,9 +607,9 @@ pub fn binomial_square<F: Field, R: Algebra<F>, const D: usize>(
 ) {
     match D {
         2 => {
-            let a1_w = a[1].dup() * w;
-            res[0] = R::dot_product(a[..].try_into().unwrap(), &[a[0].dup(), a1_w]);
-            res[1] = a[0].dup() * a[1].double();
+            let [c0, c1] = R::quadratic_extension_square(a[..].try_into().unwrap(), w);
+            res[0] = c0;
+            res[1] = c1;
         }
         3 => cubic_square(a, res, w),
         4 => quartic_square(a, res, w),

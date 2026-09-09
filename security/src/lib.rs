@@ -52,6 +52,7 @@ pub mod multilinear;
 
 pub mod ldt;
 
+pub mod binary;
 pub mod fri;
 pub mod whir;
 

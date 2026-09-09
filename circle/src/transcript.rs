@@ -15,6 +15,7 @@
 //! ```text
 //!     per claimed opening:  opening point   two coordinates on the circle
 //!                           opened values   one extension element per column
+//!     batching grinding                     only when the difficulty is positive
 //!     batching challenge                    one extension element
 //!     first-layer commitment                one opaque value
 //!     bivariate challenge                   one extension element
@@ -28,7 +29,7 @@
 //!
 //! # What is bound
 //!
-//! - Shape: opened widths, commit-round count, index width, both grinding difficulties.
+//! - Shape: opened widths, commit-round count, index width, all grinding difficulties.
 //! - Instance label: the blowup, and the batch / matrix / point nesting of the claims.
 //! - Nothing: a commitment's width, which this layer cannot see.
 //! - Nothing: the lambda corrections, which the first-layer opening check pins instead.
@@ -85,6 +86,9 @@ const OPENING_POINT: &str = "opening_point";
 /// Step label of the values claimed at one opening point.
 const OPENED_VALUES: &str = "opened_values";
 
+/// Step label of the grinding step guarding the opening-batching challenge.
+const BATCH_POW: &str = "batch_pow";
+
 /// Step label of the challenge batching every claim into one FRI instance.
 const BATCH_CHALLENGE: &str = "batch_challenge";
 
@@ -132,6 +136,7 @@ pub type OpeningClaim<'a, EF> = (Point<EF>, &'a [EF]);
 /// A described grinding step therefore always has a witness to replay it.
 /// Only the strength of that witness can still fail here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum CircleTranscriptFailure {
     /// A grinding witness did not produce the zero bits its step requires.
     #[error("invalid proof-of-work witness for the {phase} phase: {bits} bits required")]
@@ -164,6 +169,8 @@ pub struct CirclePcsShape {
     pub opened_widths: Vec<Vec<Vec<usize>>>,
     /// Number of commit-phase rounds the folding chain walks.
     pub num_commit_rounds: usize,
+    /// Grinding difficulty guarding the opening-batching challenge.
+    pub batch_pow_bits: usize,
     /// Grinding difficulty guarding each folding challenge.
     pub commit_pow_bits: usize,
     /// Grinding difficulty guarding the query indices.
@@ -219,6 +226,7 @@ impl CirclePcsShape {
         Self {
             opened_widths,
             num_commit_rounds: log_max_height - params.log_blowup - 1,
+            batch_pow_bits: params.batch_proof_of_work_bits,
             commit_pow_bits: params.commit_proof_of_work_bits,
             query_pow_bits: params.query_proof_of_work_bits,
             num_queries: params.num_queries,
@@ -239,9 +247,9 @@ impl CirclePcsShape {
         F: PrimeField64,
         EF: ExtensionField<F>,
     {
-        // Two steps per claim, three per commit round, and six fixed steps around them.
+        // Two steps per claim, three per commit round, and up to seven surrounding steps.
         let num_claims: usize = self.opened_widths.iter().flatten().map(Vec::len).sum();
-        let mut steps = Vec::with_capacity(2 * num_claims + 3 * self.num_commit_rounds + 6);
+        let mut steps = Vec::with_capacity(2 * num_claims + 3 * self.num_commit_rounds + 7);
 
         for &width in self.opened_widths.iter().flatten().flatten() {
             // The point is bound before the values claimed there.
@@ -258,6 +266,16 @@ impl CirclePcsShape {
                 Kind::Message,
                 OPENED_VALUES,
                 Length::Fixed(width),
+            ));
+        }
+
+        // Every claim is fixed before grinding protects the batching challenge.
+        if self.batch_pow_bits > 0 {
+            steps.push(Interaction::algebra::<F, F>(
+                Hierarchy::Atomic,
+                Kind::Pow,
+                BATCH_POW,
+                Length::Fixed(self.batch_pow_bits),
             ));
         }
 
@@ -428,7 +446,7 @@ where
         }
     }
 
-    /// Bind every claimed opening, then draw the challenge that batches them.
+    /// Bind every claimed opening, grind, then draw the challenge that batches them.
     ///
     /// # Arguments
     ///
@@ -436,8 +454,8 @@ where
     ///
     /// # Returns
     ///
-    /// The batching challenge `alpha`.
-    pub fn batch_phase<'c, I>(&mut self, claims: I) -> EF
+    /// The batching challenge `alpha` and the witness when grinding is enabled.
+    pub fn batch_phase<'c, I>(&mut self, claims: I) -> (EF, Option<F>)
     where
         I: IntoIterator<Item = OpeningClaim<'c, EF>>,
         EF: 'c,
@@ -452,9 +470,13 @@ where
                 .observe_extensions::<F, EF, FieldToFieldCodec<F>>(OPENED_VALUES, values);
         }
 
-        self.state
+        let witness = (self.shape.batch_pow_bits > 0)
+            .then(|| self.state.observe_pow(BATCH_POW, self.shape.batch_pow_bits));
+        let alpha = self
+            .state
             .challenge_extension::<F, EF, FieldToFieldCodec<F>>(BATCH_CHALLENGE)
-            .into_inner()
+            .into_inner();
+        (alpha, witness)
     }
 
     /// Bind the commitment to the reduced openings and draw the bivariate challenge.
@@ -564,18 +586,27 @@ where
         }
     }
 
-    /// Replay every claimed opening, then redraw the batching challenge.
+    /// Replay every claimed opening, check its grind, then redraw the batching challenge.
     ///
     /// # Arguments
     ///
     /// - `claims`: every claim in batch, then matrix, then point order.
+    /// - `witness`: the proof's batching witness, ignored when the difficulty is zero.
+    ///
+    /// # Errors
+    ///
+    /// When the batching witness misses the configured difficulty.
     ///
     /// # Panics
     ///
     /// Never in practice.
     /// The shape and the claims come from the same caller-supplied statement.
     /// A described width and a supplied width therefore cannot differ.
-    pub fn batch_phase<'c, I>(&mut self, claims: I) -> EF
+    pub fn batch_phase<'c, I>(
+        &mut self,
+        claims: I,
+        witness: F,
+    ) -> Result<EF, CircleTranscriptFailure>
     where
         I: IntoIterator<Item = OpeningClaim<'c, EF>>,
         EF: 'c,
@@ -592,9 +623,19 @@ where
                 .expect("the described widths come from these same claims");
         }
 
-        self.state
+        if self.shape.batch_pow_bits > 0 {
+            self.state
+                .observe_pow(BATCH_POW, self.shape.batch_pow_bits, witness)
+                .map_err(|_| CircleTranscriptFailure::PowWitness {
+                    phase: PowPhase::Batch,
+                    bits: self.shape.batch_pow_bits,
+                })?;
+        }
+
+        Ok(self
+            .state
             .challenge_extension::<F, EF, FieldToFieldCodec<F>>(BATCH_CHALLENGE)
-            .into_inner()
+            .into_inner())
     }
 
     /// Replay the first-layer commitment and redraw the bivariate challenge.
@@ -723,6 +764,7 @@ mod tests {
         CirclePcsShape {
             opened_widths,
             num_commit_rounds: 1,
+            batch_pow_bits: 0,
             commit_pow_bits: 0,
             query_pow_bits: 0,
             num_queries: 2,
@@ -747,7 +789,7 @@ mod tests {
         let mut transcript =
             CircleProverTranscript::<Ch, F, EF>::new(&mut challenger, shape.clone());
 
-        let alpha = transcript.batch_phase(claims.iter().map(|(p, v)| (*p, v.as_slice())));
+        let (alpha, _) = transcript.batch_phase(claims.iter().map(|(p, v)| (*p, v.as_slice())));
         let _bivariate = transcript.first_layer([F::ONE; 8]);
         for _ in 0..shape.num_commit_rounds {
             let _beta = transcript.commit_round([F::TWO; 8]);
@@ -803,6 +845,10 @@ mod tests {
         rounds.num_commit_rounds += 1;
         assert_ne!(first_challenge(&rounds), baseline, "commit round count");
 
+        let mut batch_pow = base.clone();
+        batch_pow.batch_pow_bits = 4;
+        assert_ne!(first_challenge(&batch_pow), baseline, "batch grinding");
+
         let mut commit_pow = base.clone();
         commit_pow.commit_pow_bits = 4;
         assert_ne!(first_challenge(&commit_pow), baseline, "commit grinding");
@@ -854,37 +900,45 @@ mod tests {
 
     #[test]
     fn both_sides_derive_the_same_challenges() {
-        // Completeness: a verifier replaying the prover's values redraws them exactly.
-        let shape = shape_with(vec![vec![vec![2]]]);
-        let point = Point::from_projective_line(EF::from_u32(7));
-        let values = vec![EF::ONE, EF::TWO];
+        for batch_pow_bits in [0, 8] {
+            // Completeness: a verifier replaying the prover's values redraws them exactly.
+            let mut shape = shape_with(vec![vec![vec![2]]]);
+            shape.batch_pow_bits = batch_pow_bits;
+            let point = Point::from_projective_line(EF::from_u32(7));
+            let values = vec![EF::ONE, EF::TWO];
 
-        let mut prover_challenger = fresh_challenger();
-        let mut prover =
-            CircleProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, shape.clone());
-        let prover_alpha = prover.batch_phase([(point, values.as_slice())]);
-        let prover_bivariate = prover.first_layer([F::ONE; 8]);
-        let (prover_beta, _) = prover.commit_round([F::TWO; 8]);
-        let (prover_indices, _) = prover.query_phase(EF::ONE);
-        prover.finish();
+            let mut prover_challenger = fresh_challenger();
+            let mut prover =
+                CircleProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, shape.clone());
+            let (prover_alpha, batch_witness) = prover.batch_phase([(point, values.as_slice())]);
+            let prover_bivariate = prover.first_layer([F::ONE; 8]);
+            let (prover_beta, _) = prover.commit_round([F::TWO; 8]);
+            let (prover_indices, _) = prover.query_phase(EF::ONE);
+            prover.finish();
 
-        let mut verifier_challenger = fresh_challenger();
-        let mut verifier =
-            CircleVerifierTranscript::<Ch, F, EF>::new(&mut verifier_challenger, shape);
-        let verifier_alpha = verifier.batch_phase([(point, values.as_slice())]);
-        let verifier_bivariate = verifier.first_layer([F::ONE; 8]);
-        let verifier_beta = verifier
-            .commit_round([F::TWO; 8], F::ZERO)
-            .expect("a round without grinding replays from the commitment alone");
-        let verifier_indices = verifier
-            .query_phase(EF::ONE, F::ZERO)
-            .expect("a query phase without grinding replays from the constant alone");
-        verifier.finish();
+            let mut verifier_challenger = fresh_challenger();
+            let mut verifier =
+                CircleVerifierTranscript::<Ch, F, EF>::new(&mut verifier_challenger, shape);
+            let verifier_alpha = verifier
+                .batch_phase(
+                    [(point, values.as_slice())],
+                    batch_witness.unwrap_or_default(),
+                )
+                .unwrap();
+            let verifier_bivariate = verifier.first_layer([F::ONE; 8]);
+            let verifier_beta = verifier
+                .commit_round([F::TWO; 8], F::ZERO)
+                .expect("a round without grinding replays from the commitment alone");
+            let verifier_indices = verifier
+                .query_phase(EF::ONE, F::ZERO)
+                .expect("a query phase without grinding replays from the constant alone");
+            verifier.finish();
 
-        assert_eq!(prover_alpha, verifier_alpha);
-        assert_eq!(prover_bivariate, verifier_bivariate);
-        assert_eq!(prover_beta, verifier_beta);
-        assert_eq!(prover_indices, verifier_indices);
+            assert_eq!(prover_alpha, verifier_alpha);
+            assert_eq!(prover_bivariate, verifier_bivariate);
+            assert_eq!(prover_beta, verifier_beta);
+            assert_eq!(prover_indices, verifier_indices);
+        }
     }
 
     #[test]
@@ -898,7 +952,7 @@ mod tests {
         let mut challenger = fresh_challenger();
         let mut transcript = CircleVerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape);
 
-        let _alpha = transcript.batch_phase([]);
+        let _alpha = transcript.batch_phase([], F::ZERO).unwrap();
         let _bivariate = transcript.first_layer([F::ONE; 8]);
 
         let err = transcript
@@ -925,7 +979,7 @@ mod tests {
         let mut challenger = fresh_challenger();
         let mut transcript = CircleVerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape);
 
-        let _alpha = transcript.batch_phase([]);
+        let _alpha = transcript.batch_phase([], F::ZERO).unwrap();
         let _bivariate = transcript.first_layer([F::ONE; 8]);
 
         let err = transcript
@@ -948,7 +1002,7 @@ mod tests {
         let mut transcript =
             CircleVerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape_with(vec![]));
 
-        let _alpha = transcript.batch_phase([]);
+        let _alpha = transcript.batch_phase([], F::ZERO).unwrap();
         transcript.abort();
     }
 }

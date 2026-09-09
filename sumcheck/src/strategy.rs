@@ -8,6 +8,7 @@
 
 use alloc::vec::Vec;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_maybe_rayon::prelude::*;
@@ -16,6 +17,7 @@ use p3_multilinear_util::poly::{Poly, PolyMaybePackedView};
 
 use crate::constraints::{Constraint, Statements};
 use crate::product_polynomial::ProductPolynomial;
+use crate::transcript::{ProverTranscript, SumcheckShape};
 use crate::{SumcheckData, extrapolate_01inf};
 
 /// Input size at which the round-coefficient routines switch from serial to parallel execution.
@@ -1011,6 +1013,7 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         constraint: Option<Constraint<F, EF>>,
     ) -> Point<EF>
     where
+        F: TranscriptField,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Optional constraint absorption: fold into the weight polynomial and update the sum.
@@ -1026,12 +1029,16 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         let mut pending: Option<EF> = None;
         let mut challenges = Vec::with_capacity(folding_factor);
 
+        // One driver spans the whole batch, so the description is walked exactly once.
+        let shape = SumcheckShape::new(folding_factor, pow_bits, Basis::Evaluation);
+        let mut transcript = ProverTranscript::<Challenger, F, EF>::new(challenger, shape);
+
         for _ in 0..folding_factor {
             // Measure this round, absorbing whatever binding the last one left behind.
             let (c_a, c_inf) = self.measure_round(&mut pending);
 
             // Commit to the transcript, do the optional grinding, take the challenge.
-            let r = sumcheck_data.observe_and_sample(challenger, c_a, c_inf, pow_bits);
+            let r = sumcheck_data.observe_and_sample(&mut transcript, c_a, c_inf);
 
             // Advance the claim through the round identity the verifier applies.
             self.sum = Basis::Evaluation.reduce_claim(c_a, c_inf, r, self.sum);
@@ -1041,6 +1048,9 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
             // Hand this round's challenge to the next one.
             pending = Some(r);
         }
+
+        // Require that every described step was played.
+        transcript.finish();
 
         // The last challenge has no successor to fuse with, so it binds on its own.
         self.bind_pending(&mut pending);
@@ -1069,6 +1079,7 @@ mod tests {
     use super::{Basis, RoundMessage, VariableOrder};
     use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement};
     use crate::constraints::{Constraint, Statements};
+    use crate::transcript::{ProverTranscript, SumcheckShape};
 
     type F = BabyBear;
     type EF = BinomialExtensionField<BabyBear, 4>;
@@ -1184,6 +1195,7 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
         // Invariant:
         //     VariableOrder::eval_constraints_poly must agree with the reference
         //     implementation across random constraint sets and challenge points.
@@ -1438,11 +1450,13 @@ mod tests {
                 let mut want_poly = poly.clone();
                 let mut want_sum = sum;
                 let mut want_challenger = challenger();
+                let want_shape = SumcheckShape::new(num_variables, 0, Basis::Evaluation);
+                let mut want_transcript =
+                    ProverTranscript::<_, F, EF>::new(&mut want_challenger, want_shape);
                 let want_challenges: Vec<EF> = (0..num_variables)
-                    .map(|_| {
-                        want_poly.round(&mut want_data, &mut want_challenger, &mut want_sum, 0)
-                    })
+                    .map(|_| want_poly.round(&mut want_data, &mut want_transcript, &mut want_sum))
                     .collect();
+                want_transcript.finish();
 
                 // Arm under test: the driver, which holds each binding back a round.
                 let mut got_data = SumcheckData::<F, EF>::default();

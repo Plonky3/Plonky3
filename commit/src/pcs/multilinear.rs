@@ -53,6 +53,25 @@ where
     /// be a flat polynomial, a table layout, or another structure that expands
     /// to multilinear evaluations over the Boolean hypercube.
     ///
+    /// # Transcript
+    ///
+    /// The challenger is the sponge the whole proof shares, and this phase owes it one absorb.
+    ///
+    /// ```text
+    ///     required   ->  the commitment being returned, absorbed once
+    ///     forbidden  ->  any other absorb, any sample, any grind
+    /// ```
+    ///
+    /// A verifier never reaches this method, so it absorbs that same commitment in its place.
+    /// The obligation above is what makes the two interchangeable.
+    ///
+    /// An absorbed table height, or a batching challenge drawn here, desyncs the two sides.
+    /// Neither side has a step out of place, so the caller sees an unexplained rejection.
+    ///
+    /// Absorbing at all needs a challenger able to observe this commitment type.
+    /// This trait bounds no challenger, so each implementation carries that bound itself.
+    /// The prescribed-point opening sub-trait requires it of every caller it serves.
+    ///
     /// # Returns
     ///
     /// - A succinct commitment (e.g. a Merkle root).
