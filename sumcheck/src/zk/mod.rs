@@ -46,7 +46,8 @@
 //!
 //! # Module layout
 //!
-//! - Transcript schema and mask oracle handle.
+//! - Proof record and mask oracle handle.
+//! - Fiat-Shamir description of one masked batch, driven by all three parties.
 //! - Prover-side sumcheck with mask sampling and round-polynomial assembly.
 //! - Verifier-side replay with the dropped-coefficient reconstruction.
 //! - Witness-free simulator used to prove honest-verifier zero-knowledge.
@@ -62,7 +63,11 @@
 //! - Base field characteristic must not be `2`.
 //! - Mask message length `ell_zk` must be at least `3`, so the mask (degree `ell_zk - 1`) covers the degree-2 plain round polynomial.
 //!
-//! Both are checked at constructor entry.
+//! Both are checked where the transcript description is built.
+//!
+//! A prover treats a violation as its own configuration bug.
+//!
+//! A verifier reports it.
 //!
 //! # References
 //!
@@ -71,6 +76,7 @@
 pub mod data;
 pub mod prover;
 pub mod simulator;
+pub mod transcript;
 pub mod verifier;
 
 #[cfg(test)]
@@ -82,4 +88,5 @@ pub use data::{
 };
 pub use prover::{ZkLayout, ZkPrefixProver, ZkProver, ZkSuffixProver, stack_codewords};
 pub use simulator::simulate_classic_unpacked;
+pub use transcript::{ZkPrelude, ZkProverTranscript, ZkSumcheckShape, ZkVerifierTranscript};
 pub use verifier::ZkVerifier;
