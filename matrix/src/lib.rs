@@ -12,6 +12,7 @@ use p3_field::{
     BasedVectorSpace, ExtensionField, Field, FieldArray, PackedField, PackedFieldExtension,
     PackedValue, PrimeCharacteristicRing,
 };
+use p3_maybe_rayon::PARALLEL_ENABLED;
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 use tracing::instrument;
@@ -447,6 +448,25 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
 
         let packed_width = self.width().div_ceil(T::Packing::WIDTH);
 
+        // Avoid multi-worker scheduling for modest products while bounding both input
+        // traffic and per-call extension-coefficient work. Larger products, serial
+        // builds, and one-worker pools retain the existing reduction.
+        const SERIAL_PACKED_ELEMS: usize = 4096;
+        const SERIAL_PACKED_COEFF_OPS: usize = 512;
+        if T::Packing::WIDTH > 1
+            && self.height() > 1
+            && self.height().saturating_mul(self.width()) <= SERIAL_PACKED_ELEMS
+            && self
+                .height()
+                .saturating_mul(packed_width)
+                .saturating_mul(EF::DIMENSION)
+                <= SERIAL_PACKED_COEFF_OPS
+            && PARALLEL_ENABLED
+            && current_num_threads() > 1
+        {
+            return serial_packed_columnwise_dot_product(self, v);
+        }
+
         let packed_result = self
             .par_padded_horizontally_packed_rows::<T::Packing>()
             .zip(v)
@@ -570,6 +590,28 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     }
 }
 
+#[inline(never)]
+fn serial_packed_columnwise_dot_product<F, EF, M>(matrix: &M, weights: &[EF]) -> Vec<EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    M: Matrix<F> + ?Sized,
+{
+    let mut acc = EF::ExtensionPacking::zero_vec(matrix.width().div_ceil(F::Packing::WIDTH));
+    F::batched_columnwise_dot_product::<EF, _, _, 1>(
+        &mut acc,
+        (0..matrix.height()).map(|r| {
+            (
+                matrix.padded_horizontally_packed_row::<F::Packing>(r),
+                [weights[r]],
+            )
+        }),
+    );
+    EF::ExtensionPacking::to_ext_iter(acc)
+        .take(matrix.width())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
@@ -578,11 +620,76 @@ mod tests {
     use itertools::izip;
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
-    use p3_field::extension::BinomialExtensionField;
+    use p3_field::extension::{BinomialExtensionField, CubicTrinomialExtensionField};
+    use p3_goldilocks::Goldilocks;
+    use p3_mersenne_31::{Mersenne31, QM31};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
     use super::*;
+    use crate::bitrev::BitReversibleMatrix;
+    use crate::extension::FlatMatrixView;
+
+    fn patterned_matrix<F: Field>(height: usize, width: usize) -> RowMajorMatrix<F> {
+        RowMajorMatrix::new(
+            (0..height * width)
+                .map(|i| F::from_usize((i * 17 + 3) % 127))
+                .collect(),
+            width,
+        )
+    }
+
+    fn patterned_extension_matrix<F, EF>(height: usize, width: usize) -> RowMajorMatrix<EF>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        RowMajorMatrix::new(
+            (0..height * width)
+                .map(|i| {
+                    EF::from_basis_coefficients_fn(|d| {
+                        F::from_usize((i * EF::DIMENSION + d + 1) % 127)
+                    })
+                })
+                .collect(),
+            width,
+        )
+    }
+
+    fn assert_columnwise_dot_product_matches_scalar<F, EF, M>(mat: &M)
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        M: Matrix<F>,
+    {
+        let weights: Vec<EF> = (0..mat.height())
+            .map(|r| {
+                EF::from_basis_coefficients_fn(|d| F::from_usize((r * EF::DIMENSION + d + 5) % 127))
+            })
+            .collect();
+        let expected: Vec<EF> = (0..mat.width())
+            .map(|c| {
+                (0..mat.height())
+                    .map(|r| weights[r] * mat.get(r, c).unwrap())
+                    .sum()
+            })
+            .collect();
+
+        assert_eq!(mat.columnwise_dot_product(&weights), expected);
+    }
+
+    fn assert_columnwise_dot_product_grid<F, EF>()
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        for height in [0, 1, 17, 32, 128, 1024] {
+            for width in [1, 3, 8, 17, 65] {
+                let mat = patterned_matrix::<F>(height, width);
+                assert_columnwise_dot_product_matches_scalar::<F, EF, _>(&mat);
+            }
+        }
+    }
 
     #[test]
     fn test_columnwise_dot_product() {
@@ -624,6 +731,59 @@ mod tests {
 
             assert_eq!(m.columnwise_dot_product(&v), expected, "height = {height}");
         }
+    }
+
+    #[test]
+    fn test_columnwise_dot_product_matches_scalar_across_extension_fields() {
+        type BabyBear4 = BinomialExtensionField<BabyBear, 4>;
+        type BabyBear5 = BinomialExtensionField<BabyBear, 5>;
+        type Goldilocks2 = BinomialExtensionField<Goldilocks, 2>;
+        type Goldilocks3 = CubicTrinomialExtensionField<Goldilocks>;
+        type Mersenne31_3 = BinomialExtensionField<Mersenne31, 3>;
+
+        assert_columnwise_dot_product_grid::<BabyBear, BabyBear4>();
+        assert_columnwise_dot_product_grid::<BabyBear, BabyBear5>();
+        assert_columnwise_dot_product_grid::<Goldilocks, Goldilocks2>();
+        assert_columnwise_dot_product_grid::<Goldilocks, Goldilocks3>();
+        assert_columnwise_dot_product_grid::<Mersenne31, QM31>();
+        assert_columnwise_dot_product_grid::<Mersenne31, Mersenne31_3>();
+    }
+
+    #[test]
+    fn test_columnwise_dot_product_matches_scalar_for_matrix_views() {
+        type BabyBear4 = BinomialExtensionField<BabyBear, 4>;
+        type Goldilocks3 = CubicTrinomialExtensionField<Goldilocks>;
+        type Mersenne31_3 = BinomialExtensionField<Mersenne31, 3>;
+
+        let mapped = patterned_matrix::<BabyBear>(32, 17).bit_reverse_rows();
+        assert_columnwise_dot_product_matches_scalar::<BabyBear, BabyBear4, _>(&mapped);
+
+        let flat = FlatMatrixView::<Goldilocks, Goldilocks3, _>::new(patterned_extension_matrix::<
+            Goldilocks,
+            Goldilocks3,
+        >(32, 3));
+        assert_columnwise_dot_product_matches_scalar::<Goldilocks, Goldilocks3, _>(&flat);
+
+        let mapped_flat = FlatMatrixView::<Mersenne31, Mersenne31_3, _>::new(
+            patterned_extension_matrix::<Mersenne31, Mersenne31_3>(128, 3).bit_reverse_rows(),
+        );
+        assert_columnwise_dot_product_matches_scalar::<Mersenne31, Mersenne31_3, _>(&mapped_flat);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_columnwise_dot_product_rejects_short_weights() {
+        let mat = patterned_matrix::<BabyBear>(17, 17);
+        let weights = BinomialExtensionField::<BabyBear, 4>::zero_vec(16);
+        let _ = mat.columnwise_dot_product(&weights);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_columnwise_dot_product_rejects_long_weights() {
+        let mat = patterned_matrix::<BabyBear>(17, 17);
+        let weights = BinomialExtensionField::<BabyBear, 4>::zero_vec(18);
+        let _ = mat.columnwise_dot_product(&weights);
     }
 
     #[test]
