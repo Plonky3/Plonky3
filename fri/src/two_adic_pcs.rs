@@ -665,6 +665,15 @@ where
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
+        // A zero grinding budget leaves the witness unread, so every field is pinned here
+        // rather than by its grind.
+        //
+        //     bits = 0 -> prover emits zero, verifier reads nothing -> pin the field here
+        //     bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
+        //
+        // The FRI verifier repeats the check for the two phases it owns.
+        verifier::check_canonical_pow_witnesses(&self.fri, proof)?;
+
         // Describe the transcript from the claims, which are this verifier's own input.
         //
         // The prover built the identical description from the matrices it opened.
@@ -928,6 +937,14 @@ mod tests {
     ///
     /// The challenger is advanced past the commitment, ready for `Pcs::verify`.
     fn make_pcs_fixture() -> (MyPcs, Claims, MyProof, Challenger) {
+        make_pcs_fixture_at(BATCH_POW_BITS)
+    }
+
+    /// The same roundtrip at a caller-chosen batch difficulty.
+    ///
+    /// The difficulty reaches the transcript's description, so prover and verifier must
+    /// be built from the same number for the replay to line up.
+    fn make_pcs_fixture_at(batch_pow_bits: usize) -> (MyPcs, Claims, MyProof, Challenger) {
         // Fixed seed keeps the roundtrip deterministic.
         let mut rng = SmallRng::seed_from_u64(42);
 
@@ -944,7 +961,7 @@ mod tests {
             log_final_poly_len: 0,
             max_log_arity: 1,
             num_queries: 2,
-            batch_proof_of_work_bits: BATCH_POW_BITS,
+            batch_proof_of_work_bits: batch_pow_bits,
             commit_proof_of_work_bits: 0,
             query_proof_of_work_bits: 0,
             mmcs: challenge_mmcs,
@@ -1073,6 +1090,29 @@ mod tests {
 
         match err {
             FriError::InvalidPowWitness(PowPhase::Batch) => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_noncanonical_batch_grinding_witness_at_zero_difficulty_is_rejected() {
+        // Invariant: at zero difficulty only a canonical-value check binds the witness.
+        //
+        //     bits = 0 -> check_witness returns true, the step is elided -> unbound
+        //     bits > 0 -> absorbed, bits resampled                       -> grind binds
+        let (pcs, claims, mut proof, mut challenger) = make_pcs_fixture_at(0);
+
+        // The honest prover writes zero when it pays no work.
+        assert_eq!(proof.batch_pow_witness, F::ZERO);
+        proof.batch_pow_witness = F::ONE;
+
+        let err = run_pcs_verify(&pcs, claims, &proof, &mut challenger)
+            .expect_err("a rewritten batch grinding witness must be rejected");
+
+        match err {
+            FriError::NonCanonicalPowWitness {
+                phase: PowPhase::Batch,
+            } => {}
             other => panic!("wrong error variant: {other:?}"),
         }
     }

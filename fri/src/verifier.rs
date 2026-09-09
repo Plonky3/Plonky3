@@ -203,6 +203,22 @@ where
     FinalPolyMismatch,
     #[error("invalid proof-of-work witness for the {0} phase")]
     InvalidPowWitness(PowPhase),
+    /// A grinding witness that is not the value a zero difficulty budget admits.
+    ///
+    /// Checked with the other proof-shape rejections, before any transcript work.
+    //
+    // Why: at zero bits neither side touches the sponge.
+    //
+    //     prover  : grind(0)  -> returns zero, absorbs nothing
+    //     verifier: the Pow step is elided, so no witness is read at all
+    //
+    // The field is then bound to nothing: any value rides along and still verifies.
+    // Zero is the only value an honest prover emits, so zero is the only value accepted.
+    #[error("non-canonical grinding witness for the {phase} phase at zero difficulty")]
+    NonCanonicalPowWitness {
+        /// Phase whose witness is not the canonical zero.
+        phase: PowPhase,
+    },
     /// A query point coincides with an opening point, so the quotient denominator is zero.
     #[error(
         "batch {batch}, matrix {matrix}, point {point}: query point coincides with the opening point"
@@ -291,6 +307,56 @@ where
 /// FRI folds and rolls. The first element of each pair indicates the round of
 /// fri in which the input should be rolled in. The second element is the opening.
 pub type FriOpenings<F> = Vec<(usize, F)>;
+
+/// Checks that every grinding witness a zero difficulty leaves unread carries the one
+/// value a zero budget admits, before any transcript operation.
+///
+/// A positive budget needs no check for its own phase: there the witness is absorbed and
+/// its sampled bits are compared, so the difficulty itself pins the field.
+///
+/// The three phases are checked independently, because their difficulties are independent.
+//
+// Why: `GrindingChallenger::check_witness` returns `true` at `bits == 0` without
+// absorbing, and the typed transcript elides the step altogether, which leaves the
+// witness compared against nothing and free to be any value.
+//
+//     bits = 0 -> prover emits zero, verifier reads nothing -> pin the field here
+//     bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
+//
+// The commit phase carries one witness per round, so every entry is pinned rather than
+// only the vector's length: a count check is not a value check.
+pub(crate) fn check_canonical_pow_witnesses<Val, Challenge, FriMmcs, InputErr, InputProof>(
+    params: &FriParameters<FriMmcs>,
+    proof: &FriProof<Challenge, FriMmcs, Val, InputProof>,
+) -> Result<(), FriError<FriMmcs::Error, InputErr>>
+where
+    Val: Field,
+    Challenge: Field,
+    FriMmcs: Mmcs<Challenge>,
+    InputErr: core::fmt::Debug,
+{
+    if params.batch_proof_of_work_bits == 0 && proof.batch_pow_witness != Val::ZERO {
+        return Err(FriError::NonCanonicalPowWitness {
+            phase: PowPhase::Batch,
+        });
+    }
+
+    if params.commit_proof_of_work_bits == 0
+        && proof.commit_pow_witnesses.iter().any(|w| *w != Val::ZERO)
+    {
+        return Err(FriError::NonCanonicalPowWitness {
+            phase: PowPhase::CommitPhase,
+        });
+    }
+
+    if params.query_proof_of_work_bits == 0 && proof.query_pow_witness != Val::ZERO {
+        return Err(FriError::NonCanonicalPowWitness {
+            phase: PowPhase::Query,
+        });
+    }
+
+    Ok(())
+}
 
 /// Verifies a FRI proof.
 ///
@@ -472,6 +538,10 @@ where
             got: proof.commit_pow_witnesses.len(),
         });
     }
+
+    // A zero grinding budget leaves the witness unread, so the three fields are pinned
+    // here rather than by their grinds.
+    check_canonical_pow_witnesses(params, proof)?;
 
     // Ensure that the final polynomial has the expected degree.
     //
@@ -2610,6 +2680,64 @@ mod tests {
 
         match err {
             FriError::InvalidPowWitness(PowPhase::CommitPhase) => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn noncanonical_pow_witnesses_at_zero_difficulty_are_rejected() {
+        // Invariant: at zero difficulty only a canonical-value check binds the witness.
+        //
+        //     bits = 0 -> check_witness returns true without absorbing -> unbound
+        //     bits > 0 -> absorbed, bits resampled                     -> the grind binds
+        //
+        // The commit-phase mutation moves one element and leaves the length alone: the
+        // length has its own rejection, and a count check is not a value check.
+        let f = make_test_fixture();
+        assert_eq!(f.fri_params.commit_proof_of_work_bits, 0);
+        assert_eq!(f.fri_params.query_proof_of_work_bits, 0);
+
+        // The honest prover writes zero into every slot it pays no work for.
+        assert!(f.proof.commit_pow_witnesses.iter().all(|w| *w == Val::ZERO));
+        assert_eq!(f.proof.query_pow_witness, Val::ZERO);
+
+        // One commit round's witness, with the vector's length left untouched.
+        let mut proof = f.proof.clone();
+        proof.commit_pow_witnesses[0] = Val::ONE;
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+            f.alpha,
+        )
+        .expect_err("a rewritten commit-phase witness must be rejected");
+        match err {
+            FriError::NonCanonicalPowWitness {
+                phase: PowPhase::CommitPhase,
+            } => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+
+        // The query witness, which is a scalar rather than a vector entry.
+        let mut proof = f.proof.clone();
+        proof.query_pow_witness = Val::ONE;
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+            f.alpha,
+        )
+        .expect_err("a rewritten query witness must be rejected");
+        match err {
+            FriError::NonCanonicalPowWitness {
+                phase: PowPhase::Query,
+            } => {}
             other => panic!("wrong error variant: {other:?}"),
         }
     }

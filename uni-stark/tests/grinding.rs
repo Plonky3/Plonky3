@@ -23,8 +23,8 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_security::grinding::GrindingSites;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{
-    ProvenSecurity, StarkConfig, StarkGenericConfig, StarkSecurityParams, VerificationError, prove,
-    verify,
+    InvalidProofShapeError, ProvenSecurity, StarkConfig, StarkGenericConfig, StarkSecurityParams,
+    VerificationError, prove, verify,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -145,6 +145,32 @@ fn tampered_ood_pow_witness_is_rejected() {
     match verify(&config, &SquareAir, &proof, &[]) {
         Err(VerificationError::InvalidOodPowWitness) => {}
         other => panic!("expected InvalidOodPowWitness, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_noncanonical_ood_pow_witness_at_zero_difficulty_is_rejected() {
+    // Why: `check_witness` short-circuits at zero bits, and the step is elided.
+    //
+    //     ood_pow_bits = 0 -> the witness never reaches the sponge -> unbound
+    //     ood_pow_bits > 0 -> absorbed, bits resampled             -> the grind binds it
+    //
+    // Left unbound, a third party rewrites the field and keeps a verifying proof.
+    let config = make_config(0, 0);
+    let trace = generate_square_trace::<Val>(1 << 3);
+    let mut proof = prove(&config, &SquareAir, trace, &[]);
+
+    // The honest prover writes zero when it pays no work, so zero is canonical.
+    assert_eq!(proof.ood_pow_witness, Val::ZERO);
+
+    // Any other value is a second encoding of the same statement.
+    proof.ood_pow_witness = Val::ONE;
+
+    match verify(&config, &SquareAir, &proof, &[]) {
+        Err(VerificationError::InvalidProofShape(
+            InvalidProofShapeError::NonCanonicalOodPowWitness,
+        )) => {}
+        other => panic!("expected NonCanonicalOodPowWitness, got {other:?}"),
     }
 }
 

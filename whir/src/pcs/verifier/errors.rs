@@ -68,6 +68,21 @@ pub enum VerifierError {
     #[error("Invalid proof-of-work witness")]
     InvalidPowWitness,
 
+    /// A grinding witness is not the value its zero difficulty admits.
+    ///
+    /// Raised with the other shape checks, before any transcript work.
+    ///
+    /// The final round is labelled by the intermediate round count.
+    //
+    // Why: at `pow_bits = 0` neither side touches the sponge.
+    //
+    //     prover  : grind is skipped     -> zero on the wire
+    //     verifier: check_witness(0, w)  -> returns true, absorbs nothing
+    //
+    // The field is then bound to nothing: any value rides along and still verifies.
+    #[error("Non-canonical proof-of-work witness in round {round} at zero difficulty")]
+    NonCanonicalPowWitness { round: usize },
+
     /// Proof is missing the Merkle commitment for a round.
     #[error("Proof is missing the Merkle commitment for round {round}")]
     MissingRoundCommitment { round: usize },

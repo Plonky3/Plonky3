@@ -57,6 +57,9 @@
 //! A prover who learns `zeta` first fits the quotient to agree at that one point.
 //!
 //! Each grind prices one retry of such a search at `2^bits`.
+//!
+//! A grind of zero bits prices nothing, and absorbs nothing either.
+//! Its witness is pinned to the one value a free search returns, so the field stays unique.
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -155,12 +158,37 @@ pub enum BatchTranscriptFailure {
     /// A batch that samples no lookup challenge still carries a witness for one.
     #[error("a batch with no lookups carries a lookup PoW witness")]
     UnexpectedLookupPowWitness,
+    /// The lookup witness is not the value a zero-difficulty step admits.
+    ///
+    /// A free search has one answer, and the proof carries a different one.
+    //
+    // Why: a zero-difficulty step absorbs nothing and compares nothing.
+    //
+    //     bits = 0 -> the witness is skipped, alpha and beta follow -> the value floats free
+    //     bits > 0 -> absorbed, bits resampled                      -> the grind pins it
+    //
+    // The step is described whatever the difficulty, so the pattern pins the bit count.
+    // A bit count is not a value, so any value rides along and the proof still verifies.
+    #[error("lookup phase PoW witness is nonzero at zero difficulty, expected zero")]
+    NonCanonicalLookupPowWitness,
     /// The witness guarding the out-of-domain point misses its difficulty.
     #[error("out-of-domain phase PoW witness does not meet the required {bits} bits")]
     OodPowWitness {
         /// Grinding difficulty the step requires.
         bits: usize,
     },
+    /// The out-of-domain witness is not the value a zero-difficulty step admits.
+    ///
+    /// A free search has one answer, and the proof carries a different one.
+    //
+    // Why: a zero-difficulty step absorbs nothing and compares nothing.
+    //
+    //     bits = 0 -> the witness is skipped, zeta follows -> the value floats free
+    //     bits > 0 -> absorbed, bits resampled             -> the grind pins it
+    //
+    // Left unpinned, the field is a second encoding of one and the same statement.
+    #[error("out-of-domain phase PoW witness is nonzero at zero difficulty, expected zero")]
+    NonCanonicalOodPowWitness,
 }
 
 /// Numbers that fix the transcript of one batch-STARK run.
@@ -795,6 +823,7 @@ where
     /// - The batch declares a lookup and the proof carries no witness.
     /// - The batch declares none and the proof carries one anyway.
     /// - The witness misses the difficulty its step requires.
+    /// - The difficulty is zero and the witness is not the value a free search returns.
     pub fn lookup_phase<LG, L>(
         &mut self,
         all_lookups: &[L],
@@ -826,6 +855,19 @@ where
             self.state.abort();
             return Err(BatchTranscriptFailure::MissingLookupPowWitness { bits });
         };
+
+        // A zero-difficulty step reads the witness without absorbing or comparing it.
+        //
+        //     bits = 0 -> prover emits zero, nothing is absorbed -> pin the value here
+        //     bits > 0 -> prover grinds,     bits are resampled  -> the grind pins it
+        //
+        // The check sits ahead of the step, so nothing has entered the sponge yet.
+        // Releasing the completeness check keeps this rejection the only failure.
+        if bits == 0 && witness != F::ZERO {
+            self.state.abort();
+            return Err(BatchTranscriptFailure::NonCanonicalLookupPowWitness);
+        }
+
         self.state
             .observe_pow(LOOKUP_POW, bits, witness)
             .map_err(|_| BatchTranscriptFailure::LookupPowWitness { bits })?;
@@ -888,9 +930,22 @@ where
     ///
     /// # Errors
     ///
-    /// When the witness misses the difficulty its step requires.
+    /// - The witness misses the difficulty its step requires.
+    /// - The difficulty is zero and the witness is not the value a free search returns.
     pub fn ood_phase(&mut self, witness: F) -> Result<EF, BatchTranscriptFailure> {
         let bits = self.shape.ood_pow_bits;
+
+        // A zero-difficulty step reads the witness without absorbing or comparing it.
+        //
+        //     bits = 0 -> prover emits zero, nothing is absorbed -> pin the value here
+        //     bits > 0 -> prover grinds,     bits are resampled  -> the grind pins it
+        //
+        // The check sits ahead of the step, so zeta is not drawn on a rejected proof.
+        // Releasing the completeness check keeps this rejection the only failure.
+        if bits == 0 && witness != F::ZERO {
+            self.state.abort();
+            return Err(BatchTranscriptFailure::NonCanonicalOodPowWitness);
+        }
 
         self.state
             .observe_pow(OOD_POW, bits, witness)
@@ -1139,6 +1194,30 @@ mod tests {
     }
 
     #[test]
+    fn a_lookup_witness_at_zero_difficulty_must_be_the_canonical_zero() {
+        // Described run: two instances, one declaring a lookup, and a free grind.
+        //
+        //     required:  the one witness a search of zero bits returns
+        //     supplied:  a value no search could have produced
+        //
+        // The step is described here whatever the difficulty, so the count is already bound.
+        // A count is not a value, so the value is checked on its own.
+        let mut shape = plain_shape();
+        shape.num_lookup_instances = 1;
+        assert_eq!(shape.lookup_pow_bits, 0);
+
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            BatchVerifierTranscript::<Ch, F, EF, [F; 8]>::new(&mut challenger, shape);
+
+        let err = transcript
+            .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), Some(F::ONE))
+            .expect_err("a nonzero witness at zero difficulty must error");
+
+        assert_eq!(err, BatchTranscriptFailure::NonCanonicalLookupPowWitness);
+    }
+
+    #[test]
     fn an_out_of_domain_witness_below_its_difficulty_is_rejected() {
         // Described run: two instances and a grind of 12 bits before the point is drawn.
         //
@@ -1165,6 +1244,35 @@ mod tests {
             .expect_err("a witness below the required difficulty must error");
 
         assert_eq!(err, BatchTranscriptFailure::OodPowWitness { bits: 12 });
+    }
+
+    #[test]
+    fn an_out_of_domain_witness_at_zero_difficulty_must_be_the_canonical_zero() {
+        // Described run: two instances and a free grind before the point is drawn.
+        //
+        //     required:  the one witness a search of zero bits returns
+        //     supplied:  a value no search could have produced
+        let shape = plain_shape();
+        assert_eq!(shape.ood_pow_bits, 0);
+
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            BatchVerifierTranscript::<Ch, F, EF, [F; 8]>::new(&mut challenger, shape);
+
+        transcript.instance_bindings(&[4, 5]);
+        transcript.main_phase([F::ONE; 8], &[&[] as &[F], &[F::ONE]]);
+        transcript.preprocessed_phase(None);
+        transcript
+            .lookup_phase(&NO_LOOKUPS, &LogUpGadget::new(), None)
+            .expect("a batch with no lookups replays with no witness");
+        let _alpha = transcript.permutation_phase(None, &[]);
+        transcript.quotient_phase([F::ZERO; 8], None);
+
+        let err = transcript
+            .ood_phase(F::ONE)
+            .expect_err("a nonzero witness at zero difficulty must error");
+
+        assert_eq!(err, BatchTranscriptFailure::NonCanonicalOodPowWitness);
     }
 
     #[test]
