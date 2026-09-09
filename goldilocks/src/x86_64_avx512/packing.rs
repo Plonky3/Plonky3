@@ -214,6 +214,18 @@ impl PrimeCharacteristicRing for PackedGoldilocksAVX512 {
     }
 
     #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        if (2..=6).contains(&N) {
+            Self::from_vector(dot_product_delayed_reduce::<N>(|i| {
+                (lhs[i].to_vector(), rhs[i].to_vector())
+            }))
+        } else {
+            let products: [Self; N] = core::array::from_fn(|i| lhs[i] * rhs[i]);
+            Self::sum_array::<N>(&products)
+        }
+    }
+
+    #[inline]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.
         unsafe { reconstitute_from_base(Goldilocks::zero_vec(len * WIDTH)) }
@@ -233,11 +245,17 @@ impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {
 
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
-        dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(
-            a,
-            f,
-            <Self as Algebra<Goldilocks>>::BATCHED_LC_CHUNK,
-        )
+        if (2..=6).contains(&N) {
+            Self::from_vector(dot_product_delayed_reduce::<N>(|i| {
+                (a[i].to_vector(), Self::broadcast(f[i]).to_vector())
+            }))
+        } else {
+            dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(
+                a,
+                f,
+                <Self as Algebra<Goldilocks>>::BATCHED_LC_CHUNK,
+            )
+        }
     }
 }
 
@@ -552,6 +570,45 @@ fn square64(x: __m512i) -> (__m512i, __m512i) {
         let res_lo = _mm512_add_epi64(mul_ll, mul_lh_lo);
 
         (res_hi, res_lo)
+    }
+}
+
+/// Accumulate 2..=6 full-u64 products without losing carries above bit 128.
+///
+/// With B = 2^32, the exact sum is lo + B^2 * mid + B^3 * top. Each product
+/// contributes its low64 word, the bottom32 of its high64 word, and its top32.
+/// Carries from lo enter mid. After k terms, mid <= k*B - 1 and top <= k*(B - 1),
+/// so neither accumulator can overflow for k <= 6, even for noncanonical inputs.
+#[inline]
+fn dot_product_delayed_reduce<const N: usize>(
+    inputs: impl Fn(usize) -> (__m512i, __m512i),
+) -> __m512i {
+    debug_assert!((2..=6).contains(&N));
+    unsafe {
+        let (a, b) = inputs(0);
+        let (hi, mut lo) = mul64_64(a, b);
+        let mut mid = _mm512_and_si512(hi, EPSILON);
+        let mut top = _mm512_srli_epi64::<32>(hi);
+        let one = _mm512_set1_epi64(1);
+        for i in 1..N {
+            let (a, b) = inputs(i);
+            let (hi, product_lo) = mul64_64(a, b);
+            let old = lo;
+            lo = _mm512_add_epi64(lo, product_lo);
+            let carry = _mm512_cmplt_epu64_mask(lo, old);
+            mid = _mm512_add_epi64(mid, _mm512_and_si512(hi, EPSILON));
+            mid = _mm512_mask_add_epi64(mid, carry, mid, one);
+            top = _mm512_add_epi64(top, _mm512_srli_epi64::<32>(hi));
+        }
+
+        // B^2 = B - 1 and B^3 = -1 modulo P. Splitting mid at bit 32 gives
+        // lo - (top + (mid >> 32)) + (mid & (B - 1)) * (B - 1).
+        // correction <= N*B - 1 and term <= (B - 1)^2 are both below P,
+        // satisfying the no-double-overflow helper bounds for arbitrary lo.
+        let correction = _mm512_add_epi64(top, _mm512_srli_epi64::<32>(mid));
+        let term = _mm512_mul_epu32(mid, EPSILON);
+        let adjusted = sub_no_double_overflow_64_64(lo, correction);
+        add_no_double_overflow_64_64(adjusted, term)
     }
 }
 
