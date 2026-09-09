@@ -128,6 +128,26 @@ where
             });
         }
 
+        // A zero-difficulty site leaves its witness unread, so the value is pinned here
+        // rather than by the grind.
+        //
+        // Why: `check_witness` returns `true` at zero bits without absorbing anything.
+        //
+        //     pow_bits = 0 -> prover emits zero, verifier reads nothing -> pin it here
+        //     pow_bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
+        //
+        // Each round carries its own difficulty, so each is compared against its own.
+        for (round, round_proof) in proof.rounds.iter().enumerate() {
+            if self.round_parameters[round].pow_bits == 0 && round_proof.pow_witness != F::ZERO {
+                return Err(VerifierError::NonCanonicalPowWitness { round });
+            }
+        }
+        if self.final_round_config().pow_bits == 0 && proof.final_pow_witness != F::ZERO {
+            return Err(VerifierError::NonCanonicalPowWitness {
+                round: expected_rounds,
+            });
+        }
+
         // One driver spans the whole run, so the description is walked exactly once.
         let shape = WhirShape::new(self.config, num_opening_claims);
         let mut transcript = WhirVerifierTranscript::<Challenger, F, EF>::new(challenger, shape);

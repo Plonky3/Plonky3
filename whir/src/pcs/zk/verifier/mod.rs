@@ -97,6 +97,19 @@ pub enum ZkVerifierError {
     /// A round failed its proof-of-work check.
     #[error("invalid proof-of-work witness in round {round}")]
     InvalidPowWitness { round: usize },
+
+    /// A round's grinding witness is not the value its zero difficulty admits.
+    ///
+    /// Raised with the other structural checks, before any transcript work.
+    //
+    // Why: at `pow_bits = 0` neither side touches the sponge.
+    //
+    //     prover  : grind is skipped     -> zero on the wire
+    //     verifier: check_witness(0, w)  -> returns true, absorbs nothing
+    //
+    // The field is then bound to nothing: any value rides along and still verifies.
+    #[error("non-canonical proof-of-work witness in round {round} at zero difficulty")]
+    NonCanonicalPowWitness { round: usize },
 }
 
 /// The commitment a code-switch round opens against.
@@ -190,6 +203,21 @@ where
                 expected: n_rounds + 1,
                 actual: proof.sumcheck_mask_commitments.len(),
             });
+        }
+
+        // A zero-difficulty site leaves its witness unread, so the value is pinned here
+        // rather than by the grind.
+        //
+        //     pow_bits = 0 -> prover emits zero, verifier reads nothing -> pin it here
+        //     pow_bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
+        //
+        // Each round carries its own difficulty, so each is compared against its own.
+        //
+        // The base case pins its own witness the same way.
+        for (round, round_proof) in proof.rounds.iter().enumerate() {
+            if config.round_parameters[round].pow_bits == 0 && round_proof.pow_witness != F::ZERO {
+                return Err(ZkVerifierError::NonCanonicalPowWitness { round });
+            }
         }
 
         // Reject malformed statements before any folding arithmetic runs.

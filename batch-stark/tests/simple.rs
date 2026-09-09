@@ -2233,6 +2233,43 @@ fn batch_without_lookups_carries_no_witness() {
     );
 }
 
+#[test]
+fn a_noncanonical_lookup_pow_witness_at_zero_difficulty_is_rejected() {
+    // Invariant: a zero-difficulty lookup grind binds the bit count, never the witness.
+    //
+    //     bits = 0 -> nothing absorbed, alpha and beta follow -> the value floats free
+    //     bits > 0 -> absorbed, bits resampled                -> the grind pins it
+    //
+    // The step is described whatever the difficulty, so the pattern covers the count.
+    // A count is not a value, so the value is pinned to the one an honest prover emits.
+    //
+    // Fixture state: two instances that declare lookups, lookup grinding at 0 bits.
+    let config = make_config(2024);
+    assert_eq!(config.lookup_proof_of_work_bits(), 0);
+    let airs = lookup_grinding_airs();
+
+    lookup_grinding_case(&config, &config, &airs, |proof| {
+        assert_eq!(proof.lookup_pow_witness, Some(Val::ZERO));
+    })
+    .expect("an unground proof verifies");
+
+    // Mutation: Some(0) -> Some(1), a second encoding of the very same statement.
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.lookup_pow_witness = Some(Val::ONE);
+    })
+    .expect_err("a rewritten lookup witness must be rejected");
+
+    assert!(
+        matches!(
+            err,
+            BatchVerificationError::Transcript(
+                BatchTranscriptFailure::NonCanonicalLookupPowWitness
+            )
+        ),
+        "wrong error variant: {err:?}"
+    );
+}
+
 /// Difficulty small enough to grind instantly, large enough that a wrong
 /// witness is rejected with overwhelming probability.
 const OOD_POW_BITS: usize = 8;
@@ -2286,6 +2323,40 @@ fn ood_pow_difficulty_mismatch_is_rejected() {
         matches!(
             err,
             BatchVerificationError::Transcript(BatchTranscriptFailure::OodPowWitness { bits: 24 })
+        ),
+        "wrong error variant: {err:?}"
+    );
+}
+
+#[test]
+fn a_noncanonical_ood_pow_witness_at_zero_difficulty_is_rejected() {
+    // Invariant: a zero-difficulty out-of-domain grind binds the bit count, never the witness.
+    //
+    //     bits = 0 -> nothing absorbed, zeta follows -> the value floats free
+    //     bits > 0 -> absorbed, bits resampled       -> the grind pins it
+    //
+    // Left unpinned, a third party rewrites the field and keeps a verifying proof.
+    //
+    // Fixture state: two instances, out-of-domain grinding at 0 bits.
+    let config = make_config(2024);
+    assert_eq!(config.ood_proof_of_work_bits(), 0);
+    let airs = lookup_grinding_airs();
+
+    lookup_grinding_case(&config, &config, &airs, |proof| {
+        assert_eq!(proof.ood_pow_witness, Val::ZERO);
+    })
+    .expect("an unground proof verifies");
+
+    // Mutation: 0 -> 1, a second encoding of the very same statement.
+    let err = lookup_grinding_case(&config, &config, &airs, |proof| {
+        proof.ood_pow_witness = Val::ONE;
+    })
+    .expect_err("a rewritten out-of-domain witness must be rejected");
+
+    assert!(
+        matches!(
+            err,
+            BatchVerificationError::Transcript(BatchTranscriptFailure::NonCanonicalOodPowWitness)
         ),
         "wrong error variant: {err:?}"
     );
