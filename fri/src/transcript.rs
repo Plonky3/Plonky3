@@ -45,7 +45,10 @@ use crate::{FriParameters, fold_schedule};
 const VERSION: u8 = 1;
 
 /// Protocol name bound into the transcript seed.
-const NAME: &[u8] = b"p3-fri";
+///
+/// Visible to the crate so the opening argument that brackets this protocol can
+/// name it when checking their two halves of one `FriParameters` together.
+pub(crate) const NAME: &[u8] = b"p3-fri";
 
 /// Step label of a commit-phase commitment.
 const COMMITMENT: &str = "commit_phase_commitment";
@@ -492,13 +495,22 @@ pub enum TranscriptFailure {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use core::str::from_utf8;
     #[cfg(panic = "unwind")]
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_challenger::{CanSample, DuplexChallenger};
+    use p3_challenger::DuplexChallenger;
+    use p3_challenger::fs::TypeTag;
+    use p3_challenger::testing::{
+        SeedDigest, assert_seeds_pairwise_distinct, pow_difficulties, seed_digest,
+    };
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_security::grinding::{
+        GRINDING_VOCABULARY, GrindingBudget, GrindingSite, RecordedGrind, ZeroBitConvention,
+        grinding_step,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -529,27 +541,167 @@ mod tests {
         }
     }
 
-    /// The first challenge a shape's seed produces.
-    fn first_challenge(shape: &FriShape) -> F {
-        let mut challenger = fresh_challenger();
-        let separator = shape.domain_separator::<F, EF>();
-        separator.seed(&mut challenger);
-        challenger.sample()
+    /// The shape every mutation below is measured against.
+    ///
+    /// Three rounds, so a per-round step is described more than once.
+    fn plain_shape() -> FriShape {
+        shape_with(vec![3, 3, 2])
     }
 
-    #[test]
-    fn the_arity_of_every_round_reaches_the_seed() {
-        // Reorderings share a round count, a total, and therefore a step sequence.
+    /// The digest of the byte stream a shape seeds its sponge with.
+    ///
+    /// Comparing seed streams, rather than a sampled challenge, keeps the sponge out of it.
+    fn seed_of(shape: &FriShape) -> SeedDigest {
+        seed_digest(&shape.domain_separator::<F, EF>())
+    }
+
+    /// Every field of the shape, each moved one step away from `plain_shape`.
+    ///
+    /// One entry per configuration knob.
+    /// A field added to the shape stops the destructuring below from compiling.
+    ///
+    /// The schedule is a vector, so it contributes one entry per way of moving it.
+    fn one_step_from_plain() -> Vec<(&'static str, FriShape)> {
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        // The bindings go unused, since naming the fields is all this has to do.
+        let FriShape {
+            log_arities: _,
+            final_poly_len: _,
+            commit_pow_bits: _,
+            query_pow_bits: _,
+            num_queries: _,
+            index_bits: _,
+            log_blowup: _,
+            max_log_arity: _,
+        } = plain_shape();
+
+        let mut mutations = Vec::new();
+
+        // The closing round folds by one more, at an unchanged round count.
+        let mut shape = plain_shape();
+        shape.log_arities[2] += 1;
+        mutations.push(("log_arities value", shape));
+
+        // One more round, which the pattern loop turns into one more group of steps.
+        let mut shape = plain_shape();
+        shape.log_arities.push(2);
+        mutations.push(("log_arities length", shape));
+
+        // A reordering keeps the round count, the total, and the step sequence.
         //
         //     [3, 3, 2]  folds 8 -> 5 -> 2 -> 0
         //     [2, 3, 3]  folds 8 -> 6 -> 3 -> 0
         //
         // Reachable as inputs [10] against [10, 8] at the same cap.
         // Only the instance label separates them, so it must carry the values.
-        let descending = first_challenge(&shape_with(vec![3, 3, 2]));
-        let ascending = first_challenge(&shape_with(vec![2, 3, 3]));
+        let mut shape = plain_shape();
+        shape.log_arities.reverse();
+        mutations.push(("log_arities order", shape));
 
-        assert_ne!(descending, ascending);
+        // One more coefficient the final polynomial's fixed-length step declares.
+        let mut shape = plain_shape();
+        shape.final_poly_len += 1;
+        mutations.push(("final_poly_len", shape));
+
+        // Elided at zero, so this is the transition where the step appears at all.
+        // It appears once per round, which is why the plain shape runs three.
+        let mut shape = plain_shape();
+        shape.commit_pow_bits += 1;
+        mutations.push(("commit_pow_bits", shape));
+
+        // Elided at zero too, so again the transition is the step's presence.
+        let mut shape = plain_shape();
+        shape.query_pow_bits += 1;
+        mutations.push(("query_pow_bits", shape));
+
+        // One more index drawn, which is the fixed length of the query step.
+        let mut shape = plain_shape();
+        shape.num_queries += 1;
+        mutations.push(("num_queries", shape));
+
+        // One more bit per index, which the query step carries in its type tag.
+        let mut shape = plain_shape();
+        shape.index_bits += 1;
+        mutations.push(("index_bits", shape));
+
+        // Blowup and arity cap leave every step exactly where it was.
+        // They still change what the protocol is, so the instance label carries them.
+        let mut shape = plain_shape();
+        shape.log_blowup += 1;
+        mutations.push(("log_blowup", shape));
+
+        let mut shape = plain_shape();
+        shape.max_log_arity += 1;
+        mutations.push(("max_log_arity", shape));
+
+        mutations
+    }
+
+    #[test]
+    fn no_two_configurations_of_the_shape_share_a_seed() {
+        // Invariant: the knobs are separated from each other, not merely from a baseline.
+        //
+        //     plain shape in the set  ->  every knob has to reach the seed
+        //     pairwise over the set   ->  no two knobs may land on one seed
+        //
+        // Two knobs bound as one number differ from the baseline and still agree with each other.
+        let mut seeds = vec![("plain", seed_of(&plain_shape()))];
+        seeds.extend(
+            one_step_from_plain()
+                .iter()
+                .map(|(field, shape)| (*field, seed_of(shape))),
+        );
+
+        assert_seeds_pairwise_distinct(&seeds);
+    }
+
+    #[test]
+    fn a_grinding_step_that_is_already_present_still_binds_its_difficulty() {
+        // Both difficulties are elided at zero, so a bump off zero only proves presence.
+        //
+        //     0 -> 1   the step joins the sequence
+        //     1 -> 2   the step that is already there declares one more bit
+        //
+        // The second transition is the one the step's `Length::Fixed` carries.
+        let mut commit_one = plain_shape();
+        commit_one.commit_pow_bits = 1;
+        let mut commit_two = commit_one.clone();
+        commit_two.commit_pow_bits = 2;
+
+        assert_ne!(seed_of(&commit_one), seed_of(&commit_two));
+
+        let mut query_one = plain_shape();
+        query_one.query_pow_bits = 1;
+        let mut query_two = query_one.clone();
+        query_two.query_pow_bits = 2;
+
+        assert_ne!(seed_of(&query_one), seed_of(&query_two));
+    }
+
+    #[test]
+    fn the_query_index_width_is_described_where_the_indices_are_drawn() {
+        // A run draws `log_global_max_height + extra_query_index_bits` bits per query.
+        // A narrower draw shrinks the query space, and the proximity-test soundness error with it.
+        //
+        // That width is not a length: the length of the step is how many indices it draws.
+        // It reaches the fingerprint through the type tag instead, which is what this pins.
+        let shape = plain_shape();
+        let pattern = shape.pattern::<F, EF>();
+
+        let drawn: Vec<_> = pattern
+            .interactions()
+            .iter()
+            .filter(|step| step.label() == QUERY_INDICES)
+            .collect();
+
+        assert_eq!(drawn.len(), 1, "every index is drawn at one step");
+        assert_eq!(
+            drawn[0].type_tag(),
+            TypeTag::Bits {
+                width: shape.index_bits
+            },
+        );
+        assert_eq!(drawn[0].length(), Length::Fixed(shape.num_queries));
     }
 
     #[test]
@@ -623,5 +775,65 @@ mod tests {
                 got: 3
             }
         );
+    }
+    /// This protocol's name, as the vocabulary table keys it.
+    fn protocol() -> &'static str {
+        from_utf8(NAME).expect("the protocol name is ASCII")
+    }
+
+    #[test]
+    fn the_grinding_vocabulary_maps_both_grinds_this_protocol_describes() {
+        // The security model keys its table on the name and the labels bound here.
+        let commit = grinding_step(protocol(), COMMIT_POW).expect("the folding grind is mapped");
+        assert_eq!(commit.site, GrindingSite::LdtCommitPhase);
+        assert_eq!(commit.zero_bits, ZeroBitConvention::Elided);
+
+        let query = grinding_step(protocol(), QUERY_POW).expect("the query grind is mapped");
+        assert_eq!(query.site, GrindingSite::LdtQueryPhase);
+        assert_eq!(query.zero_bits, ZeroBitConvention::Elided);
+
+        // Two grinds described, so two rows: a third would credit bits nothing pays.
+        assert_eq!(
+            GRINDING_VOCABULARY
+                .iter()
+                .filter(|step| step.protocol == protocol())
+                .count(),
+            2,
+        );
+    }
+
+    #[test]
+    fn every_described_grind_carries_the_difficulty_the_regime_credits() {
+        // Invariant: `security_regime` and the pattern read one number twice.
+        //
+        //     FriParameters  --security_regime-->  FriRegime      --> credited bits
+        //                    --FriShape::pattern-->  Kind::Pow    --> recorded bits
+        //
+        // Three rounds, so the commit-phase grind is described three times.
+        for commit_proof_of_work_bits in [0, 1, 12] {
+            for query_proof_of_work_bits in [0, 1, 16] {
+                let params = FriParameters {
+                    log_blowup: 1,
+                    log_final_poly_len: 0,
+                    max_log_arity: 3,
+                    num_queries: 64,
+                    batch_proof_of_work_bits: 0,
+                    commit_proof_of_work_bits,
+                    query_proof_of_work_bits,
+                    mmcs: (),
+                };
+                let shape = FriShape::with_schedule(&params, vec![3, 3, 2], 8);
+
+                let recorded: Vec<_> = pow_difficulties(&shape.pattern::<F, EF>())
+                    .into_iter()
+                    .map(|(label, bits)| RecordedGrind::new(protocol(), label, bits))
+                    .collect();
+
+                GrindingBudget::NONE
+                    .with_fri(&params.security_regime())
+                    .check(&[protocol()], &recorded)
+                    .unwrap_or_else(|mismatch| panic!("{mismatch}"));
+            }
+        }
     }
 }

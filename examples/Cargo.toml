@@ -42,11 +42,13 @@ rand.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
-p3-challenger = { path = "../challenger" }
+p3-batch-stark = { path = "../batch-stark" }
+p3-challenger = { path = "../challenger", features = ["test-utils"] }
 p3-commit = { path = "../commit", features = ["test-utils"] }
 p3-dft = { path = "../dft" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-matrix = { path = "../matrix" }
+p3-multi-stark = { path = "../multi-stark" }
 p3-poseidon1 = { path = "../poseidon1" }
 p3-sumcheck = { path = "../sumcheck" }
 p3-util = { path = "../util" }

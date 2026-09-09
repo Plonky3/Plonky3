@@ -517,6 +517,37 @@ fn zk_whir_rejects_tampered_pow_witness() {
 }
 
 #[test]
+fn zk_whir_rejects_noncanonical_pow_witnesses_at_zero_difficulty() {
+    // Fixture state: the canonical shape grinds nowhere, so every site asks for no work.
+    //
+    //     pow_bits = 0  ->  check_witness returns true without absorbing
+    //     pow_bits > 0  ->  the witness is absorbed and its bits resampled
+    //
+    // Mutation: rewrite the code-switching round's witness, then the base case's.
+    // Neither reaches the sponge, so only a canonical-value check can reject them.
+    let proven = Setup::new(22).prove();
+
+    // The honest prover writes zero into every slot it pays no work for.
+    assert!(proven.proof.rounds.iter().all(|r| r.pow_witness == F::ZERO));
+    assert_eq!(proven.proof.base_case.pow_witness, F::ZERO);
+    proven.verify().expect("an ungrounded proof must verify");
+
+    let mut mutated = Setup::new(22).prove();
+    mutated.proof.rounds[0].pow_witness = F::ONE;
+    assert_eq!(
+        mutated.verify().unwrap_err(),
+        ZkVerifierError::NonCanonicalPowWitness { round: 0 }
+    );
+
+    let mut mutated = Setup::new(22).prove();
+    mutated.proof.base_case.pow_witness = F::ONE;
+    assert_eq!(
+        mutated.verify().unwrap_err(),
+        ZkVerifierError::BaseCase(BaseCaseZkError::NonCanonicalPowWitness)
+    );
+}
+
+#[test]
 fn zk_whir_rejects_tampered_sumcheck_wire() {
     // Mutation: shift one coefficient of the first sumcheck wire.
     //

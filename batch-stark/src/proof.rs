@@ -27,14 +27,15 @@ pub struct BatchProof<SC: StarkGenericConfig> {
     /// sampled.
     ///
     /// `None` exactly when no instance declares a lookup, since the batch then
-    /// samples no such challenge. Trivially valid (but still present) when
-    /// [`p3_uni_stark::StarkGenericConfig::lookup_proof_of_work_bits`] is `0`
-    /// and the batch has lookups.
+    /// samples no such challenge.
+    ///
+    /// Zero at a zero difficulty, where the search is free and returns one value.
+    /// The verifier rejects any other value, so the field is unique at every difficulty.
     pub lookup_pow_witness: Option<Val<SC>>,
     /// Proof of work for the phase before the out-of-domain point is sampled.
     ///
-    /// Trivially valid (and unread) when
-    /// [`p3_uni_stark::StarkGenericConfig::ood_proof_of_work_bits`] is `0`.
+    /// Zero at a zero difficulty, where the search is free and returns one value.
+    /// The verifier rejects any other value, so the field is unique at every difficulty.
     pub ood_pow_witness: Val<SC>,
 }
 

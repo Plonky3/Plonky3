@@ -151,6 +151,27 @@ pub enum ProofShapeError {
         stage: GrindStage,
     },
 
+    /// A grinding witness is not the value its site's zero difficulty admits.
+    ///
+    /// Checked before the replication check, which only forces the batched copies of a
+    /// shared site to agree with each other.
+    //
+    // Why: at zero difficulty neither side touches the sponge.
+    //
+    //     prover  : the grind returns zero and absorbs nothing
+    //     verifier: `replay_pow` returns `Ok(())` without reading the witness
+    //
+    // Agreement alone therefore admits a whole batch rewritten to one shared wrong value.
+    // Pinning zero per instance is what closes that: zero is the only value an honest
+    // prover emits, so zero is the only value accepted.
+    #[error("{round}: {stage} PoW witness is nonzero at zero difficulty, expected zero")]
+    NonCanonicalPowWitness {
+        /// Round whose grinding site asks for no work.
+        round: RoundLabel,
+        /// Site inside that round the unread witness belongs to.
+        stage: GrindStage,
+    },
+
     /// The opening proof carries one STIR instance per distinct shared LDE height.
     #[error("expected {expected} LDE-height buckets, got {got}")]
     BucketCount { expected: usize, got: usize },

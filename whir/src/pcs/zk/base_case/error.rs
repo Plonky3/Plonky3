@@ -29,6 +29,19 @@ pub enum BaseCaseZkError {
     #[error("invalid proof-of-work witness")]
     InvalidPowWitness,
 
+    /// The proof-of-work witness is not the value a zero difficulty admits.
+    ///
+    /// Raised with the length checks, before any transcript work.
+    //
+    // Why: at `pow_bits = 0` neither side touches the sponge.
+    //
+    //     prover  : grind is skipped     -> zero on the wire
+    //     verifier: check_witness(0, w)  -> returns true, absorbs nothing
+    //
+    // The field is then bound to nothing: any value rides along and still verifies.
+    #[error("non-canonical proof-of-work witness at zero difficulty")]
+    NonCanonicalPowWitness,
+
     /// The joint linear target check failed.
     #[error("base-case target check failed")]
     TargetCheckFailed,

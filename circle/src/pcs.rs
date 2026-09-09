@@ -1177,7 +1177,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_fri::FriParameters;
-    use p3_fri::verifier::FriError;
+    use p3_fri::verifier::{FriError, PowPhase};
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_mersenne_31::Mersenne31;
@@ -1243,6 +1243,27 @@ mod tests {
         Vec<Vec<Vec<Vec<Challenge>>>>,
         CirclePcsProof<Val, Challenge, ValMmcs, ChallengeMmcs, Val>,
     ) {
+        setup_valid_proof_at(batch_pow_bits, 1, 1)
+    }
+
+    /// The same fixture at caller-chosen commit- and query-phase difficulties.
+    ///
+    /// Both numbers reach the transcript's description, so prover and verifier must be
+    /// built from the same pair for the replay to line up.
+    #[allow(clippy::type_complexity)]
+    fn setup_valid_proof_at(
+        batch_pow_bits: usize,
+        commit_pow_bits: usize,
+        query_pow_bits: usize,
+    ) -> (
+        TestPcs,
+        ByteHash,
+        <ValMmcs as Mmcs<Val>>::Commitment,
+        CircleDomain<Val>,
+        Challenge,
+        Vec<Vec<Vec<Vec<Challenge>>>>,
+        CirclePcsProof<Val, Challenge, ValMmcs, ChallengeMmcs, Val>,
+    ) {
         let mut rng = SmallRng::seed_from_u64(0);
 
         // Build the hash stack: field hasher → compression → Merkle tree.
@@ -1257,6 +1278,8 @@ mod tests {
         // Minimal FRI parameters for fast test execution.
         let mut fri_params = FriParameters::new_testing(challenge_mmcs, 0);
         fri_params.batch_proof_of_work_bits = batch_pow_bits;
+        fri_params.commit_proof_of_work_bits = commit_pow_bits;
+        fri_params.query_proof_of_work_bits = query_pow_bits;
 
         let pcs = TestPcs {
             mmcs: val_mmcs,
@@ -2010,6 +2033,60 @@ mod tests {
 
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
             .expect_err("a tampered query grinding witness must be rejected");
+    }
+
+    #[test]
+    fn reject_noncanonical_pow_witnesses_at_zero_difficulty() {
+        // Invariant: at zero difficulty only a canonical-value check binds the witness.
+        //
+        //     bits = 0 -> check_witness returns true, the step is elided -> unbound
+        //     bits > 0 -> absorbed, bits resampled                       -> grind binds
+        //
+        // The commit-phase mutation moves one element and leaves the length alone: the
+        // length has its own rejection, and a count check is not a value check.
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof_at(0, 0, 0);
+
+        // The honest prover writes zero into every slot it pays no work for.
+        assert!(
+            proof
+                .fri_proof
+                .commit_pow_witnesses
+                .iter()
+                .all(|w| *w == Val::ZERO)
+        );
+        assert_eq!(proof.fri_proof.pow_witness, Val::ZERO);
+
+        // The untouched proof still verifies, so the mutations below are the only change.
+        try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect("an ungrounded proof must verify");
+
+        let mut mutated = proof.clone();
+        mutated.fri_proof.commit_pow_witnesses[0] = Val::ONE;
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &mutated)
+            .expect_err("a rewritten commit-phase witness must be rejected");
+        assert!(
+            matches!(
+                err,
+                FriError::NonCanonicalPowWitness {
+                    phase: PowPhase::CommitPhase
+                }
+            ),
+            "expected NonCanonicalPowWitness for the commit phase, got {err:?}"
+        );
+
+        let mut mutated = proof;
+        mutated.fri_proof.pow_witness = Val::ONE;
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &mutated)
+            .expect_err("a rewritten query witness must be rejected");
+        assert!(
+            matches!(
+                err,
+                FriError::NonCanonicalPowWitness {
+                    phase: PowPhase::Query
+                }
+            ),
+            "expected NonCanonicalPowWitness for the query phase, got {err:?}"
+        );
     }
 
     #[test]

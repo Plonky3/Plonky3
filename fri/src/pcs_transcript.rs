@@ -535,15 +535,25 @@ pub enum PcsTranscriptFailure {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use core::str::from_utf8;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::testing::{
+        SeedDigest, assert_seeds_pairwise_distinct, pow_difficulties, seed_digest,
+    };
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_security::grinding::{
+        GRINDING_VOCABULARY, GrindingBudget, GrindingSite, RecordedGrind, ZeroBitConvention,
+        grinding_step,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
     use super::*;
+    use crate::FriShape;
+    use crate::transcript::NAME as LDT_NAME;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -564,24 +574,79 @@ mod tests {
         }
     }
 
-    /// The first challenge a shape's seed produces.
-    fn first_challenge(shape: &PcsShape) -> F {
-        let mut challenger = fresh_challenger();
-        let separator = shape.domain_separator::<F, EF>();
-        separator.seed(&mut challenger);
-        challenger.sample()
+    /// The shape every mutation below is measured against.
+    ///
+    /// One commitment, one matrix, two openings of unequal width.
+    fn plain_shape() -> PcsShape {
+        shape_with(vec![vec![vec![3, 1]]])
     }
 
-    #[test]
-    fn the_width_of_every_opening_reaches_the_seed() {
-        // Widths drive the `Length::Fixed` of each step, so they ride the fingerprint.
+    /// The digest of the byte stream a shape seeds its sponge with.
+    ///
+    /// Comparing seed streams, rather than a sampled challenge, keeps the sponge out of it.
+    fn seed_of(shape: &PcsShape) -> SeedDigest {
+        seed_digest(&shape.domain_separator::<F, EF>())
+    }
+
+    /// Every field of the shape, each moved one step away from `plain_shape`.
+    ///
+    /// One entry per configuration knob.
+    /// A field added to the shape stops the destructuring below from compiling.
+    ///
+    /// The counts are nested vectors, so they contribute one entry per way of moving them.
+    fn one_step_from_plain() -> Vec<(&'static str, PcsShape)> {
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        // The bindings go unused, since naming the fields is all this has to do.
+        let PcsShape {
+            claimed_evaluation_counts: _,
+            batch_pow_bits: _,
+        } = plain_shape();
+
+        let mut mutations = Vec::new();
+
+        // One more claimed evaluation in the first opening's fixed-length step.
+        let mut shape = plain_shape();
+        shape.claimed_evaluation_counts[0][0][0] += 1;
+        mutations.push(("claimed_evaluation_counts value", shape));
+
+        // One more opening, which is one more step.
+        let mut shape = plain_shape();
+        shape.claimed_evaluation_counts[0][0].push(2);
+        mutations.push(("claimed_evaluation_counts length", shape));
+
+        // A reordering keeps the openings and their widths, and swaps the order they arrive in.
         //
         //     [[[3, 1]]]  absorbs 3 values then 1
         //     [[[1, 3]]]  absorbs 1 value then 3
-        let wide_first = first_challenge(&shape_with(vec![vec![vec![3, 1]]]));
-        let narrow_first = first_challenge(&shape_with(vec![vec![vec![1, 3]]]));
+        let mut shape = plain_shape();
+        shape.claimed_evaluation_counts[0][0].reverse();
+        mutations.push(("claimed_evaluation_counts order", shape));
 
-        assert_ne!(wide_first, narrow_first);
+        // Elided at zero, so this is the transition where the grinding step appears at all.
+        // A shorter sequence, not a cheaper one.
+        let mut shape = plain_shape();
+        shape.batch_pow_bits += 1;
+        mutations.push(("batch_pow_bits", shape));
+
+        mutations
+    }
+
+    #[test]
+    fn no_two_configurations_of_the_shape_share_a_seed() {
+        // Invariant: the knobs are separated from each other, not merely from a baseline.
+        //
+        //     plain shape in the set  ->  every knob has to reach the seed
+        //     pairwise over the set   ->  no two knobs may land on one seed
+        //
+        // Two knobs bound as one number differ from the baseline and still agree with each other.
+        let mut seeds = vec![("plain", seed_of(&plain_shape()))];
+        seeds.extend(
+            one_step_from_plain()
+                .iter()
+                .map(|(field, shape)| (*field, seed_of(shape))),
+        );
+
+        assert_seeds_pairwise_distinct(&seeds);
     }
 
     #[test]
@@ -592,8 +657,8 @@ mod tests {
         //     one commitment, one matrix, two points         ->  [3, 3]
         //
         // Only the instance label separates them, so it must carry the grouping.
-        let two_matrices = first_challenge(&shape_with(vec![vec![vec![3], vec![3]]]));
-        let two_points = first_challenge(&shape_with(vec![vec![vec![3, 3]]]));
+        let two_matrices = seed_of(&shape_with(vec![vec![vec![3], vec![3]]]));
+        let two_points = seed_of(&shape_with(vec![vec![vec![3, 3]]]));
 
         assert_ne!(two_matrices, two_points);
     }
@@ -604,32 +669,26 @@ mod tests {
         //
         //     two commitments of one matrix   ->  [3, 3]
         //     one commitment of two matrices  ->  [3, 3]
-        let two_commitments = first_challenge(&shape_with(vec![vec![vec![3]], vec![vec![3]]]));
-        let one_commitment = first_challenge(&shape_with(vec![vec![vec![3], vec![3]]]));
+        let two_commitments = seed_of(&shape_with(vec![vec![vec![3]], vec![vec![3]]]));
+        let one_commitment = seed_of(&shape_with(vec![vec![vec![3], vec![3]]]));
 
         assert_ne!(two_commitments, one_commitment);
     }
 
     #[test]
-    fn the_batch_grinding_difficulty_reaches_the_seed() {
-        // The difficulty is the fixed length of the grinding step, so it rides the fingerprint.
-        // Nothing else in the shape changes between these two runs.
-        let mut ground = shape_with(vec![vec![vec![2]]]);
-        ground.batch_pow_bits = 4;
-        let mut ground_harder = ground.clone();
-        ground_harder.batch_pow_bits = 5;
-
-        assert_ne!(first_challenge(&ground), first_challenge(&ground_harder));
-    }
-
-    #[test]
-    fn a_run_with_no_grinding_differs_from_one_with_a_single_bit() {
-        // At zero bits the step is absent, which is a shorter sequence, not a cheaper one.
-        let ungrounded = shape_with(vec![vec![vec![2]]]);
-        let mut ground = ungrounded.clone();
+    fn a_grinding_step_that_is_already_present_still_binds_its_difficulty() {
+        // The step is elided at zero, so a bump off zero only proves presence.
+        //
+        //     0 -> 1   the step joins the sequence
+        //     1 -> 2   the step that is already there declares one more bit
+        //
+        // The second transition is the one the step's `Length::Fixed` carries.
+        let mut ground = plain_shape();
         ground.batch_pow_bits = 1;
+        let mut ground_harder = ground.clone();
+        ground_harder.batch_pow_bits = 2;
 
-        assert_ne!(first_challenge(&ungrounded), first_challenge(&ground));
+        assert_ne!(seed_of(&ground), seed_of(&ground_harder));
     }
 
     #[test]
@@ -690,7 +749,7 @@ mod tests {
         // Invariant: the markers are structural.
         // They record the delegation, and absorb nothing.
         //
-        // Fixture state: two runs over the same shape, one bracketing an empty delegation.
+        // Fixture state: the two sides over the same shape, each bracketing an empty delegation.
         let shape = shape_with(vec![vec![vec![1]]]);
         let claims: Vec<CommitmentWithOpeningPoints<EF, (), ()>> =
             vec![((), vec![((), vec![(EF::ONE, vec![EF::ONE])])]).into()];
@@ -717,5 +776,123 @@ mod tests {
         let bracketed_next: F = bracketed_challenger.sample();
         let plain_next: F = plain_challenger.sample();
         assert_eq!(bracketed_next, plain_next);
+    }
+    /// This protocol's name, as the vocabulary table keys it.
+    fn protocol() -> &'static str {
+        from_utf8(NAME).expect("the protocol name is ASCII")
+    }
+
+    /// The low-degree test this protocol brackets, as the table keys it.
+    fn low_degree_test() -> &'static str {
+        from_utf8(LDT_NAME).expect("the protocol name is ASCII")
+    }
+
+    #[test]
+    fn the_grinding_vocabulary_maps_the_one_grind_this_protocol_describes() {
+        // The security model keys its table on the name and the label bound here.
+        let batch = grinding_step(protocol(), BATCH_POW).expect("the batching grind is mapped");
+        assert_eq!(batch.site, GrindingSite::BatchCombination);
+        assert_eq!(batch.zero_bits, ZeroBitConvention::Elided);
+
+        // One grind described, so one row.
+        assert_eq!(
+            GRINDING_VOCABULARY
+                .iter()
+                .filter(|step| step.protocol == protocol())
+                .count(),
+            1,
+        );
+    }
+
+    #[test]
+    fn the_two_halves_of_one_parameter_set_account_for_every_grind_it_describes() {
+        // Invariant: `grinding_sites` and `security_regime` partition the grinds.
+        //
+        //     grinding_sites  ->  batch_pow, described here
+        //     security_regime ->  commit_pow and query_pow, described in the bracket
+        //
+        // Neither may omit a site, and neither may claim the other's.
+        for batch_proof_of_work_bits in [0, 1, 10] {
+            for commit_proof_of_work_bits in [0, 4] {
+                for query_proof_of_work_bits in [0, 16] {
+                    let params = FriParameters {
+                        log_blowup: 1,
+                        log_final_poly_len: 0,
+                        max_log_arity: 3,
+                        num_queries: 64,
+                        batch_proof_of_work_bits,
+                        commit_proof_of_work_bits,
+                        query_proof_of_work_bits,
+                        mmcs: (),
+                    };
+
+                    // One opening, then the bracketed low-degree test over two rounds.
+                    let opening = PcsShape {
+                        claimed_evaluation_counts: vec![vec![vec![3]]],
+                        batch_pow_bits: params.batch_proof_of_work_bits,
+                    };
+                    let ldt = FriShape::with_schedule(&params, vec![2, 2], 8);
+
+                    let recorded: Vec<_> = [
+                        (protocol(), opening.pattern::<F, EF>()),
+                        (low_degree_test(), ldt.pattern::<F, EF>()),
+                    ]
+                    .iter()
+                    .flat_map(|(name, pattern)| {
+                        pow_difficulties(pattern)
+                            .into_iter()
+                            .map(|(label, bits)| RecordedGrind::new(name, label, bits))
+                    })
+                    .collect();
+
+                    GrindingBudget::from_sites(&params.grinding_sites())
+                        .with_fri(&params.security_regime())
+                        .check(&[protocol(), low_degree_test()], &recorded)
+                        .unwrap_or_else(|mismatch| panic!("{mismatch}"));
+                }
+            }
+        }
+    }
+    #[test]
+    fn every_parameter_set_this_crate_ships_is_fully_accounted_for() {
+        // A named constructor is a parameter set someone deploys unread.
+        //
+        // Each is checked here so that raising a difficulty in one of them
+        // cannot land without the site that credits it moving too.
+        let sets: [(&str, FriParameters<()>); 5] = [
+            ("new_testing", FriParameters::new_testing((), 0)),
+            ("new_testing_zk", FriParameters::new_testing_zk(())),
+            ("new_benchmark", FriParameters::new_benchmark(())),
+            (
+                "new_benchmark_high_arity",
+                FriParameters::new_benchmark_high_arity(()),
+            ),
+            ("new_benchmark_zk", FriParameters::new_benchmark_zk(())),
+        ];
+
+        for (name, params) in sets {
+            let opening = PcsShape {
+                claimed_evaluation_counts: vec![vec![vec![3]]],
+                batch_pow_bits: params.batch_proof_of_work_bits,
+            };
+            let ldt = FriShape::with_schedule(&params, vec![2, 2], 8);
+
+            let recorded: Vec<_> = [
+                (protocol(), opening.pattern::<F, EF>()),
+                (low_degree_test(), ldt.pattern::<F, EF>()),
+            ]
+            .iter()
+            .flat_map(|(who, pattern)| {
+                pow_difficulties(pattern)
+                    .into_iter()
+                    .map(|(label, bits)| RecordedGrind::new(who, label, bits))
+            })
+            .collect();
+
+            GrindingBudget::from_sites(&params.grinding_sites())
+                .with_fri(&params.security_regime())
+                .check(&[protocol(), low_degree_test()], &recorded)
+                .unwrap_or_else(|mismatch| panic!("`{name}`: {mismatch}"));
+        }
     }
 }
