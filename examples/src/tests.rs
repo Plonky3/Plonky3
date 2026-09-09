@@ -113,6 +113,7 @@ fn test_end_to_end_koalabear_keccak_hashes_parallel_dft_keccak_merkle_tree()
 }
 
 #[test]
+#[ignore = "full STIR prove/verify at the 100-bit example security target; run from heavy CI"]
 fn test_end_to_end_koalabear_keccak_hashes_parallel_dft_keccak_merkle_tree_stir()
 -> Result<(), impl Debug> {
     let num_hashes = TRACE_SIZE / 24;
@@ -247,6 +248,7 @@ fn test_end_to_end_babybear_blake3_hashes_parallel_dft_poseidon2_merkle_tree()
 }
 
 #[test]
+#[ignore = "full circle-STARK prove/verify at the 100-bit example security target; run from heavy CI"]
 fn test_end_to_end_mersenne_31_keccak_hashes_keccak_merkle_tree() -> Result<(), impl Debug> {
     let num_hashes = TRACE_SIZE / 24;
     let proof_goal = KeccakAir {};
@@ -255,6 +257,7 @@ fn test_end_to_end_mersenne_31_keccak_hashes_keccak_merkle_tree() -> Result<(), 
 }
 
 #[test]
+#[ignore = "full circle-STARK prove/verify at the 100-bit example security target; run from heavy CI"]
 fn test_end_to_end_mersenne31_blake3_hashes_keccak_merkle_tree() -> Result<(), impl Debug> {
     let num_hashes = TRACE_SIZE >> 4;
     let proof_goal = Blake3Air {};

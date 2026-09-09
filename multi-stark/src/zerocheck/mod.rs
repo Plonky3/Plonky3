@@ -2094,6 +2094,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "O(num_vars^2) staged Poseidon2/Blake3/Fib proofs; run from heavy CI"]
     fn staged_zerocheck_mixed_poseidon2_blake3_fib() {
         for num_vars in 1..10 {
             let mut rng = SmallRng::seed_from_u64(1);
