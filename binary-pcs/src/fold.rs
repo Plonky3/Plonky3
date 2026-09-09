@@ -340,6 +340,108 @@ pub fn fold_codeword(codeword: &[BinaryField128], beta: BinaryField128) -> Vec<B
     folded
 }
 
+/// Fold one aligned coset, including its global offset in every virtual layer.
+pub(crate) fn fold_coset(
+    coset_index: usize,
+    values: &mut [BinaryField128],
+    challenges: &[BinaryField128],
+) -> BinaryField128 {
+    assert_eq!(values.len(), 1usize << challenges.len());
+    let mut len = values.len();
+    for &beta in challenges {
+        len /= 2;
+        for i in 0..len {
+            values[i] = fold_pair(
+                coset_index * len + i,
+                beta,
+                values[2 * i],
+                values[2 * i + 1],
+            );
+        }
+    }
+    values[0]
+}
+
+/// Fold several sequential challenges without materializing full intermediate codewords.
+///
+/// Each task reuses one coset-sized scratch buffer in the polynomial basis. Symbols cross
+/// bases only when loaded from the source or stored into the final output. The Cantor domain
+/// bases advance by XOR, just as in the single-fold path. `challenges` stays in sumcheck order.
+pub(crate) fn fold_codeword_batch(
+    codeword: &[BinaryField128],
+    challenges: &[BinaryField128],
+) -> Vec<BinaryField128> {
+    assert!(!challenges.is_empty());
+    assert!(codeword.len().is_power_of_two());
+    assert!(challenges.len() <= codeword.len().ilog2() as usize);
+    if challenges.len() == 1 {
+        return fold_codeword(codeword, challenges[0]);
+    }
+    let arity = challenges.len();
+    let size = 1 << arity;
+    let num_cosets = codeword.len() / size;
+    let betas: Vec<_> = challenges.iter().copied().map(Ghash128::from).collect();
+    let offsets: Vec<Ghash128> = (0..size / 2).map(|i| domain_point(i << 1)).collect();
+    let steps: Vec<Vec<Ghash128>> = (0..arity)
+        .map(|round| {
+            let mut step = Ghash128::ZERO;
+            (0..num_cosets.ilog2() as usize)
+                .map(|bit| {
+                    step += Ghash128::cantor_basis(arity - round + bit);
+                    step
+                })
+                .collect()
+        })
+        .collect();
+    let mut output = BinaryField128::zero_vec(num_cosets);
+    output
+        .par_chunks_mut(FOLD_GRAIN)
+        .zip(codeword.par_chunks(FOLD_GRAIN.saturating_mul(size)))
+        .enumerate()
+        .for_each(|(task, (out, input))| {
+            let start = task * FOLD_GRAIN;
+            let mut bases: Vec<Ghash128> = (0..arity)
+                .map(|r| domain_point(start << (arity - r)))
+                .collect();
+            let mut scratch = Ghash128::zero_vec(size);
+            for (offset, (slot, coset)) in out.iter_mut().zip(input.chunks_exact(size)).enumerate()
+            {
+                let index = start + offset;
+                if offset != 0 {
+                    for (base, steps) in bases.iter_mut().zip(&steps) {
+                        *base += steps[index.trailing_zeros() as usize];
+                    }
+                }
+                for (dst, &src) in scratch.iter_mut().zip(coset) {
+                    *dst = Ghash128::from(src);
+                }
+                let mut len = size;
+                for (r, &beta) in betas.iter().enumerate() {
+                    len /= 2;
+                    let packed_end = len / WIDTH * WIDTH;
+                    let beta_packed = Packed::broadcast(beta);
+                    for i in (0..packed_end).step_by(WIDTH) {
+                        let lo = Packed::from_fn(|lane| scratch[2 * (i + lane)]);
+                        let hi = Packed::from_fn(|lane| scratch[2 * (i + lane) + 1]);
+                        let x = Packed::from_fn(|lane| bases[r] + offsets[i + lane]);
+                        let f1 = lo + hi;
+                        let f0 = lo + x * f1;
+                        let folded = f0 + beta_packed * (f0 + f1);
+                        scratch[i..i + WIDTH].copy_from_slice(folded.as_slice());
+                    }
+                    for i in packed_end..len {
+                        let lo = scratch[2 * i];
+                        let f1 = lo + scratch[2 * i + 1];
+                        let f0 = lo + (bases[r] + offsets[i]) * f1;
+                        scratch[i] = f0 + beta * (f0 + f1);
+                    }
+                }
+                *slot = BinaryField128::from(scratch[0]);
+            }
+        });
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
@@ -355,6 +457,28 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::{FOLD_GRAIN, WIDTH, fold_codeword, fold_pair, group_steps, lane_offsets};
+
+    #[test]
+    fn batched_folds_match_sequential_folds_at_every_coset_offset() {
+        let mut rng = SmallRng::seed_from_u64(0xBA7C);
+        for log_len in [4, 7, 12, 14] {
+            let word: Vec<BinaryField128> = (0..1 << log_len).map(|_| rng.random()).collect();
+            for arity in 1..=4.min(log_len) {
+                let challenges: Vec<BinaryField128> = (0..arity).map(|_| rng.random()).collect();
+                let mut expected = word.clone();
+                for &beta in &challenges {
+                    expected = fold_codeword(&expected, beta);
+                }
+                assert_eq!(super::fold_codeword_batch(&word, &challenges), expected);
+                for (index, coset) in word.chunks(1 << arity).enumerate() {
+                    assert_eq!(
+                        super::fold_coset(index, &mut coset.to_vec(), &challenges),
+                        expected[index]
+                    );
+                }
+            }
+        }
+    }
 
     /// Encode novel-basis coefficients over the additive domain, through the oracle.
     ///

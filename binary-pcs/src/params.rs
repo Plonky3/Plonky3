@@ -112,12 +112,19 @@ pub struct BinaryPcsConfig {
     params: BinaryPcsParams,
     num_variables: usize,
     num_queries: usize,
+    log_folding_factor: usize,
 }
 
 /// Why a [`BinaryPcsConfig`] could not be derived.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BinaryPcsConfigError {
+    /// A batch must fold between one and all remaining message variables.
+    #[error("folding factor log {requested} must be in 1..={num_variables}")]
+    InvalidFoldingFactor {
+        requested: usize,
+        num_variables: usize,
+    },
     /// The codeword length does not fit in a `usize`.
     ///
     /// A codeword is indexed by `usize`, so `log_len` must stay below `max_bits`
@@ -161,9 +168,8 @@ impl BinaryPcsConfig {
     /// Derive the round schedule for a polynomial in `num_variables` variables.
     ///
     /// Every variable is folded: the commit phase lays the whole polynomial out as a single
-    /// codeword column, so there is no head of preprocessing rounds to configure. Binding a
-    /// prefix of the variables inside a committed row instead is the deferred head collapse,
-    /// which would reintroduce a folding parameter alongside the machinery to honour it.
+    /// codeword column. By default each variable fold commits its own word; use
+    /// [`Self::try_with_folding`] to batch several folds between commitments.
     ///
     /// # Errors
     ///
@@ -227,7 +233,75 @@ impl BinaryPcsConfig {
             params,
             num_variables,
             num_queries,
+            log_folding_factor: 1,
         })
+    }
+
+    /// Batch up to `log_folding_factor` sequential variable folds between commitments.
+    /// The last batch folds the remaining variables, even when shorter.
+    ///
+    /// For batching, charge every deterministic virtual fold, including those without roots.
+    /// The UDR mutual-agreement bound lifts agreement through each omitted fold: the input
+    /// word is fixed before its challenge, and the query authenticates the whole coset.
+    /// See Appendix A, Theorem 8 of <https://eprint.iacr.org/2024/1553>.
+    /// Sequential independent challenges are used, not powers of one sampled challenge.
+    ///
+    /// Sum `(N / 2^r + 1) / |F|` over every variable fold, plus `2 / |F|` per
+    /// sumcheck round. Reserve one bit each for that sum and the query error so their sum
+    /// meets the requested budget. Query PoW is credited only to the query error.
+    /// Factor log one retains the existing single-fold configuration and transcript.
+    ///
+    /// # Errors
+    /// Rejects an empty/oversized batch or a target exceeding the batched field budget.
+    pub fn try_with_folding(
+        mut self,
+        log_folding_factor: usize,
+    ) -> Result<Self, BinaryPcsConfigError> {
+        if log_folding_factor == 0 || log_folding_factor > self.num_variables {
+            return Err(BinaryPcsConfigError::InvalidFoldingFactor {
+                requested: log_folding_factor,
+                num_variables: self.num_variables,
+            });
+        }
+        // Re-derive from the original parameters, including when switching back to one fold.
+        self.log_folding_factor = log_folding_factor;
+        let reserve = usize::from(log_folding_factor > 1);
+        let max = self.field_security_bits().saturating_sub(reserve);
+        if self.params.security_level > max {
+            return Err(BinaryPcsConfigError::SecurityLevelExceedsFieldCapacity {
+                security_level: self.params.security_level,
+                max,
+            });
+        }
+        self.num_queries = REGIME.queries(
+            self.params.security_level + reserve - self.params.pow_bits,
+            self.params.log_inv_rate,
+        );
+        Ok(self)
+    }
+
+    /// Maximum number of sequential variable challenges per committed fold batch.
+    #[must_use]
+    pub const fn log_folding_factor(&self) -> usize {
+        self.log_folding_factor
+    }
+
+    /// Number of fold batches, including the final batch sent in the clear.
+    #[must_use]
+    pub const fn num_fold_batches(&self) -> usize {
+        self.num_variables.div_ceil(self.log_folding_factor)
+    }
+
+    /// Each batch's starting variable and number of challenges, in transcript order.
+    pub(crate) fn fold_batches(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        (0..self.num_variables)
+            .step_by(self.log_folding_factor)
+            .map(|start| {
+                (
+                    start,
+                    self.log_folding_factor.min(self.num_variables - start),
+                )
+            })
     }
 
     /// Number of variables of the committed polynomial.
@@ -280,12 +354,11 @@ impl BinaryPcsConfig {
 
     /// Bits of security the sampled queries deliver.
     ///
-    /// The query phase runs one test per distinct fold pair.
-    /// It therefore executes at most half the domain's worth of tests, however many
-    /// the derivation asked for.
+    /// The query phase runs one test per distinct first-batch coset, capped at the
+    /// number of such cosets in the domain.
     ///
     /// Where the derived count exceeds that, this figure is a lower bound.
-    /// Opening every pair checks every fold at every position of every round, and the
+    /// Opening every base coset checks every composed fold at every position, and the
     /// query-phase error of that is zero rather than a power of the proximity gap.
     #[must_use]
     pub fn query_security_bits(&self) -> f64 {
@@ -294,11 +367,19 @@ impl BinaryPcsConfig {
 
     /// Bits of security the fold and sumcheck rounds leave, rounded down.
     ///
-    /// This is the ceiling on the target: [`Self::try_new`] rejects a `security_level` above
-    /// it, because no query count buys those bits back.
+    /// No query count buys these bits back. Batched configurations reserve one additional
+    /// bit to add this error to the query error; see [`Self::try_with_folding`].
     #[must_use]
     pub const fn field_security_bits(&self) -> usize {
-        field_security_bits_at(self.log_domain_size(), self.num_fold_rounds())
+        if self.log_folding_factor == 1 {
+            field_security_bits_at(self.log_domain_size(), self.num_fold_rounds())
+        } else {
+            // Sum the geometric series of all virtual codeword lengths and every
+            // fold/sumcheck error. log_domain_size < usize::BITS leaves room in u128.
+            let numerator = (2u128 << self.log_domain_size()) - (2u128 << self.log_final_len())
+                + 3 * self.num_variables as u128;
+            ALPHABET_BITS.saturating_sub(log2_ceil_u128(numerator))
+        }
     }
 }
 
@@ -333,6 +414,55 @@ mod tests {
         // Folding stops when the message is a constant, leaving the rate expansion.
         assert_eq!(config.log_final_len(), 2);
         assert!(config.num_queries() > 0);
+    }
+
+    #[test]
+    fn batched_schedule_keeps_all_variables_and_a_short_final_batch() {
+        let config = BinaryPcsConfig::try_new(7, params())
+            .unwrap()
+            .try_with_folding(3)
+            .unwrap();
+        assert_eq!(
+            config.fold_batches().collect::<alloc::vec::Vec<_>>(),
+            [(0, 3), (3, 3), (6, 1)]
+        );
+        assert_eq!(config.num_fold_rounds(), 7);
+        assert_eq!(config.num_fold_batches(), 3);
+        assert_eq!(config.log_final_len(), 2);
+        assert!(config.query_security_bits() >= 85.0);
+        assert!(
+            BinaryPcsConfig::try_new(7, params())
+                .unwrap()
+                .try_with_folding(0)
+                .is_err()
+        );
+        assert!(
+            BinaryPcsConfig::try_new(7, params())
+                .unwrap()
+                .try_with_folding(8)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn batching_prices_every_virtual_fold_and_reserves_error_budget() {
+        let config = BinaryPcsConfig::try_new(19, params())
+            .unwrap()
+            .try_with_folding(3)
+            .unwrap();
+        // Sum (2^(21-r)+1), r=0..18, plus 2*19 = 4_194_353; ceil(log2)=23.
+        assert_eq!(config.field_security_bits(), 105);
+        let mut p = params();
+        p.security_level = 105;
+        let old = BinaryPcsConfig::try_new(19, p).unwrap();
+        assert!(old.try_with_folding(3).is_err());
+        p.security_level = 104;
+        assert!(
+            BinaryPcsConfig::try_new(19, p)
+                .unwrap()
+                .try_with_folding(3)
+                .is_ok()
+        );
     }
 
     /// `query_security_bits` reports the achieved security the sampled queries buy back after

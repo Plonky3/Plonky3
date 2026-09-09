@@ -1,7 +1,8 @@
 //! Benchmark adjacent-symbol Merkle grouping on the binary recurrence AIR.
-//! Run with `-- [repetitions=9] [log_height=18] [vary]`; CSV goes to stdout.
+//! Run with `-- [repetitions=9] [log_height=18] [vary] [batched]`; CSV goes to stdout.
 //! Group 0 is the unwrapped baseline; group 1 measures adapter overhead.
 //! `vary` uses a different public transcript separator in each iteration to sample proof sizes.
+//! `batched` compares the original PCS, fixed groups 4/8, and batches of 2/3/4 folds.
 
 use std::time::Instant;
 
@@ -67,16 +68,22 @@ impl<M: MmcsTrait<F, Commitment = <Mmcs as MmcsTrait<F>>::Commitment>> MultiStar
     }
 }
 
-fn config<M>(log_height: usize, mmcs: M) -> Config<M> {
+fn pcs_config(log_height: usize, log_folding_factor: usize) -> BinaryPcsConfig {
     // Two trace columns add one variable to the stacked polynomial.
     let params = BinaryPcsParams {
         log_inv_rate: 2,
         pow_bits: 0,
         security_level: 100,
     };
-    let pcs_config = BinaryPcsConfig::try_new(log_height + 1, params).unwrap();
+    BinaryPcsConfig::try_new(log_height + 1, params)
+        .unwrap()
+        .try_with_folding(log_folding_factor)
+        .unwrap()
+}
+
+fn config<M>(log_height: usize, mmcs: M, log_folding_factor: usize) -> Config<M> {
     Config {
-        pcs: BinaryPcs::new(pcs_config, mmcs),
+        pcs: BinaryPcs::new(pcs_config(log_height, log_folding_factor), mmcs),
     }
 }
 
@@ -143,11 +150,12 @@ fn run<M: MmcsTrait<F, Commitment = <Mmcs as MmcsTrait<F>>::Commitment>>(
     log_height: usize,
     mmcs: M,
     seed: u64,
+    log_folding_factor: usize,
 ) -> (f64, f64, usize)
 where
     M::ProverData<RowMajorMatrix<F>>: Clone,
 {
-    let config = config(log_height, mmcs);
+    let config = config(log_height, mmcs, log_folding_factor);
     let (table, public) = trace(log_height);
     let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger(seed));
     let start = Instant::now();
@@ -199,25 +207,39 @@ fn main() {
         Some("vary") => true,
         _ => panic!("usage: bench_binary_grouping [repetitions] [log_height] [vary]"),
     };
-    println!("iteration,group_size,seed,prove_ms,verify_ms,proof_bytes");
+    let batched = match args.get(3).map(String::as_str) {
+        None => false,
+        Some("batched") => true,
+        _ => panic!("expected batched as the fourth argument"),
+    };
+    println!("iteration,group_size,log_folding_factor,seed,prove_ms,verify_ms,proof_bytes");
     // Warm every configuration, then rotate and reverse order to spread drift across groups.
     // Iteration zero is warm-up and must be excluded from summary statistics.
     for iteration in 0..=repetitions {
-        let mut groups = [0, 1, 2, 4, 8, 16];
+        let mut groups = if batched {
+            [(0, 1), (4, 1), (8, 1), (4, 2), (8, 3), (16, 4)]
+        } else {
+            [(0, 1), (1, 1), (2, 1), (4, 1), (8, 1), (16, 1)]
+        };
         let order = iteration.saturating_sub(1);
         groups.rotate_left(order % 6);
         if (order / groups.len()) % 2 == 1 {
             groups.reverse();
         }
         let seed = if vary_transcript { iteration as u64 } else { 0 };
-        for group in groups {
+        for (group, arity) in groups {
             let mmcs = Mmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
             let (prove_ms, verify_ms, bytes) = if group == 0 {
-                run(log_height, mmcs, seed)
+                run(log_height, mmcs, seed, arity)
             } else {
-                run(log_height, GroupedCodewordMmcs::new(mmcs, group), seed)
+                let grouped = if arity > 1 {
+                    GroupedCodewordMmcs::for_folding(mmcs, &pcs_config(log_height, arity))
+                } else {
+                    GroupedCodewordMmcs::new(mmcs, group)
+                };
+                run(log_height, grouped, seed, arity)
             };
-            println!("{iteration},{group},{seed},{prove_ms:.6},{verify_ms:.6},{bytes}");
+            println!("{iteration},{group},{arity},{seed},{prove_ms:.6},{verify_ms:.6},{bytes}");
         }
     }
 }
