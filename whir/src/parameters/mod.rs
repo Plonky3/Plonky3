@@ -29,7 +29,9 @@ pub struct ProtocolParameters {
     pub folding_factor: FoldingFactor,
     /// The type of soundness guarantee.
     pub soundness_type: SecurityAssumption,
-    /// The security level in bits.
+    /// Target bits for each protocol error term, including initial claim batching.
+    /// A full PCS bound must sum the terms' error probabilities; use the
+    /// `PrescribedPointPcs::prescribed_security` hook for that composed bound.
     pub security_level: usize,
     /// The number of bits required for proof-of-work (PoW).
     pub pow_bits: usize,
@@ -39,7 +41,7 @@ impl Display for ProtocolParameters {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(
             f,
-            "Targeting {}-bits of security with {}-bits of PoW - soundness: {:?}",
+            "Targeting {} bits per error term with {} bits of PoW - soundness: {:?}",
             self.security_level, self.pow_bits, self.soundness_type
         )?;
         writeln!(

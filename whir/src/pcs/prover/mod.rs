@@ -157,6 +157,13 @@ where
         Challenger: CanObserve<MT::Commitment>,
     {
         assert_eq!(self.round_folding_factor(0), layout.folding());
+        self.config
+            .validate_initial_claims(
+                layout
+                    .num_claims()
+                    .saturating_add(initial_ood_answers.len()),
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
         let variable_order = L::variable_order();
 
         let mut initial_sumcheck = SumcheckData::default();
@@ -295,7 +302,7 @@ where
         // A freshly sampled challenge weights the groups by its successive powers,
         // and the verifier samples the same challenge to rebuild the identical batch.
         let num_variables = ood_statement.num_variables();
-        let constraint = Constraint::new(
+        let constraint = Constraint::new_with_existing_claim(
             challenger.sample_algebra_element(),
             num_variables,
             vec![

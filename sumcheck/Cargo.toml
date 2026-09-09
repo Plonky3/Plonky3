@@ -21,6 +21,7 @@ p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-multilinear-util.workspace = true
+p3-security.workspace = true
 p3-util.workspace = true
 p3-zk-codes.workspace = true
 

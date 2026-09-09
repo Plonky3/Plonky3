@@ -187,6 +187,13 @@ where
         // Its seed therefore lands here, ahead of the run's first challenge.
         self.seed_transcript(challenger);
 
+        self.config.validate_initial_claims(
+            protocol
+                .iter_openings()
+                .map(|(_, batch)| batch.len())
+                .sum::<usize>()
+                .saturating_add(self.commitment_ood_samples),
+        )?;
         let alpha = challenger.sample_algebra_element();
         let constraint = layout_verifier.constraint(alpha);
         let mut claimed_eval = EF::ZERO;
@@ -218,6 +225,13 @@ where
         + CanObserve<MT::Commitment>,
     L: Layout<F, EF>,
 {
+    fn prescribed_security(
+        &self,
+        protocol: &OpeningProtocol,
+    ) -> Option<p3_sumcheck::PrescribedOpeningSecurity> {
+        super::security::prescribed_security(&self.config, protocol)
+    }
+
     /// Open each batch at its supplied point.
     ///
     /// The out-of-domain commitment samples are still drawn from the transcript.
@@ -315,6 +329,13 @@ where
         // Its seed therefore lands here, ahead of the run's first challenge.
         self.seed_transcript(challenger);
 
+        self.config.validate_initial_claims(
+            protocol
+                .iter_openings()
+                .map(|(_, batch)| batch.len())
+                .sum::<usize>()
+                .saturating_add(self.commitment_ood_samples),
+        )?;
         let alpha = challenger.sample_algebra_element();
         let constraint = layout_verifier.constraint(alpha);
         let mut claimed_eval = EF::ZERO;

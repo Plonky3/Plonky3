@@ -132,6 +132,9 @@ where
         rng: &mut R,
     ) -> ZkWhirProof<F, EF, MT> {
         let config = self.config;
+        config
+            .validate_initial_claims(claims.len())
+            .unwrap_or_else(|error| panic!("{error}"));
         let num_variables = config.num_variables;
         let sumcheck_mask_encoding = config.sumcheck_mask.encoding::<EF>();
 

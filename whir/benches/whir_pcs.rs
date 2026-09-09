@@ -10,7 +10,7 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
-use p3_field::extension::QuinticTrinomialExtensionField;
+use p3_field::extension::BinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
@@ -23,7 +23,8 @@ use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
 type F = KoalaBear;
-type EF = QuinticTrinomialExtensionField<F>;
+// The largest case needs an octic extension to cover initial claim batching at 128 bits.
+type EF = BinomialExtensionField<F, 8>;
 
 type Poseidon16 = Poseidon2KoalaBear<16>;
 type Poseidon24 = Poseidon2KoalaBear<24>;
@@ -47,6 +48,7 @@ const LARGE: usize = 20;
 const FOLDING: usize = 4;
 const LOG_INV_RATE: usize = 1;
 const SOUNDNESS: SecurityAssumption = SecurityAssumption::CapacityBound;
+// Target for each configured error term; total soundness requires their union bound.
 const SECURITY_LEVEL: usize = 128;
 // One opening claim is enough to exercise the full pipeline.
 //
@@ -161,7 +163,12 @@ impl<L: Layout<F, EF>> Bench<L> {
         };
 
         // Derive the per-round configuration and pre-allocate FFT twiddles.
-        let config = WhirConfig::<EF, F, Challenger>::new(opts.num_variables, params).unwrap();
+        let config = WhirConfig::<EF, F, Challenger>::new_with_initial_claims(
+            opts.num_variables,
+            params,
+            NUM_EVALUATIONS,
+        )
+        .unwrap();
         let dft = Dft::new(1 << config.max_fft_size());
         let pcs = Pcs::<L>::new(config, dft, mmcs);
 
@@ -429,7 +436,7 @@ fn report_proof_size(_c: &mut Criterion) {
 
     eprintln!();
     eprintln!(
-        "whir_pcs proof report  (security={SECURITY_LEVEL}, soundness={SOUNDNESS:?}, \
+        "whir_pcs proof report  (per_phase_target={SECURITY_LEVEL}, soundness={SOUNDNESS:?}, \
          folding={FOLDING}, starting_log_inv_rate={LOG_INV_RATE}, evals={NUM_EVALUATIONS})"
     );
     eprintln!(

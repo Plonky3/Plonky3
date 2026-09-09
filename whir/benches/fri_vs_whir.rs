@@ -8,11 +8,11 @@
 //!
 //! # Substrate (matched on both sides)
 //!
-//! - Field            : KoalaBear, with quartic extension `EF`.
+//! - Field            : KoalaBear, with quintic extension `EF`.
 //! - Merkle hash      : swept over Poseidon1, Poseidon2 (field-element digests), Blake3 (byte digests).
 //! - Message          : `2^22` base-field elements.
 //! - Code rate        : `ρ = 2^-1` (`log_blowup = 1`).
-//! - Soundness target : 100 bits, capacity-regime conjecture.
+//! - Per-phase target : 100 bits, capacity-regime conjecture; total soundness requires a union bound.
 //!
 //! # Workload (matched claim shape)
 //!
@@ -58,7 +58,7 @@ use p3_commit::{ExtensionMmcs, Mmcs, MultilinearPcs, Pcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::QuinticTrinomialExtensionField;
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_koala_bear::{
     KoalaBear, Poseidon1KoalaBear, default_koalabear_poseidon1_16, default_koalabear_poseidon1_24,
@@ -80,7 +80,7 @@ use rand::rngs::SmallRng;
 type F = KoalaBear;
 
 /// Challenge field used for Fiat-Shamir challenges and out-of-domain samples.
-type EF = BinomialExtensionField<F, 4>;
+type EF = QuinticTrinomialExtensionField<F>;
 
 /// DFT backend used by both protocols.
 type Dft = Radix2DFTSmallBatch<F>;
@@ -116,16 +116,15 @@ type Dft = Radix2DFTSmallBatch<F>;
 // A stricter WHIR setting would force more queries than FRI pays
 // for, biasing the comparison.
 
-/// Target soundness in bits for both protocols.
+/// Target for the configured per-phase bounds of both protocols.
 ///
 /// Interpreted under the capacity-regime conjecture (see security framing above).
+/// Total proof soundness additionally requires a union bound over the error terms.
 const SECURITY_LEVEL: usize = 100;
 
 /// Proof-of-work grinding bits, shared by both protocols.
 ///
-/// # Why this value
-///
-/// - The WHIR side needs every per-round grinding requirement to fit under this budget. `21` is the smallest budget that clears that ceiling.
+/// Every WHIR per-round grinding requirement must fit under this budget.
 const POW_BITS: usize = 21;
 
 /// log_2 of the inverse code rate.
@@ -337,7 +336,8 @@ where
     };
 
     // Per-round protocol layout: query counts, OOD samples, PoW bits per round.
-    let config = WhirConfig::<EF, F, Ch>::new(num_variables, params).unwrap();
+    let config =
+        WhirConfig::<EF, F, Ch>::new_with_initial_claims(num_variables, params, width).unwrap();
 
     // Per-rig RNG: distinct seed per `(num_variables, log_width)` so two rigs
     // cannot accidentally collide on polynomial samples.
@@ -783,7 +783,7 @@ mod blake3 {
 fn print_diagnostic_table() {
     println!();
     println!(
-        "=== FRI vs WHIR diagnostic ({SECURITY_LEVEL}-bit security, rho = 2^-{LOG_BLOWUP}) ==="
+        "=== FRI vs WHIR diagnostic ({SECURITY_LEVEL}-bit per-phase target, rho = 2^-{LOG_BLOWUP}) ==="
     );
     println!("  hash      |  m | proto | commit ms | open ms | verify us | proof bytes | queries");
     println!("------------+----+-------+-----------+---------+-----------+-------------+--------");

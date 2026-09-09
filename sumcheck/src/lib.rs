@@ -49,7 +49,7 @@ pub use data::{SumcheckData, verify_final_sumcheck_rounds};
 pub use error::SumcheckError;
 pub(crate) use lagrange::extrapolate_01inf;
 use p3_field::Field;
-pub use prescribed_pcs::PrescribedPointPcs;
+pub use prescribed_pcs::{PrescribedOpeningSecurity, PrescribedPointPcs};
 pub use table::{
     OpeningBatch, OpeningEvals, OpeningProtocol, OpeningRequest, PointSchedule, TableShape,
     TableSpec,

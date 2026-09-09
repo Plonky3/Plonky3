@@ -9,6 +9,20 @@ use p3_multilinear_util::point::Point;
 
 use crate::table::{OpeningEvals, OpeningProtocol};
 
+/// Conditional soundness evidence for a concrete prescribed-point opening.
+///
+/// Except with probability bounded by `error`, accepted evaluations must agree
+/// with one of at most `2^log2_max_candidates` polynomials in a candidate set
+/// fixed by the commitment, before the outer protocol samples its challenges.
+/// Callers must union-bound their own reductions over this candidate set.
+#[derive(Clone, Copy, Debug)]
+pub struct PrescribedOpeningSecurity {
+    /// Union of all algebraic opening errors, under the PCS's stated assumptions.
+    pub error: p3_security::ErrorBits,
+    /// Logarithm of the maximum candidate set size at commitment time.
+    pub log2_max_candidates: f64,
+}
+
 /// A multilinear commitment scheme that opens columns at caller-chosen points.
 ///
 /// The base opening path draws each evaluation point from the transcript.
@@ -41,6 +55,23 @@ where
         + CanSampleUniformBits<Self::Val>
         + CanObserve<Self::Commitment>,
 {
+    /// Soundness evidence for this exact opening protocol, or `None` when unknown.
+    ///
+    /// The bound must include claim batching and every opening reduction, composed by a
+    /// union bound. It inherits the implementation's documented proximity assumptions.
+    /// It excludes hash and transcript collision security, which the outer protocol must
+    /// supply separately. Returning the configured per-round target is insufficient.
+    /// The candidate count must apply before outer challenges, even if opening-time
+    /// checks later reduce the list to a single polynomial.
+    ///
+    /// The default makes security-checked callers fail closed for unaudited backends.
+    fn prescribed_security(
+        &self,
+        _protocol: &OpeningProtocol,
+    ) -> Option<PrescribedOpeningSecurity> {
+        None
+    }
+
     /// Open the committed columns at caller-prescribed points instead of sampled ones.
     ///
     /// # Arguments
