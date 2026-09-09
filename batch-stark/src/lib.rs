@@ -27,5 +27,7 @@ pub use p3_uni_stark::{OpenedValues, VerificationError};
 pub use proof::{BatchCommitments, BatchOpenedValues, BatchProof};
 pub use prover::{StarkInstance, prove_batch};
 pub use security::num_batched_openings;
-pub use transcript::{BatchTranscript, InvalidLookupPow};
+pub use transcript::{
+    BatchProverTranscript, BatchShape, BatchTranscriptFailure, BatchVerifierTranscript,
+};
 pub use verifier::{VerifierData, verify_batch};
