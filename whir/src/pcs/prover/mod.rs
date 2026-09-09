@@ -4,6 +4,7 @@ use core::marker::PhantomData;
 use core::mem;
 use core::ops::Deref;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
@@ -101,7 +102,7 @@ where
 
 impl<EF, F, Dft, MT, Challenger, L> WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + Ord,
+    F: TwoAdicField + TranscriptField + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,

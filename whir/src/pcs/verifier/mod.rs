@@ -4,6 +4,7 @@ use core::fmt::Debug;
 use core::ops::Deref;
 
 use errors::VerifierError;
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_field::{ExtensionField, Field, TwoAdicField};
@@ -59,7 +60,7 @@ where
 
 impl<'a, EF, F, MT, Challenger> WhirVerifier<'a, EF, F, MT, Challenger>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + TranscriptField,
     EF: ExtensionField<F> + TwoAdicField,
     MT: Mmcs<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,

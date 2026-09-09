@@ -43,6 +43,7 @@ pub mod table;
 pub mod test_util;
 #[cfg(test)]
 mod tests;
+pub mod transcript;
 pub mod zk;
 
 pub use data::{SumcheckData, verify_final_sumcheck_rounds};

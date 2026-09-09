@@ -326,6 +326,8 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::layout::{Layout, SuffixProver, Table};
+    use p3_sumcheck::strategy::Basis;
+    use p3_sumcheck::transcript::{SumcheckShape, VerifierTranscript};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -539,8 +541,11 @@ mod tests {
         #[allow(clippy::needless_range_loop)]
         for r in 0..num_fold_rounds {
             let [c0, c_inf] = sumcheck_data.polynomial_evaluations()[r];
-            verifier_ch.observe_algebra_slice(&[c0, c_inf]);
-            let beta: F = verifier_ch.sample_algebra_element();
+            // One fold round is one single-round sumcheck, seeded on its own.
+            let shape = SumcheckShape::new(1, 0, Basis::Evaluation);
+            let mut transcript = VerifierTranscript::<_, F, F>::new(&mut verifier_ch, shape);
+            let beta = transcript.round(c0, c_inf, None).unwrap();
+            transcript.finish();
             assert_eq!(beta, randomness.as_slice()[r], "round {r} challenge");
             if r + 1 < num_fold_rounds {
                 verifier_ch.observe(rounds[r].commitment.clone());
