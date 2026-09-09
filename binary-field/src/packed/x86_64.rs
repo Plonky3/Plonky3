@@ -548,9 +548,17 @@ mod tests {
         unsafe { lanes::load(values.as_ptr()) }
     }
 
-    /// Every lane operation on the register, against the same operation on the scalar model.
+    /// The two 64-bit halves of every lane, exchanged.
+    fn swapped_halves(values: [u128; WIDTH]) -> [u128; WIDTH] {
+        // Rotating a 128-bit value by half its width is exactly the exchange.
+        core::array::from_fn(|i| values[i].rotate_left(64))
+    }
+
+    /// Each lane-local operation on the register, against the same operation on the model.
     ///
     /// One assertion per operation, so a mismatch names the intrinsic that disagreed.
+    ///
+    /// The whole-element interleave is the one left out, since it crosses lanes by design.
     fn lanes_conform(
         a: [u128; WIDTH],
         b: [u128; WIDTH],
@@ -584,6 +592,11 @@ mod tests {
             mx.clmul::<HIGH_BY_HIGH>(my).0
         );
 
+        // Not a trait method, so the model cannot supply the expectation.
+        //
+        // It carries the only hand-written shuffle immediate here, which is why it is pinned.
+        prop_assert_eq!(lanes_of(lanes::swap_halves(x)), swapped_halves(a));
+
         // The two composites built from those operations.
         //
         // A lane-crossing slip therefore shows up here as well as in the primitives above.
@@ -598,14 +611,31 @@ mod tests {
 
     #[test]
     fn the_register_matches_the_scalar_model_at_the_corners() {
-        // Invariant: each lane operation is lane-local, so distinct lanes must stay distinct.
+        // Invariant: each operation is lane-local, so distinct lanes must stay distinct.
         //
-        // Filling the lanes by rotating through the corners pairs a different extreme in each.
-        for (i, &scalar) in SPECIAL.iter().enumerate() {
-            let a = core::array::from_fn(|lane| SPECIAL[(lane + i) % SPECIAL.len()]);
-            let b = core::array::from_fn(|lane| SPECIAL[(lane + i + 1) % SPECIAL.len()]);
+        // Lane 0 carries the pair under test, so all sixteen combinations are reached.
+        //
+        // That includes the squaring-shaped case where both operands are the same value.
+        //
+        // The other lanes rotate through the corners, so a value that crosses a lane
+        // boundary lands on a different extreme and shows as a mismatch.
+        for (i, &x) in SPECIAL.iter().enumerate() {
+            for (j, &y) in SPECIAL.iter().enumerate() {
+                let a = core::array::from_fn(|lane| match lane {
+                    0 => x,
+                    _ => SPECIAL[(i + lane) % SPECIAL.len()],
+                });
+                let b = core::array::from_fn(|lane| match lane {
+                    0 => y,
+                    _ => SPECIAL[(j + lane) % SPECIAL.len()],
+                });
 
-            lanes_conform(a, b, scalar).unwrap_or_else(|e| panic!("scalar {scalar:#x}: {e}"));
+                // The multiplier walks the corners too, so the split runs from each extreme.
+                for scalar in SPECIAL {
+                    lanes_conform(a, b, scalar)
+                        .unwrap_or_else(|e| panic!("a {x:#x}, b {y:#x}, scalar {scalar:#x}: {e}"));
+                }
+            }
         }
     }
 

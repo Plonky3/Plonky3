@@ -108,12 +108,14 @@ mod wide {
     /// Apply the forward butterfly to a prefix, returning the number of elements it covered.
     ///
     /// Out of line for the same reason as the scaling kernel above.
+    ///
+    /// The two halves must be the same length, which every caller asserts before arriving.
     #[inline(never)]
     pub(super) fn butterfly_forward(lo: &mut [u128], hi: &mut [u128], scalar: u128) -> usize {
         let (lo, hi) = (lo.as_chunks_mut::<WIDTH>().0, hi.as_chunks_mut::<WIDTH>().0);
 
-        // Pairing stops at the shorter side, so that is what the count has to report.
-        let blocks = lo.len().min(hi.len());
+        // The dispatcher asserts the two halves match, so either chunk count is the answer.
+        let blocks = lo.len();
         let split = SplitScalar::new(scalar);
 
         for (lo, hi) in lo.iter_mut().zip(hi.iter_mut()) {
@@ -136,12 +138,14 @@ mod wide {
     /// Apply the inverse butterfly to a prefix, returning the number of elements it covered.
     ///
     /// Out of line for the same reason as the scaling kernel above.
+    ///
+    /// The two halves must be the same length, which every caller asserts before arriving.
     #[inline(never)]
     pub(super) fn butterfly_inverse(lo: &mut [u128], hi: &mut [u128], scalar: u128) -> usize {
         let (lo, hi) = (lo.as_chunks_mut::<WIDTH>().0, hi.as_chunks_mut::<WIDTH>().0);
 
-        // Pairing stops at the shorter side, so that is what the count has to report.
-        let blocks = lo.len().min(hi.len());
+        // The dispatcher asserts the two halves match, so either chunk count is the answer.
+        let blocks = lo.len();
         let split = SplitScalar::new(scalar);
 
         for (lo, hi) in lo.iter_mut().zip(hi.iter_mut()) {
@@ -233,12 +237,27 @@ mod tests {
         any(target_feature = "avx2", target_feature = "avx512f")
     ));
 
-    /// Guard elements on each side of the payload, two full registers of the widest build.
+    /// Elements per register on the widest packing this crate has.
+    ///
+    /// The build assertion below forces a wider one to bump this rather than pass silently.
+    const WIDEST_LANES: usize = 4;
+
+    /// Guard elements on each side of the payload, two of the widest registers.
     ///
     /// One register wide would catch only a store that overran by exactly one register.
     ///
     /// Two make the next one out detectable as well, still inside the buffer's own allocation.
-    const SENTINELS: usize = 8;
+    const SENTINELS: usize = 2 * WIDEST_LANES;
+
+    // The gate on the packed prefix has to agree with the target predicate restated above.
+    //
+    // Drift in either direction leaves the fallback's sentinel width behind, so checking the
+    // width here turns it into a build failure instead of waiting for someone to run this leg.
+    const _: () = assert!(if PACKED_BUILD {
+        super::wide::WIDTH == 2 || super::wide::WIDTH == WIDEST_LANES
+    } else {
+        super::wide::WIDTH == usize::MAX
+    });
 
     /// What those elements hold, which no product of the inputs below can reproduce.
     const SENTINEL: u128 = 0x5a5a_5a5a_5a5a_5a5a_5a5a_5a5a_5a5a_5a5a;
@@ -274,16 +293,20 @@ mod tests {
         &mut buffer[start..start + len]
     }
 
-    /// The payload of such a buffer, once both walls are confirmed intact.
-    fn payload(buffer: &[u128], offset: usize, len: usize) -> Result<&[u128], TestCaseError> {
+    /// Both walls of such a buffer, still holding the guard value.
+    fn walls_intact(buffer: &[u128], offset: usize, len: usize) -> bool {
         let start = SENTINELS + offset;
 
-        // Nothing may have run off the front.
-        prop_assert!(buffer[..start].iter().all(|&v| v == SENTINEL));
+        // Nothing may have run off the front, and nothing off the back either.
+        buffer[..start].iter().all(|&v| v == SENTINEL)
+            && buffer[start + len..].iter().all(|&v| v == SENTINEL)
+    }
 
-        // Nothing may have run off the back either.
-        prop_assert!(buffer[start + len..].iter().all(|&v| v == SENTINEL));
+    /// The payload of such a buffer, once both walls are confirmed intact.
+    fn payload(buffer: &[u128], offset: usize, len: usize) -> Result<&[u128], TestCaseError> {
+        prop_assert!(walls_intact(buffer, offset, len));
 
+        let start = SENTINELS + offset;
         Ok(&buffer[start..start + len])
     }
 
@@ -402,43 +425,51 @@ mod tests {
         // So a build that lost the packed path still returns right answers, silently.
         //
         // Checking the reported count is what turns that into a failure.
+        //
+        // The width itself is pinned at build time by the assertion near the guard constants.
         if !PACKED_BUILD {
-            // No packing here, so the width is the sentinel that sends every slice to the tail.
-            assert_eq!(super::wide::WIDTH, usize::MAX);
             return;
         }
 
         let width = super::wide::WIDTH;
-
-        // Two lanes under the 256-bit register, four under the 512-bit one, and nothing else.
-        assert!(
-            width == 2 || width == 4,
-            "unexpected register width {width}"
-        );
 
         // Every length from an empty prefix to several whole registers plus a tail.
         for len in 0..4 * width {
             // Whole registers only: the remainder is the scalar tail's business.
             let want = len - len % width;
 
-            let mut values = sample(len);
-            assert_eq!(
-                super::wide::scale(&mut values, 3),
-                want,
-                "scale at len {len}"
-            );
+            let values = sample(len);
 
-            let (mut lo, mut hi) = (sample(len), sample(len));
-            assert_eq!(
-                super::wide::butterfly_forward(&mut lo, &mut hi, 3),
-                want,
-                "forward butterfly at len {len}"
+            // The second operand of the butterflies, reversed so the two slices differ.
+            let other: Vec<u128> = values.iter().rev().copied().collect();
+
+            // Walled on both sides, so a store past either end fails here rather than
+            // corrupting the allocator the way a bare sample would.
+            let mut scaled = padded(&values, 0);
+            let covered = super::wide::scale(payload_mut(&mut scaled, 0, len), 3);
+            assert_eq!(covered, want, "scale at len {len}");
+            assert!(walls_intact(&scaled, 0, len), "scale overran at len {len}");
+
+            let mut lo = padded(&values, 0);
+            let mut hi = padded(&other, 0);
+
+            let covered = super::wide::butterfly_forward(
+                payload_mut(&mut lo, 0, len),
+                payload_mut(&mut hi, 0, len),
+                3,
             );
-            assert_eq!(
-                super::wide::butterfly_inverse(&mut lo, &mut hi, 3),
-                want,
-                "inverse butterfly at len {len}"
+            assert_eq!(covered, want, "forward butterfly at len {len}");
+            assert!(walls_intact(&lo, 0, len), "forward overran lo at len {len}");
+            assert!(walls_intact(&hi, 0, len), "forward overran hi at len {len}");
+
+            let covered = super::wide::butterfly_inverse(
+                payload_mut(&mut lo, 0, len),
+                payload_mut(&mut hi, 0, len),
+                3,
             );
+            assert_eq!(covered, want, "inverse butterfly at len {len}");
+            assert!(walls_intact(&lo, 0, len), "inverse overran lo at len {len}");
+            assert!(walls_intact(&hi, 0, len), "inverse overran hi at len {len}");
         }
     }
 

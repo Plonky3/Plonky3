@@ -65,7 +65,8 @@ jobs:
             parallel: true
           # VPCLMULQDQ, the 256- and 512-bit carryless multiply, arrived with Ice Lake and
           # Zen 3. GitHub's runner pool still includes older parts, so these legs compile the
-          # wide carryless-multiply paths rather than running them.
+          # wide carryless-multiply paths rather than running them. The 256-bit half of that
+          # is executed under emulation by the job named below the matrix.
           - os: ubuntu-latest
             features: "+avx2,+vpclmulqdq"
             compile_only: true
@@ -225,6 +226,44 @@ jobs:
         run: python3 scripts/check.py wasm --step bench --run-target ${{ env.run_target }}
       - name: Run wasm_merkle_bench under wasmtime
         run: python3 scripts/check.py wasm --step merkle --run-target ${{ env.run_target }}
+
+  check_x86_emulated:
+    name: Test x86 vpclmulqdq (emulated)
+    runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+    env:
+      # Naming the host triple keeps the pinned instructions off build scripts and proc
+      # macros, which the runner executes natively and may not be able to decode.
+      target: x86_64-unknown-linux-gnu
+      # QEMU's translator implements the 256-bit carryless multiply, so this leg executes
+      # the two-lane packed backend that the compile-only legs merely build.
+      #
+      # It implements no AVX-512, so the four-lane backend still needs real silicon.
+      features: "+avx2,+vpclmulqdq"
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: qemu-x86_64 -cpu max
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Install the user-mode emulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user
+
+      # One crate, because it is the only one whose kernels are gated on this feature pair.
+      - name: Test p3-binary-field under emulation
+        run: |
+          python3 scripts/check.py test \
+            --package p3-binary-field \
+            --target ${{ env.target }} \
+            --target-feature=${{ env.features }}
 
   lint:
     name: Formatting and Clippy
