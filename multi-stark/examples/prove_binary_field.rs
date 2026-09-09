@@ -13,8 +13,8 @@ use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::{
-    MultiStarkProof, ProverInstance, ProverInstances, VerifierInstance, VerifierInstances, prove,
-    setup, verify,
+    MultiStarkProof, ProverInstance, ProverInstances, VerifierInstance, VerifierInstances,
+    prove_with_security, setup, verify_with_security,
 };
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
@@ -43,6 +43,11 @@ impl MultiStarkConfig for Config {
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
+    }
+
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        // Keccak-256 is shared by the transcript and Merkle tree.
+        Some(128)
     }
 
     fn min_num_variables(&self) -> usize {
@@ -155,7 +160,7 @@ fn main() {
     let (table, public) = trace(log_height);
     let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
 
-    let proof = prove(
+    let proof = prove_with_security(
         &config,
         ProverInstances::new(vec![ProverInstance::new(
             &RecurrenceAir,
@@ -164,12 +169,14 @@ fn main() {
             &public,
         )]),
         0,
+        100,
         &mut challenger(),
-    );
+    )
+    .expect("binary AIR proof must meet the 100-bit composed target");
     let bytes = postcard::to_allocvec(&proof).unwrap();
     let proof: MultiStarkProof<Config> = postcard::from_bytes(&bytes).unwrap();
 
-    verify(
+    verify_with_security(
         &config,
         VerifierInstances::new(vec![VerifierInstance::new(
             &RecurrenceAir,
@@ -179,6 +186,7 @@ fn main() {
         )]),
         &proof,
         0,
+        100,
         &mut challenger(),
     )
     .expect("binary AIR proof must verify");
@@ -194,7 +202,7 @@ mod tests {
     use p3_binary_pcs::{BinaryPcsError, BinaryPcsProof};
     use p3_field::PrimeCharacteristicRing;
     use p3_multi_stark::config::PcsError;
-    use p3_multi_stark::{VerificationError, VerifyingKey};
+    use p3_multi_stark::{VerificationError, VerifyingKey, prove, verify};
 
     use super::*;
 
@@ -262,18 +270,47 @@ mod tests {
     }
 
     #[test]
-    fn security_preserves_large_base_fields_but_requires_pcs_evidence() {
+    fn security_certifies_binary_pcs_and_rejects_an_excessive_target() {
+        for log_height in [1, 4, 18] {
+            let config = config(log_height);
+            let (_, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
+            let public = [F::ZERO; 3];
+            let instances = VerifierInstances::new(vec![VerifierInstance::new(
+                &RecurrenceAir,
+                &vk,
+                log_height,
+                &public,
+            )]);
+            let report = p3_multi_stark::security_report(&config, &instances).unwrap();
+            assert!(report.unassessed_components().is_empty());
+            report.require_security(100).unwrap();
+            assert!(report.require_security(128).is_err());
+        }
         let config = config(4);
-        let (_, public) = trace(4);
-        let (_, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
-        let instances =
-            VerifierInstances::new(vec![VerifierInstance::new(&RecurrenceAir, &vk, 4, &public)]);
-        let report = p3_multi_stark::security_report(&config, &instances).unwrap();
-        // GF(2^128) needs no extension to give high-security AIR challenges.
-        assert!(report.terms().iter().all(|term| term.bits.bits() >= 120.0));
-        // BinaryPcs has not supplied a full prescribed-opening assessment.
-        assert!(report.unassessed_components().contains(&"main-pcs"));
-        assert!(report.require_security(100).is_err());
+        let (table, public) = trace(4);
+        let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
+        let proof = prove_with_security(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &RecurrenceAir,
+                table,
+                &pk,
+                &public,
+            )]),
+            0,
+            100,
+            &mut challenger(),
+        )
+        .unwrap();
+        verify_with_security(
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(&RecurrenceAir, &vk, 4, &public)]),
+            &proof,
+            0,
+            100,
+            &mut challenger(),
+        )
+        .unwrap();
     }
 
     #[test]
