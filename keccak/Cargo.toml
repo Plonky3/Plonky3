@@ -19,8 +19,11 @@ tiny-keccak = { workspace = true, features = ["keccak"] }
 p3-field = { path = "../field" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 
-criterion.workspace = true
 proptest.workspace = true
+
+# Criterion pulls Rayon transitively, which does not build for WASI.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion.workspace = true
 
 [[bench]]
 name = "bench_keccak"
