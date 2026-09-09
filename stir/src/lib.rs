@@ -58,6 +58,7 @@ mod batch_transcript;
 pub mod config;
 pub mod error;
 pub mod pcs;
+mod pcs_budget;
 pub mod proof;
 pub mod prover;
 mod soundness;

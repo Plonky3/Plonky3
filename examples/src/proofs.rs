@@ -29,6 +29,9 @@ use crate::types::{
     Poseidon2StarkConfig, StirKeccakStarkConfig, StirPoseidon2StarkConfig,
 };
 
+/// PCS batching grind used by the STIR examples.
+const STIR_BATCH_POW_BITS: usize = 16;
+
 /// Result type for Keccak-based two-adic proofs
 type KeccakTwoAdicResult<F, EF, DFT> =
     Result<(), VerificationError<PcsError<KeccakStarkConfig<F, EF, DFT>>>>;
@@ -231,7 +234,8 @@ where
 
     let trace = proof_goal.generate_trace_rows(num_hashes, stir_params.log_blowup);
 
-    let pcs = TwoAdicStirPcs::new(dft, val_mmcs, stir_params);
+    let pcs = TwoAdicStirPcs::new(dft, val_mmcs, stir_params)
+        .with_batch_proof_of_work_bits(STIR_BATCH_POW_BITS);
     let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
     let config = StirKeccakStarkConfig::new(pcs, challenger);
@@ -286,7 +290,8 @@ where
 
     let trace = proof_goal.generate_trace_rows(num_hashes, stir_params.log_blowup);
 
-    let pcs = TwoAdicStirPcs::new(dft, val_mmcs, stir_params);
+    let pcs = TwoAdicStirPcs::new(dft, val_mmcs, stir_params)
+        .with_batch_proof_of_work_bits(STIR_BATCH_POW_BITS);
     let challenger = DuplexChallenger::new(perm24);
 
     let config = StirPoseidon2StarkConfig::new(pcs, challenger);
@@ -472,7 +477,8 @@ where
 pub fn report_stir_security_level(security_level: usize, max_pow_bits: usize) {
     println!(
         "STIR low-degree test configured to target {security_level} bits of conjectured \
-         security ({max_pow_bits} bits of grinding budget); this excludes the STARK-level \
+         security ({max_pow_bits} bits of per-round grinding budget, \
+         {STIR_BATCH_POW_BITS} batching grind bits); this excludes the STARK-level \
          (DEEP-ALI/batching) terms `--pcs fri` reports separately"
     );
 }

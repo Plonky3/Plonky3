@@ -9,6 +9,7 @@ use p3_field::{ExtensionField, TwoAdicField};
 use thiserror::Error;
 
 use crate::SecurityAssumption;
+use crate::pcs_budget::PcsBatch;
 use crate::soundness::{StirSoundness, initial_batching_error, minimum_eta_for_target};
 
 /// Extra requirement round 0's `eta` must additionally satisfy so that the
@@ -29,8 +30,8 @@ struct CombineRequirement {
 /// # Combine feasibility envelope
 ///
 /// [`StirConfig::new`] is feasible over a wide range of these parameters, but
-/// [`StirConfig::new_with_combine`] — the §7 Construction 7.2 path the PCS takes when one
-/// commitment holds matrices of more than one native height — is not. Merging classes of total
+/// [`StirConfig::new_with_combine`] — unground §7 Construction 7.2 degree correction —
+/// is not. Merging classes of total
 /// multiplicity `ell` into a degree-`d* = 2^log_d_star` codeword costs roughly `2·log_d_star`
 /// bits of challenge field, because the `dᵢ` are distinct powers of two and so every degree gap
 /// is within a factor of two of `d*` however tight the height spread is.
@@ -50,6 +51,9 @@ struct CombineRequirement {
 /// the same shape.
 /// Outside the envelope, derivation reports the shortfall rather than silently weakening the
 /// parameters; callers that need wider height spreads should commit the outliers separately.
+/// The PCS derives a separate joint alpha/Combine budget and credits its configured
+/// batching grind there. Its grouping feasibility and field-size margin therefore
+/// differ from this standalone, unground Combine envelope.
 #[derive(Clone, Debug)]
 pub struct StirParameters<M> {
     /// Log₂ of the inverse rate of the initial Reed-Solomon code.
@@ -290,6 +294,19 @@ pub enum StirConfigError {
         class_log_degree: usize,
         log_starting_degree: usize,
     },
+
+    /// PCS classes must be distinct descending native heights, topped at the
+    /// enforced STIR degree, with a nonzero number of quotient contributions.
+    #[error("invalid PCS native-height classes or opening multiplicities")]
+    InvalidPcsBatch,
+
+    /// The number of alpha powers must fit the counter used by both transcripts.
+    #[error("PCS opening-batching multiplicity overflow")]
+    PcsBatchMultiplicityOverflow,
+
+    /// The PCS cannot enforce this difficulty with its base-field witness.
+    #[error("invalid PCS batch grinding difficulty {bits}")]
+    InvalidPcsBatchPowBits { bits: usize },
     /// The folding arities cannot reach the requested final coefficient bound.
     #[error(
         "requested final polynomial log length {max_log_final_poly_len} is below the minimum reachable {min_log_final_poly_len}"
@@ -514,7 +531,7 @@ where
         params: StirParameters<M>,
         options: StirOptions,
     ) -> Result<Self, StirConfigError> {
-        Self::try_new_with_optional_combine(log_starting_degree, params, None, options, &[])
+        Self::try_new_with_optional_combine(log_starting_degree, params, None, None, options, &[])
     }
 
     /// Panicking form of [`Self::try_new_with_options`].
@@ -587,6 +604,7 @@ where
             log_starting_degree,
             params,
             Some(CombineRequirement { num_classes, ell }),
+            None,
             options,
             &[],
         )
@@ -618,6 +636,7 @@ where
             log_starting_degree,
             params,
             combine.map(|(num_classes, ell)| CombineRequirement { num_classes, ell }),
+            None,
             options,
             quotient_batches,
         )
@@ -663,10 +682,34 @@ where
         .unwrap_or_else(|e| panic!("{e}"))
     }
 
+    /// PCS-only derivation: the caller must enforce this batch grind before alpha
+    /// and all Combine challenges, and supply the actual pooled opening multiplicities.
+    pub(crate) fn try_new_with_pcs_batch(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        batch: PcsBatch<'_>,
+        options: StirOptions,
+    ) -> Result<Self, StirConfigError> {
+        if batch.pow_bits >= F::bits().min(usize::BITS as usize) {
+            return Err(StirConfigError::InvalidPcsBatchPowBits {
+                bits: batch.pow_bits,
+            });
+        }
+        Self::try_new_with_optional_combine(
+            log_starting_degree,
+            params,
+            None,
+            Some(batch),
+            options,
+            &[],
+        )
+    }
+
     fn try_new_with_optional_combine(
         log_starting_degree: usize,
         params: StirParameters<M>,
         combine: Option<CombineRequirement>,
+        pcs_batch: Option<PcsBatch<'_>>,
         options: StirOptions,
         quotient_batches: &[(usize, usize)],
     ) -> Result<Self, StirConfigError> {
@@ -730,7 +773,12 @@ where
             });
         }
 
-        let field_size_bits = EF::bits();
+        let field_size_bits = if let Some(batch) = pcs_batch {
+            batch.validate(log_starting_degree)?;
+            crate::pcs_budget::field_bits::<EF>(params.soundness_type)
+        } else {
+            EF::bits()
+        };
         let log_blowup = params.log_blowup;
         let log_folding_factor = params.log_folding_factor;
         let log_starting_folding_factor = params.log_starting_folding_factor;
@@ -769,14 +817,20 @@ where
         // intermediate rounds has six independent terms (query tier: query
         // failure, OOD, random-combination, Ans-check; folding tier: proximity-gaps,
         // sumcheck); the final stage has three (folding tier + final query failure); a
-        // `Combine` bucket adds one more (Theorem 7.1's `ε_com` term, §4.5), and
-        // PCS quotient batching adds its per-class probability sum as one term.
-        // The buffer applies to every per-event term. OOD, Ans-check, Combine and batching must
-        // reach the buffered target algebraically because the query-phase grind does not
-        // protect them.
+        // `Combine` bucket adds one more (Theorem 7.1's `ε_com` term, §4.5).
+        // For a PCS schedule this slot holds the summed alpha/Combine block instead.
+        // OOD and Ans-check remain unground; standalone Combine is also unground.
+        // Only a PCS-owned requirement may credit its earlier batch grinding site.
         const TERMS_PER_INTERMEDIATE_ROUND: usize = 6;
         const FINAL_STAGE_TERMS: usize = 3;
-        let combine_term = usize::from(combine.is_some_and(|c| c.num_classes >= 2));
+        // The PCS charges alpha and Combine together in one slot, using their
+        // summed error. A singleton bucket still needs the slot when alpha batches
+        // multiple openings. Standalone STIR receives no PCS grinding credit.
+        let combine_term = usize::from(
+            combine.is_some_and(|c| c.num_classes >= 2)
+                || pcs_batch.is_some_and(|batch| batch.has_error()),
+        );
+        // The public unground batching constructor keeps its separate alpha budget.
         let batching_term = usize::from(quotient_batches.iter().any(|&(_, count)| count > 1));
         let num_alg_terms = TERMS_PER_INTERMEDIATE_ROUND * (total_folds - 1)
             + FINAL_STAGE_TERMS
@@ -836,6 +890,13 @@ where
             params
                 .soundness_type
                 .stir_queries_for_base(pow_target_bits, failure_base)
+        };
+        let pcs_eta_floor = |log_inv_rate| {
+            if pcs_batch.is_some() {
+                crate::pcs_budget::minimum_eta(params.soundness_type, log_inv_rate)
+            } else {
+                0.
+            }
         };
         let validate_eta =
             |round: usize, stage_log_inv_rate: usize, eta: f64| -> Result<(), StirConfigError> {
@@ -904,7 +965,7 @@ where
             )?;
             final_eta = final_eta.max(batching_eta);
         }
-        // Combine (§4.5) is not PoW-eligible (it runs once, before the query phase's
+        // Standalone Combine (§4.5) is not PoW-eligible (it runs once, before the query phase's
         // grind), so — like OOD and Ans-check — it must reach the full buffered target
         // on its own. Evaluated at `log_degree`/`log_inv_rate` as they stand here: round
         // 0's own starting degree and rate, matching what Combine merges at (immediately
@@ -941,6 +1002,16 @@ where
             }
             final_eta = final_eta.max(combine_eta);
         }
+        if let Some(batch) = pcs_batch {
+            final_eta = final_eta.max(batch.eta(
+                params.soundness_type,
+                field_size_bits,
+                log_degree,
+                log_inv_rate,
+                buffered_security_level,
+            )?);
+        }
+        final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
         validate_eta(0, log_inv_rate, final_eta)?;
 
         // Round 0 reuses the `stir_initial_eta` already computed above; every subsequent
@@ -964,6 +1035,7 @@ where
                     field_size_bits,
                     prev_queries,
                 )?;
+                final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
                 validate_eta(round, log_inv_rate, final_eta)?;
             }
 
@@ -1035,6 +1107,7 @@ where
                 field_size_bits,
                 prev_queries,
             )?;
+            final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
             validate_eta(num_rounds, log_inv_rate, final_eta)?;
         }
         let final_queries = query_count(log_inv_rate, final_eta)?;
@@ -1058,7 +1131,9 @@ where
 
         Ok(Self {
             options,
-            quotient_batches: quotient_batches.to_vec(),
+            quotient_batches: pcs_batch
+                .map_or(quotient_batches, |batch| batch.classes)
+                .to_vec(),
             log_starting_degree,
             soundness_type: params.soundness_type,
             security_level: params.security_level,

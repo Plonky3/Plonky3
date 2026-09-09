@@ -295,6 +295,27 @@ pub enum StirError<MmcsError, InputError = ()> {
     #[error("commitment {commitment}, matrix {matrix}: opened at zero points")]
     MatrixWithoutOpeningPoints { commitment: usize, matrix: usize },
 
+    /// Every opening of a matrix must claim the same nonzero number of columns.
+    #[error(
+        "commitment {commitment}, matrix {matrix}, point {point}: inconsistent or zero opening width"
+    )]
+    InvalidOpeningWidth {
+        commitment: usize,
+        matrix: usize,
+        point: usize,
+    },
+
+    /// The PCS quotient/extraction argument requires every opening outside its
+    /// matrix's shared LDE coset, including points which queries did not sample.
+    #[error(
+        "commitment {commitment}, matrix {matrix}, point {point}: opening point lies in its shared LDE domain"
+    )]
+    OpeningPointInDomain {
+        commitment: usize,
+        matrix: usize,
+        point: usize,
+    },
+
     /// A claimed opening point coincides with a queried fiber lane.
     ///
     /// The quotient `(f(z) - f(x)) / (z - x)` is undefined there.
@@ -345,6 +366,24 @@ impl<E, IE> StirError<E, IE> {
             Self::MatrixWithoutOpeningPoints { commitment, matrix } => {
                 StirError::MatrixWithoutOpeningPoints { commitment, matrix }
             }
+            Self::InvalidOpeningWidth {
+                commitment,
+                matrix,
+                point,
+            } => StirError::InvalidOpeningWidth {
+                commitment,
+                matrix,
+                point,
+            },
+            Self::OpeningPointInDomain {
+                commitment,
+                matrix,
+                point,
+            } => StirError::OpeningPointInDomain {
+                commitment,
+                matrix,
+                point,
+            },
             Self::OpeningPointMatchesQueryPoint {
                 commitment,
                 matrix,

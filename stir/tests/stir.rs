@@ -3406,7 +3406,7 @@ mod babybear_pcs {
         assert!(
             matches!(
                 err,
-                StirError::OpeningPointMatchesQueryPoint {
+                StirError::OpeningPointInDomain {
                     commitment: 0,
                     matrix: 0,
                     point: 0,
