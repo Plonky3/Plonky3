@@ -307,7 +307,7 @@ where
                      points: points_for_mats,
                  }| {
                     let mats = self.mmcs.get_matrices(data);
-                    debug_assert_eq!(
+                    assert_eq!(
                         mats.len(),
                         points_for_mats.len(),
                         "Mismatched number of matrices and points"
@@ -1317,6 +1317,32 @@ mod tests {
         );
 
         (pcs, byte_hash, comm, d, zeta, values, proof)
+    }
+
+    fn open_with_mismatched_point_count(matrix_count: usize, point_count: usize) {
+        let (pcs, byte_hash, _, d, zeta, _, _) = setup_valid_proof_at(0, 0, 0);
+        let matrices =
+            (0..matrix_count).map(|_| (d, RowMajorMatrix::new(vec![Val::ONE; d.size()], 1)));
+        let (_, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, matrices);
+        pcs.open(
+            vec![OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]; point_count],
+            }],
+            &mut Challenger::from_hasher(vec![], byte_hash),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Mismatched number of matrices and points")]
+    fn open_rejects_too_few_point_lists() {
+        open_with_mismatched_point_count(2, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Mismatched number of matrices and points")]
+    fn open_rejects_too_many_point_lists() {
+        open_with_mismatched_point_count(1, 2);
     }
 
     /// Run the PCS verifier with the given proof and return the result.
