@@ -3008,13 +3008,19 @@ mod babybear_pcs {
             &mut p_ch,
         );
 
+        // The honest row count is a property of the drawn query set, which every
+        // transcript change moves. Read it off the proof rather than pinning it, so
+        // the assertion below stays exact without hand-edited constants.
+        let mut honest_rows = None;
         for (_stir_proof, input_openings) in proof.buckets.iter_mut() {
             let opening = input_openings[0]
                 .as_mut()
                 .expect("single commitment must have a present opening");
             assert!(!opening.opened_values.is_empty());
+            honest_rows = Some(opening.opened_values.len());
             opening.opened_values.pop();
         }
+        let honest_rows = honest_rows.expect("the proof carries at least one bucket");
 
         let mut v_ch = challenger_template;
         observe_commitment(&mut v_ch, &commit);
@@ -3035,8 +3041,8 @@ mod babybear_pcs {
             ProofShapeError::InputOpenedRowCount {
                 log_height: log_d + 1,
                 commitment: 0,
-                expected: 19,
-                got: 18,
+                expected: honest_rows,
+                got: honest_rows - 1,
             }
         );
     }

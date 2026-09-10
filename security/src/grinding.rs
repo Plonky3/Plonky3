@@ -264,6 +264,7 @@ pub struct GrindingStep {
 /// | `p3-batch-stark` | `ood_pow`    | out-of-domain     | always              |
 /// | `p3-batch-stark` | `lookup_pow` | lookup-challenge  | when the phase runs |
 /// | `p3-fri-pcs`     | `batch_pow`  | batch-combination | elided              |
+/// | `p3-stir-pcs-batch` | `batch_pow` | batch-combination | elided           |
 /// | `p3-fri`         | `commit_pow` | ldt-commit-phase  | elided              |
 /// | `p3-fri`         | `query_pow`  | ldt-query-phase   | elided              |
 ///
@@ -279,7 +280,7 @@ pub struct GrindingStep {
 /// | `p3-sumcheck-generic-degree` | `round_pow`                                                  |
 ///
 /// None of them declares its sites in bits, so no check can read the credited difficulty back out.
-pub const GRINDING_VOCABULARY: [GrindingStep; 6] = [
+pub const GRINDING_VOCABULARY: [GrindingStep; 7] = [
     GrindingStep {
         protocol: "p3-uni-stark",
         label: "ood_pow",
@@ -300,6 +301,12 @@ pub const GRINDING_VOCABULARY: [GrindingStep; 6] = [
     },
     GrindingStep {
         protocol: "p3-fri-pcs",
+        label: "batch_pow",
+        site: GrindingSite::BatchCombination,
+        zero_bits: ZeroBitConvention::Elided,
+    },
+    GrindingStep {
+        protocol: "p3-stir-pcs-batch",
         label: "batch_pow",
         site: GrindingSite::BatchCombination,
         zero_bits: ZeroBitConvention::Elided,
