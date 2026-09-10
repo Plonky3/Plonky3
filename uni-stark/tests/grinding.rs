@@ -125,7 +125,7 @@ fn ungrounded_config_is_the_default() {
     assert_eq!(config.ood_proof_of_work_bits(), 0);
 
     let trace = generate_square_trace::<Val>(1 << 3);
-    let proof = prove(&config, &SquareAir, trace, &[]);
+    let proof = prove(&config, &SquareAir, trace, &[]).unwrap();
     verify(&config, &SquareAir, &proof, &[]).expect("ungrounded proof verifies");
 }
 
@@ -134,7 +134,7 @@ fn ungrounded_config_is_the_default() {
 fn grinding_at_both_sites_round_trips() {
     let config = make_config(BATCH_POW_BITS, OOD_POW_BITS);
     let trace = generate_square_trace::<Val>(1 << 3);
-    let proof = prove(&config, &SquareAir, trace, &[]);
+    let proof = prove(&config, &SquareAir, trace, &[]).unwrap();
     verify(&config, &SquareAir, &proof, &[]).expect("ground proof verifies");
 }
 
@@ -145,7 +145,7 @@ fn grinding_at_both_sites_round_trips() {
 fn tampered_ood_pow_witness_is_rejected() {
     let config = make_config(0, OOD_POW_BITS);
     let trace = generate_square_trace::<Val>(1 << 3);
-    let mut proof = prove(&config, &SquareAir, trace, &[]);
+    let mut proof = prove(&config, &SquareAir, trace, &[]).unwrap();
     proof.ood_pow_witness += Val::ONE;
 
     match verify(&config, &SquareAir, &proof, &[]) {
@@ -164,7 +164,7 @@ fn a_noncanonical_ood_pow_witness_at_zero_difficulty_is_rejected() {
     // Left unbound, a third party rewrites the field and keeps a verifying proof.
     let config = make_config(0, 0);
     let trace = generate_square_trace::<Val>(1 << 3);
-    let mut proof = prove(&config, &SquareAir, trace, &[]);
+    let mut proof = prove(&config, &SquareAir, trace, &[]).unwrap();
 
     // The honest prover writes zero when it pays no work, so zero is canonical.
     assert_eq!(proof.ood_pow_witness, Val::ZERO);
@@ -187,7 +187,7 @@ fn a_noncanonical_ood_pow_witness_at_zero_difficulty_is_rejected() {
 fn ood_pow_difficulty_mismatch_is_rejected() {
     let prover_config = make_config(0, 0);
     let trace = generate_square_trace::<Val>(1 << 3);
-    let proof = prove(&prover_config, &SquareAir, trace, &[]);
+    let proof = prove(&prover_config, &SquareAir, trace, &[]).unwrap();
 
     let verifier_config = make_config(0, 24);
     match verify(&verifier_config, &SquareAir, &proof, &[]) {
@@ -202,7 +202,7 @@ fn ood_pow_difficulty_mismatch_is_rejected() {
 fn batch_pow_difficulty_mismatch_is_rejected() {
     let prover_config = make_config(0, 0);
     let trace = generate_square_trace::<Val>(1 << 3);
-    let proof = prove(&prover_config, &SquareAir, trace, &[]);
+    let proof = prove(&prover_config, &SquareAir, trace, &[]).unwrap();
 
     let verifier_config = make_config(24, 0);
     match verify(&verifier_config, &SquareAir, &proof, &[]) {

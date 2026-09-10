@@ -95,7 +95,7 @@ fn bench_commit(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(name), &inputs, |b, inputs| {
             b.iter_batched(
                 || inputs.clone(),
-                |inputs| <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, inputs),
+                |inputs| <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, inputs).unwrap(),
                 BatchSize::LargeInput,
             );
         });
@@ -110,7 +110,7 @@ fn bench_open(c: &mut Criterion) {
     for &(name, log_degrees) in LAYOUTS {
         let inputs = make_inputs(&pcs, log_degrees);
         let (commit, data) =
-            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, inputs.iter().cloned());
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, inputs.iter().cloned()).unwrap();
         let mut base = challenger.clone();
         commit.iter().for_each(|root| base.observe(root.clone()));
         let zeta: Challenge = base.sample_algebra_element();
@@ -134,6 +134,7 @@ fn bench_open(c: &mut Criterion) {
                         }],
                         &mut challenger,
                     )
+                    .unwrap()
                 },
                 BatchSize::LargeInput,
             );
@@ -149,7 +150,7 @@ fn bench_verify(c: &mut Criterion) {
     for &(name, log_degrees) in LAYOUTS {
         let inputs = make_inputs(&pcs, log_degrees);
         let (commit, data) =
-            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, inputs.iter().cloned());
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, inputs.iter().cloned()).unwrap();
         let mut p_challenger = challenger.clone();
         commit
             .iter()
@@ -163,7 +164,8 @@ fn bench_verify(c: &mut Criterion) {
                 points,
             }],
             &mut p_challenger,
-        );
+        )
+        .unwrap();
 
         let claims: Vec<_> = inputs
             .iter()

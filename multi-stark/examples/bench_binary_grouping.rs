@@ -157,7 +157,7 @@ where
 {
     let config = config(log_height, mmcs, log_folding_factor);
     let (table, public) = trace(log_height);
-    let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger(seed));
+    let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger(seed)).unwrap();
     let start = Instant::now();
     let proof = prove(
         &config,
@@ -169,7 +169,8 @@ where
         )]),
         0,
         &mut challenger(seed),
-    );
+    )
+    .unwrap();
     let prove_ms = start.elapsed().as_secs_f64() * 1000.0;
     let bytes = postcard::to_allocvec(&proof).unwrap();
     let proof: MultiStarkProof<Config<M>> = postcard::from_bytes(&bytes).unwrap();

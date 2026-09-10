@@ -61,7 +61,10 @@ pub fn assert_pcs_opening_contract<P, Challenge, Challenger>(
 
     let (commitments, prover_data): (Vec<_>, Vec<_>) = rounds
         .iter()
-        .map(|round| pcs.commit(round.iter().cloned()))
+        .map(|round| {
+            pcs.commit(round.iter().cloned())
+                .expect("test commitment budget")
+        })
         .unzip();
     let mut prover = challenger.clone();
     prover.observe_slice(&commitments);
@@ -97,17 +100,19 @@ pub fn assert_pcs_opening_contract<P, Challenge, Challenger>(
                 .collect()
         })
         .collect();
-    let (opened, proof) = pcs.open(
-        prover_data
-            .iter()
-            .zip(opening_points.clone())
-            .map(|(prover_data, points)| OpeningRequest {
-                prover_data,
-                points,
-            })
-            .collect(),
-        &mut prover,
-    );
+    let (opened, proof) = pcs
+        .open(
+            prover_data
+                .iter()
+                .zip(opening_points.clone())
+                .map(|(prover_data, points)| OpeningRequest {
+                    prover_data,
+                    points,
+                })
+                .collect(),
+            &mut prover,
+        )
+        .expect("test opening budget");
     assert_eq!(opened.len(), rounds.len(), "commitment opening count");
 
     let claims: Vec<_> = commitments

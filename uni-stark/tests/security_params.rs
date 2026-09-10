@@ -91,7 +91,7 @@ fn opening_count_matches_proof_with_overestimated_degree_hint() {
     );
     let pcs = TwoAdicFriPcs::new(Dft::default(), mmcs, fri);
     let config = StarkConfig::<_, Challenge, _>::new(pcs, Challenger::new(perm));
-    let proof = prove(&config, &air, trace(), &[]);
+    let proof = prove(&config, &air, trace(), &[]).unwrap();
     verify(&config, &air, &proof, &[]).unwrap();
 
     // The degree-five hint commits four chunks, each four base-field columns wide.
@@ -124,7 +124,7 @@ fn opening_count_matches_hiding_proof() {
     );
     let pcs = HidingFriPcs::new(Dft::default(), mmcs, fri, 4, StdRng::seed_from_u64(43));
     let config = StarkConfig::<_, Challenge, _>::new(pcs, Challenger::new(perm));
-    let proof = prove(&config, &air, trace(), &[]);
+    let proof = prove(&config, &air, trace(), &[]).unwrap();
     verify(&config, &air, &proof, &[]).unwrap();
 
     let public = proof.opened_values.trace_local.len()
@@ -174,7 +174,7 @@ fn opening_count_matches_circle_batching_degree() {
     let pcs = CirclePcs::<F, _, _>::new(mmcs, fri);
     let config = StarkConfig::<_, QM31, _>::new(pcs, DuplexChallenger::<F, _, 16, 8>::new(perm));
     let trace = RowMajorMatrix::new(vec![F::ONE; 32], 2);
-    let proof = prove(&config, &air, trace, &[]);
+    let proof = prove(&config, &air, trace, &[]).unwrap();
     verify(&config, &air, &proof, &[]).unwrap();
 
     let columns = proof.opened_values.trace_local.len()
@@ -237,7 +237,8 @@ fn circle_transition_cubic_security_counts_all_committed_quotient_chunks() {
         &air,
         RowMajorMatrix::new(vec![F::ZERO; 16], 1),
         &[],
-    );
+    )
+    .unwrap();
     verify(&config, &air, &proof, &[]).unwrap();
     assert_eq!(proof.opened_values.quotient_chunks.len(), 4);
     assert_eq!(

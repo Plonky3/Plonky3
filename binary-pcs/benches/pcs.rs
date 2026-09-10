@@ -82,7 +82,7 @@ fn bench_commit(c: &mut Criterion) {
             |b, &num_variables| {
                 b.iter_batched(
                     || (make_witness(num_variables, 0), challenger()),
-                    |(witness, mut ch)| pcs.commit(witness, &mut ch),
+                    |(witness, mut ch)| pcs.commit(witness, &mut ch).unwrap(),
                     BatchSize::PerIteration,
                 );
             },
@@ -105,10 +105,12 @@ fn bench_open(c: &mut Criterion) {
                     || {
                         let witness = make_witness(num_variables, 1);
                         let mut ch = challenger();
-                        let (_commitment, prover_data) = pcs.commit(witness, &mut ch);
+                        let (_commitment, prover_data) = pcs.commit(witness, &mut ch).unwrap();
                         (prover_data, protocol.clone(), ch)
                     },
-                    |(prover_data, protocol, mut ch)| pcs.open(prover_data, protocol, &mut ch),
+                    |(prover_data, protocol, mut ch)| {
+                        pcs.open(prover_data, protocol, &mut ch).unwrap()
+                    },
                     BatchSize::PerIteration,
                 );
             },
@@ -126,8 +128,10 @@ fn bench_verify(c: &mut Criterion) {
         let witness = make_witness(num_variables, 2);
 
         let mut prover_challenger = challenger();
-        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-        let proof = pcs.open(prover_data, protocol.clone(), &mut prover_challenger);
+        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+        let proof = pcs
+            .open(prover_data, protocol.clone(), &mut prover_challenger)
+            .unwrap();
 
         let proof_bytes = postcard::to_allocvec(&proof).unwrap().len();
         eprintln!("pcs/proof_size/{num_variables}: {proof_bytes} bytes");

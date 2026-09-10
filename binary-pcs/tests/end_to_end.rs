@@ -54,8 +54,8 @@ fn opening_claims_must_fit_the_security_budget() {
         mmcs(),
     );
     let mut ch = challenger();
-    let (root, data) = prover.commit(witness, &mut ch);
-    let proof = prover.open(data, protocol.clone(), &mut ch);
+    let (root, data) = prover.commit(witness, &mut ch).unwrap();
+    let proof = prover.open(data, protocol.clone(), &mut ch).unwrap();
     assert!(
         verifier
             .verify(&root, &proof, &mut challenger(), protocol)
@@ -115,7 +115,7 @@ fn claim_boundaries_cover_successors_and_both_opening_modes() {
                 let prover = BinaryPcs::new(low, mmcs());
                 let verifier = BinaryPcs::new(high, mmcs());
                 let mut pc = challenger();
-                let (root, data) = prover.commit(witness, &mut pc);
+                let (root, data) = prover.commit(witness, &mut pc).unwrap();
                 let mut vc = challenger();
                 let mut guarded_ch = pc.clone();
                 let result = if prescribed {
@@ -198,7 +198,7 @@ fn invalid_protocols_and_points_fail_before_transcript_changes() {
         mmcs(),
     );
     let mut ch = challenger();
-    let (_, data) = pcs.commit(witness, &mut ch);
+    let (_, data) = pcs.commit(witness, &mut ch).unwrap();
     let bad = OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(5, 1),
         vec![OpeningBatch::new(vec![0], vec![])],
@@ -267,8 +267,8 @@ fn batched_folding_commits_only_batch_boundaries_and_verifies() {
             vec![OpeningBatch::new(vec![0], vec![0])],
         )]);
         let mut ch = challenger();
-        let (root, data) = pcs.commit(witness, &mut ch);
-        let proof = pcs.open(data, protocol.clone(), &mut ch);
+        let (root, data) = pcs.commit(witness, &mut ch).unwrap();
+        let proof = pcs.open(data, protocol.clone(), &mut ch).unwrap();
         assert_eq!(proof.rounds.len(), expected_roots);
         assert_eq!(proof.sumcheck.num_rounds(), num_variables);
         let bytes = postcard::to_allocvec(&proof).unwrap();
@@ -365,8 +365,10 @@ fn run_lifecycle(
     let pcs = BinaryPcs::new(config, mmcs());
 
     let mut prover_challenger = challenger();
-    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-    let proof = pcs.open(prover_data, protocol.clone(), &mut prover_challenger);
+    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+    let proof = pcs
+        .open(prover_data, protocol.clone(), &mut prover_challenger)
+        .unwrap();
 
     (pcs, commitment, proof, protocol)
 }
@@ -573,8 +575,10 @@ fn a_proof_checked_against_a_different_protocol_is_rejected() {
     let pcs: MyPcs = BinaryPcs::new(config, mmcs());
 
     let mut prover_challenger = challenger();
-    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-    let proof = pcs.open(prover_data, protocol_a, &mut prover_challenger);
+    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+    let proof = pcs
+        .open(prover_data, protocol_a, &mut prover_challenger)
+        .unwrap();
 
     let mut verifier_challenger = challenger();
     let err = pcs
@@ -598,7 +602,8 @@ fn a_proof_checked_against_a_different_commitment_is_rejected() {
     let other_table = Table::rand(&mut rng, 1, NUM_VARIABLES);
     let other_witness = SuffixProver::<F, F>::new_witness(vec![other_table], 0);
     let mut other_challenger = challenger();
-    let (other_commitment, _other_prover_data) = pcs.commit(other_witness, &mut other_challenger);
+    let (other_commitment, _other_prover_data) =
+        pcs.commit(other_witness, &mut other_challenger).unwrap();
 
     let mut verifier_challenger = challenger();
     let err = pcs
@@ -764,8 +769,10 @@ fn zero_claim_lifecycle(
     let pcs = BinaryPcs::new(config, mmcs());
 
     let mut prover_challenger = challenger();
-    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-    let proof = pcs.open(prover_data, protocol.clone(), &mut prover_challenger);
+    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+    let proof = pcs
+        .open(prover_data, protocol.clone(), &mut prover_challenger)
+        .unwrap();
 
     (pcs, commitment, proof, protocol)
 }

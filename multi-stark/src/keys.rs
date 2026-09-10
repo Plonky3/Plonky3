@@ -61,11 +61,12 @@ pub struct VerifyingKey<C: MultiStarkConfig> {
 /// # Panics
 ///
 /// Panics if an AIR declares preprocessed columns but does not return a preprocessed trace.
+#[allow(clippy::type_complexity)]
 pub fn setup<C, A>(
     config: &C,
     airs: &[&A],
     challenger: &mut C::Challenger,
-) -> (ProvingKey<C>, VerifyingKey<C>)
+) -> Result<(ProvingKey<C>, VerifyingKey<C>), crate::ProvingError<crate::config::PcsProverError<C>>>
 where
     C: MultiStarkConfig,
     A: BaseAir<C::Val>,
@@ -82,15 +83,21 @@ where
     }
 
     if tables.is_empty() {
-        return (
+        return Ok((
             ProvingKey { preprocessed: None },
             VerifyingKey { preprocessed: None },
-        );
+        ));
     }
 
     // Turn traces into one multilinear per column, then commit the stacked tables once.
     let witness = config.build_witness(tables);
-    let (commitment, prover_data) = config.preprocessed_pcs().commit(witness, challenger);
+    let (commitment, prover_data) = config
+        .preprocessed_pcs()
+        .commit(witness, challenger)
+        .map_err(|source| crate::ProvingError::Pcs {
+            phase: "preprocessing commitment",
+            source,
+        })?;
 
     // The prover key keeps committed data to open each proof.
     let proving = ProvingKey {
@@ -103,5 +110,5 @@ where
     let verifying = VerifyingKey {
         preprocessed: Some(commitment),
     };
-    (proving, verifying)
+    Ok((proving, verifying))
 }

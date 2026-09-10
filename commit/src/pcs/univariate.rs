@@ -37,6 +37,9 @@ where
     /// The type of a proof verification error.
     type Error: Debug;
 
+    /// Configuration or budget failure during commitment or opening.
+    type ProverError: Debug;
+
     /// This should return a domain such that `Domain::next_point` returns `Some`.
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
@@ -46,23 +49,27 @@ where
     ///
     /// Returns both the commitment which should be sent to the verifier
     /// and the prover data which can be used to produce opening proofs.
+    /// Configuration and budget failures are returned before consuming private randomness.
     #[allow(clippy::type_complexity)]
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
-    ) -> (Self::Commitment, Self::ProverData);
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError>;
 
     /// Open each requested commitment, matrix and point in caller order.
     ///
     /// Each request must supply one point vector per committed matrix. Columns are
     /// interpreted as polynomials evaluated over the domain supplied to [`Self::commit`].
     /// The returned values retain request, matrix, point and column order.
+    ///
+    /// Configuration and budget rejection leaves the challenger, private randomness,
+    /// and any single-use opening state unchanged. This does not undo earlier successful calls.
     fn open(
         &self,
         // For each multi-matrix commitment,
         commitment_data_with_opening_points: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         fiat_shamir_challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof);
+    ) -> Result<(OpenedValues<Challenge>, Self::Proof), Self::ProverError>;
 
     /// Verify the claimed column evaluations for each commitment, matrix and point.
     ///
@@ -110,7 +117,7 @@ where
     fn commit_preprocessing(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         self.commit(evaluations)
     }
 
@@ -131,7 +138,7 @@ where
         quotient_domain: Self::Domain,
         quotient_evaluations: RowMajorMatrix<Val<Self::Domain>>,
         num_chunks: usize,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         // Given the evaluation vector of `Q_i(x)` over a domain, split it into evaluation vectors
         // of `q_{i0}(x), ...` over subdomains and commit to these `q`'s.
         // TODO: Currently, split_evals involves copying the data to a new matrix.
@@ -145,7 +152,7 @@ where
                 .into_iter()
                 .zip(quotient_sub_evaluations),
             num_chunks,
-        );
+        )?;
         self.commit_ldes(ldes)
     }
 
@@ -154,17 +161,18 @@ where
     ///
     /// This corresponds to the first step of `commit_quotient`. When `zk` is enabled,
     /// this will additionally add randomization.
+    #[allow(clippy::type_complexity)]
     fn get_quotient_ldes(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
         num_chunks: usize,
-    ) -> Vec<RowMajorMatrix<Val<Self::Domain>>>;
+    ) -> Result<Vec<RowMajorMatrix<Val<Self::Domain>>>, Self::ProverError>;
 
     /// Commits to a collection of LDE evaluation matrices.
     fn commit_ldes(
         &self,
         ldes: Vec<RowMajorMatrix<Val<Self::Domain>>>,
-    ) -> (Self::Commitment, Self::ProverData);
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError>;
 
     /// Given prover data corresponding to a commitment to a collection of evaluation matrices,
     /// return the evaluations of those matrices on the given domain.
@@ -201,7 +209,7 @@ where
         commitment_data_with_opening_points: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         fiat_shamir_challenger: &mut Challenger,
         _preprocessed_commitment: Option<usize>,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
+    ) -> Result<(OpenedValues<Challenge>, Self::Proof), Self::ProverError> {
         assert!(
             !Self::ZK,
             "open_with_preprocessing should have a different implementation when ZK is enabled"
@@ -209,11 +217,12 @@ where
         self.open(commitment_data_with_opening_points, fiat_shamir_challenger)
     }
 
+    #[allow(clippy::type_complexity)]
     fn get_opt_randomization_poly_commitment(
         &self,
         _domain: impl IntoIterator<Item = Self::Domain>,
-    ) -> Option<(Self::Commitment, Self::ProverData)> {
-        None
+    ) -> Result<Option<(Self::Commitment, Self::ProverData)>, Self::ProverError> {
+        Ok(None)
     }
 
     /// Build the compact periodic LDE table (height = max_period × blowup, width = num periodic columns).

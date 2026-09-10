@@ -79,29 +79,43 @@ fn example_circle_parameters<EF: Field, M>(mmcs: M) -> FriParameters<M> {
     })
 }
 
+/// Distinguishes a rejected proving budget from a rejected proof.
+#[derive(Debug)]
+pub enum ProofRunError<P: Debug, V: Debug> {
+    /// Proof generation rejected its configuration or opening budget.
+    Prove(P),
+    /// The generated proof failed verification.
+    Verify(V),
+}
+
+type ProofRunResult<SC> = Result<
+    (),
+    ProofRunError<
+        p3_uni_stark::ProvingError<p3_uni_stark::PcsProverError<SC>>,
+        VerificationError<PcsError<SC>>,
+    >,
+>;
+
 /// Result type for Keccak-based two-adic proofs
-type KeccakTwoAdicResult<F, EF, DFT> =
-    Result<(), VerificationError<PcsError<KeccakStarkConfig<F, EF, DFT>>>>;
+type KeccakTwoAdicResult<F, EF, DFT> = ProofRunResult<KeccakStarkConfig<F, EF, DFT>>;
 
 /// Result type for Poseidon2-based two-adic proofs
 type Poseidon2TwoAdicResult<F, EF, DFT, Perm16, Perm24> =
-    Result<(), VerificationError<PcsError<Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>>>;
+    ProofRunResult<Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>;
 
 /// Result type for Keccak-based, STIR-backed two-adic proofs
-type StirKeccakTwoAdicResult<F, EF, DFT> =
-    Result<(), VerificationError<PcsError<StirKeccakStarkConfig<F, EF, DFT>>>>;
+type StirKeccakTwoAdicResult<F, EF, DFT> = ProofRunResult<StirKeccakStarkConfig<F, EF, DFT>>;
 
 /// Result type for Poseidon2-based, STIR-backed two-adic proofs
 type StirPoseidon2TwoAdicResult<F, EF, DFT, Perm16, Perm24> =
-    Result<(), VerificationError<PcsError<StirPoseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>>>;
+    ProofRunResult<StirPoseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>;
 
 /// Result type for Keccak-based circle proofs with Mersenne31
-type KeccakCircleResult =
-    Result<(), VerificationError<PcsError<KeccakCircleStarkConfig<Mersenne31, QM31>>>>;
+type KeccakCircleResult = ProofRunResult<KeccakCircleStarkConfig<Mersenne31, QM31>>;
 
 /// Result type for Poseidon2-based circle proofs
 type Poseidon2CircleResult<F, EF, Perm16, Perm24> =
-    Result<(), VerificationError<PcsError<Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>>>;
+    ProofRunResult<Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>;
 
 /// Produce a MerkleTreeMmcs which uses the KeccakF permutation.
 const fn get_keccak_mmcs<F: Field>(cap_height: usize) -> KeccakMerkleMmcs<F> {
@@ -179,14 +193,14 @@ where
 
     let config = KeccakStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_parameter_security(&proof, &security_params);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree.
@@ -237,14 +251,14 @@ where
 
     let config = Poseidon2StarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_parameter_security(&proof, &security_params);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree, with
@@ -289,14 +303,14 @@ where
 
     let config = StirKeccakStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_stir_security_level(security_level, max_pow_bits);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree, with
@@ -345,14 +359,14 @@ where
 
     let config = StirPoseidon2StarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_stir_security_level(security_level, max_pow_bits);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -394,14 +408,14 @@ pub fn prove_m31_keccak<
 
     let config = KeccakCircleStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_parameter_security(&proof, &security_params);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -450,14 +464,14 @@ where
 
     let config = Poseidon2CircleStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_parameter_security(&proof, &security_params);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Report the result of the proof.

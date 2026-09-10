@@ -73,8 +73,10 @@ pub(crate) fn run_lifecycle(
     let pcs = BinaryPcs::new(config, mmcs());
 
     let mut prover_challenger = challenger();
-    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-    let proof = pcs.open(prover_data, protocol.clone(), &mut prover_challenger);
+    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+    let proof = pcs
+        .open(prover_data, protocol.clone(), &mut prover_challenger)
+        .unwrap();
 
     (pcs, commitment, proof, protocol)
 }

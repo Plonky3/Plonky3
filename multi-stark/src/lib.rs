@@ -36,6 +36,6 @@ pub mod zerocheck;
 pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};
 pub use keys::{ProvingKey, VerifyingKey, setup};
 pub use proof::MultiStarkProof;
-pub use prover::{prove, prove_with_security};
+pub use prover::{ProvingError, prove, prove_with_security};
 pub use security::{MultiStarkSecurityReport, SecurityError, security_report};
 pub use verifier::{VerificationError, verify, verify_with_security};

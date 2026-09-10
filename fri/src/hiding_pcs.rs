@@ -23,6 +23,33 @@ use tracing::info_span;
 use crate::verifier::FriError;
 use crate::{BatchMultiOpening, FriParameters, FriProof, TwoAdicFriPcs};
 
+/// A hiding commitment cannot safely support the requested disclosure budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum HidingFriProverError {
+    /// Too few independent random codewords for the challenge extension.
+    #[error("hiding FRI requires {required} random codewords, got {got}")]
+    InsufficientRandomCodewords { required: usize, got: usize },
+    /// The requested disclosure count does not fit the budget counter.
+    #[error("hiding budget arithmetic overflow")]
+    BudgetOverflow,
+    /// The mask cannot cover all requested field evaluations and FRI queries.
+    #[error(
+        "insufficient hiding budget: {mask_height} mask values, {num_queries} queries, {num_opening_points} opening points, extension degree {extension_degree}"
+    )]
+    HidingBudgetExceeded {
+        mask_height: usize,
+        num_queries: usize,
+        num_opening_points: usize,
+        extension_degree: usize,
+    },
+}
+
+impl From<core::convert::Infallible> for HidingFriProverError {
+    fn from(error: core::convert::Infallible) -> Self {
+        match error {}
+    }
+}
+
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
 ///
@@ -124,17 +151,30 @@ impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs,
             .checked_mul(2)
     }
 
-    fn assert_hiding_budget(&self, mask_height: usize, extension_degree: usize, num_points: usize) {
-        assert!(
-            self.num_random_codewords >= extension_degree,
-            "hiding FRI requires at least {extension_degree} random codewords"
-        );
-        assert!(
-            self.hiding_budget(extension_degree, num_points)
-                .is_some_and(|required| mask_height >= required),
-            "insufficient hiding budget: {mask_height} mask values, {} queries, {num_points} opening points, extension degree {extension_degree}",
-            self.inner.fri.num_queries,
-        );
+    fn check_hiding_budget(
+        &self,
+        mask_height: usize,
+        extension_degree: usize,
+        num_points: usize,
+    ) -> Result<(), HidingFriProverError> {
+        if self.num_random_codewords < extension_degree {
+            return Err(HidingFriProverError::InsufficientRandomCodewords {
+                required: extension_degree,
+                got: self.num_random_codewords,
+            });
+        }
+        let required = self
+            .hiding_budget(extension_degree, num_points)
+            .ok_or(HidingFriProverError::BudgetOverflow)?;
+        if required > mask_height {
+            return Err(HidingFriProverError::HidingBudgetExceeded {
+                mask_height,
+                num_queries: self.inner.fri.num_queries,
+                num_opening_points: num_points,
+                extension_degree,
+            });
+        }
+        Ok(())
     }
 
     fn lde_mask_height(&self, height: usize) -> usize {
@@ -181,6 +221,7 @@ where
     );
 
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
+    type ProverError = HidingFriProverError;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
@@ -190,13 +231,16 @@ where
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
+        let evaluations: Vec<_> = evaluations.into_iter().collect();
+        for (_, mat) in &evaluations {
+            self.check_hiding_budget(mat.height(), Challenge::DIMENSION, 1)?;
+        }
         let randomized_evaluations: Vec<(Self::Domain, RowMajorMatrix<Val>)> =
             info_span!("randomize polys").in_scope(|| {
                 evaluations
                     .into_iter()
                     .map(|(domain, mat)| {
-                        self.assert_hiding_budget(mat.height(), Challenge::DIMENSION, 1);
                         let mat_width = mat.width();
                         // Let `w` and `h` be the width and height of the original matrix. The randomized matrix should have height `2h` and width `w + num_random_codewords`.
                         // To generate it, we add `w + 2 * num_random_codewords` columns to the original matrix, then reshape it by setting the width to `w + num_random_codewords`.
@@ -214,8 +258,8 @@ where
             });
 
         let (commitment, data) =
-            Pcs::<Challenge, Challenger>::commit(&self.inner, randomized_evaluations);
-        (
+            Pcs::<Challenge, Challenger>::commit(&self.inner, randomized_evaluations)?;
+        Ok((
             commitment,
             HidingFriPcsProverData::new(
                 data,
@@ -223,7 +267,7 @@ where
                 self.num_random_codewords,
                 self.inner.fri.log_blowup,
             ),
-        )
+        ))
     }
 
     fn open(
@@ -231,7 +275,7 @@ where
         // For each round,
         rounds: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
+    ) -> Result<(OpenedValues<Challenge>, Self::Proof), Self::ProverError> {
         self.open_with_preprocessing(rounds, challenger, None)
     }
 
@@ -346,12 +390,15 @@ where
     fn commit_preprocessing(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
+        let evaluations: Vec<_> = evaluations.into_iter().collect();
+        for (_, mat) in &evaluations {
+            self.check_hiding_budget(mat.height(), Challenge::DIMENSION, 1)?;
+        }
         // Pad values with zero columns instead of random columns.
         let padded_evals = evaluations
             .into_iter()
             .map(|(domain, mat)| {
-                self.assert_hiding_budget(mat.height(), Challenge::DIMENSION, 1);
                 let mat_width = mat.width();
                 // Let `w` and `h` be the width and height of the original matrix. The padded matrix should have height `2h` and width `w`.
                 // To generate it, we add `w` zero columns to the original matrix, then reshape it by setting the width to `w`.
@@ -362,8 +409,8 @@ where
             })
             .collect::<Vec<_>>();
 
-        let (commitment, data) = Pcs::<Challenge, Challenger>::commit(&self.inner, padded_evals);
-        (
+        let (commitment, data) = Pcs::<Challenge, Challenger>::commit(&self.inner, padded_evals)?;
+        Ok((
             commitment,
             HidingFriPcsProverData::new(
                 data,
@@ -371,7 +418,7 @@ where
                 self.num_random_codewords,
                 self.inner.fri.log_blowup,
             ),
-        )
+        ))
     }
 
     /// Get the quotient polynomial LDEs. We first decompose the quotient polynomial into
@@ -392,14 +439,14 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         num_chunks: usize,
-    ) -> Vec<RowMajorMatrix<Val>> {
+    ) -> Result<Vec<RowMajorMatrix<Val>>, Self::ProverError> {
         assert!(
             num_chunks > 1,
             "num_chunks must be > 1 to preserve hiding (got {num_chunks})"
         );
         let (domains, evaluations): (Vec<_>, Vec<_>) = evaluations.into_iter().unzip();
         for mat in &evaluations {
-            self.assert_hiding_budget(mat.height(), Challenge::DIMENSION, 1);
+            self.check_hiding_budget(mat.height(), Challenge::DIMENSION, 1)?;
         }
         let cis = get_zp_cis(&domains);
         let last_chunk = num_chunks - 1;
@@ -432,7 +479,7 @@ where
             }
         }
 
-        domains
+        Ok(domains
             .into_iter()
             .zip(randomized_evaluations)
             .enumerate()
@@ -482,18 +529,21 @@ where
                     .bit_reverse_rows()
                     .to_row_major_matrix()
             })
-            .collect()
+            .collect())
     }
 
     /// The LDEs must contain fresh masks, as produced by [`Self::get_quotient_ldes`].
     /// Recommitting copies of the same masked LDEs does not refresh their hiding budget.
-    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+    fn commit_ldes(
+        &self,
+        ldes: Vec<RowMajorMatrix<Val>>,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         for lde in &ldes {
-            self.assert_hiding_budget(self.lde_mask_height(lde.height()), Challenge::DIMENSION, 1);
+            self.check_hiding_budget(self.lde_mask_height(lde.height()), Challenge::DIMENSION, 1)?;
         }
         let (commitment, data) =
-            UnivariateStarkPcs::<Challenge, Challenger>::commit_ldes(&self.inner, ldes);
-        (
+            UnivariateStarkPcs::<Challenge, Challenger>::commit_ldes(&self.inner, ldes)?;
+        Ok((
             commitment,
             HidingFriPcsProverData::new(
                 data,
@@ -501,7 +551,7 @@ where
                 self.num_random_codewords,
                 self.inner.fri.log_blowup,
             ),
-        )
+        ))
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -545,7 +595,7 @@ where
         rounds: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
         preprocessed_commitment: Option<usize>,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
+    ) -> Result<(OpenedValues<Challenge>, Self::Proof), Self::ProverError> {
         for (round_idx, round) in rounds.iter().enumerate() {
             self.assert_prover_data_config(round.prover_data);
             assert_eq!(
@@ -556,11 +606,11 @@ where
             let matrices = self.inner.mmcs.get_matrices(&round.prover_data.inner);
             assert_eq!(matrices.len(), round.points.len());
             for (matrix, points) in matrices.iter().zip(&round.points) {
-                self.assert_hiding_budget(
+                self.check_hiding_budget(
                     self.lde_mask_height(matrix.height()),
                     Challenge::DIMENSION,
                     points.len(),
-                );
+                )?;
             }
         }
         // Consume before producing any openings. Repeated requests and concurrent calls must
@@ -582,7 +632,7 @@ where
             .collect();
         let (mut inner_opened_values, inner_proof) =
             self.inner
-                .open_with_preprocessing(rounds, challenger, preprocessed_commitment);
+                .open_with_preprocessing(rounds, challenger, preprocessed_commitment)?;
         // inner_opened_values includes opened values for the random codewords. Those should be
         // hidden from our caller, so we split them off and store them in the proof.
         let opened_values_rand = inner_opened_values
@@ -609,17 +659,20 @@ where
             })
             .collect();
 
-        (inner_opened_values, (opened_values_rand, inner_proof))
+        Ok((inner_opened_values, (opened_values_rand, inner_proof)))
     }
 
     fn get_opt_randomization_poly_commitment(
         &self,
         ext_trace_domains: impl IntoIterator<Item = Self::Domain>,
-    ) -> Option<(Self::Commitment, Self::ProverData)> {
+    ) -> Result<Option<(Self::Commitment, Self::ProverData)>, Self::ProverError> {
+        let ext_trace_domains: Vec<_> = ext_trace_domains.into_iter().collect();
+        for domain in &ext_trace_domains {
+            self.check_hiding_budget(domain.size() / 2, Challenge::DIMENSION, 1)?;
+        }
         let random_input_vals = ext_trace_domains
             .into_iter()
             .map(|domain| {
-                self.assert_hiding_budget(domain.size() / 2, Challenge::DIMENSION, 1);
                 let m = DenseMatrix::rand(
                     &mut *self.rng.lock(),
                     domain.size(),
@@ -631,8 +684,8 @@ where
             .collect::<Vec<_>>();
 
         let r_commit_and_data =
-            Pcs::<Challenge, Challenger>::commit(&self.inner, random_input_vals);
-        Some((
+            Pcs::<Challenge, Challenger>::commit(&self.inner, random_input_vals)?;
+        Ok(Some((
             r_commit_and_data.0,
             HidingFriPcsProverData::new(
                 r_commit_and_data.1,
@@ -640,7 +693,7 @@ where
                 self.num_random_codewords,
                 self.inner.fri.log_blowup,
             ),
-        ))
+        )))
     }
 
     fn build_periodic_lde_table(
@@ -778,19 +831,21 @@ mod tests {
             <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 2 << log_degree);
         let trace = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_degree, width);
         let (commitment, prover_data) =
-            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace)]);
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace)]).unwrap();
 
         // Prover: observe, sample the point, prove.
         let mut p_challenger = Challenger::new(perm.clone());
         p_challenger.observe(&commitment);
         let zeta: Challenge = p_challenger.sample_algebra_element();
-        let (opened_values, proof) = pcs.open(
-            vec![OpeningRequest {
-                prover_data: &prover_data,
-                points: vec![vec![zeta]],
-            }],
-            &mut p_challenger,
-        );
+        let (opened_values, proof) = pcs
+            .open(
+                vec![OpeningRequest {
+                    prover_data: &prover_data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut p_challenger,
+            )
+            .unwrap();
 
         // Verifier: replay up to the point sample so a valid proof must pass.
         let mut v_challenger = Challenger::new(perm);
@@ -835,31 +890,35 @@ mod tests {
             <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::commit_preprocessing(
                 &pcs,
                 [(domain, RowMajorMatrix::<Val>::rand(&mut rng, 16, 3))],
-            );
+            )
+            .unwrap();
         let (trace_commit, trace_data) = <MyPcs as Pcs<Challenge, Challenger>>::commit(
             &pcs,
             [(domain, RowMajorMatrix::<Val>::rand(&mut rng, 16, 4))],
-        );
+        )
+        .unwrap();
         for challenger in [&mut prover_challenger, &mut verifier_challenger] {
             challenger.observe(&pre_commit);
             challenger.observe(&trace_commit);
         }
         let zeta: Challenge = prover_challenger.sample_algebra_element();
         assert_eq!(zeta, verifier_challenger.sample_algebra_element());
-        let (values, proof) = pcs.open_with_preprocessing(
-            vec![
-                OpeningRequest {
-                    prover_data: &pre_data,
-                    points: vec![vec![zeta]],
-                },
-                OpeningRequest {
-                    prover_data: &trace_data,
-                    points: vec![vec![zeta]],
-                },
-            ],
-            &mut prover_challenger,
-            Some(0),
-        );
+        let (values, proof) = pcs
+            .open_with_preprocessing(
+                vec![
+                    OpeningRequest {
+                        prover_data: &pre_data,
+                        points: vec![vec![zeta]],
+                    },
+                    OpeningRequest {
+                        prover_data: &trace_data,
+                        points: vec![vec![zeta]],
+                    },
+                ],
+                &mut prover_challenger,
+                Some(0),
+            )
+            .unwrap();
         assert_eq!(values[0][0][0].len(), 3);
         assert_eq!(values[1][0][0].len(), 4);
         assert!(proof.0[0][0][0].is_empty());
@@ -893,60 +952,96 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "hiding budget")]
+    fn failed_commit_validates_all_matrices_before_rng() {
+        let (pcs, _, _, _) = make_fixture();
+        let (control, _, _, _) = make_fixture();
+        let before: u64 = control.rng.lock().random();
+        let large = Domain::new(Val::ONE, 6).unwrap();
+        let small = Domain::new(Val::ONE, 2).unwrap();
+        let result = <MyPcs as Pcs<Challenge, Challenger>>::commit(
+            &pcs,
+            [
+                (large, RowMajorMatrix::new(Val::zero_vec(64), 1)),
+                (small, RowMajorMatrix::new(Val::zero_vec(2), 1)),
+            ],
+        );
+        assert!(matches!(
+            result,
+            Err(HidingFriProverError::HidingBudgetExceeded { .. })
+        ));
+        assert_eq!(pcs.rng.lock().random::<u64>(), before);
+    }
+
+    #[test]
     fn commit_rejects_trace_shorter_than_hiding_budget() {
         let (pcs, _, _, _) = make_fixture();
         let domain = Domain::new(Val::ONE, 2).unwrap();
-        <MyPcs as Pcs<Challenge, Challenger>>::commit(
+        let result = <MyPcs as Pcs<Challenge, Challenger>>::commit(
             &pcs,
             [(domain, RowMajorMatrix::new(Val::zero_vec(2), 1))],
         );
+        assert!(matches!(
+            result,
+            Err(HidingFriProverError::HidingBudgetExceeded { mask_height: 2, .. })
+        ));
     }
 
     #[test]
-    #[should_panic(expected = "hiding budget")]
     fn preprocessing_rejects_short_domain() {
         let (pcs, _, _, _) = make_fixture();
         let domain = Domain::new(Val::ONE, 2).unwrap();
-        <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::commit_preprocessing(
+        let result = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::commit_preprocessing(
             &pcs,
             [(domain, RowMajorMatrix::new(Val::zero_vec(2), 1))],
         );
+        assert!(matches!(
+            result,
+            Err(HidingFriProverError::HidingBudgetExceeded { .. })
+        ));
     }
 
     #[test]
-    #[should_panic(expected = "hiding budget")]
     fn randomization_commitment_rejects_short_domain() {
         let (pcs, _, _, _) = make_fixture();
         let domain = Domain::new(Val::ONE, 2).unwrap();
-        <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_opt_randomization_poly_commitment(
+        let result = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_opt_randomization_poly_commitment(
             &pcs,
             [domain],
         );
+        assert!(matches!(
+            result,
+            Err(HidingFriProverError::HidingBudgetExceeded { .. })
+        ));
     }
 
     #[test]
-    #[should_panic(expected = "hiding budget")]
     fn quotient_ldes_reject_chunks_shorter_than_hiding_budget() {
         let (pcs, _, _, _) = make_fixture();
         let domains = Domain::new(Val::GENERATOR, 2).unwrap().split_domains(2);
-        <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_quotient_ldes(
+        let result = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_quotient_ldes(
             &pcs,
             domains
                 .into_iter()
                 .map(|domain| (domain, RowMajorMatrix::new(Val::zero_vec(2), 1))),
             2,
         );
+        assert!(matches!(
+            result,
+            Err(HidingFriProverError::HidingBudgetExceeded { .. })
+        ));
     }
 
     #[test]
-    #[should_panic(expected = "hiding budget")]
     fn commit_ldes_rejects_short_mask() {
         let (pcs, _, _, _) = make_fixture();
-        <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::commit_ldes(
+        let result = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::commit_ldes(
             &pcs,
             vec![RowMajorMatrix::new(Val::zero_vec(8), 1)],
         );
+        assert!(matches!(
+            result,
+            Err(HidingFriProverError::HidingBudgetExceeded { .. })
+        ));
     }
 
     fn commit_opening_fixture(pcs: &MyPcs) -> <MyPcs as Pcs<Challenge, Challenger>>::ProverData {
@@ -955,6 +1050,7 @@ mod tests {
             pcs,
             [(domain, RowMajorMatrix::new(Val::zero_vec(32), 1))],
         )
+        .unwrap()
         .1
     }
 
@@ -982,13 +1078,15 @@ mod tests {
         let zeta = challenger.sample_algebra_element::<Challenge>();
         let mut untouched_challenger = challenger.clone();
         let opening = catch_unwind(AssertUnwindSafe(|| {
-            receiver.open(
-                vec![OpeningRequest {
-                    prover_data: &data,
-                    points: vec![vec![zeta]],
-                }],
-                &mut challenger,
-            );
+            receiver
+                .open(
+                    vec![OpeningRequest {
+                        prover_data: &data,
+                        points: vec![vec![zeta]],
+                    }],
+                    &mut challenger,
+                )
+                .unwrap();
         }));
         assert!(
             evaluations.is_err() && evaluations_no_random.is_err() && opening.is_err(),
@@ -1015,20 +1113,37 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "hiding budget")]
     fn open_rejects_excess_opening_points() {
         let (pcs, _, _, mut challenger) = make_fixture();
         let data = commit_opening_fixture(&pcs);
         let points = (0..5)
             .map(|_| challenger.sample_algebra_element::<Challenge>())
             .collect();
-        pcs.open(
+        let before: Challenge = challenger.clone().sample_algebra_element();
+        let result = pcs.open(
             vec![OpeningRequest {
                 prover_data: &data,
                 points: vec![points],
             }],
             &mut challenger,
         );
+        assert!(matches!(
+            result,
+            Err(HidingFriProverError::HidingBudgetExceeded {
+                num_opening_points: 5,
+                ..
+            })
+        ));
+        assert_eq!(challenger.sample_algebra_element::<Challenge>(), before);
+        // Rejection did not claim the single-use mask: a smaller opening can still succeed.
+        pcs.open(
+            vec![OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![Challenge::from_u8(7)]],
+            }],
+            &mut challenger,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1045,7 +1160,8 @@ mod tests {
                     points: vec![vec![zeta]],
                 }],
                 &mut challenger,
-            );
+            )
+            .unwrap();
         }
     }
 
@@ -1059,7 +1175,8 @@ mod tests {
             prover_data: &data,
             points: vec![vec![zeta]],
         };
-        pcs.open(vec![request.clone(), request], &mut challenger);
+        pcs.open(vec![request.clone(), request], &mut challenger)
+            .unwrap();
     }
 
     #[test]
@@ -1075,7 +1192,8 @@ mod tests {
             }],
             &mut challenger,
             Some(0),
-        );
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1085,17 +1203,20 @@ mod tests {
         let (_, data) = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::commit_preprocessing(
             &pcs,
             [(domain, RowMajorMatrix::new(Val::zero_vec(16), 1))],
-        );
+        )
+        .unwrap();
         for _ in 0..2 {
             let zeta = challenger.sample_algebra_element::<Challenge>();
-            let (values, proof) = pcs.open_with_preprocessing(
-                vec![OpeningRequest {
-                    prover_data: &data,
-                    points: vec![vec![zeta]],
-                }],
-                &mut challenger,
-                Some(0),
-            );
+            let (values, proof) = pcs
+                .open_with_preprocessing(
+                    vec![OpeningRequest {
+                        prover_data: &data,
+                        points: vec![vec![zeta]],
+                    }],
+                    &mut challenger,
+                    Some(0),
+                )
+                .unwrap();
             assert_eq!(values[0][0][0], vec![Challenge::ZERO]);
             assert!(proof.0[0][0][0].is_empty());
         }
@@ -1116,19 +1237,22 @@ mod tests {
             .with_random_cols(1 + 2 * NUM_RANDOM_CODEWORDS, &mut rng);
         trace.width = 1 + NUM_RANDOM_CODEWORDS;
         let (commitment, data) =
-            Pcs::<Challenge, Challenger>::commit(&pcs.inner, [(domain, trace)]);
+            Pcs::<Challenge, Challenger>::commit(&pcs.inner, [(domain, trace)]).unwrap();
         challenger.observe(&commitment);
         let points = (0..num_points)
             .map(|_| challenger.sample_algebra_element::<Challenge>())
             .collect_vec();
         let verifier_challenger = challenger.clone();
-        let (mut values, proof) = pcs.inner.open(
-            vec![OpeningRequest {
-                prover_data: &data,
-                points: vec![points.clone()],
-            }],
-            &mut challenger,
-        );
+        let (mut values, proof) = pcs
+            .inner
+            .open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![points.clone()],
+                }],
+                &mut challenger,
+            )
+            .unwrap();
         let random_values = values[0][0]
             .iter_mut()
             .map(|point_values| point_values.split_off(1))
@@ -1191,11 +1315,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "at least 4 random codewords")]
     fn commit_rejects_insufficient_random_codewords() {
         let (mut pcs, _, _, _) = make_fixture();
         pcs.num_random_codewords = 3;
-        commit_opening_fixture(&pcs);
+        let domain = Domain::new(Val::ONE, 6).unwrap();
+        let result = <MyPcs as Pcs<Challenge, Challenger>>::commit(
+            &pcs,
+            [(domain, RowMajorMatrix::new(Val::zero_vec(64), 1))],
+        );
+        assert!(matches!(
+            result,
+            Err(HidingFriProverError::InsufficientRandomCodewords {
+                required: 4,
+                got: 3
+            })
+        ));
     }
 
     #[test]
@@ -1430,7 +1564,8 @@ mod tests {
                 &pcs,
                 domains.iter().copied().zip(mats).collect_vec(),
                 num_chunks,
-            );
+            )
+            .unwrap();
 
             assert_eq!(fused.len(), expected.len());
             for (got, want) in fused.iter().zip(&expected) {

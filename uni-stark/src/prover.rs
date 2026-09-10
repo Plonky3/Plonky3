@@ -82,6 +82,8 @@ where
 {
 }
 
+/// Prove with reusable preprocessing, returning the PCS failure with its proving phase.
+/// No partial proof is emitted on a configuration or disclosure-budget error.
 #[instrument(skip_all)]
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
 pub fn prove_with_preprocessed<
@@ -94,7 +96,7 @@ pub fn prove_with_preprocessed<
     trace: RowMajorMatrix<Val<SC>>,
     public_values: &[Val<SC>],
     preprocessed: Option<&PreprocessedProverData<SC>>,
-) -> Proof<SC>
+) -> Result<Proof<SC>, crate::ProvingError<crate::config::PcsProverError<SC>>>
 where
     SC: StarkGenericConfig,
     SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
@@ -214,8 +216,12 @@ where
     //      trace_commit contains the root of the tree
     //      trace_data contains the entire tree.
     //          - trace_data.leaves is the matrix containing `ET`.
-    let (trace_commit, trace_data) =
-        info_span!("commit to trace data").in_scope(|| pcs.commit([(ext_trace_domain, trace)]));
+    let (trace_commit, trace_data) = info_span!("commit to trace data")
+        .in_scope(|| pcs.commit([(ext_trace_domain, trace)]))
+        .map_err(|source| crate::ProvingError::Pcs {
+            phase: "trace commitment",
+            source,
+        })?;
 
     // Preprocessed commitment and prover data (if any).
     let (preprocessed_commit, preprocessed_data_ref) = preprocessed
@@ -320,7 +326,12 @@ where
     //      quotient_data contains the entire tree.
     //          - quotient_data.leaves is a pair of matrices containing the `q_i0(x)` and `q_i1(x)`.
     let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
-        .in_scope(|| pcs.commit_quotient(quotient_domain, quotient_flat, num_quotient_chunks));
+        .in_scope(|| pcs.commit_quotient(quotient_domain, quotient_flat, num_quotient_chunks))
+        .inspect_err(|_| transcript.abort())
+        .map_err(|source| crate::ProvingError::Pcs {
+            phase: "quotient commitment",
+            source,
+        })?;
 
     // If zk is enabled, we generate random extension field values of the size of the randomized trace. If `n` is the degree of the initial trace,
     // then the randomized trace has degree `2n`. To randomize the FRI batch polynomial, we then need an extension field random polynomial of degree `2n -1`.
@@ -333,6 +344,11 @@ where
     let (opt_r_commit, opt_r_data) = if SC::Pcs::ZK {
         let (r_commit, r_data) = pcs
             .get_opt_randomization_poly_commitment(core::iter::once(ext_trace_domain))
+            .inspect_err(|_| transcript.abort())
+            .map_err(|source| crate::ProvingError::Pcs {
+                phase: "randomization commitment",
+                source,
+            })?
             .expect("ZK is enabled, so we should have randomization commitments");
         (Some(r_commit), Some(r_data))
     } else {
@@ -374,7 +390,7 @@ where
     let main_next = !air.main_next_row_columns().is_empty();
     let pre_next = !air.preprocessed_next_row_columns().is_empty();
     let opening_layout = crate::StarkOpeningLayout::new(SC::Pcs::ZK);
-    let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
+    let opening_result = info_span!("open").in_scope(|| {
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
         let round1_points = if main_next {
             vec![zeta, zeta_next]
@@ -410,6 +426,13 @@ where
             )
         })
     });
+
+    let (opened_values, opening_proof) = opening_result
+        .inspect_err(|_| transcript.abort())
+        .map_err(|source| crate::ProvingError::Pcs {
+            phase: "opening",
+            source,
+        })?;
 
     // Every described step has now been played.
     transcript.finish();
@@ -450,15 +473,16 @@ where
         quotient_chunks,
         random,
     };
-    Proof {
+    Ok(Proof {
         commitments,
         opened_values,
         opening_proof,
         degree_bits: log_ext_degree,
         ood_pow_witness,
-    }
+    })
 }
 
+/// Prove a trace, returning the PCS failure with its proving phase.
 #[instrument(skip_all)]
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
 pub fn prove<
@@ -470,7 +494,7 @@ pub fn prove<
     air: &A,
     trace: RowMajorMatrix<Val<SC>>,
     public_values: &[Val<SC>],
-) -> Proof<SC>
+) -> Result<Proof<SC>, crate::ProvingError<crate::config::PcsProverError<SC>>>
 where
     SC: StarkGenericConfig,
     SC::Challenger: GrindingChallenger<Witness = Val<SC>>,

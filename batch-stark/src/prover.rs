@@ -100,6 +100,8 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
 /// # Returns
 ///
 /// A self-contained batch proof that can be verified with `verify_batch`.
+/// Configuration or disclosure-budget failures return the PCS error with its proving phase,
+/// without emitting a partial proof.
 #[instrument(skip_all)]
 pub fn prove_batch<
     SC,
@@ -114,13 +116,14 @@ pub fn prove_batch<
     config: &SC,
     instances: &[StarkInstance<'_, SC, A>],
     prover_data: &ProverData<SC>,
-) -> BatchProof<SC>
+) -> Result<BatchProof<SC>, crate::ProvingError<crate::config::PcsProverError<SC>>>
 where
     SC: SGC,
     Val<SC>: PrimeField64,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     Domain<SC>: Send + Sync,
     SC::Pcs: Sync,
+    crate::config::PcsProverError<SC>: Send,
     SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::ProverData: Sync,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Commitment: Sync,
@@ -243,7 +246,13 @@ where
         .zip(ext_trace_domains.iter().cloned())
         .map(|(inst, dom)| (dom, inst.trace.clone()))
         .collect::<Vec<_>>();
-    let (main_commit, main_data) = pcs.commit(main_commit_inputs);
+    let (main_commit, main_data) = pcs
+        .commit(main_commit_inputs)
+        .inspect_err(|_| transcript.abort())
+        .map_err(|source| crate::ProvingError::Pcs {
+            phase: "trace commitment",
+            source,
+        })?;
 
     transcript.main_phase(main_commit.clone(), &pub_vals);
     transcript.preprocessed_phase(common.preprocessed.as_ref().map(|g| g.commitment.clone()));
@@ -330,7 +339,14 @@ where
 
     // Commit all permutation traces (if any).
     let permutation_commit_and_data = if !permutation_commit_inputs.is_empty() {
-        Some(pcs.commit(permutation_commit_inputs))
+        Some(
+            pcs.commit(permutation_commit_inputs)
+                .inspect_err(|_| transcript.abort())
+                .map_err(|source| crate::ProvingError::Pcs {
+                    phase: "permutation commitment",
+                    source,
+                })?,
+        )
     } else {
         None
     };
@@ -367,7 +383,8 @@ where
     // Each instance's quotient chunks are independent, so compute them in
     // parallel. `quotient_values` already parallelises over rows; with many
     // instances this fills the cores that a single instance leaves idle.
-    let per_instance: Vec<InstanceQuotient<SC>> = (0..n_instances)
+    let per_instance: Result<Vec<InstanceQuotient<SC>>, crate::config::PcsProverError<SC>> = (0
+        ..n_instances)
         .into_par_iter()
         .map(|i| {
             let _air_span = info_span!("compute quotient", air_idx = i).entered();
@@ -463,9 +480,9 @@ where
 
             // Compute low-degree extensions of each chunk for commitment.
             let evals = chunk_domains.iter().zip(chunk_mats).map(|(d, m)| (*d, m));
-            let ldes = pcs.get_quotient_ldes(evals, n_chunks);
+            let ldes = pcs.get_quotient_ldes(evals, n_chunks)?;
 
-            (chunk_domains, ldes)
+            Ok((chunk_domains, ldes))
         })
         .collect();
 
@@ -473,7 +490,14 @@ where
     let mut quotient_chunk_domains = Vec::new();
     let mut quotient_chunk_mats = Vec::new();
     let mut quotient_chunk_ranges = Vec::with_capacity(n_instances);
-    for (chunk_domains, ldes) in per_instance {
+    for (chunk_domains, ldes) in
+        per_instance
+            .inspect_err(|_| transcript.abort())
+            .map_err(|source| crate::ProvingError::Pcs {
+                phase: "quotient evaluations",
+                source,
+            })?
+    {
         let start = quotient_chunk_domains.len();
         quotient_chunk_domains.extend(chunk_domains);
         quotient_chunk_mats.extend(ldes);
@@ -482,7 +506,13 @@ where
     }
 
     // Commit all quotient chunks in a single batch.
-    let (quotient_commit, quotient_data) = pcs.commit_ldes(quotient_chunk_mats);
+    let (quotient_commit, quotient_data) = pcs
+        .commit_ldes(quotient_chunk_mats)
+        .inspect_err(|_| transcript.abort())
+        .map_err(|source| crate::ProvingError::Pcs {
+            phase: "quotient commitment",
+            source,
+        })?;
 
     // Transcript: Optional ZK randomization polynomial
     //
@@ -495,6 +525,11 @@ where
     let (opt_r_commit, opt_r_data) = if SC::Pcs::ZK {
         let (r_commit, r_data) = pcs
             .get_opt_randomization_poly_commitment(ext_trace_domains.iter().copied())
+            .inspect_err(|_| transcript.abort())
+            .map_err(|source| crate::ProvingError::Pcs {
+                phase: "randomization commitment",
+                source,
+            })?
             .expect("ZK is enabled, so we should have randomization commitments");
         (Some(r_commit), Some(r_data))
     } else {
@@ -513,7 +548,7 @@ where
 
     // Build the opening rounds and produce the FRI opening proof.
     let opening_layout = p3_uni_stark::StarkOpeningLayout::new(SC::Pcs::ZK);
-    let (opened_values, opening_proof) = {
+    let opening_result = {
         let mut rounds = Vec::new();
 
         // Round 0 (optional): randomization polynomial opened at zeta per instance.
@@ -608,6 +643,12 @@ where
         })
     };
 
+    let (opened_values, opening_proof) = opening_result
+        .inspect_err(|_| transcript.abort())
+        .map_err(|source| crate::ProvingError::Pcs {
+            phase: "opening",
+            source,
+        })?;
     transcript.finish();
 
     // Parse opened values into per-instance structures
@@ -727,7 +768,7 @@ where
         .map(|(comm, _)| comm.clone());
 
     // Assemble the final proof structure.
-    BatchProof {
+    Ok(BatchProof {
         commitments: BatchCommitments {
             main: main_commit,
             quotient_chunks: quotient_commit,
@@ -742,7 +783,7 @@ where
         degree_bits: log_ext_degrees,
         lookup_pow_witness,
         ood_pow_witness,
-    }
+    })
 }
 
 /// Evaluate the quotient polynomial q(x) = C(x) / Z_H(x) over the quotient

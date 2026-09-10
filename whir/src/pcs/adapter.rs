@@ -77,6 +77,7 @@ where
     type ProverData = WhirProverData<F, EF, MT, L>;
     type Proof = PcsProof<F, EF, MT>;
     type Error = VerifierError;
+    type ProverError = crate::WhirConfigError;
     type Witness = Witness<F>;
     type OpeningProtocol = OpeningProtocol;
 
@@ -88,7 +89,7 @@ where
         &self,
         witness: Self::Witness,
         challenger: &mut Challenger,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         assert_eq!(witness.num_variables(), self.config.num_variables);
         let (layout, commitment, merkle_data) = L::commit(
             &self.dft,
@@ -98,14 +99,14 @@ where
             self.config.round_folding_factor(0),
             self.config.starting_log_inv_rate,
         );
-        (
+        Ok((
             commitment,
             WhirProverData {
                 layout,
                 merkle_data,
                 _marker: PhantomData,
             },
-        )
+        ))
     }
 
     fn open(
@@ -113,7 +114,15 @@ where
         mut prover_data: Self::ProverData,
         protocol: Self::OpeningProtocol,
         challenger: &mut Challenger,
-    ) -> Self::Proof {
+    ) -> Result<Self::Proof, Self::ProverError> {
+        self.config.validate_initial_claims(
+            protocol
+                .iter_openings()
+                .try_fold(self.commitment_ood_samples, |n, (_, batch)| {
+                    n.checked_add(batch.len())
+                })
+                .ok_or(crate::WhirConfigError::InitialClaimCountOverflow)?,
+        )?;
         let initial_ood_answers = tracing::info_span!("ood claims").in_scope(|| {
             (0..self.commitment_ood_samples)
                 .map(|_| prover_data.layout.add_virtual_eval(challenger))
@@ -133,9 +142,9 @@ where
             prover_data.layout,
             prover_data.merkle_data,
             protocol.num_openings(),
-        );
+        )?;
 
-        PcsProof { whir, evals }
+        Ok(PcsProof { whir, evals })
     }
 
     fn verify(
@@ -241,7 +250,15 @@ where
         protocol: &OpeningProtocol,
         points: &[Point<EF>],
         challenger: &mut Challenger,
-    ) -> Self::Proof {
+    ) -> Result<Self::Proof, Self::ProverError> {
+        self.config.validate_initial_claims(
+            protocol
+                .iter_openings()
+                .try_fold(self.commitment_ood_samples, |n, (_, batch)| {
+                    n.checked_add(batch.len())
+                })
+                .ok_or(crate::WhirConfigError::InitialClaimCountOverflow)?,
+        )?;
         // One prescribed point per opening batch.
         assert_eq!(protocol.num_openings(), points.len());
 
@@ -269,9 +286,9 @@ where
             prover_data.layout,
             prover_data.merkle_data,
             protocol.num_openings(),
-        );
+        )?;
 
-        PcsProof { whir, evals }
+        Ok(PcsProof { whir, evals })
     }
 
     /// Verify each batch at its supplied point.

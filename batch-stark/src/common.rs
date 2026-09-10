@@ -157,7 +157,10 @@ where
     /// - Deduces symbolic lookups from the STARKs
     ///
     /// This is a convenience function mainly used for tests.
-    pub fn from_instances<A>(config: &SC, instances: &[StarkInstance<'_, SC, A>]) -> Self
+    pub fn from_instances<A>(
+        config: &SC,
+        instances: &[StarkInstance<'_, SC, A>],
+    ) -> Result<Self, crate::ProvingError<crate::config::PcsProverError<SC>>>
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
         A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>> + Clone,
@@ -185,7 +188,7 @@ where
         config: &SC,
         airs: &[A],
         trace_ext_degree_bits: &[usize],
-    ) -> Self
+    ) -> Result<Self, crate::ProvingError<crate::config::PcsProverError<SC>>>
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
         A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>,
@@ -229,7 +232,7 @@ where
         trace_ext_degree_bits: &[usize],
         lookup_budget_overrides: &[usize],
         log_blowup: usize,
-    ) -> Self
+    ) -> Result<Self, crate::ProvingError<crate::config::PcsProverError<SC>>>
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
         A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>,
@@ -294,7 +297,12 @@ where
         let (preprocessed, preprocessed_prover_data) = if domains_and_traces.is_empty() {
             (None, None)
         } else {
-            let (commitment, prover_data) = pcs.commit_preprocessing(domains_and_traces);
+            let (commitment, prover_data) =
+                pcs.commit_preprocessing(domains_and_traces)
+                    .map_err(|source| crate::ProvingError::Pcs {
+                        phase: "preprocessing commitment",
+                        source,
+                    })?;
             (
                 Some(GlobalPreprocessed {
                     commitment,
@@ -393,7 +401,7 @@ where
             })
             .collect();
 
-        Self {
+        Ok(Self {
             common: CommonData {
                 preprocessed,
                 lookups,
@@ -401,6 +409,6 @@ where
             prover_only: ProverOnlyData {
                 preprocessed_prover_data,
             },
-        }
+        })
     }
 }

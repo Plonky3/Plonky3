@@ -81,6 +81,9 @@ where
     /// - One prescribed point per batch.
     /// - Fiat-Shamir transcript with the commitment already absorbed.
     ///
+    /// Configuration and budget errors are returned before any transcript interaction
+    /// or consumption of private randomness, as for [`MultilinearPcs::open`].
+    ///
     /// # Panics
     ///
     /// Panics if the number of points differs from the number of opening batches.
@@ -90,7 +93,7 @@ where
         protocol: &OpeningProtocol,
         points: &[Point<Challenge>],
         challenger: &mut Challenger,
-    ) -> Self::Proof;
+    ) -> Result<Self::Proof, Self::ProverError>;
 
     /// Verify a prescribed-point opening and return the opened column values.
     ///

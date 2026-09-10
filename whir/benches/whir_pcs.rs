@@ -212,6 +212,7 @@ impl<L: Layout<F, EF>> Bench<L> {
                         witness,
                         &mut challenger,
                     )
+                    .unwrap()
                 },
                 BatchSize::PerIteration,
             );
@@ -230,7 +231,8 @@ impl<L: Layout<F, EF>> Bench<L> {
                         &self.pcs,
                         self.witness.clone(),
                         &mut challenger,
-                    );
+                    )
+                    .unwrap();
                     (prover_data, challenger)
                 },
                 |(prover_data, mut challenger)| {
@@ -240,6 +242,7 @@ impl<L: Layout<F, EF>> Bench<L> {
                         self.protocol.clone(),
                         &mut challenger,
                     )
+                    .unwrap()
                 },
                 BatchSize::PerIteration,
             );
@@ -255,13 +258,15 @@ impl<L: Layout<F, EF>> Bench<L> {
             &self.pcs,
             self.witness.clone(),
             &mut challenger,
-        );
+        )
+        .unwrap();
         let proof = <Pcs<L> as MultilinearPcs<EF, Challenger>>::open(
             &self.pcs,
             prover_data,
             self.protocol.clone(),
             &mut challenger,
-        );
+        )
+        .unwrap();
 
         group.bench_function(BenchmarkId::from_parameter(label), |b| {
             b.iter_batched(
@@ -288,13 +293,15 @@ impl<L: Layout<F, EF>> Bench<L> {
             &self.pcs,
             self.witness.clone(),
             &mut challenger,
-        );
+        )
+        .unwrap();
         <Pcs<L> as MultilinearPcs<EF, Challenger>>::open(
             &self.pcs,
             prover_data,
             self.protocol.clone(),
             &mut challenger,
         )
+        .unwrap()
     }
 
     /// Measure serialized size and Merkle-path shape of one honest proof.

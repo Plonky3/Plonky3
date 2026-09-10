@@ -124,3 +124,9 @@ pub type PcsError<C> = <Pcs<C> as MultilinearPcs<
     <C as MultiStarkConfig>::Challenge,
     <C as MultiStarkConfig>::Challenger,
 >>::Error;
+
+/// Configuration or budget failure reported by the proving commitment scheme.
+pub type PcsProverError<C> = <Pcs<C> as MultilinearPcs<
+    <C as MultiStarkConfig>::Challenge,
+    <C as MultiStarkConfig>::Challenger,
+>>::ProverError;

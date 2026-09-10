@@ -1,5 +1,3 @@
-use core::fmt::Debug;
-
 use p3_baby_bear::{
     BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
     BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear,
@@ -39,7 +37,7 @@ const NUM_PERMUTATIONS: usize = NUM_ROWS * VECTOR_LEN;
 
 type Dft = p3_dft::Radix2DitParallel<BabyBear>;
 
-fn main() -> Result<(), impl Debug> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
@@ -107,7 +105,7 @@ fn main() -> Result<(), impl Debug> {
     type MyConfig = StarkConfig<Pcs, Challenge, Challenger>;
     let config = MyConfig::new(pcs, challenger);
 
-    let proof = prove(&config, &air, trace, &[]);
+    let proof = prove(&config, &air, trace, &[])?;
 
-    verify(&config, &air, &proof, &[])
+    verify(&config, &air, &proof, &[]).map_err(Into::into)
 }

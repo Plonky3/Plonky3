@@ -13,6 +13,9 @@ use super::{FoldingFactor, FoldingFactorError, ProtocolParameters};
 /// Reasons a set of user-facing parameters cannot form a valid WHIR configuration.
 #[derive(Debug, Error)]
 pub enum WhirConfigError {
+    /// The number of claims cannot be represented by the budget counter.
+    #[error("initial claim count overflow")]
+    InitialClaimCountOverflow,
     /// Initial alpha batching cannot reach the target without grinding.
     #[error(
         "initial claim combination of {num_claims} claims retains {bits} bits, below the {security_level}-bit target; reduce the claim count or use a larger extension field"

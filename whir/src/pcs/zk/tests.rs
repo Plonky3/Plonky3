@@ -50,6 +50,7 @@ type TestCommitment = <TestZkPcs as MultilinearPcs<EF, MyChallenger>>::Commitmen
 ///     prove_with(w, pts)   ->  honest run on a caller-chosen statement
 /// ```
 struct Setup {
+    security_level: usize,
     /// Arity of the committed polynomial.
     num_variables: usize,
     /// Number of opened evaluation claims.
@@ -71,6 +72,7 @@ impl Setup {
     /// The seed drives both the PCS hiding randomness and the witness.
     const fn new(seed: u64) -> Self {
         Self {
+            security_level: 32,
             num_variables: 12,
             num_points: 1,
             folding_factor: FoldingFactor::Constant(4),
@@ -112,7 +114,7 @@ impl Setup {
         let config = ZkWhirConfig::new(
             self.num_variables,
             ProtocolParameters {
-                security_level: 32,
+                security_level: self.security_level,
                 pow_bits: self.pow_bits,
                 round_log_inv_rates: vec![],
                 folding_factor: self.folding_factor.clone(),
@@ -149,8 +151,10 @@ impl Setup {
     fn prove_with(self, witness: Poly<F>, points: Vec<Point<EF>>) -> Proven {
         let pcs = self.pcs();
         let mut prover_challenger = fresh_challenger();
-        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-        let proof = pcs.open(prover_data, points.clone(), &mut prover_challenger);
+        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+        let proof = pcs
+            .open(prover_data, points.clone(), &mut prover_challenger)
+            .unwrap();
         Proven {
             pcs,
             commitment,
@@ -208,6 +212,52 @@ impl Proven {
 /// The scheme seeds its own transcript when it opens.
 fn fresh_challenger() -> MyChallenger {
     MyChallenger::new(Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1)))
+}
+
+#[test]
+fn zk_opening_budget_rejection_preserves_transcript_and_rng() {
+    use p3_challenger::CanSample;
+    let mut setup = Setup::new(945).pow_bits(32);
+    setup.security_level = 100;
+    let pcs = setup.pcs();
+    let control = setup.pcs();
+    let mut rng = SmallRng::seed_from_u64(946);
+    let witness = Poly::<F>::rand(&mut rng, setup.num_variables);
+    let point = Point::<EF>::rand(&mut rng, setup.num_variables);
+    let mut transcript = fresh_challenger();
+    let (_, data) = pcs.commit(witness.clone(), &mut transcript).unwrap();
+    let (_, direct_data) = control
+        .commit(witness.clone(), &mut fresh_challenger())
+        .unwrap();
+    let before: F = transcript.clone().sample();
+    let claims = vec![(point.clone(), witness.eval_base(&point)); 1 << 14];
+    let result = pcs.open(data, vec![point; 1 << 14], &mut transcript);
+    assert!(matches!(
+        result,
+        Err(crate::WhirConfigError::InitialClaimsBelowTarget { .. })
+    ));
+    assert_eq!(CanSample::<F>::sample(&mut transcript), before);
+
+    let direct = super::prover::HidingWhirProver::new(&pcs.config, &pcs.dft, &pcs.mmcs);
+    let mut direct_rng = StdRng::seed_from_u64(948);
+    let mut before = transcript.clone();
+    let result = direct.prove(direct_data, &claims, &mut transcript, &mut direct_rng);
+    assert!(matches!(
+        result,
+        Err(crate::WhirConfigError::InitialClaimsBelowTarget { .. })
+    ));
+    assert_eq!(CanSample::<F>::sample(&mut transcript), before.sample());
+    assert_eq!(
+        direct_rng.random::<u64>(),
+        StdRng::seed_from_u64(948).random::<u64>()
+    );
+    // An unsuccessful opening must not advance the adapter's masking RNG.
+    let next = pcs
+        .commit(witness.clone(), &mut fresh_challenger())
+        .unwrap()
+        .0;
+    let expected = control.commit(witness, &mut fresh_challenger()).unwrap().0;
+    assert_eq!(next, expected);
 }
 
 #[test]

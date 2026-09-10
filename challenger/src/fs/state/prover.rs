@@ -107,6 +107,12 @@ impl<C, U: Unit> ProverState<C, U> {
         &self.narg
     }
 
+    /// Release the completeness check when proof generation returns an error.
+    /// This does not restore the underlying challenger or yield a partial proof.
+    pub fn abort(&mut self) {
+        self.player.abort();
+    }
+
     /// Finalise the driver and return the serialised wire bytes.
     ///
     /// # Panics
@@ -1593,6 +1599,15 @@ mod tests {
             payload.downcast_ref::<&str>().copied(),
             Some("caller panic inside the live scope")
         );
+    }
+
+    #[test]
+    fn prover_abort_releases_unfinished_pattern() {
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"abort", small_pattern());
+        let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
+        p.add_scalars::<F, ByteCodec>("msgs", &[F::ONE, F::ONE, F::ONE]);
+        p.abort();
+        drop(p);
     }
 
     #[test]

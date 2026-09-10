@@ -68,7 +68,8 @@ where
     ///
     /// Security rejection is a behavior change: protocols accepted by older releases can
     /// exceed the configured target. Use this preflight or [`Self::try_open`] /
-    /// [`Self::try_open_at`] to handle rejection without the infallible traits' panic.
+    /// [`Self::try_open_at`] to validate a prescribed opening directly; the PCS traits
+    /// propagate the same typed errors.
     pub fn validate_opening_protocol(
         &self,
         protocol: &OpeningProtocol,
@@ -392,6 +393,7 @@ where
     type ProverData = BinaryPcsProverData<MT>;
     type Proof = BinaryPcsProof<MT>;
     type Error = BinaryPcsError<MT::Error>;
+    type ProverError = BinaryPcsError<MT::Error>;
     type Witness = Witness<BinaryField128>;
     type OpeningProtocol = OpeningProtocol;
 
@@ -403,20 +405,24 @@ where
         &self,
         witness: Self::Witness,
         challenger: &mut Challenger,
-    ) -> (Self::Commitment, Self::ProverData) {
-        commit(&self.config, &self.encoder, &self.mmcs, challenger, witness)
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
+        Ok(commit(
+            &self.config,
+            &self.encoder,
+            &self.mmcs,
+            challenger,
+            witness,
+        ))
     }
 
-    /// Panics if the opening protocol exceeds its security budget. This trait is infallible;
-    /// use `BinaryPcs::try_open` to handle the security rejection as a typed error.
+    /// Rejects an over-budget protocol before touching the challenger.
     fn open(
         &self,
         prover_data: Self::ProverData,
         protocol: Self::OpeningProtocol,
         challenger: &mut Challenger,
-    ) -> Self::Proof {
+    ) -> Result<Self::Proof, Self::ProverError> {
         self.try_open(prover_data, &protocol, challenger)
-            .unwrap_or_else(|e| panic!("invalid binary PCS opening protocol: {e}"))
     }
 
     fn verify(
@@ -453,17 +459,16 @@ where
         })
     }
 
-    /// Panics on an invalid or over-budget protocol or mismatched points. Use
-    /// `BinaryPcs::try_open_at` for typed errors. Points must already be transcript-bound.
+    /// Rejects invalid or over-budget protocols before touching the challenger.
+    /// Points must already be transcript-bound.
     fn open_at(
         &self,
         prover_data: Self::ProverData,
         protocol: &OpeningProtocol,
         points: &[Point<BinaryField128>],
         challenger: &mut Challenger,
-    ) -> Self::Proof {
+    ) -> Result<Self::Proof, Self::ProverError> {
         self.try_open_at(prover_data, protocol, points, challenger)
-            .unwrap_or_else(|e| panic!("invalid binary PCS prescribed opening protocol: {e}"))
     }
 
     /// Verifies an opening proof against `points` instead of sampling each opening point from
@@ -583,15 +588,17 @@ mod tests {
         let pcs = BinaryPcs::new(config, mmcs());
 
         let mut prover_challenger = challenger();
-        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
+        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
         let sample: F = prover_challenger.sample_algebra_element();
         let point = Point::expand_from_univariate(sample, NUM_VARIABLES);
-        let proof = pcs.open_at(
-            prover_data,
-            &protocol,
-            core::slice::from_ref(&point),
-            &mut prover_challenger,
-        );
+        let proof = pcs
+            .open_at(
+                prover_data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut prover_challenger,
+            )
+            .unwrap();
 
         (pcs, commitment, proof, protocol, point)
     }
@@ -711,8 +718,10 @@ mod tests {
         let pcs: BinaryPcs<MyMmcs> = BinaryPcs::new(config, mmcs());
 
         let mut prover_challenger = challenger();
-        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-        let proof = pcs.open(prover_data, protocol.clone(), &mut prover_challenger);
+        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+        let proof = pcs
+            .open(prover_data, protocol.clone(), &mut prover_challenger)
+            .unwrap();
 
         let mut verifier_challenger = challenger();
         pcs.verify(&commitment, &proof, &mut verifier_challenger, protocol)

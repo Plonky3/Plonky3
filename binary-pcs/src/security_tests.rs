@@ -123,7 +123,7 @@ fn zero_claim_final_codeword_is_bound_before_query_grinding_and_sampling() {
                 let protocol =
                     OpeningProtocol::new(vec![TableSpec::new(TableShape::new(8, 1), vec![])]);
                 let mut pc = RecordingChallenger::new();
-                let (root, data) = pcs.commit(witness, &mut pc);
+                let (root, data) = pcs.commit(witness, &mut pc).unwrap();
                 let proof = if prescribed {
                     pcs.try_open_at(data, &protocol, &[], &mut pc).unwrap()
                 } else {
@@ -213,7 +213,7 @@ fn actual_grinding_matches_the_model_and_follows_alpha_and_every_fold() {
                 vec![OpeningBatch::new(vec![0], vec![0])],
             )]);
             let mut pc = RecordingChallenger::new();
-            let (root, data) = pcs.commit(witness, &mut pc);
+            let (root, data) = pcs.commit(witness, &mut pc).unwrap();
             let proof = pcs.try_open(data, &protocol, &mut pc).unwrap();
             let mut vc = RecordingChallenger::new();
             pcs.verify(&root, &proof, &mut vc, protocol).unwrap();

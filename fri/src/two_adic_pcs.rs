@@ -298,6 +298,7 @@ where
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchMultiOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
+    type ProverError = core::convert::Infallible;
 
     /// Get the unique subgroup `H` of size `|H| = degree`.
     ///
@@ -318,7 +319,7 @@ where
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         let ldes: Vec<_> = evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -337,8 +338,10 @@ where
             })
             .collect();
 
-        // Commit to the bit-reversed LDEs.
-        self.mmcs.commit(ldes)
+        Ok(
+            // Commit to the bit-reversed LDEs.
+            self.mmcs.commit(ldes),
+        )
     }
 
     /// Open a batch of matrices at a collection of points.
@@ -353,7 +356,7 @@ where
         // For each multi-matrix commitment,
         commitment_data_with_opening_points: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
+    ) -> Result<(OpenedValues<Challenge>, Self::Proof), Self::ProverError> {
         /*
 
         A quick rundown of the optimizations in this function:
@@ -653,7 +656,7 @@ where
         // Every described step has now been played.
         transcript.finish();
 
-        (all_opened_values, fri_proof)
+        Ok((all_opened_values, fri_proof))
     }
 
     fn verify(
@@ -741,8 +744,8 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         _num_chunks: usize,
-    ) -> Vec<RowMajorMatrix<Val>> {
-        evaluations
+    ) -> Result<Vec<RowMajorMatrix<Val>>, Self::ProverError> {
+        Ok(evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
@@ -758,10 +761,13 @@ where
                     .bit_reverse_rows()
                     .to_row_major_matrix()
             })
-            .collect()
+            .collect())
     }
 
-    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+    fn commit_ldes(
+        &self,
+        ldes: Vec<RowMajorMatrix<Val>>,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         // Opening assumes every committed matrix is an LDE at `self.fri.log_blowup` and recovers the
         // underlying polynomial degree as `height >> log_blowup`. A matrix shorter than the blowup
         // factor would silently yield a zero-height degree and a malformed proof, so reject it here.
@@ -773,7 +779,7 @@ where
                 lde.height()
             );
         }
-        self.mmcs.commit(ldes)
+        Ok(self.mmcs.commit(ldes))
     }
 
     /// Given the evaluations on a domain `gH`, return the evaluations on a different domain `g'K`.
@@ -978,16 +984,19 @@ mod tests {
                 RowMajorMatrix::<F>::rand_nonzero(&mut rng, 1 << log_degree, width),
             )
         });
-        let (commitment, prover_data) = <MyPcs as Pcs<EF, Challenger>>::commit(&pcs, traces);
+        let (commitment, prover_data) =
+            <MyPcs as Pcs<EF, Challenger>>::commit(&pcs, traces).unwrap();
 
         // Prover: observe the commitment, sample the point, open.
         let mut p_challenger = Challenger::new(perm.clone());
         p_challenger.observe(&commitment);
         let zeta: EF = p_challenger.sample_algebra_element();
-        let (opened_values, proof) = pcs.open(
-            vec![(&prover_data, vec![vec![zeta], vec![zeta]]).into()],
-            &mut p_challenger,
-        );
+        let (opened_values, proof) = pcs
+            .open(
+                vec![(&prover_data, vec![vec![zeta], vec![zeta]]).into()],
+                &mut p_challenger,
+            )
+            .unwrap();
 
         // Verifier: replay up to the point sample so a valid proof must pass.
         let mut v_challenger = Challenger::new(perm);

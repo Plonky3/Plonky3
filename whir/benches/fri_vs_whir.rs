@@ -393,7 +393,8 @@ where
         &rig.pcs,
         rig.witness.clone(),
         &mut prover_challenger,
-    );
+    )
+    .unwrap();
     let commit_ms = t.elapsed().as_millis();
 
     // Phase 2: open (multi-round sumcheck + STIR queries + PoW).
@@ -403,7 +404,8 @@ where
         prover_data,
         rig.protocol.clone(),
         &mut prover_challenger,
-    );
+    )
+    .unwrap();
     let open_ms = t.elapsed().as_millis();
 
     (commitment, proof, commit_ms, open_ms)
@@ -591,7 +593,8 @@ where
     let (commit, prover_data) = <TwoAdicFriPcs<F, Dft, InMmcs, ChMmcs> as Pcs<EF, Ch>>::commit(
         &rig.pcs,
         [(rig.domain, rig.message.clone())],
-    );
+    )
+    .unwrap();
     let commit_ms = t.elapsed().as_millis();
 
     // Bind the Merkle root into the transcript before drawing the opening point,
@@ -611,7 +614,8 @@ where
         &rig.pcs,
         data_and_points.into_iter().map(Into::into).collect(),
         &mut prover_challenger,
-    );
+    )
+    .unwrap();
     let open_ms = t.elapsed().as_millis();
 
     // `openings` is a 4-level nested Vec indexed by `[round][matrix][point][column]`.

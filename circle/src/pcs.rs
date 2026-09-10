@@ -243,6 +243,7 @@ where
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Challenger::Witness>;
     type Error = FriError<FriMmcs::Error, InputError<InputMmcs::Error, FriMmcs::Error>>;
+    type ProverError = core::convert::Infallible;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         CircleDomain::standard(log2_strict_usize(degree))
@@ -251,7 +252,7 @@ where
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         let ldes = evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -268,7 +269,7 @@ where
             })
             .collect_vec();
         let (comm, mmcs_data) = self.mmcs.commit(ldes);
-        (comm, mmcs_data)
+        Ok((comm, mmcs_data))
     }
 
     fn open(
@@ -276,7 +277,7 @@ where
         // For each round,
         rounds: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
+    ) -> Result<(OpenedValues<Challenge>, Self::Proof), Self::ProverError> {
         // Materialize the CFFT-ordered domain points once per committed height. They are shared
         // by the Lagrange denominators and the DEEP-quotient vanishing parts below, which are in
         // turn shared by every matrix opened at the same point on the same domain.
@@ -647,7 +648,7 @@ where
         // Every described step has now been played.
         transcript.finish();
 
-        (
+        Ok((
             values,
             CirclePcsProof {
                 batch_pow_witness: batch_pow_witness.unwrap_or_default(),
@@ -655,7 +656,7 @@ where
                 lambdas,
                 fri_proof,
             },
-        )
+        ))
     }
 
     fn verify(
@@ -1113,8 +1114,8 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         _num_chunks: usize,
-    ) -> Vec<RowMajorMatrix<Val>> {
-        evaluations
+    ) -> Result<Vec<RowMajorMatrix<Val>>, Self::ProverError> {
+        Ok(evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
@@ -1128,11 +1129,14 @@ where
                     ))
                     .to_cfft_order()
             })
-            .collect_vec()
+            .collect_vec())
     }
 
-    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
-        self.mmcs.commit(ldes)
+    fn commit_ldes(
+        &self,
+        ldes: Vec<RowMajorMatrix<Val>>,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
+        Ok(self.mmcs.commit(ldes))
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -1301,20 +1305,23 @@ mod tests {
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
 
         // Commit to the trace and produce the Merkle root.
-        let (comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+        let (comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]).unwrap();
 
         // Random evaluation point in the extension field.
         let zeta: Challenge = rng.random();
 
         // Generate the opening proof at the chosen evaluation point.
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let (values, proof) = pcs.open(
-            vec![OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut chal,
-        );
+        let (values, proof) = pcs
+            .open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut chal,
+            )
+            .unwrap();
 
         (pcs, byte_hash, comm, d, zeta, values, proof)
     }
@@ -1323,14 +1330,15 @@ mod tests {
         let (pcs, byte_hash, _, d, zeta, _, _) = setup_valid_proof_at(0, 0, 0);
         let matrices =
             (0..matrix_count).map(|_| (d, RowMajorMatrix::new(vec![Val::ONE; d.size()], 1)));
-        let (_, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, matrices);
+        let (_, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, matrices).unwrap();
         pcs.open(
             vec![OpeningRequest {
                 prover_data: &data,
                 points: vec![vec![zeta]; point_count],
             }],
             &mut Challenger::from_hasher(vec![], byte_hash),
-        );
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1458,18 +1466,21 @@ mod tests {
         let evals_0 = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
         let evals_1 = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
         let (comm, data) =
-            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals_0), (d, evals_1)]);
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals_0), (d, evals_1)])
+                .unwrap();
 
         // Prove: open matrix 0 at one point, matrix 1 at no points.
         let zeta: Challenge = rng.random();
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let (values, proof) = pcs.open(
-            vec![OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta], vec![]],
-            }],
-            &mut chal,
-        );
+        let (values, proof) = pcs
+            .open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta], vec![]],
+                }],
+                &mut chal,
+            )
+            .unwrap();
 
         // Verify with the same shape: matrix 1 carries no opening points.
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
@@ -1527,7 +1538,7 @@ mod tests {
         let evals = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_n, width);
 
         let (_comm, data) =
-            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals.clone())]);
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals.clone())]).unwrap();
 
         // The committed LDE lives on `standard(log_n + 2)`. Walk a target domain from the
         // original degree up past the committed LDE: `log_n + 1` is the smaller-than case,
@@ -1653,18 +1664,21 @@ mod tests {
         let d =
             <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
-        let (_comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+        let (_comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]).unwrap();
 
         // Commit succeeds; the assert fires inside the opening (FRI prover).
         let zeta: Challenge = rng.random();
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let _ = pcs.open(
-            vec![OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut chal,
-        );
+        let _ = pcs
+            .open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut chal,
+            )
+            .unwrap();
     }
 
     #[test]
@@ -1719,18 +1733,21 @@ mod tests {
         let d =
             <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
-        let (_comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+        let (_comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]).unwrap();
 
         // Commit succeeds; the assert fires inside the opening (FRI prover).
         let zeta: Challenge = rng.random();
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let _ = pcs.open(
-            vec![OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut chal,
-        );
+        let _ = pcs
+            .open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut chal,
+            )
+            .unwrap();
     }
 
     #[test]

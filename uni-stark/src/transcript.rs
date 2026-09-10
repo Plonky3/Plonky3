@@ -470,6 +470,11 @@ where
         output
     }
 
+    /// Abandon proof generation after a recoverable error, releasing the drop check.
+    pub fn abort(&mut self) {
+        self.state.abort();
+    }
+
     /// Close the transcript once every described step has been played.
     ///
     /// # Panics

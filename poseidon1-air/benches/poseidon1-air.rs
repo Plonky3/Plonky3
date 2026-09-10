@@ -221,7 +221,7 @@ fn bench_prove(c: &mut Criterion) {
                     let trace = air.generate_trace_rows(num_hashes, log_blowup);
 
                     // Run the full STARK prover.
-                    prove(&config, &air, trace, &[])
+                    prove(&config, &air, trace, &[]).unwrap()
                 });
             },
         );
@@ -262,7 +262,7 @@ fn bench_prove_verify(c: &mut Criterion) {
                 let trace = air.generate_trace_rows(num_hashes, log_blowup);
 
                 // Prove.
-                let proof = prove(&config, &air, trace, &[]);
+                let proof = prove(&config, &air, trace, &[]).unwrap();
 
                 // Verify — panics on failure to catch regressions.
                 verify(&config, &air, &proof, &[]).expect("verification failed");
@@ -310,7 +310,7 @@ fn bench_vectorized_prove(c: &mut Criterion) {
                     let trace = air.generate_vectorized_trace_rows(num_perms, log_blowup);
 
                     // Run the full STARK prover.
-                    prove(&config, &air, trace, &[])
+                    prove(&config, &air, trace, &[]).unwrap()
                 });
             },
         );

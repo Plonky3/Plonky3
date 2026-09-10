@@ -318,7 +318,7 @@ mod tests {
         let config = StarkConfig::new(pcs, challenger);
 
         // Prove: generate a STARK proof for the Poseidon1 AIR.
-        let proof = prove(&config, &air, trace, &[]);
+        let proof = prove(&config, &air, trace, &[]).unwrap();
 
         // Verify: check the proof against the same AIR and config.
         verify(&config, &air, &proof, &[]).expect("Verification failed");

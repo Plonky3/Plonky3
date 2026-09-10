@@ -91,6 +91,7 @@ where
     type ProverData = HidingWhirProverData<F, EF, MT>;
     type Proof = ZkWhirProof<F, EF, MT>;
     type Error = ZkVerifierError;
+    type ProverError = crate::WhirConfigError;
     type Witness = Poly<F>;
     type OpeningProtocol = Vec<Point<EF>>;
 
@@ -102,10 +103,10 @@ where
         &self,
         witness: Self::Witness,
         challenger: &mut Challenger,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         let prover = HidingWhirProver::new(&self.config, &self.dft, &self.mmcs);
         let mut rng = StdRng::from_rng(&mut *self.rng.lock());
-        prover.commit(witness, challenger, &mut rng)
+        Ok(prover.commit(witness, challenger, &mut rng))
     }
 
     fn open(
@@ -113,7 +114,8 @@ where
         prover_data: Self::ProverData,
         protocol: Self::OpeningProtocol,
         challenger: &mut Challenger,
-    ) -> Self::Proof {
+    ) -> Result<Self::Proof, Self::ProverError> {
+        self.config.validate_initial_claims(protocol.len())?;
         // Evaluate and bind the public claims: points and values.
         let claims: Vec<(Point<EF>, EF)> = protocol
             .into_iter()

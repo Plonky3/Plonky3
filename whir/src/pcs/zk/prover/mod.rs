@@ -138,14 +138,12 @@ where
         claims: &[(Point<EF>, EF)],
         challenger: &mut Challenger,
         rng: &mut R,
-    ) -> ZkWhirProof<F, EF, MT>
+    ) -> Result<ZkWhirProof<F, EF, MT>, crate::WhirConfigError>
     where
         F: PrimeField64,
     {
         let config = self.config;
-        config
-            .validate_initial_claims(claims.len())
-            .unwrap_or_else(|error| panic!("{error}"));
+        config.validate_initial_claims(claims.len())?;
         let num_variables = config.num_variables;
         let sumcheck_mask_encoding = config.sumcheck_mask.encoding::<EF>();
 
@@ -513,13 +511,13 @@ where
         );
         transcript.finish();
 
-        ZkWhirProof {
+        Ok(ZkWhirProof {
             evals: claimed_evals,
             sumchecks,
             sumcheck_mask_commitments,
             rounds,
             base_case,
-        }
+        })
     }
 
     /// Opens the active oracle at every index in one multiproof and folds
