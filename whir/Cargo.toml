@@ -37,6 +37,7 @@ tracing.workspace = true
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-blake3 = { path = "../blake3" }
+p3-challenger = { path = "../challenger", features = ["test-utils"] }
 p3-fri = { path = "../fri" }
 p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }

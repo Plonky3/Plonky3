@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
@@ -12,8 +13,8 @@ use rand::{Rng, RngExt};
 
 use super::config::{BaseCaseZkConfig, MaskGroupWitness};
 use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
-use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::proof::{BaseCaseZkProof, BlindedMask, MaskOpeningPair};
+use crate::transcript::zk::{ZkBaseCaseProverTranscript, ZkBaseCaseShape};
 
 /// HVZK base-case prover (Construction 7.2).
 pub struct BaseCaseZkProver<'a, F, EF, MT>
@@ -47,6 +48,16 @@ where
     ///     5. open spot-check positions
     /// ```
     ///
+    /// # Transcript
+    ///
+    /// The base case is a protocol of its own.
+    ///
+    /// It therefore seeds a driver of its own.
+    ///
+    /// ```text
+    ///     borrowed sponge  ->  seed  ->  every move below  ->  sponge handed back
+    /// ```
+    ///
     /// # Arguments
     ///
     /// - `open_source`: opens the (virtual) source at the folded-domain positions.
@@ -63,6 +74,7 @@ where
         rng: &mut R,
     ) -> BaseCaseZkProof<F, EF, MT>
     where
+        F: TranscriptField,
         Dft: TwoAdicSubgroupDft<F>,
         Challenger: FieldChallenger<F>
             + GrindingChallenger<Witness = F>
@@ -76,6 +88,13 @@ where
         assert_eq!(source_randomness.len(), code.randomness_len);
         assert_eq!(source_covector.len(), code.message_len);
         assert_eq!(masks.len(), self.config.mask_groups.len());
+
+        // One driver spans the whole base case.
+        //
+        // The description is therefore walked exactly once.
+        let shape = ZkBaseCaseShape::new(self.config);
+        let mut transcript =
+            ZkBaseCaseProverTranscript::<Challenger, F, EF>::new(challenger, shape);
 
         // Move 1a: fresh main mask g = Enc(g~, r_g).
         //
@@ -92,7 +111,7 @@ where
         let codeword = code.encode_column(dft, &fresh_message, &fresh_randomness);
         let (fresh_main_commitment, fresh_main_data) = self.extension_mmcs.commit_matrix(codeword);
         // Bind the commitment before any challenge depends on it.
-        challenger.observe(fresh_main_commitment.clone());
+        transcript.fresh_commitment(fresh_main_commitment.clone());
 
         // Move 1b: one fresh blind s'_i = Enc(s~'_i, r'_i) per carried mask.
         //
@@ -120,7 +139,7 @@ where
             let (commitment, data) = self.extension_mmcs.commit_matrix(
                 encoding.encode_batch_with_randomness(&blind_messages, &blind_randomness),
             );
-            challenger.observe(commitment.clone());
+            transcript.blind_commitment(commitment.clone());
             fresh_mask_commitments.push(commitment);
             fresh_groups.push((blind_messages, blind_randomness, data, witness));
         }
@@ -141,10 +160,10 @@ where
                     dot_product::<EF, _, _>(message.iter().copied(), covector.iter().copied());
             }
         }
-        challenger.observe_algebra_element(masked_claim);
+        transcript.claim(masked_claim);
 
         // Move 3: the blinding challenge, bound to every commitment above.
-        let gamma: EF = challenger.sample_algebra_element();
+        let gamma: EF = transcript.gamma();
 
         // Move 4: the one-time-pad reveals.
         //
@@ -161,8 +180,7 @@ where
         // Source reveals: f* = g~ + gamma * f and r* = r_g + gamma * r.
         let blinded_message = blind(&fresh_message, source_message);
         let blinded_randomness = blind(&fresh_randomness, source_randomness);
-        challenger.observe_algebra_slice(&blinded_message);
-        challenger.observe_algebra_slice(&blinded_randomness);
+        transcript.reveal(&blinded_message, &blinded_randomness);
         // Mask reveals:
         // - xi*_i = s~'_i + gamma * xi_i,
         // - the analogous r*_i for each mask's encoding randomness.
@@ -178,8 +196,7 @@ where
                     randomness: blind(randomness, hidden_randomness),
                 };
                 // Absorb each reveal before the spot positions are drawn.
-                challenger.observe_algebra_slice(&blinded.message);
-                challenger.observe_algebra_slice(&blinded.randomness);
+                transcript.reveal(&blinded.message, &blinded.randomness);
                 blinded_masks.push(blinded);
             }
         }
@@ -187,11 +204,7 @@ where
         // PoW before the spot checks.
         //
         //     pow_bits = 0  ->  no grind, zero witness on the wire
-        let pow_witness = if self.config.pow_bits > 0 {
-            challenger.grind(self.config.pow_bits)
-        } else {
-            F::ZERO
-        };
+        let pow_witness = transcript.spot_check_pow();
 
         // Move 5a: source spot checks, t positions on the source domain.
         //
@@ -200,12 +213,7 @@ where
         //     Enc(f*, r*)(z) = g(z) + gamma * f(z)
         //
         // so both committed sides are opened here.
-        let positions = get_challenge_stir_queries::<Challenger, F>(
-            code.domain_size,
-            0,
-            self.config.num_queries,
-            challenger,
-        );
+        let positions = transcript.source_queries();
         // f(z): leaves of the last committed oracle, virtually folded.
         let source_openings = open_source(&positions);
         // g(z): the fresh main mask, committed above.
@@ -221,15 +229,8 @@ where
         // Positions are shared across the group, so one opened row of each
         // oracle serves every member.
         let mut mask_openings = Vec::with_capacity(fresh_groups.len());
-        for (group, (_, _, fresh_data, witness)) in
-            self.config.mask_groups.iter().zip(&fresh_groups)
-        {
-            let positions = get_challenge_stir_queries::<Challenger, F>(
-                group.shape.domain_size,
-                0,
-                self.config.mask_queries,
-                challenger,
-            );
+        for (group_index, (_, _, fresh_data, witness)) in fresh_groups.iter().enumerate() {
+            let positions = transcript.mask_queries(group_index);
             // xi_i(y) and s'_i(y): the carried group oracle and its fresh
             // blind, opened at the same shared positions.
             mask_openings.push(MaskOpeningPair {
@@ -237,6 +238,9 @@ where
                 fresh: SharedProofOpening::open(self.extension_mmcs, &positions, fresh_data),
             });
         }
+
+        // Require that every described step was played.
+        transcript.finish();
 
         BaseCaseZkProof {
             fresh_main_commitment,

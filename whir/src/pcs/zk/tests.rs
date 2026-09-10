@@ -13,6 +13,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use proptest::prelude::*;
 use rand::rngs::{SmallRng, StdRng};
 use rand::{RngExt, SeedableRng};
 
@@ -744,4 +745,245 @@ fn zk_whir_masks_are_witness_independent() {
         proof_a.base_case.blinded_message, proof_b.base_case.blinded_message,
         "different witnesses produce different (uniformly padded) reveals",
     );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_round_commitment() {
+    // Invariant: the oracle a code-switching round commits is bound at its own step.
+    //
+    // Fixture state: 12 variables at folding 4, giving 1 code-switching round.
+    //
+    // Mutation: swap in another witness's round oracle.
+    //
+    //     described  oracle_commitment       <- honest digest
+    //     supplied   oracle_commitment       <- a stranger's digest
+    //     -> every later challenge moves
+    //     -> the round-0 multiproof cannot authenticate
+    let mut proven = Setup::new(50).prove();
+    let other = Setup::new(51).prove();
+    proven.proof.rounds[0].commitment = other.proof.rounds[0].commitment.clone();
+    let err = proven.verify().unwrap_err();
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
+}
+
+#[test]
+fn zk_whir_rejects_tampered_switch_mask_commitment() {
+    // Invariant: the code-switch mask is bound at a step of its own.
+    //
+    // It is committed right after the oracle it hides.
+    //
+    // Mutation: swap in another witness's mask oracle.
+    //
+    //     described  oracle_commitment  switch_mask_commitment
+    //     supplied   honest             a stranger's digest
+    //     -> the transcript diverges before the round's positions are drawn
+    let mut proven = Setup::new(52).prove();
+    let other = Setup::new(53).prove();
+    proven.proof.rounds[0].mask_commitment = other.proof.rounds[0].mask_commitment.clone();
+    let err = proven.verify().unwrap_err();
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
+}
+
+#[test]
+fn zk_whir_rejects_tampered_sumcheck_mask_commitment() {
+    // Invariant: each masked batch binds its interleaved mask oracle.
+    //
+    // That happens inside the batch's own description, under its own seed.
+    //
+    // Mutation: swap the first batch's mask oracle for a stranger's.
+    //
+    //     batch 0  mask_commitment  <- a stranger's digest
+    //     -> the batch draws a different combining challenge
+    //     -> the batch cannot close
+    let mut proven = Setup::new(54).prove();
+    let other = Setup::new(55).prove();
+    proven.proof.sumcheck_mask_commitments[0] = other.proof.sumcheck_mask_commitments[0].clone();
+    let err = proven.verify().unwrap_err();
+    // The diverged batch fails its own round identity.
+    //
+    // Or it moves the positions the round-0 multiproof is checked at.
+    assert!(matches!(
+        err,
+        ZkVerifierError::Sumcheck(_) | ZkVerifierError::MerkleVerificationFailed { round: 0 },
+    ));
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_fresh_commitment() {
+    // Invariant: the base case binds its fresh source mask first.
+    //
+    // Nothing is drawn before that binding.
+    //
+    // The blinding challenge is what the binding protects.
+    //
+    // Mutation: swap in another run's fresh source mask.
+    //
+    //     described  base_fresh_commitment  <- honest digest
+    //     supplied   base_fresh_commitment  <- a stranger's digest
+    //     -> a different blinding challenge
+    //     -> the joint target identity fails
+    let mut proven = Setup::new(56).prove();
+    let other = Setup::new(57).prove();
+    proven.proof.base_case.fresh_main_commitment = other.proof.base_case.fresh_main_commitment;
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::TargetCheckFailed),
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_blind_commitment() {
+    // Invariant: every fresh blind group is bound at a step of its own.
+    //
+    // Mutation: swap the first group's blind oracle for a stranger's.
+    //
+    //     group 0  base_blind_commitment  <- a stranger's digest
+    //     -> a different blinding challenge
+    //     -> the joint target identity fails
+    let mut proven = Setup::new(58).prove();
+    let other = Setup::new(59).prove();
+    assert!(
+        !proven.proof.base_case.fresh_mask_commitments.is_empty(),
+        "the fixture must commit at least one fresh blind group",
+    );
+    proven.proof.base_case.fresh_mask_commitments[0] =
+        other.proof.base_case.fresh_mask_commitments[0].clone();
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::TargetCheckFailed),
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_randomness_reveal() {
+    // Invariant: the encoding-randomness half of a reveal is bound too.
+    //
+    // It does not enter the joint target identity.
+    //
+    // Only its binding can catch a shift in it.
+    //
+    // Mutation: shift one coefficient of the source randomness reveal.
+    //
+    //     absorbed  base_reveal_randomness  <- shifted
+    //     -> the spot positions drawn next differ from the ones the proof opens
+    let mut proven = Setup::new(60).prove();
+    proven.proof.base_case.blinded_randomness[0] += EF::ONE;
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::SourceOpeningsRejected),
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_mask_reveal() {
+    // Invariant: each carried mask is revealed as its own pair of bound steps.
+    //
+    // Mutation: shift the message half of the first mask reveal.
+    //
+    //     absorbed  base_reveal_message  <- shifted
+    //     -> the reveal enters the joint target identity
+    //     -> that identity then fails
+    let mut proven = Setup::new(61).prove();
+    assert!(
+        !proven.proof.base_case.blinded_masks.is_empty(),
+        "the fixture must carry at least one mask",
+    );
+    proven.proof.base_case.blinded_masks[0].message[0] += EF::ONE;
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::TargetCheckFailed),
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_mask_randomness_reveal() {
+    // Invariant: the randomness half of a mask reveal is bound at its own step.
+    //
+    // Mutation: shift the randomness half of the first mask reveal.
+    //
+    //     target identity  ->  unaffected, randomness is not in it
+    //     absorbed reveal  ->  lands before the spot positions are drawn
+    //     -> the positions move
+    //     -> the source multiproof opens the wrong leaves
+    let mut proven = Setup::new(62).prove();
+    proven.proof.base_case.blinded_masks[0].randomness[0] += EF::ONE;
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::SourceOpeningsRejected),
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_pow_witness() {
+    // Invariant: the base case grinds once, before its spot positions are drawn.
+    //
+    // Fixture state: 5 grinding bits, which is real work.
+    //
+    // Mutation: shift the witness the base case grinding step reads.
+    //
+    //     described  base_pow(5)
+    //     supplied   witness + 1   -> clears 5 bits with probability 2^-5
+    let mut proven = Setup::new(63).pow_bits(5).prove();
+    assert!(
+        proven.pcs.config.final_pow_bits > 0,
+        "the fixture must grind before its spot checks",
+    );
+    proven.proof.base_case.pow_witness += F::ONE;
+    let err = proven.verify().unwrap_err();
+    // A shifted witness usually fails the grind outright.
+    //
+    // A lucky one still moves the spot positions.
+    //
+    // The openings are then rejected instead.
+    assert!(matches!(
+        err,
+        ZkVerifierError::BaseCase(
+            BaseCaseZkError::InvalidPowWitness | BaseCaseZkError::SourceOpeningsRejected
+        ),
+    ));
+}
+
+#[test]
+fn zk_whir_rejects_a_truncated_base_case_reveal() {
+    // Invariant: a reveal carries exactly the length the configuration describes.
+    //
+    // Fixture state: the source word is 2^final_sumcheck_rounds values wide.
+    //
+    // Mutation: drop one value from the source message reveal.
+    //
+    //     described  message_len
+    //     supplied   message_len - 1  -> rejected, nothing absorbed
+    let mut proven = Setup::new(64).prove();
+    let expected = proven.proof.base_case.blinded_message.len();
+    let _dropped = proven.proof.base_case.blinded_message.pop();
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::BlindedLengthMismatch {
+            kind: "message",
+            expected,
+            actual: expected - 1,
+        }),
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+
+    #[test]
+    fn prop_zk_whir_round_trip_accepts(seed in any::<u64>()) {
+        // Completeness over random statements and random hiding material.
+        //
+        // The seed drives the witness, the opened points and the prover's masks.
+        //
+        // Both sides play one description.
+        //
+        // Every honest run must therefore verify.
+        Setup::new(seed).num_points(2).assert_round_trip();
+    }
 }
