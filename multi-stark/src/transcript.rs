@@ -71,7 +71,7 @@ use p3_challenger::{CanObserve, CanSample};
 use thiserror::Error;
 
 /// Version byte bound into the transcript seed.
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 
 /// Protocol name bound into the transcript seed.
 const NAME: &[u8] = b"p3-multi-stark";
@@ -145,6 +145,10 @@ pub struct MultiStarkInstanceShape {
     pub preprocessed_width: usize,
     /// Number of public values this instance's AIR reads.
     pub num_public_values: usize,
+    /// Main successor columns, in opening order.
+    pub main_next_row_columns: Vec<usize>,
+    /// Preprocessed successor columns, in opening order.
+    pub preprocessed_next_row_columns: Vec<usize>,
 }
 
 /// Numbers that fix the transcript of one batched multi-STARK statement.
@@ -202,6 +206,8 @@ impl MultiStarkShape {
                     main_width: air.width(),
                     preprocessed_width: air.preprocessed_width(),
                     num_public_values: air.num_public_values(),
+                    main_next_row_columns: air.main_next_row_columns(),
+                    preprocessed_next_row_columns: air.preprocessed_next_row_columns(),
                 })
                 .collect(),
             pow_bits,
@@ -317,6 +323,15 @@ impl MultiStarkShape {
                 .instance(&(instance.num_variables as u64).to_be_bytes())
                 .instance(&(instance.main_width as u64).to_be_bytes())
                 .instance(&(instance.preprocessed_width as u64).to_be_bytes());
+            for columns in [
+                &instance.main_next_row_columns,
+                &instance.preprocessed_next_row_columns,
+            ] {
+                separator.instance(&(columns.len() as u64).to_be_bytes());
+                for &column in columns {
+                    separator.instance(&(column as u64).to_be_bytes());
+                }
+            }
         }
 
         separator
@@ -755,12 +770,16 @@ mod tests {
                     main_width: 4,
                     preprocessed_width: 2,
                     num_public_values: 3,
+                    main_next_row_columns: vec![0, 1],
+                    preprocessed_next_row_columns: vec![0],
                 },
                 MultiStarkInstanceShape {
                     num_variables: 6,
                     main_width: 5,
                     preprocessed_width: 0,
                     num_public_values: 1,
+                    main_next_row_columns: vec![0],
+                    preprocessed_next_row_columns: vec![],
                 },
             ],
             pow_bits: 4,
@@ -777,6 +796,36 @@ mod tests {
 
         left.pattern().pattern_hash() == right.pattern().pattern_hash()
             && left.instance_label() == right.instance_label()
+    }
+
+    #[test]
+    fn ordered_successor_columns_change_the_statement_seed() {
+        struct ColumnsAir(Vec<usize>, Vec<usize>);
+        impl BaseAir<F> for ColumnsAir {
+            fn width(&self) -> usize {
+                3
+            }
+            fn preprocessed_width(&self) -> usize {
+                3
+            }
+            fn main_next_row_columns(&self) -> Vec<usize> {
+                self.0.clone()
+            }
+            fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+                self.1.clone()
+            }
+        }
+        let baseline =
+            MultiStarkShape::new::<F, _>(&[&ColumnsAir(vec![0, 1], vec![0, 1])], &[4], 0);
+        for air in [
+            ColumnsAir(vec![1, 0], vec![0, 1]),
+            ColumnsAir(vec![0, 2], vec![0, 1]),
+            ColumnsAir(vec![0, 1], vec![1, 0]),
+            ColumnsAir(vec![0, 1], vec![0, 2]),
+        ] {
+            let changed = MultiStarkShape::new::<F, _>(&[&air], &[4], 0);
+            assert!(!seeds_agree(&baseline, &changed));
+        }
     }
 
     /// First challenge a shape's seed produces on a fresh sponge.
@@ -806,6 +855,8 @@ mod tests {
             main_width,
             preprocessed_width,
             num_public_values,
+            main_next_row_columns,
+            preprocessed_next_row_columns,
         } = instances
             .into_iter()
             .next()
@@ -836,6 +887,17 @@ mod tests {
         let mut shape = base_shape();
         shape.instances[0].num_public_values = num_public_values + 1;
         mutations.push(("instance.num_public_values", shape));
+
+        let mut shape = base_shape();
+        shape.instances[0].main_next_row_columns =
+            main_next_row_columns.into_iter().rev().collect();
+        mutations.push(("instance.main_next_row_columns", shape));
+        let mut shape = base_shape();
+        shape.instances[0].preprocessed_next_row_columns = preprocessed_next_row_columns
+            .into_iter()
+            .map(|c| c + 1)
+            .collect();
+        mutations.push(("instance.preprocessed_next_row_columns", shape));
 
         mutations
     }
@@ -998,12 +1060,16 @@ mod tests {
                         main_width: 7,
                         preprocessed_width: 3,
                         num_public_values: 5,
+                        main_next_row_columns: (0..7).collect(),
+                        preprocessed_next_row_columns: (0..3).collect(),
                     },
                     MultiStarkInstanceShape {
                         num_variables: 4,
                         main_width: 2,
                         preprocessed_width: 0,
                         num_public_values: 1,
+                        main_next_row_columns: (0..2).collect(),
+                        preprocessed_next_row_columns: vec![],
                     },
                 ],
                 pow_bits: 6,
@@ -1280,6 +1346,8 @@ mod tests {
                     main_width,
                     preprocessed_width,
                     num_public_values,
+                    main_next_row_columns: (0..main_width).collect(),
+                    preprocessed_next_row_columns: (0..preprocessed_width).collect(),
                 }
             },
         );
