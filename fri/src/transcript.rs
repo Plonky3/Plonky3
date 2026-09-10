@@ -26,6 +26,29 @@
 //!
 //! A wrong commitment width does not desynchronise the transcript.
 //! The opening check that recomputes it is what rejects it.
+//!
+//! # Why the arity of every round is bound separately
+//!
+//! The step sequence carries the round count.
+//!
+//! It emits one group of steps per round.
+//!
+//! It does not carry the arity each round folds by.
+//!
+//! ```text
+//!     [3, 3, 2]   three rounds, eight levels folded
+//!     [2, 3, 3]   three rounds, eight levels folded
+//! ```
+//!
+//! Both give the same step sequence.
+//!
+//! The query index width follows the total, and the total is equal.
+//!
+//! Real configurations reach both.
+//!
+//! So the values go in the instance label.
+//!
+//! That is what gives the two runs distinct seeds.
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -243,12 +266,16 @@ impl FriShape {
             separator.instance(&(value as u64).to_be_bytes());
         }
 
-        // The round count alone does not pin which arity each round folds by.
+        // The round count alone does not pin the arity each round folds by.
         //
-        //     [3, 3, 2]  and  [2, 3, 3]
+        //     [3, 3, 2]   three rounds, eight levels folded
+        //     [2, 3, 3]   three rounds, eight levels folded
         //
-        // Both have three rounds, both total eight, so both describe one shape.
-        // Binding the values gives the two runs distinct seeds.
+        // The step sequence emits one group per round, so it agrees on the two.
+        //
+        // The query index width follows the total, and the total is equal too.
+        //
+        // Binding the values here is what gives the two runs distinct seeds.
         for &log_arity in &self.log_arities {
             separator.instance(&(log_arity as u64).to_be_bytes());
         }
@@ -381,13 +408,111 @@ where
         }
     }
 
+    /// Replay every commit round the run was described with.
+    ///
+    /// # Overview
+    ///
+    /// The round count is a length of the described transcript.
+    ///
+    /// The folding schedule fixes it.
+    ///
+    /// Both sides derive that schedule from their own configuration.
+    ///
+    /// A different round count is a different shape.
+    ///
+    /// It is rejected here, not replayed.
+    ///
+    /// ```text
+    ///     described:  one commitment and one witness per round
+    ///     supplied:   whatever the proof carries
+    ///
+    ///     equal      ->  replay, one folding challenge per round
+    ///     different  ->  reject, nothing absorbed
+    /// ```
+    ///
+    /// # Why the count is checked before anything is absorbed
+    ///
+    /// A step played past the end of a description is a programming error.
+    ///
+    /// The driver reports it by panicking.
+    ///
+    /// Untrusted input must never reach that path.
+    ///
+    /// Checking the count first keeps a malformed run on the rejection path.
+    ///
+    /// # Arguments
+    ///
+    /// - `commitments`: one commitment per round, in round order.
+    /// - `witnesses`: one grinding witness per round, in the same order.
+    ///
+    /// # Returns
+    ///
+    /// One folding challenge per round, in round order.
+    ///
+    /// # Errors
+    ///
+    /// - The commitments do not number one per described round.
+    /// - The witnesses do not number one per described round.
+    /// - A witness misses the difficulty its grinding step requires.
+    pub fn commit_rounds<Com>(
+        &mut self,
+        commitments: &[Com],
+        witnesses: &[F],
+    ) -> Result<Vec<EF>, TranscriptFailure>
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        // The described round count.
+        //
+        // It comes from the folding schedule alone.
+        let expected = self.shape.log_arities.len();
+
+        // A shorter run would leave described steps unplayed.
+        //
+        // A longer one would walk off the end of the description.
+        //
+        // Both are rejected before the first commitment is absorbed.
+        if commitments.len() != expected {
+            self.state.abort();
+            return Err(TranscriptFailure::CommitRoundCount {
+                expected,
+                got: commitments.len(),
+            });
+        }
+
+        // Each round replays its own grinding step.
+        //
+        // So the witnesses form a per-round list of the same length.
+        if witnesses.len() != expected {
+            self.state.abort();
+            return Err(TranscriptFailure::CommitPowWitnessCount {
+                expected,
+                got: witnesses.len(),
+            });
+        }
+
+        // Both counts agree with the description.
+        //
+        // Every round can now be replayed.
+        commitments
+            .iter()
+            .zip(witnesses)
+            .map(|(commitment, &witness)| self.commit_round(commitment.clone(), Some(witness)))
+            .collect()
+    }
+
     /// Replay one commit round against the witness the proof carries.
+    ///
+    /// Private because the described round count bounds how often this may run.
+    ///
+    /// Only the entry point that checks a supplied count against it may call it.
     ///
     /// # Errors
     ///
     /// - The round carries no witness for a described grinding step.
     /// - The witness misses the required difficulty.
-    pub fn commit_round<Com>(
+    fn commit_round<Com>(
         &mut self,
         commitment: Com,
         witness: Option<F>,
@@ -489,6 +614,22 @@ pub enum TranscriptFailure {
         /// Coefficient count the run was described with.
         expected: usize,
         /// Coefficient count the proof carries.
+        got: usize,
+    },
+    /// The run carries a round count the folding schedule does not fix.
+    #[error("commit round count mismatch: expected {expected}, got {got}")]
+    CommitRoundCount {
+        /// Round count the folding schedule fixes.
+        expected: usize,
+        /// Round count the proof carries.
+        got: usize,
+    },
+    /// The per-round grinding witnesses do not number one per commit round.
+    #[error("commit phase PoW witness count mismatch: expected {expected}, got {got}")]
+    CommitPowWitnessCount {
+        /// Witness count the folding schedule fixes.
+        expected: usize,
+        /// Witness count the proof carries.
         got: usize,
     },
 }
@@ -680,6 +821,53 @@ mod tests {
     }
 
     #[test]
+    fn the_arity_of_every_round_reaches_the_seed_through_the_instance_label() {
+        // Invariant: the step sequence does not determine the folding schedule.
+        //
+        // The schedule therefore has to be bound outside it.
+        //
+        // Fixture state: two runs of three rounds, folding the same total distance.
+        //
+        //     [3, 3, 2]  folds 8 -> 5 -> 2 -> 0
+        //     [2, 3, 3]  folds 8 -> 6 -> 3 -> 0
+        //
+        // Both are reachable at one folding cap:
+        //
+        //     inputs [10]      ->  [3, 3, 2]
+        //     inputs [10, 8]   ->  [2, 3, 3]
+        //
+        // So these are two real protocols, not a tampered field.
+        //
+        // Every quantity the step sequence carries agrees on the two:
+        //
+        //     round count   3 == 3   one group of steps per round
+        //     index width   8 == 8   derived from the total, which is equal
+        //     final poly    1 == 1
+        //     grinding      elided on both
+        //
+        // Only the instance label is left to separate them.
+        let forward = plain_shape();
+        let mut reversed = plain_shape();
+        reversed.log_arities.reverse();
+
+        // The two runs share one sequence of steps.
+        assert_eq!(
+            forward.pattern::<F, EF>().interactions(),
+            reversed.pattern::<F, EF>().interactions(),
+            "the step sequence cannot tell the two schedules apart",
+        );
+
+        // The seed does separate them.
+        //
+        // That separation is the instance label doing its work.
+        assert_ne!(
+            seed_of(&forward),
+            seed_of(&reversed),
+            "the schedule must reach the seed",
+        );
+    }
+
+    #[test]
     fn the_query_index_width_is_described_where_the_indices_are_drawn() {
         // A run draws `log_global_max_height + extra_query_index_bits` bits per query.
         // A narrower draw shrinks the query space, and the proximity-test soundness error with it.
@@ -749,6 +937,105 @@ mod tests {
             err,
             TranscriptFailure::MissingPowWitness(PowPhase::CommitPhase)
         );
+    }
+
+    #[test]
+    fn a_run_carrying_the_wrong_number_of_commit_rounds_is_rejected() {
+        // Invariant: the round count is a length of the description.
+        //
+        // It is never a length of the proof.
+        //
+        // Fixture state: a schedule of [3, 3, 2], so exactly 3 commit rounds.
+        //
+        // Mutation: hand the replay 2 commitments, then 4.
+        //
+        //     described:  [round_0, round_1, round_2]
+        //     short:      [round_0, round_1]          -> 2 != 3
+        //     long:       [round_0, ..., round_3]     -> 4 != 3
+        //
+        // A short run would leave a described step unplayed.
+        //
+        // A long run would drive the player off the end of the description.
+        for got in [2, 4] {
+            let mut challenger = fresh_challenger();
+            let mut transcript =
+                VerifierTranscript::<Ch, F, EF>::new(&mut challenger, plain_shape());
+
+            // One commitment and one witness per supplied round.
+            //
+            // Only the count differs from the description.
+            let commitments = vec![[F::ONE; 8]; got];
+            let witnesses = vec![F::ZERO; got];
+
+            let err = transcript
+                .commit_rounds(&commitments, &witnesses)
+                .expect_err("a round count outside the description must error");
+
+            assert_eq!(
+                err,
+                TranscriptFailure::CommitRoundCount { expected: 3, got }
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_carrying_the_wrong_number_of_grinding_witnesses_is_rejected() {
+        // Invariant: every commit round replays its own grinding step.
+        //
+        // Fixture state: a schedule of [3, 3, 2], so 3 rounds and 3 witnesses.
+        //
+        // Mutation: keep the 3 commitments, supply only 2 witnesses.
+        //
+        //     commitments: [c_0, c_1, c_2]   ->  3 == 3, accepted
+        //     witnesses:   [w_0, w_1]        ->  2 != 3, rejected
+        //
+        // Zipping the two lists instead would silently drop the last round.
+        let mut challenger = fresh_challenger();
+        let mut transcript = VerifierTranscript::<Ch, F, EF>::new(&mut challenger, plain_shape());
+
+        let err = transcript
+            .commit_rounds(&[[F::ONE; 8]; 3], &[F::ZERO; 2])
+            .expect_err("a witness count outside the description must error");
+
+        assert_eq!(
+            err,
+            TranscriptFailure::CommitPowWitnessCount {
+                expected: 3,
+                got: 2
+            }
+        );
+    }
+
+    #[test]
+    fn a_wrong_round_count_is_an_error_and_not_a_panic() {
+        // Invariant: a verifier rejects malformed input.
+        //
+        // It never panics on it.
+        //
+        // The driver panics on a step played past the end of a description.
+        //
+        // A count taken from a proof must never reach that path.
+        //
+        // Fixture state: 3 described rounds, 50 supplied.
+        //
+        //     described steps:  3 rounds * 3 steps, plus 3 closing steps
+        //     4th commitment:   no step left to match it
+        //
+        // Reaching the assertion at all proves no panic was raised.
+        let mut challenger = fresh_challenger();
+        let mut transcript = VerifierTranscript::<Ch, F, EF>::new(&mut challenger, plain_shape());
+
+        let err = transcript
+            .commit_rounds(&[[F::ONE; 8]; 50], &[F::ZERO; 50])
+            .expect_err("a wildly wrong round count must still be a structured error");
+
+        assert!(matches!(
+            err,
+            TranscriptFailure::CommitRoundCount {
+                expected: 3,
+                got: 50
+            }
+        ));
     }
 
     #[test]
