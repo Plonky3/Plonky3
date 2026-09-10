@@ -493,6 +493,17 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///     prefix: the high index bit, faces half the table apart, bound in place
     ///     suffix: the low index bit, faces adjacent, bound into a half-size buffer
     /// ```
+    ///
+    /// The suffix half-size buffer is pure cost below `PARALLEL_THRESHOLD` entries,
+    /// where `Poly::fix_suffix_var_mut` folds in place and allocates nothing.
+    ///
+    /// No size gate routes those rounds back to two passes, because the tail of a
+    /// ladder cannot move its total:
+    ///
+    /// ```text
+    ///     a 2^20 ladder reads ~2^21 entries in all
+    ///     its rounds below the threshold hold ~2^13 of them, or ~0.4%
+    /// ```
     pub(crate) fn fold_round_coefficients(&mut self, r: EF) -> (EF, EF) {
         // The fused pass needs the bound table to keep a variable for the message.
         // That is four entries in the table it starts from.

@@ -121,48 +121,27 @@ where
 /// batch except the last, the folding randomness in round order — `randomness.as_slice()[r]` is
 /// round `r`'s challenge, matching what [`Layout::into_sumcheck`] returns — and the final
 /// folded codeword.
+///
+/// `BIND_EACH_ROUND` picks when each round's challenge is applied to the sumcheck tables:
+///
+/// ```text
+///     false: left outstanding, so the next round's measuring pass absorbs it
+///            one pass per round
+///     true : applied on the spot, so the next round measures in a pass of its own
+///            two passes per round
+/// ```
+///
+/// The two produce the same round polynomials, so one can be pinned against the other.
+///
+/// The choice is a const parameter, so a build that never asks for the two-pass route
+/// never compiles one.
+///
+/// This is the only seam between the two routes.
+/// `BinaryPcs::finish_open_with` carries the same parameter one level up.
 #[must_use]
 #[allow(clippy::type_complexity)]
 #[tracing::instrument(name = "binary pcs fold rounds", skip_all)]
-pub(crate) fn fold_rounds<MT, Ch>(
-    prover_data: BinaryPcsProverData<MT>,
-    config: &BinaryPcsConfig,
-    mmcs: &MT,
-    challenger: &mut Ch,
-) -> (
-    MT::ProverData<DenseMatrix<BinaryField128>>,
-    SumcheckData<BinaryField128, BinaryField128>,
-    Vec<RoundCommitment<MT>>,
-    Point<BinaryField128>,
-    Vec<BinaryField128>,
-)
-where
-    MT: Mmcs<BinaryField128>,
-    Ch: FieldChallenger<BinaryField128>
-        + GrindingChallenger<Witness = BinaryField128>
-        + CanObserve<MT::Commitment>,
-{
-    fold_rounds_with::<false, MT, Ch>(prover_data, config, mmcs, challenger)
-}
-
-/// Drives the fold rounds, applying each round's binding on the spot when asked.
-///
-/// On the spot means two passes per round.
-/// The round reads its tables to measure, then a second pass applies the binding.
-///
-/// Left outstanding, the next round's measuring pass absorbs it.
-/// That is one pass per round.
-///
-/// The two produce the same round polynomials.
-///
-/// So one can be pinned against the other.
-///
-/// The choice is a const parameter.
-///
-/// So a build that never asks for the two-pass route never compiles one.
-#[must_use]
-#[allow(clippy::type_complexity)]
-fn fold_rounds_with<const BIND_EACH_ROUND: bool, MT, Ch>(
+pub(crate) fn fold_rounds_with<const BIND_EACH_ROUND: bool, MT, Ch>(
     prover_data: BinaryPcsProverData<MT>,
     config: &BinaryPcsConfig,
     mmcs: &MT,
@@ -265,37 +244,6 @@ where
     )
 }
 
-/// Reference route for the tests.
-///
-/// Each round's binding is applied on the spot.
-///
-/// The fused route instead lets the next round's measuring pass absorb it.
-///
-/// Two passes per round rather than one, over the same round polynomials.
-#[cfg(test)]
-#[must_use]
-#[allow(clippy::type_complexity)]
-pub(crate) fn fold_rounds_binding_each_round<MT, Ch>(
-    prover_data: BinaryPcsProverData<MT>,
-    config: &BinaryPcsConfig,
-    mmcs: &MT,
-    challenger: &mut Ch,
-) -> (
-    MT::ProverData<DenseMatrix<BinaryField128>>,
-    SumcheckData<BinaryField128, BinaryField128>,
-    Vec<RoundCommitment<MT>>,
-    Point<BinaryField128>,
-    Vec<BinaryField128>,
-)
-where
-    MT: Mmcs<BinaryField128>,
-    Ch: FieldChallenger<BinaryField128>
-        + GrindingChallenger<Witness = BinaryField128>
-        + CanObserve<MT::Commitment>,
-{
-    fold_rounds_with::<true, MT, Ch>(prover_data, config, mmcs, challenger)
-}
-
 /// The query phase's prover-side output: every opening `verifier::verify_query_paths` needs,
 /// plus the grinding witness.
 pub(crate) struct QueryProofs<MT: Mmcs<BinaryField128>> {
@@ -314,7 +262,7 @@ pub(crate) struct QueryProofs<MT: Mmcs<BinaryField128>> {
 /// the base codeword's domain, then opens the base commitment and every intermediate
 /// fold-batch commitment at all coset indices each sampled query needs.
 ///
-/// `rounds` is every [`RoundCommitment`] `fold_rounds` produced: one per fold batch except the
+/// `rounds` is every [`RoundCommitment`] `fold_rounds_with` produced: one per fold batch except the
 /// last, whose codeword is never committed — it travels in the clear as the proof's
 /// `final_codeword` instead, so a Merkle path for it would only repeat what the verifier can
 /// already read directly.
@@ -335,7 +283,7 @@ where
     assert_eq!(
         rounds.len(),
         config.num_fold_batches() - 1,
-        "rounds is the caller's own fold_rounds output, never proof-supplied data"
+        "rounds is the caller's own fold_rounds_with output, never proof-supplied data"
     );
 
     let pow_witness = challenger.grind(config.pow_bits());
@@ -381,7 +329,7 @@ fn single_matrix_rows(values: Vec<Vec<Vec<BinaryField128>>>) -> Vec<Vec<BinaryFi
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
+    use alloc::{format, vec};
 
     use p3_binary_dft::{AdditiveRsEncoder, NaiveAdditiveNtt};
     use p3_binary_field::BinaryField128;
@@ -394,7 +342,7 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::{commit, fold_rounds, fold_rounds_binding_each_round};
+    use super::{commit, fold_rounds_with};
     use crate::fold::fold_codeword;
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::test_util::{challenger, mmcs};
@@ -480,9 +428,9 @@ mod tests {
         assert!(!codeword.iter().all(|&v| v == final_value));
     }
 
-    /// Drives the crate's own [`commit`] and [`fold_rounds`] end to end and checks their
+    /// Drives the crate's own [`commit`] and [`fold_rounds_with`] end to end and checks their
     /// output against an independent oracle: folding the original message variable by
-    /// variable, via [`Poly::fix_suffix_var_mut`], over the randomness `fold_rounds` returns,
+    /// variable, via [`Poly::fix_suffix_var_mut`], over the randomness `fold_rounds_with` returns,
     /// in the order returned, must produce the constant every symbol of the final codeword
     /// equals.
     #[test]
@@ -506,7 +454,7 @@ mod tests {
         let (_commitment, prover_data) =
             commit(&config, &encoder, &mmcs_instance, &mut ch, witness);
         let (_merkle_data, _sumcheck_data, rounds, randomness, final_codeword) =
-            fold_rounds(prover_data, &config, &mmcs_instance, &mut ch);
+            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut ch);
 
         assert_eq!(rounds.len(), config.num_fold_rounds() - 1);
         assert_eq!(randomness.num_variables(), NUM_VARIABLES);
@@ -538,18 +486,27 @@ mod tests {
         //     fused    : round r measures and applies round r-1's binding in one pass
         //     reference: round r measures, then a second pass applies round r's binding
         //
-        // Fixture state: two arities, driven twice from identically seeded challengers.
+        // Fixture shapes: driven twice from identically seeded challengers.
         //
         //     8  variables: every fused pass takes the serial branch
         //     15 variables: the early rounds take the threaded branch, where a fused pass
         //                   writing its own input in place would race another task's reads
-        for num_variables in [8usize, 15] {
+        //
+        // Both folding factors, because they exercise different held-challenge paths:
+        //
+        //     1: every round is its own batch, so every held challenge crosses a batch
+        //     3: three rounds share a batch, so a held challenge also crosses a round
+        //        boundary inside one — which is where the reference route's per-round
+        //        `settle()` sits
+        for (num_variables, log_folding_factor) in [(8usize, 1usize), (8, 3), (15, 1), (15, 3)] {
             let params = BinaryPcsParams {
                 log_inv_rate: LOG_INV_RATE,
                 pow_bits: 4,
                 security_level: 40,
             };
-            let config = BinaryPcsConfig::try_new(num_variables, params).unwrap();
+            let config =
+                BinaryPcsConfig::try_new_with_folding(num_variables, params, log_folding_factor)
+                    .unwrap();
 
             // The shipped encoder, not the naive one.
             //
@@ -559,6 +516,7 @@ mod tests {
 
             let mut rng = SmallRng::seed_from_u64(0xF0FA + num_variables as u64);
             let table = Table::rand(&mut rng, 1, num_variables);
+            let shape = format!("{num_variables} variables, arity {log_folding_factor}");
 
             // Fused route.
             let mut got_ch = challenger();
@@ -570,7 +528,7 @@ mod tests {
                 SuffixProver::<F, F>::new_witness(vec![table.clone()], 0),
             );
             let (_, got_sumcheck, got_rounds, got_randomness, got_final) =
-                fold_rounds(got_data, &config, &mmcs_instance, &mut got_ch);
+                fold_rounds_with::<false, _, _>(got_data, &config, &mmcs_instance, &mut got_ch);
 
             // Reference route, from an identically seeded challenger.
             let mut want_ch = challenger();
@@ -582,13 +540,13 @@ mod tests {
                 SuffixProver::<F, F>::new_witness(vec![table], 0),
             );
             let (_, want_sumcheck, want_rounds, want_randomness, want_final) =
-                fold_rounds_binding_each_round(want_data, &config, &mmcs_instance, &mut want_ch);
+                fold_rounds_with::<true, _, _>(want_data, &config, &mmcs_instance, &mut want_ch);
 
             // Round by round first, so a discrepancy is localised to the round that drifted.
             assert_eq!(
                 got_sumcheck.num_rounds(),
                 want_sumcheck.num_rounds(),
-                "{num_variables} variables: round count"
+                "{shape}: round count"
             );
             for (round, (got_msg, want_msg)) in got_sumcheck
                 .polynomial_evaluations()
@@ -596,27 +554,21 @@ mod tests {
                 .zip(want_sumcheck.polynomial_evaluations())
                 .enumerate()
             {
-                assert_eq!(
-                    got_msg, want_msg,
-                    "{num_variables} variables: round {round} message"
-                );
+                assert_eq!(got_msg, want_msg, "{shape}: round {round} message");
             }
 
             // The challenges follow the messages, and the codeword folds follow the challenges.
             assert_eq!(
                 got_randomness.as_slice(),
                 want_randomness.as_slice(),
-                "{num_variables} variables: folding randomness"
+                "{shape}: folding randomness"
             );
-            assert_eq!(
-                got_final, want_final,
-                "{num_variables} variables: final codeword"
-            );
+            assert_eq!(got_final, want_final, "{shape}: final codeword");
             for (round, (got_round, want_round)) in got_rounds.iter().zip(&want_rounds).enumerate()
             {
                 assert_eq!(
                     got_round.commitment, want_round.commitment,
-                    "{num_variables} variables: round {round} commitment"
+                    "{shape}: round {round} commitment"
                 );
             }
 
@@ -628,7 +580,7 @@ mod tests {
             assert_eq!(
                 got_ch.sample_algebra_element::<F>(),
                 want_ch.sample_algebra_element::<F>(),
-                "{num_variables} variables: transcript state"
+                "{shape}: transcript state"
             );
         }
     }

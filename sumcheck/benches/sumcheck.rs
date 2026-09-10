@@ -629,8 +629,22 @@ where
 
 /// Benches a sumcheck driven one round per call, fused against binding each round.
 ///
-/// This is the shape the binary PCS uses: it interleaves a codeword fold and a Merkle
-/// commitment between rounds, so it can never ask for several rounds at once.
+/// This is the shape the binary PCS asks for: its inner loop requests one round at a time.
+///
+/// One codeword fold and one Merkle commitment land per fold *batch*, not per round,
+/// so the boundaries no batching can remove are the batch boundaries:
+///
+/// ```text
+///     rounds fused across a call, if a batch were asked for in one go
+///         = num_fold_batches - 1
+///         = ceil(num_variables / log_folding_factor) - 1
+///
+///     rounds fused across a call, as the inner loop asks today (arity 1)
+///         = num_variables - 1
+/// ```
+///
+/// The grid below measures the second line, which is today's default schedule.
+/// Above a `log_folding_factor` of 1 it is an upper bound on what the binary PCS sees.
 ///
 /// Two arms over the identical ladder:
 ///

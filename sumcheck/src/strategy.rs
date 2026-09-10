@@ -1217,7 +1217,7 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// A reader that skipped it would silently see the tables one round behind.
     ///
     /// A debug build checks the claim against the pair this binding produced.
-    /// That is the only place a held binding is ever validated.
+    /// That is the only place a binding no measuring pass absorbed is ever validated.
     ///
     /// Idempotent, and free when nothing is outstanding.
     pub fn settle(&mut self) {
@@ -1255,15 +1255,21 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// An outstanding binding is absorbed into the measuring pass.
     /// The round then reads its tables once instead of twice.
     ///
-    /// The slot is cleared here.
+    /// The slot is cleared once the pass has returned.
     /// The caller puts this round's own challenge back into it.
+    ///
+    /// Clearing it first would drop the challenge if the pass panicked.
+    /// The prover would then read as settled with tables a round stale.
     pub(crate) fn measure_round(&mut self) -> (EF, EF) {
-        let message = match self.outstanding.take() {
+        let message = match self.outstanding {
             // A challenge is waiting, so bind and measure in one pass.
             Some(r) => self.poly.fold_round_coefficients(r),
             // Nothing waiting, so this is a plain measuring pass.
             None => self.poly.round_coefficients(),
         };
+
+        // Reached only once the binding landed, so a caught unwind still holds it.
+        self.outstanding = None;
 
         // Invariant: the claim is the inner product of the pair this round measured.
         //
@@ -2115,6 +2121,153 @@ mod tests {
                 assert_eq!(
                     twice.evals().as_slice(),
                     settled.evals().as_slice(),
+                    "{shape}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_panicking_fused_pass_leaves_the_challenge_held() {
+        extern crate std;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use crate::product_polynomial::ProductPolynomial;
+
+        // Invariant: the slot is cleared only once the pass that consumes it has returned.
+        //
+        // Clearing first and then panicking would leave the prover reading as settled,
+        // with tables the binding never reached.
+        //
+        // Fixture state: a fully bound pair, so the fused pass has no variable to bind.
+        //
+        //     held    : ONE
+        //     measured: panics inside the fold, because the ladder is past its last variable
+        //     after   : ONE must still be held
+        let evals = Poly::new(vec![EF::ONE]);
+        let weights = Poly::new(vec![EF::TWO]);
+        let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
+        let sum = poly.dot_product();
+        let mut prover = super::SumcheckProver::new(poly, sum);
+
+        // `hold` itself is arity-agnostic, so nothing rejects the challenge on the way in.
+        prover.outstanding = Some(EF::ONE);
+
+        // The pass panics, caught so the state left behind can be inspected.
+        let measured = catch_unwind(AssertUnwindSafe(|| prover.measure_round()));
+        assert!(measured.is_err());
+
+        // The challenge the failed pass never applied must still be there to apply.
+        assert_eq!(prover.outstanding, Some(EF::ONE));
+    }
+
+    #[test]
+    fn absorbing_a_constraint_settles_an_outstanding_binding() {
+        use p3_baby_bear::Poseidon2BabyBear;
+        use p3_challenger::DuplexChallenger;
+
+        use crate::SumcheckData;
+        use crate::product_polynomial::ProductPolynomial;
+
+        type Perm = Poseidon2BabyBear<16>;
+        type TestChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+        let challenger = || {
+            let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(23));
+            TestChallenger::new(perm)
+        };
+
+        let mut rng = SmallRng::seed_from_u64(0xC0115E);
+
+        // Invariant: the constraint is sized against the current hypercube.
+        //
+        // So an outstanding binding has to land before the weights grow by it.
+        //
+        // Settling after `combine` instead would add a weight delta of the bound length
+        // to a table still a round long: a length panic, or silently wrong weights.
+        //
+        // Fixture state: a batch runs and returns with its last challenge held, then a
+        // constraint is absorbed without any accessor having been read in between.
+        //
+        //     driven : one binding outstanding, `combine` settles it
+        //     settled: the same state with the binding already applied
+        //
+        // Fixture shapes:
+        //
+        //     variables : 5, 9
+        //     orders    : both
+        for (num_variables, rounds) in [(5usize, 2usize), (9, 4)] {
+            for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
+                let evals = Poly::<EF>::rand(&mut rng, num_variables);
+                let weights = Poly::<EF>::rand(&mut rng, num_variables);
+                let poly = ProductPolynomial::<F, EF>::new_unpacked(order, evals, weights);
+                let sum = poly.dot_product();
+
+                let mut driven = super::SumcheckProver::new(poly, sum);
+                let mut data = SumcheckData::<F, EF>::default();
+                driven.compute_sumcheck_polynomials(&mut data, &mut challenger(), rounds, 0, None);
+
+                // Reference arm: the same state with the outstanding binding applied.
+                let mut settled = driven.clone();
+                settled.settle();
+
+                // The constraint spans what is left of the hypercube.
+                let live = num_variables - rounds;
+                let shape = format!("{order:?}, {num_variables} variables, {rounds} rounds");
+
+                // An honest constraint, so the running claim invariant survives absorption.
+                //
+                // Each equality claim carries the value the settled table really takes,
+                // which is what makes `sum + delta_sum == <evals, weights + delta>` hold.
+                let mut eq_statement = EqStatement::initialize(live);
+                for _ in 0..2 {
+                    let point = Point::<EF>::rand(&mut rng, live);
+                    let value = settled.eval(&point);
+                    eq_statement.add_evaluated_constraint(point, value);
+                }
+                let constraint =
+                    Constraint::new(rng.random(), live, vec![Statements::Eq(eq_statement)]);
+
+                // One more round on each arm, the constraint absorbed on the way in.
+                //
+                // `driven` meets it with the binding outstanding; `settled` does not.
+                let mut got_data = SumcheckData::<F, EF>::default();
+                let got = driven.compute_sumcheck_polynomials(
+                    &mut got_data,
+                    &mut challenger(),
+                    1,
+                    0,
+                    Some(constraint.clone()),
+                );
+                let mut want_data = SumcheckData::<F, EF>::default();
+                let want = settled.compute_sumcheck_polynomials(
+                    &mut want_data,
+                    &mut challenger(),
+                    1,
+                    0,
+                    Some(constraint),
+                );
+
+                // The round message first, so a discrepancy is localised to the transcript.
+                assert_eq!(
+                    got_data.polynomial_evaluations(),
+                    want_data.polynomial_evaluations(),
+                    "{shape}"
+                );
+
+                // The challenges follow the messages.
+                assert_eq!(got.as_slice(), want.as_slice(), "{shape}");
+
+                // And the state left behind, tables included.
+                assert_eq!(driven.claimed_sum(), settled.claimed_sum(), "{shape}");
+                assert_eq!(
+                    driven.evals().as_slice(),
+                    settled.evals().as_slice(),
+                    "{shape}"
+                );
+                assert_eq!(
+                    driven.weights().as_slice(),
+                    settled.weights().as_slice(),
                     "{shape}"
                 );
             }
