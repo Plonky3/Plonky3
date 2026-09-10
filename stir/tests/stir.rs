@@ -1655,6 +1655,49 @@ mod babybear_pcs {
         commit
     }
 
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(8))]
+
+        #[test]
+        fn test_pcs_round_trips_over_random_layouts(
+            max_log_height_spread in 0usize..=4,
+            log_degrees in proptest::collection::vec(
+                LOG_STARTING_FOLDING_FACTOR..=6usize,
+                1..=4,
+            ),
+            widths in proptest::collection::vec(1usize..=4, 1..=4),
+        ) {
+            // Invariant: an honest opening verifies whatever layout the claims imply.
+            //
+            // That layout describes the transcript of the commitment scheme entirely.
+            //
+            // A failure here is the two sides disagreeing on the description itself.
+            //
+            // No proof-shape check could catch that.
+            //
+            // Fixture state: 1 to 4 matrices, log-height 2 to 6, width 1 to 4.
+            //
+            // The spread cap ranges over 0 to 4.
+            //
+            //     spread 0        -> one bucket per distinct height, nothing merged
+            //     spread >= range -> one bucket, every height merged into it
+            //
+            // Both ends and the mixed middle move the bucket count.
+            //
+            // They move the merged-class count and every claimed width too.
+            //
+            // So they move the description the two sides have to agree on.
+            let widths: Vec<usize> = log_degrees
+                .iter()
+                .enumerate()
+                .map(|(i, _)| widths[i % widths.len()])
+                .collect();
+
+            let (pcs, challenger_template) = get_pcs_with_spread(max_log_height_spread);
+            round_trip_under(&pcs, &challenger_template, &log_degrees, &widths);
+        }
+    }
+
     #[test]
     fn test_pcs_round_trips_at_every_spread() {
         // The same claim must verify whichever layout the spread cap produces: one STIR
@@ -3143,14 +3186,41 @@ mod babybear_pcs {
         // there is only one and skips it entirely.
         let err = verify_with_claimed_degrees(&[8, 6], &[8, 8])
             .expect_err("an overstated native height must be rejected");
-        assert_eq!(
-            shape_of(err),
+        // One class rather than two gives a smaller first-round query count.
+        //
+        // So the point set an answer polynomial may interpolate is smaller too.
+        //
+        //     verifier accepts at most  2 OOD points + 21 queries = 23 coefficients
+        //     the proof carries         2 OOD points + 22 queries = 24 coefficients
+        //
+        // Two of STIR's shape checks can catch this, and both are correct.
+        //
+        //     query openings     one opening per distinct queried position
+        //     answer polynomial  one coefficient per interpolated point
+        //
+        // Which one trips first depends on how many of the drawn positions coincided.
+        //
+        // That is a property of the challenge stream, not of the mutation.
+        //
+        // So the assertion pins what the mutation controls, not which check won the race.
+        //
+        // In both readings the proof carries exactly one item too many, at round 0.
+        match shape_of(err) {
             ProofShapeError::QueryOpeningCount {
-                round: RoundLabel::Round(0),
-                expected: 21,
-                got: 22,
+                round,
+                expected,
+                got,
             }
-        );
+            | ProofShapeError::AnsPolynomialTooLong {
+                round,
+                maximum: expected,
+                got,
+            } => {
+                assert_eq!(round, RoundLabel::Round(0));
+                assert_eq!(got, expected + 1);
+            }
+            other => panic!("expected a round-0 shape rejection, got {other:?}"),
+        }
     }
 
     #[test]
