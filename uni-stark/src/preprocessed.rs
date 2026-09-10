@@ -1,4 +1,4 @@
-use p3_commit::Pcs;
+use p3_commit::{Pcs, UnivariateStarkPcs};
 use p3_matrix::Matrix;
 use tracing::debug_span;
 

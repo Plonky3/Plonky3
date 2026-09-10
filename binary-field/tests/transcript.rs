@@ -1,9 +1,10 @@
 use p3_binary_field::{BinaryChallenger, BinaryField128, TowerLevel};
+use p3_challenger::HashChallenger;
 use p3_challenger::fs::{
     Codec, DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction,
     InteractionPattern, Kind, Length, ProverState, TypeTag, Unit, VerifierState,
 };
-use p3_challenger::{CanObserve, HashChallenger};
+use p3_challenger::testing::Recorder;
 use p3_keccak::Keccak256Hash;
 use proptest::prelude::*;
 
@@ -11,19 +12,10 @@ type F = BinaryField128;
 type Ch = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 type Cdc = FieldToFieldCodec<F>;
 
-#[derive(Default)]
-struct Recorder(Vec<F>);
-
-impl CanObserve<F> for Recorder {
-    fn observe(&mut self, value: F) {
-        self.0.push(value);
-    }
-}
-
 fn seed(bytes: &[u8]) -> Vec<F> {
     let mut recorder = Recorder::default();
     FieldUnit::<F>::observe_bytes(&mut recorder, bytes);
-    recorder.0
+    recorder.into_absorbed()
 }
 
 #[test]

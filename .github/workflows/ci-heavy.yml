@@ -9,6 +9,15 @@ on:
     paths:
       - "whir/src/**"
       - "binary-pcs/**"
+      - "multilinear-util/src/**"
+      - "multi-stark/src/**"
+      - "uni-stark/src/**"
+      - "uni-stark/tests/**"
+      - "binary-dft/src/**"
+      - "binary-dft/tests/**"
+      - "stir/src/**"
+      - "stir/tests/**"
+      - "examples/src/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,6 +31,10 @@ env:
 jobs:
   whir_exhaustive:
     name: WHIR exhaustive tests
+    env:
+      # Optimize the exhaustive sweep while retaining the test profile's
+      # debug assertions and overflow checks.
+      CARGO_PROFILE_TEST_OPT_LEVEL: 1
     strategy:
       matrix:
         include:
@@ -43,12 +56,38 @@ jobs:
           echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test WHIR exhaustive sweep
-        run: cargo test -p p3-whir pcs::tests::test_whir_end_to_end_exhaustive -- --ignored --exact
+        run: python3 scripts/check.py whir-exhaustive
 
       - name: Test WHIR exhaustive sweep with parallel
-        run: cargo test -p p3-whir --features parallel pcs::tests::test_whir_end_to_end_exhaustive -- --ignored --exact
+        run: python3 scripts/check.py whir-exhaustive --parallel
+
+  slow_regressions:
+    name: Slow regression tests
+    env:
+      # Optimize these compute-heavy tests while retaining the test profile's
+      # debug assertions and overflow checks. Scoped per-package (never a
+      # bare workspace-wide `cargo test`/`nextest run`), so this never touches
+      # p3-bn254's zkhash dev-dependency and the ark-ff/halo2 tree it pulls
+      # in, which is expensive to optimize and unrelated to any of these
+      # tests.
+      CARGO_PROFILE_TEST_OPT_LEVEL: 1
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test slow regressions
+        run: python3 scripts/check.py slow-regressions
 
   binary_pcs_large_configuration:
     name: binary-pcs 2^16 round trip
@@ -66,6 +105,8 @@ jobs:
         run: echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=+pclmulqdq" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test the 2^16 round trip
-        run: cargo test -p p3-binary-pcs --release --test end_to_end large_configuration_2_16_round_trips -- --ignored --exact
+        run: python3 scripts/check.py binary-large

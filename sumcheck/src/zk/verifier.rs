@@ -2,12 +2,14 @@
 
 use alloc::vec::Vec;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, HornerIter};
 use p3_multilinear_util::point::Point;
 
 use super::data::{ZkSumcheckData, ZkVerifierHandoff};
+use super::transcript::{ZkSumcheckShape, ZkVerifierTranscript};
 use crate::error::SumcheckError;
 use crate::layout::{LayoutStrategy, Verifier};
 use crate::strategy::VariableOrder;
@@ -72,32 +74,42 @@ where
         self.inner.strategy()
     }
 
+    /// Reject a proof whose counts disagree with the described shape.
+    ///
+    /// # Invariant
+    ///
+    /// Both counts a proof carries are attacker-controlled, and the round loop reads both.
+    ///
+    /// ```text
+    ///     round_coefficients.len()  ->  how many rounds the loop indexes
+    ///     pow_witnesses.len()       ->  what the guarded rounds index into
+    /// ```
+    ///
+    /// Comparing both against the configuration is what keeps every later index in bounds.
+    /// The per-round wire width needs no check here: the described step rejects a wrong one.
+    ///
+    /// # Errors
+    ///
+    /// - The configuration cannot describe a masked batch.
+    /// - The proof does not carry one wire per described round.
+    /// - The witness count is not the one the difficulty implies.
     fn validate_shape(
         zk_data: &ZkSumcheckData<F, EF>,
-        ell_zk: usize,
-        folding_factor: usize,
-        pow_bits: usize,
+        shape: ZkSumcheckShape,
     ) -> Result<(), SumcheckError> {
-        assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
-        assert!(
-            ell_zk >= 3,
-            "mask degree ell_zk - 1 must cover the degree-2 plain piece (ell_zk >= 3)",
-        );
-        assert!(folding_factor >= 1, "sumcheck requires at least one round");
+        shape.validate::<F>()?;
 
-        if zk_data.ell_zk != ell_zk {
-            return Err(SumcheckError::EllZkMismatch {
-                expected: ell_zk,
-                actual: zk_data.ell_zk,
-            });
-        }
-        if zk_data.round_coefficients.len() != folding_factor {
+        if zk_data.round_coefficients.len() != shape.num_rounds {
             return Err(SumcheckError::RoundCountMismatch {
-                expected: folding_factor,
+                expected: shape.num_rounds,
                 actual: zk_data.round_coefficients.len(),
             });
         }
-        let expected_pow = if pow_bits > 0 { folding_factor } else { 0 };
+        let expected_pow = if shape.pow_bits > 0 {
+            shape.num_rounds
+        } else {
+            0
+        };
         if zk_data.pow_witnesses.len() != expected_pow {
             return Err(SumcheckError::PowWitnessCountMismatch {
                 expected: expected_pow,
@@ -105,52 +117,66 @@ where
             });
         }
 
-        let h_size = ell_zk.max(3);
-        let wire_size = h_size - 1;
-        for (idx, wire) in zk_data.round_coefficients.iter().enumerate() {
-            if wire.len() != wire_size {
-                return Err(SumcheckError::WireSizeMismatch {
-                    round: idx + 1,
-                    expected: wire_size,
-                    actual: wire.len(),
-                });
-            }
-        }
-
         Ok(())
     }
 
-    fn replay_claim_unchecked<M, Ch>(
+    /// Replay the masking prelude and the round chain of one batch.
+    ///
+    /// The transcript arrives with its prelude already played.
+    ///
+    /// The two entry points open it differently, so only what follows is shared.
+    ///
+    /// # Arguments
+    ///
+    /// - `transcript`: driver positioned just after the prelude, and the source of the shape.
+    /// - `zk_data`: the proof record, already counted against the shape.
+    /// - `mask_commitment`: the batch's interleaved mask oracle.
+    /// - `claimed_sum`: the scalar the batch runs against.
+    ///
+    /// # Errors
+    ///
+    /// Any rejection the round replay itself raises.
+    fn replay_claim<M, Ch>(
+        transcript: &mut ZkVerifierTranscript<'_, Ch, F, EF>,
         zk_data: &ZkSumcheckData<F, EF>,
         mask_commitment: &M::Commitment,
-        folding_factor: usize,
-        pow_bits: usize,
         claimed_sum: EF,
-        challenger: &mut Ch,
     ) -> Result<ZkVerifierHandoff<EF>, SumcheckError>
     where
+        F: TranscriptField,
         M: Mmcs<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
-        challenger.observe(mask_commitment.clone());
-        challenger.observe_algebra_element(zk_data.mu_tilde);
-        let eps: EF = challenger.sample_algebra_element();
+        // The shape the driver was seeded with, so the round count cannot drift from the description.
+        let shape = transcript.shape();
+
+        let eps = transcript.masks(mask_commitment.clone(), zk_data.mu_tilde);
 
         let mut target: EF = eps * claimed_sum + zk_data.mu_tilde;
-        let mut randomness: Vec<EF> = Vec::with_capacity(folding_factor);
+        let mut randomness: Vec<EF> = Vec::with_capacity(shape.num_rounds);
 
-        for (j_idx, wire) in zk_data.round_coefficients.iter().enumerate() {
+        // Driven by the number the description was built from, not by a proof length.
+        //
+        // The two agree only because of the count check in `validate_shape`.
+        // Both indices below are in bounds by that same check.
+        for round in 0..shape.num_rounds {
+            let wire = &zk_data.round_coefficients[round];
+            let witness = (shape.pow_bits > 0).then(|| zk_data.pow_witnesses[round]);
+
+            // One call binds the wire, re-checks the grind, and draws the challenge.
+            //
+            // A rejection here releases the driver's completeness check on its way out.
+            let gamma_j = transcript.round(wire, witness)?;
+
+            // Returning without error means the wire was the described width.
+            //
+            //     wire_len = max(ell_zk, 3) - 1 >= 2
+            //
+            // Both reads below are therefore in bounds.
             let c0 = wire[0];
             let high_sum: EF = wire[1..].iter().copied().sum();
             let c1 = target - c0.double() - high_sum;
 
-            challenger.observe_algebra_slice(wire);
-
-            if pow_bits > 0 && !challenger.check_witness(pow_bits, zk_data.pow_witnesses[j_idx]) {
-                return Err(SumcheckError::InvalidPowWitness);
-            }
-
-            let gamma_j: EF = challenger.sample_algebra_element();
             target = core::iter::once(c0)
                 .chain(core::iter::once(c1))
                 .chain(wire[1..].iter().copied())
@@ -225,16 +251,15 @@ where
     ///
     /// # Errors
     ///
-    /// - Mismatch between the verifier-side and proof-side mask code length.
+    /// - The configuration cannot describe a masked batch.
     /// - Wrong number of rounds or PoW witnesses.
-    /// - A per-round wire of the wrong shape.
+    /// - A per-round wire of the wrong width.
     /// - A failing proof-of-work witness check.
     ///
     /// # Panics
     ///
-    /// - Base field characteristic is `2`.
-    /// - Mask code message length is below `3`.
-    /// - Folding factor is `0`.
+    /// Never on proof input.
+    /// Only when the description is left half-played, which is a caller bug.
     #[allow(clippy::too_many_arguments)]
     pub fn into_sumcheck<M, Ch>(
         self,
@@ -246,37 +271,73 @@ where
         challenger: &mut Ch,
     ) -> Result<ZkVerifierHandoff<EF>, SumcheckError>
     where
+        F: TranscriptField,
         M: Mmcs<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
         // Phase 1: shape checks (input validation before Construction 6.3 replay).
-        Self::validate_shape(zk_data, ell_zk, folding_factor, pow_bits)?;
+        //
+        // Every number here comes from this verifier's own configuration.
+        let shape = ZkSumcheckShape::new_batching(folding_factor, ell_zk, pow_bits);
+        Self::validate_shape(zk_data, shape)?;
 
-        // Phase 2: transcript prelude (matches the prover byte-for-byte; replays Construction 6.3 setup).
+        // Phase 2: transcript prelude, seeded from the shape the prover seeded with.
+        let mut transcript = ZkVerifierTranscript::<Ch, F, EF>::new(challenger, shape);
 
-        // Sample alpha, then derive mu from the recorded claims.
-        let alpha: EF = challenger.sample_algebra_element();
+        // Draw alpha, then derive mu from the recorded claims.
+        let alpha = transcript.batching_challenge();
         let mu = self.inner.sum(alpha);
 
-        // Phase 3: absorb the mask commitment and mu_tilde, sample eps, and walk the round chain.
-        Self::replay_claim_unchecked::<M, _>(
-            zk_data,
-            mask_commitment,
-            folding_factor,
-            pow_bits,
-            mu,
-            challenger,
-        )
+        // Phase 3: bind the mask oracle and mu_tilde, draw eps, and walk the round chain.
+        //
+        // A rejection releases the driver here rather than relying on the step that raised it.
+        let handoff = Self::replay_claim::<M, _>(&mut transcript, zk_data, mask_commitment, mu)
+            .inspect_err(|_| transcript.abort())?;
+
+        // Every described step was replayed, so the sponge goes back to the caller.
+        transcript.finish();
+
+        Ok(handoff)
     }
 
     /// Replays an HVZK sumcheck transcript for an already-batched scalar claim.
     ///
-    /// This is the verifier-side counterpart of
-    /// [`crate::strategy::SumcheckProver::into_zk_sumcheck`]. It skips the
-    /// claim-batching `alpha` prelude because the caller already supplies the
-    /// scalar claim that the masked sumcheck should prove. The scalar is
-    /// absorbed before the masking prelude so this standalone residual-claim
-    /// API is transcript-bound even without recorded layout claims.
+    /// It mirrors the prover-side run of a masked batch over an inherited claim.
+    ///
+    /// It plays the inherited-claim prelude rather than the batching one.
+    ///
+    /// The caller already supplies the scalar the masked sumcheck should prove.
+    ///
+    /// That scalar is bound ahead of the masking prelude.
+    ///
+    /// This standalone residual-claim API is therefore transcript-bound with no recorded claims.
+    ///
+    /// # Soundness
+    ///
+    /// The prover binds its own view of the same scalar.
+    ///
+    /// ```text
+    ///     prover   ->  claimed_sum + aux_claim
+    ///     verifier ->  whatever the caller hands over here
+    /// ```
+    ///
+    /// Nothing here can compare the two, so agreeing on them stays a caller obligation.
+    ///
+    /// The step is described on both sides, so a disagreement is not silent.
+    ///
+    /// It moves `eps` and every challenge after it, and the residual no longer matches.
+    ///
+    /// # Errors
+    ///
+    /// - The configuration cannot describe a masked batch.
+    /// - Wrong number of rounds or PoW witnesses.
+    /// - A per-round wire of the wrong width.
+    /// - A failing proof-of-work witness check.
+    ///
+    /// # Panics
+    ///
+    /// Never on proof input.
+    /// Only when the description is left half-played, which is a caller bug.
     #[allow(clippy::too_many_arguments)]
     pub fn verify_claim<M, Ch>(
         zk_data: &ZkSumcheckData<F, EF>,
@@ -288,19 +349,25 @@ where
         challenger: &mut Ch,
     ) -> Result<ZkVerifierHandoff<EF>, SumcheckError>
     where
+        F: TranscriptField,
         M: Mmcs<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
-        Self::validate_shape(zk_data, ell_zk, folding_factor, pow_bits)?;
-        challenger.observe_algebra_element(claimed_sum);
-        Self::replay_claim_unchecked::<M, _>(
-            zk_data,
-            mask_commitment,
-            folding_factor,
-            pow_bits,
-            claimed_sum,
-            challenger,
-        )
+        // Every number here comes from the caller's own configuration.
+        let shape = ZkSumcheckShape::new_inherited(folding_factor, ell_zk, pow_bits);
+        Self::validate_shape(zk_data, shape)?;
+
+        let mut transcript = ZkVerifierTranscript::<Ch, F, EF>::new(challenger, shape);
+        transcript.bind_claim(claimed_sum);
+
+        // A rejection releases the driver here rather than relying on the step that raised it.
+        let handoff =
+            Self::replay_claim::<M, _>(&mut transcript, zk_data, mask_commitment, claimed_sum)
+                .inspect_err(|_| transcript.abort())?;
+
+        transcript.finish();
+
+        Ok(handoff)
     }
 }
 
@@ -312,7 +379,7 @@ mod tests {
     use super::*;
     use crate::layout::{Layout, PrefixProver, SuffixProver, TableShape};
     use crate::strategy::VariableOrder;
-    use crate::zk::test_helpers::{EF, F, MyMmcs, run_prover};
+    use crate::zk::test_helpers::{EF, F, MyMmcs, ProverRun, run_prover};
 
     #[test]
     fn verifier_strategy_matches_non_private_layouts() {
@@ -413,7 +480,7 @@ mod tests {
         );
 
         assert!(
-            matches!(result, Err(SumcheckError::InvalidPowWitness)),
+            matches!(result, Err(SumcheckError::InvalidPowWitness { .. })),
             "verifier accepted a forged PoW witness in binding {binding:?}; got {result:?}",
         );
     }
@@ -434,31 +501,34 @@ mod tests {
         forged_pow_witness_rejected_case(VariableOrder::Suffix);
     }
 
-    /// Drives the `ell_zk` mismatch invariant for one binding mode.
+    /// Drives the `ell_zk` disagreement invariant for one binding mode.
     ///
     /// - Honest prover commits with `ell_zk = 4`.
     /// - Verifier replays with `ell_zk = 5`.
-    /// - Asserts the verifier rejects with [`SumcheckError::EllZkMismatch`].
+    /// - Asserts the verifier rejects the width disagreement.
     ///
-    /// # Why a dedicated error is needed
+    /// # Why the proof carries no mask length
     ///
-    /// The wire-shape check is non-injective on `{2, 3}`:
+    /// The mask length reaches the description twice.
     ///
     /// ```text
-    ///     ell_zk = 2  →  wire_size = max(2, 3) - 1 = 2
-    ///     ell_zk = 3  →  wire_size = max(3, 3) - 1 = 2
+    ///     wire step   ->  Fixed(max(ell_zk, 3) - 1)
+    ///     seed label  ->  ell_zk itself
     /// ```
     ///
-    /// A swapped mask length would slip past the shape check.
-    /// The dedicated mismatch error closes that gap.
-    fn ell_zk_mismatch_rejected_case(binding: VariableOrder) {
+    /// The clamp alone is non-injective on `{2, 3}`, which is why the label carries the number.
+    ///
+    /// A length the two sides disagree on is caught as a described-width rejection.
+    ///
+    /// No value the proof supplied takes part in that check.
+    fn ell_zk_disagreement_rejected_case(binding: VariableOrder) {
         // Fixture state:
         //
         //     n_vars       = 6
         //     folding      = 2
         //     ell_zk       = 4        (prover-side)
         //     num_virtual  = 1
-        //     pow_bits     = 0        (PoW disabled to isolate the shape check)
+        //     pow_bits     = 0        (PoW disabled to isolate the width check)
         //     seed         = 0
         //
         // Mutation: the verifier replays with `wrong_ell_zk = 5`.
@@ -491,27 +561,165 @@ mod tests {
             &mut run.verifier_challenger,
         );
 
-        // Expect the dedicated mismatch error with the exact (expected, actual) values.
-        assert!(
-            matches!(
-                result,
-                Err(SumcheckError::EllZkMismatch { expected, actual })
-                    if expected == wrong_ell_zk && actual == ell_zk
-            ),
-            "verifier should have rejected ell_zk mismatch in binding {binding:?}; got {result:?}",
+        // Described width: 4 coefficients.
+        // The proof carries 3.
+        assert_eq!(
+            result.err(),
+            Some(SumcheckError::WireSizeMismatch {
+                round: 0,
+                expected: wrong_ell_zk - 1,
+                actual: ell_zk - 1,
+            }),
+            "verifier should have rejected the mask-length disagreement in binding {binding:?}",
+        );
+    }
+
+    /// Fixture shared by the two masking-prelude tampering tests.
+    ///
+    /// Returns an honest run and the residual its verifier derives from it.
+    fn honest_run_and_residual() -> (ProverRun, EF) {
+        // Fixture state: n_vars = 6, folding = 2, ell_zk = 4, num_virtual = 1, seed = 3.
+        //
+        // PoW is disabled, so only the masking prelude is under test.
+        let run = run_prover(VariableOrder::Prefix, 6, 2, 4, 0, 1, 0, 3);
+
+        // Every replay below starts from this same post-claim sponge state.
+        let mut honest_challenger = run.verifier_challenger.clone();
+        let residual = run
+            .verifier
+            .clone()
+            .into_sumcheck::<MyMmcs, _>(
+                &run.zk_data,
+                &run.mask_commitment,
+                4,
+                2,
+                0,
+                &mut honest_challenger,
+            )
+            .expect("the honest run must replay")
+            .claimed_residual;
+
+        (run, residual)
+    }
+
+    #[test]
+    fn a_foreign_mask_commitment_changes_the_verifier_output() {
+        // Invariant: the mask oracle is bound before the challenge that combines the masks.
+        //
+        // Without that, a prover could pick its masks after seeing `eps`.
+        //
+        // Mutation: hand the verifier the mask oracle of a different run.
+        //
+        // The affine reconstruction keeps every round identity satisfied, so the replay
+        // still returns `Ok`.
+        //
+        // The residual it hands back is what must move.
+        let (run, honest_residual) = honest_run_and_residual();
+
+        // A second run under another seed commits to different masks.
+        let foreign = run_prover(VariableOrder::Prefix, 6, 2, 4, 0, 1, 0, 4);
+        assert_ne!(run.mask_commitment, foreign.mask_commitment);
+
+        let mut tampered_challenger = run.verifier_challenger.clone();
+        let tampered_residual = run
+            .verifier
+            .clone()
+            .into_sumcheck::<MyMmcs, _>(
+                &run.zk_data,
+                &foreign.mask_commitment,
+                4,
+                2,
+                0,
+                &mut tampered_challenger,
+            )
+            .expect("a well-shaped proof always replays")
+            .claimed_residual;
+
+        assert_ne!(honest_residual, tampered_residual);
+    }
+
+    #[test]
+    fn a_perturbed_mu_tilde_changes_the_verifier_output() {
+        // Invariant: the mask endpoint sum is bound before `eps` weighs it against the plain
+        // piece, and it also anchors the round-1 target.
+        //
+        // Mutation: bump `mu_tilde` by one.
+        let (run, honest_residual) = honest_run_and_residual();
+
+        let mut tampered_zk_data = run.zk_data.clone();
+        tampered_zk_data.mu_tilde += EF::ONE;
+
+        let mut tampered_challenger = run.verifier_challenger.clone();
+        let tampered_residual = run
+            .verifier
+            .clone()
+            .into_sumcheck::<MyMmcs, _>(
+                &tampered_zk_data,
+                &run.mask_commitment,
+                4,
+                2,
+                0,
+                &mut tampered_challenger,
+            )
+            .expect("a well-shaped proof always replays")
+            .claimed_residual;
+
+        assert_ne!(honest_residual, tampered_residual);
+    }
+
+    #[test]
+    fn a_configuration_no_batch_can_run_under_is_rejected() {
+        // A verifier reports a configuration failure.
+        // It never panics on one.
+        //
+        // Fixture state: an honest run at ell_zk = 4, replayed under two broken configurations.
+        let run = run_prover(VariableOrder::Prefix, 6, 2, 4, 0, 1, 0, 5);
+
+        // A mask shorter than the plain quadratic cannot hide it.
+        let mut challenger = run.verifier_challenger.clone();
+        assert_eq!(
+            run.verifier
+                .clone()
+                .into_sumcheck::<MyMmcs, _>(
+                    &run.zk_data,
+                    &run.mask_commitment,
+                    2,
+                    2,
+                    0,
+                    &mut challenger,
+                )
+                .err(),
+            Some(SumcheckError::MaskTooShort { ell_zk: 2 }),
+        );
+
+        // A batch of no rounds has no mask to commit and no claim to reduce.
+        let mut challenger = run.verifier_challenger.clone();
+        assert_eq!(
+            run.verifier
+                .clone()
+                .into_sumcheck::<MyMmcs, _>(
+                    &run.zk_data,
+                    &run.mask_commitment,
+                    4,
+                    0,
+                    0,
+                    &mut challenger,
+                )
+                .err(),
+            Some(SumcheckError::NoRounds),
         );
     }
 
     #[test]
-    fn ell_zk_mismatch_rejected_prefix() {
-        // Prefix path: verifier rejects when its `ell_zk` disagrees with the proof.
-        ell_zk_mismatch_rejected_case(VariableOrder::Prefix);
+    fn ell_zk_disagreement_rejected_prefix() {
+        // Prefix path: verifier rejects when its `ell_zk` disagrees with the prover's.
+        ell_zk_disagreement_rejected_case(VariableOrder::Prefix);
     }
 
     #[test]
-    fn ell_zk_mismatch_rejected_suffix() {
+    fn ell_zk_disagreement_rejected_suffix() {
         // Suffix path: same invariant, exercised through the suffix dispatch.
-        ell_zk_mismatch_rejected_case(VariableOrder::Suffix);
+        ell_zk_disagreement_rejected_case(VariableOrder::Suffix);
     }
 
     /// Drives the wire-tampering invariant for one binding mode.

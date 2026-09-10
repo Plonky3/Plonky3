@@ -9,7 +9,8 @@ use p3_field::{ExtensionField, TwoAdicField};
 use thiserror::Error;
 
 use crate::SecurityAssumption;
-use crate::soundness::StirSoundness;
+use crate::pcs_budget::PcsBatch;
+use crate::soundness::{StirSoundness, initial_batching_error, minimum_eta_for_target};
 
 /// Extra requirement round 0's `eta` must additionally satisfy so that the
 /// batch-degree-correction `Combine` step (§4.5) reaches the target security when merging
@@ -29,8 +30,8 @@ struct CombineRequirement {
 /// # Combine feasibility envelope
 ///
 /// [`StirConfig::new`] is feasible over a wide range of these parameters, but
-/// [`StirConfig::new_with_combine`] — the §7 Construction 7.2 path the PCS takes when one
-/// commitment holds matrices of more than one native height — is not. Merging classes of total
+/// [`StirConfig::new_with_combine`] — unground §7 Construction 7.2 degree correction —
+/// is not. Merging classes of total
 /// multiplicity `ell` into a degree-`d* = 2^log_d_star` codeword costs roughly `2·log_d_star`
 /// bits of challenge field, because the `dᵢ` are distinct powers of two and so every degree gap
 /// is within a factor of two of `d*` however tight the height spread is.
@@ -50,6 +51,9 @@ struct CombineRequirement {
 /// the same shape.
 /// Outside the envelope, derivation reports the shortfall rather than silently weakening the
 /// parameters; callers that need wider height spreads should commit the outliers separately.
+/// The PCS derives a separate joint alpha/Combine budget and credits its configured
+/// batching grind there. Its grouping feasibility and field-size margin therefore
+/// differ from this standalone, unground Combine envelope.
 #[derive(Clone, Debug)]
 pub struct StirParameters<M> {
     /// Log₂ of the inverse rate of the initial Reed-Solomon code.
@@ -96,6 +100,20 @@ pub struct StirParameters<M> {
 
     /// Merkle tree commitment scheme for codeword commitments.
     pub mmcs: M,
+}
+
+/// Optional STIR prover/proof-size tradeoffs. Both prover and verifier must use the same options.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StirOptions {
+    /// `Some(cap)` stops folding once the coefficient bound is at most `2^cap`, after at least the
+    /// starting fold. `None` retains the legacy schedule. Larger bounds save intermediate
+    /// rounds at the cost of sending more final coefficients. An unreachable bound is rejected.
+    pub max_log_final_poly_len: Option<usize>,
+
+    /// Omit answer-polynomial coefficients from the proof and reconstruct them in the
+    /// verifier. This saves proof bytes at the cost of verifier interpolation work and
+    /// temporary memory. The default sends coefficients; both sides must agree on this option.
+    pub compact_answers: bool,
 }
 
 /// Derived configuration for a single STIR round.
@@ -178,6 +196,10 @@ type NonOwning<F, EF, Challenger> = PhantomData<fn() -> (F, EF, Challenger)>;
 /// Contains all precomputed values needed by the prover and verifier.
 #[derive(Debug, Clone)]
 pub struct StirConfig<F, EF, M, Challenger> {
+    options: StirOptions,
+    /// `(log_native_degree, num_quotients)` for each PCS alpha batch on the initial domain.
+    /// Standalone STIR configurations leave this empty.
+    pub quotient_batches: Vec<(usize, usize)>,
     /// Log₂ of the degree of the initial polynomial.
     pub log_starting_degree: usize,
 
@@ -264,6 +286,36 @@ impl core::fmt::Display for Stage {
 /// process.
 #[derive(Clone, Copy, Debug, PartialEq, Error)]
 pub enum StirConfigError {
+    /// A quotient batch claims a native degree larger than the bucket's degree.
+    #[error(
+        "quotient batch degree 2^{class_log_degree} exceeds starting degree 2^{log_starting_degree}"
+    )]
+    BatchDegreeExceedsStartingDegree {
+        class_log_degree: usize,
+        log_starting_degree: usize,
+    },
+
+    /// PCS classes must be distinct descending native heights, topped at the
+    /// enforced STIR degree, with a nonzero number of quotient contributions.
+    #[error("invalid PCS native-height classes or opening multiplicities")]
+    InvalidPcsBatch,
+
+    /// The number of alpha powers must fit the counter used by both transcripts.
+    #[error("PCS opening-batching multiplicity overflow")]
+    PcsBatchMultiplicityOverflow,
+
+    /// The PCS cannot enforce this difficulty with its base-field witness.
+    #[error("invalid PCS batch grinding difficulty {bits}")]
+    InvalidPcsBatchPowBits { bits: usize },
+    /// The folding arities cannot reach the requested final coefficient bound.
+    #[error(
+        "requested final polynomial log length {max_log_final_poly_len} is below the minimum reachable {min_log_final_poly_len}"
+    )]
+    FinalPolynomialBoundUnreachable {
+        max_log_final_poly_len: usize,
+        min_log_final_poly_len: usize,
+    },
+
     /// `log_folding_factor` was below the paper-backed schedule's minimum of 2 (k >= 4).
     #[error(
         "the paper-backed STIR parameter schedule requires log_folding_factor >= 2 (k >= 4), \
@@ -457,7 +509,7 @@ where
         log_starting_degree: usize,
         params: StirParameters<M>,
     ) -> Result<Self, StirConfigError> {
-        Self::try_new_with_optional_combine(log_starting_degree, params, None)
+        Self::try_new_with_options(log_starting_degree, params, StirOptions::default())
     }
 
     /// Derive a full STIR configuration from user-facing parameters.
@@ -470,6 +522,29 @@ where
     /// [`Self::try_new`] for the fallible form and [`StirConfigError`] for the failure modes.
     pub fn new(log_starting_degree: usize, params: StirParameters<M>) -> Self {
         Self::try_new(log_starting_degree, params).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Derive the full schedule using optional prover/proof-size tradeoffs.
+    /// Both prover and verifier must agree on `options`.
+    pub fn try_new_with_options(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        options: StirOptions,
+    ) -> Result<Self, StirConfigError> {
+        Self::try_new_with_optional_combine(log_starting_degree, params, None, None, options, &[])
+    }
+
+    /// Panicking form of [`Self::try_new_with_options`].
+    ///
+    /// # Panics
+    /// Panics when the parameters or requested options cannot produce a valid schedule.
+    pub fn new_with_options(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        options: StirOptions,
+    ) -> Self {
+        Self::try_new_with_options(log_starting_degree, params, options)
+            .unwrap_or_else(|e| panic!("{e}"))
     }
 
     /// Like [`Self::try_new`], but additionally inflates round 0's `eta` (and, transitively,
@@ -499,6 +574,24 @@ where
         num_classes: usize,
         ell: u64,
     ) -> Result<Self, StirConfigError> {
+        Self::try_new_with_combine_and_options(
+            log_starting_degree,
+            params,
+            num_classes,
+            ell,
+            StirOptions::default(),
+        )
+    }
+
+    /// Like [`Self::try_new_with_combine`], deriving the entire schedule with `options`.
+    /// Both prover and verifier must agree on these options.
+    pub fn try_new_with_combine_and_options(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        num_classes: usize,
+        ell: u64,
+        options: StirOptions,
+    ) -> Result<Self, StirConfigError> {
         // `ell` carries the real information, so without these a `num_classes` of 1 would
         // silently skip all Combine accounting despite the name.
         if num_classes < 2 {
@@ -511,6 +604,41 @@ where
             log_starting_degree,
             params,
             Some(CombineRequirement { num_classes, ell }),
+            None,
+            options,
+            &[],
+        )
+    }
+
+    /// Derive a PCS schedule that also budgets the initial quotient combination.
+    ///
+    /// `quotient_batches` supplies `(log_native_degree, num_quotients)` per height
+    /// class, counting every column at every opening point. `combine` is the
+    /// optional `(num_classes, ell)` from
+    /// [`Self::try_new_with_combine`]. Alpha is sampled before STIR's grinding,
+    /// so this term must meet the full buffered target without PoW credit.
+    pub fn try_new_with_batching(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        quotient_batches: &[(usize, usize)],
+        combine: Option<(usize, u64)>,
+        options: StirOptions,
+    ) -> Result<Self, StirConfigError> {
+        if let Some((num_classes, ell)) = combine {
+            if num_classes < 2 {
+                return Err(StirConfigError::CombineNeedsMultipleClasses { num_classes });
+            }
+            if ell < num_classes as u64 {
+                return Err(StirConfigError::CombineMultiplicityTooSmall { num_classes, ell });
+            }
+        }
+        Self::try_new_with_optional_combine(
+            log_starting_degree,
+            params,
+            combine.map(|(num_classes, ell)| CombineRequirement { num_classes, ell }),
+            None,
+            options,
+            quotient_batches,
         )
     }
 
@@ -533,11 +661,66 @@ where
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
+    /// Panicking form of [`Self::try_new_with_combine_and_options`].
+    ///
+    /// # Panics
+    /// Panics when the parameters, Combine requirements or options cannot produce a valid schedule.
+    pub fn new_with_combine_and_options(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        num_classes: usize,
+        ell: u64,
+        options: StirOptions,
+    ) -> Self {
+        Self::try_new_with_combine_and_options(
+            log_starting_degree,
+            params,
+            num_classes,
+            ell,
+            options,
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// PCS-only derivation: the caller must enforce this batch grind before alpha
+    /// and all Combine challenges, and supply the actual pooled opening multiplicities.
+    pub(crate) fn try_new_with_pcs_batch(
+        log_starting_degree: usize,
+        params: StirParameters<M>,
+        batch: PcsBatch<'_>,
+        options: StirOptions,
+    ) -> Result<Self, StirConfigError> {
+        if batch.pow_bits >= F::bits().min(usize::BITS as usize) {
+            return Err(StirConfigError::InvalidPcsBatchPowBits {
+                bits: batch.pow_bits,
+            });
+        }
+        Self::try_new_with_optional_combine(
+            log_starting_degree,
+            params,
+            None,
+            Some(batch),
+            options,
+            &[],
+        )
+    }
+
     fn try_new_with_optional_combine(
         log_starting_degree: usize,
         params: StirParameters<M>,
         combine: Option<CombineRequirement>,
+        pcs_batch: Option<PcsBatch<'_>>,
+        options: StirOptions,
+        quotient_batches: &[(usize, usize)],
     ) -> Result<Self, StirConfigError> {
+        for &(class_log_degree, _) in quotient_batches {
+            if class_log_degree > log_starting_degree {
+                return Err(StirConfigError::BatchDegreeExceedsStartingDegree {
+                    class_log_degree,
+                    log_starting_degree,
+                });
+            }
+        }
         // Rate 1 leaves no redundancy to test proximity against: `delta = 1 - rho - eta` is
         // non-positive, so the query-count formula has no per-query failure probability
         // below 1 to invert. Rejected here rather than downstream, where it would surface as
@@ -590,7 +773,12 @@ where
             });
         }
 
-        let field_size_bits = EF::bits();
+        let field_size_bits = if let Some(batch) = pcs_batch {
+            batch.validate(log_starting_degree)?;
+            crate::pcs_budget::field_bits::<EF>(params.soundness_type)
+        } else {
+            EF::bits()
+        };
         let log_blowup = params.log_blowup;
         let log_folding_factor = params.log_folding_factor;
         let log_starting_folding_factor = params.log_starting_folding_factor;
@@ -599,16 +787,24 @@ where
         let algebraic_security_level = security_level - max_pow_bits;
         let num_ood_samples = params.soundness_type.stir_num_ood_samples();
 
-        // Determine number of intermediate rounds. Round 0 folds by k0
-        // (`log_starting_folding_factor`); every fold after that, including the final
-        // direct-send stage, folds by k (`log_folding_factor`). We fold all the way down
-        // to a polynomial of size `2^log_final_degree` (where log_final_degree <
-        // log_folding_factor, whenever more than the k0 fold happens) and send it
-        // directly. When `log_starting_degree - log_starting_folding_factor` is itself
-        // already `< log_folding_factor`, the k0 fold IS the final fold and no further
-        // k-fold occurs.
+        // Every schedule performs k0 first. Optional early stopping removes only whole
+        // subsequent k folds, before deriving queries, eta, PoW and the union-bound buffer.
         let after_starting_fold = log_starting_degree - log_starting_folding_factor;
-        let extra_folds = after_starting_fold / log_folding_factor;
+        let extra_folds = match options.max_log_final_poly_len {
+            None => after_starting_fold / log_folding_factor,
+            Some(cap) => {
+                let minimum = after_starting_fold % log_folding_factor;
+                if cap < minimum {
+                    return Err(StirConfigError::FinalPolynomialBoundUnreachable {
+                        max_log_final_poly_len: cap,
+                        min_log_final_poly_len: minimum,
+                    });
+                }
+                after_starting_fold
+                    .saturating_sub(cap)
+                    .div_ceil(log_folding_factor)
+            }
+        };
         let total_folds = 1 + extra_folds;
 
         // Last fold produces the final polynomial; intermediate rounds = total_folds - 1.
@@ -622,14 +818,24 @@ where
         // failure, OOD, random-combination, Ans-check; folding tier: proximity-gaps,
         // sumcheck); the final stage has three (folding tier + final query failure); a
         // `Combine` bucket adds one more (Theorem 7.1's `ε_com` term, §4.5).
-        // The buffer applies to every per-event term. OOD, Ans-check, and Combine must
-        // reach the buffered target algebraically because the query-phase grind does not
-        // protect them.
+        // For a PCS schedule this slot holds the summed alpha/Combine block instead.
+        // OOD and Ans-check remain unground; standalone Combine is also unground.
+        // Only a PCS-owned requirement may credit its earlier batch grinding site.
         const TERMS_PER_INTERMEDIATE_ROUND: usize = 6;
         const FINAL_STAGE_TERMS: usize = 3;
-        let combine_term = usize::from(combine.is_some_and(|c| c.num_classes >= 2));
-        let num_alg_terms =
-            TERMS_PER_INTERMEDIATE_ROUND * (total_folds - 1) + FINAL_STAGE_TERMS + combine_term;
+        // The PCS charges alpha and Combine together in one slot, using their
+        // summed error. A singleton bucket still needs the slot when alpha batches
+        // multiple openings. Standalone STIR receives no PCS grinding credit.
+        let combine_term = usize::from(
+            combine.is_some_and(|c| c.num_classes >= 2)
+                || pcs_batch.is_some_and(|batch| batch.has_error()),
+        );
+        // The public unground batching constructor keeps its separate alpha budget.
+        let batching_term = usize::from(quotient_batches.iter().any(|&(_, count)| count > 1));
+        let num_alg_terms = TERMS_PER_INTERMEDIATE_ROUND * (total_folds - 1)
+            + FINAL_STAGE_TERMS
+            + combine_term
+            + batching_term;
         let union_bound_buffer = libm::ceil(libm::log2(num_alg_terms as f64)) as usize;
         let buffered_security_level = security_level + union_bound_buffer;
 
@@ -685,6 +891,13 @@ where
                 .soundness_type
                 .stir_queries_for_base(pow_target_bits, failure_base)
         };
+        let pcs_eta_floor = |log_inv_rate| {
+            if pcs_batch.is_some() {
+                crate::pcs_budget::minimum_eta(params.soundness_type, log_inv_rate)
+            } else {
+                0.
+            }
+        };
         let validate_eta =
             |round: usize, stage_log_inv_rate: usize, eta: f64| -> Result<(), StirConfigError> {
                 if !params
@@ -734,7 +947,25 @@ where
             log_starting_folding_factor,
             field_size_bits,
         )?;
-        // Combine (§4.5) is not PoW-eligible (it runs once, before the query phase's
+        if batching_term != 0 {
+            let batching_eta = minimum_eta_for_target(
+                params.soundness_type.stir_eta_upper_bound(log_inv_rate),
+                buffered_security_level,
+                |eta| {
+                    initial_batching_error(
+                        params.soundness_type,
+                        EF::bits() - 1,
+                        log_degree,
+                        log_inv_rate,
+                        quotient_batches,
+                        eta,
+                    )
+                },
+                "initial PCS quotient combination",
+            )?;
+            final_eta = final_eta.max(batching_eta);
+        }
+        // Standalone Combine (§4.5) is not PoW-eligible (it runs once, before the query phase's
         // grind), so — like OOD and Ans-check — it must reach the full buffered target
         // on its own. Evaluated at `log_degree`/`log_inv_rate` as they stand here: round
         // 0's own starting degree and rate, matching what Combine merges at (immediately
@@ -771,6 +1002,16 @@ where
             }
             final_eta = final_eta.max(combine_eta);
         }
+        if let Some(batch) = pcs_batch {
+            final_eta = final_eta.max(batch.eta(
+                params.soundness_type,
+                field_size_bits,
+                log_degree,
+                log_inv_rate,
+                buffered_security_level,
+            )?);
+        }
+        final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
         validate_eta(0, log_inv_rate, final_eta)?;
 
         // Round 0 reuses the `stir_initial_eta` already computed above; every subsequent
@@ -794,6 +1035,7 @@ where
                     field_size_bits,
                     prev_queries,
                 )?;
+                final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
                 validate_eta(round, log_inv_rate, final_eta)?;
             }
 
@@ -865,6 +1107,7 @@ where
                 field_size_bits,
                 prev_queries,
             )?;
+            final_eta = final_eta.max(pcs_eta_floor(log_inv_rate));
             validate_eta(num_rounds, log_inv_rate, final_eta)?;
         }
         let final_queries = query_count(log_inv_rate, final_eta)?;
@@ -887,6 +1130,10 @@ where
         let final_pow_bits = derive_pow_bits("query", Stage::Final, final_query_alg)?;
 
         Ok(Self {
+            options,
+            quotient_batches: pcs_batch
+                .map_or(quotient_batches, |batch| batch.classes)
+                .to_vec(),
             log_starting_degree,
             soundness_type: params.soundness_type,
             security_level: params.security_level,
@@ -903,6 +1150,25 @@ where
             mmcs: params.mmcs,
             _phantom: PhantomData,
         })
+    }
+
+    /// Options used to derive this schedule; prover and verifier must agree on them.
+    pub const fn options(&self) -> StirOptions {
+        self.options
+    }
+
+    /// Bits retained by the PCS's initial quotient combination, without PoW.
+    /// A standalone STIR configuration has no such error and returns infinity.
+    pub fn initial_batching_error(&self) -> f64 {
+        let eta = self.round_configs.first().map_or(self.final_eta, |r| r.eta);
+        initial_batching_error(
+            self.soundness_type,
+            EF::bits() - 1,
+            self.log_starting_degree,
+            self.log_blowup,
+            &self.quotient_batches,
+            eta,
+        )
     }
 
     /// Log₂ of the initial evaluation domain size.
@@ -985,6 +1251,56 @@ mod tests {
             max_pow_bits: 20,
             mmcs: TestMmcs::new(val_mmcs),
         }
+    }
+
+    #[test]
+    fn early_stop_selects_the_first_fold_within_the_requested_bound() {
+        let cases = [
+            (18, 2, 2, None, 8, 0),
+            (18, 2, 2, Some(0), 8, 0),
+            (18, 2, 2, Some(6), 5, 6),
+            (18, 2, 3, None, 5, 1),
+            (18, 2, 3, Some(6), 4, 4),
+            (10, 3, 2, Some(3), 2, 3),
+            (10, 3, 2, Some(2), 3, 1),
+            (10, 3, 2, Some(usize::MAX), 0, 7),
+        ];
+        for (degree, starting_fold, fold, cap, rounds, final_log) in cases {
+            let mut params = test_params(1, fold);
+            params.log_starting_folding_factor = starting_fold;
+            params.security_level = 16;
+            params.max_pow_bits = 0;
+            let options = StirOptions {
+                max_log_final_poly_len: cap,
+                ..Default::default()
+            };
+            let config = StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::new_with_options(
+                degree, params, options,
+            );
+            assert_eq!(
+                (config.num_rounds(), config.log_final_degree),
+                (rounds, final_log)
+            );
+            assert_eq!(config.options(), options);
+        }
+        let mut params = test_params(1, 2);
+        params.log_starting_folding_factor = 3;
+        let err = StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::try_new_with_options(
+            10,
+            params,
+            StirOptions {
+                max_log_final_poly_len: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            StirConfigError::FinalPolynomialBoundUnreachable {
+                max_log_final_poly_len: 0,
+                min_log_final_poly_len: 1,
+            }
+        );
     }
 
     /// [`test_params`] with every knob the fallibility tests need to vary exposed.
@@ -1483,11 +1799,11 @@ mod tests {
             (16, 1, 3, 2, 80, 20, cb),
         ];
 
-        {
+        for cap in [None, Some(2), Some(6), Some(12), Some(usize::MAX)] {
             for &(log_deg, log_blowup, log_fold, log_starting_fold, sec, max_pow, soundness_type) in
                 &cases
             {
-                let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(
+                let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new_with_options(
                     log_deg,
                     StirParameters {
                         log_blowup,
@@ -1498,10 +1814,14 @@ mod tests {
                         max_pow_bits: max_pow,
                         mmcs: MyMmcs::new(val_mmcs.clone()),
                     },
+                    StirOptions {
+                        max_log_final_poly_len: cap,
+                        ..Default::default()
+                    },
                 );
 
                 // Mirror `StirConfig::new`'s buffered target.
-                let total_folds = 1 + (log_deg - log_starting_fold) / log_fold;
+                let total_folds = config.num_rounds() + 1;
                 let buffer = libm::ceil(libm::log2((6 * (total_folds - 1) + 3) as f64)) as usize;
                 let buffered = (sec + buffer) as f64;
                 // Recomputed algebraic bits use the same `libm` math as the config, so
@@ -1570,7 +1890,7 @@ mod tests {
                         .round_configs
                         .last()
                         .map_or((log_deg, log_blowup), |last| {
-                            let fd = last.log_degree - log_fold;
+                            let fd = last.log_degree - last.log_folding_factor;
                             let fdom = last.log_domain_size - 1;
                             (fd, fdom - fd)
                         });

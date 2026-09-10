@@ -12,6 +12,7 @@ mod suffix;
 use alloc::vec::Vec;
 
 pub use claims::StackedClaims;
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, Mmcs};
 use p3_field::{ExtensionField, Field};
@@ -47,6 +48,15 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     /// - `witness`                — stacked committed polynomial plus its tables.
     /// - `folding`                — folding factor consumed by the first WHIR round.
     /// - `starting_log_inv_rate`  — initial log-inverse rate of the RS code.
+    ///
+    /// # Transcript
+    ///
+    /// The default body absorbs exactly one value, the Merkle root it returns.
+    ///
+    /// An override owes the sponge that same single absorb, and no other absorb, sample or grind.
+    ///
+    /// A verifier never reaches this method, so it absorbs that one root in its place.
+    /// An absorbed table height would desync the two sides with no step out of place on either.
     fn commit<E, MT, Challenger>(
         encoder: &E,
         mmcs: &MT,
@@ -183,6 +193,7 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         challenger: &mut Ch,
     ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
+        F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
 }
 

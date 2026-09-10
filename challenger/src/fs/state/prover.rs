@@ -5,7 +5,6 @@ use core::marker::PhantomData;
 
 use p3_field::{BasedVectorSpace, Field, PrimeField64};
 
-use crate::fs::TranscriptField;
 use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::{
     Codec, ExtensionFieldCodec, bound_byte_width, encode_field_be, encode_len_be,
@@ -14,7 +13,8 @@ use crate::fs::domain_separator::DomainSeparator;
 use crate::fs::pattern::{Hierarchy, Interaction, Kind, Label, Length, Pattern, PatternPlayer};
 use crate::fs::state::assert_challenge_security;
 use crate::fs::unit::Unit;
-use crate::{CanObserve, GrindingChallenger};
+use crate::fs::{TranscriptField, drop_check_may_panic};
+use crate::{CanObserve, CanSampleBits, CanSampleUniformBits, GrindingChallenger};
 
 /// Drives a prover-side transcript in lockstep with a recorded pattern.
 ///
@@ -33,6 +33,9 @@ use crate::{CanObserve, GrindingChallenger};
 ///
 /// On drop without [`Self::finalize`], to surface a transcript that was
 /// abandoned halfway through.
+///
+/// A panic already unwinding releases the check.
+/// Panicking on top of one aborts the process instead of reporting anything.
 pub struct ProverState<C, U: Unit = u8> {
     /// Underlying sponge that absorbs prover messages and yields challenges.
     challenger: C,
@@ -46,10 +49,13 @@ pub struct ProverState<C, U: Unit = u8> {
 
 impl<C, U: Unit> Drop for ProverState<C, U> {
     fn drop(&mut self) {
+        // A panic already unwinding owns the failure, and a second one would abort.
+        // Caller code runs inside a live scope, so that panic need not be ours.
+        if !drop_check_may_panic() {
+            return;
+        }
+
         // Loud failure surfaces a transcript abandoned before finalisation.
-        //
-        // Every path that panics or bails marks the player aborted first,
-        // so this check never fires during cleanup of another failure.
         if !self.player.is_finalized() {
             let remaining = self.player.remaining();
             // Release the player's own drop check so this panic stays single.
@@ -81,6 +87,19 @@ impl<C, U: Unit> ProverState<C, U> {
     /// Read-only access to the underlying challenger.
     pub const fn challenger(&self) -> &C {
         &self.challenger
+    }
+
+    /// Mutable access to the underlying challenger.
+    ///
+    /// A component that lends its sponge to a sub-protocol reaches it through here.
+    /// The sub-protocol seeds its own driver from the state this one has reached.
+    ///
+    /// Nothing this returns is validated against the pattern.
+    ///
+    /// Bracket the region with the begin and end markers.
+    /// The delegation is then recorded even though its steps belong to the callee.
+    pub const fn challenger_mut(&mut self) -> &mut C {
+        &mut self.challenger
     }
 
     /// Read-only access to the bytes buffered for the proof so far.
@@ -385,6 +404,236 @@ impl<C, U: Unit> ProverState<C, U> {
             .collect()
     }
 
+    /// Absorb a variable-length list of extension messages the caller carries itself.
+    ///
+    /// # Overview
+    ///
+    /// The list holds at most `max` values, and `max` is what the pattern records.
+    ///
+    /// The actual count is bound into the sponge as a big-endian prefix before any value.
+    ///
+    /// ```text
+    ///     absorb: [the count in W bytes][each value through the codec]
+    /// ```
+    ///
+    /// The prefix keeps the transcript prefix-free.
+    ///
+    /// No shorter run of this step is then a prefix of a longer one.
+    ///
+    /// Nothing is written to the wire, so the caller's own proof carries the values.
+    ///
+    /// # When to use this
+    ///
+    /// A list whose length is settled by the run rather than by the configuration.
+    /// An interpolant through a deduplicated point set is the case that matters.
+    ///
+    /// # Panics
+    ///
+    /// When the supplied slice is longer than `max`.
+    pub fn observe_extensions_bounded<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        values: &[EF],
+        max: usize,
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: TranscriptField,
+        EF: Field + BasedVectorSpace<F>,
+        C: CanObserve<U::Item>,
+        Cdc: Codec<C, F>,
+    {
+        // Caller bug: absorbing more than the cap would diverge from the recorded pattern.
+        if values.len() > max {
+            self.fail(format_args!(
+                "message length {} exceeds declared maximum {max}",
+                values.len(),
+            ));
+        }
+        // Validate: the next pattern step is a bounded list of extension messages.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Bounded(max),
+        ));
+        // Prefix width is deterministic on both sides from the recorded bound.
+        let width = bound_byte_width(max);
+        let len_bytes = encode_len_be(values.len(), width);
+        // Count first, then the values, so a short run cannot prefix a long one.
+        U::observe_bytes(&mut self.challenger, &len_bytes[..width]);
+        values
+            .iter()
+            .map(|v| {
+                ExtensionFieldCodec::<F, EF, Cdc>::observe(&mut self.challenger, v);
+                TranscriptBound::wrap(*v)
+            })
+            .collect()
+    }
+
+    /// Absorb a value the challenger knows how to encode, carried by the caller.
+    ///
+    /// # When to use this
+    ///
+    /// A commitment is the usual case.
+    /// Its width lives in the commitment scheme's configuration, not here.
+    ///
+    /// # What is bound
+    ///
+    /// The value's content, through the challenger's own encoding.
+    /// Its width is not, so two runs differing only in that share a fingerprint.
+    ///
+    /// Bind such widths through the instance label where a protocol can see them.
+    pub fn observe_opaque<T>(&mut self, label: Label, value: T) -> TranscriptBound<T>
+    where
+        T: Clone,
+        C: CanObserve<T>,
+    {
+        // Validate: the next pattern step is an opaque message.
+        self.player.interact(Interaction::opaque(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Scalar,
+        ));
+        // The challenger owns the encoding, so hand the value over whole.
+        self.challenger.observe(value.clone());
+        TranscriptBound::wrap(value)
+    }
+
+    /// Sample `count` challenges of `width` uniform bits under one step.
+    ///
+    /// The width travels in the step.
+    /// A verifier drawing narrower indices fails the shape check.
+    ///
+    /// Nothing is absorbed between draws, so one step describes them all.
+    pub fn challenge_bits(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleBits<usize>,
+    {
+        self.player.interact(Interaction::bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        (0..count)
+            .map(|_| TranscriptBound::wrap(self.challenger.sample_bits(width)))
+            .collect()
+    }
+
+    /// Sample `count` challenges of `width` bits with no modular bias, under one step.
+    ///
+    /// # Overview
+    ///
+    /// The biased draw reduces one sponge output modulo `2^width`.
+    ///
+    /// Its distance from uniform is `2^width / p`, which a 31-bit prime makes visible.
+    ///
+    /// This one rejects an output that would bias the result and draws again.
+    ///
+    /// # Shape
+    ///
+    /// The step records the width and the count, exactly as the biased draw does.
+    /// Its tag differs, so the two cannot be confused at the same position.
+    ///
+    /// The number of sponge outputs a draw consumes is not part of the shape.
+    /// It is not known when the pattern is built, and both sides consume the same one.
+    ///
+    /// # Panics
+    ///
+    /// Never for a challenger that rejects internally, which is what `RESAMPLE = true` asks for.
+    pub fn challenge_uniform_bits<W>(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleUniformBits<W>,
+    {
+        self.player.interact(Interaction::uniform_bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        (0..count)
+            .map(|_| {
+                TranscriptBound::wrap(
+                    self.challenger
+                        .sample_uniform_bits::<true>(width)
+                        .expect("RESAMPLE = true: rejection loops internally, never errors"),
+                )
+            })
+            .collect()
+    }
+
+    /// Sample `count` extension challenges the caller's predicate accepts, under one step.
+    ///
+    /// # Overview
+    ///
+    /// A candidate is drawn and shown to `accept` alongside the values already kept.
+    ///
+    /// It is then either kept or discarded.
+    ///
+    /// ```text
+    ///     draw -> accept? -> keep     until `count` values are kept
+    ///                     -> discard
+    /// ```
+    ///
+    /// # When to use this
+    ///
+    /// A challenge constrained to avoid a set the protocol fixes in advance.
+    /// An out-of-domain point that must miss every evaluation domain is the case that matters.
+    ///
+    /// # Shape
+    ///
+    /// The step records the count, not the number of candidates it took to reach it.
+    /// That number depends on the sponge, so no pattern built before the run can hold it.
+    ///
+    /// The predicate is not recorded either.
+    /// Two runs whose predicates differ share a fingerprint.
+    ///
+    /// So bind whatever shapes the predicate through the instance label.
+    ///
+    /// # Panics
+    ///
+    /// Never returns if `accept` rejects every value in the field.
+    pub fn challenge_extensions_rejecting<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        count: usize,
+        mut accept: impl FnMut(&EF, &[EF]) -> bool,
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: TranscriptField,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        assert_challenge_security::<C, F, Cdc>();
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            Length::Fixed(count),
+        ));
+        let mut kept: Vec<EF> = Vec::with_capacity(count);
+        while kept.len() < count {
+            let candidate = ExtensionFieldCodec::<F, EF, Cdc>::sample(&mut self.challenger);
+            if accept(&candidate, &kept) {
+                kept.push(candidate);
+            }
+        }
+        kept.into_iter().map(TranscriptBound::wrap).collect()
+    }
+
     /// Absorb a fixed-length byte string as a prover message.
     ///
     /// The dominant prover message in this repository is a digest.
@@ -634,6 +883,8 @@ impl<C, U: Unit> ProverState<C, U> {
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
+    #[cfg(panic = "unwind")]
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
@@ -1313,6 +1564,27 @@ mod tests {
         // The failure path releases the drop-time check, so this panic stays single.
         let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
         p.add_hint_bounded("auth", &[0u8; 5], 4);
+    }
+
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn a_panic_inside_a_live_prover_scope_unwinds() {
+        // Fixture state: a driver holding two unplayed steps, so its drop check is armed.
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"unwind", small_pattern());
+
+        // Mutation: the caller panics mid-run, exactly as `RowMajorMatrix::new` would.
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
+            p.add_scalars::<F, ByteCodec>("msgs", &[F::ONE, F::ONE, F::ONE]);
+            panic!("caller panic inside the live scope");
+        }));
+
+        // The drop check yields to the panic in flight, so the caller's failure survives.
+        let payload = caught.expect_err("the caller's panic must unwind out of the scope");
+        assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some("caller panic inside the live scope")
+        );
     }
 
     #[test]

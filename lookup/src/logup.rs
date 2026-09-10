@@ -22,12 +22,11 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_air::{ExtensionBuilder, PermutationAirBuilder, SymbolicExpression, WindowAccess};
-use p3_field::{Field, PrimeCharacteristicRing, dot_product};
+use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
 use p3_maybe_rayon::prelude::*;
-use p3_uni_stark::{StarkGenericConfig, Val};
 use tracing::instrument;
 
 use crate::protocol::LookupProtocol;
@@ -35,7 +34,7 @@ use crate::traits::LookupTraceBuilder;
 use crate::types::{Lookup, LookupError, LookupTerminal};
 
 /// Type alias for the row evaluation context used during permutation trace generation.
-pub type RowEvalContext<'a, SC> = LookupTraceBuilder<'a, SC>;
+pub type RowEvalContext<'a, F, EF> = LookupTraceBuilder<'a, F, EF>;
 
 /// Combine one tuple `(e_0, ..., e_{k-1})` into a single extension-field value.
 ///
@@ -49,22 +48,22 @@ pub type RowEvalContext<'a, SC> = LookupTraceBuilder<'a, SC>;
 /// - Those powers run `beta^{k-1}` down to `beta^1`, taken from `beta_powers[1..k]` reversed.
 /// - The product is extension times base, cheaper than the extension times extension a Horner fold uses.
 /// - This folding convention matches the symbolic side, so prover and verifier agree on the combined value.
-fn combine_tuple<SC: StarkGenericConfig>(
-    elts: &[SymbolicExpression<Val<SC>>],
-    beta_powers: &[SC::Challenge],
-    row_ctx: &RowEvalContext<'_, SC>,
-) -> SC::Challenge {
+fn combine_tuple<F: Field, EF: ExtensionField<F>>(
+    elts: &[SymbolicExpression<F>],
+    beta_powers: &[EF],
+    row_ctx: &RowEvalContext<'_, F, EF>,
+) -> EF {
     match elts.split_last() {
         // Empty tuple combines to zero.
-        None => SC::Challenge::ZERO,
+        None => EF::ZERO,
         // Width-1 tuple: the single element carries beta^0, so lift it directly.
         Some((last, [])) => last.resolve(row_ctx).into(),
         Some((last, leading)) => {
             // Powers beta^{k-1} down to beta^1, aligned with e_0 .. e_{k-2}.
             let high_powers = beta_powers[1..elts.len()].iter().rev().copied();
             let leading_resolved = leading.iter().map(|e| e.resolve(row_ctx));
-            let lifted_last: SC::Challenge = last.resolve(row_ctx).into();
-            lifted_last + dot_product::<SC::Challenge, _, _>(high_powers, leading_resolved)
+            let lifted_last: EF = last.resolve(row_ctx).into();
+            lifted_last + dot_product::<EF, _, _>(high_powers, leading_resolved)
         }
     }
 }
@@ -497,17 +496,14 @@ impl LookupProtocol for LogUpGadget {
     }
 
     #[instrument(name = "generate lookup permutation", skip_all, level = "debug")]
-    fn generate_permutation<SC: StarkGenericConfig>(
+    fn generate_permutation<F: Field, EF: ExtensionField<F>>(
         &self,
-        main: &RowMajorMatrix<Val<SC>>,
-        preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
-        public_values: &[Val<SC>],
-        lookups: &[Lookup<Val<SC>>],
-        challenges: &[SC::Challenge],
-    ) -> (
-        RowMajorMatrix<SC::Challenge>,
-        Option<LookupTerminal<SC::Challenge>>,
-    ) {
+        main: &RowMajorMatrix<F>,
+        preprocessed: &Option<RowMajorMatrix<F>>,
+        public_values: &[F],
+        lookups: &[Lookup<F>],
+        challenges: &[EF],
+    ) -> (RowMajorMatrix<EF>, Option<LookupTerminal<EF>>) {
         // AIRs without lookups carry no permutation trace and no terminal.
         if lookups.is_empty() {
             return (RowMajorMatrix::new(Vec::new(), 0), None);
@@ -560,7 +556,7 @@ impl LookupProtocol for LogUpGadget {
         // Each lookup uses a pair (alpha, beta) that is constant across all rows.
         // - alpha is the rational-denominator challenge,
         // - beta combines tuple elements.
-        let lookup_challenges: Vec<(SC::Challenge, SC::Challenge)> = lookups
+        let lookup_challenges: Vec<(EF, EF)> = lookups
             .iter()
             .map(|lookup| {
                 // Index into the flat challenge array by the lookup's slot index.
@@ -583,7 +579,7 @@ impl LookupProtocol for LogUpGadget {
             .map(Vec::len)
             .max()
             .unwrap_or(0);
-        let beta_powers: Vec<Vec<SC::Challenge>> = lookup_challenges
+        let beta_powers: Vec<Vec<EF>> = lookup_challenges
             .iter()
             .map(|&(_, beta)| beta.powers().collect_n(max_tuple_width))
             .collect();
@@ -618,12 +614,12 @@ impl LookupProtocol for LogUpGadget {
         //
         //     col 0:      acc           ← filled from row_totals (parallel prefix sum, below)
         //     col i + 1:  frac_i = V/U  ← filled per row during the batch-invert chunks
-        let mut aux_trace = SC::Challenge::zero_vec(height * width);
+        let mut aux_trace = EF::zero_vec(height * width);
 
         // Per-row sum of every fraction column.
         //
         // Used as the per-row delta when building the accumulator.
-        let mut row_totals = SC::Challenge::zero_vec(height);
+        let mut row_totals = EF::zero_vec(height);
 
         aux_trace
             .par_chunks_mut(CHUNK_SIZE * width)
@@ -636,8 +632,8 @@ impl LookupProtocol for LogUpGadget {
                 let num_rows = chunk_aux.len() / width;
 
                 // Thread-local denominator and multiplicity buffers.
-                let mut local_denoms = SC::Challenge::zero_vec(num_rows * denoms_per_row);
-                let mut local_mults = Val::<SC>::zero_vec(num_rows * denoms_per_row);
+                let mut local_denoms = EF::zero_vec(num_rows * denoms_per_row);
+                let mut local_mults = F::zero_vec(num_rows * denoms_per_row);
 
                 // Phase 1: Fill denominators and multiplicities for every row in this chunk.
                 for local_i in 0..num_rows {
@@ -673,7 +669,7 @@ impl LookupProtocol for LogUpGadget {
 
                     // Concrete evaluator: resolves symbolic expressions to field values
                     // using the current row's data.
-                    let row_ctx: RowEvalContext<'_, SC> = RowEvalContext::new(
+                    let row_ctx: RowEvalContext<'_, F, EF> = RowEvalContext::new(
                         main_rows,
                         preprocessed_rows,
                         public_values,
@@ -706,9 +702,9 @@ impl LookupProtocol for LogUpGadget {
                                     // - The verifier reads the real denominator from the trace.
                                     // - So the zero term drops from both sides of `U * f = V`.
                                     local_denoms[offset] = if mult.is_zero() {
-                                        SC::Challenge::ONE
+                                        EF::ONE
                                     } else {
-                                        alpha - combine_tuple::<SC>(elts, powers, &row_ctx)
+                                        alpha - combine_tuple::<F, EF>(elts, powers, &row_ctx)
                                     };
                                     offset += 1;
                                 }
@@ -726,9 +722,9 @@ impl LookupProtocol for LogUpGadget {
                                 //
                                 //   N = sum_k flag_k * mult_k
                                 //   D = sum_k flag_k * (alpha - combine_k) + (1 - sum_k flag_k)
-                                let mut numerator = Val::<SC>::ZERO;
-                                let mut flag_sum = Val::<SC>::ZERO;
-                                let mut denom = SC::Challenge::ZERO;
+                                let mut numerator = F::ZERO;
+                                let mut flag_sum = F::ZERO;
+                                let mut denom = EF::ZERO;
                                 for (k, elts) in lookup.elements.iter().enumerate() {
                                     let flag = flags[k].resolve(&row_ctx);
 
@@ -737,7 +733,7 @@ impl LookupProtocol for LogUpGadget {
                                     //
                                     // - each flag is boolean (selects or skips its branch),
                                     debug_assert!(
-                                        flag.is_zero() || flag == Val::<SC>::ONE,
+                                        flag.is_zero() || flag == F::ONE,
                                         "exclusive flag must be boolean"
                                     );
 
@@ -751,19 +747,20 @@ impl LookupProtocol for LogUpGadget {
 
                                     let mult = lookup.multiplicities[k].resolve(&row_ctx);
                                     numerator += flag * mult;
-                                    let term = alpha - combine_tuple::<SC>(elts, powers, &row_ctx);
-                                    denom += term * SC::Challenge::from(flag);
+                                    let term =
+                                        alpha - combine_tuple::<F, EF>(elts, powers, &row_ctx);
+                                    denom += term * flag;
                                 }
 
                                 // - at most one flag fires, so the boolean flags sum to 0 or 1.
                                 debug_assert!(
-                                    flag_sum.is_zero() || flag_sum == Val::<SC>::ONE,
+                                    flag_sum.is_zero() || flag_sum == F::ONE,
                                     "exclusive flags must sum to at most one per row"
                                 );
 
                                 // Fallback: an all-inactive row gets denominator 1.
                                 // Its fraction is then 0.
-                                denom += SC::Challenge::from(Val::<SC>::ONE - flag_sum);
+                                denom += F::ONE - flag_sum;
                                 local_denoms[offset] = denom;
                                 local_mults[offset] = numerator;
                                 offset += 1;
@@ -791,7 +788,7 @@ impl LookupProtocol for LogUpGadget {
                 for (local_i, row_total_slot) in chunk_row_totals.iter_mut().enumerate() {
                     let inv_base = local_i * denoms_per_row;
                     let row_offset = local_i * width;
-                    let mut row_total = SC::Challenge::ZERO;
+                    let mut row_total = EF::ZERO;
                     for lookup_idx in 0..lookups.len() {
                         // Slice out the range of denominators belonging to this lookup.
                         let start = lookup_denom_offsets[lookup_idx];
@@ -839,7 +836,7 @@ impl LookupProtocol for LogUpGadget {
 
         // Phase B — Combine chunk totals into cumulative offsets.
         // Only as many entries as there are chunks (one per thread), so this is tiny.
-        let mut offsets = SC::Challenge::zero_vec(height.div_ceil(chunk_size));
+        let mut offsets = EF::zero_vec(height.div_ceil(chunk_size));
         for i in 1..offsets.len() {
             offsets[i] = offsets[i - 1] + row_totals[i * chunk_size - 1];
         }

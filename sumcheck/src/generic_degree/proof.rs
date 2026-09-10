@@ -11,7 +11,7 @@ use p3_multilinear_util::point::Point;
 use serde::{Deserialize, Serialize};
 
 use super::error::GenericDegreeError;
-use super::transcript::VerifierTranscript;
+use super::transcript::{GenericDegreeShape, VerifierTranscript};
 use super::util::RoundPolyInterpolator;
 
 /// Transcript record produced by the generic-degree sumcheck prover.
@@ -63,16 +63,16 @@ impl<F, EF> GenericDegreeProof<F, EF> {
     ///
     /// When an outer protocol fixes the claimed sum, the caller must also check the proof's claimed sum against it.
     ///
-    /// # Shape checks come first
+    /// # Shape checks
     ///
-    /// Every length this proof carries is checked before any of it is absorbed.
+    /// The counts this proof carries are attacker-controlled.
     ///
-    /// The transcript panics on a step of an undescribed length.
-    /// That is right for two sides built from different descriptions.
-    /// It is wrong for untrusted input, which must be rejected instead.
+    /// The two that fix how the proof is walked are checked up front.
+    /// One is the round count, which decides how many steps are played.
+    /// The other is the witness count, which the round loop indexes into.
     ///
-    /// So the checks run first.
-    /// They compare against the same numbers that shape the description.
+    /// The width of a round polynomial is checked by the transcript itself.
+    /// The described step declares that width, so a mismatch is rejected before the round absorbs anything.
     ///
     /// # Errors
     ///
@@ -122,31 +122,31 @@ impl<F, EF> GenericDegreeProof<F, EF> {
             });
         }
 
-        // Each round polynomial is one transcript step of a fixed width.
+        // Phase 2: replay the transcript, now that the walk itself is known safe.
+
+        // Seeded from the same numbers the prover seeded with.
+        //
+        // Each round polynomial is one described step of exactly `degree` evaluations.
+        // The described width is what checks it, so no separate width sweep runs first.
         //
         //     described step:  Fixed(degree) evaluations
         //     proof carries:   evals.len()
-        //     mismatch      -> reject here, before absorbing anything
-        for (round, evals) in self.round_polys.iter().enumerate() {
-            if evals.len() != degree {
-                return Err(GenericDegreeError::PolyEvalCountMismatch {
-                    round,
-                    expected: degree,
-                    actual: evals.len(),
-                });
-            }
-        }
-
-        // Phase 2: replay the transcript, now that every length is known good.
-
-        // Seeded from the same numbers the prover seeded with.
-        let mut transcript = VerifierTranscript::<Challenger, F, EF>::new(
-            challenger,
-            num_rounds,
-            degree,
-            pow_bits,
-            self.claimed_sum,
-        );
+        //     mismatch      -> that round rejects
+        //
+        // The rejection happens at the offending round, not before the replay.
+        // A proof whose round 3 carries the wrong width has rounds 0 to 2 absorbed first.
+        //
+        // The sponge is borrowed from the caller, so it outlives the rejection half advanced.
+        //
+        // What keeps the verdict safe is that every caller propagates the error:
+        //
+        //     propagate -> the half-advanced sponge is abandoned with the failed verification
+        //     retry     -> the next attempt starts from a state the rejected proof chose
+        //
+        // A retry on this borrow is therefore unsound: it lets a prover pick its own challenges.
+        let shape = GenericDegreeShape::new(num_rounds, degree, pow_bits);
+        let mut transcript =
+            VerifierTranscript::<Challenger, F, EF>::new(challenger, shape, self.claimed_sum);
 
         // Barycentric weights for the integer domain 0, 1, …, degree are shared by every round.
         let interpolator = RoundPolyInterpolator::new(degree);
@@ -154,7 +154,15 @@ impl<F, EF> GenericDegreeProof<F, EF> {
         let mut running_sum = self.claimed_sum;
         let mut challenges = Vec::with_capacity(num_rounds);
 
-        for (round, evals) in self.round_polys.iter().enumerate() {
+        // Driven by the same number the description was built from, not by the proof's length.
+        //
+        // The two agree only because of the round-count check above.
+        // Reading the count once keeps the loop and the description from ever disagreeing.
+        //
+        // Both indices below are in bounds by the two checks above.
+        for round in 0..num_rounds {
+            let evals = &self.round_polys[round];
+
             // One call binds the polynomial, re-checks the grind, and draws the challenge.
             let witness = (pow_bits > 0).then(|| self.pow_witnesses[round]);
             let challenge = transcript.round(evals, witness)?;
@@ -183,7 +191,6 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
-    use crate::generic_degree::pattern;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -251,22 +258,33 @@ mod tests {
         // It is therefore what keeps two configurations off the same challenges.
         //
         // Fixture state: 4 rounds, degree 3, no grinding.
-        let base = pattern::<F, EF>(4, 3, 0).pattern_hash();
+        let base = GenericDegreeShape::new(4, 3, 0)
+            .pattern::<F, EF>()
+            .pattern_hash();
 
         // One more round appends three more steps.
-        assert_ne!(base, pattern::<F, EF>(5, 3, 0).pattern_hash());
+        let more_rounds = GenericDegreeShape::new(5, 3, 0)
+            .pattern::<F, EF>()
+            .pattern_hash();
+        assert_ne!(base, more_rounds);
 
         // A wider round polynomial changes each round step's declared width.
-        assert_ne!(base, pattern::<F, EF>(4, 4, 0).pattern_hash());
+        let wider = GenericDegreeShape::new(4, 4, 0)
+            .pattern::<F, EF>()
+            .pattern_hash();
+        assert_ne!(base, wider);
 
         // Enabling grinding inserts a step per round.
-        assert_ne!(base, pattern::<F, EF>(4, 3, 8).pattern_hash());
+        let ground = GenericDegreeShape::new(4, 3, 8)
+            .pattern::<F, EF>()
+            .pattern_hash();
+        assert_ne!(base, ground);
 
         // Two positive difficulties differ only inside the grinding steps.
-        assert_ne!(
-            pattern::<F, EF>(4, 3, 8).pattern_hash(),
-            pattern::<F, EF>(4, 3, 9).pattern_hash(),
-        );
+        let harder = GenericDegreeShape::new(4, 3, 9)
+            .pattern::<F, EF>()
+            .pattern_hash();
+        assert_ne!(ground, harder);
     }
 
     #[test]

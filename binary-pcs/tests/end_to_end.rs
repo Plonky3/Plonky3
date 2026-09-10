@@ -10,7 +10,10 @@
 //! actually produced.
 
 use p3_binary_field::{BinaryChallenger, BinaryField128};
-use p3_binary_pcs::{BinaryPcs, BinaryPcsConfig, BinaryPcsError, BinaryPcsParams, BinaryPcsProof};
+use p3_binary_pcs::{
+    BinaryPcs, BinaryPcsConfig, BinaryPcsError, BinaryPcsParams, BinaryPcsProof,
+    GroupedCodewordMmcs,
+};
 use p3_challenger::{FieldChallenger, HashChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::PrimeCharacteristicRing;
@@ -32,6 +35,274 @@ type MyCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
 type MyMmcs = MerkleTreeMmcs<F, u8, MyHash, MyCompress, 2, 32>;
 type MyChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 type MyPcs = BinaryPcs<MyMmcs>;
+
+#[test]
+fn opening_claims_must_fit_the_security_budget() {
+    let mut rng = SmallRng::seed_from_u64(0xA17A);
+    let witness = SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, 1)], 0);
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(1, 1),
+        (0..7).map(|_| OpeningBatch::new(vec![0], vec![])).collect(),
+    )]);
+    // Both configurations query every pair. Only the claim budget distinguishes them.
+    let prover = BinaryPcs::new(
+        BinaryPcsConfig::try_new(1, params(2, 0, 40)).unwrap(),
+        mmcs(),
+    );
+    let verifier = BinaryPcs::new(
+        BinaryPcsConfig::try_new(1, params(2, 0, 124)).unwrap(),
+        mmcs(),
+    );
+    let mut ch = challenger();
+    let (root, data) = prover.commit(witness, &mut ch);
+    let proof = prover.open(data, protocol.clone(), &mut ch);
+    assert!(
+        verifier
+            .verify(&root, &proof, &mut challenger(), protocol)
+            .is_err()
+    );
+}
+
+#[test]
+fn single_folds_must_compose_all_rounds_and_query_error() {
+    // Sum_r (2^(22-r) + 1) + 2*20 = 8_388_660 field-error units.
+    // Its rounded bound is 104 bits; reserving half the error for queries leaves 103.
+    assert!(BinaryPcsConfig::try_new(20, params(2, 0, 104)).is_err());
+}
+
+#[test]
+fn binary_pcs_supplies_composed_prescribed_security() {
+    let pcs = BinaryPcs::new(
+        BinaryPcsConfig::try_new(4, params(2, 0, 100)).unwrap(),
+        mmcs(),
+    );
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(4, 1),
+        vec![OpeningBatch::new(vec![0], vec![0])],
+    )]);
+    let evidence =
+        <MyPcs as PrescribedPointPcs<F, MyChallenger>>::prescribed_security(&pcs, &protocol)
+            .expect("binary PCS must supply its opening bound");
+    assert!(evidence.error.bits() >= 100.0);
+    assert_eq!(evidence.log2_max_candidates, 0.0);
+}
+
+#[test]
+fn claim_boundaries_cover_successors_and_both_opening_modes() {
+    use p3_challenger::CanObserve;
+    for (nv, security, folding, cap) in [(1, 124, 1, 6), (4, 119, 2, 381)] {
+        let low = BinaryPcsConfig::try_new(nv, params(2, 0, 40))
+            .unwrap()
+            .try_with_folding(folding)
+            .unwrap();
+        let high = BinaryPcsConfig::try_new(nv, params(2, 0, security))
+            .unwrap()
+            .try_with_folding(folding)
+            .unwrap();
+        assert_eq!(high.max_opening_claims(), cap);
+        for count in [cap, cap + 1] {
+            for prescribed in [false, true] {
+                let mut rng = SmallRng::seed_from_u64(999);
+                let witness =
+                    SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, nv)], 0);
+                let protocol = OpeningProtocol::new(vec![TableSpec::new(
+                    TableShape::new(nv, 1),
+                    (0..count / 2)
+                        .map(|_| OpeningBatch::new(vec![0], vec![0]))
+                        .chain((count % 2 == 1).then(|| OpeningBatch::new(vec![0], vec![])))
+                        .collect(),
+                )]);
+                let prover = BinaryPcs::new(low, mmcs());
+                let verifier = BinaryPcs::new(high, mmcs());
+                let mut pc = challenger();
+                let (root, data) = prover.commit(witness, &mut pc);
+                let mut vc = challenger();
+                let mut guarded_ch = pc.clone();
+                let result = if prescribed {
+                    vc.observe(root.clone());
+                    let points: Vec<Point<F>> = protocol
+                        .iter_openings()
+                        .map(|_| Point::new((0..nv).map(|_| pc.sample_algebra_element()).collect()))
+                        .collect();
+                    let verifier_points: Vec<Point<F>> = protocol
+                        .iter_openings()
+                        .map(|_| Point::new((0..nv).map(|_| vc.sample_algebra_element()).collect()))
+                        .collect();
+                    guarded_ch = pc.clone();
+                    let mut snapshot = guarded_ch.clone();
+                    let guarded =
+                        verifier.try_open_at(data.clone(), &protocol, &points, &mut guarded_ch);
+                    assert_eq!(guarded.is_ok(), count <= cap);
+                    if count > cap {
+                        assert_claim_budget_error(&guarded.err().unwrap(), count, cap, security);
+                        assert_eq!(
+                            guarded_ch.sample_algebra_element::<F>(),
+                            snapshot.sample_algebra_element::<F>()
+                        );
+                    }
+                    let proof = prover
+                        .try_open_at(data, &protocol, &points, &mut pc)
+                        .unwrap();
+                    verifier
+                        .verify_at(&root, &proof, &protocol, &verifier_points, &mut vc)
+                        .map(|_| ())
+                } else {
+                    let mut snapshot = guarded_ch.clone();
+                    let guarded = verifier.try_open(data.clone(), &protocol, &mut guarded_ch);
+                    assert_eq!(guarded.is_ok(), count <= cap);
+                    if count > cap {
+                        assert_claim_budget_error(&guarded.err().unwrap(), count, cap, security);
+                        assert_eq!(
+                            guarded_ch.sample_algebra_element::<F>(),
+                            snapshot.sample_algebra_element::<F>()
+                        );
+                    }
+                    let proof = prover.try_open(data, &protocol, &mut pc).unwrap();
+                    verifier.verify(&root, &proof, &mut vc, protocol.clone())
+                };
+                if count <= cap {
+                    result.unwrap();
+                } else {
+                    assert_claim_budget_error(&result.unwrap_err(), count, cap, security);
+                    assert!(
+                        <MyPcs as PrescribedPointPcs<F, MyChallenger>>::prescribed_security(
+                            &verifier, &protocol
+                        )
+                        .is_none()
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn assert_claim_budget_error(
+    error: &BinaryPcsError<<MyMmcs as Mmcs<F>>::Error>,
+    count: usize,
+    cap: usize,
+    security: usize,
+) {
+    assert!(
+        matches!(error, BinaryPcsError::OpeningClaimCountExceedsSecurityBudget {
+        actual, max, security_level
+    } if *actual == count && *max == cap && *security_level == security)
+    );
+}
+
+#[test]
+fn invalid_protocols_and_points_fail_before_transcript_changes() {
+    let mut rng = SmallRng::seed_from_u64(32);
+    let witness = SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, 4)], 0);
+    let pcs = BinaryPcs::new(
+        BinaryPcsConfig::try_new(4, params(2, 0, 100)).unwrap(),
+        mmcs(),
+    );
+    let mut ch = challenger();
+    let (_, data) = pcs.commit(witness, &mut ch);
+    let bad = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(5, 1),
+        vec![OpeningBatch::new(vec![0], vec![])],
+    )]);
+    let mut snapshot = ch.clone();
+    assert!(matches!(
+        pcs.try_open(data.clone(), &bad, &mut ch),
+        Err(BinaryPcsError::InvalidOpeningProtocol)
+    ));
+    assert!(
+        <MyPcs as PrescribedPointPcs<F, MyChallenger>>::prescribed_security(&pcs, &bad).is_none()
+    );
+    let good = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(4, 1),
+        vec![OpeningBatch::new(vec![0], vec![])],
+    )]);
+    for points in [vec![], vec![Point::new(vec![F::ZERO; 3])]] {
+        assert!(matches!(
+            pcs.try_open_at(data.clone(), &good, &points, &mut ch),
+            Err(BinaryPcsError::OpeningPointShapeMismatch)
+        ));
+    }
+    assert_eq!(
+        ch.sample_algebra_element::<F>(),
+        snapshot.sample_algebra_element::<F>()
+    );
+
+    let (pcs, root, proof, _) = run_lifecycle(4, 2, 0, 100, 123);
+    let mut vc = challenger();
+    let mut snapshot = vc.clone();
+    for points in [vec![], vec![Point::new(vec![F::ZERO; 3])]] {
+        assert!(matches!(
+            pcs.verify_at(&root, &proof, &good, &points, &mut vc),
+            Err(BinaryPcsError::OpeningPointShapeMismatch)
+        ));
+    }
+    assert!(matches!(
+        pcs.verify_at(
+            &root,
+            &proof,
+            &bad,
+            &[Point::new(vec![F::ZERO; 5])],
+            &mut vc
+        ),
+        Err(BinaryPcsError::InvalidOpeningProtocol)
+    ));
+    assert_eq!(
+        vc.sample_algebra_element::<F>(),
+        snapshot.sample_algebra_element::<F>()
+    );
+}
+
+#[test]
+fn batched_folding_commits_only_batch_boundaries_and_verifies() {
+    for (num_variables, arity, expected_roots) in [(8, 3, 2), (7, 2, 3), (4, 4, 0)] {
+        let config = BinaryPcsConfig::try_new(num_variables, params(2, 0, 100))
+            .unwrap()
+            .try_with_folding(arity)
+            .unwrap();
+        let pcs = BinaryPcs::new(config, GroupedCodewordMmcs::for_folding(mmcs(), &config));
+        let mut rng = SmallRng::seed_from_u64(0xBA7C);
+        let table = Table::rand(&mut rng, 1, num_variables);
+        let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(num_variables, 1),
+            vec![OpeningBatch::new(vec![0], vec![0])],
+        )]);
+        let mut ch = challenger();
+        let (root, data) = pcs.commit(witness, &mut ch);
+        let proof = pcs.open(data, protocol.clone(), &mut ch);
+        assert_eq!(proof.rounds.len(), expected_roots);
+        assert_eq!(proof.sumcheck.num_rounds(), num_variables);
+        let bytes = postcard::to_allocvec(&proof).unwrap();
+        let decoded: BinaryPcsProof<GroupedCodewordMmcs<MyMmcs>> =
+            postcard::from_bytes(&bytes).unwrap();
+        pcs.verify(&root, &decoded, &mut challenger(), protocol.clone())
+            .unwrap();
+
+        // Authenticate every symbol in the coset, including those beyond the first pair.
+        let mut tampered = decoded.clone();
+        tampered.base_opened_values[(1 << arity) - 1][0] += F::ONE;
+        assert!(matches!(
+            pcs.verify(&root, &tampered, &mut challenger(), protocol.clone()),
+            Err(BinaryPcsError::MerkleFailed { round: 0, .. })
+        ));
+
+        let mut short_coset = decoded.clone();
+        short_coset.base_opened_values.pop();
+        assert!(matches!(
+            pcs.verify(&root, &short_coset, &mut challenger(), protocol.clone()),
+            Err(BinaryPcsError::OpeningCountMismatch { round: 0, .. })
+        ));
+
+        if !decoded.rounds.is_empty() {
+            let mut tampered = decoded;
+            // The final committed layer precedes a potentially shorter batch.
+            tampered.rounds.last_mut().unwrap().opened_values[0][0] += F::ONE;
+            assert!(matches!(
+                pcs.verify(&root, &tampered, &mut challenger(), protocol),
+                Err(BinaryPcsError::MerkleFailed { round, .. }) if round == expected_roots
+            ));
+        }
+    }
+}
 
 /// Default shape shared by every negative test: enough intermediate rounds
 /// (`num_fold_rounds - 1 == 7`) to truncate or permute, and `pow_bits > 0` so the grinding
@@ -366,6 +637,37 @@ fn corrupted_pow_witness_is_rejected() {
     );
 }
 
+#[test]
+fn a_noncanonical_pow_witness_at_zero_difficulty_is_rejected() {
+    // Fixture state: pow_bits = 0, so the grind is a no-op on both sides.
+    let (pcs, commitment, mut proof, protocol) =
+        run_lifecycle(NUM_VARIABLES, LOG_INV_RATE, 0, SECURITY_LEVEL, 12);
+
+    // Invariant: a zero budget makes zero the one witness an honest prover emits.
+    assert_eq!(proof.pow_witness, F::ZERO);
+
+    // Mutation: any other value.
+    //
+    //     prover  : grind at 0 bits -> zero witness, sponge untouched
+    //     verifier: check at 0 bits -> accepts,      sponge untouched
+    //
+    // Nothing in the transcript binds the field, so only a canonical-value check rejects
+    // this second encoding of the same statement.
+    proof.pow_witness = F::ONE;
+
+    let mut verifier_challenger = challenger();
+    let err = pcs
+        .verify(&commitment, &proof, &mut verifier_challenger, protocol)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            BinaryPcsError::NonCanonicalPowWitness { actual } if actual == F::ONE
+        ),
+        "expected NonCanonicalPowWitness, got {err:?}"
+    );
+}
+
 /// A proof carrying PoW witnesses is rejected outright: every fold round replays with a
 /// freshly built, always-empty `pow_witnesses` vector (see `BinaryPcs::verify_opening`), so
 /// nothing in the proof's own transcript reads or binds the ones this test appends. Without
@@ -436,6 +738,7 @@ fn permuted_round_commitments_are_rejected() {
 fn zero_claim_lifecycle(
     num_variables: usize,
     seed: u64,
+    log_folding_factor: usize,
 ) -> (
     MyPcs,
     <MyMmcs as Mmcs<F>>::Commitment,
@@ -455,6 +758,8 @@ fn zero_claim_lifecycle(
         num_variables,
         params(LOG_INV_RATE, POW_BITS, SECURITY_LEVEL),
     )
+    .unwrap()
+    .try_with_folding(log_folding_factor)
     .unwrap();
     let pcs = BinaryPcs::new(config, mmcs());
 
@@ -474,7 +779,7 @@ fn zero_claim_lifecycle(
 /// that ties the final codeword to the rounds committed before it, and it is what catches this.
 #[test]
 fn a_zero_claim_proof_with_a_uniformly_shifted_final_codeword_is_rejected_by_the_fold_chain() {
-    let (pcs, commitment, proof, protocol) = zero_claim_lifecycle(NUM_VARIABLES, 11);
+    let (pcs, commitment, proof, protocol) = zero_claim_lifecycle(NUM_VARIABLES, 11, 1);
 
     let mut honest_challenger = challenger();
     pcs.verify(
@@ -518,6 +823,26 @@ fn a_zero_claim_proof_with_a_uniformly_shifted_final_codeword_is_rejected_by_the
         matches!(err, BinaryPcsError::FoldMismatch { round, query: 0 } if round == NUM_VARIABLES),
         "expected FoldMismatch at round {NUM_VARIABLES} query 0, got {err:?}"
     );
+}
+
+/// With no opening claims, the sumcheck's final product check is vacuous. Batched query
+/// verification must still tie the uniform final word to the authenticated base cosets.
+#[test]
+fn batched_zero_claim_proofs_reject_a_shifted_final_codeword() {
+    for arity in [2, 3, NUM_VARIABLES] {
+        let (pcs, commitment, mut proof, protocol) =
+            zero_claim_lifecycle(NUM_VARIABLES, 0xBA7C, arity);
+        pcs.verify(&commitment, &proof, &mut challenger(), protocol.clone())
+            .unwrap();
+        for symbol in proof.final_codeword.as_mut_slice() {
+            *symbol += F::ONE;
+        }
+        let expected_round = NUM_VARIABLES.div_ceil(arity);
+        assert!(matches!(
+            pcs.verify(&commitment, &proof, &mut challenger(), protocol),
+            Err(BinaryPcsError::FoldMismatch { round, query: 0 }) if round == expected_round
+        ));
+    }
 }
 
 /// The different-commitment test desyncs the whole transcript, so `FinalCheck` fires long

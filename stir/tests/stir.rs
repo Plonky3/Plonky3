@@ -9,13 +9,15 @@ use core::fmt::Debug;
 use p3_challenger::{
     CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
 };
-use p3_commit::{ExtensionMmcs, Mmcs, Pcs};
+use p3_commit::{ExtensionMmcs, Mmcs, Pcs, UnivariateStarkPcs};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{
+    BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField,
+};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_stir::config::{StirConfig, StirParameters};
+use p3_stir::config::{StirConfig, StirOptions, StirParameters};
 use p3_stir::proof::StirProof;
 use p3_stir::prover::{codeword_from_coeffs, prove_stir, prove_stir_from_external_codeword};
 use p3_stir::verifier::{verify_stir, verify_stir_with_external_initial};
@@ -58,7 +60,7 @@ fn do_test_stir_prove_verify<F, EF, Dft, M, Challenger>(
     challenger_template: &Challenger,
     log_degree: usize,
 ) where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF> + Clone,
@@ -166,6 +168,166 @@ mod babybear_stir {
     fn test_prove_verify_blowup1_fold2_degree8() {
         let (params, dft, challenger) = make_params(1, 2);
         do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
+    }
+
+    #[test]
+    fn early_stop_roundtrips_and_checks_final_coefficients() {
+        for (degree, starting_fold, cap, rounds, final_log) in [
+            (12, 2, 6, 2, 6),
+            (10, 3, 3, 2, 3),
+            (10, 3, 5, 1, 5),
+            (10, 3, usize::MAX, 0, 7),
+        ] {
+            let (mut params, dft, challenger) = make_params(1, 2);
+            params.log_starting_folding_factor = starting_fold;
+            let config = StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                degree,
+                params,
+                StirOptions {
+                    max_log_final_poly_len: Some(cap),
+                    ..Default::default()
+                },
+            );
+            let mut rng = seeded_rng();
+            let poly: Vec<EF> = (0..1usize << degree).map(|_| rng.random()).collect();
+            let mut p_ch = challenger.clone();
+            let (mut proof, _) = prove_stir(&config, poly, &dft, &mut p_ch);
+            assert_eq!(proof.round_proofs.len(), rounds);
+            assert_eq!(proof.final_polynomial.len(), 1 << final_log);
+            let mut v_ch = challenger.clone();
+            verify_stir(&config, &proof, &mut v_ch).unwrap();
+            assert_eq!(
+                p_ch.sample_algebra_element::<EF>(),
+                v_ch.sample_algebra_element::<EF>()
+            );
+
+            *proof.final_polynomial.last_mut().unwrap() += EF::ONE;
+            assert!(verify_stir(&config, &proof, &mut challenger.clone()).is_err());
+        }
+    }
+
+    #[test]
+    fn early_stop_reduces_serialized_proof_size() {
+        let (params, dft, mut challenger) = make_params_full(1, 2, 80, 0);
+        let full = StirConfig::<F, EF, MyMmcs, Challenger>::new(14, params.clone());
+        let early = StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+            14,
+            params,
+            StirOptions {
+                max_log_final_poly_len: Some(6),
+                ..Default::default()
+            },
+        );
+        let mut rng = seeded_rng();
+        let poly: Vec<EF> = (0..1 << 14).map(|_| rng.random()).collect();
+        let (full_proof, _) = prove_stir(&full, poly.clone(), &dft, &mut challenger.clone());
+        let (early_proof, _) = prove_stir(&early, poly, &dft, &mut challenger.clone());
+        verify_stir(&full, &full_proof, &mut challenger.clone()).unwrap();
+        verify_stir(&early, &early_proof, &mut challenger).unwrap();
+        assert!(
+            postcard::to_allocvec(&early_proof).unwrap().len()
+                < postcard::to_allocvec(&full_proof).unwrap().len()
+        );
+    }
+
+    #[test]
+    fn compact_answers_preserve_proofs_and_transcripts() {
+        for (degree, kind, cap) in [
+            (8, 0, None),
+            (8, 1, None),
+            (8, 2, None),
+            (3, 0, None),
+            (10, 0, Some(6)),
+        ] {
+            let (params, dft, challenger) = make_params(1, 2);
+            let options = StirOptions {
+                max_log_final_poly_len: cap,
+                ..Default::default()
+            };
+            let full = StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                degree,
+                params.clone(),
+                options,
+            );
+            let compact = StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                degree,
+                params,
+                StirOptions {
+                    compact_answers: true,
+                    ..options
+                },
+            );
+            let mut rng = seeded_rng();
+            let mut poly: Vec<EF> = (0..1 << degree).map(|_| rng.random()).collect();
+            if kind != 0 {
+                poly.fill(EF::ZERO);
+                if kind == 2 {
+                    poly[0] = EF::from_u64(7);
+                }
+            }
+            let mut full_p = challenger.clone();
+            let mut compact_p = challenger.clone();
+            let (full_proof, full_queries) = prove_stir(&full, poly.clone(), &dft, &mut full_p);
+            let (compact_proof, compact_queries) = prove_stir(&compact, poly, &dft, &mut compact_p);
+            assert_eq!(full_queries, compact_queries);
+            let mut full_v = challenger.clone();
+            let mut compact_v = challenger.clone();
+            verify_stir(&full, &full_proof, &mut full_v).unwrap();
+            verify_stir(&compact, &compact_proof, &mut compact_v).unwrap();
+            let next: EF = full_p.sample_algebra_element();
+            assert_eq!(next, compact_p.sample_algebra_element::<EF>());
+            assert_eq!(next, full_v.sample_algebra_element::<EF>());
+            assert_eq!(next, compact_v.sample_algebra_element::<EF>());
+
+            if kind == 1 {
+                assert!(
+                    full_proof
+                        .round_proofs
+                        .iter()
+                        .all(|r| r.ans_polynomial == [EF::ZERO])
+                );
+            }
+            let mut omitted = full_proof.clone();
+            for round in &mut omitted.round_proofs {
+                round.ans_polynomial.clear();
+            }
+            let full_bytes = postcard::to_allocvec(&full_proof).unwrap();
+            let compact_bytes = postcard::to_allocvec(&compact_proof).unwrap();
+            assert_eq!(compact_bytes, postcard::to_allocvec(&omitted).unwrap());
+            if compact.num_rounds() == 0 {
+                assert_eq!(compact_bytes, full_bytes);
+                continue;
+            }
+            assert!(compact_bytes.len() < full_bytes.len());
+            for coefficients in [
+                full_proof.round_proofs[0].ans_polynomial.clone(),
+                vec![EF::ONE],
+            ] {
+                let mut bad = compact_proof.clone();
+                let got = coefficients.len();
+                bad.round_proofs[0].ans_polynomial = coefficients;
+                let err = verify_stir(&compact, &bad, &mut challenger.clone()).unwrap_err();
+                assert_eq!(
+                    shape_of(err),
+                    ProofShapeError::UnexpectedAnsPolynomial {
+                        round: RoundLabel::Round(0),
+                        got
+                    }
+                );
+            }
+            if degree == 8 && kind == 0 {
+                let mut bad = compact_proof.clone();
+                bad.round_proofs[0].ood_answers[0] += EF::ONE;
+                assert!(verify_stir(&compact, &bad, &mut challenger.clone()).is_err());
+                let mut bad = compact_proof;
+                bad.round_proofs[0]
+                    .query_openings
+                    .as_mut()
+                    .unwrap()
+                    .row_evals[0][0] += EF::ONE;
+                assert!(verify_stir(&compact, &bad, &mut challenger.clone()).is_err());
+            }
+        }
     }
 
     #[test]
@@ -402,7 +564,8 @@ mod babybear_stir {
         assert!(
             matches!(
                 err,
-                StirError::InvalidPowWitness { round } if round == RoundLabel::Round(round_with_pow)
+                StirError::InvalidPowWitness { round, .. }
+                    if round == RoundLabel::Round(round_with_pow)
             ),
             "{err:?}"
         );
@@ -429,7 +592,8 @@ mod babybear_stir {
         assert!(
             matches!(
                 err,
-                StirError::InvalidPowWitness { round } if round == RoundLabel::Round(round_with_pow)
+                StirError::InvalidPowWitness { round, .. }
+                    if round == RoundLabel::Round(round_with_pow)
             ),
             "expected InvalidPowWitness in round {round_with_pow}, got {err:?}"
         );
@@ -455,7 +619,8 @@ mod babybear_stir {
             matches!(
                 err,
                 StirError::InvalidPowWitness {
-                    round: RoundLabel::Final
+                    round: RoundLabel::Final,
+                    ..
                 }
             ),
             "{err:?}"
@@ -844,8 +1009,8 @@ mod babybear_stir {
             source,
             ExternalSourceError::FiberCount {
                 round: RoundLabel::Round(0),
-                expected: 19,
-                got: 18,
+                expected: 20,
+                got: 19,
             }
         );
     }
@@ -979,6 +1144,12 @@ mod babybear_stir {
 
     #[test]
     fn test_overlong_ans_polynomial_rejected() {
+        // The transcript describes the answer step with the loosest cap a round can reach:
+        // one point per OOD sample plus one per query draw, before any of them collide.
+        //
+        //     described cap = num_ood_samples + num_queries = 2 + 21 = 23
+        //
+        // A proof above that cap is rejected before the run is described at all.
         let err = shape_error_after(|proof| {
             proof.round_proofs[0].ans_polynomial.resize(1024, EF::ONE);
         });
@@ -986,9 +1157,33 @@ mod babybear_stir {
             err,
             ProofShapeError::AnsPolynomialTooLong {
                 round: RoundLabel::Round(0),
-                maximum: 20,
+                maximum: 23,
                 got: 1024,
             }
+        );
+    }
+
+    #[test]
+    fn test_ans_polynomial_above_the_dedup_bound_rejected() {
+        // Below the described cap but above the round's actual point count.
+        //
+        // The draw settles how many query indices collide.
+        //
+        // So this bound is only known once the round has run, and the rejection lands
+        // mid-transcript, where the verifier has to release its completeness check first.
+        let err = shape_error_after(|proof| {
+            proof.round_proofs[0].ans_polynomial.resize(22, EF::ONE);
+        });
+        assert!(
+            matches!(
+                err,
+                ProofShapeError::AnsPolynomialTooLong {
+                    round: RoundLabel::Round(0),
+                    maximum,
+                    got: 22,
+                } if maximum < 22
+            ),
+            "unexpected error: {err:?}"
         );
     }
 
@@ -1331,7 +1526,7 @@ mod babybear_pcs {
         // Strictly taller than the committed LDE (`d` folded by `log_blowup = 1`), so the fast
         // path's `lde.height() >= domain.size()` guard cannot fire.
         let tall_domain = TwoAdicMultiplicativeCoset::new(Val::GENERATOR, log_d + 2).unwrap();
-        let evals = <MyPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+        let evals = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_evaluations_on_domain(
             &pcs,
             &data,
             0,
@@ -1350,6 +1545,50 @@ mod babybear_pcs {
             .to_row_major_matrix();
 
         assert_eq!(evals, expected);
+    }
+
+    /// The general `get_evaluations_on_domain` path must interpolate the committed polynomial
+    /// before changing cosets. Exercise both a native-size target and a target taller than the
+    /// committed LDE so neither can use the borrowed `GENERATOR`-shift prefix.
+    #[test]
+    fn get_evaluations_on_changed_shift_matches_direct_evaluation() {
+        use p3_field::coset::TwoAdicMultiplicativeCoset;
+        use p3_matrix::Matrix;
+
+        let (pcs, _) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 4;
+        let d = 1usize << log_d;
+        let width = 3;
+        let trace = RowMajorMatrix::<Val>::rand(&mut rng, d, width);
+        let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, d);
+        let (_, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace.clone())]);
+
+        let dft = Dft::default();
+        let native_coeffs = dft.idft_batch(trace);
+        for log_target in [log_d, log_d + 2] {
+            let target = TwoAdicMultiplicativeCoset::new(Val::from_u64(7), log_target).unwrap();
+            let actual =
+                <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_evaluations_on_domain(
+                    &pcs, &data, 0, target,
+                )
+                .to_row_major_matrix();
+
+            let mut padded_coeffs = native_coeffs.clone();
+            padded_coeffs
+                .values
+                .resize(target.size() * width, Val::ZERO);
+            let expected = dft
+                .coset_dft_batch(padded_coeffs, target.shift())
+                .to_row_major_matrix();
+
+            assert_eq!(
+                actual, expected,
+                "changed-shift evaluation disagrees at log_target={log_target}"
+            );
+        }
     }
 
     /// Commit `log_degrees`, with `widths[i]` columns in matrix `i`, open every matrix at one
@@ -1385,8 +1624,14 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
 
         let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
-        let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(pcs, vec![(&data, points)], &mut p_ch);
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            pcs,
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points,
+            }],
+            &mut p_ch,
+        );
 
         let mut v_ch = challenger_template.clone();
         observe_commitment(&mut v_ch, &commit);
@@ -1401,7 +1646,7 @@ mod babybear_pcs {
 
         <MyPcs as Pcs<Challenge, Challenger>>::verify(
             pcs,
-            vec![(commit.clone(), claims)],
+            vec![(commit.clone(), claims).into()],
             &proof,
             &mut v_ch,
         )
@@ -1474,14 +1719,15 @@ mod babybear_pcs {
                 })
                 .collect();
 
-            let ldes = <MyPcs as Pcs<Challenge, Challenger>>::get_quotient_ldes(
+            let ldes = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_quotient_ldes(
                 &pcs,
                 domains_and_polys.iter().cloned(),
                 1,
             );
 
             let mut p_ch = challenger_template.clone();
-            let (commit, data) = <MyPcs as Pcs<Challenge, Challenger>>::commit_ldes(&pcs, ldes);
+            let (commit, data) =
+                <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::commit_ldes(&pcs, ldes);
 
             let (direct_commit, _) = <MyPcs as Pcs<Challenge, Challenger>>::commit(
                 &pcs,
@@ -1502,8 +1748,14 @@ mod babybear_pcs {
             observe_commitment(&mut p_ch, &commit);
             let zeta: Challenge = p_ch.sample_algebra_element();
             let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
-            let (opening_values, proof) =
-                <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, vec![(&data, points)], &mut p_ch);
+            let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+                &pcs,
+                vec![p3_commit::OpeningRequest {
+                    prover_data: &data,
+                    points,
+                }],
+                &mut p_ch,
+            );
 
             let mut v_ch = challenger_template;
             observe_commitment(&mut v_ch, &commit);
@@ -1518,7 +1770,7 @@ mod babybear_pcs {
 
             <MyPcs as Pcs<Challenge, Challenger>>::verify(
                 &pcs,
-                vec![(commit, claims)],
+                vec![(commit, claims).into()],
                 &proof,
                 &mut v_ch,
             )
@@ -1581,11 +1833,14 @@ mod babybear_pcs {
             (&data_a, vec![vec![zeta], vec![zeta]]),
             (&data_b, vec![vec![zeta], vec![zeta]]),
         ];
-        let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            data_and_points.into_iter().map(Into::into).collect(),
+            &mut p_ch,
+        );
 
         // One shared 2^9 domain, so one STIR instance for both commitments.
-        assert_eq!(proof.len(), 1);
+        assert_eq!(proof.buckets.len(), 1);
 
         let mut v_ch = challenger_template;
         observe_commitment(&mut v_ch, &commit_a);
@@ -1608,8 +1863,8 @@ mod babybear_pcs {
         <MyPcs as Pcs<Challenge, Challenger>>::verify(
             &pcs,
             vec![
-                (commit_a, claims(0, &domains_a)),
-                (commit_b, claims(1, &domains_b)),
+                (commit_a, claims(0, &domains_a)).into(),
+                (commit_b, claims(1, &domains_b)).into(),
             ],
             &proof,
             &mut v_ch,
@@ -1668,13 +1923,16 @@ mod babybear_pcs {
         let data_and_points: Vec<_> = datas
             .iter()
             .zip(&mats)
-            .map(|(data, per_commit)| (data, per_commit.iter().map(|_| vec![zeta]).collect()))
+            .map(|(data, per_commit)| p3_commit::OpeningRequest {
+                prover_data: data,
+                points: per_commit.iter().map(|_| vec![zeta]).collect(),
+            })
             .collect();
         let (opening_values, proof) =
             <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
 
         // Buckets 2^9, 2^7 and 2^5, and B reaches only the middle one.
-        assert_eq!(proof.len(), 3);
+        assert_eq!(proof.buckets.len(), 3);
 
         let mut v_ch = challenger_template;
         for commit in &commits {
@@ -1698,7 +1956,7 @@ mod babybear_pcs {
                         )
                     })
                     .collect::<Vec<_>>();
-                (commit, claims)
+                (commit, claims).into()
             })
             .collect();
 
@@ -1750,7 +2008,10 @@ mod babybear_pcs {
         let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
         let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &prover_pcs,
-            vec![(&data, points)],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points,
+            }],
             &mut p_ch,
         );
 
@@ -1767,7 +2028,7 @@ mod babybear_pcs {
 
         <MyPcs as Pcs<Challenge, Challenger>>::verify(
             &verifier_pcs,
-            vec![(commit, claims)],
+            vec![(commit, claims).into()],
             &proof,
             &mut v_ch,
         )
@@ -1818,63 +2079,53 @@ mod babybear_pcs {
     fn test_pcs_log_max_lde_height_reserves_blowup_bits() {
         let (pcs, _challenger) = get_pcs();
         assert_eq!(
-            <MyPcs as Pcs<Challenge, Challenger>>::log_max_lde_height(&pcs),
+            <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::log_max_lde_height(&pcs),
             Val::TWO_ADICITY - 1
         );
     }
 
     fn do_test_pcs(log_degrees: &[usize]) {
-        #[allow(unused_imports)]
-        use p3_commit::Pcs as _;
+        use p3_commit::PolynomialSpace;
+        use p3_commit::testing::assert_pcs_opening_contract;
 
-        let (pcs, challenger_template) = get_pcs();
-        let mut rng = seeded_rng();
-
-        let mut p_challenger = challenger_template.clone();
-
-        // Commit: one round with multiple matrices.
-        let domains_and_polys: Vec<_> = log_degrees
+        let (pcs, challenger) = get_pcs();
+        if log_degrees.len() == 1 {
+            // Preserve the isolated schedules on random full-degree inputs. The shared
+            // batched contract needs a nonempty commitment after removing a matrix.
+            round_trip_under(&pcs, &challenger, log_degrees, &[3]);
+            return;
+        }
+        let matrices: Vec<_> = log_degrees
             .iter()
-            .map(|&log_d| {
-                let d = 1 << log_d;
-                let width = 3;
-                (
-                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, d),
-                    RowMajorMatrix::<Val>::rand(&mut rng, d, width),
-                )
+            .enumerate()
+            .map(|(matrix_index, &log_degree)| {
+                let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                    &pcs,
+                    1 << log_degree,
+                );
+                let mut x = domain.first_point();
+                let mut values = Vec::new();
+                for _ in 0..domain.size() {
+                    values.extend([
+                        x.square() + Val::from_usize(2 + matrix_index),
+                        x + Val::from_usize(7 + matrix_index),
+                        Val::from_usize(23 + matrix_index),
+                        // Reach the degree bound while keeping the expected value independent.
+                        x.exp_u64((domain.size() - 1) as u64),
+                    ]);
+                    x = domain.next_point(x).unwrap();
+                }
+                (domain, RowMajorMatrix::new(values, 4))
             })
             .collect();
-
-        let (commit, data) =
-            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_polys.iter().cloned());
-        observe_commitment(&mut p_challenger, &commit);
-
-        let zeta: Challenge = p_challenger.sample_algebra_element();
-
-        let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
-        let data_and_points = vec![(&data, points)];
-        let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_challenger);
-
-        // Verify.
-        let mut v_challenger = challenger_template;
-        observe_commitment(&mut v_challenger, &commit);
-        let v_zeta: Challenge = v_challenger.sample_algebra_element();
-        assert_eq!(v_zeta, zeta);
-
-        let claims: Vec<_> = domains_and_polys
-            .iter()
-            .zip(opening_values.first().unwrap().iter())
-            .map(|((domain, _), mat_openings)| (*domain, vec![(zeta, mat_openings[0].clone())]))
-            .collect();
-
-        <MyPcs as Pcs<Challenge, Challenger>>::verify(
-            &pcs,
-            vec![(commit, claims)],
-            &proof,
-            &mut v_challenger,
-        )
-        .unwrap_or_else(|e| panic!("PCS verification failed: {e:?}"));
+        assert_pcs_opening_contract(&pcs, &challenger, &[matrices], |_, matrix_index, point| {
+            vec![
+                point.square() + Challenge::from_usize(2 + matrix_index),
+                point + Challenge::from_usize(7 + matrix_index),
+                Challenge::from_usize(23 + matrix_index),
+                point.exp_u64(((1usize << log_degrees[matrix_index]) - 1) as u64),
+            ]
+        });
     }
 
     #[test]
@@ -1951,8 +2202,11 @@ mod babybear_pcs {
 
         let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
         let data_and_points = vec![(&data, points)];
-        let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_challenger);
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            data_and_points.into_iter().map(Into::into).collect(),
+            &mut p_challenger,
+        );
 
         let mut v_challenger = challenger_template;
         observe_commitment(&mut v_challenger, &commit);
@@ -1967,7 +2221,7 @@ mod babybear_pcs {
 
         <MyPcs as Pcs<Challenge, Challenger>>::verify(
             &pcs,
-            vec![(commit, claims)],
+            vec![(commit, claims).into()],
             &proof,
             &mut v_challenger,
         )
@@ -2028,7 +2282,10 @@ mod babybear_pcs {
         let zeta: Challenge = fri_p_ch.sample_algebra_element();
         let (fri_openings, fri_proof) = <FriPcs as Pcs<Challenge, Challenger>>::open(
             &fri_pcs,
-            vec![(&fri_data, vec![vec![zeta]])],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &fri_data,
+                points: vec![vec![zeta]],
+            }],
             &mut fri_p_ch,
         );
 
@@ -2039,7 +2296,7 @@ mod babybear_pcs {
         let fri_claims = vec![(fri_domain, vec![(zeta, fri_openings[0][0][0].clone())])];
         <FriPcs as Pcs<Challenge, Challenger>>::verify(
             &fri_pcs,
-            vec![(fri_commit, fri_claims)],
+            vec![(fri_commit, fri_claims).into()],
             &fri_proof,
             &mut fri_v_ch,
         )
@@ -2058,7 +2315,10 @@ mod babybear_pcs {
         let stir_zeta: Challenge = stir_p_ch.sample_algebra_element();
         let (stir_openings, stir_proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &stir_pcs,
-            vec![(&stir_data, vec![vec![stir_zeta]])],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &stir_data,
+                points: vec![vec![stir_zeta]],
+            }],
             &mut stir_p_ch,
         );
 
@@ -2072,7 +2332,7 @@ mod babybear_pcs {
         )];
         <MyPcs as Pcs<Challenge, Challenger>>::verify(
             &stir_pcs,
-            vec![(stir_commit, stir_claims)],
+            vec![(stir_commit, stir_claims).into()],
             &stir_proof,
             &mut stir_v_ch,
         )
@@ -2094,15 +2354,7 @@ mod babybear_pcs {
     }
 
     #[test]
-    fn test_pcs_proof_size_vs_binary_fri_equivalent_input() {
-        const WIDTH: usize = 3;
-
-        for (log_degree, log_folding_factor) in [(14, 2), (16, 2)] {
-            compare_stir_proof_size_with_binary_fri(log_degree, log_folding_factor, WIDTH);
-        }
-    }
-
-    #[test]
+    #[ignore = "full FRI+STIR prove/verify at two sizes; run from heavy CI"]
     fn assert_stir_proof_smaller_than_binary_fri() {
         const WIDTH: usize = 3;
 
@@ -2162,8 +2414,11 @@ mod babybear_pcs {
 
         // Each commitment has one matrix, opened at the same `zeta`.
         let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
-        let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            data_and_points.into_iter().map(Into::into).collect(),
+            &mut p_ch,
+        );
 
         // Verify.
         let mut v_ch = challenger_template;
@@ -2182,7 +2437,10 @@ mod babybear_pcs {
 
         <MyPcs as Pcs<Challenge, Challenger>>::verify(
             &pcs,
-            commitments_with_claims,
+            commitments_with_claims
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             &proof,
             &mut v_ch,
         )
@@ -2216,8 +2474,11 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
 
         let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
-        let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            data_and_points.into_iter().map(Into::into).collect(),
+            &mut p_ch,
+        );
 
         let mut v_ch = challenger_template;
         observe_commitment(&mut v_ch, &commit_a);
@@ -2231,8 +2492,13 @@ mod babybear_pcs {
             (commit_a, vec![(domain, vec![(zeta, opening_a)])]),
             (commit_b, vec![(domain, vec![(zeta, opening_b)])]),
         ];
-        <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .unwrap_or_else(|e| panic!("two-commitment same-bucket verification failed: {e:?}"));
+        <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        )
+        .unwrap_or_else(|e| panic!("two-commitment same-bucket verification failed: {e:?}"));
     }
 
     /// Committing a matrix and then opening it at no points would emit a proof that cannot
@@ -2262,7 +2528,11 @@ mod babybear_pcs {
 
         // `mat_a` is opened at `zeta`; `mat_b` is opened at no points at all.
         let data_and_points = vec![(&data, vec![vec![zeta], vec![]])];
-        let _ = <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+        let _ = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            data_and_points.into_iter().map(Into::into).collect(),
+            &mut p_ch,
+        );
     }
 
     /// The degenerate extreme of the above: nothing is opened at all, so the prover would
@@ -2284,7 +2554,11 @@ mod babybear_pcs {
         observe_commitment(&mut p_ch, &commit);
 
         let data_and_points = vec![(&data, vec![vec![]])];
-        let _ = <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+        let _ = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            data_and_points.into_iter().map(Into::into).collect(),
+            &mut p_ch,
+        );
     }
 
     /// Prove honestly at `prove_log_degrees`, then verify with matrix `emptied`'s claims
@@ -2322,8 +2596,14 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
 
         let points: Vec<Vec<Challenge>> = prove_log_degrees.iter().map(|_| vec![zeta]).collect();
-        let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, vec![(&data, points)], &mut p_ch);
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points,
+            }],
+            &mut p_ch,
+        );
 
         let mut v_ch = challenger_template;
         observe_commitment(&mut v_ch, &commit);
@@ -2347,7 +2627,7 @@ mod babybear_pcs {
 
         let result = <MyPcs as Pcs<Challenge, Challenger>>::verify(
             &pcs,
-            vec![(commit, claims)],
+            vec![(commit, claims).into()],
             &proof,
             &mut v_ch,
         );
@@ -2424,13 +2704,16 @@ mod babybear_pcs {
 
         let zeta: Challenge = p_ch.sample_algebra_element();
         let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
-        let (opening_values, mut proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            data_and_points.into_iter().map(Into::into).collect(),
+            &mut p_ch,
+        );
 
         // Drop the second commitment's input-opening vector. The verifier must reject:
         // skipping a commit's openings would let the proof verify against a proper subset
         // of the public input.
-        for (_stir_proof, input_openings) in proof.iter_mut() {
+        for (_stir_proof, input_openings) in proof.buckets.iter_mut() {
             assert_eq!(input_openings.len(), 2);
             input_openings.pop();
         }
@@ -2446,7 +2729,12 @@ mod babybear_pcs {
             (commit_a, vec![(domain, vec![(zeta, opening_a)])]),
             (commit_b, vec![(domain, vec![(zeta, opening_b)])]),
         ];
-        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
+        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        );
         let err = res.expect_err("truncated input_openings must be rejected");
         assert_eq!(
             shape_of(err),
@@ -2484,12 +2772,15 @@ mod babybear_pcs {
 
         let zeta: Challenge = p_ch.sample_algebra_element();
         let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
-        let (opening_values, mut proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            data_and_points.into_iter().map(Into::into).collect(),
+            &mut p_ch,
+        );
 
         // Both commitments land in the same bucket, so both slots start as `Some`. Blank
         // out the first one in place, keeping the vector's length untouched.
-        for (_stir_proof, input_openings) in proof.iter_mut() {
+        for (_stir_proof, input_openings) in proof.buckets.iter_mut() {
             assert_eq!(input_openings.len(), 2);
             assert!(input_openings[0].is_some());
             input_openings[0] = None;
@@ -2506,7 +2797,12 @@ mod babybear_pcs {
             (commit_a, vec![(domain, vec![(zeta, opening_a)])]),
             (commit_b, vec![(domain, vec![(zeta, opening_b)])]),
         ];
-        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
+        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        );
         let err = res.expect_err("a blanked input opening must be rejected");
         assert_eq!(
             shape_of(err),
@@ -2538,12 +2834,15 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (_, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
-            vec![(&data, vec![vec![zeta]])],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
             &mut p_ch,
         );
 
-        assert_eq!(proof.len(), 1);
-        let (stir_proof, input_openings) = &proof[0];
+        assert_eq!(proof.buckets.len(), 1);
+        let (stir_proof, input_openings) = &proof.buckets[0];
         assert!(stir_proof.initial_commitment.is_some());
         let round0 = stir_proof
             .round_proofs
@@ -2592,11 +2891,14 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
-            vec![(&data, vec![vec![zeta]])],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
             &mut p_ch,
         );
 
-        proof[0].0.round_proofs[0]
+        proof.buckets[0].0.round_proofs[0]
             .query_openings
             .as_mut()
             .expect("round 0 opens the committed initial oracle")
@@ -2609,8 +2911,13 @@ mod babybear_pcs {
             commit,
             vec![(domain, vec![(zeta, opening_values[0][0][0].clone())])],
         )];
-        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .expect_err("a tampered initial-oracle fiber must be rejected");
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        )
+        .expect_err("a tampered initial-oracle fiber must be rejected");
         assert!(
             matches!(
                 err,
@@ -2641,11 +2948,14 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
-            vec![(&data, vec![vec![zeta]])],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
             &mut p_ch,
         );
 
-        proof[0].1[0]
+        proof.buckets[0].1[0]
             .as_mut()
             .expect("the commitment sits on this bucket")
             .opened_values[0][0][0] += Val::ONE;
@@ -2657,8 +2967,13 @@ mod babybear_pcs {
             commit,
             vec![(domain, vec![(zeta, opening_values[0][0][0].clone())])],
         )];
-        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .expect_err("a tampered input row must be rejected");
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        )
+        .expect_err("a tampered input row must be rejected");
         assert!(
             matches!(err, StirError::InputError(_)),
             "expected the input Merkle check to fail, got {err:?}"
@@ -2686,11 +3001,14 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
-            vec![(&data, vec![vec![zeta]])],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
             &mut p_ch,
         );
 
-        for (_stir_proof, input_openings) in proof.iter_mut() {
+        for (_stir_proof, input_openings) in proof.buckets.iter_mut() {
             let opening = input_openings[0]
                 .as_mut()
                 .expect("single commitment must have a present opening");
@@ -2705,15 +3023,20 @@ mod babybear_pcs {
 
         let opening = opening_values[0][0][0].clone();
         let claims = vec![(commit, vec![(domain, vec![(zeta, opening)])])];
-        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
+        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        );
         let err = res.expect_err("truncated opened_values must be rejected");
         assert_eq!(
             shape_of(err),
             ProofShapeError::InputOpenedRowCount {
                 log_height: log_d + 1,
                 commitment: 0,
-                expected: 18,
-                got: 17,
+                expected: 19,
+                got: 18,
             }
         );
     }
@@ -2752,8 +3075,14 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
 
         let points: Vec<Vec<Challenge>> = prove_log_degrees.iter().map(|_| vec![zeta]).collect();
-        let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, vec![(&data, points)], &mut p_ch);
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points,
+            }],
+            &mut p_ch,
+        );
 
         let mut v_ch = challenger_template;
         observe_commitment(&mut v_ch, &commit);
@@ -2774,7 +3103,7 @@ mod babybear_pcs {
 
         <MyPcs as Pcs<Challenge, Challenger>>::verify(
             &pcs,
-            vec![(commit, claims)],
+            vec![(commit, claims).into()],
             &proof,
             &mut v_ch,
         )
@@ -2856,8 +3185,14 @@ mod babybear_pcs {
         observe_commitment(&mut p_ch, &commit);
         let zeta: Challenge = p_ch.sample_algebra_element();
         let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
-        let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, vec![(&data, points)], &mut p_ch);
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points,
+            }],
+            &mut p_ch,
+        );
 
         let mut v_ch = challenger_template;
         observe_commitment(&mut v_ch, &commit);
@@ -2882,7 +3217,7 @@ mod babybear_pcs {
 
         let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(
             &pcs,
-            vec![(commit, claims)],
+            vec![(commit, claims).into()],
             &proof,
             &mut v_ch,
         );
@@ -2934,8 +3269,14 @@ mod babybear_pcs {
         observe_commitment(&mut p_ch, &commit);
         let zeta: Challenge = p_ch.sample_algebra_element();
         let points: Vec<Vec<Challenge>> = log_degrees.iter().map(|_| vec![zeta]).collect();
-        let (opening_values, proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, vec![(&data, points)], &mut p_ch);
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points,
+            }],
+            &mut p_ch,
+        );
 
         let mut v_ch = challenger_template;
         observe_commitment(&mut v_ch, &commit);
@@ -2950,7 +3291,7 @@ mod babybear_pcs {
 
         <MyPcs as Pcs<Challenge, Challenger>>::verify(
             &pcs,
-            vec![(commit, claims)],
+            vec![(commit, claims).into()],
             &proof,
             &mut v_ch,
         )
@@ -2975,7 +3316,10 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
-            vec![(&data, vec![vec![zeta]])],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
             &mut p_ch,
         );
 
@@ -2991,7 +3335,12 @@ mod babybear_pcs {
         tampered[0] += Challenge::from(Val::ONE);
 
         let claims = vec![(commit, vec![(domain, vec![(zeta, tampered)])])];
-        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
+        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        );
         assert!(
             res.is_err(),
             "PCS verify must reject a tampered claimed opening"
@@ -3021,7 +3370,10 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
-            vec![(&data, vec![vec![zeta]])],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
             &mut p_ch,
         );
 
@@ -3036,12 +3388,17 @@ mod babybear_pcs {
             commit,
             vec![(domain, vec![(coset_point, opening_values[0][0][0].clone())])],
         )];
-        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .expect_err("an opening point on the evaluation domain must be rejected");
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        )
+        .expect_err("an opening point on the evaluation domain must be rejected");
         assert!(
             matches!(
                 err,
-                StirError::OpeningPointMatchesQueryPoint {
+                StirError::OpeningPointInDomain {
                     commitment: 0,
                     matrix: 0,
                     point: 0,
@@ -3068,14 +3425,17 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
-            vec![(&data, vec![vec![zeta]])],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
             &mut p_ch,
         );
 
         // The claims pin one STIR instance per distinct shared LDE height, so a proof with
         // fewer must be rejected before the transcript is touched.
-        assert_eq!(proof.len(), 1);
-        proof.pop();
+        assert_eq!(proof.buckets.len(), 1);
+        proof.buckets.pop();
 
         let mut v_ch = challenger_template;
         v_ch.observe(commit.clone());
@@ -3084,8 +3444,13 @@ mod babybear_pcs {
             commit,
             vec![(domain, vec![(v_zeta, opening_values[0][0][0].clone())])],
         )];
-        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .expect_err("a missing height bucket must be rejected");
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        )
+        .expect_err("a missing height bucket must be rejected");
         assert_eq!(
             shape_of(err),
             ProofShapeError::BucketCount {
@@ -3127,16 +3492,19 @@ mod babybear_pcs {
             (&data_tall, vec![vec![zeta]]),
             (&data_short, vec![vec![zeta]]),
         ];
-        let (opening_values, mut proof) =
-            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
-        assert_eq!(proof.len(), 2, "two heights must give two buckets");
+        let (opening_values, mut proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            data_and_points.into_iter().map(Into::into).collect(),
+            &mut p_ch,
+        );
+        assert_eq!(proof.buckets.len(), 2, "two heights must give two buckets");
 
         // Copy the short commitment's own opening into its (rightly empty) slot at the tall
         // bucket.
-        let short_opening = proof[1].1[1].clone();
+        let short_opening = proof.buckets[1].1[1].clone();
         assert!(short_opening.is_some());
-        assert!(proof[0].1[1].is_none());
-        proof[0].1[1] = short_opening;
+        assert!(proof.buckets[0].1[1].is_none());
+        proof.buckets[0].1[1] = short_opening;
 
         let mut v_ch = challenger_template;
         v_ch.observe(commit_tall.clone());
@@ -3156,8 +3524,13 @@ mod babybear_pcs {
                 )],
             ),
         ];
-        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
-            .expect_err("an opening at the wrong bucket must be rejected");
+        let err = <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            claims.into_iter().map(Into::into).collect(),
+            &proof,
+            &mut v_ch,
+        )
+        .expect_err("an opening at the wrong bucket must be rejected");
         assert_eq!(
             shape_of(err),
             ProofShapeError::UnexpectedInputOpening {
@@ -3184,7 +3557,10 @@ mod babybear_pcs {
         let zeta: Challenge = p_ch.sample_algebra_element();
         let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
             &pcs,
-            vec![(&data, vec![vec![zeta]])],
+            vec![p3_commit::OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]],
+            }],
             &mut p_ch,
         );
 
@@ -3196,21 +3572,27 @@ mod babybear_pcs {
                 commit.clone(),
                 vec![(domain, vec![(v_zeta, opening_values[0][0][0].clone())])],
             )];
-            <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, proof, &mut v_ch)
+            <MyPcs as Pcs<Challenge, Challenger>>::verify(
+                &pcs,
+                claims.into_iter().map(Into::into).collect(),
+                proof,
+                &mut v_ch,
+            )
         };
 
         // STIR commits the initial oracle itself, and that commitment is what the round-0
         // fibers — and hence the lane checks — are authenticated against. Dropping it leaves
         // the transcript a message short.
         let mut dropped = proof.clone();
-        dropped[0].0.initial_commitment = None;
+        dropped.buckets[0].0.initial_commitment = None;
         let err = verify_with(&dropped).expect_err("a missing initial commitment is malformed");
         assert_eq!(shape_of(err), ProofShapeError::MissingInitialCommitment);
 
         // Swapping it for another root the proof already carries must not authenticate the
         // round-0 openings.
         let mut swapped = proof;
-        swapped[0].0.initial_commitment = Some(swapped[0].0.round_proofs[0].commitment.clone());
+        swapped.buckets[0].0.initial_commitment =
+            Some(swapped.buckets[0].0.round_proofs[0].commitment.clone());
         let err = verify_with(&swapped).expect_err("a swapped initial commitment must be rejected");
         assert!(
             matches!(err, StirError::InvalidMmcsProof { round, .. } if round == RoundLabel::Round(0)),
@@ -3338,6 +3720,106 @@ mod babybear_stir_multi {
         }
     }
 
+    #[test]
+    fn a_batch_mixing_ground_and_ungrounded_instances_still_verifies() {
+        // A shared grind runs at the largest difficulty among the instances active at its site.
+        //
+        //     instance A  max_pow_bits 0   -> derives 0 bits
+        //     instance B  max_pow_bits 12  -> derives > 0 bits
+        //     shared site                  -> max(0, >0) = > 0 bits
+        //
+        // So instance A legitimately carries a nonzero witness for a site it asked no work at.
+        // Pinning a witness against its own instance's bits would reject this honest prover.
+        // The canonical check reads the shared shape instead, and skips a site the batch grinds.
+        let (idle_params, dft, challenger) = make_params(1, 2, 32, 0);
+        let (ground_params, _, _) = make_params(1, 2, 32, 12);
+
+        let log_degree = 8usize;
+        let mut rng = seeded_rng();
+        let configs = [&idle_params, &ground_params]
+            .map(|params| StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params.clone()))
+            .to_vec();
+
+        // The grinding instance must actually grind, or the batch proves nothing.
+        assert!(
+            configs[1].round_configs.iter().any(|rc| rc.pow_bits > 0)
+                || configs[1].final_pow_bits > 0,
+            "the second instance must derive a positive difficulty for this batch to be mixed",
+        );
+        assert!(
+            configs[0].round_configs.iter().all(|rc| rc.pow_bits == 0)
+                && configs[0].final_pow_bits == 0,
+            "the first instance must derive no difficulty for this batch to be mixed",
+        );
+
+        let polys: Vec<Vec<EF>> = (0..2)
+            .map(|_| (0..1usize << log_degree).map(|_| rng.random()).collect())
+            .collect();
+        let config_refs: Vec<&StirConfig<F, EF, MyMmcs, Challenger>> = configs.iter().collect();
+
+        let mut p_ch = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys, &dft, &mut p_ch);
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+
+        // Completeness: the honest mixed batch verifies, canonical check and all.
+        let mut v_ch = challenger;
+        verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proofs, &mut v_ch)
+            .expect("an honest batch mixing ground and ungrounded instances must verify");
+    }
+
+    #[test]
+    fn test_multi_noncanonical_replicated_pow_witnesses_are_rejected() {
+        // Why: `check_replicated_witnesses` compares the copies of a shared site only
+        // against each other, and at zero difficulty nothing else reads them at all.
+        //
+        //     agree, both wrong -> the agreement check passes  -> unbound
+        //     pinned to zero    -> every rewrite is caught     -> bound
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        let log_degrees = [8usize, 6];
+        let (configs, polys) = make_instances(&params, &log_degrees);
+        let config_refs: Vec<&StirConfig<F, EF, MyMmcs, Challenger>> = configs.iter().collect();
+
+        let mut p_ch = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys, &dft, &mut p_ch);
+        let mut proofs: Vec<_> = results.into_iter().map(|(proof, _)| proof).collect();
+
+        // Every site asks for no work, so the honest prover wrote zero into all of them.
+        for proof in &proofs {
+            assert!(
+                proof
+                    .round_proofs
+                    .iter()
+                    .all(|rp| rp.folding_pow_witness == F::ZERO && rp.pow_witness == F::ZERO)
+            );
+            assert_eq!(proof.final_folding_pow_witness, F::ZERO);
+            assert_eq!(proof.final_pow_witness, F::ZERO);
+        }
+
+        // Rewrite every replicated copy to one shared wrong value, so the instances still
+        // agree and the replication check has nothing to catch.
+        for proof in &mut proofs {
+            for rp in &mut proof.round_proofs {
+                rp.folding_pow_witness = F::ONE;
+                rp.pow_witness = F::ONE;
+            }
+            proof.final_folding_pow_witness = F::ONE;
+            proof.final_pow_witness = F::ONE;
+        }
+
+        let proof_refs: Vec<_> = proofs.iter().collect();
+        let mut v_ch = challenger;
+        let err =
+            verify_stir_multi::<F, EF, MyMmcs, Challenger>(&config_refs, &proof_refs, &mut v_ch)
+                .expect_err("rewritten replicated witnesses must be rejected");
+        assert!(
+            matches!(
+                err,
+                StirError::InvalidProofShape(ProofShapeError::NonCanonicalPowWitness { .. })
+            ),
+            "expected NonCanonicalPowWitness, got {err:?}"
+        );
+    }
+
     /// The result an external fiber source returns.
     type FiberResult = Result<Vec<Vec<EF>>, StirError<<MyMmcs as Mmcs<EF>>::Error>>;
 
@@ -3354,6 +3836,229 @@ mod babybear_stir_multi {
                 .iter()
                 .map(|&j| (0..arity).map(|l| codeword[j + l * fold_height]).collect())
                 .collect())
+        }
+    }
+
+    #[test]
+    fn early_stop_mixed_schedules_verify_with_committed_and_external_oracles() {
+        let (mut params, dft, challenger) = make_params(1, 2, 16, 0);
+        params.log_starting_folding_factor = 3;
+        let configs: Vec<_> = [(8, Some(4)), (6, Some(usize::MAX))]
+            .into_iter()
+            .map(|(degree, cap)| {
+                StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                    degree,
+                    params.clone(),
+                    StirOptions {
+                        max_log_final_poly_len: cap,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let config_refs: Vec<_> = configs.iter().collect();
+        assert_eq!(
+            configs.iter().map(|c| c.num_rounds()).collect::<Vec<_>>(),
+            vec![1, 0]
+        );
+        let mut rng = seeded_rng();
+        let polys: Vec<Vec<EF>> = [8, 6]
+            .map(|degree| (0..1 << degree).map(|_| rng.random()).collect())
+            .into();
+        let mut p_ch = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys.clone(), &dft, &mut p_ch);
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+        let mut v_ch = challenger.clone();
+        verify_stir_multi(&config_refs, &proofs, &mut v_ch).unwrap();
+        assert_eq!(
+            p_ch.sample_algebra_element::<EF>(),
+            v_ch.sample_algebra_element::<EF>()
+        );
+
+        let codewords: Vec<_> = configs
+            .iter()
+            .zip(polys)
+            .map(|(config, poly)| {
+                codeword_from_coeffs(&dft, poly, F::GENERATOR, config.log_starting_domain_size())
+            })
+            .collect();
+        let mut base = challenger;
+        for codeword in &codewords {
+            base.observe_algebra_slice(codeword);
+        }
+        let mut p_ch = base.clone();
+        let results = prove_stir_multi_from_external_codewords(
+            &config_refs,
+            codewords.clone(),
+            &dft,
+            &mut p_ch,
+        );
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+        let sources: Vec<_> = configs
+            .iter()
+            .zip(codewords)
+            .map(|(config, codeword)| {
+                let arity = 1 << config.log_starting_folding_factor;
+                let height = codeword.len() / arity;
+                external_fiber_source(codeword, arity, height)
+            })
+            .collect();
+        let outputs = verify_stir_multi_with_external_initial::<F, EF, MyMmcs, Challenger, (), _>(
+            &config_refs,
+            &proofs,
+            &mut base,
+            sources,
+        )
+        .unwrap();
+        assert_eq!(
+            p_ch.sample_algebra_element::<EF>(),
+            base.sample_algebra_element::<EF>()
+        );
+        for ((_, first), output) in results.iter().zip(outputs) {
+            assert_eq!(first.draws, output.first_round_draws);
+            assert_eq!(first.unique_sorted, output.first_round_indices);
+        }
+    }
+
+    #[test]
+    fn compact_answers_support_mixed_configs_and_external_oracles() {
+        let (params, dft, challenger) = make_params(1, 2, 16, 0);
+        let full_configs: Vec<_> = [(10, None), (8, Some(4)), (6, Some(usize::MAX))]
+            .into_iter()
+            .map(|(degree, cap)| {
+                StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                    degree,
+                    params.clone(),
+                    StirOptions {
+                        max_log_final_poly_len: cap,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let configs: Vec<_> = full_configs
+            .iter()
+            .zip([true, false, true])
+            .map(|(full, compact_answers)| {
+                StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
+                    full.log_starting_degree,
+                    params.clone(),
+                    StirOptions {
+                        compact_answers,
+                        ..full.options()
+                    },
+                )
+            })
+            .collect();
+        let full_refs: Vec<_> = full_configs.iter().collect();
+        let config_refs: Vec<_> = configs.iter().collect();
+        let mut rng = seeded_rng();
+        let polys: Vec<Vec<EF>> = configs
+            .iter()
+            .map(|config| {
+                (0..1 << config.log_starting_degree)
+                    .map(|_| rng.random())
+                    .collect()
+            })
+            .collect();
+        let codewords: Vec<_> = configs
+            .iter()
+            .zip(&polys)
+            .map(|(config, poly)| {
+                codeword_from_coeffs(
+                    &dft,
+                    poly.clone(),
+                    F::GENERATOR,
+                    config.log_starting_domain_size(),
+                )
+            })
+            .collect();
+
+        for external in [false, true] {
+            let mut base = challenger.clone();
+            if external {
+                for codeword in &codewords {
+                    base.observe_algebra_slice(codeword);
+                }
+            }
+            let prove = |refs: &[&StirConfig<F, EF, MyMmcs, Challenger>], ch: &mut Challenger| {
+                if external {
+                    prove_stir_multi_from_external_codewords(refs, codewords.clone(), &dft, ch)
+                } else {
+                    prove_stir_multi(refs, polys.clone(), &dft, ch)
+                }
+            };
+            let verify = |refs: &[&StirConfig<F, EF, MyMmcs, Challenger>],
+                          proofs: &[&StirProof<EF, MyMmcs, F>],
+                          ch: &mut Challenger| {
+                if external {
+                    let sources: Vec<_> = configs
+                        .iter()
+                        .zip(&codewords)
+                        .map(|(config, codeword)| {
+                            let arity = 1 << config.log_starting_folding_factor;
+                            external_fiber_source(codeword.clone(), arity, codeword.len() / arity)
+                        })
+                        .collect();
+                    verify_stir_multi_with_external_initial::<F, EF, MyMmcs, Challenger, (), _>(
+                        refs, proofs, ch, sources,
+                    )
+                } else {
+                    verify_stir_multi(refs, proofs, ch)
+                }
+            };
+            let mut full_p = base.clone();
+            let mut compact_p = base.clone();
+            let full = prove(&full_refs, &mut full_p);
+            let mixed = prove(&config_refs, &mut compact_p);
+            let mut full_v = base.clone();
+            let mut compact_v = base.clone();
+            let full_outputs = verify(
+                &full_refs,
+                &full.iter().map(|(p, _)| p).collect::<Vec<_>>(),
+                &mut full_v,
+            )
+            .unwrap();
+            let mixed_outputs = verify(
+                &config_refs,
+                &mixed.iter().map(|(p, _)| p).collect::<Vec<_>>(),
+                &mut compact_v,
+            )
+            .unwrap();
+            let next: EF = full_p.sample_algebra_element();
+            assert_eq!(next, compact_p.sample_algebra_element::<EF>());
+            assert_eq!(next, full_v.sample_algebra_element::<EF>());
+            assert_eq!(next, compact_v.sample_algebra_element::<EF>());
+            for (i, ((full_proof, full_queries), (mixed_proof, mixed_queries))) in
+                full.iter().zip(&mixed).enumerate()
+            {
+                assert_eq!(full_queries, mixed_queries);
+                assert_eq!(
+                    full_outputs[i].first_round_draws,
+                    mixed_outputs[i].first_round_draws
+                );
+                assert_eq!(mixed_queries.draws, mixed_outputs[i].first_round_draws);
+                let mut expected = full_proof.clone();
+                if configs[i].options().compact_answers {
+                    for round in &mut expected.round_proofs {
+                        round.ans_polynomial.clear();
+                    }
+                }
+                assert_eq!(
+                    postcard::to_allocvec(&expected).unwrap(),
+                    postcard::to_allocvec(mixed_proof).unwrap()
+                );
+            }
+            let mut bad: Vec<_> = mixed.into_iter().map(|(proof, _)| proof).collect();
+            bad[0].round_proofs[1].ans_polynomial = vec![EF::ONE];
+            let err = verify(&config_refs, &bad.iter().collect::<Vec<_>>(), &mut base).unwrap_err();
+            assert_eq!(
+                shape_of(err),
+                ProofShapeError::UnexpectedAnsPolynomial {
+                    round: RoundLabel::Round(1),
+                    got: 1
+                }
+            );
         }
     }
 
@@ -3472,6 +4177,37 @@ mod babybear_stir_multi {
     }
 
     #[test]
+    fn test_multi_shared_folding_pow_with_late_and_final_only_instances() {
+        let (params, dft, challenger) = make_params(1, 2, 100, 16);
+        let (configs, polys) = make_instances(&params, &[10, 6, 2]);
+        assert!(configs[0].num_rounds() > configs[1].num_rounds());
+        assert!(configs[1].num_rounds() > 0);
+        assert_eq!(configs[2].num_rounds(), 0);
+        assert!(configs[1].round_configs[0].folding_pow_bits > 0);
+        assert!(configs[2].final_folding_pow_bits > 0);
+        let config_refs: Vec<_> = configs.iter().collect();
+
+        let mut prover_challenger = challenger.clone();
+        let results = prove_stir_multi(&config_refs, polys, &dft, &mut prover_challenger);
+        let proofs: Vec<_> = results.iter().map(|(proof, _)| proof).collect();
+        let mut verifier_challenger = challenger;
+        let outputs = verify_stir_multi::<F, EF, MyMmcs, Challenger>(
+            &config_refs,
+            &proofs,
+            &mut verifier_challenger,
+        )
+        .expect("shared folding grinds must cover every right-aligned instance");
+
+        for ((_, queries), output) in results.iter().zip(outputs) {
+            assert_eq!(queries.draws, output.first_round_draws);
+        }
+        assert_eq!(
+            prover_challenger.sample_algebra_element::<EF>(),
+            verifier_challenger.sample_algebra_element::<EF>()
+        );
+    }
+
+    #[test]
     fn test_multi_one_bucket_matches_single_instance_bytes() {
         // At B=1 the shared-grind schedule degenerates to the single-instance schedule, so
         // the multi-driver must reproduce the exact same transcript and proof bytes.
@@ -3532,7 +4268,8 @@ mod babybear_stir_multi {
         assert!(
             matches!(
                 err,
-                StirError::InvalidPowWitness { round } if round == RoundLabel::Round(round_with_pow)
+                StirError::InvalidPowWitness { round, .. }
+                    if round == RoundLabel::Round(round_with_pow)
             ),
             "{err:?}"
         );

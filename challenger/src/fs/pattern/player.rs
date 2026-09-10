@@ -5,6 +5,7 @@ use alloc::sync::Arc;
 use super::Pattern;
 use super::sequence::InteractionPattern;
 use super::step::Interaction;
+use crate::fs::drop_check_may_panic;
 
 /// Walks a recorded sequence and matches each request against the next expected step.
 ///
@@ -132,8 +133,11 @@ impl PatternPlayer {
 
 impl Drop for PatternPlayer {
     fn drop(&mut self) {
-        // Loud failure surfaces forgot-to-finalize bugs.
-        assert!(self.finalized, "Dropped unfinalized pattern player.");
+        // A panic already unwinding owns the failure, and a second one would abort.
+        if drop_check_may_panic() {
+            // Loud failure surfaces forgot-to-finalize bugs.
+            assert!(self.finalized, "Dropped unfinalized pattern player.");
+        }
     }
 }
 

@@ -9,6 +9,7 @@ use p3_dft::{
     Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, Layout, NaiveDft, Radix2Bowers,
     Radix2DFTSmallBatch, Radix2Dit, Radix2DitParallel, TwiddleFreeButterfly, TwoAdicSubgroupDft,
 };
+use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -375,6 +376,61 @@ proptest! {
         prop_assert_eq!(&naive, &parallel);
         prop_assert_eq!(&naive, &small_batch);
     }
+}
+
+fn assert_parallel_idft_matches_naive<F: TwoAdicField + Ord>(
+    make_value: impl Fn(usize) -> F,
+    shift: F,
+) {
+    const HEIGHTS: [usize; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 1024];
+    const WIDTHS: [usize; 4] = [1, 3, 8, 17];
+
+    let dft = Radix2DitParallel::<F>::default();
+    for height in HEIGHTS {
+        let widths = if height == 1024 {
+            &WIDTHS[..1]
+        } else {
+            &WIDTHS
+        };
+        for &width in widths {
+            let values = (0..height * width)
+                .map(|index| make_value(index + height + width))
+                .collect();
+            let input = RowMajorMatrix::new(values, width);
+
+            let expected = NaiveDft.idft_batch(input.clone());
+            let actual = dft.idft_batch(input.clone());
+            assert_eq!(actual, expected, "height={height}, width={width}");
+
+            let evaluations = dft
+                .coset_dft_batch(input.clone(), shift)
+                .to_row_major_matrix();
+            let recovered = dft.coset_idft_batch(evaluations, shift);
+            assert_eq!(recovered, input, "height={height}, width={width}");
+        }
+    }
+}
+
+#[test]
+fn parallel_idft_matches_naive_across_sizes() {
+    assert_parallel_idft_matches_naive(BabyBear::from_usize, BabyBear::GENERATOR);
+}
+
+#[test]
+fn parallel_idft_matches_naive_for_extension_field() {
+    type EF = BinomialExtensionField<BabyBear, 4>;
+
+    assert_parallel_idft_matches_naive(
+        |index| {
+            EF::new([
+                BabyBear::from_usize(index),
+                BabyBear::from_usize(index + 1),
+                BabyBear::from_usize(index + 2),
+                BabyBear::from_usize(index + 3),
+            ])
+        },
+        EF::GENERATOR,
+    );
 }
 
 proptest! {

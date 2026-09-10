@@ -1,21 +1,10 @@
-//! Query sampling and the per-query fold-consistency check.
+//! Full-coset queries tying consecutive committed fold batches together.
 //!
-//! Every round's codeword is a flat vector; round 0 is the base commitment, round `r` for
-//! `1 <= r < num_fold_rounds` is `proof.rounds[r - 1]`, and round `num_fold_rounds` is
-//! `proof.final_codeword`, sent in full rather than committed. A query index `i`, drawn from
-//! the base codeword's domain, addresses position `i >> r` at round `r`; folding that
-//! position's pair with round `r`'s challenge must reproduce the value read at position
-//! `i >> (r + 1)` of round `r + 1`.
-//!
-//! Every one of those reads goes through `i >> 1`:
-//!
-//! - Round 0 opens the pair `[i & !1, (i & !1) + 1]`.
-//! - Round 0 folds that pair at the domain point of the pair's low position.
-//! - Round `r >= 1` sees only `i >> r`.
-//!
-//! So bit 0 of `i` selects nothing, and a query is a pair index.
-//! Sampling draws that pair index directly.
-//! That is what makes one distinct draw mean one distinct fold-chain test.
+//! Base query indices are aligned to the first batch's coset size. A batch starting at
+//! variable `start` with `arity` challenges opens the coset containing `index >> start`,
+//! folds all its symbols, then checks the coordinate `index >> (start + arity)` in the next
+//! committed word (or the final word sent in full). Only base cosets are sampled distinctly;
+//! repeated projected cosets in later rounds remain the same base-query paths.
 
 use alloc::collections::BTreeSet;
 use alloc::vec;
@@ -24,12 +13,12 @@ use alloc::vec::Vec;
 use p3_binary_field::BinaryField128;
 use p3_challenger::{CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::Field;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Dimensions;
 use p3_util::log2_strict_usize;
 
 use crate::error::BinaryPcsError;
-use crate::fold::fold_pair;
+use crate::fold::{fold_coset, fold_pair};
 use crate::params::BinaryPcsConfig;
 use crate::proof::BinaryPcsProof;
 
@@ -101,19 +90,32 @@ where
     pairs.into_iter().map(|pair| pair << 1).collect()
 }
 
-/// The pair of positions round `round`'s codeword must supply to carry query `index` onward:
-/// the position `index` addresses at that round, and its fold sibling — low bit clear first.
-const fn fold_pair_positions(index: usize, round: usize) -> [usize; 2] {
-    let position = index >> round;
-    let even = position & !1;
-    [even, even + 1]
+/// Sample distinct base cosets. Reusing the pair sampler on a shorter index domain keeps
+/// the single-fold transcript unchanged; lifting its indices clears all first-batch low bits.
+pub(crate) fn sample_query_cosets<Ch>(config: &BinaryPcsConfig, challenger: &mut Ch) -> Vec<usize>
+where
+    Ch: FieldChallenger<BinaryField128> + CanSampleUniformBits<BinaryField128>,
+{
+    let shift = config.log_folding_factor() - 1;
+    sample_query_indices::<_, BinaryField128>(
+        config.domain_size() >> shift,
+        config.num_queries(),
+        challenger,
+    )
+    .into_iter()
+    .map(|index| index << shift)
+    .collect()
 }
 
-/// Every position round `round` must open: one pair per sampled query index, in query order.
-pub(crate) fn flat_pair_indices(indices: &[usize], round: usize) -> Vec<usize> {
+/// All symbols of every queried coset, in query order, with ascending offsets within a coset.
+pub(crate) fn flat_coset_indices(indices: &[usize], start: usize, arity: usize) -> Vec<usize> {
+    let size = 1usize << arity;
     indices
         .iter()
-        .flat_map(|&index| fold_pair_positions(index, round))
+        .flat_map(|&index| {
+            let first = (index >> start) & !(size - 1);
+            first..first + size
+        })
         .collect()
 }
 
@@ -167,7 +169,7 @@ pub(crate) fn check_round_and_final_lengths<MT>(
 where
     MT: Mmcs<BinaryField128>,
 {
-    let expected_intermediate_rounds = config.num_fold_rounds() - 1;
+    let expected_intermediate_rounds = config.num_fold_batches() - 1;
     if proof.rounds.len() != expected_intermediate_rounds {
         return Err(BinaryPcsError::RoundCountMismatch {
             expected: expected_intermediate_rounds,
@@ -180,6 +182,37 @@ where
         return Err(BinaryPcsError::FinalCodewordLengthMismatch {
             expected: expected_final_len,
             actual: proof.final_codeword.num_evals(),
+        });
+    }
+
+    Ok(())
+}
+
+/// Checks that a zero-difficulty proof carries the one grinding witness a zero budget admits,
+/// before any transcript operation.
+///
+/// A positive budget needs no check here: the witness is absorbed and its sampled bits are
+/// compared, so the difficulty itself pins the field.
+//
+// Why: `GrindingChallenger::check_witness` returns `true` at `bits == 0` without absorbing,
+// which leaves `proof.pow_witness` compared against nothing and free to be any value.
+//
+//     pow_bits = 0 -> prover emits zero, verifier reads nothing -> pin the field here
+//     pow_bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
+//
+// Assumption: the honest prover's grind at zero bits is pinned to the zero witness.
+// A grinding path that leaves the zero-bit witness unconstrained needs this check revisited.
+// The pin is asserted by `zero_difficulty_grinding_is_pinned_to_the_zero_witness` below.
+pub(crate) fn check_canonical_pow_witness<MT>(
+    config: &BinaryPcsConfig,
+    proof: &BinaryPcsProof<MT>,
+) -> Result<(), BinaryPcsError<MT::Error>>
+where
+    MT: Mmcs<BinaryField128>,
+{
+    if config.pow_bits() == 0 && proof.pow_witness != BinaryField128::ZERO {
+        return Err(BinaryPcsError::NonCanonicalPowWitness {
+            actual: proof.pow_witness,
         });
     }
 
@@ -221,91 +254,87 @@ where
     // Structural checks: every one derivable from `config` and the proof's own declared
     // lengths, none needing the transcript.
     check_round_and_final_lengths(config, proof)?;
+    check_canonical_pow_witness(config, proof)?;
 
     let domain_size = config.domain_size();
-    let target_queries = num_distinct_queries(domain_size, config.num_queries());
-    let expected_opens = 2 * target_queries;
-
-    check_round_shape(0, &proof.base_opened_values, expected_opens)?;
-    for (r, round) in proof.rounds.iter().enumerate() {
-        check_round_shape(r + 1, &round.opened_values, expected_opens)?;
+    let target_queries = config
+        .num_queries()
+        .min(domain_size >> config.log_folding_factor());
+    let batches: Vec<_> = config.fold_batches().collect();
+    let round_values = |batch: usize| -> &[Vec<BinaryField128>] {
+        if batch == 0 {
+            &proof.base_opened_values
+        } else {
+            &proof.rounds[batch - 1].opened_values
+        }
+    };
+    for (batch, &(_, arity)) in batches.iter().enumerate() {
+        check_round_shape(batch, round_values(batch), target_queries << arity)?;
     }
 
-    // The transcript is touched from here on: grind, then sample.
     if !challenger.check_witness(config.pow_bits(), proof.pow_witness) {
         return Err(BinaryPcsError::InvalidPowWitness);
     }
-
-    let indices =
-        sample_query_indices::<_, BinaryField128>(domain_size, config.num_queries(), challenger);
+    let indices = sample_query_cosets(config, challenger);
     debug_assert_eq!(indices.len(), target_queries);
 
-    // One Merkle multiproof per round.
-    let base_indices = flat_pair_indices(&indices, 0);
-    let base_dims = [Dimensions {
-        width: 1,
-        height: domain_size,
-    }];
-    mmcs.verify_multi_batch(
-        base_commitment,
-        &base_dims,
-        &base_indices,
-        &wrap_rows(&proof.base_opened_values),
-        &proof.base_multi_proof,
-    )
-    .map_err(|source| BinaryPcsError::MerkleFailed { round: 0, source })?;
-
-    for (r, round) in proof.rounds.iter().enumerate() {
-        let round_number = r + 1;
-        let round_indices = flat_pair_indices(&indices, round_number);
+    for (batch, &(start, arity)) in batches.iter().enumerate() {
+        let (commitment, multi_proof) = if batch == 0 {
+            (base_commitment, &proof.base_multi_proof)
+        } else {
+            (
+                &proof.rounds[batch - 1].commitment,
+                &proof.rounds[batch - 1].multi_proof,
+            )
+        };
         let dims = [Dimensions {
             width: 1,
-            height: domain_size >> round_number,
+            height: domain_size >> start,
         }];
+        let coset_indices = flat_coset_indices(&indices, start, arity);
         mmcs.verify_multi_batch(
-            &round.commitment,
+            commitment,
             &dims,
-            &round_indices,
-            &wrap_rows(&round.opened_values),
-            &round.multi_proof,
+            &coset_indices,
+            &wrap_rows(round_values(batch)),
+            multi_proof,
         )
         .map_err(|source| BinaryPcsError::MerkleFailed {
-            round: round_number,
+            round: batch,
             source,
         })?;
     }
 
-    // Fold-chain consistency, one query at a time.
-    let round_values = |round: usize| -> &[Vec<BinaryField128>] {
-        if round == 0 {
-            &proof.base_opened_values
-        } else {
-            &proof.rounds[round - 1].opened_values
-        }
-    };
-
+    let mut coset = Vec::new();
     for (q, &index) in indices.iter().enumerate() {
-        // The bound is `num_fold_rounds`, checked against `betas.len()` above, rather than
-        // `betas.len()` itself, so an inconsistent `betas` cannot silently shrink or grow this
-        // loop; `r` also indexes `index >> r` and both `round_values` calls, not just `betas`.
-        #[allow(clippy::needless_range_loop)]
-        for r in 0..num_fold_rounds {
-            let beta = betas[r];
-            let position = index >> r;
-            let lo = round_values(r)[2 * q][0];
-            let hi = round_values(r)[2 * q + 1][0];
-            let folded = fold_pair(position >> 1, beta, lo, hi);
-
-            let expected = if r + 1 < num_fold_rounds {
-                let parity = (position >> 1) & 1;
-                round_values(r + 1)[2 * q + parity][0]
+        for (batch, &(start, arity)) in batches.iter().enumerate() {
+            let size = 1 << arity;
+            let next_position = index >> (start + arity);
+            let folded = if arity == 1 {
+                fold_pair(
+                    next_position,
+                    betas[start],
+                    round_values(batch)[2 * q][0],
+                    round_values(batch)[2 * q + 1][0],
+                )
             } else {
-                proof.final_codeword.as_slice()[position >> 1]
+                coset.clear();
+                coset.extend(
+                    round_values(batch)[q * size..(q + 1) * size]
+                        .iter()
+                        .map(|row| row[0]),
+                );
+                fold_coset(next_position, &mut coset, &betas[start..start + arity])
             };
-
+            let expected = if let Some(&(_, next_arity)) = batches.get(batch + 1) {
+                let next_size = 1 << next_arity;
+                round_values(batch + 1)[q * next_size + (next_position & (next_size - 1))][0]
+            } else {
+                proof.final_codeword.as_slice()[next_position]
+            };
             if folded != expected {
                 return Err(BinaryPcsError::FoldMismatch {
-                    round: r + 1,
+                    round: batch + 1,
                     query: q,
                 });
             }
@@ -325,14 +354,16 @@ mod tests {
     use p3_binary_field::BinaryField128;
     use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
     use p3_commit::Mmcs;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::layout::{Layout, SuffixProver, Table};
+    use p3_sumcheck::strategy::Basis;
+    use p3_sumcheck::transcript::{SumcheckShape, VerifierTranscript};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::{BinaryPcsError, sample_query_indices, verify_query_paths};
+    use super::{BinaryPcsError, sample_query_cosets, sample_query_indices, verify_query_paths};
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::proof::BinaryPcsProof;
     use crate::prover::{RoundCommitment, commit, fold_rounds, open_queries};
@@ -349,6 +380,35 @@ mod tests {
             pow_bits: 4,
             security_level: 40,
         }
+    }
+
+    #[test]
+    fn zero_difficulty_grinding_is_pinned_to_the_zero_witness() {
+        // Invariant: this crate's challenger grinds to the zero witness at a zero budget.
+        //
+        //              grind                     check
+        //     0 bits   zero, absorbing nothing   true, absorbing nothing
+        //     4 bits   a search that absorbs     resamples and compares
+        //
+        // Zero is therefore the only witness an honest prover emits at a zero budget.
+        //
+        // Nothing in the transcript binds the field there, so the check above has to.
+        assert_eq!(challenger().grind(0), F::ZERO);
+
+        // The complementary half: a zero-bit witness check accepts every value handed to it.
+        for witness in [F::ZERO, F::ONE, F::GENERATOR] {
+            assert!(challenger().check_witness(0, witness));
+        }
+
+        // A positive budget needs no such check, because there the difficulty pins the field.
+        assert!(challenger().check_witness(4, challenger().grind(4)));
+
+        // Excluded case: the uniform-grinding pair, which inverts both facts above.
+        // Its grind has no zero-bit shortcut, so at zero bits an arbitrary candidate wins.
+        // Its check absorbs at every difficulty, so there the transcript binds the witness.
+        //
+        // A challenger whose zero-bit grind is unconstrained fails the first assertion here.
+        // Moving the query phase's single grind onto that pair needs the check revisited too.
     }
 
     #[test]
@@ -377,6 +437,28 @@ mod tests {
         let mut c = challenger();
         let indices = sample_query_indices::<_, BinaryField128>(8, 100, &mut c);
         assert_eq!(indices, alloc::vec![0, 2, 4, 6]);
+    }
+
+    #[test]
+    fn batched_queries_sample_distinct_full_cosets_and_cap_at_the_coset_count() {
+        for (num_variables, arity) in [(8, 3), (3, 3)] {
+            let config = BinaryPcsConfig::try_new(num_variables, params())
+                .unwrap()
+                .try_with_folding(arity)
+                .unwrap();
+            let indices = sample_query_cosets(&config, &mut challenger());
+            let cosets = config.domain_size() >> arity;
+            assert_eq!(indices.len(), config.num_queries().min(cosets));
+            assert!(indices.windows(2).all(|w| w[0] < w[1]));
+            assert!(
+                indices
+                    .iter()
+                    .all(|&i| i < config.domain_size() && i % (1 << arity) == 0)
+            );
+            if config.num_queries() >= cosets {
+                assert_eq!(indices, (0..cosets).map(|i| i << arity).collect::<Vec<_>>());
+            }
+        }
     }
 
     #[test]
@@ -520,8 +602,11 @@ mod tests {
         #[allow(clippy::needless_range_loop)]
         for r in 0..num_fold_rounds {
             let [c0, c_inf] = sumcheck_data.polynomial_evaluations()[r];
-            verifier_ch.observe_algebra_slice(&[c0, c_inf]);
-            let beta: F = verifier_ch.sample_algebra_element();
+            // One fold round is one single-round sumcheck, seeded on its own.
+            let shape = SumcheckShape::new(1, 0, Basis::Evaluation);
+            let mut transcript = VerifierTranscript::<_, F, F>::new(&mut verifier_ch, shape);
+            let beta = transcript.round(c0, c_inf, None).unwrap();
+            transcript.finish();
             assert_eq!(beta, randomness.as_slice()[r], "round {r} challenge");
             if r + 1 < num_fold_rounds {
                 verifier_ch.observe(rounds[r].commitment.clone());

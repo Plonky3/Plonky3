@@ -2,6 +2,7 @@
 //!
 //! - Measures prover time, verifier time, and serialized proof size.
 //! - Both pipelines run the same polynomial size and round structure.
+//! - Both main pipelines use a quintic extension and target 100 bits per phase.
 //! - Eprint 2026/391 predicts a `1 + o(1)` overhead.
 
 use std::time::Duration;
@@ -14,7 +15,7 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::{BinomialExtensionField, QuinticTrinomialExtensionField};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
@@ -22,7 +23,6 @@ use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::prover::WhirProver;
 use p3_whir::pcs::zk::{HidingWhirPcs, ZkParameters, ZkWhirConfig};
@@ -30,7 +30,7 @@ use rand::SeedableRng;
 use rand::rngs::{SmallRng, StdRng};
 
 type F = KoalaBear;
-type EF = BinomialExtensionField<F, 4>;
+type EF = QuinticTrinomialExtensionField<F>;
 type OcticEF = BinomialExtensionField<F, 8>;
 
 type Poseidon16 = Poseidon2KoalaBear<16>;
@@ -50,6 +50,7 @@ type OcticZkPcs = HidingWhirPcs<OcticEF, F, Dft, Mmcs, Challenger, StdRng>;
 const SIZES: [usize; 2] = [16, 18];
 const FOLDING: usize = 4;
 const LOG_INV_RATE: usize = 2;
+// Target for each configured error term; total soundness requires their union bound.
 const SECURITY_LEVEL: usize = 100;
 const OCTIC_OPEN_SIZES: [usize; 3] = [18, 19, 20];
 
@@ -101,7 +102,7 @@ fn challenger() -> Challenger {
 
 /// Benchmarks the plain (non-hiding) prover for one size.
 fn bench_plain(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
-    let config = WhirConfig::new(num_variables, protocol_params()).unwrap();
+    let config = WhirConfig::new_with_initial_claims(num_variables, protocol_params(), 1).unwrap();
     let pcs = PlainPcs::new(config, Dft::default(), mmcs());
 
     let mut rng = SmallRng::seed_from_u64(3);
@@ -114,10 +115,7 @@ fn bench_plain(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
     group.bench_function(BenchmarkId::new("plain", num_variables), |b| {
         b.iter_batched(
             || {
-                let mut ch = challenger();
-                let mut ds = DomainSeparator::new(vec![]);
-                pcs.add_domain_separator::<8>(&mut ds);
-                ds.observe_domain_separator(&mut ch);
+                let ch = challenger();
                 let witness = PrefixProver::<F, EF>::new_witness(vec![table.clone()], FOLDING);
                 (ch, witness)
             },
@@ -151,13 +149,7 @@ fn bench_zk(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
 
     group.bench_function(BenchmarkId::new("zk", num_variables), |b| {
         b.iter_batched(
-            || {
-                let mut ch = challenger();
-                let mut ds = DomainSeparator::new(vec![]);
-                pcs.add_domain_separator::<8>(&mut ds);
-                ds.observe_domain_separator(&mut ch);
-                (ch, witness.clone())
-            },
+            || (challenger(), witness.clone()),
             |(mut ch, witness)| {
                 let (_, data) = pcs.commit(witness, &mut ch);
                 pcs.open(data, points.clone(), &mut ch)
@@ -170,7 +162,7 @@ fn bench_zk(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
 /// Reports serialized proof sizes side by side (printed once, not measured).
 fn report_proof_sizes(num_variables: usize) {
     // Plain proof size.
-    let config = WhirConfig::new(num_variables, protocol_params()).unwrap();
+    let config = WhirConfig::new_with_initial_claims(num_variables, protocol_params(), 1).unwrap();
     let pcs = PlainPcs::new(config, Dft::default(), mmcs());
     let mut rng = SmallRng::seed_from_u64(3);
     let table = Table::rand(&mut rng, 1, num_variables);
@@ -179,9 +171,6 @@ fn report_proof_sizes(num_variables: usize) {
         vec![OpeningBatch::new(vec![0], Vec::new())],
     )]);
     let mut ch = challenger();
-    let mut ds = DomainSeparator::new(vec![]);
-    pcs.add_domain_separator::<8>(&mut ds);
-    ds.observe_domain_separator(&mut ch);
     let witness = PrefixProver::<F, EF>::new_witness(vec![table], FOLDING);
     let (_, data) = pcs.commit(witness, &mut ch);
     let plain_proof = pcs.open(data, protocol, &mut ch);
@@ -205,9 +194,6 @@ fn report_proof_sizes(num_variables: usize) {
     let witness = Poly::<F>::rand(&mut rng, num_variables);
     let points = vec![Point::<EF>::rand(&mut rng, num_variables)];
     let mut ch = challenger();
-    let mut ds = DomainSeparator::new(vec![]);
-    pcs.add_domain_separator::<8>(&mut ds);
-    ds.observe_domain_separator(&mut ch);
     let (_, data) = pcs.commit(witness, &mut ch);
     let zk_proof = pcs.open(data, points, &mut ch);
     let zk_size = postcard::to_allocvec(&zk_proof).unwrap().len();
@@ -259,9 +245,6 @@ fn bench_octic_zk_open_no_pow(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     let mut ch = challenger();
-                    let mut ds = DomainSeparator::new(vec![]);
-                    pcs.add_domain_separator::<8>(&mut ds);
-                    ds.observe_domain_separator(&mut ch);
                     let (_, data) = pcs.commit(witness.clone(), &mut ch);
                     (ch, data)
                 },

@@ -16,8 +16,7 @@ use p3_field::op_assign_macros::{
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField64, RawDataSerializable, TwoAdicField, UniformSamplingField,
-    impl_raw_serializable_primefield64, quotient_map_large_iint, quotient_map_large_uint,
-    quotient_map_small_int, tonelli_shanks_two_adic,
+    impl_raw_serializable_primefield64, quotient_map_large_iint, quotient_map_small_int,
 };
 use p3_util::{branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
@@ -173,6 +172,28 @@ impl Goldilocks {
         }
         powers_of_two
     };
+
+    /// Returns the canonical coefficient 2^exp mod P for packed multiplication.
+    #[cfg(any(
+        test,
+        all(target_arch = "aarch64", target_feature = "neon"),
+        all(
+            target_arch = "x86_64",
+            any(target_feature = "avx2", target_feature = "avx512f")
+        ),
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
+    #[inline]
+    pub(crate) const fn power_of_two(exp: u64) -> Self {
+        // 2^96 = -1 mod P, so powers repeat with period 192.
+        let exp = (exp % 192) as usize;
+        if exp < 96 {
+            Self::POWERS_OF_TWO[exp]
+        } else {
+            // Every table entry is nonzero and canonical, so this cannot underflow.
+            Self::new(Self::ORDER_U64 - Self::POWERS_OF_TWO[exp - 96].value)
+        }
+    }
 }
 
 impl PartialEq for Goldilocks {
@@ -277,6 +298,12 @@ impl PrimeCharacteristicRing for Goldilocks {
         Self::new(half.wrapping_add(mask & HALF_P_PLUS_1))
     }
 
+    #[cfg(target_arch = "wasm32")]
+    #[inline]
+    fn square(&self) -> Self {
+        reduce128(square_wide(self.value))
+    }
+
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // In the Goldilocks field, 2^96 = -1 mod P and 2^192 = 1 mod P.
@@ -303,6 +330,18 @@ impl PrimeCharacteristicRing for Goldilocks {
         match exp {
             0 => *self,
             1 => self.halve(),
+            2..=32 => {
+                let lo = self.value & ((1u64 << exp) - 1);
+                let hi = self.value >> exp;
+
+                // Multiplying the expression below by 2^exp gives self.value modulo P,
+                // since 2^64 - 2^32 + 1 = P. Moreover, a < 2^64 and -P < a - b < P,
+                // so correcting a wrapping subtraction once produces a canonical result.
+                let a = hi + (lo << (32 - exp));
+                let b = lo << (64 - exp);
+                let (result, borrow) = a.overflowing_sub(b);
+                Self::new(result.wrapping_sub(Self::NEG_ORDER * u64::from(borrow)))
+            }
             _ => self.mul_2exp_u64(192 - exp),
         }
     }
@@ -326,7 +365,7 @@ impl PrimeCharacteristicRing for Goldilocks {
     fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
         // The constant OFFSET has 2 important properties:
         // 1. It is a multiple of P.
-        // 2. It is greater than the maximum possible value of the sum of the products of two u64s.
+        // 2. It is greater than the maximum possible product of two u64s.
         const OFFSET: u128 = ((P as u128) << 64) - (P as u128) + ((P as u128) << 32);
         const {
             assert!((N as u32) <= (1 << 31));
@@ -337,8 +376,8 @@ impl PrimeCharacteristicRing for Goldilocks {
             2 => {
                 // We unroll the N = 2 case as it is slightly faster and this is an important case
                 // as a major use is in extension field arithmetic and Goldilocks has a degree 2 extension.
-                let long_prod_0 = (lhs[0].value as u128) * (rhs[0].value as u128);
-                let long_prod_1 = (lhs[1].value as u128) * (rhs[1].value as u128);
+                let long_prod_0 = mul_wide(lhs[0].value, rhs[0].value);
+                let long_prod_1 = mul_wide(lhs[1].value, rhs[1].value);
 
                 // We know that long_prod_0, long_prod_1 < OFFSET.
                 // Thus if long_prod_0 + long_prod_1 overflows, we can just subtract OFFSET.
@@ -355,7 +394,7 @@ impl PrimeCharacteristicRing for Goldilocks {
                 let (lo_plus_hi, hi) = lhs
                     .iter()
                     .zip(rhs)
-                    .map(|(x, y)| (x.value as u128) * (y.value as u128))
+                    .map(|(x, y)| mul_wide(x.value, y.value))
                     .fold((0_u128, 0_u64), |(acc_lo, acc_hi), val| {
                         // Split val into (hi, lo) where hi is the upper 32 bits and lo is the lower 96 bits.
                         let val_hi = (val >> 96) as u64;
@@ -399,6 +438,18 @@ impl PermutationMonomial<7> for Goldilocks {
 
 impl RawDataSerializable for Goldilocks {
     impl_raw_serializable_primefield64!();
+}
+
+/// Compute `x^(2^31 - 1)` using a fixed addition chain.
+#[inline(always)]
+fn exp_2_31_minus_1(x: Goldilocks) -> Goldilocks {
+    let x3 = x.square() * x;
+    let x7 = x3.square() * x;
+    let x63 = x7.exp_power_of_2(3) * x7;
+    let x4095 = x63.exp_power_of_2(6) * x63;
+    let x24 = x4095.exp_power_of_2(12) * x4095;
+    let x30 = x24.exp_power_of_2(6) * x63;
+    x30.square() * x
 }
 
 impl Field for Goldilocks {
@@ -455,21 +506,46 @@ impl Field for Goldilocks {
 
     #[inline]
     fn try_sqrt(&self) -> Option<Self> {
-        tonelli_shanks_two_adic(*self)
+        // Zero is its own square root and would otherwise break Tonelli-Shanks.
+        if self.is_zero() {
+            return Some(Self::ZERO);
+        }
+
+        // Goldilocks has `p - 1 = (2^32 - 1) * 2^32`, so the initial
+        // Tonelli-Shanks exponent is `(2^32 - 2) / 2 = 2^31 - 1`.
+        let u = exp_2_31_minus_1(*self);
+        let mut r = u * *self;
+        let mut t = r * u;
+        let mut m = 32;
+
+        while t != Self::ONE {
+            // Find the least i with t^(2^i) = 1. If no such i is below m,
+            // t has order 2^m and the input is a quadratic non-residue.
+            let mut i = 0;
+            let mut t2i = t;
+            while t2i != Self::ONE {
+                t2i = t2i.square();
+                i += 1;
+                if i == m {
+                    return None;
+                }
+            }
+
+            // The current correction is the (i + 1)-th two-adic generator:
+            // G_m^(2^(m-i-1)) = G_(i+1), and its square is G_i. Since
+            // i < m <= 32, both table indices are always in range.
+            r *= Self::TWO_ADIC_GENERATORS[i + 1];
+            t *= Self::TWO_ADIC_GENERATORS[i];
+            m = i;
+        }
+
+        Some(r)
     }
 }
 
-// We use macros to implement QuotientMap<Int> for all integer types except for u64 and i64.
+// We use macros to implement QuotientMap<Int> for all integer types except u64, i64, and u128.
 quotient_map_small_int!(Goldilocks, u64, [u8, u16, u32]);
 quotient_map_small_int!(Goldilocks, i64, [i8, i16, i32]);
-quotient_map_large_uint!(
-    Goldilocks,
-    u64,
-    Goldilocks::ORDER_U64,
-    "`[0, 2^64 - 2^32]`",
-    "`[0, 2^64 - 1]`",
-    [u128]
-);
 quotient_map_large_iint!(
     Goldilocks,
     i64,
@@ -477,6 +553,33 @@ quotient_map_large_iint!(
     "`[1 + 2^32 - 2^64, 2^64 - 1]`",
     [(i128, u128)]
 );
+
+impl QuotientMap<u128> for Goldilocks {
+    /// Convert a given `u128` integer into an element of the `Goldilocks` field.
+    ///
+    /// Uses the specialized Goldilocks reduction and returns a canonical representation.
+    #[inline]
+    fn from_int(int: u128) -> Self {
+        Self::new(reduce128(int).as_canonical_u64())
+    }
+
+    /// Convert a given `u128` integer into an element of the `Goldilocks` field.
+    ///
+    /// Returns `None` if the input does not lie in the range `[0, 2^64 - 2^32]`.
+    #[inline]
+    fn from_canonical_checked(int: u128) -> Option<Self> {
+        (int < Self::ORDER_U64 as u128).then(|| Self::new(int as u64))
+    }
+
+    /// Convert a given `u128` integer into an element of the `Goldilocks` field.
+    ///
+    /// # Safety
+    /// The input must lie in the range `[0, 2^64 - 1]`.
+    #[inline]
+    unsafe fn from_canonical_unchecked(int: u128) -> Self {
+        Self::new(int as u64)
+    }
+}
 
 impl QuotientMap<u64> for Goldilocks {
     /// Convert a given `u64` integer into an element of the `Goldilocks` field.
@@ -652,8 +755,54 @@ impl Mul for Goldilocks {
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        reduce128(u128::from(self.value) * u128::from(rhs.value))
+        reduce128(mul_wide(self.value, rhs.value))
     }
+}
+
+/// Full-width product. Explicit 32-bit limbs avoid the out-of-line `__multi3`
+/// lowering of a `u128` multiplication on wasm, which has native `i64.mul`.
+#[inline]
+fn mul_wide(x: u64, y: u64) -> u128 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        u128::from(x) * u128::from(y)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let x_lo = x & Goldilocks::NEG_ORDER;
+        let x_hi = x >> 32;
+        let y_lo = y & Goldilocks::NEG_ORDER;
+        let y_hi = y >> 32;
+        let ll = x_lo * y_lo;
+        let lh = x_lo * y_hi;
+        let hl = x_hi * y_lo;
+        let hh = x_hi * y_hi;
+
+        // Each partial product is at most (2^32 - 1)^2. Adding one
+        // 32-bit carry therefore fits in u64, without wrapping.
+        let t0 = hl + (ll >> 32);
+        let t1 = lh + (t0 & Goldilocks::NEG_ORDER);
+        let hi = hh + (t0 >> 32) + (t1 >> 32);
+        let lo = (ll & Goldilocks::NEG_ORDER) | (t1 << 32);
+        (u128::from(hi) << 64) | u128::from(lo)
+    }
+}
+
+/// Squaring shares its two cross products, requiring only three `i64.mul`s.
+#[cfg(target_arch = "wasm32")]
+#[inline]
+fn square_wide(x: u64) -> u128 {
+    let lo = x & Goldilocks::NEG_ORDER;
+    let hi = x >> 32;
+    let ll = lo * lo;
+    let lh = lo * hi;
+    let hh = hi * hi;
+    // x^2 = ll + lh*2^33 + hh*2^64. Adding ll>>33 to lh cannot
+    // overflow: lh <= (2^32 - 1)^2 and ll>>33 < 2^31.
+    let middle = lh + (ll >> 33);
+    let product_hi = hh + (middle >> 31);
+    let product_lo = ll.wrapping_add(lh << 33);
+    (u128::from(product_hi) << 64) | u128::from(product_lo)
 }
 
 impl_add_assign!(Goldilocks);
@@ -784,14 +933,334 @@ const fn from_unusual_int(int: i64) -> Goldilocks {
 #[cfg(test)]
 mod tests {
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PackedValue, tonelli_shanks_two_adic};
     use p3_field_testing::{
         test_field, test_field_dft, test_prime_field, test_prime_field_64, test_two_adic_field,
     };
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
     type F = Goldilocks;
     type EF = BinomialExtensionField<F, 5>;
+
+    /// Check both product limbs, not just the residue: a lost carry could otherwise
+    /// be hidden by the field reduction. Includes noncanonical field representatives.
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn wasm_wide_products_match_u128_oracle() {
+        const EDGES: [u64; 12] = [
+            0,
+            1,
+            (1 << 32) - 2,
+            (1 << 32) - 1,
+            1 << 32,
+            (1 << 32) + 1,
+            (1 << 63) - 1,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX,
+        ];
+        let check = |a: u64, b: u64| {
+            let product = u128::from(a) * u128::from(b);
+            let square = u128::from(a) * u128::from(a);
+            assert_eq!(mul_wide(a, b), product, "a={a}, b={b}");
+            assert_eq!(square_wide(a), square, "a={a}");
+            assert_eq!(
+                (F::new(a) * F::new(b)).as_canonical_u64(),
+                (product % u128::from(P)) as u64
+            );
+            assert_eq!(
+                F::new(a).square().as_canonical_u64(),
+                (square % u128::from(P)) as u64
+            );
+        };
+        for a in EDGES {
+            for b in EDGES {
+                check(a, b);
+            }
+        }
+        let mut rng = SmallRng::seed_from_u64(0x64_32_CA77);
+        for _ in 0..10_000 {
+            check(rng.random(), rng.random());
+        }
+    }
+
+    /// Compare every packed lane with an independent full-u64 sum modulo the field order.
+    /// This avoids using the scalar Goldilocks sum as the oracle because it also delays reduction.
+    #[test]
+    fn packed_sum_array_matches_full_u64_oracle() {
+        type PF = <F as Field>::Packing;
+
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            (1 << 32) - 1,
+            1 << 32,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+
+        fn check<const N: usize>(values: &[u64]) {
+            type PF = <F as Field>::Packing;
+
+            assert_eq!(values.len(), PF::WIDTH * N);
+            let input: [PF; N] =
+                core::array::from_fn(|term| PF::from_fn(|lane| F::new(values[lane * N + term])));
+            let actual = PF::sum_array::<N>(&input);
+
+            for lane in 0..PF::WIDTH {
+                let expected = (values[lane * N..(lane + 1) * N]
+                    .iter()
+                    .map(|&value| u128::from(value))
+                    .sum::<u128>()
+                    % u128::from(P)) as u64;
+                assert_eq!(
+                    actual.as_slice()[lane].as_canonical_u64(),
+                    expected,
+                    "N={N}, lane={lane}"
+                );
+            }
+        }
+
+        macro_rules! check_length {
+            ($rng:ident, $n:literal, $random_cases:literal) => {{
+                let edge_values = (0..PF::WIDTH * $n)
+                    .map(|index| RAW_EDGES[index % RAW_EDGES.len()])
+                    .collect::<Vec<_>>();
+                check::<$n>(&edge_values);
+                check::<$n>(&[u64::MAX; PF::WIDTH * $n]);
+
+                for _ in 0..$random_cases {
+                    let values = (0..PF::WIDTH * $n)
+                        .map(|_| $rng.random::<u64>())
+                        .collect::<Vec<_>>();
+                    check::<$n>(&values);
+                }
+            }};
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x5A_0B17_5EED);
+        check_length!(rng, 0, 16);
+        check_length!(rng, 1, 16);
+        check_length!(rng, 2, 16);
+        check_length!(rng, 3, 16);
+        check_length!(rng, 4, 16);
+        check_length!(rng, 5, 16);
+        check_length!(rng, 6, 16);
+        check_length!(rng, 7, 16);
+        check_length!(rng, 8, 16);
+        check_length!(rng, 12, 16);
+        check_length!(rng, 16, 16);
+        check_length!(rng, 32, 16);
+        check_length!(rng, 63, 8);
+        check_length!(rng, 64, 8);
+        check_length!(rng, 129, 4);
+    }
+
+    /// Reduce each full-u64 product separately in the oracle, so repeated max * max
+    /// also checks sums exceeding u128 without overflowing the expected-value calculation.
+    #[test]
+    fn packed_dot_products_match_full_u64_oracle() {
+        use p3_field::Algebra;
+
+        type PF = <F as Field>::Packing;
+
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            (1 << 32) - 2,
+            (1 << 32) - 1,
+            1 << 32,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX,
+        ];
+
+        fn check<const N: usize>(lhs: &[PF; N], rhs: &[PF; N], coeffs: &[F; N]) {
+            let ordinary = PF::dot_product(lhs, rhs);
+            let mixed = PF::mixed_dot_product(lhs, coeffs);
+            let broadcast = PF::dot_product(lhs, &coeffs.map(PF::from));
+            assert_eq!(mixed, broadcast, "mixed/broadcast, N={N}");
+
+            for lane in 0..PF::WIDTH {
+                let mut ordinary_expected = 0u128;
+                let mut mixed_expected = 0u128;
+                for term in 0..N {
+                    let a = u128::from(lhs[term].as_slice()[lane].value);
+                    let b = u128::from(rhs[term].as_slice()[lane].value);
+                    ordinary_expected += (a * b) % u128::from(P);
+                    mixed_expected += (a * u128::from(coeffs[term].value)) % u128::from(P);
+                }
+                assert_eq!(
+                    ordinary.as_slice()[lane].as_canonical_u64(),
+                    (ordinary_expected % u128::from(P)) as u64,
+                    "ordinary, N={N}, lane={lane}"
+                );
+                assert_eq!(
+                    mixed.as_slice()[lane].as_canonical_u64(),
+                    (mixed_expected % u128::from(P)) as u64,
+                    "mixed, N={N}, lane={lane}"
+                );
+            }
+        }
+
+        fn check_length<const N: usize>(rng: &mut SmallRng) {
+            // Repeated edge pairs exercise carries above bit 128, zero representatives,
+            // and the largest possible high limbs in every lane.
+            for a in RAW_EDGES {
+                for b in RAW_EDGES {
+                    check::<N>(
+                        &[PF::from(F::new(a)); N],
+                        &[PF::from(F::new(b)); N],
+                        &[F::new(b); N],
+                    );
+                }
+            }
+            for offset in 0..RAW_EDGES.len() {
+                let lhs = core::array::from_fn(|term| {
+                    PF::from_fn(|lane| F::new(RAW_EDGES[(offset + term + lane) % RAW_EDGES.len()]))
+                });
+                let rhs = core::array::from_fn(|term| {
+                    PF::from_fn(|lane| {
+                        F::new(RAW_EDGES[(offset + 3 * term + 7 * lane) % RAW_EDGES.len()])
+                    })
+                });
+                let coeffs = core::array::from_fn(|term| {
+                    F::new(RAW_EDGES[(offset + term) % RAW_EDGES.len()])
+                });
+                check::<N>(&lhs, &rhs, &coeffs);
+            }
+            for _ in 0..128 {
+                let lhs = core::array::from_fn(|_| PF::from_fn(|_| F::new(rng.random())));
+                let rhs = core::array::from_fn(|_| PF::from_fn(|_| F::new(rng.random())));
+                let coeffs = core::array::from_fn(|_| F::new(rng.random()));
+                check::<N>(&lhs, &rhs, &coeffs);
+            }
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0xD07_F011_5EED);
+        check_length::<0>(&mut rng);
+        check_length::<1>(&mut rng);
+        check_length::<2>(&mut rng);
+        check_length::<3>(&mut rng);
+        check_length::<4>(&mut rng);
+        check_length::<5>(&mut rng);
+        check_length::<6>(&mut rng);
+        check_length::<7>(&mut rng);
+        check_length::<8>(&mut rng);
+        check_length::<12>(&mut rng);
+        check_length::<16>(&mut rng);
+        check_length::<31>(&mut rng);
+        check_length::<32>(&mut rng);
+        check_length::<33>(&mut rng);
+        check_length::<64>(&mut rng);
+        check_length::<65>(&mut rng);
+        check_length::<129>(&mut rng);
+    }
+
+    #[test]
+    fn power_of_two_coefficient_matches_generic_exponentiation() {
+        for exp in (0..384).chain([1 << 32, 1 << 63, u64::MAX - 1, u64::MAX]) {
+            let coefficient = F::power_of_two(exp);
+            assert_eq!(coefficient, F::TWO.exp_u64(exp), "exp = {exp}");
+            assert!(
+                coefficient.value < P,
+                "noncanonical coefficient: exp = {exp}"
+            );
+            assert_eq!(
+                coefficient * F::power_of_two(192 - exp % 192),
+                F::ONE,
+                "inverse coefficient: exp = {exp}"
+            );
+        }
+    }
+
+    #[test]
+    fn packed_powers_of_two_match_scalar_oracle_for_arbitrary_representatives() {
+        type PF = <F as Field>::Packing;
+
+        const EXPONENTS: [u64; 17] = [
+            0,
+            1,
+            2,
+            3,
+            5,
+            31,
+            32,
+            33,
+            63,
+            95,
+            96,
+            191,
+            192,
+            194,
+            224,
+            225,
+            u64::MAX,
+        ];
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            (1 << 32) - 2,
+            (1 << 32) - 1,
+            1 << 32,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX,
+        ];
+
+        let check = |raw: &[u64]| {
+            assert_eq!(raw.len(), PF::WIDTH);
+            let input = PF::from_fn(|lane| F::new(raw[lane]));
+
+            for exp in EXPONENTS {
+                let power = F::TWO.exp_u64(exp);
+                let product = input.mul_2exp_u64(exp);
+                let quotient = input.div_2exp_u64(exp);
+
+                for (lane, &raw) in raw.iter().enumerate() {
+                    let scalar = F::new(raw);
+                    assert_eq!(
+                        product.as_slice()[lane],
+                        scalar * power,
+                        "mul: raw = {raw:#018x}, exp = {exp}, lane = {lane}"
+                    );
+                    assert_eq!(
+                        quotient.as_slice()[lane],
+                        scalar / power,
+                        "div: raw = {raw:#018x}, exp = {exp}, lane = {lane}"
+                    );
+                }
+            }
+        };
+
+        for offset in 0..RAW_EDGES.len() {
+            let raw = (0..PF::WIDTH)
+                .map(|lane| RAW_EDGES[(offset + lane) % RAW_EDGES.len()])
+                .collect::<Vec<_>>();
+            check(&raw);
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x2E80_2E80_5EED);
+        for _ in 0..256 {
+            let raw = (0..PF::WIDTH)
+                .map(|_| rng.random::<u64>())
+                .collect::<Vec<_>>();
+            check(&raw);
+        }
+    }
 
     #[test]
     fn deserialize_rejects_non_canonical_encodings() {
@@ -861,6 +1330,230 @@ mod tests {
         assert_eq!(f.injective_exp_n().injective_exp_root_n(), f);
         assert_eq!(y.injective_exp_n().injective_exp_root_n(), y);
         assert_eq!(F::TWO.injective_exp_n().injective_exp_root_n(), F::TWO);
+    }
+
+    #[test]
+    fn u128_conversion_matches_modulo_oracle() {
+        const EDGES: [u128; 12] = [
+            0,
+            1,
+            P as u128 - 1,
+            P as u128,
+            P as u128 + 1,
+            u64::MAX as u128,
+            1 << 64,
+            (1 << 64) + P as u128,
+            1 << 96,
+            1 << 127,
+            u128::MAX - 1,
+            u128::MAX,
+        ];
+
+        let check = |input: u128| {
+            let expected = (input % P as u128) as u64;
+            let actual = F::from_int(input);
+            assert_eq!(actual.value, expected, "input = {input:#034x}");
+        };
+
+        for input in EDGES {
+            check(input);
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x128_C0DE);
+        for _ in 0..10_000 {
+            check(rng.random());
+        }
+    }
+
+    #[test]
+    fn i128_conversion_matches_modulo_oracle() {
+        const P_I128: i128 = P as i128;
+        const EDGES: [i128; 14] = [
+            i128::MIN,
+            i128::MIN + 1,
+            -(1 << 96),
+            -P_I128 - 1,
+            -P_I128,
+            -P_I128 + 1,
+            -1,
+            0,
+            1,
+            P_I128 - 1,
+            P_I128,
+            P_I128 + 1,
+            i128::MAX - 1,
+            i128::MAX,
+        ];
+
+        let check = |input: i128| {
+            let magnitude_mod_p = (input.unsigned_abs() % P as u128) as u64;
+            let expected_raw = if input < 0 {
+                P - magnitude_mod_p
+            } else {
+                magnitude_mod_p
+            };
+            let actual = F::from_int(input);
+            assert_eq!(actual.value, expected_raw, "input = {input}");
+        };
+
+        for input in EDGES {
+            check(input);
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x128_51C0);
+        for _ in 0..10_000 {
+            check(rng.random());
+        }
+    }
+
+    #[test]
+    fn sqrt_matches_generic_tonelli_shanks_for_arbitrary_representatives() {
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            (1 << 32) - 1,
+            1 << 32,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX - 1,
+            u64::MAX,
+        ];
+
+        let check = |raw: u64| {
+            let input = F::new(raw);
+            let expected = tonelli_shanks_two_adic(input);
+            let actual = input.try_sqrt();
+            assert_eq!(actual.is_some(), expected.is_some(), "raw = {raw:#018x}");
+            if let Some(root) = actual {
+                assert_eq!(root.square(), input, "raw = {raw:#018x}");
+            }
+        };
+
+        for raw in RAW_EDGES {
+            check(raw);
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0x5A7_C0DE);
+        for _ in 0..10_000 {
+            check(rng.random());
+        }
+    }
+
+    #[test]
+    fn large_integer_checked_conversion_preserves_bounds_and_raw_values() {
+        let unsigned_cases = [
+            (0, Some(0)),
+            (P as u128 - 1, Some(P - 1)),
+            (P as u128, None),
+            (P as u128 + 1, None),
+            (u128::MAX, None),
+        ];
+        for (input, expected_raw) in unsigned_cases {
+            assert_eq!(
+                F::from_canonical_checked(input).map(|value| value.value),
+                expected_raw,
+                "input = {input}"
+            );
+        }
+
+        const BOUND: i128 = (P >> 1) as i128;
+        let signed_cases = [
+            (-BOUND - 1, None),
+            (-BOUND, Some(P - BOUND as u64)),
+            (-1, Some(P - 1)),
+            (0, Some(0)),
+            (BOUND, Some(BOUND as u64)),
+            (BOUND + 1, None),
+            (i128::MIN, None),
+            (i128::MAX, None),
+        ];
+        for (input, expected_raw) in signed_cases {
+            assert_eq!(
+                F::from_canonical_checked(input).map(|value| value.value),
+                expected_raw,
+                "input = {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn large_integer_unchecked_conversion_preserves_cast_behavior() {
+        let unsigned_cases = [
+            (0, 0),
+            (P as u128 - 1, P - 1),
+            (P as u128, P),
+            (u64::MAX as u128, u64::MAX),
+        ];
+        for (input, expected_raw) in unsigned_cases {
+            let actual = unsafe { F::from_canonical_unchecked(input) };
+            assert_eq!(actual.value, expected_raw, "input = {input}");
+        }
+
+        const MIN_UNCHECKED: i128 = 1 + (1_i128 << 32) - (1_i128 << 64);
+        let signed_inputs = [
+            MIN_UNCHECKED,
+            i64::MIN as i128 - 1,
+            i64::MIN as i128,
+            -1,
+            0,
+            i64::MAX as i128,
+            i64::MAX as i128 + 1,
+            u64::MAX as i128,
+        ];
+        for input in signed_inputs {
+            let narrowed = input as i64;
+            let expected_raw = if narrowed >= 0 {
+                narrowed as u64
+            } else {
+                P.wrapping_add_signed(narrowed)
+            };
+            let actual = unsafe { F::from_canonical_unchecked(input) };
+            assert_eq!(actual.value, expected_raw, "input = {input}");
+        }
+    }
+
+    #[test]
+    fn div_2exp_matches_field_division_for_all_representatives() {
+        const EPSILON: u64 = (1 << 32) - 1;
+        const RAW_EDGES: [u64; 10] = [
+            0,
+            1,
+            EPSILON - 1,
+            EPSILON,
+            1 << 32,
+            1 << 63,
+            P - 1,
+            P,
+            P + 1,
+            u64::MAX,
+        ];
+        const LARGE_EXPONENTS: [u64; 5] = [193, 384, 1 << 32, 1 << 63, u64::MAX];
+
+        let check = |raw: u64, exp: u64| {
+            let x = F::new(raw);
+            let divisor = F::TWO.exp_u64(exp % 192);
+            assert_eq!(
+                x.div_2exp_u64(exp),
+                x / divisor,
+                "raw = {raw:#018x}, exp = {exp}"
+            );
+        };
+
+        for raw in RAW_EDGES {
+            for exp in 0..=192 {
+                check(raw, exp);
+            }
+            for exp in LARGE_EXPONENTS {
+                check(raw, exp);
+            }
+        }
+
+        let mut rng = SmallRng::seed_from_u64(0xD12_2E98);
+        for _ in 0..10_000 {
+            check(rng.random(), rng.random());
+        }
     }
 
     // Goldilocks has a redundant representation for both 0 and 1.

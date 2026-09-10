@@ -98,7 +98,10 @@ pub enum Length {
 ///
 /// Two protocols over two different 31-bit primes must not share a seed.
 /// Neither must a step that is an `F` in one protocol and a degree-4 element in the other.
+///
+/// A new encoding is a new variant, so downstream matches stay open.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[non_exhaustive]
 pub enum TypeTag {
     /// Structural marker; carries no value.
     Marker,
@@ -122,6 +125,40 @@ pub enum TypeTag {
         bits: usize,
         /// Number of tower-field coefficients per value.
         degree: usize,
+    },
+    /// A value whose encoding belongs to the challenger, not to this layer.
+    ///
+    /// A commitment is the usual case.
+    ///
+    /// # What this does not bind
+    ///
+    /// - Its width, which lives in the commitment scheme's own configuration.
+    /// - So two runs differing only in that share a fingerprint.
+    ///
+    /// A wrong width does not desynchronise the transcript either.
+    /// The opening check that recomputes the value is what rejects it.
+    ///
+    /// Bind such widths through the instance label where a protocol sees them.
+    Opaque,
+    /// A challenge drawn as `width` uniform bits.
+    ///
+    /// Fewer bits shrink the space a query ranges over.
+    /// The sampled value alone does not show that, so the shape must.
+    Bits {
+        /// Number of bits the challenge spans.
+        width: usize,
+    },
+    /// A challenge drawn as `width` bits with no modular bias.
+    ///
+    /// Reducing one field element modulo `2^width` is biased by `2^width / p`.
+    /// Over a 31-bit prime and a 20-bit index that bias is `2^-11`, not a rounding detail.
+    ///
+    /// A rejection sampler removes it at the cost of an unpredictable number of draws.
+    /// The two draws answer the same question with different distributions.
+    /// So they are different shapes, and the fingerprint separates them.
+    UniformBits {
+        /// Number of bits the challenge spans.
+        width: usize,
     },
 }
 
@@ -186,6 +223,62 @@ impl Interaction {
             label,
             type_tag: TypeTag::Bytes,
             type_name: type_name::<u8>(),
+            length,
+        }
+    }
+
+    /// Build a step whose value the challenger encodes on its own.
+    ///
+    /// No Rust type is recorded, not even for local comparison.
+    /// A step that declares it does not model its type cannot then compare one.
+    #[must_use]
+    pub const fn opaque(hierarchy: Hierarchy, kind: Kind, label: Label, length: Length) -> Self {
+        Self {
+            hierarchy,
+            kind,
+            label,
+            type_tag: TypeTag::Opaque,
+            type_name: "opaque",
+            length,
+        }
+    }
+
+    /// Build a challenge step drawn as `width` uniform bits.
+    #[must_use]
+    pub fn bits(
+        hierarchy: Hierarchy,
+        kind: Kind,
+        label: Label,
+        width: usize,
+        length: Length,
+    ) -> Self {
+        Self {
+            hierarchy,
+            kind,
+            label,
+            type_tag: TypeTag::Bits { width },
+            type_name: type_name::<usize>(),
+            length,
+        }
+    }
+
+    /// Build a challenge step drawn as `width` bits with no modular bias.
+    ///
+    /// The biased constructor above records a different tag for the same width.
+    #[must_use]
+    pub fn uniform_bits(
+        hierarchy: Hierarchy,
+        kind: Kind,
+        label: Label,
+        width: usize,
+        length: Length,
+    ) -> Self {
+        Self {
+            hierarchy,
+            kind,
+            label,
+            type_tag: TypeTag::UniformBits { width },
+            type_name: type_name::<usize>(),
             length,
         }
     }
@@ -326,6 +419,9 @@ impl Display for TypeTag {
             Self::Bytes => write!(f, "Bytes"),
             Self::Algebra { modulus, degree } => write!(f, "Algebra({modulus}^{degree})"),
             Self::BinaryTower { bits, degree } => write!(f, "BinaryTower({bits}^{degree})"),
+            Self::Opaque => write!(f, "Opaque"),
+            Self::Bits { width } => write!(f, "Bits({width})"),
+            Self::UniformBits { width } => write!(f, "UniformBits({width})"),
         }
     }
 }
@@ -422,6 +518,60 @@ mod tests {
                 degree: 4,
             }
         );
+    }
+
+    #[test]
+    fn bit_width_is_part_of_the_shape() {
+        // Invariant: a challenge's bit width reaches the fingerprint.
+        //
+        // Drawing fewer bits shrinks the space a query ranges over.
+        // Nothing in the sampled value itself shows that, so the shape must.
+        let wide = Interaction::bits(Hierarchy::Atomic, Kind::Challenge, "q", 20, Length::Scalar);
+        let narrow = Interaction::bits(Hierarchy::Atomic, Kind::Challenge, "q", 19, Length::Scalar);
+
+        assert_eq!(format!("{wide:#}"), "Atomic Challenge 1 q Scalar Bits(20)");
+        assert_ne!(format!("{wide:#}"), format!("{narrow:#}"));
+    }
+
+    #[test]
+    fn a_biased_bit_draw_and_an_unbiased_one_are_different_shapes() {
+        // Fixture state: the same label, the same width, the same count.
+        //
+        // Only the sampling rule differs, and the soundness argument rests on it.
+        let biased = Interaction::bits(Hierarchy::Atomic, Kind::Challenge, "q", 20, Length::Scalar);
+        let unbiased =
+            Interaction::uniform_bits(Hierarchy::Atomic, Kind::Challenge, "q", 20, Length::Scalar);
+
+        assert_eq!(
+            format!("{unbiased:#}"),
+            "Atomic Challenge 1 q Scalar UniformBits(20)"
+        );
+        assert_ne!(format!("{biased:#}"), format!("{unbiased:#}"));
+
+        // The width still reaches the fingerprint, exactly as it does for a biased draw.
+        let narrower =
+            Interaction::uniform_bits(Hierarchy::Atomic, Kind::Challenge, "q", 19, Length::Scalar);
+        assert_ne!(format!("{unbiased:#}"), format!("{narrower:#}"));
+    }
+
+    #[test]
+    fn opaque_records_the_step_without_its_shape() {
+        // Invariant: an opaque step is distinguishable from every modelled one.
+        //
+        // Its own width is deliberately absent: the layer cannot see it.
+        // Two opaque steps differing only in width therefore render alike.
+        let commitment = Interaction::opaque(Hierarchy::Atomic, Kind::Message, "c", Length::Scalar);
+        let wider = Interaction::opaque(Hierarchy::Atomic, Kind::Message, "c", Length::Scalar);
+
+        assert_eq!(
+            format!("{commitment:#}"),
+            "Atomic Message 1 c Scalar Opaque"
+        );
+        assert_eq!(format!("{commitment:#}"), format!("{wider:#}"));
+
+        // It is still separated from a step whose shape the layer does model.
+        let modelled = Interaction::bytes(Hierarchy::Atomic, Kind::Message, "c", Length::Scalar);
+        assert_ne!(format!("{commitment:#}"), format!("{modelled:#}"));
     }
 
     #[test]

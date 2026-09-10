@@ -31,36 +31,18 @@ where
     /// Data that the prover stores for committed polynomials, to help the prover with opening.
     type ProverData;
 
-    /// Type of the output of `get_evaluations_on_domain`.
-    type EvaluationsOnDomain<'a>: Matrix<Val<Self::Domain>> + 'a;
-
     /// The opening argument.
     type Proof: Clone + Serialize + DeserializeOwned;
 
     /// The type of a proof verification error.
     type Error: Debug;
 
-    /// Set to true to activate randomization and achieve zero-knowledge.
-    const ZK: bool;
-
-    /// Index of the trace commitment in the computed opened values.
-    const TRACE_IDX: usize = Self::ZK as usize;
-
-    /// Index of the quotient commitments in the computed opened values.
-    const QUOTIENT_IDX: usize = Self::TRACE_IDX + 1;
-
-    /// Index of the preprocessed trace commitment in the computed opened values.
-    const PREPROCESSED_TRACE_IDX: usize = Self::QUOTIENT_IDX + 1; // Note: not always present
-
     /// This should return a domain such that `Domain::next_point` returns `Some`.
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
-    /// The base-2 logarithm of the largest evaluation domain this PCS can construct.
-    fn log_max_lde_height(&self) -> usize;
-
     /// Given a collection of evaluation matrices, produce a binding commitment to
-    /// the polynomials defined by those evaluations. If `zk` is enabled, the evaluations are
-    /// first randomized as explained in Section 3 of <https://eprint.iacr.org/2024/1037.pdf>.
+    /// the polynomials defined by those evaluations. Hiding implementations may randomize
+    /// their encoding before committing.
     ///
     /// Returns both the commitment which should be sent to the verifier
     /// and the prover data which can be used to produce opening proofs.
@@ -69,6 +51,55 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
     ) -> (Self::Commitment, Self::ProverData);
+
+    /// Open each requested commitment, matrix and point in caller order.
+    ///
+    /// Each request must supply one point vector per committed matrix. Columns are
+    /// interpreted as polynomials evaluated over the domain supplied to [`Self::commit`].
+    /// The returned values retain request, matrix, point and column order.
+    fn open(
+        &self,
+        // For each multi-matrix commitment,
+        commitment_data_with_opening_points: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
+        fiat_shamir_challenger: &mut Challenger,
+    ) -> (OpenedValues<Challenge>, Self::Proof);
+
+    /// Verify the claimed column evaluations for each commitment, matrix and point.
+    ///
+    /// Claims supply the original evaluation domains and must retain the ordering used
+    /// to construct the opening proof. The proof and transcript formats are backend-specific.
+    fn verify(
+        &self,
+        // For each commitment:
+        commitments_with_opening_points: Vec<
+            CommitmentOpening<Challenge, Self::Commitment, Self::Domain>,
+        >,
+        // The opening proof for all claimed evaluations.
+        proof: &Self::Proof,
+        fiat_shamir_challenger: &mut Challenger,
+    ) -> Result<(), Self::Error>;
+}
+
+/// Capabilities used by univariate STARK provers and verifiers.
+///
+/// Generic commitment clients only need [`Pcs`]. Evaluation views remain backend-specific
+/// through the GAT, so implementations can borrow committed LDEs without copying.
+pub trait UnivariateStarkPcs<Challenge, Challenger>: Pcs<Challenge, Challenger>
+where
+    Challenge: ExtensionField<Val<Self::Domain>>,
+{
+    /// Type of the output of `get_evaluations_on_domain`.
+    type EvaluationsOnDomain<'a>: Matrix<Val<Self::Domain>> + 'a;
+
+    /// Whether to activate the STARK's randomized layout and masking protocol.
+    ///
+    /// Hiding implementations must enforce their trace-size and opening budgets.
+    /// The flag alone does not certify caller-supplied commitments, randomness,
+    /// or an arbitrary use of the underlying opening protocol.
+    const ZK: bool;
+
+    /// The base-2 logarithm of the largest evaluation domain this PCS can construct.
+    fn log_max_lde_height(&self) -> usize;
 
     /// Same as `commit` but without randomization. This is used for preprocessed columns
     /// which do not have to be randomized even when ZK is enabled. Note that the preprocessed columns still
@@ -158,73 +189,18 @@ where
         self.get_evaluations_on_domain(prover_data, idx, domain)
     }
 
-    /// Open a collection of polynomial commitments at a set of points. Produce the values at those points along with a proof
-    /// of correctness.
+    /// Open commitments with an optional commitment to unrandomized preprocessing.
     ///
-    /// Arguments:
-    /// - `commitment_data_with_opening_points`: A vector whose elements are a pair:
-    ///     - `data`: The prover data corresponding to a multi-matrix commitment.
-    ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points.
-    /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
-    ///
-    /// Unwrapping the arguments further, each `data` contains a vector of the committed matrices (`matrices = Vec<M>`).
-    /// If the length of `matrices` is not equal to the length of `opening_points` the function will error. Otherwise, for
-    /// each index `i`, the matrix `M = matrices[i]` will be opened at the points `opening_points[i]`.
-    ///
-    /// This means that each column of `M` will be interpreted as the evaluation vector of some polynomial
-    /// and we will compute the value of all of those polynomials at `opening_points[i]`.
-    ///
-    /// The domains on which the evaluation vectors are defined is not part of the arguments here
-    /// but should be public information known to both the prover and verifier.
-    fn open(
-        &self,
-        // For each multi-matrix commitment,
-        commitment_data_with_opening_points: Vec<(
-            // The matrices and auxiliary prover data
-            &Self::ProverData,
-            // for each matrix,
-            Vec<
-                // the points to open
-                Vec<Challenge>,
-            >,
-        )>,
-        fiat_shamir_challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof);
-
-    /// Open a collection of polynomial commitments at a set of points, when there is preprocessing data.
-    /// It is the same as `open` when `ZK` is disabled.
-    /// Produce the values at those points along with a proof of correctness.
-    ///
-    /// Arguments:
-    /// - `commitment_data_with_opening_points`: A vector whose elements are a pair:
-    ///     - `data`: The prover data corresponding to a multi-matrix commitment.
-    ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points.
-    /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
-    /// - `is_preprocessing`: If one of the committed matrices corresponds to preprocessed columns, this is the index of that matrix.
-    ///
-    /// Unwrapping the arguments further, each `data` contains a vector of the committed matrices (`matrices = Vec<M>`).
-    /// If the length of `matrices` is not equal to the length of `opening_points` the function will error. Otherwise, for
-    /// each index `i`, the matrix `M = matrices[i]` will be opened at the points `opening_points[i]`.
-    ///
-    /// This means that each column of `M` will be interpreted as the evaluation vector of some polynomial
-    /// and we will compute the value of all of those polynomials at `opening_points[i]`.
-    ///
-    /// The domains on which the evaluation vectors are defined is not part of the arguments here
-    /// but should be public information known to both the prover and verifier.
+    /// `preprocessed_commitment` identifies a request in the batch, not a matrix within
+    /// a commitment. Hiding implementations omit random codewords for that request.
+    /// The caller owns the commitment ordering; PCS implementations impose no STARK layout.
+    /// Non-hiding implementations behave exactly like [`Pcs::open`].
     fn open_with_preprocessing(
         &self,
         // For each multi-matrix commitment,
-        commitment_data_with_opening_points: Vec<(
-            // The matrices and auxiliary prover data
-            &Self::ProverData,
-            // for each matrix,
-            Vec<
-                // the points to open
-                Vec<Challenge>,
-            >,
-        )>,
+        commitment_data_with_opening_points: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         fiat_shamir_challenger: &mut Challenger,
-        _is_preprocessing: bool,
+        _preprocessed_commitment: Option<usize>,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
         assert!(
             !Self::ZK,
@@ -232,39 +208,6 @@ where
         );
         self.open(commitment_data_with_opening_points, fiat_shamir_challenger)
     }
-
-    /// Verify that a collection of opened values is correct.
-    ///
-    /// Arguments:
-    /// - `commitments_with_opening_points`: A vector whose elements are a pair:
-    ///     - `commitment`: A multi matrix commitment.
-    ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points and claimed evaluations.
-    /// - `proof`: A claimed proof of correctness for the opened values.
-    /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
-    #[allow(clippy::type_complexity)]
-    fn verify(
-        &self,
-        // For each commitment:
-        commitments_with_opening_points: Vec<(
-            // The commitment
-            Self::Commitment,
-            // for each matrix in the commitment:
-            Vec<(
-                // its domain,
-                Self::Domain,
-                // A vector of (point, claimed_evaluation) pairs
-                Vec<(
-                    // the point the matrix was opened at,
-                    Challenge,
-                    // the claimed evaluations at that point
-                    Vec<Challenge>,
-                )>,
-            )>,
-        )>,
-        // The opening proof for all claimed evaluations.
-        proof: &Self::Proof,
-        fiat_shamir_challenger: &mut Challenger,
-    ) -> Result<(), Self::Error>;
 
     fn get_opt_randomization_poly_commitment(
         &self,
@@ -355,17 +298,92 @@ where
 ///
 /// This is the shape [`Pcs::verify`] checks an opening argument against, so it is also what
 /// any code building that argument produces.
-pub type CommitmentWithOpeningPoints<Challenge, Commitment, Domain> = (
-    Commitment,
-    // For each matrix in the commitment:
-    Vec<(
-        // The domain of the matrix
-        Domain,
-        // A vector of (point, claimed_evaluation) pairs.
-        // The claimed evaluation count per point is also the matrix width used by verification.
-        Vec<(Challenge, Vec<Challenge>)>,
-    )>,
-);
+#[derive(Clone, Debug)]
+pub struct CommitmentOpening<Challenge, Commitment, Domain> {
+    /// Commitment whose matrices are opened, in commitment order.
+    pub commitment: Commitment,
+    /// Claims for each matrix, in the order supplied to `commit`.
+    pub matrices: Vec<MatrixOpening<Challenge, Domain>>,
+}
+
+/// Opening points and claimed column evaluations for one matrix.
+#[derive(Clone, Debug)]
+pub struct MatrixOpening<Challenge, Domain> {
+    pub domain: Domain,
+    pub points: Vec<PointOpening<Challenge>>,
+}
+
+/// Claimed evaluations of every column at one point, in column order.
+#[derive(Clone, Debug)]
+pub struct PointOpening<Challenge> {
+    pub point: Challenge,
+    pub values: Vec<Challenge>,
+}
+
+/// Points to open for each matrix in one commitment.
+///
+/// Requests, matrices and points retain caller order in [`OpenedValues`].
+/// The prover data is borrowed; point vectors are moved without copying.
+#[derive(Debug)]
+pub struct OpeningRequest<'a, ProverData, Challenge> {
+    pub prover_data: &'a ProverData,
+    pub points: Vec<Vec<Challenge>>,
+}
+
+impl<ProverData, Challenge: Clone> Clone for OpeningRequest<'_, ProverData, Challenge> {
+    fn clone(&self) -> Self {
+        Self {
+            prover_data: self.prover_data,
+            points: self.points.clone(),
+        }
+    }
+}
+
+impl<'a, ProverData, Challenge> From<(&'a ProverData, Vec<Vec<Challenge>>)>
+    for OpeningRequest<'a, ProverData, Challenge>
+{
+    fn from((prover_data, points): (&'a ProverData, Vec<Vec<Challenge>>)) -> Self {
+        Self {
+            prover_data,
+            points,
+        }
+    }
+}
+
+impl<Challenge> From<(Challenge, Vec<Challenge>)> for PointOpening<Challenge> {
+    fn from((point, values): (Challenge, Vec<Challenge>)) -> Self {
+        Self { point, values }
+    }
+}
+
+impl<Challenge, Domain> From<(Domain, Vec<(Challenge, Vec<Challenge>)>)>
+    for MatrixOpening<Challenge, Domain>
+{
+    fn from((domain, points): (Domain, Vec<(Challenge, Vec<Challenge>)>)) -> Self {
+        Self {
+            domain,
+            points: points.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl<Challenge, Commitment, Domain>
+    From<(Commitment, Vec<(Domain, Vec<(Challenge, Vec<Challenge>)>)>)>
+    for CommitmentOpening<Challenge, Commitment, Domain>
+{
+    fn from(
+        (commitment, matrices): (Commitment, Vec<(Domain, Vec<(Challenge, Vec<Challenge>)>)>),
+    ) -> Self {
+        Self {
+            commitment,
+            matrices: matrices.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Compatibility name for the named verification claim.
+pub type CommitmentWithOpeningPoints<Challenge, Commitment, Domain> =
+    CommitmentOpening<Challenge, Commitment, Domain>;
 
 pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
 pub type OpenedValuesForRound<F> = Vec<OpenedValuesForMatrix<F>>;

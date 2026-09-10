@@ -1,3 +1,5 @@
+mod pcs;
+
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -9,9 +11,13 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
+pub use pcs::assert_pcs_opening_contract;
 use serde::{Deserialize, Serialize};
 
-use crate::{OpenedValues, Pcs, PolynomialSpace};
+use crate::{
+    CommitmentOpening, MatrixOpening, OpenedValues, OpeningRequest, Pcs, PointOpening,
+    PolynomialSpace, UnivariateStarkPcs,
+};
 
 /// A trivial PCS: its commitment is simply the coefficients of each poly.
 #[derive(Clone, Debug)]
@@ -48,19 +54,13 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = Vec<Vec<Val>>;
     type ProverData = Vec<RowMajorMatrix<Val>>;
-    type EvaluationsOnDomain<'a> = Dft::Evaluations;
     type Proof = ();
     type Error = ();
-    const ZK: bool = false;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         // This panics if (and only if) `degree` is not a power of 2 or `degree`
         // > `1 << Val::TWO_ADICITY`.
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
-    }
-
-    fn log_max_lde_height(&self) -> usize {
-        Val::TWO_ADICITY
     }
 
     fn commit(
@@ -91,6 +91,90 @@ where
             coeffs.clone().into_iter().map(|m| m.values).collect(),
             coeffs,
         )
+    }
+
+    fn open(
+        &self,
+        // For each round,
+        rounds: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
+        _challenger: &mut Challenger,
+    ) -> (OpenedValues<Challenge>, Self::Proof) {
+        (
+            rounds
+                .into_iter()
+                .map(
+                    |OpeningRequest {
+                         prover_data: coeffs_for_round,
+                         points: points_for_round,
+                     }| {
+                        // ensure that each matrix corresponds to a set of opening points
+                        debug_assert_eq!(coeffs_for_round.len(), points_for_round.len());
+                        coeffs_for_round
+                            .iter()
+                            .zip(points_for_round)
+                            .map(|(coeffs_for_mat, points_for_mat)| {
+                                points_for_mat
+                                    .into_iter()
+                                    .map(|pt| eval_coeffs_at_pt(coeffs_for_mat, pt))
+                                    .collect()
+                            })
+                            .collect()
+                    },
+                )
+                .collect(),
+            (),
+        )
+    }
+
+    // This is a testing function, so we allow panics for convenience.
+    #[allow(clippy::panic_in_result_fn)]
+    fn verify(
+        &self,
+        // For each round:
+        rounds: Vec<CommitmentOpening<Challenge, Self::Commitment, Self::Domain>>,
+        _proof: &Self::Proof,
+        _challenger: &mut Challenger,
+    ) -> Result<(), Self::Error> {
+        for CommitmentOpening {
+            commitment: comm,
+            matrices: round_opening,
+        } in rounds
+        {
+            for (
+                coeff_vec,
+                MatrixOpening {
+                    domain,
+                    points: points_and_values,
+                },
+            ) in zip_eq(comm, round_opening, ())?
+            {
+                let width = coeff_vec.len() / domain.size();
+                assert_eq!(width * domain.size(), coeff_vec.len());
+                let coeffs = RowMajorMatrix::new(coeff_vec, width);
+                for PointOpening { point: pt, values } in points_and_values {
+                    assert_eq!(eval_coeffs_at_pt(&coeffs, pt), values);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<Val, Dft, Challenge, Challenger> UnivariateStarkPcs<Challenge, Challenger>
+    for TrivialPcs<Val, Dft>
+where
+    Val: TwoAdicField,
+    Challenge: ExtensionField<Val>,
+    Challenger: CanSample<Challenge>,
+    Dft: TwoAdicSubgroupDft<Val>,
+    Vec<Vec<Val>>: Serialize + for<'de> Deserialize<'de>,
+{
+    type EvaluationsOnDomain<'a> = Dft::Evaluations;
+
+    const ZK: bool = false;
+
+    fn log_max_lde_height(&self) -> usize {
+        Val::TWO_ADICITY
     }
 
     fn commit_quotient(
@@ -136,75 +220,5 @@ where
             Val::ZERO,
         );
         self.dft.coset_dft_batch(coeffs, domain.shift())
-    }
-
-    fn open(
-        &self,
-        // For each round,
-        rounds: Vec<(
-            &Self::ProverData,
-            // for each matrix,
-            Vec<
-                // points to open
-                Vec<Challenge>,
-            >,
-        )>,
-        _challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
-        (
-            rounds
-                .into_iter()
-                .map(|(coeffs_for_round, points_for_round)| {
-                    // ensure that each matrix corresponds to a set of opening points
-                    debug_assert_eq!(coeffs_for_round.len(), points_for_round.len());
-                    coeffs_for_round
-                        .iter()
-                        .zip(points_for_round)
-                        .map(|(coeffs_for_mat, points_for_mat)| {
-                            points_for_mat
-                                .into_iter()
-                                .map(|pt| eval_coeffs_at_pt(coeffs_for_mat, pt))
-                                .collect()
-                        })
-                        .collect()
-                })
-                .collect(),
-            (),
-        )
-    }
-
-    // This is a testing function, so we allow panics for convenience.
-    #[allow(clippy::panic_in_result_fn)]
-    fn verify(
-        &self,
-        // For each round:
-        rounds: Vec<(
-            Self::Commitment,
-            // for each matrix:
-            Vec<(
-                // its domain,
-                Self::Domain,
-                // for each point:
-                Vec<(
-                    Challenge,
-                    // values at this point
-                    Vec<Challenge>,
-                )>,
-            )>,
-        )>,
-        _proof: &Self::Proof,
-        _challenger: &mut Challenger,
-    ) -> Result<(), Self::Error> {
-        for (comm, round_opening) in rounds {
-            for (coeff_vec, (domain, points_and_values)) in zip_eq(comm, round_opening, ())? {
-                let width = coeff_vec.len() / domain.size();
-                assert_eq!(width * domain.size(), coeff_vec.len());
-                let coeffs = RowMajorMatrix::new(coeff_vec, width);
-                for (pt, values) in points_and_values {
-                    assert_eq!(eval_coeffs_at_pt(&coeffs, pt), values);
-                }
-            }
-        }
-        Ok(())
     }
 }

@@ -13,6 +13,15 @@ use super::{FoldingFactor, FoldingFactorError, ProtocolParameters};
 /// Reasons a set of user-facing parameters cannot form a valid WHIR configuration.
 #[derive(Debug, Error)]
 pub enum WhirConfigError {
+    /// Initial alpha batching cannot reach the target without grinding.
+    #[error(
+        "initial claim combination of {num_claims} claims retains {bits} bits, below the {security_level}-bit target; reduce the claim count or use a larger extension field"
+    )]
+    InitialClaimsBelowTarget {
+        num_claims: usize,
+        bits: f64,
+        security_level: usize,
+    },
     /// The folding factor is incompatible with the polynomial size.
     #[error(transparent)]
     FoldingFactor(#[from] FoldingFactorError),
@@ -206,7 +215,53 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
+    /// Derive a configuration and check the concrete opening-claim count.
+    /// Commitment-phase OOD claims are added automatically after derivation.
+    pub fn new_with_initial_claims(
+        num_variables: usize,
+        whir_parameters: ProtocolParameters,
+        num_opening_claims: usize,
+    ) -> Result<Self, WhirConfigError> {
+        let config = Self::new(num_variables, whir_parameters)?;
+        config.validate_initial_claims(
+            num_opening_claims.saturating_add(config.commitment_ood_samples),
+        )?;
+        Ok(config)
+    }
+
+    /// Bits retained by the initial alpha combination, without later PoW credit.
+    /// `num_claims` includes concrete openings and commitment-phase OOD claims.
+    pub fn initial_claims_error(&self, num_claims: usize) -> f64 {
+        // Field::bits rounds up; subtracting one gives a conservative lower bound
+        // on log2(|EF|), including fields whose order is far below a power of two.
+        self.soundness_type.initial_claims_error(
+            EF::bits() - 1,
+            self.num_variables,
+            self.starting_log_inv_rate,
+            num_claims,
+        )
+    }
+
+    /// Reject an initial claim batch whose algebraic bound misses the target.
+    /// Alpha is sampled before the first folding grind, so grinding cannot rescue it.
+    pub fn validate_initial_claims(&self, num_claims: usize) -> Result<(), WhirConfigError> {
+        let bits = self.initial_claims_error(num_claims);
+        if bits < self.security_level as f64 {
+            return Err(WhirConfigError::InitialClaimsBelowTarget {
+                num_claims,
+                bits,
+                security_level: self.security_level,
+            });
+        }
+        Ok(())
+    }
+
     /// Derive a full protocol configuration from user-facing parameters.
+    ///
+    /// When the opening count is known, prefer [`Self::new_with_initial_claims`];
+    /// otherwise the PCS validates the full batch at opening and verification time.
+    /// The target applies per error
+    /// term, so full PCS security requires composing their probabilities.
     ///
     /// # Errors
     ///
@@ -707,6 +762,32 @@ mod tests {
             folding_factor: FoldingFactor::ConstantFromSecondRound(4, 4),
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
+        }
+    }
+
+    #[test]
+    fn initial_claims_builder_counts_ood_and_never_credits_later_pow() {
+        let params = default_whir_params();
+        let config = WhirConfig::<EF4, F, MyChallenger>::new(10, params.clone()).unwrap();
+        assert!(config.commitment_ood_samples > 0);
+        assert!(
+            WhirConfig::<EF4, F, MyChallenger>::new_with_initial_claims(10, params.clone(), 1)
+                .is_ok()
+        );
+        // 123 - log2(513) - log2(20 * 2^12) < 98, even with a 20-bit grind budget.
+        let err = WhirConfig::<EF4, F, MyChallenger>::new_with_initial_claims(10, params, 512)
+            .unwrap_err();
+        match err {
+            WhirConfigError::InitialClaimsBelowTarget {
+                num_claims,
+                bits,
+                security_level,
+            } => {
+                assert_eq!(num_claims, 512 + config.commitment_ood_samples);
+                assert!(bits < 98.);
+                assert_eq!(security_level, 100);
+            }
+            other => panic!("unexpected error: {other}"),
         }
     }
 

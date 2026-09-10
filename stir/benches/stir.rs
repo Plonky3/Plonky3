@@ -20,12 +20,15 @@ use p3_challenger::{
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::QuinticTrinomialExtensionField;
-use p3_field::{BasedVectorSpace, ExtensionField, Field, TwoAdicField};
+use p3_field::{
+    BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField,
+};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_stir::SecurityAssumption;
-use p3_stir::config::{StirConfig, StirParameters};
-use p3_stir::prover::prove_stir;
+use p3_stir::config::{StirConfig, StirOptions, StirParameters};
+use p3_stir::prover::{codeword_from_coeffs, prove_stir};
 use p3_stir::verifier::verify_stir;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::distr::{Distribution, StandardUniform};
@@ -88,7 +91,7 @@ fn bench_prove<F, EF, M, D, C>(
     log_degrees: &[usize],
     group_name: &str,
 ) where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF> + Clone,
     D: TwoAdicSubgroupDft<F>,
@@ -129,7 +132,7 @@ fn bench_verify<F, EF, M, D, C>(
     log_degrees: &[usize],
     group_name: &str,
 ) where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF> + Clone,
     D: TwoAdicSubgroupDft<F>,
@@ -213,9 +216,105 @@ fn bench_stir_koalabear_fold3(c: &mut Criterion) {
     );
 }
 
+/// Measure optional proof-size tradeoffs at degree 2^18, including serialized bytes.
+fn bench_options(c: &mut Criterion) {
+    let (params, dft, challenger) = make_stir_env(2);
+    let poly = random_poly::<Challenge>(18);
+    let mut group = c.benchmark_group("stir_options");
+    group.sample_size(10);
+    for (name, options) in [
+        ("default", StirOptions::default()),
+        (
+            "final64",
+            StirOptions {
+                max_log_final_poly_len: Some(6),
+                ..Default::default()
+            },
+        ),
+        (
+            "compact",
+            StirOptions {
+                compact_answers: true,
+                ..Default::default()
+            },
+        ),
+        (
+            "final64_compact",
+            StirOptions {
+                max_log_final_poly_len: Some(6),
+                compact_answers: true,
+            },
+        ),
+    ] {
+        let config = StirConfig::<Val, Challenge, MyMmcs, Challenger>::new_with_options(
+            18,
+            params.clone(),
+            options,
+        );
+        let (proof, _) = prove_stir(&config, poly.clone(), &dft, &mut challenger.clone());
+        verify_stir(&config, &proof, &mut challenger.clone()).unwrap();
+        eprintln!(
+            "stir_options/{name}: rounds={}, final_coeffs={}, proof_bytes={}",
+            config.num_rounds(),
+            proof.final_polynomial.len(),
+            postcard::to_allocvec(&proof).unwrap().len()
+        );
+        group.bench_function(BenchmarkId::new("prove", name), |b| {
+            b.iter_batched(
+                || (challenger.clone(), poly.clone()),
+                |(mut ch, poly)| prove_stir(&config, poly, &dft, &mut ch),
+                BatchSize::LargeInput,
+            );
+        });
+        group.bench_function(BenchmarkId::new("verify", name), |b| {
+            b.iter_batched(
+                || challenger.clone(),
+                |mut ch| verify_stir(&config, &proof, &mut ch).unwrap(),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+/// Compare degree-aware dispatch with the full padded DFT on the same build and inputs.
+fn bench_codeword(c: &mut Criterion) {
+    let mut group = c.benchmark_group("stir_codeword");
+    group.sample_size(10);
+    let dft = Dft::default();
+    for (log_size, log_len) in [(12, 9), (18, 16), (18, 15), (18, 14), (18, 12), (18, 8)] {
+        let coeffs = random_poly::<Challenge>(log_len);
+        let shape = format!("domain{log_size}_degree{log_len}");
+        for full_dft in [false, true] {
+            let method = if full_dft { "full_dft" } else { "degree_aware" };
+            group.bench_function(BenchmarkId::new(method, &shape), |b| {
+                b.iter_batched(
+                    || coeffs.clone(),
+                    |mut coeffs| {
+                        if full_dft {
+                            coeffs.resize(1usize << log_size, Challenge::ZERO);
+                            dft.coset_dft_algebra_batch(
+                                RowMajorMatrix::new_col(coeffs),
+                                Val::GENERATOR,
+                            )
+                            .values
+                        } else {
+                            codeword_from_coeffs(&dft, coeffs, Val::GENERATOR, log_size)
+                        }
+                    },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_stir_koalabear_fold2,
     bench_stir_koalabear_fold3,
+    bench_codeword,
+    bench_options,
 );
 criterion_main!(benches);

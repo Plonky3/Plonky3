@@ -13,6 +13,10 @@ use crate::folder::VerifierAir;
 use crate::lookup::{LookupError, verify_lookup};
 use crate::opening::TableOpening;
 use crate::proof::MultiStarkProof;
+use crate::security::{SecurityError, security_report};
+use crate::transcript::{
+    MultiStarkShape, MultiStarkTranscriptFailure, MultiStarkVerifierTranscript,
+};
 use crate::zerocheck::{AirZerocheck, ZerocheckError};
 
 /// Reasons the multilinear AIR verifier rejects a proof.
@@ -21,6 +25,9 @@ pub enum VerificationError<E>
 where
     E: Debug,
 {
+    /// Security evidence is missing or the requested bound is not met.
+    #[error("security: {0}")]
+    Security(SecurityError),
     /// The zerocheck reduction or its closing constraint check failed.
     #[error("zerocheck: {0}")]
     Zerocheck(ZerocheckError),
@@ -36,30 +43,71 @@ where
     /// The proof carries a preprocessed opening, but the verifying key expects none.
     #[error("preprocessed opening present but not expected")]
     UnexpectedPreprocessedOpening,
-    /// The proof carries the wrong number of preprocessed opening slots.
-    #[error("preprocessed opening count mismatch: expected {expected}, got {actual}")]
-    PreprocessedOpeningCountMismatch {
-        /// Number of verifier instances.
-        expected: usize,
-        /// Number of proof slots.
-        actual: usize,
-    },
+    /// A statement-level transcript step could not be replayed.
+    #[error("transcript: {0}")]
+    Transcript(MultiStarkTranscriptFailure),
+}
+
+/// Verify only when the verifier's statement meets the requested security target.
+///
+/// The report uses trusted AIR declarations and verifier dimensions, never proof
+/// counts. Missing PCS or collision evidence fails closed before the transcript
+/// is touched. The result inherits the configured PCS assumptions; see
+/// [`security_report`]. Other verifier preconditions are the same as [`verify`].
+pub fn verify_with_security<'a, C, A>(
+    config: &C,
+    instances: VerifierInstances<'a, C, A>,
+    proof: &MultiStarkProof<C>,
+    pow_bits: usize,
+    target_bits: usize,
+    challenger: &mut C::Challenger,
+) -> Result<(), VerificationError<PcsError<C>>>
+where
+    C: MultiStarkConfig,
+    C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
+    C::Challenger: FieldChallenger<C::Val>
+        + GrindingChallenger<Witness = C::Val>
+        + CanSampleUniformBits<C::Val>
+        + CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    A: VerifierAir<C::Val, C::Challenge>,
+{
+    security_report(config, &instances)
+        .and_then(|report| report.require_security(target_bits))
+        .map_err(VerificationError::Security)?;
+    verify(config, instances, proof, pow_bits, challenger)
 }
 
 /// Verify a complete batched multilinear AIR proof.
 ///
-/// The verifier replays the prover's transcript in the same order:
+/// This entry point enforces no minimum security level. Use [`verify_with_security`]
+/// when verification must meet a security target, including the AIR and lookup reductions.
+///
+/// The verifier replays the prover's statement-level transcript in the same order:
 ///
 /// ```text
-///     1. absorb batched preprocessed commitment (if any)
-///     2. absorb main commitment
-///     3. absorb public values, then verify the lookup reduction (if any)
-///     4. verify zerocheck sumcheck -> common bound point r, reduced sum
-///     5. open main tables at r     -> main values bound to the main commitment
-///     6. open preprocessed tables at r (if any)
-///                                  -> values bound to the preprocessed commitment
-///     7. recompute the batched constraint at r and match the reduced sum
+///     1. replay batched preprocessed commitment (if any)
+///     2. replay main commitment
+///     3. replay public values, one step per instance
+///     4. verify the lookup reduction (if any)  -> delegated
+///     5. verify zerocheck sumcheck             -> delegated, yields bound point r
+///     6. open main tables at r                 -> delegated, bound to the main commitment
+///     7. open preprocessed tables at r (if any)
+///                                              -> delegated, bound to the preprocessed commitment
+///     8. recompute the batched constraint at r and match the reduced sum
 /// ```
+///
+/// Both sides walk one pattern, and each driver checks only its own party against it:
+///
+/// ```text
+///     this verifier misplaces a step  ->  its own driver refuses the call
+///     the prover skips an absorb      ->  the sponges diverge, so a later check fails
+///     the prover skips a bracket      ->  the delegated verification rejects on its own
+/// ```
+///
+/// Why the brackets absorb nothing: a driver's opener and closer only append a marker to its own pattern record, and neither reaches the sponge.
+///
+/// That holds by construction on both sides rather than by test, so a skipped delegation is caught by the callee and never here.
 ///
 /// Each AIR instance is evaluated at the suffix of the common point matching its
 /// trace height. Main openings are returned in instance order. Preprocessed
@@ -86,6 +134,8 @@ where
 /// Returns an error when the closing check fails.
 /// Returns an error when either commitment opening fails.
 /// Returns an error when the proof and key disagree on whether preprocessed data is opened.
+/// Returns an error when the key and the AIRs disagree on whether a preprocessed trace exists.
+/// Returns an error when an instance supplies a public-value count its AIR does not declare.
 /// Returns an error when the proof and the AIRs disagree on whether a lookup exists.
 ///
 /// # Panics
@@ -123,89 +173,127 @@ where
         _ => {}
     }
 
-    // 1. Absorb the reusable batched preprocessed commitment before any challenge
-    // depends on it.
-    if let Some(commitment) = preprocessed_commitment {
-        challenger.observe(commitment.clone());
-    } else if instances
-        .iter()
-        .any(|instance| instance.air.preprocessed_width() != 0)
-    {
-        return Err(VerificationError::PreprocessedOpeningCountMismatch {
-            expected: instances.len(),
-            actual: 0,
-        });
-    }
-
-    // 2. Absorb the main commitment, matching the prover's commit phase.
-    challenger.observe(proof.commitment.clone());
-
-    // 3. Verify the lookup reduction.
-    // Its claim feeds the coupled AIR sumcheck below.
+    // Describe the statement before replaying it.
+    //
+    // Invariant: every number describing the statement is one the caller already holds.
+    //
+    //     the AIRs     -> widths, public-value counts, preprocessed widths
+    //     this caller  -> each instance's trace arity, and the grinding difficulty
+    //
+    // Nothing is read out of the proof.
     let airs = instances.airs();
     let log_heights = instances.num_variables();
     let public_values = instances.public_values();
-    // Match the prover's single statement-level observation of the public values.
-    // It happens before either phase samples a challenge.
-    for values in &public_values {
-        challenger.observe_algebra_slice(values);
-    }
-    let lookup = verify_lookup::<C::Val, C::Challenge, A, _>(
-        &airs,
-        &log_heights,
-        proof.lookup.as_ref(),
+    let mut transcript = MultiStarkVerifierTranscript::<C::Challenger, C::Val>::new(
         challenger,
-    )
-    .map_err(VerificationError::Lookup)?;
+        MultiStarkShape::new::<C::Val, A>(&airs, &log_heights, pow_bits),
+    );
 
-    // 4. Verify the batched zerocheck sumcheck.
-    // It yields the common bound point and the reduced sum.
+    // 1. Replay the reusable batched preprocessed commitment before any challenge
+    // depends on it.
+    transcript
+        .preprocessed_commitment(preprocessed_commitment.cloned())
+        .map_err(VerificationError::Transcript)?;
+
+    // 2. Replay the absorb the commitment scheme performs inside the prover's commit phase.
+    // The verifier never calls `commit`, so it absorbs the same commitment in the same bracket.
+    transcript.main_commitment(|challenger| challenger.observe(proof.commitment.clone()));
+
+    // 3. Replay the public values, one step per instance.
+    transcript
+        .public_values(&public_values)
+        .map_err(VerificationError::Transcript)?;
+
+    // 4. Verify the lookup reduction, inside the delegation bracket.
+    // Its claim feeds the coupled AIR sumcheck below, so a rejection stops the replay here.
+    let lookup = match transcript.lookup_argument(|challenger| {
+        verify_lookup::<C::Val, C::Challenge, A, _>(
+            &airs,
+            &log_heights,
+            proof.lookup.as_ref(),
+            challenger,
+        )
+    }) {
+        Ok(lookup) => lookup,
+        // Releasing the completeness check keeps this rejection the only failure in flight.
+        Err(error) => {
+            transcript.abort();
+            return Err(VerificationError::Lookup(error));
+        }
+    };
+
+    // 5. Verify the batched zerocheck sumcheck, inside the delegation bracket.
+    // It yields the common bound point and the reduced sum, which both openings need.
     let zerocheck = AirZerocheck::new(&airs, pow_bits);
-    let reduction = zerocheck
-        .verify_reduction_with_lookup::<C::Val, C::Challenge, _>(
+    let reduction = match transcript.zerocheck(|challenger| {
+        zerocheck.verify_reduction_with_lookup::<C::Val, C::Challenge, _>(
             &proof.sumcheck,
             &log_heights,
             &public_values,
             lookup.as_ref(),
             challenger,
         )
-        .map_err(VerificationError::Zerocheck)?;
+    }) {
+        Ok(reduction) => reduction,
+        Err(error) => {
+            transcript.abort();
+            return Err(VerificationError::Zerocheck(error));
+        }
+    };
 
-    // 5. Open the committed main trace tables at their suffixes of the bound point.
+    // Invariant: a return between here and the driver's `finish` must release the driver first.
+    //
+    //     main opening            -> Begin, the scheme's own run, End, on any outcome
+    //     main rejection          -> abort, then return, with the preprocessed step unplayed
+    //     preprocessed opening    -> the same bracket, when the batch describes one
+    //     finish                  -> every described step replayed
+    //     preprocessed rejection  -> travels past `finish`, since no described step follows it
+    //
+    // A rejected batch with preprocessed columns therefore costs one opening, not two.
+
+    // 6. Open the committed main trace tables at their suffixes of the bound point.
     // The returned values are bound to the main commitment.
-    let main_evals = config
-        .pcs()
-        .verify_at(
+    let main_evals = match transcript.main_opening(|challenger| {
+        config.pcs().verify_at(
             &proof.commitment,
             &proof.opening,
             &instances.opening_protocol(),
             &instances.main_points(&reduction.point),
             challenger,
         )
-        .map_err(VerificationError::Opening)?;
+    }) {
+        Ok(evals) => evals,
+        // Nothing below can change this verdict, so the preprocessed opening never runs.
+        Err(error) => {
+            transcript.abort();
+            return Err(VerificationError::Opening(error));
+        }
+    };
 
-    // 6. Open the preprocessed tables at their suffixes of the same bound point.
+    // 7. Open the preprocessed tables at their suffixes of the same bound point.
     // The owned batches are kept local so the closing check can borrow them.
-    let preprocessed_evals = if let Some(preprocessed_commitment) = preprocessed_commitment {
+    let opened_preprocessed = transcript.preprocessed_opening(|challenger| {
+        let commitment = preprocessed_commitment
+            .expect("a described preprocessed commitment is checked before the replay");
         let opening = proof
             .preprocessed_opening
             .as_ref()
             .expect("missing preprocessed opening rejected before verification");
-        Some(
-            config
-                .preprocessed_pcs()
-                .verify_at(
-                    preprocessed_commitment,
-                    opening,
-                    &instances.preprocessed_opening_protocol(),
-                    &instances.preprocessed_points(&reduction.point),
-                    challenger,
-                )
-                .map_err(VerificationError::Opening)?,
+        config.preprocessed_pcs().verify_at(
+            commitment,
+            opening,
+            &instances.preprocessed_opening_protocol(),
+            &instances.preprocessed_points(&reduction.point),
+            challenger,
         )
-    } else {
-        None
-    };
+    });
+
+    // Every described step has now been replayed.
+    transcript.finish();
+
+    let preprocessed_evals = opened_preprocessed
+        .transpose()
+        .map_err(VerificationError::Opening)?;
 
     let preprocessed_next_columns = instances.preprocessed_next_columns();
     let next_columns = instances.next_columns();

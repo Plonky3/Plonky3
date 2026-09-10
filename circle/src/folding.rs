@@ -170,18 +170,25 @@ pub(crate) fn fold_row_with_inv_twiddle<F: Field, EF: ExtensionField<F>>(
 
 /// Precompute the per-query chain of x-fold twiddles, already batch-inverted.
 ///
-/// `top_level_index` is the FRI-domain index (the query index with
-/// [`FriFoldingStrategy::extra_query_index_bits`] shifted off), and `log_max_height` is
-/// [`crate::verifier::verify`]'s own top height (one less than the tallest committed matrix's
-/// LDE height, since the first-layer bivariate fold has already consumed one bit of height by
-/// this point).
+/// # Arguments
 ///
-/// Round `r`'s twiddle is exactly what `fold_x_row` recomputes from scratch on every call
-/// (`CircleDomain::standard(log_max_height - r + 1).nth_x_twiddle(..)`). After the first round,
-/// each successive twiddle is the circle's squaring map applied to the previous one
-/// (`x -> 2x^2 - 1`), with a sign flip determined by a fixed bit of `top_level_index` - no
-/// further scalar multiplications or domain constructions are needed. All `num_rounds`
-/// twiddles are inverted in a single batch instead of one inversion per round.
+/// - `top_level_index`: the FRI-domain index for this query.
+///   The folding strategy's extra query index bits are already shifted off.
+/// - `log_max_height`: the height the query phase starts folding from.
+///   It is one below the tallest committed matrix's LDE height.
+///   The first-layer bivariate fold has already consumed that one bit.
+///
+/// # Algorithm
+///
+/// Round `r` needs the twiddle of the standard circle domain at `log_max_height - r + 1`.
+///
+/// ```text
+///     r = 0    x_0 = nth_x_twiddle of the domain at log_max_height + 1
+///     r > 0    x_r = 2 * x_{r-1}^2 - 1, sign flipped by one bit of top_level_index
+/// ```
+///
+/// The squaring map replaces a scalar multiplication and a domain construction per round.
+/// All the twiddles are then inverted in one batch, rather than one inversion per round.
 pub(crate) fn query_x_twiddles_inv<F: ComplexExtendable>(
     top_level_index: usize,
     log_max_height: usize,

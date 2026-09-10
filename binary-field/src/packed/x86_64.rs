@@ -23,19 +23,8 @@ use p3_field::{
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
-use crate::clmul::TAIL_128;
+use super::split::{HIGH_BY_HIGH, LOW_BY_LOW, Lanes, fold_shifted};
 use crate::{Gf2, Ghash128};
-
-/// Selects the low quadword of both operands.
-///
-/// Bit 0 picks the half of the first argument, bit 4 the half of the second.
-const LOW_BY_LOW: i32 = 0x00;
-
-/// Selects the high quadword of both operands.
-const HIGH_BY_HIGH: i32 = 0x11;
-
-/// Selects the high quadword of the first operand and the low quadword of the second.
-const HIGH_BY_LOW: i32 = 0x01;
 
 /// Swaps the two quadwords of every lane, so `x ^ swap(x)` holds `x_lo ^ x_hi` in both halves.
 const SWAP_QUADWORDS: i32 = 0x4e;
@@ -46,51 +35,86 @@ const SWAP_QUADWORDS: i32 = 0x4e;
     target_feature = "vpclmulqdq",
     not(target_feature = "avx512f")
 ))]
-mod lanes {
+pub(crate) mod lanes {
     use core::arch::x86_64::{
-        __m256i, _mm256_clmulepi64_epi128, _mm256_setzero_si256, _mm256_shuffle_epi32,
+        __m256i, _mm_set_epi64x, _mm256_broadcastsi128_si256, _mm256_clmulepi64_epi128,
+        _mm256_loadu_si256, _mm256_setzero_si256, _mm256_shuffle_epi32, _mm256_storeu_si256,
         _mm256_unpacklo_epi64, _mm256_xor_si256,
     };
 
     use p3_field::interleave::interleave_u128;
 
     /// The register one packed value occupies.
-    pub(super) type Reg = __m256i;
+    pub(crate) type Reg = __m256i;
 
     /// Field elements per register.
-    pub(super) const WIDTH: usize = 2;
+    pub(crate) const WIDTH: usize = 2;
 
     // SAFETY for every wrapper below: this module is compiled only when the target features
     // its intrinsics require are enabled for the crate, which is what makes each call sound.
 
     /// All lanes zero.
     #[inline(always)]
-    pub(super) fn zero() -> Reg {
+    pub(crate) fn zero() -> Reg {
         unsafe { _mm256_setzero_si256() }
     }
 
     /// Bitwise exclusive or.
     #[inline(always)]
-    pub(super) fn xor(a: Reg, b: Reg) -> Reg {
+    pub(crate) fn xor(a: Reg, b: Reg) -> Reg {
         unsafe { _mm256_xor_si256(a, b) }
     }
 
     /// The low quadword of each operand, paired within each lane.
     #[inline(always)]
-    pub(super) fn unpack_low_64(a: Reg, b: Reg) -> Reg {
+    pub(crate) fn unpack_low_64(a: Reg, b: Reg) -> Reg {
         unsafe { _mm256_unpacklo_epi64(a, b) }
     }
 
     /// The carryless product of one quadword of each operand, in every lane.
     #[inline(always)]
-    pub(super) fn clmul<const IMM: i32>(a: Reg, b: Reg) -> Reg {
+    pub(crate) fn clmul<const IMM: i32>(a: Reg, b: Reg) -> Reg {
         unsafe { _mm256_clmulepi64_epi128::<IMM>(a, b) }
     }
 
     /// Exchanges the two halves of every lane.
     #[inline(always)]
-    pub(super) fn swap_halves(a: Reg) -> Reg {
+    pub(crate) fn swap_halves(a: Reg) -> Reg {
         unsafe { _mm256_shuffle_epi32::<{ super::SWAP_QUADWORDS }>(a) }
+    }
+
+    /// The same field element in every lane.
+    #[inline(always)]
+    pub(crate) fn broadcast(value: u128) -> Reg {
+        unsafe {
+            // Arguments run from the highest quadword down.
+            let lane = _mm_set_epi64x((value >> 64) as i64, value as i64);
+            _mm256_broadcastsi128_si256(lane)
+        }
+    }
+
+    /// Reads one register of consecutive field elements.
+    ///
+    /// # Safety
+    ///
+    /// The address must be readable for as many elements as one register holds.
+    /// No alignment is required.
+    #[inline(always)]
+    pub(crate) unsafe fn load(from: *const u128) -> Reg {
+        // SAFETY: the readability of the address is the caller's obligation.
+        unsafe { _mm256_loadu_si256(from.cast()) }
+    }
+
+    /// Writes one register of consecutive field elements.
+    ///
+    /// # Safety
+    ///
+    /// The address must be writable for as many elements as one register holds.
+    /// No alignment is required.
+    #[inline(always)]
+    pub(crate) unsafe fn store(to: *mut u128, value: Reg) {
+        // SAFETY: the writability of the address is the caller's obligation.
+        unsafe { _mm256_storeu_si256(to.cast(), value) }
     }
 
     /// Interleaves whole field elements between two registers.
@@ -98,7 +122,7 @@ mod lanes {
     /// # Panics
     /// Panics if the block length does not divide the width.
     #[inline(always)]
-    pub(super) fn interleave(a: Reg, b: Reg, block_len: usize) -> (Reg, Reg) {
+    pub(crate) fn interleave(a: Reg, b: Reg, block_len: usize) -> (Reg, Reg) {
         match block_len {
             1 => interleave_u128(a, b),
             WIDTH => (a, b),
@@ -109,51 +133,86 @@ mod lanes {
 
 /// The 512-bit register, holding four field elements.
 #[cfg(all(target_feature = "avx512f", target_feature = "vpclmulqdq"))]
-mod lanes {
+pub(crate) mod lanes {
     use core::arch::x86_64::{
-        __m512i, _mm512_clmulepi64_epi128, _mm512_setzero_si512, _mm512_shuffle_epi32,
+        __m512i, _mm_set_epi64x, _mm512_broadcast_i32x4, _mm512_clmulepi64_epi128,
+        _mm512_loadu_si512, _mm512_setzero_si512, _mm512_shuffle_epi32, _mm512_storeu_si512,
         _mm512_unpacklo_epi64, _mm512_xor_si512,
     };
 
     use p3_field::interleave::{interleave_u128, interleave_u256};
 
     /// The register one packed value occupies.
-    pub(super) type Reg = __m512i;
+    pub(crate) type Reg = __m512i;
 
     /// Field elements per register.
-    pub(super) const WIDTH: usize = 4;
+    pub(crate) const WIDTH: usize = 4;
 
     // SAFETY for every wrapper below: this module is compiled only when the target features
     // its intrinsics require are enabled for the crate, which is what makes each call sound.
 
     /// All lanes zero.
     #[inline(always)]
-    pub(super) fn zero() -> Reg {
+    pub(crate) fn zero() -> Reg {
         unsafe { _mm512_setzero_si512() }
     }
 
     /// Bitwise exclusive or.
     #[inline(always)]
-    pub(super) fn xor(a: Reg, b: Reg) -> Reg {
+    pub(crate) fn xor(a: Reg, b: Reg) -> Reg {
         unsafe { _mm512_xor_si512(a, b) }
     }
 
     /// The low quadword of each operand, paired within each lane.
     #[inline(always)]
-    pub(super) fn unpack_low_64(a: Reg, b: Reg) -> Reg {
+    pub(crate) fn unpack_low_64(a: Reg, b: Reg) -> Reg {
         unsafe { _mm512_unpacklo_epi64(a, b) }
     }
 
     /// The carryless product of one quadword of each operand, in every lane.
     #[inline(always)]
-    pub(super) fn clmul<const IMM: i32>(a: Reg, b: Reg) -> Reg {
+    pub(crate) fn clmul<const IMM: i32>(a: Reg, b: Reg) -> Reg {
         unsafe { _mm512_clmulepi64_epi128::<IMM>(a, b) }
     }
 
     /// Exchanges the two halves of every lane.
     #[inline(always)]
-    pub(super) fn swap_halves(a: Reg) -> Reg {
+    pub(crate) fn swap_halves(a: Reg) -> Reg {
         unsafe { _mm512_shuffle_epi32::<{ super::SWAP_QUADWORDS }>(a) }
+    }
+
+    /// The same field element in every lane.
+    #[inline(always)]
+    pub(crate) fn broadcast(value: u128) -> Reg {
+        unsafe {
+            // Arguments run from the highest quadword down.
+            let lane = _mm_set_epi64x((value >> 64) as i64, value as i64);
+            _mm512_broadcast_i32x4(lane)
+        }
+    }
+
+    /// Reads one register of consecutive field elements.
+    ///
+    /// # Safety
+    ///
+    /// The address must be readable for as many elements as one register holds.
+    /// No alignment is required.
+    #[inline(always)]
+    pub(crate) unsafe fn load(from: *const u128) -> Reg {
+        // SAFETY: the readability of the address is the caller's obligation.
+        unsafe { _mm512_loadu_si512(from.cast()) }
+    }
+
+    /// Writes one register of consecutive field elements.
+    ///
+    /// # Safety
+    ///
+    /// The address must be writable for as many elements as one register holds.
+    /// No alignment is required.
+    #[inline(always)]
+    pub(crate) unsafe fn store(to: *mut u128, value: Reg) {
+        // SAFETY: the writability of the address is the caller's obligation.
+        unsafe { _mm512_storeu_si512(to.cast(), value) }
     }
 
     /// Interleaves whole field elements between two registers.
@@ -161,7 +220,7 @@ mod lanes {
     /// # Panics
     /// Panics if the block length does not divide the width.
     #[inline(always)]
-    pub(super) fn interleave(a: Reg, b: Reg, block_len: usize) -> (Reg, Reg) {
+    pub(crate) fn interleave(a: Reg, b: Reg, block_len: usize) -> (Reg, Reg) {
         match block_len {
             1 => interleave_u128(a, b),
             2 => interleave_u256(a, b),
@@ -172,6 +231,38 @@ mod lanes {
 }
 
 use lanes::WIDTH;
+
+// The register is the production backend of the shared split-multiplier algebra.
+//
+// Every method is one intrinsic.
+//
+// So the generic code monomorphizes to the instructions a hand-written kernel would emit.
+impl Lanes for lanes::Reg {
+    #[inline(always)]
+    fn zero() -> Self {
+        lanes::zero()
+    }
+
+    #[inline(always)]
+    fn broadcast(value: u128) -> Self {
+        lanes::broadcast(value)
+    }
+
+    #[inline(always)]
+    fn xor(self, other: Self) -> Self {
+        lanes::xor(self, other)
+    }
+
+    #[inline(always)]
+    fn unpack_low_64(self, other: Self) -> Self {
+        lanes::unpack_low_64(self, other)
+    }
+
+    #[inline(always)]
+    fn clmul<const IMM: i32>(self, other: Self) -> Self {
+        lanes::clmul::<IMM>(self, other)
+    }
+}
 
 /// Several elements of the polynomial-basis `GF(2^128)`, one per 128-bit lane of a register.
 ///
@@ -205,34 +296,6 @@ impl PackedGhash128 {
     #[inline]
     const fn broadcast(value: Ghash128) -> Self {
         Self([value; WIDTH])
-    }
-
-    /// The modulus tail in the low quadword of every lane.
-    #[inline]
-    fn tail() -> lanes::Reg {
-        // SAFETY: `u128` and one 128-bit lane have the same layout.
-        unsafe { transmute::<[u128; WIDTH], lanes::Reg>([TAIL_128; WIDTH]) }
-    }
-
-    /// One Horner step of the reduction, in every lane at once.
-    ///
-    /// Splitting the second argument into its 64-bit halves rewrites the part that overflows:
-    ///
-    /// ```text
-    ///     T  = x^7 + x^2 + x + 1                    the modulus tail, since x^128 = T
-    ///     t1 = t1_lo + t1_hi x^64
-    ///
-    ///     t1 x^64 = t1_lo x^64 + t1_hi T
-    /// ```
-    #[inline]
-    fn fold_shifted(t0: lanes::Reg, t1: lanes::Reg) -> lanes::Reg {
-        // Interleaving against zero moves the low quadword up, scaling by x^64.
-        let raised = lanes::unpack_low_64(lanes::zero(), t1);
-
-        // The high quadword times the tail is what the modulus rewrites.
-        let folded = lanes::clmul::<HIGH_BY_LOW>(t1, Self::tail());
-
-        lanes::xor(t0, lanes::xor(raised, folded))
     }
 }
 
@@ -303,7 +366,7 @@ impl Mul for PackedGhash128 {
         );
 
         // Inner fold brings the top limb down, outer fold finishes the reduction.
-        Self::from_vector(Self::fold_shifted(low, Self::fold_shifted(middle, high)))
+        Self::from_vector(fold_shifted(low, fold_shifted(middle, high)))
     }
 }
 
@@ -343,12 +406,8 @@ impl PrimeCharacteristicRing for PackedGhash128 {
         // coefficient and the inner fold has nothing to add to.
         let low = lanes::clmul::<LOW_BY_LOW>(x, x);
         let high = lanes::clmul::<HIGH_BY_HIGH>(x, x);
-        let folded = lanes::xor(
-            lanes::unpack_low_64(lanes::zero(), high),
-            lanes::clmul::<HIGH_BY_LOW>(high, Self::tail()),
-        );
 
-        Self::from_vector(Self::fold_shifted(low, folded))
+        Self::from_vector(fold_shifted(low, fold_shifted(lanes::zero(), high)))
     }
 
     #[inline]
@@ -372,7 +431,7 @@ impl PrimeCharacteristicRing for PackedGhash128 {
         middle = lanes::xor(middle, lanes::xor(low, high));
 
         // Reduction is linear, so the whole sum folds the modulus once.
-        Self::from_vector(Self::fold_shifted(low, Self::fold_shifted(middle, high)))
+        Self::from_vector(fold_shifted(low, fold_shifted(middle, high)))
     }
 
     #[inline]
@@ -445,7 +504,13 @@ unsafe impl PackedFieldPow2 for PackedGhash128 {
 mod tests {
     use p3_field::PackedValue;
     use p3_field_testing::test_packed_binary_field;
+    use proptest::prelude::*;
 
+    use super::lanes::{self, WIDTH};
+    use crate::packed::split::model::Model;
+    use crate::packed::split::{
+        HIGH_BY_HIGH, HIGH_BY_LOW, LOW_BY_HIGH, LOW_BY_LOW, Lanes, SplitScalar, fold_shifted,
+    };
     use crate::{Ghash128, PackedGhash128};
 
     /// The bit patterns a random search is unlikely to reach.
@@ -463,6 +528,131 @@ mod tests {
     /// One extreme bit pattern per lane.
     fn specials() -> PackedGhash128 {
         PackedValue::from_fn(|i| Ghash128::from_le_bytes(SPECIAL[i].to_le_bytes()))
+    }
+
+    /// The elements a register holds, read back one per lane.
+    fn lanes_of(register: lanes::Reg) -> [u128; WIDTH] {
+        let mut out = [0u128; WIDTH];
+
+        // SAFETY: the destination is exactly one register of contiguous 128-bit integers.
+        //
+        // The store is the unaligned form, so the array's own alignment is irrelevant.
+        unsafe { lanes::store(out.as_mut_ptr(), register) };
+
+        out
+    }
+
+    /// A register holding the given elements, one per lane.
+    fn register_of(values: [u128; WIDTH]) -> lanes::Reg {
+        // SAFETY: the source is exactly one register of contiguous 128-bit integers.
+        unsafe { lanes::load(values.as_ptr()) }
+    }
+
+    /// The two 64-bit halves of every lane, exchanged.
+    fn swapped_halves(values: [u128; WIDTH]) -> [u128; WIDTH] {
+        // Rotating a 128-bit value by half its width is exactly the exchange.
+        core::array::from_fn(|i| values[i].rotate_left(64))
+    }
+
+    /// Each lane-local operation on the register, against the same operation on the model.
+    ///
+    /// One assertion per operation, so a mismatch names the intrinsic that disagreed.
+    ///
+    /// The whole-element interleave is the one left out, since it crosses lanes by design.
+    fn lanes_conform(
+        a: [u128; WIDTH],
+        b: [u128; WIDTH],
+        scalar: u128,
+    ) -> Result<(), TestCaseError> {
+        let (x, y) = (register_of(a), register_of(b));
+        let (mx, my) = (Model(a), Model(b));
+
+        prop_assert_eq!(lanes_of(lanes::Reg::zero()), Model::<WIDTH>::zero().0);
+        prop_assert_eq!(
+            lanes_of(lanes::Reg::broadcast(scalar)),
+            Model::<WIDTH>::broadcast(scalar).0
+        );
+        prop_assert_eq!(lanes_of(lanes::Reg::tail()), Model::<WIDTH>::tail().0);
+        prop_assert_eq!(lanes_of(x.xor(y)), mx.xor(my).0);
+        prop_assert_eq!(lanes_of(x.unpack_low_64(y)), mx.unpack_low_64(my).0);
+        prop_assert_eq!(
+            lanes_of(x.clmul::<LOW_BY_LOW>(y)),
+            mx.clmul::<LOW_BY_LOW>(my).0
+        );
+        prop_assert_eq!(
+            lanes_of(x.clmul::<HIGH_BY_LOW>(y)),
+            mx.clmul::<HIGH_BY_LOW>(my).0
+        );
+        prop_assert_eq!(
+            lanes_of(x.clmul::<LOW_BY_HIGH>(y)),
+            mx.clmul::<LOW_BY_HIGH>(my).0
+        );
+        prop_assert_eq!(
+            lanes_of(x.clmul::<HIGH_BY_HIGH>(y)),
+            mx.clmul::<HIGH_BY_HIGH>(my).0
+        );
+
+        // Not a trait method, so the model cannot supply the expectation.
+        //
+        // It carries the only hand-written shuffle immediate here, which is why it is pinned.
+        prop_assert_eq!(lanes_of(lanes::swap_halves(x)), swapped_halves(a));
+
+        // The two composites built from those operations.
+        //
+        // A lane-crossing slip therefore shows up here as well as in the primitives above.
+        prop_assert_eq!(lanes_of(fold_shifted(x, y)), fold_shifted(mx, my).0);
+        prop_assert_eq!(
+            lanes_of(SplitScalar::new(scalar).apply(x)),
+            SplitScalar::new(scalar).apply(mx).0
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn the_register_matches_the_scalar_model_at_the_corners() {
+        // Invariant: each operation is lane-local, so distinct lanes must stay distinct.
+        //
+        // Lane 0 carries the pair under test, so all sixteen combinations are reached.
+        //
+        // That includes the squaring-shaped case where both operands are the same value.
+        //
+        // The other lanes rotate through the corners, so a value that crosses a lane
+        // boundary lands on a different extreme and shows as a mismatch.
+        for (i, &x) in SPECIAL.iter().enumerate() {
+            for (j, &y) in SPECIAL.iter().enumerate() {
+                let a = core::array::from_fn(|lane| match lane {
+                    0 => x,
+                    _ => SPECIAL[(i + lane) % SPECIAL.len()],
+                });
+                let b = core::array::from_fn(|lane| match lane {
+                    0 => y,
+                    _ => SPECIAL[(j + lane) % SPECIAL.len()],
+                });
+
+                // The multiplier walks the corners too, so the split runs from each extreme.
+                for scalar in SPECIAL {
+                    lanes_conform(a, b, scalar)
+                        .unwrap_or_else(|e| panic!("a {x:#x}, b {y:#x}, scalar {scalar:#x}: {e}"));
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn the_register_matches_the_scalar_model(
+            a in prop::array::uniform(any::<u128>()),
+            b in prop::array::uniform(any::<u128>()),
+            scalar in any::<u128>(),
+        ) {
+            // The seam the scalar model alone cannot reach.
+            //
+            // Each intrinsic must be the one the algebra was written against, lane by lane.
+            lanes_conform(a, b, scalar)?;
+        }
     }
 
     test_packed_binary_field!(

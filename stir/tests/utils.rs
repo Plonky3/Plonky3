@@ -24,6 +24,46 @@ fn ef(n: u64) -> EF {
     EF::from(f(n))
 }
 
+#[test]
+fn test_codeword_from_coeffs_matches_horner_across_shapes() {
+    use p3_field::TwoAdicField;
+
+    let dft = Radix2DitParallel::<F>::default();
+    let mut rng = SmallRng::seed_from_u64(0xdecaf);
+    for log_size in [0usize, 1, 4, 8] {
+        let size = 1usize << log_size;
+        // Cover empty/constant inputs, ragged lengths, both sides of the degree-aware
+        // crossover, a full domain, and truncation of coefficients beyond the domain.
+        for len in [
+            0,
+            1,
+            2,
+            3,
+            size / 16,
+            size / 8,
+            size / 8 + 1,
+            size,
+            size + 3,
+        ] {
+            let coeffs: Vec<EF> = (0..len).map(|_| rng.random()).collect();
+            for shift in [F::ZERO, F::ONE, F::GENERATOR, f(7)] {
+                let actual = codeword_from_coeffs(&dft, coeffs.clone(), shift, log_size);
+                assert_eq!(actual.len(), size);
+                let mut point = shift;
+                let generator = F::two_adic_generator(log_size);
+                for (i, value) in actual.into_iter().enumerate() {
+                    let expected = coeffs[..len.min(size)]
+                        .iter()
+                        .rev()
+                        .fold(EF::ZERO, |acc, &coeff| acc * point + coeff);
+                    assert_eq!(value, expected, "log_size={log_size}, len={len}, i={i}");
+                    point *= generator;
+                }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // eval_poly
 // ---------------------------------------------------------------------------
@@ -394,6 +434,43 @@ fn test_fold_poly_coeffs_agrees_with_the_evaluation_form_fold() {
             coeffs_from_codeword(&dft, &folded, fold_shift),
             "coefficient and evaluation folds disagree at log_arity={log_arity}"
         );
+    }
+}
+
+#[test]
+fn test_folded_coeffs_recover_from_degree_sized_subcosets() {
+    let log_degree = 6;
+    let degree = 1usize << log_degree;
+    let dft = Radix2DitParallel::<F>::default();
+    let shift = f(7);
+    let gamma = ef(31);
+    let native_coeffs: Vec<EF> = (1..=degree).map(|i| ef(i as u64)).collect();
+
+    // Vary both the LDE blowup and fold arity, including distinct k0/k-style arities. The
+    // expected coefficients come from the independent coefficient-form fold.
+    for log_blowup in [0usize, 1, 2] {
+        let log_domain = log_degree + log_blowup;
+        let mut domain_coeffs = native_coeffs.clone();
+        domain_coeffs.resize(1usize << log_domain, EF::ZERO);
+        let codeword = codeword_from_coeffs(&dft, domain_coeffs, shift, log_domain);
+
+        for log_arity in [1usize, 2, 3] {
+            let beta = gamma * EF::from(shift.inverse());
+            let folded = fold_codeword::<F, EF>(&codeword, beta, log_arity, log_domain);
+            let folded_degree_bound = degree >> log_arity;
+            let stride = folded.len() / folded_degree_bound;
+            let subcoset: Vec<EF> = (0..folded_degree_bound)
+                .map(|i| folded[i * stride])
+                .collect();
+            let fold_shift = shift.exp_power_of_2(log_arity);
+
+            assert_eq!(
+                coeffs_from_codeword(&dft, &subcoset, fold_shift),
+                fold_poly_coeffs(&native_coeffs, gamma, log_arity),
+                "subcoset recovery disagrees at log_blowup={log_blowup}, \
+                 log_arity={log_arity}"
+            );
+        }
     }
 }
 

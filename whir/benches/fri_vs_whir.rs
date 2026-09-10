@@ -8,11 +8,11 @@
 //!
 //! # Substrate (matched on both sides)
 //!
-//! - Field            : KoalaBear, with quartic extension `EF`.
+//! - Field            : KoalaBear, with quintic extension `EF`.
 //! - Merkle hash      : swept over Poseidon1, Poseidon2 (field-element digests), Blake3 (byte digests).
 //! - Message          : `2^22` base-field elements.
 //! - Code rate        : `ρ = 2^-1` (`log_blowup = 1`).
-//! - Soundness target : 100 bits, capacity-regime conjecture.
+//! - Per-phase target : 100 bits, capacity-regime conjecture; total soundness requires a union bound.
 //!
 //! # Workload (matched claim shape)
 //!
@@ -58,7 +58,7 @@ use p3_commit::{ExtensionMmcs, Mmcs, MultilinearPcs, Pcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::QuinticTrinomialExtensionField;
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_koala_bear::{
     KoalaBear, Poseidon1KoalaBear, default_koalabear_poseidon1_16, default_koalabear_poseidon1_24,
@@ -68,7 +68,6 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::proof::PcsProof;
 use p3_whir::pcs::prover::WhirProver;
@@ -81,7 +80,7 @@ use rand::rngs::SmallRng;
 type F = KoalaBear;
 
 /// Challenge field used for Fiat-Shamir challenges and out-of-domain samples.
-type EF = BinomialExtensionField<F, 4>;
+type EF = QuinticTrinomialExtensionField<F>;
 
 /// DFT backend used by both protocols.
 type Dft = Radix2DFTSmallBatch<F>;
@@ -117,16 +116,15 @@ type Dft = Radix2DFTSmallBatch<F>;
 // A stricter WHIR setting would force more queries than FRI pays
 // for, biasing the comparison.
 
-/// Target soundness in bits for both protocols.
+/// Target for the configured per-phase bounds of both protocols.
 ///
 /// Interpreted under the capacity-regime conjecture (see security framing above).
+/// Total proof soundness additionally requires a union bound over the error terms.
 const SECURITY_LEVEL: usize = 100;
 
 /// Proof-of-work grinding bits, shared by both protocols.
 ///
-/// # Why this value
-///
-/// - The WHIR side needs every per-round grinding requirement to fit under this budget. `21` is the smallest budget that clears that ceiling.
+/// Every WHIR per-round grinding requirement must fit under this budget.
 const POW_BITS: usize = 21;
 
 /// log_2 of the inverse code rate.
@@ -276,8 +274,6 @@ struct WhirRig<MT: Mmcs<F>, Ch> {
     witness: Witness<F>,
     /// Public opening schedule: one common point opening every column.
     protocol: OpeningProtocol,
-    /// Domain separator used for both prover and verifier transcripts.
-    domain_separator: DomainSeparator<EF, F>,
     /// Base challenger; both prover and verifier clone from this.
     challenger: Ch,
 }
@@ -340,7 +336,8 @@ where
     };
 
     // Per-round protocol layout: query counts, OOD samples, PoW bits per round.
-    let config = WhirConfig::<EF, F, Ch>::new(num_variables, params).unwrap();
+    let config =
+        WhirConfig::<EF, F, Ch>::new_with_initial_claims(num_variables, params, width).unwrap();
 
     // Per-rig RNG: distinct seed per `(num_variables, log_width)` so two rigs
     // cannot accidentally collide on polynomial samples.
@@ -366,16 +363,10 @@ where
     // Bundle config, FFT engine, and Merkle backend into the PCS.
     let pcs = WhirPcsTy::<MT, Ch>::new(config, dft, mmcs);
 
-    // Domain separator: encodes the protocol shape into the transcript so challenges
-    // are bound to this exact configuration.
-    let mut domain_separator = DomainSeparator::new(vec![]);
-    pcs.add_domain_separator::<DIGEST_ELEMS>(&mut domain_separator);
-
     WhirRig {
         pcs,
         witness,
         protocol,
-        domain_separator,
         challenger: base_challenger,
     }
 }
@@ -393,10 +384,8 @@ where
     MT: WhirMmcs,
     Ch: WhirChallenger<MT>,
 {
-    // Fresh prover challenger seeded with the domain separator.
+    // Fresh prover challenger. The scheme seeds its own transcript when it opens.
     let mut prover_challenger = rig.challenger.clone();
-    rig.domain_separator
-        .observe_domain_separator(&mut prover_challenger);
 
     // Phase 1: commit (DFT + Merkle + OOD samples).
     let t = Instant::now();
@@ -432,8 +421,6 @@ where
 {
     // Each verification call starts from a fresh transcript clone.
     let mut verifier_challenger = rig.challenger.clone();
-    rig.domain_separator
-        .observe_domain_separator(&mut verifier_challenger);
 
     let t = Instant::now();
     <WhirPcsTy<MT, Ch> as MultilinearPcs<EF, Ch>>::verify(
@@ -622,7 +609,7 @@ where
     let t = Instant::now();
     let (openings, proof) = <TwoAdicFriPcs<F, Dft, InMmcs, ChMmcs> as Pcs<EF, Ch>>::open(
         &rig.pcs,
-        data_and_points,
+        data_and_points.into_iter().map(Into::into).collect(),
         &mut prover_challenger,
     );
     let open_ms = t.elapsed().as_millis();
@@ -669,7 +656,7 @@ where
     let t = Instant::now();
     <TwoAdicFriPcs<F, Dft, InMmcs, ChMmcs> as Pcs<EF, Ch>>::verify(
         &rig.pcs,
-        claims,
+        claims.into_iter().map(Into::into).collect(),
         proof,
         &mut verifier_challenger,
     )
@@ -692,7 +679,7 @@ mod poseidon1 {
     pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
     pub type Challenger = DuplexChallenger<F, Perm16, 16, 8>;
 
-    /// Number of base-field elements per digest, used to size the domain separator.
+    /// Number of base-field elements per digest.
     pub const DIGEST_ELEMS: usize = 8;
 
     /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
@@ -726,7 +713,7 @@ mod poseidon2 {
     pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
     pub type Challenger = DuplexChallenger<F, Perm16, 16, 8>;
 
-    /// Number of base-field elements per digest, used to size the domain separator.
+    /// Number of base-field elements per digest.
     pub const DIGEST_ELEMS: usize = 8;
 
     /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
@@ -772,7 +759,7 @@ mod blake3 {
     pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
     pub type Challenger = SerializingChallenger32<F, HashChallenger<u8, Blake3, 32>>;
 
-    /// Number of bytes per digest, used to size the domain separator.
+    /// Number of bytes per digest.
     pub const DIGEST_ELEMS: usize = 32;
 
     /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
@@ -796,7 +783,7 @@ mod blake3 {
 fn print_diagnostic_table() {
     println!();
     println!(
-        "=== FRI vs WHIR diagnostic ({SECURITY_LEVEL}-bit security, rho = 2^-{LOG_BLOWUP}) ==="
+        "=== FRI vs WHIR diagnostic ({SECURITY_LEVEL}-bit per-phase target, rho = 2^-{LOG_BLOWUP}) ==="
     );
     println!("  hash      |  m | proto | commit ms | open ms | verify us | proof bytes | queries");
     println!("------------+----+-------+-----------+---------+-----------+-------------+--------");

@@ -22,10 +22,13 @@
 //! the same `security-level` / `pow-bits` budget. FRI's query count follows a closed
 //! form; STIR and WHIR each derive their own per-round query/PoW schedule from that
 //! budget, so query counts differ across protocols even at matched security.
+//! STIR additionally uses a 16-bit PCS batching grind, credited to its joint
+//! alpha/Combine budget. Its query counts are read from the generated proof, with
+//! buckets separated by `;` and rounds within each bucket separated by `,`.
 //!
 //! STIR's schedule derivation also enforces a per-round validity ceiling on its `eta`
 //! parameter (see `p3_stir::config`); some `(log-message-size, rate, stir-log-fold)`
-//! combinations are not valid under that ceiling and `StirConfig::new` panics with a
+//! combinations are not valid under that ceiling and the PCS panics with a
 //! description of the violated bound. Lower `stir-log-fold` or raise `rate` if that
 //! happens.
 //!
@@ -63,12 +66,11 @@ use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_stir::{StirConfig, StirParameters, TwoAdicStirPcs};
+use p3_stir::{StirParameters, TwoAdicStirPcs};
 use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_ceil_usize;
-use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::prover::WhirProver;
 use rand::SeedableRng;
@@ -101,11 +103,9 @@ type Challenger = DuplexChallenger<F, Poseidon16, 16, 8>;
 
 type FriPcsTy = TwoAdicFriPcs<F, Dft, ValMmcs, ChallengeMmcs>;
 type StirPcsTy = TwoAdicStirPcs<F, Dft, ValMmcs, ChallengeMmcs, EF, Challenger>;
+const STIR_BATCH_POW_BITS: usize = 16;
 type WhirLayout = SuffixProver<F, EF>;
 type WhirPcsTy = WhirProver<EF, F, Dft, ValMmcs, Challenger, WhirLayout>;
-
-/// Number of base-field elements per Merkle digest for this hash backend.
-const DIGEST_ELEMS: usize = 8;
 
 /// Command-line arguments for the PCS comparison.
 #[derive(Parser, Debug)]
@@ -213,6 +213,32 @@ fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFac
     rates
 }
 
+/// Read each bucket's actual query schedule after PCS batching and grouping.
+fn stir_queries(proof: &<StirPcsTy as Pcs<EF, Challenger>>::Proof) -> String {
+    proof
+        .buckets
+        .iter()
+        .map(|(bucket, _)| {
+            bucket
+                .round_proofs
+                .iter()
+                .map(|round| &round.query_openings)
+                .chain(std::iter::once(&bucket.final_query_openings))
+                .map(|openings| {
+                    openings
+                        .as_ref()
+                        .expect("PCS commits its initial STIR oracle")
+                        .row_evals
+                        .len()
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 /// Run one full commit -> open -> verify cycle for a univariate PCS (FRI or STIR) over
 /// one or more matrices batched into a single commitment and opened at a shared
 /// out-of-domain point, then report timing, proof size, and query count.
@@ -221,7 +247,7 @@ fn run_univariate_pcs<P>(
     pcs: &P,
     tables: Vec<(TwoAdicMultiplicativeCoset<F>, RowMajorMatrix<F>)>,
     base_challenger: &Challenger,
-    queries: String,
+    queries: impl FnOnce(&P::Proof) -> String,
     observe: impl Fn(&mut Challenger, &P::Commitment),
 ) -> ProtocolReport
 where
@@ -242,7 +268,13 @@ where
 
     let t = Instant::now();
     let opening_points = domains.iter().map(|_| vec![zeta]).collect();
-    let (openings, proof) = pcs.open(vec![(&prover_data, opening_points)], &mut prover_challenger);
+    let (openings, proof) = pcs.open(
+        vec![p3_commit::OpeningRequest {
+            prover_data: &prover_data,
+            points: opening_points,
+        }],
+        &mut prover_challenger,
+    );
     let open_ms = t.elapsed().as_millis();
     let values: Vec<_> = openings[0]
         .iter()
@@ -264,7 +296,7 @@ where
     let verify_us = median_verify_us(|| {
         let mut challenger = verifier_challenger.clone();
         pcs.verify(
-            vec![(commit.clone(), matrices_with_openings.clone())],
+            vec![(commit.clone(), matrices_with_openings.clone()).into()],
             &proof,
             &mut challenger,
         )
@@ -281,7 +313,7 @@ where
         open_ms,
         verify_us,
         proof_bytes,
-        queries,
+        queries: queries(&proof),
     }
 }
 
@@ -291,11 +323,9 @@ fn run_whir(
     pcs: &WhirPcsTy,
     witness: <WhirPcsTy as MultilinearPcs<EF, Challenger>>::Witness,
     protocol: &OpeningProtocol,
-    domain_separator: &DomainSeparator<EF, F>,
     base_challenger: &Challenger,
 ) -> ProtocolReport {
     let mut prover_challenger = base_challenger.clone();
-    domain_separator.observe_domain_separator(&mut prover_challenger);
 
     let t = Instant::now();
     let (commitment, prover_data) =
@@ -311,8 +341,7 @@ fn run_whir(
     );
     let open_ms = t.elapsed().as_millis();
 
-    let mut verifier_challenger = base_challenger.clone();
-    domain_separator.observe_domain_separator(&mut verifier_challenger);
+    let verifier_challenger = base_challenger.clone();
 
     let verify_us = median_verify_us(|| {
         let mut challenger = verifier_challenger.clone();
@@ -412,6 +441,7 @@ fn main() {
     info!(
         security_level = args.security_level,
         pow_bits = args.pow_bits,
+        stir_batch_pow_bits = STIR_BATCH_POW_BITS,
         log_message_size = args.log_message_size,
         log_width = args.log_width,
         rate = args.rate,
@@ -446,7 +476,7 @@ fn main() {
             &pcs,
             vec![(domain, message)],
             &base_challenger,
-            num_queries.to_string(),
+            |_| num_queries.to_string(),
             |ch, commit| ch.observe(commit.clone()),
         ));
     }
@@ -462,18 +492,9 @@ fn main() {
             max_pow_bits: args.pow_bits,
             mmcs: challenge_mmcs.clone(),
         };
-        let config =
-            StirConfig::<F, EF, ChallengeMmcs, Challenger>::new(log_height, stir_params.clone());
-        let queries = config
-            .round_configs
-            .iter()
-            .map(|rc| rc.num_queries.to_string())
-            .chain(std::iter::once(config.final_queries.to_string()))
-            .collect::<Vec<_>>()
-            .join(",");
-
         let dft = Dft::new(1 << (log_height + args.rate));
-        let pcs = StirPcsTy::new(dft, val_mmcs.clone(), stir_params);
+        let pcs = StirPcsTy::new(dft, val_mmcs.clone(), stir_params)
+            .with_batch_proof_of_work_bits(STIR_BATCH_POW_BITS);
         let domain =
             <StirPcsTy as Pcs<EF, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_height);
         let mut rng = SmallRng::seed_from_u64(0x57113);
@@ -483,7 +504,7 @@ fn main() {
             &pcs,
             vec![(domain, message)],
             &base_challenger,
-            queries,
+            stir_queries,
             // STIR commits one Merkle tree per shared-domain group; a single table is one
             // group, hence one root.
             |ch, commit| commit.iter().for_each(|root| ch.observe(root.clone())),
@@ -521,16 +542,7 @@ fn main() {
         let dft = Dft::new(1 << config.max_fft_size());
         let pcs = WhirPcsTy::new(config, dft, val_mmcs.clone());
 
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<DIGEST_ELEMS>(&mut domain_separator);
-
-        reports.push(run_whir(
-            &pcs,
-            witness,
-            &protocol,
-            &domain_separator,
-            &base_challenger,
-        ));
+        reports.push(run_whir(&pcs, witness, &protocol, &base_challenger));
     }
 
     // Multi-table run: three tables batched into one commitment, with log heights
@@ -577,20 +589,13 @@ fn main() {
             &pcs,
             tables,
             &base_challenger,
-            num_queries.to_string(),
+            |_| num_queries.to_string(),
             |ch, commit| ch.observe(commit.clone()),
         ));
     }
 
-    // STIR: every table here shares one `commit()` call, and the three heights span exactly
-    // `DEFAULT_MAX_LOG_HEIGHT_SPREAD` octaves, so they land in one shared-domain group: the
-    // real prover extends all three onto one LDE domain (sized to the tallest) and merges
-    // their native-height classes via `Combine` (§7, Construction 7.2) before STIR runs.
-    // Reconstruct that same bucket (`ell` per Lemma 4.13, matching what `p3_stir`'s PCS impl
-    // computes internally) so the printed schedule reflects what actually proves, not a plain
-    // single-height instance. Where `Combine` does not fit the challenge field, the PCS splits
-    // the heights across several groups instead of failing, and so does the reconstruction:
-    // the schedule then printed is the tallest group's, without `Combine`.
+    // STIR groups the three heights when its PCS Combine budget permits it. Read every
+    // bucket's query counts from the proof so the report also covers split layouts.
     {
         let stir_params = StirParameters {
             log_blowup: args.rate,
@@ -601,26 +606,9 @@ fn main() {
             max_pow_bits: args.pow_bits,
             mmcs: challenge_mmcs,
         };
-        let ell: u64 = heights.len() as u64 * ((1u64 << args.log_message_size) + 1)
-            - heights.iter().map(|&h| 1u64 << h).sum::<u64>();
-        let config = StirConfig::<F, EF, ChallengeMmcs, Challenger>::try_new_with_combine(
-            args.log_message_size,
-            stir_params.clone(),
-            heights.len(),
-            ell,
-        )
-        .or_else(|_| StirConfig::try_new(args.log_message_size, stir_params.clone()))
-        .expect("STIR parameters are infeasible even without Combine");
-        let queries = config
-            .round_configs
-            .iter()
-            .map(|rc| rc.num_queries.to_string())
-            .chain(std::iter::once(config.final_queries.to_string()))
-            .collect::<Vec<_>>()
-            .join(",");
-
         let dft = Dft::new(1 << (args.log_message_size + args.rate));
-        let pcs = StirPcsTy::new(dft, val_mmcs.clone(), stir_params);
+        let pcs = StirPcsTy::new(dft, val_mmcs.clone(), stir_params)
+            .with_batch_proof_of_work_bits(STIR_BATCH_POW_BITS);
         let mut rng = SmallRng::seed_from_u64(0x571131);
         let tables = heights
             .iter()
@@ -636,7 +624,7 @@ fn main() {
             &pcs,
             tables,
             &base_challenger,
-            queries,
+            stir_queries,
             // STIR commits one Merkle tree per shared-domain group: the tables here are
             // partitioned by bounded height spread, so this is one root per group.
             |ch, commit| commit.iter().for_each(|root| ch.observe(root.clone())),
@@ -688,16 +676,7 @@ fn main() {
         let dft = Dft::new(1 << config.max_fft_size());
         let pcs = WhirPcsTy::new(config, dft, val_mmcs);
 
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<DIGEST_ELEMS>(&mut domain_separator);
-
-        multi_reports.push(run_whir(
-            &pcs,
-            witness,
-            &protocol,
-            &domain_separator,
-            &base_challenger,
-        ));
+        multi_reports.push(run_whir(&pcs, witness, &protocol, &base_challenger));
     }
 
     print_report(

@@ -49,6 +49,8 @@ impl<EF: Field> RoundPolyInterpolator<EF> {
     ///
     /// `h(r)`, computed by barycentric Lagrange interpolation over the precomputed domain.
     pub fn eval(&self, evals: &[EF], sum_constraint: EF, r: EF) -> EF {
+        // Width contract, enforced upstream by the round polynomial's fixed-length step.
+        // A bounded length there would replace that rejection with a silent mis-interpolation.
         debug_assert_eq!(evals.len() + 1, self.x_coords.len());
 
         // Reconstruct the full evaluation vector at the integer nodes 0, 1, …, degree.

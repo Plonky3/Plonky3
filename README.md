@@ -117,6 +117,18 @@ Plonky3 contains optimizations that rely on newer CPU instructions unavailable i
 RUSTFLAGS="-Ctarget-cpu=native" cargo test
 ```
 
+## Development
+
+Repository checks have one local and CI interface:
+
+```bash
+python3 scripts/check.py fast
+python3 scripts/check.py test --package p3-field
+python3 scripts/check.py full
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, focused commands, cross-target checks, and CI metadata. The [architecture guide](docs/architecture.md) maps the crates and records backend capabilities and hiding guarantees.
+
 ## Configuration
 
 ### Cargo features
@@ -125,7 +137,8 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo test
 | --- | --- | --- |
 | `parallel` | Most crates | Routes hot loops through `rayon` instead of the sequential fallback. Off by default. Activate at the workspace root with `cargo … --features parallel`. |
 | `neon` | `p3-blake3` | Forwards to the upstream `blake3/neon` feature for aarch64. Off by default. |
-| `test-utils` | `p3-commit` (on by default), `p3-sumcheck` (off) | Compiles in-crate test helpers used by integration tests. |
+| `test-utils` | `p3-commit` (off by default) | Compiles in-crate test helpers used by integration tests. |
+| `test-util` | `p3-sumcheck` (off by default) | Compiles the sumcheck test helper module used by downstream tests. |
 
 There is no `nightly`, `asm`, or `simd` Cargo feature — SIMD code paths are gated by `cfg(target_feature = …)` and enabled through `RUSTFLAGS`, not features. See [CPU features](#cpu-features) above.
 
@@ -187,10 +200,10 @@ guidelines may result in your PR being rejected, ignored, or forgotten.
 
 ### General guidance for your PR
 
-Obviously, PRs will not be considered unless they pass our Github
-CI. The GitHub CI is not executed for PRs from forks, but you can
-simulate the GitHub CI by running the commands in
-`.github/workflows/ci.yml`.
+Obviously, PRs will not be considered unless they pass our GitHub CI.
+The GitHub CI is not executed for PRs from forks, but you can run its
+routine host checks locally with `python3 scripts/check.py full`; see
+[CONTRIBUTING.md](CONTRIBUTING.md) for targeted and cross-platform commands.
 
 Under no circumstances should a single PR mix different purposes: Your
 PR is either a bug fix, a new feature, or a performance improvement,

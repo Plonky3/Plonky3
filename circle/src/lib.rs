@@ -13,6 +13,7 @@ mod periodic;
 mod point;
 mod proof;
 mod prover;
+mod transcript;
 mod verifier;
 
 pub use cfft::*;
@@ -22,3 +23,7 @@ pub use pcs::*;
 pub use periodic::*;
 pub use point::*;
 pub use proof::*;
+pub use transcript::{
+    CirclePcsShape, CircleProverTranscript, CircleTranscriptFailure, CircleVerifierTranscript,
+    OpeningClaim,
+};

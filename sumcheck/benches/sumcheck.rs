@@ -19,6 +19,7 @@ use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{DuplexChallenger, FieldChallenger, GrindingChallenger};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DFTSmallBatch;
@@ -35,9 +36,10 @@ use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{
-    RoundMessage, SumcheckProver, VariableOrder, sumcheck_coefficients_prefix,
+    Basis, RoundMessage, SumcheckProver, VariableOrder, sumcheck_coefficients_prefix,
     sumcheck_coefficients_prefix_projective, sumcheck_coefficients_suffix,
 };
+use p3_sumcheck::transcript::{ProverTranscript, SumcheckShape};
 use p3_sumcheck::zk::ZkSumcheckData;
 use p3_sumcheck::{OpeningBatch, SumcheckData};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -102,7 +104,7 @@ const ORDERS: [(VariableOrder, &str); 2] = [
 /// concrete transcript constructor to call.
 trait BenchField: 'static {
     /// Base field carrying the committed evaluations.
-    type F: TwoAdicField;
+    type F: TwoAdicField + TranscriptField;
     /// Extension field used for challenges and accumulators.
     type EF: ExtensionField<Self::F>;
     /// Fiat-Shamir transcript paired with this field.
@@ -468,7 +470,11 @@ where
                     // Routine (timed): drive exactly one round with grinding disabled.
                     |(mut poly, mut sum, mut challenger)| {
                         let mut data = SumcheckData::<B::F, B::EF>::default();
-                        let r = poly.round(&mut data, &mut challenger, &mut sum, 0);
+                        let shape = SumcheckShape::new(1, 0, Basis::Evaluation);
+                        let mut transcript =
+                            ProverTranscript::<_, B::F, B::EF>::new(&mut challenger, shape);
+                        let r = poly.round(&mut data, &mut transcript, &mut sum);
+                        transcript.finish();
                         black_box((r, sum, data));
                     },
                     BatchSize::LargeInput,
