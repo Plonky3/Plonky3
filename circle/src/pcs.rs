@@ -11,7 +11,7 @@ use p3_commit::{
 };
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field, PrimeField64, batch_multiplicative_inverse, dot_product};
-use p3_fri::verifier::FriError;
+use p3_fri::verifier::{FriError, PowPhase};
 use p3_fri::{BatchMultiOpening, FriFoldingStrategy, FriParameters};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
@@ -712,6 +712,12 @@ where
         // Every length the transcript is described with is checked before it is seeded.
         let log_arities =
             validate_proof_shape(&self.fri_params, &proof.fri_proof, num_commit_rounds)?;
+
+        if self.fri_params.batch_proof_of_work_bits == 0 && proof.batch_pow_witness != Val::ZERO {
+            return Err(FriError::NonCanonicalPowWitness {
+                phase: PowPhase::Batch,
+            });
+        }
 
         // Describe the transcript from the claims, exactly as the prover described it.
         let opened_widths: Vec<Vec<Vec<usize>>> = rounds
@@ -2055,10 +2061,22 @@ mod tests {
                 .all(|w| *w == Val::ZERO)
         );
         assert_eq!(proof.fri_proof.pow_witness, Val::ZERO);
+        assert_eq!(proof.batch_pow_witness, Val::ZERO);
 
         // The untouched proof still verifies, so the mutations below are the only change.
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
             .expect("an ungrounded proof must verify");
+
+        for witness in [Val::ONE, Val::from_u32(2), Val::from_u32(12345), -Val::ONE] {
+            let mut mutated = proof.clone();
+            mutated.batch_pow_witness = witness;
+            assert!(matches!(
+                try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &mutated),
+                Err(FriError::NonCanonicalPowWitness {
+                    phase: PowPhase::Batch
+                })
+            ));
+        }
 
         let mut mutated = proof.clone();
         mutated.fri_proof.commit_pow_witnesses[0] = Val::ONE;
