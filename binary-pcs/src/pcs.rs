@@ -348,9 +348,14 @@ where
             }
         }
 
-        // `into_sumcheck` samples this batching challenge unconditionally, even with no
-        // recorded claims, and folds every claim's weight by its successive power.
-        let alpha: BinaryField128 = challenger.sample_algebra_element();
+        // The layout draws this batching challenge unconditionally.
+        //
+        // It is drawn even when no claim was recorded at all.
+        //
+        // Both sides draw it through the layout.
+        //
+        // The recorded claim counts therefore reach the sponge first.
+        let alpha = layout_verifier.batching_challenge(challenger);
         let constraint = layout_verifier.constraint(alpha);
         let mut claimed_sum = BinaryField128::ZERO;
         constraint.combine_evals(&mut claimed_sum);
