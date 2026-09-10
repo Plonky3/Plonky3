@@ -603,6 +603,17 @@ impl<C, U: Unit> ProverState<C, U> {
     ///
     /// So bind whatever shapes the predicate through the instance label.
     ///
+    /// # What the shape does not part
+    ///
+    /// This draw and the unconstrained one record the same step.
+    ///
+    /// So no fingerprint and no seed tells the two apart.
+    ///
+    /// A predicate changes both the distribution and the sponge stream.
+    ///
+    /// Replacing this call with the unconstrained draw is therefore a format change
+    /// no shape check catches.
+    ///
     /// # Panics
     ///
     /// Never returns if `accept` rejects every value in the field.
@@ -819,6 +830,24 @@ impl<C, U: Unit> ProverState<C, U> {
     /// The seed covers it.
     ///
     /// Use the rejecting draw when the protocol constrains what a coordinate may be.
+    ///
+    /// # What the shape does not part
+    ///
+    /// This draw and the rejecting one record the same step.
+    ///
+    /// ```text
+    ///     both record  ->  Atomic Challenge <label> Fixed(n) Algebra{modulus, degree}
+    /// ```
+    ///
+    /// So no fingerprint and no seed tells the two apart.
+    ///
+    /// A predicate changes both the distribution and the sponge stream.
+    ///
+    /// Swapping one draw for the other is a format change.
+    ///
+    /// No shape check catches it.
+    ///
+    /// The bit-width tags carry that distinction for index draws, and this pair does not.
     pub fn challenge_extensions<F, EF, Cdc>(
         &mut self,
         label: Label,
@@ -925,6 +954,7 @@ impl<C, U: Unit> ProverState<C, U> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
     #[cfg(panic = "unwind")]
@@ -1317,21 +1347,36 @@ mod tests {
         .unwrap();
         let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"ext-point", pattern);
 
-        // A driver abandoned mid-description panics on drop as well.
+        // The draw itself must be what fails, not the later completeness check.
         //
-        // The closure below lets it go out of scope first.
+        //     shape check fails   ->  "Received interaction ... but expected ..."
+        //     nothing validated   ->  "Pattern not fully replayed" from finalisation
         //
-        // Only one panic then reaches the catch.
+        // So the payload is compared rather than merely asserted to exist.
+        //
+        // The driver is left unfinalised on purpose, and its drop check yields to
+        // the panic already in flight.
         #[cfg(panic = "unwind")]
         {
-            let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let payload = catch_unwind(AssertUnwindSafe(|| {
                 let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
                 let _ = p.challenge_extensions::<F, EF4, ByteCodec>("point", 2);
-                p.finalize()
-            }));
+            }))
+            .expect_err("a narrower draw must fail the shape check");
+
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .expect("the player panics with a formatted message");
+
             assert!(
-                outcome.is_err(),
-                "a narrower draw must fail the shape check"
+                message.starts_with("Received interaction "),
+                "the shape check must be the failure, got: {message}",
+            );
+            assert!(
+                message.contains("Fixed(2)") && message.contains("Fixed(3)"),
+                "the diff must name both widths, got: {message}",
             );
         }
     }
@@ -1850,4 +1895,61 @@ mod tests {
     const PINNED_ALPHA_0: u32 = 252_236_841;
     /// Second challenge of the pinned end-to-end vector.
     const PINNED_ALPHA_1: u32 = 884_894_143;
+
+    #[test]
+    fn a_predicate_moves_the_stream_but_not_the_shape() {
+        // Invariant: the two extension draws record one step, so no seed parts them.
+        //
+        // This is the format change the fingerprint does not catch.
+        //
+        // Fixture state: one description of three challenge coordinates.
+        //
+        //     unconstrained  ->  takes candidates 1, 2, 3
+        //     rejecting      ->  drops candidate 1, takes 2, 3, 4
+        //
+        // Both record `Atomic Challenge point Fixed(3) Algebra{..}`.
+        let pattern = InteractionPattern::new(vec![Interaction::algebra::<F, EF4>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            "point",
+            Length::Fixed(3),
+        )])
+        .unwrap();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"ext-point", pattern);
+
+        // The unconstrained draw takes every candidate in order.
+        let mut plain = ProverState::<_, u8>::new(byte_sponge(), &ds);
+        let unconstrained: Vec<EF4> = plain
+            .challenge_extensions::<F, EF4, ByteCodec>("point", 3)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        assert!(plain.finalize().is_empty());
+
+        // The rejecting draw drops the first candidate, so every value shifts by one.
+        let mut seen = 0;
+        let mut filtered = ProverState::<_, u8>::new(byte_sponge(), &ds);
+        let rejected: Vec<EF4> = filtered
+            .challenge_extensions_rejecting::<F, EF4, ByteCodec>("point", 3, |_, _| {
+                seen += 1;
+                seen != 1
+            })
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        assert!(filtered.finalize().is_empty());
+
+        // The streams differ, which is the whole point of the predicate.
+        assert_ne!(unconstrained, rejected);
+
+        // Both drivers finalised against the SAME description, above.
+        //
+        // That is the finding: one shape accepted two different challenge streams.
+        //
+        // So the fingerprint derived from it cannot tell the two runs apart.
+        //
+        // Separating them needs a step type of its own, the way the bit-width tags
+        // separate a biased index draw from an unbiased one.
+        assert_eq!(unconstrained.len(), rejected.len());
+    }
 }

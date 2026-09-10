@@ -197,6 +197,7 @@ mod tests {
     use core::str::from_utf8;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::fs::PROTOCOL_ID_LEN;
     use p3_challenger::testing::{assert_seeds_pairwise_distinct, pow_difficulties, seed_digest};
     use p3_challenger::{CanObserve, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
@@ -421,5 +422,34 @@ mod tests {
             .check(&[protocol()], &recorded)
             .unwrap_or_else(|mismatch| panic!("bits={bits}: {mismatch}"));
         }
+    }
+
+    #[test]
+    fn this_name_is_separated_from_the_one_it_extends() {
+        // Invariant: a name is separated from a shorter name it starts with.
+        //
+        // Fixture state: this phase's name extends the core protocol's.
+        //
+        //     [1 | p3-stir            | 0 .. 0 |  7]
+        //     [1 | p3-stir-pcs-batch  | 0 .. 0 | 17]
+        //
+        // Zero padding alone cannot part the two.
+        //
+        // The last byte carries the name length, and that is what parts them.
+        let batch = separator::<F, EF>(8);
+        let core =
+            DomainSeparator::<FieldUnit<F>>::new(1, b"p3-stir", batch.pattern().as_ref().clone());
+
+        // The prefix relation is real, so the name bytes alone do not separate them.
+        assert!(NAME.starts_with(b"p3-stir"));
+
+        // Same version, same description, so only the name can differ.
+        assert_ne!(core.protocol_id(), batch.protocol_id());
+
+        // And the differing byte is the length.
+        assert_ne!(
+            core.protocol_id()[PROTOCOL_ID_LEN - 1],
+            batch.protocol_id()[PROTOCOL_ID_LEN - 1],
+        );
     }
 }

@@ -1184,8 +1184,20 @@ where
         )
         .map(|(&log_h, stir_config, (stir_proof, first_round), lanes)| {
             let log_arity0 = stir_config.log_starting_folding_factor;
-            // Both the lane count and the draw count come from the schedule.
-            debug_assert_eq!(lanes.len(), first_round.draws.len());
+            // Both counts come from the schedule, derived independently of each other.
+            //
+            // The description fixes the lane count before the driver is seeded.
+            //
+            // The draw count comes out of the run.
+            //
+            // Pairing them zips two lists, which would silently truncate to the shorter.
+            assert_eq!(
+                lanes.len(),
+                first_round.draws.len(),
+                "the schedule describes {} lanes but the run drew {} round-0 queries",
+                lanes.len(),
+                first_round.draws.len(),
+            );
             let positions = query_positions(&first_round.draws, &lanes, log_h, log_arity0);
             let row_indices = positions_to_row_indices(&positions, log_h);
 
@@ -1373,11 +1385,22 @@ where
         //
         // So the grouping reaches the seed, not only the absorbed values.
         //
-        // The claims are the statement this call was handed.
+        // The claims are the statement this call was handed, not proof fields it read.
         //
-        // Nothing here is read out of the proof.
+        // Their shape is the caller's to fix, and this function does not fix it.
         //
-        // No count is attacker-chosen.
+        //     the caller  ->  decides the claim tree, and constrains it
+        //     here        ->  binds whatever tree it was handed
+        //
+        // A STARK caller builds that tree out of the proof's own opened values.
+        //
+        // It checks the widths against its AIR before reaching this call.
+        //
+        // The pre-check just above enforces only internal consistency of the tree.
+        //
+        // So deriving the seed from the claim layout binds the statement to the run.
+        //
+        // It is not STIR validating that layout on its own behalf.
         observe_claims::<Challenger, Val, Challenge, _, _>(
             challenger,
             &commitments_with_opening_points,
@@ -1736,9 +1759,17 @@ where
 
             // The lanes this bucket drew, one per first-round query draw.
             //
-            // Both the lane count and the draw count come from the schedule.
+            // Both counts come from the schedule, derived independently of each other.
+            //
+            // Pairing them zips two lists, which would silently truncate to the shorter.
             let lanes = &bucket_lanes[bucket];
-            debug_assert_eq!(lanes.len(), output.first_round_draws.len());
+            assert_eq!(
+                lanes.len(),
+                output.first_round_draws.len(),
+                "the schedule describes {} lanes but the replay drew {} round-0 queries",
+                lanes.len(),
+                output.first_round_draws.len(),
+            );
             let positions = query_positions(&output.first_round_draws, lanes, log_h, log_arity0);
             let n_q = positions.len();
             let row_indices = positions_to_row_indices(&positions, log_h);

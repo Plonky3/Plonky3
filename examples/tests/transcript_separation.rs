@@ -11,7 +11,7 @@
 //!                     ^     ^                 ^
 //!                     |     |                 disambiguates zero-padded prefixes
 //!                     |     the only field that differs between protocols
-//!                     the same byte for all sixteen
+//!                     the same byte for all nineteen
 //! ```
 //!
 //! Separation therefore rests entirely on `NAME`, and this file is where that is checked.
@@ -22,7 +22,7 @@
 //!
 //! `p3-examples` is a leaf: nothing depends on it.
 //!
-//! It already pulls in most of the sixteen.
+//! It already pulls in most of the nineteen.
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::BatchShape;
@@ -37,6 +37,9 @@ use p3_multi_stark::lookup::transcript::{LookupInstanceShape, LookupShape};
 use p3_multi_stark::rounds::AirDegrees;
 use p3_multi_stark::transcript::{MultiStarkInstanceShape, MultiStarkShape};
 use p3_multi_stark::zerocheck::transcript::ZerocheckShape;
+use p3_stir::pcs_transcript::{
+    StirPcsBucketShape, StirPcsClaimShape, StirPcsCommitmentShape, StirPcsOpeningShape,
+};
 use p3_stir::{SecurityAssumption, StirInstanceShape, StirRoundShape, StirShape};
 use p3_sumcheck::generic_degree::GenericDegreeShape;
 use p3_sumcheck::ring_switch::RingSwitchShape;
@@ -51,7 +54,7 @@ use p3_whir::{
 
 /// Base field every separator below is derived over.
 ///
-/// One field for all sixteen.
+/// One field for all nineteen.
 ///
 /// Nothing is separated by the field choice.
 type F = BabyBear;
@@ -76,7 +79,7 @@ type Case = (String, DomainSeparator<Alphabet>);
 /// Number of protocols on the typed transcript layer.
 ///
 /// A protocol added without an entry below leaves its name unchecked against the others.
-const NUM_PROTOCOLS: usize = 16;
+const NUM_PROTOCOLS: usize = 19;
 
 /// Configurations swept per protocol: one default, then two single-field moves of it.
 ///
@@ -534,6 +537,81 @@ fn ring_switch_cases() -> Vec<Case> {
         .collect()
 }
 
+/// The STIR PCS commitment cases: one root, then two other group counts.
+fn stir_pcs_commitment_cases() -> Vec<Case> {
+    [1, 2, 3]
+        .into_iter()
+        .map(|num_roots| {
+            let shape = StirPcsCommitmentShape::new(num_roots);
+            (
+                format!("p3-stir-pcs-commitment/num_roots={num_roots}"),
+                shape.domain_separator::<F>(),
+            )
+        })
+        .collect()
+}
+
+/// The STIR PCS claim cases: one grouping, then two regroupings of the same widths.
+///
+/// All three flatten to the same widths.
+///
+/// ```text
+///     one matrix, two points   [[[3, 3]]]
+///     two matrices, one point  [[[3], [3]]]
+///     two commitments          [[[3]], [[3]]]
+/// ```
+///
+/// Only the containers part them, which is what makes them worth listing here.
+fn stir_pcs_claim_cases() -> Vec<Case> {
+    let groupings = [
+        ("one_matrix_two_points", vec![vec![vec![3, 3]]]),
+        ("two_matrices_one_point", vec![vec![vec![3], vec![3]]]),
+        ("two_commitments", vec![vec![vec![3]], vec![vec![3]]]),
+    ];
+
+    groupings
+        .into_iter()
+        .map(|(name, claim_widths)| {
+            let shape = StirPcsClaimShape { claim_widths };
+            (
+                format!("p3-stir-pcs-claims/{name}"),
+                shape.domain_separator::<F, EF>(),
+            )
+        })
+        .collect()
+}
+
+/// The STIR PCS opening cases: one merging bucket, then two single-field moves.
+fn stir_pcs_opening_cases() -> Vec<Case> {
+    let merging = StirPcsBucketShape {
+        log_lde_height: 9,
+        log_native_heights: vec![8, 6],
+        log_first_fold_arity: 3,
+        num_query_draws: 3,
+    };
+
+    // A bucket merging nothing draws no merging challenge.
+    //
+    // Its block sequence therefore differs from a merging one.
+    let mut unmerged = merging.clone();
+    unmerged.log_native_heights = vec![8];
+
+    [
+        ("one_merging_bucket", vec![merging.clone()]),
+        ("one_unmerged_bucket", vec![unmerged]),
+        ("two_merging_buckets", vec![merging.clone(), merging]),
+    ]
+    .into_iter()
+    .map(|(name, buckets)| {
+        let shape = StirPcsOpeningShape::new(buckets);
+        (
+            format!("p3-stir-pcs-opening/{name}"),
+            shape.domain_separator::<F, EF>(),
+        )
+    })
+    .collect()
+}
+
 /// Every protocol's cases, the default configuration first in each group.
 /// Number of opening claims the WHIR fixture runs with.
 ///
@@ -600,6 +678,9 @@ fn protocols() -> Vec<Vec<Case>> {
         fri_pcs_cases(),
         circle_pcs_cases(),
         stir_cases(),
+        stir_pcs_commitment_cases(),
+        stir_pcs_claim_cases(),
+        stir_pcs_opening_cases(),
         whir_cases(),
         zk_whir_cases(),
         zerocheck_cases(),
@@ -686,19 +767,32 @@ fn the_protocol_name_is_the_only_field_that_separates_two_protocols() {
 
 #[test]
 fn a_shared_name_prefix_is_separated_by_the_name_length_byte() {
-    // Two pairs of names stand in a prefix relation:
+    // Several names stand in a prefix relation:
     //
-    //     [1 | p3-fri       | 0 .. 0 |  6]
-    //     [1 | p3-fri-pcs   | 0 .. 0 | 10]
+    //     [1 | p3-fri                  | 0 .. 0 |  6]
+    //     [1 | p3-fri-pcs              | 0 .. 0 | 10]
     //
-    //     [1 | p3-whir      | 0 .. 0 |  7]
-    //     [1 | p3-whir-hvzk | 0 .. 0 | 12]
+    //     [1 | p3-whir                 | 0 .. 0 |  7]
+    //     [1 | p3-whir-hvzk            | 0 .. 0 | 12]
+    //
+    //     [1 | p3-stir                 | 0 .. 0 |  7]
+    //     [1 | p3-stir-pcs-commitment  | 0 .. 0 | 22]
+    //     [1 | p3-stir-pcs-claims      | 0 .. 0 | 18]
+    //     [1 | p3-stir-pcs-opening     | 0 .. 0 | 19]
+    //
+    // The batching phase's name extends it too, but its separator is crate-private.
+    //
+    // That pair is asserted inside the STIR crate instead, where the name is reachable.
     //
     // Zero padding alone cannot tell a short name from a longer one starting with it.
+    //
     // The final byte holds the name length, and it is what keeps the two apart.
     let pairs = [
         (fri_cases(), fri_pcs_cases()),
         (whir_cases(), zk_whir_cases()),
+        (stir_cases(), stir_pcs_commitment_cases()),
+        (stir_cases(), stir_pcs_claim_cases()),
+        (stir_cases(), stir_pcs_opening_cases()),
     ];
 
     for (short_cases, long_cases) in pairs {
