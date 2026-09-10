@@ -153,7 +153,7 @@ pub struct AirZerocheck<'a, A> {
 ///     hint too large -> larger proof and more per-row work, nothing else
 /// ```
 ///
-/// A debug assertion pins the hint against the symbolic value.
+/// The symbolic degree is a lower bound even when the AIR supplies a smaller hint.
 ///
 /// # Panics
 ///
@@ -191,11 +191,7 @@ where
     let constraint_degree = if has_constraints {
         air.max_constraint_degree()
             .map_or(symbolic_constraint_degree, |degree| {
-                debug_assert!(
-                    degree >= symbolic_constraint_degree,
-                    "max_constraint_degree hint is below the symbolic constraint degree"
-                );
-                degree
+                degree.max(symbolic_constraint_degree)
             })
     } else {
         0
@@ -1568,6 +1564,29 @@ mod tests {
     }
 
     struct InteractionDegreeAir;
+
+    struct UnderstatedDegreeAir;
+    impl<X> BaseAir<X> for UnderstatedDegreeAir {
+        fn width(&self) -> usize {
+            1
+        }
+        fn max_constraint_degree(&self) -> Option<usize> {
+            Some(1)
+        }
+    }
+    impl<AB: AirBuilder> Air<AB> for UnderstatedDegreeAir {
+        fn eval(&self, builder: &mut AB) {
+            let x: AB::Expr = builder.main().current_slice()[0].into();
+            builder.assert_zero(x.clone() * x);
+        }
+    }
+    #[test]
+    fn understated_degree_hint_uses_symbolic_degree() {
+        assert_eq!(
+            get_air_degrees::<F, EF, _>(&UnderstatedDegreeAir).constraints,
+            2
+        );
+    }
 
     struct UndeclaredSuccessorAir {
         preprocessed: bool,
