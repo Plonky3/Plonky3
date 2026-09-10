@@ -4,9 +4,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::repeat_n;
 
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_field::{ExtensionField, PrimeField64, TwoAdicField, dot_product};
+use p3_field::{ExtensionField, TwoAdicField, dot_product};
 use p3_matrix::Dimensions;
 use p3_util::log2_strict_usize;
 
@@ -14,11 +15,7 @@ use super::config::BaseCaseZkConfig;
 use super::error::BaseCaseZkError;
 use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::zk::proof::BaseCaseZkProof;
-use crate::transcript::zk::{
-    BASE_BLIND_COMMITMENT, BASE_CLAIM, BASE_FRESH_COMMITMENT, BASE_GAMMA, BASE_MASK_QUERIES,
-    BASE_POW, BASE_REVEAL_MESSAGE, BASE_REVEAL_RANDOMNESS, BASE_SOURCE_QUERIES,
-    ZkWhirVerifierTranscript,
-};
+use crate::transcript::zk::{ZkBaseCaseShape, ZkBaseCaseVerifierTranscript};
 use crate::utils::padded_ood_t1;
 
 /// HVZK base-case verifier (Construction 7.2).
@@ -36,7 +33,7 @@ where
 
 impl<F, EF, MT> BaseCaseZkVerifier<'_, F, EF, MT>
 where
-    F: TwoAdicField + PrimeField64,
+    F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
     MT: Mmcs<F>,
 {
@@ -53,11 +50,23 @@ where
     ///     5. mask spot checks         reveals match the committed masks
     /// ```
     ///
+    /// # Transcript
+    ///
+    /// The base case is a protocol of its own.
+    ///
+    /// It therefore seeds a driver of its own.
+    ///
+    /// A rejection releases that driver before the error travels to the caller.
+    ///
     /// # Arguments
     ///
     /// - `mask_covectors`: flat in chronological mask order, tiled by the groups.
     /// - `verify_source`: authenticates the source openings, returns their folded values.
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    ///
+    /// # Errors
+    ///
+    /// When any check below rejects the proof.
+    #[allow(clippy::too_many_arguments)]
     pub fn verify<Challenger>(
         &self,
         proof: &BaseCaseZkProof<F, EF, MT>,
@@ -69,9 +78,63 @@ where
             &[usize],
             &QueryOpenings<F, EF, MT::MultiProof>,
         ) -> Result<Vec<EF>, BaseCaseZkError>,
-        transcript: &mut ZkWhirVerifierTranscript<'_, Challenger, F, EF>,
+        challenger: &mut Challenger,
     ) -> Result<(), BaseCaseZkError>
     where
+        F: TranscriptField,
+        Challenger: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<MT::Commitment>,
+    {
+        // One driver spans the whole base case.
+        //
+        // The description is therefore walked exactly once.
+        let shape = ZkBaseCaseShape::new(self.config);
+        let mut transcript =
+            ZkBaseCaseVerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
+
+        // A rejection leaves the driver mid-description.
+        //
+        // Release it before the error travels out.
+        let outcome = self.replay(
+            &mut transcript,
+            proof,
+            source_covector,
+            mask_covectors,
+            mask_commitments,
+            target,
+            verify_source,
+        );
+        match outcome {
+            Ok(()) => {
+                transcript.finish();
+                Ok(())
+            }
+            Err(error) => {
+                transcript.abort();
+                Err(error)
+            }
+        }
+    }
+
+    /// Walk every described step of the base case against the proof.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn replay<Challenger>(
+        &self,
+        transcript: &mut ZkBaseCaseVerifierTranscript<'_, Challenger, F, EF>,
+        proof: &BaseCaseZkProof<F, EF, MT>,
+        source_covector: &[EF],
+        mask_covectors: &[Vec<EF>],
+        mask_commitments: &[MT::Commitment],
+        target: EF,
+        verify_source: impl FnOnce(
+            &[usize],
+            &QueryOpenings<F, EF, MT::MultiProof>,
+        ) -> Result<Vec<EF>, BaseCaseZkError>,
+    ) -> Result<(), BaseCaseZkError>
+    where
+        F: TranscriptField,
         Challenger: FieldChallenger<F>
             + GrindingChallenger<Witness = F>
             + CanSampleUniformBits<F>
@@ -87,12 +150,16 @@ where
             .map(|group| group.width)
             .sum();
 
-        // Check 0: pin every length before any transcript work.
+        // Check 0: pin every count and covector width before any transcript work.
         //
-        //     count off    ->  MaskCountMismatch
-        //     reveal off   ->  BlindedLengthMismatch
+        //     count off      ->  MaskCountMismatch
+        //     covector off   ->  MaskCountMismatch
         //
-        // Dot products zip silently, so every length is pinned up front.
+        // Dot products zip silently.
+        //
+        // Every length they read is therefore pinned up front.
+        //
+        // The reveal lengths are pinned where each reveal is absorbed instead.
         let count = |actual: usize, expected: usize| {
             if actual == expected {
                 Ok(())
@@ -106,42 +173,17 @@ where
         count(source_covector.len(), code.message_len)?;
         count(proof.blinded_masks.len(), num_masks)?;
         count(proof.fresh_mask_commitments.len(), num_groups)?;
-        // Per-mask reveal and covector lengths against the group's code.
-        let blinded = |kind, actual: usize, expected: usize| {
-            if actual == expected {
-                Ok(())
-            } else {
-                Err(BaseCaseZkError::BlindedLengthMismatch {
-                    kind,
-                    expected,
-                    actual,
-                })
-            }
-        };
-        blinded("message", proof.blinded_message.len(), code.message_len)?;
-        blinded(
-            "randomness",
-            proof.blinded_randomness.len(),
-            code.randomness_len,
-        )?;
-        // One shape per carried mask, in group order; the counts pinned above
-        // guarantee both zips cover every covector and reveal.
+        // One code shape per carried mask, in group order.
+        //
+        // The counts pinned above make the zip cover every covector.
         let shapes = self
             .config
             .mask_groups
             .iter()
             .flat_map(|group| repeat_n(&group.shape, group.width));
-        for ((covector, mask), shape) in mask_covectors.iter().zip(&proof.blinded_masks).zip(shapes)
-        {
+        for (covector, shape) in mask_covectors.iter().zip(shapes) {
             // Covector width must match the member's message length.
             count(covector.len(), shape.message_len)?;
-            // Reveals must match the member's message and randomness.
-            blinded("mask message", mask.message.len(), shape.message_len)?;
-            blinded(
-                "mask randomness",
-                mask.randomness.len(),
-                shape.randomness_len,
-            )?;
         }
 
         // Still check 0: a zero-difficulty grind leaves the witness unread, so pin it.
@@ -159,25 +201,15 @@ where
         //     move 3  ->  sample gamma (now bound to everything above)
         //     move 4  ->  reveals f*, r*, xi*_i, r*_i
         let fresh_main_commitment = &proof.fresh_main_commitment;
-        transcript.commitment(BASE_FRESH_COMMITMENT, fresh_main_commitment.clone());
+        transcript.fresh_commitment(fresh_main_commitment.clone());
         for commitment in &proof.fresh_mask_commitments {
-            transcript.commitment(BASE_BLIND_COMMITMENT, commitment.clone());
+            transcript.blind_commitment(commitment.clone());
         }
-        transcript.observe(BASE_CLAIM, proof.masked_claim);
-        let gamma: EF = transcript.challenge(BASE_GAMMA);
-        transcript
-            .observe_slice(BASE_REVEAL_MESSAGE, &proof.blinded_message)
-            .expect("reveal lengths validated above");
-        transcript
-            .observe_slice(BASE_REVEAL_RANDOMNESS, &proof.blinded_randomness)
-            .expect("reveal lengths validated above");
+        transcript.claim(proof.masked_claim);
+        let gamma: EF = transcript.gamma();
+        transcript.reveal(&proof.blinded_message, &proof.blinded_randomness)?;
         for blinded in &proof.blinded_masks {
-            transcript
-                .observe_slice(BASE_REVEAL_MESSAGE, &blinded.message)
-                .expect("reveal lengths validated above");
-            transcript
-                .observe_slice(BASE_REVEAL_RANDOMNESS, &blinded.randomness)
-                .expect("reveal lengths validated above");
+            transcript.reveal(&blinded.message, &blinded.randomness)?;
         }
 
         // Check 2: the joint target identity.
@@ -200,9 +232,7 @@ where
         }
 
         // Check 3: proof of work before the spot positions are drawn.
-        if !transcript.pow(BASE_POW, self.config.pow_bits, proof.pow_witness) {
-            return Err(BaseCaseZkError::InvalidPowWitness);
-        }
+        transcript.spot_check_pow(proof.pow_witness)?;
 
         // Check 4: source spot checks at t sampled positions.
         //
@@ -210,11 +240,7 @@ where
         // These checks tie them to the committed oracles, per position z:
         //
         //     Enc(f*, r*)(z) = g(z) + gamma * f(z)
-        let positions = transcript.indices(
-            BASE_SOURCE_QUERIES,
-            code.domain_size,
-            self.config.num_queries,
-        );
+        let positions = transcript.source_queries();
         // One opened row per sampled position, for the source and the fresh mask.
         let openings = |kind, actual: usize, expected: usize| {
             if actual == expected {
@@ -271,11 +297,7 @@ where
             .zip(&proof.mask_openings)
             .enumerate()
         {
-            let positions = transcript.indices(
-                BASE_MASK_QUERIES,
-                group.shape.domain_size,
-                self.config.mask_queries,
-            );
+            let positions = transcript.mask_queries(group_index);
             let dims = vec![Dimensions {
                 height: group.shape.domain_size,
                 width: group.width,
