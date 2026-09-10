@@ -73,6 +73,7 @@
 mod opening;
 mod plan;
 mod prover;
+mod transcript;
 mod verifier;
 mod witness;
 

@@ -23,6 +23,10 @@ pub use suffix::SuffixProver;
 
 use crate::SumcheckData;
 use crate::commit::commit_base;
+use crate::layout::transcript::{
+    BatchingShape, LayoutBinding, OpeningProverTranscript, OpeningShape, PointSource,
+    VirtualProverTranscript, VirtualShape, prover_batching_challenge,
+};
 use crate::layout::{LayoutStrategy, Table, Witness};
 use crate::strategy::{SumcheckProver, VariableOrder};
 use crate::table::{OpeningEvals, OpeningRequest};
@@ -90,6 +94,11 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         self.claims().num_claims()
     }
 
+    /// Returns the number of out-of-domain claims recorded on the stacked polynomial.
+    fn num_virtual_claims(&self) -> usize {
+        self.claims().num_virtual_claims()
+    }
+
     /// Returns the verifier strategy required to replay this committed layout.
     fn strategy() -> LayoutStrategy;
 
@@ -118,13 +127,36 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         self.claims().table(id)
     }
 
-    /// Records opening claims for the selected columns of one table at a sampled point.
+    /// Records opening claims for the selected columns of one table at a drawn point.
+    ///
+    /// # Overview
     ///
     /// - The local-frame opening point is drawn from the transcript.
-    /// - Current openings evaluate a column at that point.
-    /// - Next openings evaluate the repeat-last successor view at the same point.
-    /// - Returned evaluations list all current openings first.
-    /// - Returned evaluations list all next openings second.
+    /// - Direct openings evaluate a column at that point.
+    /// - Successor openings evaluate the repeat-last view at the same point.
+    /// - The returned evaluations list every direct opening first.
+    ///
+    /// # Transcript
+    ///
+    /// One sub-transcript spans the whole call.
+    ///
+    /// ```text
+    ///     draw the point  ->  evaluate  ->  bind the evaluations
+    /// ```
+    ///
+    /// The point is drawn before the values it is evaluated at exist.
+    ///
+    /// The values are bound before the surrounding protocol draws anything else.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Sponge of the surrounding protocol, borrowed for this call.
+    ///
+    /// # Panics
+    ///
+    /// When the request names no column at all.
     fn eval<Ch>(
         &mut self,
         table_idx: usize,
@@ -132,39 +164,75 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         challenger: &mut Ch,
     ) -> OpeningEvals<EF>
     where
+        F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // Draw the local-frame opening point as powers of one challenge.
-        // This is the standalone-PCS convention: the verifier picks the evaluation point.
-        let point = Point::expand_from_univariate(
-            challenger.sample_algebra_element(),
-            self.num_variables_table(table_idx),
+        // Opening nothing would silently record an empty claim.
+        //
+        // The schedule is the caller's own.
+        //
+        // An empty request is therefore a caller bug.
+        assert!(
+            !batch.is_empty(),
+            "opening schedule must name at least one column"
         );
-        self.eval_at(table_idx, batch, &point, challenger)
+
+        // Both column counts come from the schedule, never from a value in flight.
+        let shape = OpeningShape::new(
+            LayoutBinding::new(self.num_variables(), Self::strategy()),
+            table_idx,
+            self.num_variables_table(table_idx),
+            batch.current().len(),
+            batch.next().len(),
+            PointSource::Drawn,
+        );
+        let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(challenger, shape);
+
+        // The standalone-PCS convention: the verifier picks the evaluation point.
+        let point = transcript.point();
+
+        // Evaluate at the freshly drawn point, then bind what was found.
+        let evals = self.record_opening(table_idx, batch, &point);
+        transcript.evaluations(&evals);
+
+        // Require that every described step was played.
+        transcript.finish();
+
+        evals
     }
 
-    /// Records opening claims for the selected columns of one table at a prescribed point.
+    /// Records opening claims for the selected columns of one table at a given point.
     ///
-    /// The caller supplies the local-frame opening point instead of sampling it.
+    /// The caller supplies the local-frame opening point instead of drawing one.
+    ///
     /// An outer protocol that fixes the point opens its columns here.
     ///
-    /// Soundness requires `point` to be sampled from, or bound to, the same `challenger`
-    /// before this call (see `PrescribedPointPcs`'s Fiat-Shamir/Soundness doc) — this
-    /// method absorbs the evaluations but not the point itself.
+    /// # Overview
     ///
-    /// - Current openings evaluate a column at the supplied point.
-    /// - Next openings evaluate the repeat-last successor view at the same point.
-    /// - The claimed evaluations are absorbed into the transcript.
-    /// - The current group is absorbed first.
-    /// - Returned evaluations list all current openings first.
-    /// - Returned evaluations list all next openings second.
+    /// - Direct openings evaluate a column at the supplied point.
+    /// - Successor openings evaluate the repeat-last view at the same point.
+    /// - The returned evaluations list every direct opening first.
+    ///
+    /// # Soundness
+    ///
+    /// This call binds the evaluations.
+    ///
+    /// It binds nothing else.
+    ///
+    /// The point must already have been drawn from, or bound to, the same sponge.
+    ///
+    /// A caller choosing its own point owes the transcript that binding.
     ///
     /// # Arguments
     ///
     /// - Index of the table whose columns are opened.
     /// - Column indices opened directly and through the successor view.
     /// - Local-frame opening point.
-    /// - Fiat-Shamir transcript.
+    /// - Sponge of the surrounding protocol, borrowed for this call.
+    ///
+    /// # Panics
+    ///
+    /// When the request names no column at all.
     fn eval_at<Ch>(
         &mut self,
         table_idx: usize,
@@ -173,12 +241,168 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         challenger: &mut Ch,
     ) -> OpeningEvals<EF>
     where
-        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Opening nothing would silently record an empty claim.
+        assert!(
+            !batch.is_empty(),
+            "opening schedule must name at least one column"
+        );
 
-    /// Samples a virtual evaluation on the full stacked polynomial.
+        // A caller-fixed point contributes no step.
+        //
+        // This description therefore holds no challenge.
+        let shape = OpeningShape::new(
+            LayoutBinding::new(self.num_variables(), Self::strategy()),
+            table_idx,
+            self.num_variables_table(table_idx),
+            batch.current().len(),
+            batch.next().len(),
+            PointSource::Given,
+        );
+        let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(challenger, shape);
+
+        // Evaluate at the supplied point, then bind what was found.
+        let evals = self.record_opening(table_idx, batch, point);
+        transcript.evaluations(&evals);
+
+        // Require that every described step was played.
+        transcript.finish();
+
+        evals
+    }
+
+    /// Evaluates the selected columns of one table and records the resulting claim.
+    ///
+    /// This is the arithmetic half of an opening, with no transcript of its own.
+    ///
+    /// # Overview
+    ///
+    /// - Direct openings evaluate a column at the supplied point.
+    /// - Successor openings evaluate the repeat-last view at the same point.
+    /// - The claim is appended to this table's list in insertion order.
+    ///
+    /// # Returns
+    ///
+    /// Every direct evaluation first, then every successor evaluation.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point, one coordinate per table variable.
+    fn record_opening(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+    ) -> OpeningEvals<EF>;
+
+    /// Records an out-of-domain evaluation of the full stacked polynomial.
+    ///
+    /// # Overview
+    ///
+    /// WHIR pins the stacked polynomial at a fresh point for soundness amplification.
+    ///
+    /// The point covers every stacked variable.
+    ///
+    /// The claim is therefore not tied to any one column.
+    ///
+    /// # Transcript
+    ///
+    /// One sub-transcript spans the whole call.
+    ///
+    /// ```text
+    ///     draw the point  ->  evaluate  ->  bind the evaluation
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// - Sponge of the surrounding protocol, borrowed for this call.
+    ///
+    /// # Returns
+    ///
+    /// The claimed evaluation.
+    ///
+    /// The caller sends it in its own proof.
     fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
     where
-        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // The stacked arity is the whole configuration of this component.
+        let shape = VirtualShape::new(LayoutBinding::new(self.num_variables(), Self::strategy()));
+        let mut transcript = VirtualProverTranscript::<Ch, F, EF>::new(challenger, shape);
+
+        // Draw first.
+        //
+        // The claimed value can then not be chosen to suit the point.
+        let point = transcript.point();
+
+        // Evaluate at the drawn point, then bind what was found.
+        let eval = self.record_virtual(&point);
+        transcript.evaluation(eval);
+
+        // Require that every described step was played.
+        transcript.finish();
+
+        eval
+    }
+
+    /// Evaluates the stacked polynomial at a point and records the resulting claim.
+    ///
+    /// The arithmetic half of an out-of-domain claim.
+    ///
+    /// It keeps no transcript of its own.
+    ///
+    /// # Arguments
+    ///
+    /// - Point covering every stacked variable.
+    ///
+    /// # Returns
+    ///
+    /// The stacked polynomial's evaluation at that point.
+    fn record_virtual(&mut self, point: &Point<EF>) -> EF;
+
+    /// Draws the challenge that collapses every recorded claim into a single one.
+    ///
+    /// # Overview
+    ///
+    /// Each claim is weighted by a successive power of the drawn challenge.
+    ///
+    /// ```text
+    ///     sum = sum_i  alpha^i * eval_i
+    /// ```
+    ///
+    /// Direct and successor openings take the low powers, in insertion order.
+    ///
+    /// Out-of-domain claims continue the sequence after them.
+    ///
+    /// # Transcript
+    ///
+    /// One sub-transcript spans the draw.
+    ///
+    /// Both claim counts reach its seed.
+    ///
+    /// A run that recorded a different number of claims lands elsewhere.
+    ///
+    /// # Arguments
+    ///
+    /// - Sponge of the surrounding protocol, borrowed for the draw.
+    fn batching_challenge<Ch>(&self, challenger: &mut Ch) -> EF
+    where
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Both counts come from the claims this run recorded, never from a proof.
+        let shape = BatchingShape::new(
+            LayoutBinding::new(self.num_variables(), Self::strategy()),
+            self.num_claims(),
+            self.num_virtual_claims(),
+        );
+        prover_batching_challenge::<Ch, F, EF>(challenger, shape)
+    }
 
     /// Processes initial rounds of sumcheck and returns the residual sumcheck prover.
     ///
@@ -208,7 +432,6 @@ pub(super) mod test_utils {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use p3_challenger::FieldChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::point::Point;
     use proptest::prelude::*;
@@ -322,8 +545,9 @@ pub(super) mod test_utils {
         // Re-sample the virtual claim too; mirrors the prover's `add_virtual_eval`.
         verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
 
-        // Sample the batching challenge, build the initial constraint, seed the running sum.
-        let alpha = verifier_challenger.sample_algebra_element();
+        // Draw the batching challenge through the layout, exactly as the prover does.
+        let alpha = verifier.batching_challenge(&mut verifier_challenger);
+        // Build the initial constraint and seed the running sum from it.
         let initial_constraint = verifier.constraint(alpha);
         let mut sum = EF::ZERO;
         initial_constraint.combine_evals(&mut sum);
@@ -643,7 +867,6 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use p3_challenger::FieldChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
@@ -661,7 +884,7 @@ mod tests {
     };
     use crate::layout::{Layout, Verifier};
     use crate::strategy::Basis;
-    use crate::table::OpeningBatch;
+    use crate::table::{OpeningBatch, OpeningEvals};
     use crate::tests::*;
 
     #[test]
@@ -852,7 +1075,8 @@ mod tests {
         verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
 
         // Batching challenge and the initial constraint over all recorded claims.
-        let alpha = verifier_challenger.sample_algebra_element();
+        // The verifier draws it through the layout, exactly as the prover does.
+        let alpha = verifier.batching_challenge(&mut verifier_challenger);
         let initial_constraint = verifier.constraint(alpha);
         let mut sum = EF::ZERO;
         initial_constraint.combine_evals(&mut sum);
@@ -981,7 +1205,8 @@ mod tests {
         verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
 
         // Batching challenge and the initial constraint over all recorded claims.
-        let alpha = verifier_challenger.sample_algebra_element();
+        // The verifier draws it through the layout, exactly as the prover does.
+        let alpha = verifier.batching_challenge(&mut verifier_challenger);
         let initial_constraint = verifier.constraint(alpha);
         let mut sum = EF::ZERO;
         initial_constraint.combine_evals(&mut sum);
@@ -1133,6 +1358,304 @@ mod tests {
                 &table_shapes(),
                 &borrowed,
             );
+        }
+    }
+
+    /// One recorded batch.
+    ///
+    /// - Index of the table it opens.
+    /// - Columns it requested.
+    /// - Evaluations it claimed.
+    type RecordedClaim = (usize, OpeningBatch<usize>, OpeningEvals<EF>);
+
+    /// Opening schedule that exercises both column groups on both fixture tables.
+    ///
+    /// Returned as owned requests so a mutation test can perturb the evaluations.
+    fn mixed_schedule() -> Vec<(usize, OpeningBatch<usize>)> {
+        // Table 0 has arity 9 and two columns.
+        //
+        // Table 1 has arity 10 and two columns.
+        //
+        //     table 0: direct [0, 1], successor [1]
+        //     table 1: direct [0],    successor [0, 1]
+        vec![
+            (0, OpeningBatch::new(vec![0, 1], vec![1])),
+            (1, OpeningBatch::new(vec![0], vec![0, 1])),
+        ]
+    }
+
+    /// Records the mixed schedule plus one out-of-domain claim on a fresh prover.
+    ///
+    /// # Returns
+    ///
+    /// - The recorded claims.
+    /// - The out-of-domain evaluation.
+    /// - The batching challenge the prover reached after them.
+    fn record_mixed_claims<L>() -> (Vec<RecordedClaim>, EF, EF)
+    where
+        L: Layout<F, EF>,
+    {
+        // Fresh prover over the fixed two-table fixture.
+        let mut prover = L::from_witness(L::new_witness(build_tables(), FOLDING));
+        let mut ch = challenger();
+
+        // Each call draws its own point and binds its own evaluations.
+        let claims: Vec<_> = mixed_schedule()
+            .into_iter()
+            .map(|(table_idx, batch)| {
+                let evals = prover.eval(table_idx, &batch, &mut ch);
+                (table_idx, batch, evals)
+            })
+            .collect();
+
+        // One out-of-domain claim on the whole stacked polynomial.
+        //
+        // It follows the concrete ones.
+        let virtual_eval = prover.add_virtual_eval(&mut ch);
+
+        // The challenge that would collapse every claim recorded above.
+        let alpha = prover.batching_challenge(&mut ch);
+
+        (claims, virtual_eval, alpha)
+    }
+
+    /// Replays a recorded claim list on a fresh verifier.
+    ///
+    /// Returns the batching challenge that replay reaches.
+    ///
+    /// Every draw comes from the verifier's own transcript.
+    ///
+    /// A value that fails to bind shows up as a challenge the prover never saw.
+    fn replay_mixed_claims<L>(claims: &[RecordedClaim], virtual_eval: EF) -> EF
+    where
+        L: Layout<F, EF>,
+    {
+        // Fresh verifier over the same table shapes and the same layout strategy.
+        let mut ch = challenger();
+        let mut verifier = Verifier::<F, EF>::new(&table_shapes(), L::strategy());
+
+        // Mirror every concrete batch, in the order the prover recorded them.
+        for (table_idx, batch, evals) in claims {
+            verifier
+                .add_claim(*table_idx, batch, evals, &mut ch)
+                .unwrap();
+        }
+
+        // Mirror the out-of-domain claim that followed them.
+        verifier.add_virtual_eval(virtual_eval, &mut ch);
+
+        verifier.batching_challenge(&mut ch)
+    }
+
+    /// Replays a claim list whose direct evaluation at the given position is perturbed.
+    fn replay_with_perturbed_direct<L>(
+        claims: &[RecordedClaim],
+        virtual_eval: EF,
+        claim: usize,
+        position: usize,
+    ) -> EF
+    where
+        L: Layout<F, EF>,
+    {
+        let mut tampered = claims.to_vec();
+        // Bump one direct evaluation by one.
+        //
+        // Every other value is left alone.
+        let mut current = tampered[claim].2.current().to_vec();
+        current[position] += EF::ONE;
+        tampered[claim].2 = OpeningBatch::new(current, tampered[claim].2.next().to_vec());
+        replay_mixed_claims::<L>(&tampered, virtual_eval)
+    }
+
+    /// Replays a claim list with one perturbed successor evaluation.
+    ///
+    /// The position selects which one.
+    fn replay_with_perturbed_successor<L>(
+        claims: &[RecordedClaim],
+        virtual_eval: EF,
+        claim: usize,
+        position: usize,
+    ) -> EF
+    where
+        L: Layout<F, EF>,
+    {
+        let mut tampered = claims.to_vec();
+        // Bump one successor evaluation by one.
+        //
+        // Every other value is left alone.
+        let mut next = tampered[claim].2.next().to_vec();
+        next[position] += EF::ONE;
+        tampered[claim].2 = OpeningBatch::new(tampered[claim].2.current().to_vec(), next);
+        replay_mixed_claims::<L>(&tampered, virtual_eval)
+    }
+
+    #[test]
+    fn both_sides_of_the_claim_phase_reach_one_batching_challenge() {
+        // Invariant:
+        //     Prover and verifier walk the same descriptions.
+        //     Both therefore reach one batching challenge.
+        //
+        // Fixture state:
+        //     table 0 (arity 9, 2 cols):  direct [0, 1], successor [1]
+        //     table 1 (arity 10, 2 cols): direct [0],    successor [0, 1]
+        //     plus one out-of-domain claim on the stacked polynomial.
+        fn run<L>()
+        where
+            L: Layout<F, EF>,
+        {
+            let (claims, virtual_eval, prover_alpha) = record_mixed_claims::<L>();
+            let verifier_alpha = replay_mixed_claims::<L>(&claims, virtual_eval);
+            assert_eq!(prover_alpha, verifier_alpha);
+        }
+
+        // Both binding orders record the same claims through the same descriptions.
+        run::<PrefixProver<F, EF>>();
+        run::<SuffixProver<F, EF>>();
+    }
+
+    #[test]
+    fn a_perturbed_direct_evaluation_breaks_the_claim_phase() {
+        // Invariant:
+        //     Every direct evaluation is bound before the batching challenge.
+        //     Changing one leaves the verifier folding a claim nobody proved.
+        //
+        // Fixture state:
+        //     claim 0 on table 0 carries direct evaluations at positions 0 and 1.
+        //
+        // Mutation:
+        //     claim 0 direct group:  [e_0, e_1]  ->  [e_0 + 1, e_1]
+        //                                                  ^
+        //     then:                  [e_0, e_1]  ->  [e_0, e_1 + 1]
+        //                                                       ^
+        //     -> the replayed batching challenge must move in both cases
+        fn run<L>()
+        where
+            L: Layout<F, EF>,
+        {
+            let (claims, virtual_eval, alpha) = record_mixed_claims::<L>();
+
+            // Position 0 of the first claim's direct group.
+            assert_ne!(
+                alpha,
+                replay_with_perturbed_direct::<L>(&claims, virtual_eval, 0, 0)
+            );
+
+            // Position 1 of the same group.
+            //
+            // No single position therefore carries the binding.
+            assert_ne!(
+                alpha,
+                replay_with_perturbed_direct::<L>(&claims, virtual_eval, 0, 1)
+            );
+        }
+
+        run::<PrefixProver<F, EF>>();
+        run::<SuffixProver<F, EF>>();
+    }
+
+    #[test]
+    fn a_perturbed_successor_evaluation_breaks_the_claim_phase() {
+        // Invariant:
+        //     The successor group is bound under its own step.
+        //     It is as tightly bound as the direct group.
+        //
+        // Fixture state:
+        //     claim 1 on table 1 carries successor evaluations at positions 0 and 1.
+        //
+        // Mutation:
+        //     claim 1 successor group:  [e_0, e_1]  ->  [e_0 + 1, e_1]
+        //                                                    ^
+        //     then:                    [e_0, e_1]  ->  [e_0, e_1 + 1]
+        //                                                         ^
+        //     -> the replayed batching challenge must move in both cases
+        fn run<L>()
+        where
+            L: Layout<F, EF>,
+        {
+            let (claims, virtual_eval, alpha) = record_mixed_claims::<L>();
+
+            assert_ne!(
+                alpha,
+                replay_with_perturbed_successor::<L>(&claims, virtual_eval, 1, 0)
+            );
+            assert_ne!(
+                alpha,
+                replay_with_perturbed_successor::<L>(&claims, virtual_eval, 1, 1)
+            );
+        }
+
+        run::<PrefixProver<F, EF>>();
+        run::<SuffixProver<F, EF>>();
+    }
+
+    #[test]
+    fn a_perturbed_out_of_domain_evaluation_breaks_the_claim_phase() {
+        // Invariant:
+        //     The out-of-domain evaluation is bound too, even though it names no column.
+        //
+        // Fixture state:
+        //     one out-of-domain claim recorded after the two concrete batches.
+        //
+        // Mutation:
+        //     out-of-domain evaluation:  v  ->  v + 1
+        //     -> the replayed batching challenge must move
+        fn run<L>()
+        where
+            L: Layout<F, EF>,
+        {
+            let (claims, virtual_eval, alpha) = record_mixed_claims::<L>();
+            assert_ne!(
+                alpha,
+                replay_mixed_claims::<L>(&claims, virtual_eval + EF::ONE)
+            );
+        }
+
+        run::<PrefixProver<F, EF>>();
+        run::<SuffixProver<F, EF>>();
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 16, ..ProptestConfig::default() })]
+
+        // Invariant:
+        //     Agreement holds over random schedules.
+        //     It is not special to the fixed mixed schedule above.
+        //
+        //     coverage: both binding orders, 1..=6 calls, any column order
+        #[test]
+        fn claim_phase_agrees_over_random_schedules(schedule in arb_opening_schedule()) {
+            fn run<L>(schedule: &[(usize, Vec<usize>)])
+            where
+                L: Layout<F, EF>,
+            {
+                // Prover side: record every scheduled batch, then draw the challenge.
+                let mut prover = L::from_witness(L::new_witness(build_tables(), FOLDING));
+                let mut prover_ch = challenger();
+                let claims: Vec<_> = schedule
+                    .iter()
+                    .map(|(table_idx, polys)| {
+                        // This strategy generates direct openings only.
+                        let batch = OpeningBatch::new(polys.clone(), Vec::new());
+                        let evals = prover.eval(*table_idx, &batch, &mut prover_ch);
+                        (*table_idx, batch, evals)
+                    })
+                    .collect();
+                let prover_alpha = prover.batching_challenge(&mut prover_ch);
+
+                // Verifier side: mirror the same batches from the same schedule.
+                let mut verifier_ch = challenger();
+                let mut verifier = Verifier::<F, EF>::new(&table_shapes(), L::strategy());
+                for (table_idx, batch, evals) in &claims {
+                    verifier
+                        .add_claim(*table_idx, batch, evals, &mut verifier_ch)
+                        .unwrap();
+                }
+
+                assert_eq!(prover_alpha, verifier.batching_challenge(&mut verifier_ch));
+            }
+
+            run::<PrefixProver<F, EF>>(&schedule);
+            run::<SuffixProver<F, EF>>(&schedule);
         }
     }
 

@@ -352,12 +352,12 @@ mod tests {
 
     use p3_binary_dft::{AdditiveRsEncoder, NaiveAdditiveNtt};
     use p3_binary_field::BinaryField128;
-    use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+    use p3_challenger::{CanObserve, GrindingChallenger};
     use p3_commit::Mmcs;
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
-    use p3_sumcheck::layout::{Layout, SuffixProver, Table};
+    use p3_sumcheck::layout::{Layout, SuffixProver, Table, TableShape, Verifier};
     use p3_sumcheck::strategy::Basis;
     use p3_sumcheck::transcript::{SumcheckShape, VerifierTranscript};
     use rand::SeedableRng;
@@ -594,7 +594,21 @@ mod tests {
         // proof and the config.
         let mut verifier_ch = challenger();
         verifier_ch.observe(base_commitment);
-        let _alpha: F = verifier_ch.sample_algebra_element();
+
+        // The batching challenge is drawn through the layout.
+        //
+        // The layout's own seed carries the stacked geometry and the claim counts.
+        //
+        // This replay records no claim at all.
+        //
+        // Both counts are therefore zero, matching the layout the prover folded.
+        //
+        //     one table of arity NUM_VARIABLES, one column  ->  stacked arity NUM_VARIABLES
+        let layout_verifier = Verifier::<F, F>::new(
+            &[TableShape::new(NUM_VARIABLES, 1)],
+            SuffixProver::<F, F>::strategy(),
+        );
+        let _alpha: F = layout_verifier.batching_challenge(&mut verifier_ch);
 
         let num_fold_rounds = config.num_fold_rounds();
         // `r` indexes three collections of two different lengths (`rounds` holds one fewer
