@@ -459,7 +459,45 @@ mod tests {
     use p3_symmetric::Permutation;
 
     use super::*;
-    use crate::grinding_challenger::GrindingChallenger;
+    use crate::grinding_challenger::{GrindingChallenger, UniformGrindingChallenger};
+
+    #[test]
+    fn uniform_zero_bit_grinding_is_canonical_and_preserves_state() {
+        for may_error in [false, true] {
+            let mut challenger = DuplexChallenger::<BB, _, WIDTH, RATE>::new(TestPermutation {});
+            challenger.observe(BB::from_u8(7));
+            let before = challenger.clone();
+            let witness = if may_error {
+                challenger.grind_uniform_may_error(0)
+            } else {
+                challenger.grind_uniform(0)
+            };
+            assert_eq!(witness, BB::ZERO);
+            assert_eq!(challenger.sponge_state, before.sponge_state);
+            assert_eq!(challenger.input_buffer, before.input_buffer);
+            assert_eq!(challenger.output_buffer, before.output_buffer);
+        }
+    }
+
+    #[test]
+    fn uniform_zero_bit_checks_preserve_state_for_any_witness() {
+        for may_error in [false, true] {
+            for witness in [BB::ZERO, BB::ONE, BB::NEG_ONE] {
+                let mut challenger =
+                    DuplexChallenger::<BB, _, WIDTH, RATE>::new(TestPermutation {});
+                challenger.observe(BB::from_u8(7));
+                let before = challenger.clone();
+                assert!(if may_error {
+                    challenger.check_witness_uniform_may_error(0, witness)
+                } else {
+                    challenger.check_witness_uniform(0, witness)
+                });
+                assert_eq!(challenger.sponge_state, before.sponge_state);
+                assert_eq!(challenger.input_buffer, before.input_buffer);
+                assert_eq!(challenger.output_buffer, before.output_buffer);
+            }
+        }
+    }
 
     const WIDTH: usize = 24;
     const RATE: usize = 16;
