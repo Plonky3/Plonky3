@@ -817,6 +817,41 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         ))
     }
 
+    /// Sample a fixed-length list of challenge extension-field elements as one step.
+    ///
+    /// Mirrors the proving side.
+    ///
+    /// Both draw the same list from the same sponge state.
+    ///
+    /// The count comes from the replaying side's own configuration, never from the wire.
+    pub fn challenge_extensions<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        count: usize,
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: TranscriptField,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        assert_challenge_security::<C, F, Cdc>();
+        // Validate: the next pattern step is a fixed-length list of extension challenges.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            Length::Fixed(count),
+        ));
+        // Draw the coordinates in the order the proving side drew them.
+        (0..count)
+            .map(|_| {
+                TranscriptBound::wrap(ExtensionFieldCodec::<F, EF, Cdc>::sample(
+                    &mut self.challenger,
+                ))
+            })
+            .collect()
+    }
+
     /// Replay a proof-of-work step.
     ///
     /// - Reads the witness from the wire,
