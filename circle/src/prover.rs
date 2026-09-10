@@ -260,7 +260,6 @@ where
             current_indices = group_indices;
 
             CircleCommitPhaseMultiStep {
-                log_arity: log_arity as u8,
                 sibling_values,
                 opening_proof,
             }

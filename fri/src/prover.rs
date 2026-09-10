@@ -410,7 +410,6 @@ where
 
             // Add the siblings and the shared proof to the vector.
             CommitPhaseMultiStep {
-                log_arity: log_arity as u8,
                 sibling_values,
                 opening_proof,
             }

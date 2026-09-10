@@ -35,17 +35,24 @@ pub struct FriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
 
 /// All queries' openings of one commit-phase codeword, sharing one proof.
 ///
-/// The per-query equivalent shipped one full authentication path per query;
-/// queries into the same tree overlap heavily, so shared sibling digests are
-/// deduplicated by the multiproof.
+/// The per-query equivalent shipped one full authentication path per query.
+///
+/// Queries into the same tree overlap heavily.
+///
+/// Shared sibling digests are therefore deduplicated by the multiproof.
+///
+/// # Why no arity is carried here
+///
+/// The arity of every round follows from the committed heights and the parameters.
+///
+/// Both sides hold those before a proof exists.
+///
+/// A round carrying its own arity would declare a length the verifier already knows.
+///
+/// A length declared twice is a length that can disagree.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct CommitPhaseMultiStep<F: Field, M: Mmcs<F>> {
-    /// The log2 of the folding arity used for this round.
-    ///
-    /// The schedule is a protocol-wide constant, so it lives once per round
-    /// rather than once per query.
-    pub log_arity: u8,
     /// For each query, the openings of the commit phase codeword at the
     /// sibling locations. For arity k, each entry contains k-1 sibling values.
     pub sibling_values: Vec<Vec<F>>,
@@ -53,27 +60,9 @@ pub struct CommitPhaseMultiStep<F: Field, M: Mmcs<F>> {
     pub opening_proof: M::MultiProof,
 }
 
-impl<F: Field, M: Mmcs<F>> CommitPhaseMultiStep<F, M> {
-    /// Convert `log_arity` to `usize` and enforce the protocol bounds.
-    ///
-    /// Returns `None` when `log_arity` is zero or exceeds `max_log_arity`.
-    ///
-    /// Every field of this struct deserializes straight from an untrusted proof.
-    ///
-    /// This is the guard that turns a proof-controlled arity into a usable schedule entry.
-    /// It is public so a caller replaying the fold chain derives its schedule the same way.
-    #[inline]
-    pub fn checked_log_arity(&self, max_log_arity: usize) -> Option<usize> {
-        let log_arity = self.log_arity as usize;
-        (1..=max_log_arity)
-            .contains(&log_arity)
-            .then_some(log_arity)
-    }
-}
-
 /// All queries' openings of one input batch commitment, sharing one proof.
 ///
-/// The multi-opening analogue of [`p3_commit::BatchOpening`].
+/// The multi-opening analogue of a single-query batch opening.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
     serialize = "T: Serialize",

@@ -26,8 +26,40 @@ where
     CommitMmcsErr: core::fmt::Debug,
     InputError: core::fmt::Debug,
 {
+    /// The proof does not carry one commit-phase opening set per commit round.
+    ///
+    /// The round count comes from the folding schedule.
+    ///
+    /// The parameters and the claimed heights fix that schedule.
+    ///
+    /// This list is never absorbed.
+    ///
+    /// So the described transcript cannot see its length.
+    ///
+    /// The fold chain and the shared Merkle check walk it.
+    ///
+    /// Each of them zips the list against the schedule.
+    ///
+    /// A zip over a short list would quietly skip the trailing rounds.
     #[error("commit phase opening count mismatch: expected {expected}, got {got}")]
-    CommitPhaseOpeningsCountMismatch { expected: usize, got: usize },
+    CommitPhaseOpeningsCountMismatch {
+        /// Opening-set count the folding schedule fixes.
+        expected: usize,
+        /// Opening-set count the proof carries.
+        got: usize,
+    },
+    /// The proof does not carry one commit-phase commitment per commit round.
+    ///
+    /// The round count is a length of the described transcript.
+    ///
+    /// So this is the description rejecting a run of a different shape.
+    #[error("commit round count mismatch: expected {expected}, got {got}")]
+    CommitRoundCountMismatch {
+        /// Round count the folding schedule fixes.
+        expected: usize,
+        /// Round count the proof carries.
+        got: usize,
+    },
     #[error("round {round}: opened query count mismatch: expected {expected}, got {got}")]
     CommitPhaseQueryCountMismatch {
         round: usize,
@@ -40,8 +72,14 @@ where
         expected: usize,
         got: usize,
     },
+    /// The proof does not carry one commit-phase grinding witness per commit round.
     #[error("commit PoW witness count mismatch: expected {expected}, got {got}")]
-    CommitPowWitnessCountMismatch { expected: usize, got: usize },
+    CommitPowWitnessCountMismatch {
+        /// Witness count the folding schedule fixes.
+        expected: usize,
+        /// Witness count the proof carries.
+        got: usize,
+    },
     /// One claimed opening carries a count the PCS transcript was not described with.
     ///
     /// Both sides derive that count from the claims the verifier was handed.
@@ -78,6 +116,13 @@ where
         /// The configured cap, in log form.
         max_log_arity: usize,
     },
+    /// The instance is configured with a folding cap of one point per round.
+    ///
+    /// A round that folds nothing away never reaches the final height.
+    ///
+    /// A schedule derived against such a cap has no answer to give.
+    #[error("FRI instance has max_log_arity = 0; a positive folding cap is required")]
+    ZeroFoldingArity,
     /// The instance is configured with `log_blowup == 0`.
     ///
     /// At rate 1 every length-N word is itself a degree-<N codeword, so the
@@ -89,13 +134,24 @@ where
     MissingInitialReducedOpening { expected: usize },
     #[error("initial reduced opening height mismatch: expected {expected}, got {got}")]
     InitialReducedOpeningHeightMismatch { expected: usize, got: usize },
-    #[error("global max height mismatch: expected {expected}, got {got}")]
-    GlobalMaxHeightMismatch { expected: usize, got: usize },
+    /// The evaluation height the claims imply has no root of unity in this field.
+    ///
+    /// The query phase evaluates the final polynomial at a root of unity.
+    ///
+    /// Its order is the global evaluation height.
+    ///
+    /// No such root exists past the two-adicity.
+    ///
+    /// A claim may name a domain as tall as the two-adicity allows.
+    ///
+    /// Adding the blowup can then push the evaluation height past it.
     #[error(
         "global max height 2^{log_global_max_height} exceeds field two-adicity 2^{two_adicity}"
     )]
     GlobalMaxHeightTooLarge {
+        /// Log of the evaluation height the claimed domains imply.
         log_global_max_height: usize,
+        /// Two-adicity of the base field.
         two_adicity: usize,
     },
     #[error("round {round}: sibling values length mismatch: expected {expected}, got {got}")]
@@ -103,22 +159,6 @@ where
         round: usize,
         expected: usize,
         got: usize,
-    },
-    #[error("round {round}: invalid log-arity {log_arity}: must be in 1..={max}")]
-    InvalidLogArity {
-        round: usize,
-        log_arity: usize,
-        max: usize,
-    },
-    /// The proof folded on a different schedule than the committed heights dictate.
-    ///
-    /// Both sides derive the schedule; it is never agreed over the wire.
-    #[error("fold schedule mismatch: expected {expected:?}, got {got:?}")]
-    FoldScheduleMismatch {
-        /// Schedule derived from the committed heights and the parameters.
-        expected: Vec<usize>,
-        /// Schedule the proof folded on.
-        got: Vec<usize>,
     },
     #[error("final folded height mismatch: expected {expected}, got {got}")]
     FinalFoldHeightMismatch { expected: usize, got: usize },
@@ -274,6 +314,12 @@ where
             TranscriptFailure::FinalPolyLen { expected, got } => {
                 Self::FinalPolyLengthMismatch { expected, got }
             }
+            TranscriptFailure::CommitRoundCount { expected, got } => {
+                Self::CommitRoundCountMismatch { expected, got }
+            }
+            TranscriptFailure::CommitPowWitnessCount { expected, got } => {
+                Self::CommitPowWitnessCountMismatch { expected, got }
+            }
         }
     }
 }
@@ -360,7 +406,33 @@ where
 
 /// Verifies a FRI proof.
 ///
-/// Arguments:
+/// # Overview
+///
+/// The shape of a run is settled before the proof is read.
+///
+/// ```text
+///     claimed domains + parameters  ->  global evaluation height
+///                                   ->  folding schedule
+///                                   ->  round count and per-round arity
+/// ```
+///
+/// Every length the proof carries is then compared against that shape.
+///
+/// The transcript is described by it too.
+///
+/// A proof of a different shape is rejected, never replayed.
+///
+/// # Errors
+///
+/// - The instance is vacuous: no queries, rate 1, a zero cap, nothing committed.
+/// - The evaluation height the claims imply has no root of unity in this field.
+/// - A per-round list does not carry one entry per round, or one entry per query.
+/// - An opened group is not exactly one value short of its round's arity.
+/// - A grinding witness is missing, too weak, or outside what a zero budget admits.
+/// - An opening fails to authenticate against its commitment.
+/// - A query's fold chain misses the final polynomial's own evaluation.
+///
+/// # Arguments
 /// - `folding`: The FRI folding scheme used by the prover.
 /// - `params`: The parameters for the specific FRI protocol instance.
 /// - `proof`: The proof to verify.
@@ -411,6 +483,16 @@ where
     if params.log_blowup == 0 {
         return Err(FriError::ZeroBlowup);
     }
+    // Reject a cap that folds nothing away.
+    //
+    // The schedule below walks the height down one round at a time.
+    //
+    // A cap of zero leaves every round folding by zero bits.
+    //
+    // The walk would then never terminate.
+    if params.max_log_arity == 0 {
+        return Err(FriError::ZeroFoldingArity);
+    }
 
     // Reject an instance with nothing committed.
     //
@@ -434,64 +516,23 @@ where
     // `batch_proof_of_work_bits` to this round's round-by-round error;
     // `p3_security::GrindingSites::batch_combination` is where the soundness model credits it.
 
-    // One commit-phase opening set per commitment.
-    let expected_rounds = proof.commit_phase_commits.len();
-    if proof.commit_phase_openings.len() != expected_rounds {
-        return Err(FriError::CommitPhaseOpeningsCountMismatch {
-            expected: expected_rounds,
-            got: proof.commit_phase_openings.len(),
-        });
-    }
-
-    // Extract the per-round folding arities from the proof.
-    let log_arities: Vec<usize> = proof
-        .commit_phase_openings
-        .iter()
-        .enumerate()
-        .map(|(round, opening)| {
-            opening
-                .checked_log_arity(params.max_log_arity)
-                .ok_or(FriError::InvalidLogArity {
-                    round,
-                    log_arity: opening.log_arity as usize,
-                    max: params.max_log_arity,
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Every round must open exactly the sampled queries: no fewer, and no unopened extras
-    // riding along in the transcript. The per-query sibling counts are checked by
-    // `fold_query` itself, which is the code that indexes them.
-    for (round, opening) in proof.commit_phase_openings.iter().enumerate() {
-        if opening.sibling_values.len() != params.num_queries {
-            return Err(FriError::CommitPhaseQueryCountMismatch {
-                round,
-                expected: params.num_queries,
-                got: opening.sibling_values.len(),
-            });
-        }
-    }
-
-    // With variable arity, we compute log_global_max_height by summing all log_arities.
-    // Each round reduces the domain size by its log_arity.
-    let total_log_reduction: usize = log_arities.iter().sum();
-    let log_global_max_height = total_log_reduction + params.log_blowup + params.log_final_poly_len;
-
-    // Bound the global height by the field two-adicity before using it.
-    // The query phase evaluates the final polynomial at a 2^log_global_max_height-th
-    // root of unity, which does not exist past the two-adicity and would panic.
-    // When the input has no commitments the cross-check below is skipped, so for a
-    // malicious proof this is the only guard standing between us and that panic.
-    if log_global_max_height > Val::TWO_ADICITY {
-        return Err(FriError::GlobalMaxHeightTooLarge {
-            log_global_max_height,
-            two_adicity: Val::TWO_ADICITY,
-        });
-    }
-
-    // Heights of the folding inputs, derived once and used by both guards below.
+    // Phase 1: derive the shape of this run from the configuration alone.
     //
-    // Folding sees one input per distinct height, tallest first.
+    // Nothing in this block reads the proof.
+    //
+    // Both sides reach the same numbers from the parameters and the claimed heights.
+    //
+    // The shape is settled before any proof-supplied length is looked at.
+
+    // Heights of the folding inputs, tallest first.
+    //
+    // A claim is what the caller asked to have checked.
+    //
+    // So the claim is what fixes the geometry.
+    //
+    // Folding sees one input per distinct height.
+    //
+    // Equal heights therefore collapse into one.
     let mut input_log_heights: Vec<usize> = commitments_with_opening_points
         .iter()
         .flat_map(|CommitmentOpening { matrices: mats, .. }| {
@@ -503,44 +544,109 @@ where
     input_log_heights.sort_unstable_by(|a, b| b.cmp(a));
     input_log_heights.dedup();
 
-    // Cross-check: the global log-height has two independent derivations which must agree.
-    // Ref: Ben-Sasson et al., "Fast RS IOPP", ICALP 2018, §2.1.1.
+    // The tallest input is where folding starts.
     //
-    //     H_in   = max committed log_2(domain.size) + log_blowup
-    //     H_fold = sum(per-round log-arities) + log_blowup + log_final_poly_len
-    let expected_log_global_max_height = input_log_heights[0];
-    if log_global_max_height != expected_log_global_max_height {
-        return Err(FriError::GlobalMaxHeightMismatch {
-            expected: expected_log_global_max_height,
-            got: log_global_max_height,
+    // Ref: Ben-Sasson et al., "Fast RS IOPP", ICALP 2018, section 2.1.1.
+    //
+    //     H = max claimed log_2(domain.size) + log_blowup
+    let log_global_max_height = input_log_heights[0];
+
+    // Bound the global height by the field two-adicity before using it.
+    //
+    // The query phase evaluates the final polynomial at a 2^H-th root of unity.
+    //
+    // No such root exists past the two-adicity.
+    //
+    // Asking for one panics.
+    //
+    // A claim may name a domain as tall as the two-adicity allows.
+    //
+    // Adding the blowup can then push the evaluation height past it.
+    if log_global_max_height > Val::TWO_ADICITY {
+        return Err(FriError::GlobalMaxHeightTooLarge {
+            log_global_max_height,
+            two_adicity: Val::TWO_ADICITY,
         });
     }
 
-    // Pin the whole schedule, not just the height it sums to.
+    // The folding schedule.
     //
-    // The cross-check above constrains only the sum.
-    // Two schedules summing alike would both pass it.
-    let expected_schedule = fold_schedule(
+    // It carries the round count and the arity of every round.
+    //
+    // Two properties come with the derivation:
+    //
+    //     1 <= entry <= max_log_arity        every round folds, none overshoots the cap
+    //     sum(entries) == H - H_final        the chain lands on the final height
+    //
+    // No proof can contradict a property of the derivation.
+    let log_arities = fold_schedule(
         &input_log_heights,
         params.log_blowup + params.log_final_poly_len,
         params.max_log_arity,
     );
-    if expected_schedule != log_arities {
-        return Err(FriError::FoldScheduleMismatch {
-            expected: expected_schedule,
-            got: log_arities,
+    let num_rounds = log_arities.len();
+
+    // Phase 2: check every proof-supplied length against the shape just derived.
+    //
+    // Each comparison has configuration on the left and untrusted input on the right.
+    //
+    // A length taken from the proof never sizes anything.
+
+    // One commit-phase opening set per round.
+    //
+    // This list is never absorbed.
+    //
+    // So the described transcript cannot see its length.
+    //
+    // The fold chain and the shared Merkle check walk it.
+    //
+    // Each of them zips the list against the schedule.
+    //
+    // A zip over a short list would skip the trailing rounds instead of failing.
+    if proof.commit_phase_openings.len() != num_rounds {
+        return Err(FriError::CommitPhaseOpeningsCountMismatch {
+            expected: num_rounds,
+            got: proof.commit_phase_openings.len(),
         });
     }
 
-    if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
-        return Err(FriError::CommitPowWitnessCountMismatch {
-            expected: proof.commit_phase_commits.len(),
-            got: proof.commit_pow_witnesses.len(),
-        });
+    // Every round must open exactly the sampled queries.
+    //
+    // Every opened group must be one value short of its round's arity.
+    //
+    //     sibling_values          one row per query
+    //     sibling_values[query]   arity - 1 values, the queried one omitted
+    //
+    // No fewer, and no unopened extras riding along.
+    //
+    // The arity comes from the derived schedule.
+    //
+    // So the width of every opened group is settled before the proof is looked at.
+    for (round, (opening, &log_arity)) in
+        izip!(&proof.commit_phase_openings, &log_arities).enumerate()
+    {
+        if opening.sibling_values.len() != params.num_queries {
+            return Err(FriError::CommitPhaseQueryCountMismatch {
+                round,
+                expected: params.num_queries,
+                got: opening.sibling_values.len(),
+            });
+        }
+        let arity = 1 << log_arity;
+        for siblings in &opening.sibling_values {
+            if siblings.len() != arity - 1 {
+                return Err(FriError::SiblingValuesLengthMismatch {
+                    round,
+                    expected: arity - 1,
+                    got: siblings.len(),
+                });
+            }
+        }
     }
 
-    // A zero grinding budget leaves the witness unread, so the three fields are pinned
-    // here rather than by their grinds.
+    // A zero grinding budget leaves the witness unread.
+    //
+    // So the three fields are pinned here rather than by their grinds.
     check_canonical_pow_witnesses(params, proof)?;
 
     // Ensure that the final polynomial has the expected degree.
@@ -554,31 +660,26 @@ where
         });
     }
 
-    // Every length is now known good, so the transcript can replay.
+    // Phase 3: replay the transcript the derived shape describes.
     //
     // The batching challenge above belongs to the caller's transcript, not to
     // FRI's, so seeding starts here.
     let mut transcript = VerifierTranscript::<Challenger, Val, Challenge>::new(
         challenger,
-        // The schedule checked above is the one the run is described with.
         FriShape::with_schedule(
             params,
-            expected_schedule,
+            log_arities.clone(),
             log_global_max_height + folding.extra_query_index_bits(),
         ),
     );
 
     // One folding challenge per round, each guarded by its own grinding step.
-    let betas: Vec<Challenge> = proof
-        .commit_phase_commits
-        .iter()
-        .zip(&proof.commit_pow_witnesses)
-        .map(|(comm, witness)| {
-            transcript
-                .commit_round(comm.clone(), Some(*witness))
-                .map_err(FriError::from)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    //
+    // The round count and the witness count are lengths of the description.
+    //
+    // So the transcript is what compares them against what the proof carries.
+    let betas =
+        transcript.commit_rounds(&proof.commit_phase_commits, &proof.commit_pow_witnesses)?;
 
     // Bind the final polynomial, re-check the query grind, redraw the indices.
     let indices = transcript.query_phase(&proof.final_poly, Some(proof.query_pow_witness))?;
@@ -601,15 +702,18 @@ where
         commitments_with_opening_points,
     )?;
 
-    // Walk every query's fold chain (pure arithmetic), reconstructing the full
-    // evaluation row the prover committed to at each round. The rows are
-    // authenticated afterwards, one shared check per round.
-    let num_rounds = proof.commit_phase_commits.len();
+    // Walk every query's fold chain, which is pure arithmetic.
+    //
+    // Each round's full evaluation row is reconstructed as the chain passes it.
+    //
+    // The rows are authenticated afterwards, one shared check per round.
+    //
+    // Both collectors are sized by the derived round count, never by the proof.
     let mut group_indices_by_round: Vec<Vec<usize>> =
         vec![Vec::with_capacity(params.num_queries); num_rounds];
-    // rows_by_round[round][query] holds the opened rows of the round's single
-    // committed matrix, in the `opened_values[query][matrix]` shape that the
-    // multi-opening verification expects.
+    // Each entry holds the opened rows of one round's single committed matrix.
+    //
+    // The per-query shape matches what the multi-opening verification expects.
     let mut rows_by_round: Vec<Vec<Vec<Vec<Challenge>>>> =
         vec![Vec::with_capacity(params.num_queries); num_rounds];
 
@@ -702,28 +806,38 @@ where
 /// pushed into the per-round collectors and authenticated afterwards, one
 /// shared amortized check per round.
 ///
-/// With variable arity, each round may fold by a different factor determined by the
-/// `log_arity` field in the opening.
+/// With variable arity, each round may fold by a different factor.
+///
+/// Those factors come from the schedule the caller supplies.
 ///
 /// # Security
 ///
-/// The returned value is **not authenticated**. It is the folded evaluation implied by
-/// the rows this pass reconstructed from proof data, and it only becomes meaningful once
-/// the caller authenticates those rows against `commit_phase_commits` — the
-/// [`Mmcs::verify_multi_batch`] loop at the end of [`verify_fri`]. On its own it carries no
-/// guarantee that the prover ever committed to the codeword it was folded from.
+/// The returned value is **not authenticated**.
 ///
-/// All shape obligations on proof-controlled input are checked here, so the function is
-/// total on well-typed input: every round must open this `query` with exactly `arity - 1`
-/// siblings, and the arity schedule must not fold past `log_final_height`. Two obligations
-/// remain the caller's:
+/// It is the folded evaluation implied by the rows this pass reconstructed.
 ///
-/// - `log_arities` must be derived through [`CommitPhaseMultiStep::checked_log_arity`], which
-///   is what bounds each proof-supplied arity to `1..=max_log_arity`. Nothing here can
-///   recover `max_log_arity`, so an unbounded schedule is accepted as long as its lengths
-///   line up.
-/// - `group_indices_by_round` and `rows_by_round` must each be pre-sized to
-///   `commit_phase_commits.len()` entries; this pass indexes them by round.
+/// It becomes meaningful only once the caller authenticates those rows.
+///
+/// The shared per-round Merkle check is what does that, after every query is folded.
+///
+/// On its own the value proves nothing about what the prover committed to.
+///
+/// # Errors
+///
+/// Every shape obligation on proof-controlled input is checked here.
+///
+/// So this pass is total on well-typed input:
+///
+/// - Each round must open this query with one value fewer than its arity.
+/// - The schedule must not fold past the final height.
+///
+/// One obligation remains the caller's.
+///
+/// The two collectors must each hold one entry per round, since this pass indexes them.
+///
+/// # Panics
+///
+/// When either collector holds fewer entries than the schedule has rounds.
 ///
 /// Arguments:
 /// - `folding`: The FRI folding scheme used by the prover.
@@ -1626,7 +1740,7 @@ mod tests {
         // all authenticated by the round's shared multi-opening.
         // So the proof must carry exactly one multi-opening per round.
         //
-        // Fixture state: 3 rounds → 3 commitments → expect 3 multi-openings.
+        // Fixture state: the claim fixes 3 rounds, so 3 multi-openings are expected.
         //
         // Mutation: append a duplicate multi-opening.
         //
@@ -1929,39 +2043,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn invalid_log_arity_rejected() {
-        let f = make_test_fixture();
-        let mut proof = f.proof.clone();
-
-        // Mutation: set the first round arity to zero (invalid).
-        proof.commit_phase_openings[0].log_arity = 0;
-
-        let mut challenger = f.challenger.clone();
-        let err = run_verify_fri(
-            &f.fri_params,
-            &proof,
-            &mut challenger,
-            &f.commitments_with_opening_points,
-            &f.input_mmcs,
-            f.alpha,
-        )
-        .expect_err("should reject invalid log_arity");
-
-        match err {
-            FriError::InvalidLogArity {
-                round,
-                log_arity,
-                max,
-            } => {
-                assert_eq!(round, 0);
-                assert_eq!(log_arity, 0);
-                assert_eq!(max, f.fri_params.max_log_arity);
-            }
-            other => panic!("wrong error variant: {other:?}"),
-        }
-    }
-
     /// Build a fixture whose proof folded on `forged` instead of the derived schedule.
     ///
     /// Every commitment, sibling row and opening proof agrees with `forged`.
@@ -2050,30 +2131,42 @@ mod tests {
 
     #[test]
     fn forged_fold_schedule_rejected() {
-        // Invariant: a proof that folded on an underived schedule is rejected.
+        // Invariant: the folding schedule is derived from the claim.
         //
-        // This is the regression the derivation closes.
-        // Every part of the proof agrees with the forged schedule.
-        // No other guard has anything to catch.
+        // It is never read from the proof.
         //
-        // Fixture state: one input at log height 5, final height 1, cap 3.
+        // Fixture state: one input at log height 5, final height 1, folding cap 3.
         //
         //     derived:  [3, 1]   folds 5 -> 2 -> 1
         //     forged:   [1, 3]   folds 5 -> 4 -> 1
         //
-        // Both fold the same total distance, so the height cross-check agrees.
+        // Both have two rounds.
+        //
+        // Both fold the same total distance.
+        //
+        // So a round count and a height sum agree on the two alike.
+        //
+        // The prover here really folded on the forgery.
+        //
+        // Every commitment, sibling row and opening proof agrees with it.
+        //
+        // The transcript it ground was seeded with it too.
+        //
+        // Mutation: the derived arity of round 0 is 8, the forged one is 2.
+        //
+        //     round 0 derived arity 2^3 = 8  ->  expects 7 siblings
+        //     round 0 forged  arity 2^1 = 2  ->  carries  1 sibling
+        //
+        // Rejected before the transcript is even seeded.
         let f = make_forged_schedule_fixture(2, 3, 4, vec![1, 3]);
 
-        let forged: Vec<usize> = f
-            .proof
-            .commit_phase_openings
-            .iter()
-            .map(|opening| opening.log_arity as usize)
-            .collect();
+        // The forgery lives in the proof's geometry, not in a declared number.
+        //
+        // One sibling per query in round 0 is what folding by two produces.
         assert_eq!(
-            forged,
-            vec![1, 3],
-            "the prover must have folded on the forgery"
+            f.proof.commit_phase_openings[0].sibling_values[0].len(),
+            1,
+            "the prover must have folded round 0 by two"
         );
 
         let mut challenger = f.challenger.clone();
@@ -2088,9 +2181,14 @@ mod tests {
         .expect_err("a forged fold schedule must be rejected");
 
         match err {
-            FriError::FoldScheduleMismatch { expected, got } => {
-                assert_eq!(expected, vec![3, 1]);
-                assert_eq!(got, vec![1, 3]);
+            FriError::SiblingValuesLengthMismatch {
+                round,
+                expected,
+                got,
+            } => {
+                assert_eq!(round, 0);
+                assert_eq!(expected, 7);
+                assert_eq!(got, 1);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
@@ -2115,106 +2213,30 @@ mod tests {
     }
 
     #[test]
-    fn reordered_fold_schedule_rejected() {
-        // Invariant: the schedule is derived, not accepted.
-        //
-        // Fixture state: one input at log height 5, final height 1, cap 3.
-        //
-        // Mutation: swap the two arities.
-        //
-        //     honest:    [3, 1]   folds 5 -> 2 -> 1
-        //     tampered:  [1, 3]   folds 5 -> 4 -> 1
-        //
-        // Every earlier guard still passes:
-        //
-        //     round count      unchanged
-        //     each arity <= 3  yes
-        //     sum of arities   4, matching the height cross-check
-        //
-        // Only the derived schedule separates them.
-        let f = make_test_fixture_with(2, 3, 4);
-        let mut proof = f.proof.clone();
-
-        let honest: Vec<usize> = proof
-            .commit_phase_openings
-            .iter()
-            .map(|opening| opening.log_arity as usize)
-            .collect();
-        assert_eq!(honest, vec![3, 1], "fixture must fold non-uniformly");
-
-        proof.commit_phase_openings[0].log_arity = 1;
-        proof.commit_phase_openings[1].log_arity = 3;
-
-        let mut challenger = f.challenger.clone();
-        let err = run_verify_fri(
-            &f.fri_params,
-            &proof,
-            &mut challenger,
-            &f.commitments_with_opening_points,
-            &f.input_mmcs,
-            f.alpha,
-        )
-        .expect_err("should reject a reordered fold schedule");
-
-        match err {
-            FriError::FoldScheduleMismatch { expected, got } => {
-                assert_eq!(expected, vec![3, 1]);
-                assert_eq!(got, vec![1, 3]);
-            }
-            other => panic!("wrong error variant: {other:?}"),
-        }
-    }
-
-    /// Recompute `(H_in, H_fold)` from fixture and (mutated) proof state, so that
-    /// the assertions stay valid if the fixture's degree, blowup, or arity changes.
-    fn derive_heights(f: &TestFixture, proof: &Proof) -> (usize, usize) {
-        let log_blowup = f.fri_params.log_blowup;
-        let log_final_poly_len = f.fri_params.log_final_poly_len;
-
-        // H_in: max committed log_2(domain.size) + log_blowup. Verifier's source of truth.
-        let h_in = f
-            .commitments_with_opening_points
-            .iter()
-            .flat_map(|CommitmentOpening { matrices: mats, .. }| {
-                mats.iter()
-                    .map(|MatrixOpening { domain: d, .. }| log2_strict_usize(d.size()))
-            })
-            .max()
-            .expect("fixture commits at least one matrix")
-            + log_blowup;
-
-        // H_fold: sum of per-round log-arities + log_blowup + log_final_poly_len.
-        let log_arities_sum: usize = proof
-            .commit_phase_openings
-            .iter()
-            .map(|step| step.log_arity as usize)
-            .sum();
-        let h_fold = log_arities_sum + log_blowup + log_final_poly_len;
-
-        (h_in, h_fold)
-    }
-
-    #[test]
-    fn global_max_height_mismatch_undershoot() {
+    fn a_uniformly_shortened_commit_phase_is_rejected() {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
-        // Undershoot: H_fold < H_in. Without this rejection, a downstream `usize`
-        // subtraction in input opening would wrap in release builds.
+        // Invariant: the round count is a length of the described transcript.
         //
-        // Fixture state: input matrix log_height = 4, honest schedule = 3 rounds of arity 1.
+        // Fixture state: one input matrix at log height 4, final height 1, cap 1.
         //
-        // Mutation: drop the last fold round (commit, PoW witness, multi-opening).
+        //     one bit folded per round  ->  the claim fixes [1, 1, 1]
         //
-        //     before:  schedule [r_0, r_1, r_2]   → H_fold = 4 == H_in ✓
-        //     after:   schedule [r_0, r_1]        → H_fold = 3 != H_in = 4
-        //     → error
+        // Mutation: drop the last round from all three per-round lists.
+        //
+        //     described:  [round_0, round_1, round_2]
+        //     proof:      [round_0, round_1]
+        //
+        //     2 != 3
+        //
+        // The openings list is checked against the schedule first.
+        //
+        // So that is where a uniformly shortened proof stops.
         proof.commit_phase_commits.pop();
         proof.commit_pow_witnesses.pop();
         proof.commit_phase_openings.pop();
 
-        let (h_in, h_fold) = derive_heights(&f, &proof);
-
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
             &f.fri_params,
@@ -2224,45 +2246,46 @@ mod tests {
             &f.input_mmcs,
             f.alpha,
         )
-        .expect_err("undershoot must be rejected before input opening");
+        .expect_err("a short commit phase must be rejected");
 
         match err {
-            FriError::GlobalMaxHeightMismatch { expected, got } => {
-                assert_eq!(expected, h_in);
-                assert_eq!(got, h_fold);
-                assert!(got < expected, "test must actually undershoot");
+            FriError::CommitPhaseOpeningsCountMismatch { expected, got } => {
+                assert_eq!(expected, 3);
+                assert_eq!(got, 2);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
     }
 
     #[test]
-    fn global_max_height_mismatch_overshoot() {
+    fn an_extra_commit_round_is_rejected() {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
-        // Overshoot: H_fold > H_in. The later fold-chain seed peek would also reject;
-        // this test pins down that the cross-check fires first.
+        // Invariant: an extra commit round is a shape the description does not fix.
         //
-        // Fixture state: input matrix log_height = 4, honest schedule = 3 rounds of arity 1.
+        // The description is what rejects it.
         //
-        // Mutation: clone the last fold round (commit, PoW witness, multi-opening).
-        // The clones need not validate — this check runs before commit-phase verification.
+        // Fixture state: the claim fixes a schedule of [1, 1, 1], so 3 rounds.
         //
-        //     before:  schedule [r_0, r_1, r_2]          → H_fold = 4 == H_in ✓
-        //     after:   schedule [r_0, r_1, r_2, r_2']    → H_fold = 5 != H_in = 4
-        //     → error
+        // Mutation: clone the last round into the commitment and witness lists.
+        //
+        // The openings list is left at the described length.
+        //
+        //     openings:     [r_0, r_1, r_2]        ->  3 == 3, accepted
+        //     commitments:  [r_0, r_1, r_2, r_2]   ->  4 != 3, rejected
+        //
+        // A fourth replay would drive the player past the end of the description.
+        //
+        // The driver reports that by panicking.
+        //
+        // Reaching a structured error instead is the point of this test.
         let extra_commit = proof.commit_phase_commits.last().unwrap().clone();
         proof.commit_phase_commits.push(extra_commit);
 
         let extra_witness = *proof.commit_pow_witnesses.last().unwrap();
         proof.commit_pow_witnesses.push(extra_witness);
 
-        let extra_opening = proof.commit_phase_openings.last().unwrap().clone();
-        proof.commit_phase_openings.push(extra_opening);
-
-        let (h_in, h_fold) = derive_heights(&f, &proof);
-
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
             &f.fri_params,
@@ -2272,13 +2295,12 @@ mod tests {
             &f.input_mmcs,
             f.alpha,
         )
-        .expect_err("overshoot must be rejected before commit-phase verification");
+        .expect_err("an extra commit round must be rejected");
 
         match err {
-            FriError::GlobalMaxHeightMismatch { expected, got } => {
-                assert_eq!(expected, h_in);
-                assert_eq!(got, h_fold);
-                assert!(got > expected, "test must actually overshoot");
+            FriError::CommitRoundCountMismatch { expected, got } => {
+                assert_eq!(expected, 3);
+                assert_eq!(got, 4);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
@@ -2286,37 +2308,41 @@ mod tests {
 
     #[test]
     fn global_max_height_exceeds_two_adicity() {
-        // Invariant: the global height cannot exceed the field two-adicity.
-        // The final-poly point is a 2^height-th root of unity, absent past that.
+        // Invariant: the global evaluation height must have a root of unity here.
         //
-        // A malicious proof can inflate the fold schedule without bound.
-        // This guard runs before the height is used, so it rejects rather than panics.
+        // The query phase evaluates the final polynomial at a root of that order.
         //
-        // Fixture state: 3 rounds of arity 1.
+        // Asking for one past the two-adicity panics.
         //
-        // Mutation: clone rounds until the schedule passes the two-adicity.
+        // This guard runs before the height is used, so it rejects instead.
+        //
+        // Fixture state: one claimed matrix over a domain of log size 3, blowup 1.
+        //
+        //     H = 3 + 1 = 4, well inside a two-adicity of 27
+        //
+        // Mutation: restate the claim over the tallest domain the field admits.
+        //
+        //     claimed log size:  3  ->  TWO_ADICITY
+        //     H = TWO_ADICITY + 1   ->  past the two-adicity
+        //
+        // The height is derived from the claim.
+        //
+        // So restating the claim is the only way to inflate it.
         let f = make_test_fixture();
-        let mut proof = f.proof.clone();
+        let mut cwop = f.commitments_with_opening_points.clone();
 
-        // Grow past the two-adicity: arity 1 per round, so rounds == sum(log_arities).
-        //     sum(log_arities) + log_blowup > TWO_ADICITY
-        let target_rounds = Val::TWO_ADICITY + 1;
-        let commit = proof.commit_phase_commits[0].clone();
-        let witness = proof.commit_pow_witnesses[0];
-        let opening = proof.commit_phase_openings[0].clone();
-        while proof.commit_phase_commits.len() < target_rounds {
-            proof.commit_phase_commits.push(commit.clone());
-            proof.commit_pow_witnesses.push(witness);
-            proof.commit_phase_openings.push(opening.clone());
-        }
+        // The tallest coset the field's two-adic subgroup contains.
+        //
+        // Nothing is evaluated over it, so its size costs no memory here.
+        cwop[0].matrices[0].domain =
+            TwoAdicMultiplicativeCoset::new(Val::ONE, Val::TWO_ADICITY).expect("coset exists");
 
         let mut challenger = f.challenger.clone();
-        // The inflated sum trips this guard before the height cross-check sees it.
         let err = run_verify_fri(
             &f.fri_params,
-            &proof,
+            &f.proof,
             &mut challenger,
-            &f.commitments_with_opening_points,
+            &cwop,
             &f.input_mmcs,
             f.alpha,
         )
@@ -2328,7 +2354,7 @@ mod tests {
                 two_adicity,
             } => {
                 assert_eq!(two_adicity, Val::TWO_ADICITY);
-                assert!(log_global_max_height > two_adicity);
+                assert_eq!(log_global_max_height, Val::TWO_ADICITY + 1);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
@@ -2887,6 +2913,43 @@ mod tests {
         assert!(
             matches!(err, FriError::ZeroBlowup),
             "expected ZeroBlowup, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_with_zero_folding_arity() {
+        // Invariant: the verifier rejects a degenerate configuration.
+        //
+        // It neither hangs nor panics on one.
+        //
+        // The schedule walks the global height down one round at a time.
+        //
+        // A cap of zero makes every round fold by zero bits.
+        //
+        //     cap 1:  4 -> 3 -> 2 -> 1     reaches the final height
+        //     cap 0:  4 -> 4 -> 4 -> ...   never reaches it
+        //
+        // Fixture state: an honest proof built with a folding cap of 1.
+        //
+        // Mutation: verify it under params with a cap of 0.
+        let f = make_test_fixture();
+        let mut params = f.fri_params.clone();
+        params.max_log_arity = 0;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+            f.alpha,
+        )
+        .expect_err("a zero folding cap must be rejected");
+
+        assert!(
+            matches!(err, FriError::ZeroFoldingArity),
+            "expected ZeroFoldingArity, got {err:?}"
         );
     }
 
