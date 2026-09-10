@@ -9,6 +9,8 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_util::log2_ceil_usize;
 use thiserror::Error;
 
+use super::base_case::BaseCaseZkConfig;
+use super::committer::FoldedRsCode;
 use super::mask::{MaskCodeShape, MaskGroupShape};
 use crate::parameters::{ProtocolParameters, SecurityAssumption, WhirConfig, WhirConfigError};
 
@@ -317,6 +319,38 @@ where
             });
         }
         groups
+    }
+
+    /// Shape of the masked base case that closes a hiding run.
+    ///
+    /// Three readers need the closing phase's numbers.
+    ///
+    /// ```text
+    ///     prover       ->  runs the phase
+    ///     verifier     ->  replays it
+    ///     description  ->  fixes its transcript
+    /// ```
+    ///
+    /// All three read them here.
+    ///
+    /// None of the three can then drift from the others.
+    #[must_use]
+    pub fn base_case_config(&self) -> BaseCaseZkConfig<F> {
+        // The base case runs against the folded terminal oracle.
+        //
+        // It does not run against the plain message code.
+        let final_config = self.final_round_config();
+        BaseCaseZkConfig {
+            code: FoldedRsCode::<F>::new(
+                1 << final_config.num_variables,
+                self.oracle_randomness[self.n_rounds()],
+                final_config.domain_size >> final_config.folding_factor,
+            ),
+            mask_groups: self.mask_groups(),
+            num_queries: self.final_queries,
+            mask_queries: self.mask_queries,
+            pow_bits: self.final_pow_bits,
+        }
     }
 }
 

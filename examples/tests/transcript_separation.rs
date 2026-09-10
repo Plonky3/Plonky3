@@ -11,18 +11,24 @@
 //!                     ^     ^                 ^
 //!                     |     |                 disambiguates zero-padded prefixes
 //!                     |     the only field that differs between protocols
-//!                     the same byte for all nineteen
+//!                     a format version, owned and bumped by one protocol alone
 //! ```
 //!
-//! Separation therefore rests entirely on `NAME`, and this file is where that is checked.
+//! Separation therefore rests entirely on the name.
+//!
+//! This file is where that is checked.
 //!
 //! # Placement
 //!
-//! Every protocol crate depends on `p3-challenger`, so the check cannot live there.
+//! Every protocol crate depends on the challenger crate.
 //!
-//! `p3-examples` is a leaf: nothing depends on it.
+//! The check therefore cannot live there.
 //!
-//! It already pulls in most of the nineteen.
+//! This crate is a leaf.
+//!
+//! Nothing depends on it.
+//!
+//! It also already pulls in most of the twenty.
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::BatchShape;
@@ -54,9 +60,9 @@ use p3_whir::{
 
 /// Base field every separator below is derived over.
 ///
-/// One field for all nineteen.
+/// One field for all twenty.
 ///
-/// Nothing is separated by the field choice.
+/// Nothing is then separated by the field choice.
 type F = BabyBear;
 
 /// Extension field every separator below draws its challenges from.
@@ -79,7 +85,7 @@ type Case = (String, DomainSeparator<Alphabet>);
 /// Number of protocols on the typed transcript layer.
 ///
 /// A protocol added without an entry below leaves its name unchecked against the others.
-const NUM_PROTOCOLS: usize = 19;
+const NUM_PROTOCOLS: usize = 20;
 
 /// Configurations swept per protocol: one default, then two single-field moves of it.
 ///
@@ -356,6 +362,28 @@ fn whir_cases() -> Vec<Case> {
 
 /// The hiding WHIR cases: the same plain parameters, then two moves of the mask.
 fn zk_whir_cases() -> Vec<Case> {
+    zk_whir_parameters()
+        .into_iter()
+        .map(|(name, zk)| {
+            let config = ZkWhirConfig::<EF, F, Ch>::new(WHIR_NUM_VARIABLES, whir_params(), zk)
+                .expect("the fixture parameters are valid");
+            case(
+                "p3-whir-hvzk",
+                name,
+                ZkWhirShape::new(&config).domain_separator::<F, EF>(),
+            )
+        })
+        .collect()
+}
+
+/// The three hiding parameter sets every hiding builder below sweeps.
+///
+/// ```text
+///     plain              the baseline mask
+///     ell_zk             one more mask coefficient
+///     mask_log_inv_rate  one more halving of the mask rate
+/// ```
+fn zk_whir_parameters() -> [(&'static str, ZkParameters); 3] {
     let plain = ZkParameters {
         ell_zk: 4,
         mask_log_inv_rate: 1,
@@ -372,17 +400,24 @@ fn zk_whir_cases() -> Vec<Case> {
         ("ell_zk", longer_mask),
         ("mask_log_inv_rate", sparser_mask),
     ]
-    .into_iter()
-    .map(|(name, zk)| {
-        let config = ZkWhirConfig::<EF, F, Ch>::new(WHIR_NUM_VARIABLES, whir_params(), zk)
-            .expect("the fixture parameters are valid");
-        case(
-            "p3-whir-hvzk",
-            name,
-            ZkWhirShape::new(&config).domain_separator::<F, EF>(),
-        )
-    })
-    .collect()
+}
+
+/// The masked base-case cases: the closing phase of each hiding configuration.
+///
+/// The base case runs under a seed of its own.
+///
+/// It is therefore a protocol of its own here.
+fn zk_whir_base_case_cases() -> Vec<Case> {
+    zk_whir_parameters()
+        .into_iter()
+        .map(|(name, zk)| {
+            let config = ZkWhirConfig::<EF, F, Ch>::new(WHIR_NUM_VARIABLES, whir_params(), zk)
+                .expect("the fixture parameters are valid");
+            // The closing phase's own description hangs off the run's shape.
+            let base = ZkWhirShape::new(&config).base_case;
+            case("p3-whir-hvzk-base", name, base.domain_separator::<F, EF>())
+        })
+        .collect()
 }
 
 /// The multi-STARK zerocheck cases: two AIRs, then two single-field moves.
@@ -683,6 +718,7 @@ fn protocols() -> Vec<Vec<Case>> {
         stir_pcs_opening_cases(),
         whir_cases(),
         zk_whir_cases(),
+        zk_whir_base_case_cases(),
         zerocheck_cases(),
         lookup_cases(),
         fraction_gkr_cases(),
@@ -774,22 +810,26 @@ fn a_shared_name_prefix_is_separated_by_the_name_length_byte() {
     //
     //     [1 | p3-whir                 | 0 .. 0 |  7]
     //     [1 | p3-whir-hvzk            | 0 .. 0 | 12]
+    //     [1 | p3-whir-hvzk-base       | 0 .. 0 | 17]
     //
     //     [1 | p3-stir                 | 0 .. 0 |  7]
     //     [1 | p3-stir-pcs-commitment  | 0 .. 0 | 22]
     //     [1 | p3-stir-pcs-claims      | 0 .. 0 | 18]
     //     [1 | p3-stir-pcs-opening     | 0 .. 0 | 19]
     //
-    // The batching phase's name extends it too, but its separator is crate-private.
+    // The batching phase's name extends the STIR one too.
     //
-    // That pair is asserted inside the STIR crate instead, where the name is reachable.
+    // Its separator is crate-private, so that pair is asserted inside the STIR crate.
     //
     // Zero padding alone cannot tell a short name from a longer one starting with it.
     //
-    // The final byte holds the name length, and it is what keeps the two apart.
+    // The final byte holds the name length.
+    //
+    // That byte is what keeps the two apart.
     let pairs = [
         (fri_cases(), fri_pcs_cases()),
         (whir_cases(), zk_whir_cases()),
+        (zk_whir_cases(), zk_whir_base_case_cases()),
         (stir_cases(), stir_pcs_commitment_cases()),
         (stir_cases(), stir_pcs_claim_cases()),
         (stir_cases(), stir_pcs_opening_cases()),

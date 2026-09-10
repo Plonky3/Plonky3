@@ -2,81 +2,122 @@
 //!
 //! # Overview
 //!
-//! One statement of what a hiding WHIR run absorbs and draws, consumed by both sides.
+//! One statement of what a hiding WHIR run absorbs and draws.
 //!
-//! It is built from the derived HVZK configuration alone.
+//! Both sides play it.
+//!
+//! It is built from the derived hiding configuration alone.
+//!
+//! Neither side ever reads a count out of a proof.
 //!
 //! # Shape
 //!
 //! ```text
-//!     initial batching       one extension element
-//!     masked sumcheck        one batch over folding_factor(0) rounds
+//!     initial batching       one extension element, drawn
+//!     Begin initial fold     the delegated masked sumcheck
+//!     End   initial fold
 //!     per round:  commitment     new oracle, then its code-switch mask
 //!                 out-of-domain  one point drawn, one answer sent, per sample
 //!                 grinding       only when the difficulty is positive
 //!                 queries        num_queries draws of index_bits bits
-//!                 batching       one extension element
-//!                 masked sumcheck one batch over folding_factor(round + 1) rounds
-//!     base case              fresh commitments, one claim, one blinding challenge
-//!                            one reveal pair per committed word
-//!                            grinding, source spot checks, mask spot checks
+//!                 batching       one extension element, drawn
+//!                 Begin fold     the round's delegated masked sumcheck
+//!                 End   fold
+//!     Begin base case        the delegated masked base case
+//!     End   base case
 //! ```
 //!
-//! A masked sumcheck batch opens with four steps.
+//! # Delegation
+//!
+//! Two phases of a hiding run are protocols of their own.
 //!
 //! ```text
-//!     joint claim  ->  interleaved mask oracle  ->  mu_tilde  ->  eps
+//!     masked sumcheck  ->  its own seed, its own driver, one bracket here
+//!     masked base case ->  its own seed, its own driver, one bracket here
 //! ```
 //!
-//! Each of its rounds sends `max(ell_zk, 3) - 1` wire coefficients.
+//! A bracket states that a delegation happens.
+//!
+//! It also states where in the run it happens.
+//!
+//! The counts inside it reach this seed through the instance label.
 //!
 //! # What is bound
 //!
-//! - Shape: every count above, every grinding difficulty, every query width.
+//! - Shape: every round, every grinding difficulty, every query width, every draw count.
+//! - Shape: where each delegated phase runs, through its bracket.
 //! - Instance label: the plain WHIR parameters, unchanged.
 //! - Instance label: the mask rate, the mask geometry, the randomness budgets.
+//! - Instance label: the rounds and difficulty of every masked sumcheck batch.
+//! - Instance label: every number the delegated base case runs against.
+//!
+//! # What is not bound
+//!
+//! The width of a commitment digest.
+//!
+//! This layer cannot see it.
+//!
+//! A commitment is absorbed opaquely, through the challenger's own encoding.
+//!
+//! A wrong digest width therefore does not part the two sponges.
+//!
+//! The Merkle opening checks compare it against explicit dimensions instead.
+//!
+//! # Soundness
+//!
+//! The seed is absorbed where the hiding run starts.
+//!
+//! It lands before the run's first challenge.
+//!
+//! Everything the caller bound earlier stays in the sponge.
+//!
+//! That earlier binding keeps its effect.
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use p3_challenger::fs::{
-    DomainSeparator, Hierarchy, Interaction, InteractionPattern, Kind, Length, Unit,
+    DomainSeparator, FieldToFieldCodec, Hierarchy, Interaction, InteractionPattern, Kind, Length,
+    ProverState, TranscriptBound, TranscriptField, Unit, VerifierState,
 };
-use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
+use p3_challenger::{
+    CanObserve, CanSample, CanSampleUniformBits, FieldChallenger, GrindingChallenger,
+};
+use p3_field::{ExtensionField, TwoAdicField};
 use p3_util::log2_strict_usize;
 
 use super::{
-    Alphabet, FOLD_CHALLENGE, INITIAL_BATCHING, OOD_ANSWER, OOD_POINT, QUERY_INDICES, QUERY_POW,
-    ROUND_BATCHING, bind_folding_factor, query_draws,
+    Alphabet, INITIAL_BATCHING, INITIAL_FOLD, OOD_ANSWER, OOD_POINT, QUERY_INDICES, QUERY_POW,
+    ROUND_BATCHING, ROUND_FOLD, Sumcheck, TranscriptFailure, bind_folding_factor, push_delegation,
+    push_pow, push_query_indices, push_u64, query_draws,
 };
 use crate::parameters::{FoldingFactor, SecurityAssumption};
-use crate::pcs::zk::{MaskCodeShape, MaskGroupShape, ZkWhirConfig};
+use crate::pcs::zk::base_case::BaseCaseZkConfig;
+use crate::pcs::zk::{BaseCaseZkError, MaskCodeShape, MaskGroupShape, ZkWhirConfig};
 
-/// Version byte bound into the transcript seed.
-const VERSION: u8 = 1;
-
-/// Protocol name bound into the transcript seed.
+/// Version byte bound into the hiding run's transcript seed.
 ///
-/// Distinct from the plain name, so the two pipelines can never share a seed.
+/// The byte parts the seeds of two incompatible descriptions of one run.
+///
+/// Version 2 records each delegated phase as one bracket.
+const VERSION: u8 = 2;
+
+/// Protocol name bound into the hiding run's transcript seed.
+///
+/// It is distinct from the plain pipeline's name.
+///
+/// The two pipelines can therefore never share a seed.
 const NAME: &[u8] = b"p3-whir-hvzk";
 
-/// Step label of the joint claim opening a masked sumcheck batch.
-const JOINT_CLAIM: &str = "joint_claim";
+/// Version byte bound into the masked base case's own transcript seed.
+const BASE_VERSION: u8 = 1;
 
-/// Step label of the interleaved mask oracle of a masked sumcheck batch.
-const SUMCHECK_MASK_COMMITMENT: &str = "sumcheck_mask_commitment";
-
-/// Step label of `mu_tilde`, the sum of the batch's mask endpoints.
-const MU_TILDE: &str = "mu_tilde";
-
-/// Step label of `eps`, the challenge combining mask and plain pieces.
-const MASK_COMBINATION: &str = "mask_combination";
-
-/// Step label of the wire coefficients one masked sumcheck round sends.
-const ZK_SUMCHECK_POLY: &str = "zk_sumcheck_poly";
-
-/// Step label of the grinding step inside a masked sumcheck round.
-const ZK_SUMCHECK_POW: &str = "zk_sumcheck_pow";
+/// Protocol name bound into the masked base case's own transcript seed.
+///
+/// The base case runs under a seed of its own.
+///
+/// It therefore carries a name of its own.
+const BASE_NAME: &[u8] = b"p3-whir-hvzk-base";
 
 /// Step label of the oracle committed by a code-switching round.
 const ORACLE_COMMITMENT: &str = "oracle_commitment";
@@ -84,16 +125,19 @@ const ORACLE_COMMITMENT: &str = "oracle_commitment";
 /// Step label of the mask committed alongside it.
 const SWITCH_MASK_COMMITMENT: &str = "switch_mask_commitment";
 
+/// Container label of the masked base case that closes a hiding run.
+const BASE_CASE: &str = "base_case";
+
 /// Step label of the fresh source mask of the base case.
 const BASE_FRESH_COMMITMENT: &str = "base_fresh_commitment";
 
 /// Step label of one group of fresh blinds of the base case.
 const BASE_BLIND_COMMITMENT: &str = "base_blind_commitment";
 
-/// Step label of the fresh-side claim `mu_g`.
+/// Step label of the fresh-side claim the base case sends.
 const BASE_CLAIM: &str = "base_claim";
 
-/// Step label of the blinding challenge `gamma`.
+/// Step label of the blinding challenge the base case draws.
 const BASE_GAMMA: &str = "base_gamma";
 
 /// Step label of a one-time-pad reveal of a message word.
@@ -111,78 +155,45 @@ const BASE_SOURCE_QUERIES: &str = "base_source_queries";
 /// Step label of one group's mask spot-check positions.
 const BASE_MASK_QUERIES: &str = "base_mask_queries";
 
+/// Type naming the delegated masked base case at the type level.
+///
+/// The name is compared locally where a closer meets its opener.
+///
+/// It never reaches the pattern fingerprint.
+struct BaseCase;
+
+/// Bind one mask code's three lengths, each as its own chunk.
+///
+/// Separate chunks keep two codes with the same total apart.
+fn bind_mask_code<U: Unit>(separator: &mut DomainSeparator<U>, code: &MaskCodeShape) {
+    // How many secret coefficients the code carries.
+    push_u64(separator, code.message_len);
+    // How many uniform coefficients pad them.
+    push_u64(separator, code.randomness_len);
+    // How long the codeword those two encode into is.
+    push_u64(separator, code.domain_size);
+}
+
 /// Numbers that fix one masked sumcheck batch.
+///
+/// The batch runs under its own seed, played by its own driver.
+///
+/// Its numbers therefore reach the surrounding seed through the instance label.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkSumcheckShape {
     /// Number of rounds this batch runs.
     pub rounds: usize,
     /// Grinding difficulty inside each round.
     pub pow_bits: usize,
-    /// Wire coefficients one round sends, `max(ell_zk, 3) - 1`.
-    pub wire_len: usize,
 }
 
 impl ZkSumcheckShape {
-    /// Append this batch's steps to a step sequence under construction.
-    fn extend<F, EF>(&self, steps: &mut Vec<Interaction>)
-    where
-        F: PrimeField64,
-        EF: ExtensionField<F>,
-    {
-        // The batch binds the claim it inherits before drawing anything.
-        steps.push(Interaction::algebra::<F, EF>(
-            Hierarchy::Atomic,
-            Kind::Message,
-            JOINT_CLAIM,
-            Length::Scalar,
-        ));
-
-        // One interleaved oracle carries every mask of the batch.
-        steps.push(Interaction::opaque(
-            Hierarchy::Atomic,
-            Kind::Message,
-            SUMCHECK_MASK_COMMITMENT,
-            Length::Scalar,
-        ));
-
-        steps.push(Interaction::algebra::<F, EF>(
-            Hierarchy::Atomic,
-            Kind::Message,
-            MU_TILDE,
-            Length::Scalar,
-        ));
-
-        steps.push(Interaction::algebra::<F, EF>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            MASK_COMBINATION,
-            Length::Scalar,
-        ));
-
-        for _ in 0..self.rounds {
-            steps.push(Interaction::algebra::<F, EF>(
-                Hierarchy::Atomic,
-                Kind::Message,
-                ZK_SUMCHECK_POLY,
-                Length::Fixed(self.wire_len),
-            ));
-
-            if self.pow_bits > 0 {
-                steps.push(Interaction::algebra::<F, F>(
-                    Hierarchy::Atomic,
-                    Kind::Pow,
-                    ZK_SUMCHECK_POW,
-                    Length::Fixed(self.pow_bits),
-                ));
-            }
-
-            steps.push(Interaction::algebra::<F, EF>(
-                Hierarchy::Atomic,
-                Kind::Challenge,
-                FOLD_CHALLENGE,
-                Length::Scalar,
-            ));
-        }
+    /// Append this batch's numbers to an instance label under construction.
+    fn bind<U: Unit>(&self, separator: &mut DomainSeparator<U>) {
+        // How many variables the batch reduces away.
+        push_u64(separator, self.rounds);
+        // How much work each of those rounds charges.
+        push_u64(separator, self.pow_bits);
     }
 }
 
@@ -209,7 +220,7 @@ impl ZkWhirRoundShape {
     /// Append this round's steps to a step sequence under construction.
     fn extend<F, EF>(&self, steps: &mut Vec<Interaction>)
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
     {
         // The folded message and the mask hiding it are committed together.
@@ -238,25 +249,11 @@ impl ZkWhirRoundShape {
             ));
         }
 
-        if self.query_pow_bits > 0 {
-            steps.push(Interaction::algebra::<F, F>(
-                Hierarchy::Atomic,
-                Kind::Pow,
-                QUERY_POW,
-                Length::Fixed(self.query_pow_bits),
-            ));
-        }
+        // Grinding raises the cost of searching for favourable query indices.
+        push_pow::<F>(steps, QUERY_POW, self.query_pow_bits);
+        push_query_indices(steps, QUERY_INDICES, self.index_bits, self.query_draws);
 
-        if self.query_draws > 0 {
-            steps.push(Interaction::uniform_bits(
-                Hierarchy::Atomic,
-                Kind::Challenge,
-                QUERY_INDICES,
-                self.index_bits,
-                Length::Fixed(self.query_draws),
-            ));
-        }
-
+        // One challenge weights this round's fresh constraints against the carried claim.
         steps.push(Interaction::algebra::<F, EF>(
             Hierarchy::Atomic,
             Kind::Challenge,
@@ -264,36 +261,142 @@ impl ZkWhirRoundShape {
             Length::Scalar,
         ));
 
-        self.sumcheck.extend::<F, EF>(steps);
+        push_delegation::<Sumcheck>(steps, ROUND_FOLD);
+    }
+
+    /// Number of steps this round contributes.
+    const fn step_count(&self) -> usize {
+        // Two commitments, one batching challenge, two bracket markers.
+        5 + 2 * self.ood_samples
+            + if self.query_pow_bits > 0 { 1 } else { 0 }
+            + if self.query_draws > 0 { 1 } else { 0 }
     }
 }
 
-/// Numbers that fix the masked base case.
+/// Numbers that fix the transcript of one masked base case.
+///
+/// Both sides build it from the base-case configuration they already share.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkBaseCaseShape {
     /// Message length of the randomized terminal source code.
     pub source_message_len: usize,
     /// Encoding-randomness length of that code.
     pub source_randomness_len: usize,
-    /// Bit width of a source spot-check position.
-    pub source_index_bits: usize,
-    /// Number of source spot-check positions actually drawn.
-    pub source_query_draws: usize,
+    /// Codeword length of that code.
+    pub source_domain_size: usize,
+    /// Spot checks the configuration asks for against the source.
+    pub source_queries: usize,
+    /// Spot checks the configuration asks for against each mask group.
+    pub mask_queries: usize,
     /// Grinding difficulty guarding every spot check.
     pub pow_bits: usize,
     /// Every committed mask group, in commitment order.
     pub groups: Vec<MaskGroupShape>,
-    /// Spot-check positions drawn per group, in the same order.
-    pub mask_query_draws: Vec<usize>,
 }
 
 impl ZkBaseCaseShape {
-    /// Append the base case's steps to a step sequence under construction.
-    fn extend<F, EF>(&self, steps: &mut Vec<Interaction>)
+    /// Derive the shape of one masked base case from its configuration.
+    ///
+    /// # Arguments
+    ///
+    /// - `config`: the base-case shape the two sides agreed on.
+    #[must_use]
+    pub fn new<F: TwoAdicField>(config: &BaseCaseZkConfig<F>) -> Self {
+        // Every number below is read straight off the shared configuration.
+        //
+        // Re-deriving any of them here would leave two copies free to drift apart.
+        Self {
+            source_message_len: config.code.message_len,
+            source_randomness_len: config.code.randomness_len,
+            source_domain_size: config.code.domain_size,
+            source_queries: config.num_queries,
+            mask_queries: config.mask_queries,
+            pow_bits: config.pow_bits,
+            groups: config.mask_groups.clone(),
+        }
+    }
+
+    /// Bit width of one source spot-check position.
+    #[must_use]
+    pub const fn source_index_bits(&self) -> usize {
+        log2_strict_usize(self.source_domain_size)
+    }
+
+    /// Number of source spot-check positions actually drawn.
+    ///
+    /// A count of zero means every position opens instead.
+    ///
+    /// Nothing is then drawn at all.
+    #[must_use]
+    pub const fn source_query_draws(&self) -> usize {
+        query_draws(self.source_domain_size, self.source_queries)
+    }
+
+    /// Bit width and draw count of one group's spot-check positions.
+    ///
+    /// # Panics
+    ///
+    /// When no group sits at that index.
+    #[must_use]
+    pub fn mask_query_site(&self, group: usize) -> (usize, usize) {
+        // Every member of a group shares the group's code.
+        let shape = self.groups[group].shape;
+        (
+            // A position addresses one row of that code's codeword.
+            log2_strict_usize(shape.domain_size),
+            // Asking for at least as many positions as rows opens them all.
+            query_draws(shape.domain_size, self.mask_queries),
+        )
+    }
+
+    /// Total number of masks the groups tile.
+    #[must_use]
+    pub fn num_masks(&self) -> usize {
+        self.groups.iter().map(|group| group.width).sum()
+    }
+
+    /// Message and randomness lengths of one reveal, in reveal order.
+    ///
+    /// ```text
+    ///     position 0        the source word
+    ///     position 1 ..     every group member, group by group
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// `None` once the position runs past the last described reveal.
+    #[must_use]
+    pub fn reveal_lengths(&self, position: usize) -> Option<(usize, usize)> {
+        // The source word opens the reveal sequence.
+        if position == 0 {
+            return Some((self.source_message_len, self.source_randomness_len));
+        }
+        // The rest walk the groups, each contributing one reveal per member.
+        let mut remaining = position - 1;
+        for group in &self.groups {
+            if remaining < group.width {
+                return Some((group.shape.message_len, group.shape.randomness_len));
+            }
+            remaining -= group.width;
+        }
+        None
+    }
+
+    /// Describe the transcript this shape fixes.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice.
+    ///
+    /// A flat sequence of leaf steps always passes structural validation.
+    #[must_use]
+    pub fn pattern<F, EF>(&self) -> InteractionPattern
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
     {
+        let mut steps = Vec::new();
+
         // One fresh source mask, then one fresh blind group per carried group.
         steps.push(Interaction::opaque(
             Hierarchy::Atomic,
@@ -346,36 +449,76 @@ impl ZkBaseCaseShape {
             }
         }
 
-        if self.pow_bits > 0 {
-            steps.push(Interaction::algebra::<F, F>(
-                Hierarchy::Atomic,
-                Kind::Pow,
-                BASE_POW,
-                Length::Fixed(self.pow_bits),
-            ));
+        // Grinding raises the cost of searching for favourable spot positions.
+        push_pow::<F>(&mut steps, BASE_POW, self.pow_bits);
+        push_query_indices(
+            &mut steps,
+            BASE_SOURCE_QUERIES,
+            self.source_index_bits(),
+            self.source_query_draws(),
+        );
+
+        // Positions are shared inside a group.
+        //
+        // One step therefore covers the whole group.
+        for group in 0..self.groups.len() {
+            let (bits, draws) = self.mask_query_site(group);
+            push_query_indices(&mut steps, BASE_MASK_QUERIES, bits, draws);
         }
 
-        if self.source_query_draws > 0 {
-            steps.push(Interaction::uniform_bits(
-                Hierarchy::Atomic,
-                Kind::Challenge,
-                BASE_SOURCE_QUERIES,
-                self.source_index_bits,
-                Length::Fixed(self.source_query_draws),
-            ));
-        }
+        InteractionPattern::new(steps).expect("a flat sequence of leaf steps is always well formed")
+    }
 
-        // Positions are shared inside a group, so one step covers the group.
-        for (group, &draws) in self.groups.iter().zip(&self.mask_query_draws) {
-            if draws > 0 {
-                steps.push(Interaction::uniform_bits(
-                    Hierarchy::Atomic,
-                    Kind::Challenge,
-                    BASE_MASK_QUERIES,
-                    log2_strict_usize(group.shape.domain_size),
-                    Length::Fixed(draws),
-                ));
-            }
+    /// Bind the base case's identity, this shape, and the remaining parameters.
+    ///
+    /// # Soundness
+    ///
+    /// A requested spot-check count reaches the shape only after a clamp.
+    ///
+    /// ```text
+    ///     domain 16, 16 asked  ->  every position opens, nothing is drawn
+    ///     domain 16, 99 asked  ->  the same step sequence
+    /// ```
+    ///
+    /// The clamp is not injective.
+    ///
+    /// The label therefore carries the raw counts too.
+    #[must_use]
+    pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+    {
+        // The fingerprint of the step sequence lands inside the identifier.
+        let mut separator = DomainSeparator::new(BASE_VERSION, BASE_NAME, self.pattern::<F, EF>());
+        // Everything the step sequence does not already pin follows it.
+        self.bind(&mut separator);
+        separator
+    }
+
+    /// Append every number of this base case to an instance label under construction.
+    ///
+    /// The surrounding run appends the same numbers to its own label.
+    ///
+    /// One change to this list therefore moves both seeds.
+    fn bind<U: Unit>(&self, separator: &mut DomainSeparator<U>) {
+        // The randomized terminal source code, by its three lengths.
+        push_u64(separator, self.source_message_len);
+        push_u64(separator, self.source_randomness_len);
+        push_u64(separator, self.source_domain_size);
+
+        // How many spot checks each side was asked for, before any clamp.
+        push_u64(separator, self.source_queries);
+        push_u64(separator, self.mask_queries);
+
+        // How much work the spot checks are guarded by.
+        push_u64(separator, self.pow_bits);
+
+        // Every committed mask group, by its code and its width.
+        push_u64(separator, self.groups.len());
+        for group in &self.groups {
+            bind_mask_code(separator, &group.shape);
+            push_u64(separator, group.width);
         }
     }
 }
@@ -418,8 +561,6 @@ pub struct ZkWhirShape {
     pub ell_zk: usize,
     /// Log-inverse rate of every mask codeword.
     pub mask_log_inv_rate: usize,
-    /// Spot checks made against each mask group.
-    pub mask_queries: usize,
     /// Encoding-randomness budget of every committed oracle.
     pub oracle_randomness: Vec<usize>,
     /// Code shared by every HVZK sumcheck mask.
@@ -439,13 +580,6 @@ impl ZkWhirShape {
         EF: ExtensionField<F> + TwoAdicField,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // Every masked batch sends the same wire width.
-        //
-        // The sumcheck crate derives the same number from the same input, so this is a copy.
-        // Both sides of this pipeline seed from this one, so the copy cannot desync them.
-        // Drift would instead leave the fingerprint describing steps the run no longer takes.
-        let wire_len = config.zk.ell_zk.max(3) - 1;
-
         // Each round queries its own domain, folded by that round's arity.
         let rounds = config
             .round_parameters
@@ -461,7 +595,6 @@ impl ZkWhirShape {
                     sumcheck: ZkSumcheckShape {
                         rounds: config.round_folding_factor(index + 1),
                         pow_bits: params.folding_pow_bits,
-                        wire_len,
                     },
                     log_inv_rate: params.log_inv_rate,
                     switch_mask: config.switch_masks[index],
@@ -469,14 +602,10 @@ impl ZkWhirShape {
             })
             .collect();
 
-        // The base case runs against the randomized terminal source code.
-        let final_config = config.final_round_config();
-        let source_domain_size = final_config.domain_size >> final_config.folding_factor;
-        let groups = config.mask_groups();
-        let mask_query_draws = groups
-            .iter()
-            .map(|group| query_draws(group.shape.domain_size, config.mask_queries))
-            .collect();
+        // The base case is described from the very object the two sides run it against.
+        //
+        // Deriving it a second time here would leave two numbers free to drift apart.
+        let base_case = ZkBaseCaseShape::new(&config.base_case_config());
 
         Self {
             num_variables: config.num_variables,
@@ -490,18 +619,9 @@ impl ZkWhirShape {
             initial_sumcheck: ZkSumcheckShape {
                 rounds: config.round_folding_factor(0),
                 pow_bits: config.starting_folding_pow_bits,
-                wire_len,
             },
             rounds,
-            base_case: ZkBaseCaseShape {
-                source_message_len: 1 << final_config.num_variables,
-                source_randomness_len: config.oracle_randomness[config.n_rounds()],
-                source_index_bits: log2_strict_usize(source_domain_size),
-                source_query_draws: query_draws(source_domain_size, config.final_queries),
-                pow_bits: config.final_pow_bits,
-                groups,
-                mask_query_draws,
-            },
+            base_case,
             security_level: config.security_level,
             pow_budget: config.pow_bits,
             starting_log_inv_rate: config.starting_log_inv_rate,
@@ -509,52 +629,67 @@ impl ZkWhirShape {
             folding_factor: config.folding_factor.clone(),
             ell_zk: config.zk.ell_zk,
             mask_log_inv_rate: config.zk.mask_log_inv_rate,
-            mask_queries: config.mask_queries,
             oracle_randomness: config.oracle_randomness.clone(),
             sumcheck_mask: config.sumcheck_mask,
         }
     }
 
+    /// Number of code-switching rounds this shape runs.
+    #[must_use]
+    pub const fn n_rounds(&self) -> usize {
+        self.rounds.len()
+    }
+
     /// Describe the transcript this shape fixes.
-    ///
-    /// # Scope
-    ///
-    /// The description reaches the sponge as a seed fingerprint, and no driver plays it.
-    ///
-    /// Every phase is a leaf step, so the delegations to the sumcheck batches carry no markers.
     ///
     /// # Panics
     ///
     /// Never in practice.
-    /// A flat sequence of leaf steps always passes structural validation.
+    ///
+    /// Every bracket opened below is closed one step later, in the same call.
     #[must_use]
     pub fn pattern<F, EF>(&self) -> InteractionPattern
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
     {
-        let mut steps = Vec::new();
+        // Opening challenge, initial bracket, every round, base-case bracket.
+        let capacity = 3
+            + self
+                .rounds
+                .iter()
+                .map(ZkWhirRoundShape::step_count)
+                .sum::<usize>()
+            + 2;
+        let mut steps = Vec::with_capacity(capacity);
 
         // One challenge weights the incoming evaluation claims into a single sum.
+        //
+        // The hiding pipeline draws it itself.
+        //
+        // It lands ahead of the batch handed to the delegate.
         steps.push(Interaction::algebra::<F, EF>(
             Hierarchy::Atomic,
             Kind::Challenge,
             INITIAL_BATCHING,
             Length::Scalar,
         ));
-
-        self.initial_sumcheck.extend::<F, EF>(&mut steps);
+        push_delegation::<Sumcheck>(&mut steps, INITIAL_FOLD);
 
         for round in &self.rounds {
             round.extend::<F, EF>(&mut steps);
         }
 
-        self.base_case.extend::<F, EF>(&mut steps);
+        push_delegation::<BaseCase>(&mut steps, BASE_CASE);
 
-        InteractionPattern::new(steps).expect("a flat sequence of leaf steps is always well formed")
+        InteractionPattern::new(steps).expect("every bracket opened here is closed here")
     }
 
     /// Bind the protocol identity, this shape, and the remaining parameters.
+    ///
+    /// A parameter that changes the step sequence is covered by the fingerprint.
+    ///
+    /// The rest go in the instance label.
     ///
     /// # Soundness
     ///
@@ -563,63 +698,810 @@ impl ZkWhirShape {
     /// Distance is what makes a spot check bind.
     ///
     /// The rate reaches the shape only through the mask domain sizes.
+    ///
     /// The label therefore carries it directly.
+    ///
+    /// A delegated phase contributes one bracket whatever its length.
+    ///
+    /// Its own numbers therefore travel in the label too.
     #[must_use]
     pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
     where
-        F: PrimeField64,
+        F: TranscriptField,
         EF: ExtensionField<F>,
     {
+        // The fingerprint of the step sequence lands inside the identifier.
         let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
 
         // The plain WHIR statement, bound exactly as the plain pipeline binds it.
-        separator.instance(&(self.num_variables as u64).to_be_bytes());
+        push_u64(&mut separator, self.num_variables);
         for value in self.unreplayed_plain {
-            separator.instance(&(value as u64).to_be_bytes());
+            push_u64(&mut separator, value);
         }
-        separator.instance(&(self.security_level as u64).to_be_bytes());
-        separator.instance(&(self.pow_budget as u64).to_be_bytes());
-        separator.instance(&(self.starting_log_inv_rate as u64).to_be_bytes());
-        separator.instance(&(self.soundness_type as u64).to_be_bytes());
+        push_u64(&mut separator, self.security_level);
+        push_u64(&mut separator, self.pow_budget);
+        push_u64(&mut separator, self.starting_log_inv_rate);
+        push_u64(&mut separator, self.soundness_type as usize);
         bind_folding_factor(&mut separator, &self.folding_factor);
-        separator.instance(&(self.rounds.len() as u64).to_be_bytes());
+
+        // Every delegated masked sumcheck batch, in the order the run plays them.
+        self.initial_sumcheck.bind(&mut separator);
+        push_u64(&mut separator, self.rounds.len());
         for round in &self.rounds {
-            separator.instance(&(round.log_inv_rate as u64).to_be_bytes());
+            push_u64(&mut separator, round.log_inv_rate);
+            round.sumcheck.bind(&mut separator);
         }
 
         // The hiding overlay: mask geometry and every randomness budget.
-        separator.instance(&(self.ell_zk as u64).to_be_bytes());
-        separator.instance(&(self.mask_log_inv_rate as u64).to_be_bytes());
-        separator.instance(&(self.mask_queries as u64).to_be_bytes());
+        push_u64(&mut separator, self.ell_zk);
+        push_u64(&mut separator, self.mask_log_inv_rate);
         bind_mask_code(&mut separator, &self.sumcheck_mask);
         for round in &self.rounds {
             bind_mask_code(&mut separator, &round.switch_mask);
         }
-        separator.instance(&(self.oracle_randomness.len() as u64).to_be_bytes());
+        push_u64(&mut separator, self.oracle_randomness.len());
         for &budget in &self.oracle_randomness {
-            separator.instance(&(budget as u64).to_be_bytes());
+            push_u64(&mut separator, budget);
         }
+
+        // The delegated base case runs under its own seed.
+        //
+        // Its numbers therefore land here.
+        self.base_case.bind(&mut separator);
 
         separator
     }
+
+    /// Grinding difficulty of the query site of one round.
+    ///
+    /// # Panics
+    ///
+    /// When no round sits at that index.
+    fn query_pow_bits(&self, round: usize) -> usize {
+        self.rounds[round].query_pow_bits
+    }
+
+    /// Index width and draw count of the query site of one round.
+    ///
+    /// A draw count of zero means the round opens every position instead.
+    ///
+    /// Nothing is then drawn at all.
+    ///
+    /// # Panics
+    ///
+    /// When no round sits at that index.
+    fn query_index_site(&self, round: usize) -> (usize, usize) {
+        let shape = &self.rounds[round];
+        (shape.index_bits, shape.query_draws)
+    }
 }
 
-/// Bind one mask code's three lengths, each as its own chunk.
-fn bind_mask_code<U: Unit>(separator: &mut DomainSeparator<U>, code: &MaskCodeShape) {
-    separator.instance(&(code.message_len as u64).to_be_bytes());
-    separator.instance(&(code.randomness_len as u64).to_be_bytes());
-    separator.instance(&(code.domain_size as u64).to_be_bytes());
+/// Prover-side transcript of one HVZK-WHIR run.
+///
+/// Holds the only definition of what a hiding prover plays at each phase.
+///
+/// The challenger is borrowed, not consumed.
+///
+/// A hiding run sits inside a larger protocol.
+///
+/// That protocol's own transcript continues where this one stops.
+pub struct ZkWhirProverTranscript<'a, C, F: TranscriptField, EF> {
+    /// Driver walking the description and holding the borrowed sponge.
+    state: ProverState<&'a mut C, Alphabet<F>>,
+    /// The numbers this run was described with.
+    shape: ZkWhirShape,
+    /// Marker for the extension field the challenges live in.
+    _ef: PhantomData<EF>,
+}
+
+impl<'a, C, F, EF> ZkWhirProverTranscript<'a, C, F, EF>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F> + CanSampleUniformBits<F> + GrindingChallenger<Witness = F>,
+{
+    /// Seed the transcript from the shape.
+    ///
+    /// # Arguments
+    ///
+    /// - `challenger`: sponge of the surrounding protocol, borrowed for this run.
+    /// - `shape`: the numbers that fix this run's transcript.
+    pub fn new(challenger: &'a mut C, shape: ZkWhirShape) -> Self {
+        // Seeding folds the shape fingerprint into the sponge before any step.
+        let separator = shape.domain_separator::<F, EF>();
+        Self {
+            state: ProverState::new(challenger, &separator),
+            shape,
+            _ef: PhantomData,
+        }
+    }
+
+    /// Read-only access to the numbers this run was described with.
+    pub const fn shape(&self) -> &ZkWhirShape {
+        &self.shape
+    }
+
+    /// Draw the challenge weighting the incoming evaluation claims.
+    pub fn initial_batching(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(INITIAL_BATCHING)
+            .into_inner()
+    }
+
+    /// Lend the sponge to the masked sumcheck that opens the run.
+    pub fn delegate_initial_fold<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.delegate::<Sumcheck, R>(INITIAL_FOLD, run)
+    }
+
+    /// Lend the sponge to the masked sumcheck that closes one code-switching round.
+    pub fn delegate_round_fold<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.delegate::<Sumcheck, R>(ROUND_FOLD, run)
+    }
+
+    /// Lend the sponge to the masked base case that closes the run.
+    pub fn delegate_base_case<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.delegate::<BaseCase, R>(BASE_CASE, run)
+    }
+
+    /// Bind the oracle one code-switching round commits.
+    pub fn oracle_commitment<Com>(&mut self, commitment: Com)
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        self.state.observe_opaque(ORACLE_COMMITMENT, commitment);
+    }
+
+    /// Bind the code-switch mask committed alongside that oracle.
+    pub fn switch_mask_commitment<Com>(&mut self, commitment: Com)
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        self.state
+            .observe_opaque(SWITCH_MASK_COMMITMENT, commitment);
+    }
+
+    /// Draw one out-of-domain evaluation point.
+    pub fn ood_point(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(OOD_POINT)
+            .into_inner()
+    }
+
+    /// Bind the private answer at one out-of-domain point.
+    ///
+    /// Every answer is bound before the next point is drawn.
+    pub fn ood_answer(&mut self, answer: EF) {
+        let _bound = self
+            .state
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(OOD_ANSWER, &answer);
+    }
+
+    /// Grind the query site of one round.
+    ///
+    /// # Returns
+    ///
+    /// The witness the search found, or zero when the site asks for no work.
+    pub fn query_pow(&mut self, round: usize) -> F {
+        let bits = self.shape.query_pow_bits(round);
+        if bits == 0 {
+            return F::ZERO;
+        }
+        self.state.observe_pow(QUERY_POW, bits)
+    }
+
+    /// Draw the query indices of one round.
+    ///
+    /// # Returns
+    ///
+    /// Every index in draw order, repeats included.
+    ///
+    /// A saturated round opens every position instead.
+    pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
+        let (width, draws) = self.shape.query_index_site(round);
+        // A saturated round has nothing left to decide.
+        //
+        // No draw is described there.
+        if draws == 0 {
+            return (0..1usize << width).collect();
+        }
+        self.state
+            .challenge_uniform_bits::<F>(QUERY_INDICES, width, draws)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect()
+    }
+
+    /// Draw the challenge weighting one round's fresh constraints.
+    pub fn round_batching(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(ROUND_BATCHING)
+            .into_inner()
+    }
+
+    /// Close the transcript once every described step has been played.
+    ///
+    /// # Panics
+    ///
+    /// When the run played fewer steps than it was described with.
+    pub fn finish(self) {
+        assert!(
+            self.state.finalize().is_empty(),
+            "a hiding WHIR run carries every value in its own proof",
+        );
+    }
+
+    /// Bracket one delegated phase and hand it the borrowed sponge.
+    fn delegate<T: ?Sized, R>(&mut self, label: &'static str, run: impl FnOnce(&mut C) -> R) -> R {
+        self.state.begin_protocol::<T>(label);
+        let output = run(self.state.challenger_mut());
+        self.state.end_protocol::<T>(label);
+        output
+    }
+}
+
+/// Verifier-side transcript of one HVZK-WHIR run.
+///
+/// Mirrors the prover side call for call, over the same description.
+///
+/// Every value comes from the proof rather than from a wire.
+pub struct ZkWhirVerifierTranscript<'a, C, F: TranscriptField, EF> {
+    /// Driver walking the description and holding the borrowed sponge.
+    ///
+    /// The proof carries every value.
+    ///
+    /// The driver therefore reads an empty wire.
+    state: VerifierState<'static, &'a mut C, Alphabet<F>>,
+    /// The numbers this run was described with.
+    shape: ZkWhirShape,
+    /// Marker for the extension field the challenges live in.
+    _ef: PhantomData<EF>,
+}
+
+impl<'a, C, F, EF> ZkWhirVerifierTranscript<'a, C, F, EF>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F> + CanSampleUniformBits<F> + GrindingChallenger<Witness = F>,
+{
+    /// Seed the transcript from the shape.
+    ///
+    /// # Arguments
+    ///
+    /// - `challenger`: sponge of the surrounding protocol, borrowed for this run.
+    /// - `shape`: the numbers that fix this run's transcript.
+    pub fn new(challenger: &'a mut C, shape: ZkWhirShape) -> Self {
+        let separator = shape.domain_separator::<F, EF>();
+        Self {
+            state: VerifierState::new(challenger, &separator, &[]),
+            shape,
+            _ef: PhantomData,
+        }
+    }
+
+    /// Read-only access to the numbers this run was described with.
+    pub const fn shape(&self) -> &ZkWhirShape {
+        &self.shape
+    }
+
+    /// Redraw the challenge weighting the incoming evaluation claims.
+    pub fn initial_batching(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(INITIAL_BATCHING)
+            .into_inner()
+    }
+
+    /// Lend the sponge to the masked sumcheck that opens the run.
+    pub fn delegate_initial_fold<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.delegate::<Sumcheck, R>(INITIAL_FOLD, run)
+    }
+
+    /// Lend the sponge to the masked sumcheck that closes one code-switching round.
+    pub fn delegate_round_fold<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.delegate::<Sumcheck, R>(ROUND_FOLD, run)
+    }
+
+    /// Lend the sponge to the masked base case that closes the run.
+    pub fn delegate_base_case<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.delegate::<BaseCase, R>(BASE_CASE, run)
+    }
+
+    /// Bind the oracle one code-switching round commits.
+    pub fn oracle_commitment<Com>(&mut self, commitment: Com)
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        self.state.observe_opaque(ORACLE_COMMITMENT, commitment);
+    }
+
+    /// Bind the code-switch mask committed alongside that oracle.
+    pub fn switch_mask_commitment<Com>(&mut self, commitment: Com)
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        self.state
+            .observe_opaque(SWITCH_MASK_COMMITMENT, commitment);
+    }
+
+    /// Redraw one out-of-domain evaluation point.
+    pub fn ood_point(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(OOD_POINT)
+            .into_inner()
+    }
+
+    /// Bind the private answer the proof carries for one out-of-domain point.
+    pub fn ood_answer(&mut self, answer: EF) {
+        let _bound = self
+            .state
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(OOD_ANSWER, &answer);
+    }
+
+    /// Replay the grind of the query site of one round.
+    ///
+    /// # Errors
+    ///
+    /// When the witness misses the difficulty the site requires.
+    pub fn query_pow(&mut self, round: usize, witness: F) -> Result<(), TranscriptFailure> {
+        let bits = self.shape.query_pow_bits(round);
+        if bits == 0 {
+            return Ok(());
+        }
+        // A failed check poisons the driver.
+        //
+        // The rejection therefore travels alone.
+        self.state
+            .observe_pow(QUERY_POW, bits, witness)
+            .map_err(|_| TranscriptFailure::PowWitness { round, bits })
+    }
+
+    /// Redraw the query indices of one round.
+    pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
+        let (width, draws) = self.shape.query_index_site(round);
+        // A saturated round has nothing left to decide.
+        //
+        // No draw is described there.
+        if draws == 0 {
+            return (0..1usize << width).collect();
+        }
+        self.state
+            .challenge_uniform_bits::<F>(QUERY_INDICES, width, draws)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect()
+    }
+
+    /// Redraw the challenge weighting one round's fresh constraints.
+    pub fn round_batching(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(ROUND_BATCHING)
+            .into_inner()
+    }
+
+    /// Release the completeness check because the proof is being rejected.
+    ///
+    /// Every path that leaves the transcript early goes through this.
+    ///
+    /// Dropping an unfinished driver otherwise panics.
+    ///
+    /// That panic would land on top of an error already on its way out.
+    pub fn abort(&mut self) {
+        self.state.abort();
+    }
+
+    /// Close the transcript once every described step has been replayed.
+    ///
+    /// # Panics
+    ///
+    /// When the run replayed fewer steps than it was described with.
+    pub fn finish(self) {
+        self.state
+            .finalize()
+            .expect("a hiding WHIR run reads an empty wire, so no bytes can remain");
+    }
+
+    /// Bracket one delegated phase and hand it the borrowed sponge.
+    fn delegate<T: ?Sized, R>(&mut self, label: &'static str, run: impl FnOnce(&mut C) -> R) -> R {
+        self.state.begin_protocol::<T>(label);
+        let output = run(self.state.challenger_mut());
+        self.state.end_protocol::<T>(label);
+        output
+    }
+}
+
+/// Prover-side transcript of one masked base case.
+///
+/// Holds the only definition of what a base-case prover plays at each move.
+///
+/// The challenger is borrowed, not consumed.
+///
+/// The surrounding run's transcript continues where this one stops.
+pub struct ZkBaseCaseProverTranscript<'a, C, F: TranscriptField, EF> {
+    /// Driver walking the description and holding the borrowed sponge.
+    state: ProverState<&'a mut C, Alphabet<F>>,
+    /// The numbers this base case was described with.
+    shape: ZkBaseCaseShape,
+    /// Marker for the extension field the reveals and challenges live in.
+    _ef: PhantomData<EF>,
+}
+
+impl<'a, C, F, EF> ZkBaseCaseProverTranscript<'a, C, F, EF>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F> + CanSampleUniformBits<F> + GrindingChallenger<Witness = F>,
+{
+    /// Seed the transcript from the shape.
+    ///
+    /// # Arguments
+    ///
+    /// - `challenger`: sponge of the surrounding protocol, borrowed for this base case.
+    /// - `shape`: the numbers that fix this base case's transcript.
+    pub fn new(challenger: &'a mut C, shape: ZkBaseCaseShape) -> Self {
+        let separator = shape.domain_separator::<F, EF>();
+        Self {
+            state: ProverState::new(challenger, &separator),
+            shape,
+            _ef: PhantomData,
+        }
+    }
+
+    /// Read-only access to the numbers this base case was described with.
+    pub const fn shape(&self) -> &ZkBaseCaseShape {
+        &self.shape
+    }
+
+    /// Bind the fresh mask committed against the source code.
+    pub fn fresh_commitment<Com>(&mut self, commitment: Com)
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        self.state.observe_opaque(BASE_FRESH_COMMITMENT, commitment);
+    }
+
+    /// Bind the fresh blinds committed against one carried mask group.
+    pub fn blind_commitment<Com>(&mut self, commitment: Com)
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        self.state.observe_opaque(BASE_BLIND_COMMITMENT, commitment);
+    }
+
+    /// Bind the fresh-side claim.
+    ///
+    /// It is fixed before the challenge that is tested against it.
+    pub fn claim(&mut self, claim: EF) {
+        let _bound = self
+            .state
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(BASE_CLAIM, &claim);
+    }
+
+    /// Draw the blinding challenge.
+    pub fn gamma(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(BASE_GAMMA)
+            .into_inner()
+    }
+
+    /// Bind one one-time-pad reveal of a committed word.
+    ///
+    /// # Panics
+    ///
+    /// When either half is not the length the base case was described with.
+    pub fn reveal(&mut self, message: &[EF], randomness: &[EF]) {
+        let _message = self
+            .state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(BASE_REVEAL_MESSAGE, message);
+        let _randomness = self
+            .state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(BASE_REVEAL_RANDOMNESS, randomness);
+    }
+
+    /// Grind the site guarding every spot check.
+    ///
+    /// # Returns
+    ///
+    /// The witness the search found, or zero when the site asks for no work.
+    pub fn spot_check_pow(&mut self) -> F {
+        if self.shape.pow_bits == 0 {
+            return F::ZERO;
+        }
+        self.state.observe_pow(BASE_POW, self.shape.pow_bits)
+    }
+
+    /// Draw the source spot-check positions.
+    ///
+    /// # Returns
+    ///
+    /// Every position in draw order, repeats included.
+    ///
+    /// A saturated source opens every position instead.
+    pub fn source_queries(&mut self) -> Vec<usize> {
+        let draws = self.shape.source_query_draws();
+        let width = self.shape.source_index_bits();
+        // A saturated source has nothing left to decide.
+        //
+        // No draw is described there.
+        if draws == 0 {
+            return (0..1usize << width).collect();
+        }
+        self.state
+            .challenge_uniform_bits::<F>(BASE_SOURCE_QUERIES, width, draws)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect()
+    }
+
+    /// Draw one group's spot-check positions.
+    ///
+    /// Every member of the group shares them.
+    ///
+    /// # Panics
+    ///
+    /// When no group sits at that index.
+    pub fn mask_queries(&mut self, group: usize) -> Vec<usize> {
+        let (width, draws) = self.shape.mask_query_site(group);
+        // A saturated group has nothing left to decide.
+        //
+        // No draw is described there.
+        if draws == 0 {
+            return (0..1usize << width).collect();
+        }
+        self.state
+            .challenge_uniform_bits::<F>(BASE_MASK_QUERIES, width, draws)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect()
+    }
+
+    /// Close the transcript once every described step has been played.
+    ///
+    /// # Panics
+    ///
+    /// When the base case played fewer steps than it was described with.
+    pub fn finish(self) {
+        assert!(
+            self.state.finalize().is_empty(),
+            "a masked base case carries every value in its own proof",
+        );
+    }
+}
+
+/// Verifier-side transcript of one masked base case.
+///
+/// Mirrors the prover side call for call, over the same description.
+///
+/// The described lengths are what reject a reveal the proof got wrong.
+pub struct ZkBaseCaseVerifierTranscript<'a, C, F: TranscriptField, EF> {
+    /// Driver walking the description and holding the borrowed sponge.
+    ///
+    /// The proof carries every value.
+    ///
+    /// The driver therefore reads an empty wire.
+    state: VerifierState<'static, &'a mut C, Alphabet<F>>,
+    /// The numbers this base case was described with.
+    shape: ZkBaseCaseShape,
+    /// Position of the next reveal, used to look up the lengths it must carry.
+    reveal: usize,
+    /// Marker for the extension field the reveals and challenges live in.
+    _ef: PhantomData<EF>,
+}
+
+impl<'a, C, F, EF> ZkBaseCaseVerifierTranscript<'a, C, F, EF>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F> + CanSampleUniformBits<F> + GrindingChallenger<Witness = F>,
+{
+    /// Seed the transcript from the shape.
+    ///
+    /// # Arguments
+    ///
+    /// - `challenger`: sponge of the surrounding protocol, borrowed for this base case.
+    /// - `shape`: the numbers that fix this base case's transcript.
+    pub fn new(challenger: &'a mut C, shape: ZkBaseCaseShape) -> Self {
+        let separator = shape.domain_separator::<F, EF>();
+        Self {
+            state: VerifierState::new(challenger, &separator, &[]),
+            shape,
+            reveal: 0,
+            _ef: PhantomData,
+        }
+    }
+
+    /// Read-only access to the numbers this base case was described with.
+    pub const fn shape(&self) -> &ZkBaseCaseShape {
+        &self.shape
+    }
+
+    /// Bind the fresh mask committed against the source code.
+    pub fn fresh_commitment<Com>(&mut self, commitment: Com)
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        self.state.observe_opaque(BASE_FRESH_COMMITMENT, commitment);
+    }
+
+    /// Bind the fresh blinds committed against one carried mask group.
+    pub fn blind_commitment<Com>(&mut self, commitment: Com)
+    where
+        Com: Clone,
+        C: CanObserve<Com>,
+    {
+        self.state.observe_opaque(BASE_BLIND_COMMITMENT, commitment);
+    }
+
+    /// Bind the fresh-side claim the proof carries.
+    pub fn claim(&mut self, claim: EF) {
+        let _bound = self
+            .state
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(BASE_CLAIM, &claim);
+    }
+
+    /// Redraw the blinding challenge.
+    pub fn gamma(&mut self) -> EF {
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(BASE_GAMMA)
+            .into_inner()
+    }
+
+    /// Bind one one-time-pad reveal the proof carries.
+    ///
+    /// Reveals arrive in the described order.
+    ///
+    /// The source word comes first.
+    ///
+    /// # Errors
+    ///
+    /// - Either half is not the length the base case was described with.
+    /// - The proof carries more reveals than the base case was described with.
+    pub fn reveal(&mut self, message: &[EF], randomness: &[EF]) -> Result<(), BaseCaseZkError> {
+        // Reveal order is fixed by the description.
+        //
+        // A counter is therefore enough to name this one.
+        let position = self.reveal;
+        self.reveal += 1;
+
+        // Past the last described reveal there is no length to compare against.
+        let Some((expected_message, expected_randomness)) = self.shape.reveal_lengths(position)
+        else {
+            return Err(BaseCaseZkError::MaskCountMismatch {
+                expected: self.shape.num_masks(),
+                actual: position,
+            });
+        };
+
+        // Position zero is the source word, every later one is a group member.
+        let (message_kind, randomness_kind) = if position == 0 {
+            ("message", "randomness")
+        } else {
+            ("mask message", "mask randomness")
+        };
+
+        // Both halves are pinned before either one reaches the sponge.
+        //
+        //     described  (message_len, randomness_len)
+        //     supplied   anything else                 -> rejected, nothing absorbed
+        if message.len() != expected_message {
+            return Err(BaseCaseZkError::BlindedLengthMismatch {
+                kind: message_kind,
+                expected: expected_message,
+                actual: message.len(),
+            });
+        }
+        if randomness.len() != expected_randomness {
+            return Err(BaseCaseZkError::BlindedLengthMismatch {
+                kind: randomness_kind,
+                expected: expected_randomness,
+                actual: randomness.len(),
+            });
+        }
+
+        // Both lengths now match the description.
+        //
+        // Neither step below can reject.
+        let _message = self
+            .state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(BASE_REVEAL_MESSAGE, message);
+        let _randomness = self
+            .state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(BASE_REVEAL_RANDOMNESS, randomness);
+        Ok(())
+    }
+
+    /// Replay the grind of the site guarding every spot check.
+    ///
+    /// # Errors
+    ///
+    /// When the witness misses the difficulty the site requires.
+    pub fn spot_check_pow(&mut self, witness: F) -> Result<(), BaseCaseZkError> {
+        if self.shape.pow_bits == 0 {
+            return Ok(());
+        }
+        // A failed check poisons the driver.
+        //
+        // The rejection therefore travels alone.
+        self.state
+            .observe_pow(BASE_POW, self.shape.pow_bits, witness)
+            .map_err(|_| BaseCaseZkError::InvalidPowWitness)
+    }
+
+    /// Redraw the source spot-check positions.
+    pub fn source_queries(&mut self) -> Vec<usize> {
+        let draws = self.shape.source_query_draws();
+        let width = self.shape.source_index_bits();
+        // A saturated source has nothing left to decide.
+        //
+        // No draw is described there.
+        if draws == 0 {
+            return (0..1usize << width).collect();
+        }
+        self.state
+            .challenge_uniform_bits::<F>(BASE_SOURCE_QUERIES, width, draws)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect()
+    }
+
+    /// Redraw one group's spot-check positions.
+    ///
+    /// # Panics
+    ///
+    /// When no group sits at that index.
+    pub fn mask_queries(&mut self, group: usize) -> Vec<usize> {
+        let (width, draws) = self.shape.mask_query_site(group);
+        // A saturated group has nothing left to decide.
+        //
+        // No draw is described there.
+        if draws == 0 {
+            return (0..1usize << width).collect();
+        }
+        self.state
+            .challenge_uniform_bits::<F>(BASE_MASK_QUERIES, width, draws)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect()
+    }
+
+    /// Release the completeness check because the proof is being rejected.
+    pub fn abort(&mut self) {
+        self.state.abort();
+    }
+
+    /// Close the transcript once every described step has been replayed.
+    ///
+    /// # Panics
+    ///
+    /// When the base case replayed fewer steps than it was described with.
+    pub fn finish(self) {
+        self.state
+            .finalize()
+            .expect("a masked base case reads an empty wire, so no bytes can remain");
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
     use alloc::vec;
+    #[cfg(panic = "unwind")]
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::fs::TypeTag;
+    use p3_challenger::testing::{assert_seeds_pairwise_distinct, pow_difficulties, seed_digest};
     use p3_challenger::{CanSample, DuplexChallenger};
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use rand::SeedableRng;
+    use proptest::prelude::*;
     use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
     use crate::parameters::{ProtocolParameters, WhirConfig};
@@ -637,6 +1519,9 @@ mod tests {
 
     /// Log-inverse rate of the first committed codeword in every fixture.
     const STARTING_LOG_INV_RATE: usize = 2;
+
+    /// A commitment shaped like the ones a Merkle scheme hands this layer.
+    const DIGEST: [F; 8] = [F::ONE; 8];
 
     fn fresh_challenger() -> Ch {
         // Fixed seed so two runs differ only where the transcript makes them differ.
@@ -728,6 +1613,388 @@ mod tests {
         );
     }
 
+    /// Stand-in for a delegated phase: absorbs one value, then draws one.
+    ///
+    /// The real phase seeds its own driver from the state this one has reached.
+    ///
+    /// A bracket records only that the delegation happened.
+    ///
+    /// It also records where in the run it happened.
+    fn delegate_stub(challenger: &mut Ch) -> EF {
+        challenger.observe_algebra_element(EF::ONE);
+        challenger.sample_algebra_element()
+    }
+
+    /// Everything one side of a played run produces.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Played {
+        /// Challenges drawn, in draw order.
+        challenges: Vec<EF>,
+        /// Grinding witnesses, one per grinding site.
+        witnesses: Vec<F>,
+        /// Query and spot-check positions, one list per site.
+        indices: Vec<Vec<usize>>,
+    }
+
+    /// Values a described run carries inside its own proof.
+    #[derive(Clone, Debug)]
+    struct Carried {
+        /// One private out-of-domain answer per sample, per round.
+        ood_answers: Vec<Vec<EF>>,
+        /// The fresh-side claim the base case sends.
+        masked_claim: EF,
+        /// One reveal pair per committed word, in reveal order.
+        reveals: Vec<(Vec<EF>, Vec<EF>)>,
+    }
+
+    impl Carried {
+        /// Values that fit `shape`, drawn from a single seed.
+        fn new(shape: &ZkWhirShape, seed: u64) -> Self {
+            let mut rng = SmallRng::seed_from_u64(seed);
+
+            // One answer per out-of-domain sample of each round.
+            let ood_answers: Vec<Vec<EF>> = shape
+                .rounds
+                .iter()
+                .map(|round| (0..round.ood_samples).map(|_| rng.random()).collect())
+                .collect();
+
+            // Reveal order walks the source word first.
+            //
+            // Every group member follows, group by group.
+            let mut reveals = Vec::new();
+            let mut position = 0;
+            while let Some((message_len, randomness_len)) = shape.base_case.reveal_lengths(position)
+            {
+                let message = (0..message_len).map(|_| rng.random()).collect();
+                let randomness = (0..randomness_len).map(|_| rng.random()).collect();
+                reveals.push((message, randomness));
+                position += 1;
+            }
+
+            Self {
+                ood_answers,
+                masked_claim: rng.random(),
+                reveals,
+            }
+        }
+    }
+
+    /// Play every described step of the base case, prover side.
+    fn play_base_case_prover(
+        challenger: &mut Ch,
+        shape: &ZkBaseCaseShape,
+        carried: &Carried,
+        played: &mut Played,
+    ) {
+        let mut transcript =
+            ZkBaseCaseProverTranscript::<Ch, F, EF>::new(challenger, shape.clone());
+
+        // Move 1: the fresh source mask, then one fresh blind group per carried group.
+        transcript.fresh_commitment(DIGEST);
+        for _ in &shape.groups {
+            transcript.blind_commitment(DIGEST);
+        }
+
+        // Moves 2 and 3: the fresh-side claim, then the challenge tested against it.
+        transcript.claim(carried.masked_claim);
+        played.challenges.push(transcript.gamma());
+
+        // Move 4: every one-time-pad reveal, in the described order.
+        for (message, randomness) in &carried.reveals {
+            transcript.reveal(message, randomness);
+        }
+
+        // Move 5: grinding, then the spot-check positions it guards.
+        played.witnesses.push(transcript.spot_check_pow());
+        played.indices.push(transcript.source_queries());
+        for group in 0..shape.groups.len() {
+            played.indices.push(transcript.mask_queries(group));
+        }
+
+        transcript.finish();
+    }
+
+    /// Replay every described step of the base case, verifier side.
+    fn play_base_case_verifier(
+        challenger: &mut Ch,
+        shape: &ZkBaseCaseShape,
+        carried: &Carried,
+        witness: F,
+        played: &mut Played,
+    ) {
+        let mut transcript =
+            ZkBaseCaseVerifierTranscript::<Ch, F, EF>::new(challenger, shape.clone());
+
+        // The same five moves, in the same order, over the prover's own values.
+        transcript.fresh_commitment(DIGEST);
+        for _ in &shape.groups {
+            transcript.blind_commitment(DIGEST);
+        }
+        transcript.claim(carried.masked_claim);
+        played.challenges.push(transcript.gamma());
+        for (message, randomness) in &carried.reveals {
+            transcript
+                .reveal(message, randomness)
+                .expect("the described reveal lengths");
+        }
+        transcript
+            .spot_check_pow(witness)
+            .expect("the prover's own witness satisfies the site");
+        played.indices.push(transcript.source_queries());
+        for group in 0..shape.groups.len() {
+            played.indices.push(transcript.mask_queries(group));
+        }
+
+        transcript.finish();
+    }
+
+    /// Play every described step, prover side, in the order the pipeline plays them.
+    fn play_prover(challenger: &mut Ch, shape: &ZkWhirShape, carried: &Carried) -> Played {
+        let mut played = Played {
+            challenges: Vec::new(),
+            witnesses: Vec::new(),
+            indices: Vec::new(),
+        };
+        let mut transcript = ZkWhirProverTranscript::<Ch, F, EF>::new(challenger, shape.clone());
+
+        // The run draws its own claim-batching challenge, then hands over the batch.
+        played.challenges.push(transcript.initial_batching());
+        played
+            .challenges
+            .push(transcript.delegate_initial_fold(delegate_stub));
+
+        for round in 0..shape.n_rounds() {
+            // Two commitments open the round: the new oracle and its code-switch mask.
+            transcript.oracle_commitment(DIGEST);
+            transcript.switch_mask_commitment(DIGEST);
+
+            // Each private answer is bound before the next point is drawn.
+            for &answer in &carried.ood_answers[round] {
+                played.challenges.push(transcript.ood_point());
+                transcript.ood_answer(answer);
+            }
+
+            played.witnesses.push(transcript.query_pow(round));
+            played.indices.push(transcript.query_indices(round));
+            played.challenges.push(transcript.round_batching());
+            played
+                .challenges
+                .push(transcript.delegate_round_fold(delegate_stub));
+        }
+
+        // The base case runs under a seed of its own, inside the run's last bracket.
+        transcript.delegate_base_case(|challenger| {
+            play_base_case_prover(challenger, &shape.base_case, carried, &mut played);
+        });
+
+        transcript.finish();
+        played
+    }
+
+    /// Replay every described step, verifier side, over the prover's own values.
+    fn play_verifier(
+        challenger: &mut Ch,
+        shape: &ZkWhirShape,
+        carried: &Carried,
+        witnesses: &[F],
+    ) -> Played {
+        let mut played = Played {
+            challenges: Vec::new(),
+            witnesses: witnesses.to_vec(),
+            indices: Vec::new(),
+        };
+        let mut transcript = ZkWhirVerifierTranscript::<Ch, F, EF>::new(challenger, shape.clone());
+
+        played.challenges.push(transcript.initial_batching());
+        played
+            .challenges
+            .push(transcript.delegate_initial_fold(delegate_stub));
+
+        for (round, &witness) in witnesses.iter().take(shape.n_rounds()).enumerate() {
+            transcript.oracle_commitment(DIGEST);
+            transcript.switch_mask_commitment(DIGEST);
+            for &answer in &carried.ood_answers[round] {
+                played.challenges.push(transcript.ood_point());
+                transcript.ood_answer(answer);
+            }
+            transcript
+                .query_pow(round, witness)
+                .expect("the prover's own witness satisfies the site");
+            played.indices.push(transcript.query_indices(round));
+            played.challenges.push(transcript.round_batching());
+            played
+                .challenges
+                .push(transcript.delegate_round_fold(delegate_stub));
+        }
+
+        // The base case grinds once, at the site after every round's own.
+        let base_witness = witnesses[shape.n_rounds()];
+        transcript.delegate_base_case(|challenger| {
+            play_base_case_verifier(
+                challenger,
+                &shape.base_case,
+                carried,
+                base_witness,
+                &mut played,
+            );
+        });
+
+        transcript.finish();
+        played
+    }
+
+    #[test]
+    fn every_position_step_describes_uniform_sampling() {
+        // Invariant: a position is drawn by rejection sampling.
+        //
+        // Its distribution is therefore exactly uniform.
+        //
+        // A plain bit draw is a different distribution.
+        // The type tag is what tells the two apart.
+        //
+        //     described  UniformBits(w)   ->  replayed with a uniform draw
+        //     described  Bits(w)          ->  replayed with a plain draw
+        //
+        // A step described as one and played as the other is a pattern mismatch.
+        let config = base_config();
+        let shape = ZkWhirShape::new(&config);
+
+        // Fixture state: the run draws query indices per round.
+        let round_steps: Vec<_> = shape
+            .pattern::<F, EF>()
+            .interactions()
+            .iter()
+            .filter(|step| step.label() == QUERY_INDICES)
+            .map(Interaction::type_tag)
+            .collect();
+        assert!(
+            !round_steps.is_empty(),
+            "the fixture configuration must draw at least one query"
+        );
+
+        // Fixture state: the base case draws source positions and per-group positions.
+        let base_steps: Vec<_> = shape
+            .base_case
+            .pattern::<F, EF>()
+            .interactions()
+            .iter()
+            .filter(|step| matches!(step.label(), BASE_SOURCE_QUERIES | BASE_MASK_QUERIES))
+            .map(Interaction::type_tag)
+            .collect();
+        assert!(
+            !base_steps.is_empty(),
+            "the fixture configuration must draw at least one spot check"
+        );
+
+        for tag in round_steps.into_iter().chain(base_steps) {
+            assert!(
+                matches!(tag, TypeTag::UniformBits { .. }),
+                "a position step is described as {tag:?}, which is not how it is drawn",
+            );
+        }
+    }
+
+    #[test]
+    fn every_delegated_phase_is_recorded_as_one_bracket() {
+        // A delegated phase runs under its own seed.
+        //
+        // Its rounds are therefore not steps of the description built here.
+        //
+        //     initial fold        one bracket
+        //     per round           one bracket
+        //     base case           one bracket
+        //
+        // Every opener is matched.
+        //
+        // The description therefore passes structural validation.
+        let config = base_config();
+        let shape = ZkWhirShape::new(&config);
+        let pattern = shape.pattern::<F, EF>();
+
+        let openers: Vec<_> = pattern
+            .interactions()
+            .iter()
+            .filter(|step| step.hierarchy() == Hierarchy::Begin)
+            .map(Interaction::label)
+            .collect();
+        let closers = pattern
+            .interactions()
+            .iter()
+            .filter(|step| step.hierarchy() == Hierarchy::End)
+            .count();
+
+        let expected = 2 + shape.n_rounds();
+        assert_eq!(openers.len(), expected);
+        assert_eq!(openers.len(), closers);
+        assert_eq!(openers[0], INITIAL_FOLD);
+        assert_eq!(openers[openers.len() - 1], BASE_CASE);
+    }
+
+    #[test]
+    fn no_step_of_a_delegated_phase_reaches_this_description() {
+        // A masked batch names its own steps inside its own description.
+        //
+        // None of those labels belongs to the run described here.
+        //
+        //     child plays   mask_commitment  mu_tilde  round_poly  round_challenge
+        //     run records   one bracket
+        //
+        // A label leaking through would mean the run tries to play the child's steps.
+        let config = base_config();
+        let pattern = ZkWhirShape::new(&config).pattern::<F, EF>();
+
+        for label in [
+            "mask_commitment",
+            "mu_tilde",
+            "mask_combination",
+            "round_poly",
+            "round_pow",
+            "round_challenge",
+            "joint_claim",
+        ] {
+            assert!(
+                pattern.interactions().iter().all(|s| s.label() != label),
+                "the run describes a step the delegate plays for itself: {label}",
+            );
+        }
+    }
+
+    #[test]
+    fn the_run_describes_one_grind_per_round_and_the_delegates_describe_the_rest() {
+        // Invariant: the run grinds once per code-switching round.
+        //
+        // It grinds nowhere else.
+        //
+        // Every other grinding site belongs to a delegate.
+        //
+        //     run       ->  one query grind per round
+        //     base case ->  one grind before its spot checks
+        //     sumcheck  ->  one grind per masked round, under its own seed
+        //
+        // Fixture state: grinding is capped at 12 bits and derived per round.
+        let config = base_config();
+        let shape = ZkWhirShape::new(&config);
+
+        // The recorded difficulties must be exactly the configured ones, in order.
+        let described = pow_difficulties(&shape.pattern::<F, EF>());
+        let configured: Vec<_> = shape
+            .rounds
+            .iter()
+            .map(|round| round.query_pow_bits)
+            .filter(|&bits| bits > 0)
+            .collect();
+        assert_eq!(
+            described.iter().map(|&(_, bits)| bits).collect::<Vec<_>>(),
+            configured,
+        );
+        assert!(described.iter().all(|&(label, _)| label == QUERY_POW));
+
+        // The base case describes its own single grind, under its own seed.
+        let base = pow_difficulties(&shape.base_case.pattern::<F, EF>());
+        assert_eq!(base.len(), usize::from(shape.base_case.pow_bits > 0));
+    }
+
     #[test]
     fn the_same_configuration_seeds_the_same_stream_twice() {
         // Completeness: the seed is a pure function of the configuration.
@@ -759,8 +2026,31 @@ mod tests {
     }
 
     #[test]
+    fn the_base_case_never_shares_a_seed_with_the_run_around_it() {
+        // The base case is a protocol of its own.
+        //
+        // It therefore carries a name of its own.
+        //
+        //     run       ->  [2 | p3-whir-hvzk      | .. ]
+        //     base case ->  [1 | p3-whir-hvzk-base | .. ]
+        //
+        // A shared seed would let one description stand in for the other.
+        let config = base_config();
+        let shape = ZkWhirShape::new(&config);
+
+        let seeds = [
+            ("run", seed_digest(&shape.domain_separator::<F, EF>())),
+            (
+                "base case",
+                seed_digest(&shape.base_case.domain_separator::<F, EF>()),
+            ),
+        ];
+        assert_seeds_pairwise_distinct(&seeds);
+    }
+
+    #[test]
     fn every_user_facing_parameter_reaches_the_seed() {
-        // Walk `ProtocolParameters` and `ZkParameters` field by field.
+        // Walk the plain and hiding parameter sets, field by field.
         user_knob_moves_the_seed("security_level", |p, _| p.security_level += 1);
         user_knob_moves_the_seed("pow_bits", |p, _| p.pow_bits -= 1);
         user_knob_moves_the_seed("starting_log_inv_rate", |p, _| {
@@ -794,7 +2084,7 @@ mod tests {
 
     #[test]
     fn every_derived_field_that_shapes_the_transcript_reaches_the_seed() {
-        // Walk the plain half of `ZkWhirConfig`, field by field.
+        // Walk the plain half of the hiding configuration, field by field.
         derived_field_moves_the_seed("inner.commitment_ood_samples", |c| {
             c.inner.commitment_ood_samples += 1;
         });
@@ -806,6 +2096,9 @@ mod tests {
         });
         derived_field_moves_the_seed("inner.final_sumcheck_rounds", |c| {
             c.inner.final_sumcheck_rounds -= 1;
+        });
+        derived_field_moves_the_seed("inner.final_folding_pow_bits", |c| {
+            c.inner.final_folding_pow_bits += 1;
         });
         derived_field_moves_the_seed("round.ood_samples", |c| {
             c.inner.round_parameters[0].ood_samples += 1;
@@ -857,5 +2150,338 @@ mod tests {
         derived_field_moves_the_seed("switch_masks[0].domain_size", |c| {
             c.switch_masks[0].domain_size <<= 1;
         });
+    }
+
+    #[test]
+    fn both_sides_draw_the_same_challenges_from_the_same_values() {
+        // Described run: the fixture configuration, at its own grinding difficulties.
+        let config = base_config();
+        let shape = ZkWhirShape::new(&config);
+        let carried = Carried::new(&shape, 0xC1A1);
+
+        // Prover side: play every phase in order.
+        let mut prover_challenger = fresh_challenger();
+        let prover = play_prover(&mut prover_challenger, &shape, &carried);
+
+        // Verifier side: the same calls, in the same order, over the same values.
+        let mut verifier_challenger = fresh_challenger();
+        let verifier = play_verifier(
+            &mut verifier_challenger,
+            &shape,
+            &carried,
+            &prover.witnesses,
+        );
+
+        assert_eq!(prover, verifier);
+
+        // Both sponges land on the same state.
+        //
+        // Whatever runs next therefore agrees too.
+        let prover_next: F = prover_challenger.sample();
+        let verifier_next: F = verifier_challenger.sample();
+        assert_eq!(prover_next, verifier_next);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+
+        #[test]
+        fn prop_both_sides_agree_over_random_carried_values(seed in any::<u64>()) {
+            // Completeness over the values the proof carries.
+            //
+            // The two sides agree whatever the answers, the claim and the reveals are.
+            let config = base_config();
+            let shape = ZkWhirShape::new(&config);
+            let carried = Carried::new(&shape, seed);
+
+            let mut prover_challenger = fresh_challenger();
+            let prover = play_prover(&mut prover_challenger, &shape, &carried);
+
+            let mut verifier_challenger = fresh_challenger();
+            let verifier =
+                play_verifier(&mut verifier_challenger, &shape, &carried, &prover.witnesses);
+
+            prop_assert_eq!(prover, verifier);
+        }
+    }
+
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn a_prover_that_plays_a_step_out_of_order_fails_loudly() {
+        // Described order: the round's oracle commitment lands before its mask.
+        //
+        //     described  oracle_commitment       switch_mask_commitment
+        //     played     switch_mask_commitment  oracle_commitment
+        //
+        // Once in the sponge, nothing about the two digests tells them apart.
+        //
+        // The step they are played at is what parts them.
+        //
+        // The player is what checks that step.
+        let config = base_config();
+        let shape = ZkWhirShape::new(&config);
+        let mut challenger = fresh_challenger();
+
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            let mut transcript =
+                ZkWhirProverTranscript::<Ch, F, EF>::new(&mut challenger, shape.clone());
+            let _alpha = transcript.initial_batching();
+            let _folded = transcript.delegate_initial_fold(delegate_stub);
+            // Mutation: the mask is bound where the new oracle belongs.
+            transcript.switch_mask_commitment(DIGEST);
+        }));
+
+        let payload = caught.expect_err("a step played out of order must panic");
+        let message = payload
+            .downcast_ref::<String>()
+            .expect("the player reports the mismatch as a formatted message");
+        assert!(
+            message.contains("but expected"),
+            "the panic must diff the played step against the described one, got {message}",
+        );
+        assert!(
+            message.contains(ORACLE_COMMITMENT),
+            "the panic must name the step that was due, got {message}",
+        );
+    }
+
+    #[test]
+    #[cfg(panic = "unwind")]
+    fn a_prover_that_skips_the_base_case_bracket_fails_loudly() {
+        // Described run: the base case closes it, inside its own bracket.
+        //
+        //     described  .. round brackets ..   Begin base_case   End base_case
+        //     played     .. round brackets ..   -- nothing --
+        //
+        // Skipping the bracket leaves two steps unplayed.
+        //
+        // A verifier would play them and land on a different sponge state.
+        let config = base_config();
+        let shape = ZkWhirShape::new(&config);
+        let carried = Carried::new(&shape, 0x5C1B);
+        let mut challenger = fresh_challenger();
+
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            let mut transcript =
+                ZkWhirProverTranscript::<Ch, F, EF>::new(&mut challenger, shape.clone());
+            let _alpha = transcript.initial_batching();
+            let _folded = transcript.delegate_initial_fold(delegate_stub);
+            for round in 0..shape.n_rounds() {
+                transcript.oracle_commitment(DIGEST);
+                transcript.switch_mask_commitment(DIGEST);
+                for &answer in &carried.ood_answers[round] {
+                    let _point = transcript.ood_point();
+                    transcript.ood_answer(answer);
+                }
+                let _witness = transcript.query_pow(round);
+                let _indices = transcript.query_indices(round);
+                let _batching = transcript.round_batching();
+                let _folded = transcript.delegate_round_fold(delegate_stub);
+            }
+            // Mutation: the base case is never bracketed.
+            transcript.finish();
+        }));
+
+        let payload = caught.expect_err("a skipped bracket must panic");
+        let message = payload
+            .downcast_ref::<String>()
+            .expect("the player reports the gap as a formatted message");
+        assert!(
+            message.contains("not fully replayed"),
+            "the panic must name the step that was skipped, got {message}",
+        );
+    }
+
+    #[test]
+    fn a_query_grinding_witness_that_misses_its_difficulty_is_rejected() {
+        // Described run: 20 bits of grinding before the first round's query indices.
+        //
+        // Zero is a witness like any other.
+        //
+        // It clears 20 bits with probability 2^-20.
+        let config = base_config();
+        let mut shape = ZkWhirShape::new(&config);
+        shape.rounds[0].query_pow_bits = 20;
+        let ood_samples = shape.rounds[0].ood_samples;
+
+        let mut challenger = fresh_challenger();
+        let mut transcript = ZkWhirVerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape);
+        let _alpha = transcript.initial_batching();
+        let _folded = transcript.delegate_initial_fold(delegate_stub);
+        transcript.oracle_commitment(DIGEST);
+        transcript.switch_mask_commitment(DIGEST);
+        for _ in 0..ood_samples {
+            let _point = transcript.ood_point();
+            transcript.ood_answer(EF::ONE);
+        }
+
+        let err = transcript
+            .query_pow(0, F::ZERO)
+            .expect_err("a witness that clears no bits must be rejected");
+
+        assert_eq!(err, TranscriptFailure::PowWitness { round: 0, bits: 20 });
+        // The failed read poisoned the driver.
+        //
+        // Dropping it here therefore raises nothing.
+    }
+
+    #[test]
+    fn a_base_case_grinding_witness_that_misses_its_difficulty_is_rejected() {
+        // Described base case: 20 bits of grinding before the spot-check positions.
+        //
+        // Fixture state: every reveal carries its described length.
+        //
+        // The grind is therefore reached at all.
+        let config = base_config();
+        let shape = ZkWhirShape::new(&config);
+        let carried = Carried::new(&shape, 0xBADF);
+        let mut base = shape.base_case;
+        base.pow_bits = 20;
+
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            ZkBaseCaseVerifierTranscript::<Ch, F, EF>::new(&mut challenger, base.clone());
+        transcript.fresh_commitment(DIGEST);
+        for _ in &base.groups {
+            transcript.blind_commitment(DIGEST);
+        }
+        transcript.claim(carried.masked_claim);
+        let _gamma = transcript.gamma();
+        for (message, randomness) in &carried.reveals {
+            transcript
+                .reveal(message, randomness)
+                .expect("the described reveal lengths");
+        }
+
+        let err = transcript
+            .spot_check_pow(F::ZERO)
+            .expect_err("a witness that clears no bits must be rejected");
+
+        assert_eq!(err, BaseCaseZkError::InvalidPowWitness);
+    }
+
+    #[test]
+    fn a_base_case_reveal_of_the_wrong_length_is_rejected() {
+        // Described source reveal: source_message_len values, then source_randomness_len.
+        //
+        //     described  (message_len, randomness_len)
+        //     supplied   (message_len + 1, randomness_len)  -> rejected, nothing absorbed
+        let config = base_config();
+        let base = ZkWhirShape::new(&config).base_case;
+        let expected = base.source_message_len;
+
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            ZkBaseCaseVerifierTranscript::<Ch, F, EF>::new(&mut challenger, base.clone());
+        transcript.fresh_commitment(DIGEST);
+        for _ in &base.groups {
+            transcript.blind_commitment(DIGEST);
+        }
+        transcript.claim(EF::ONE);
+        let _gamma = transcript.gamma();
+
+        // Mutation: one extra value rides along in the message half.
+        let message = vec![EF::ONE; expected + 1];
+        let randomness = vec![EF::ONE; base.source_randomness_len];
+        let err = transcript
+            .reveal(&message, &randomness)
+            .expect_err("a reveal outside the described length must error");
+
+        assert_eq!(
+            err,
+            BaseCaseZkError::BlindedLengthMismatch {
+                kind: "message",
+                expected,
+                actual: expected + 1,
+            },
+        );
+        transcript.abort();
+    }
+
+    #[test]
+    fn a_base_case_reveal_past_the_last_described_one_is_rejected() {
+        // Described reveals: one for the source word, then one per group member.
+        //
+        //     described  1 + num_masks
+        //     supplied   1 + num_masks + 1  -> rejected at the extra one
+        let config = base_config();
+        let base = ZkWhirShape::new(&config).base_case;
+        let carried = Carried::new(&ZkWhirShape::new(&config), 0x0FF5);
+        let num_masks = base.num_masks();
+
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            ZkBaseCaseVerifierTranscript::<Ch, F, EF>::new(&mut challenger, base.clone());
+        transcript.fresh_commitment(DIGEST);
+        for _ in &base.groups {
+            transcript.blind_commitment(DIGEST);
+        }
+        transcript.claim(carried.masked_claim);
+        let _gamma = transcript.gamma();
+        for (message, randomness) in &carried.reveals {
+            transcript
+                .reveal(message, randomness)
+                .expect("the described reveal lengths");
+        }
+
+        // Mutation: one reveal more than the description carries.
+        let err = transcript
+            .reveal(&[EF::ONE], &[EF::ONE])
+            .expect_err("a reveal past the last described one must error");
+
+        assert_eq!(
+            err,
+            BaseCaseZkError::MaskCountMismatch {
+                expected: num_masks,
+                actual: num_masks + 1,
+            },
+        );
+        transcript.abort();
+    }
+
+    #[test]
+    fn a_saturated_position_phase_draws_nothing() {
+        // Boundary: asking for at least as many positions as the domain opens them all.
+        //
+        //     16 positions, 16 asked  -> every position, no draw
+        //     16 positions, 15 asked  -> 15 draws
+        let config = base_config();
+        let mut base = ZkWhirShape::new(&config).base_case;
+
+        base.source_queries = base.source_domain_size;
+        assert_eq!(base.source_query_draws(), 0);
+
+        base.source_queries = base.source_domain_size - 1;
+        assert_eq!(base.source_query_draws(), base.source_domain_size - 1);
+    }
+
+    #[test]
+    fn the_reveal_order_walks_the_source_word_then_every_group_member() {
+        // Invariant: the reveal sequence is fixed by the group list, not by the proof.
+        //
+        // Fixture state: the base case carries one source word and one reveal per mask.
+        //
+        //     position 0            source
+        //     position 1 .. n       group 0 members, then group 1 members, ..
+        //     position n + 1        past the end
+        let config = base_config();
+        let base = ZkWhirShape::new(&config).base_case;
+
+        // The source word opens the sequence at its own code's lengths.
+        assert_eq!(
+            base.reveal_lengths(0),
+            Some((base.source_message_len, base.source_randomness_len)),
+        );
+
+        // The first group member follows, at its group's code lengths.
+        let first = base.groups[0].shape;
+        assert_eq!(
+            base.reveal_lengths(1),
+            Some((first.message_len, first.randomness_len)),
+        );
+
+        // The sequence ends exactly one past the last mask.
+        assert!(base.reveal_lengths(base.num_masks()).is_some());
+        assert_eq!(base.reveal_lengths(base.num_masks() + 1), None);
     }
 }

@@ -138,9 +138,6 @@ const ROUND_BATCHING: &str = "round_batching";
 /// Container label of the fold that closes one intermediate round.
 const ROUND_FOLD: &str = "round_fold";
 
-/// Step label of a sumcheck folding challenge.
-const FOLD_CHALLENGE: &str = "fold_challenge";
-
 /// Step label of the final polynomial, sent in the clear.
 const FINAL_POLY: &str = "final_poly";
 
@@ -225,16 +222,22 @@ fn push_query_indices(
     }
 }
 
-/// Append the opener and closer of one delegated sumcheck phase.
+/// Append the opener and closer of one delegated phase.
 ///
 /// The phase's own steps live in its own pattern, under its own seed.
-fn push_delegation(steps: &mut Vec<Interaction>, label: &'static str) {
-    steps.push(Interaction::marker::<Sumcheck>(
+///
+/// The type parameter names the delegate.
+///
+/// It is compared where a closer meets its opener.
+///
+/// It never reaches the pattern fingerprint.
+fn push_delegation<T: ?Sized>(steps: &mut Vec<Interaction>, label: &'static str) {
+    steps.push(Interaction::marker::<T>(
         Hierarchy::Begin,
         Kind::Protocol,
         label,
     ));
-    steps.push(Interaction::marker::<Sumcheck>(
+    steps.push(Interaction::marker::<T>(
         Hierarchy::End,
         Kind::Protocol,
         label,
@@ -356,7 +359,7 @@ impl WhirRoundShape {
             Length::Scalar,
         ));
 
-        push_delegation(steps, ROUND_FOLD);
+        push_delegation::<Sumcheck>(steps, ROUND_FOLD);
     }
 
     /// Number of steps this round contributes.
@@ -540,7 +543,7 @@ impl WhirShape {
         let mut steps = Vec::with_capacity(capacity);
 
         // The delegate draws the claim-batching challenge, so the bracket covers it.
-        push_delegation(&mut steps, INITIAL_FOLD);
+        push_delegation::<Sumcheck>(&mut steps, INITIAL_FOLD);
 
         for round in &self.rounds {
             round.extend::<F, EF>(&mut steps);
@@ -564,7 +567,7 @@ impl WhirShape {
 
         // A run described with no closing rounds delegates nothing at all.
         if self.final_sumcheck.rounds > 0 {
-            push_delegation(&mut steps, FINAL_FOLD);
+            push_delegation::<Sumcheck>(&mut steps, FINAL_FOLD);
         }
 
         InteractionPattern::new(steps).expect("every container opened here is closed here")
@@ -1005,6 +1008,12 @@ mod tests {
 
     /// Opening claims every shape in this module is derived with.
     const CLAIMS: usize = 3;
+
+    /// Step label a delegated sumcheck round carries inside its own description.
+    ///
+    /// No step of a delegated phase belongs to the description built here.
+    /// The label is what one check below looks for and must not find.
+    const FOLD_CHALLENGE: &str = "fold_challenge";
 
     /// A commitment shaped like the ones a Merkle scheme hands this layer.
     const DIGEST: [F; 8] = [F::ONE; 8];

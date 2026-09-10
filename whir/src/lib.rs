@@ -29,4 +29,4 @@ pub use pcs::zk::{
     ZkParameters, ZkRoundProof, ZkVerifierError, ZkWhirConfig, ZkWhirProof,
 };
 pub use transcript::WhirShape;
-pub use transcript::zk::ZkWhirShape;
+pub use transcript::zk::{ZkBaseCaseShape, ZkWhirShape};

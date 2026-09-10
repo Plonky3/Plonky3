@@ -23,13 +23,13 @@ use p3_sumcheck::zk::ZkVerifier;
 use thiserror::Error;
 use tracing::instrument;
 
-use super::base_case::{BaseCaseZkConfig, BaseCaseZkError, BaseCaseZkVerifier};
+use super::base_case::{BaseCaseZkError, BaseCaseZkVerifier};
 use super::code_switch::{CodeSwitchError, ZkMaskClaim, switch_mask_covector};
 use super::config::ZkWhirConfig;
 use super::constraint::SourceClaim;
 use super::proof::ZkWhirProof;
 use crate::pcs::proof::QueryOpenings;
-use crate::pcs::utils::get_challenge_stir_queries;
+use crate::transcript::zk::{ZkWhirShape, ZkWhirVerifierTranscript};
 
 /// Failure modes of the HVZK-WHIR verifier.
 #[derive(Debug, PartialEq, Eq, Error)]
@@ -160,10 +160,23 @@ where
     ///
     /// The claims must already be bound to the transcript by the caller.
     ///
-    /// Each masked sumcheck batch seeds a typed sub-transcript of its own from this sponge.
-    /// The base-field bound is what lets that sub-transcript encode its seed.
+    /// # Transcript
+    ///
+    /// One driver spans the whole run and seeds itself from the borrowed sponge.
+    ///
+    /// ```text
+    ///     masked sumcheck batch  ->  bracketed, then it seeds a driver of its own
+    ///     masked base case       ->  bracketed, then it seeds a driver of its own
+    /// ```
+    ///
+    /// The base-field bound is what lets every one of those seeds be encoded.
+    ///
+    /// A rejection releases the driver before the error travels to the caller.
+    ///
+    /// # Errors
+    ///
+    /// When any structural check, transcript step, or algebraic check rejects the proof.
     #[instrument(skip_all)]
-    #[allow(clippy::too_many_lines)]
     pub fn verify(
         &self,
         proof: &ZkWhirProof<F, EF, MT>,
@@ -233,8 +246,48 @@ where
             }
         }
 
+        // One driver spans the whole run.
+        //
+        // The description is therefore walked exactly once.
+        //
+        // Every check above reads the proof's own shape.
+        //
+        // None of them touches the sponge.
+        let shape = ZkWhirShape::new(config);
+        let mut transcript = ZkWhirVerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
+
+        // A rejection leaves the driver mid-description.
+        //
+        // Release it before the error travels out.
+        match self.replay(&mut transcript, proof, commitment, claims) {
+            Ok(()) => {
+                transcript.finish();
+                Ok(())
+            }
+            Err(error) => {
+                transcript.abort();
+                Err(error)
+            }
+        }
+    }
+
+    /// Walk every described step of one hiding run against the proof.
+    #[allow(clippy::too_many_lines)]
+    fn replay(
+        &self,
+        transcript: &mut ZkWhirVerifierTranscript<'_, Challenger, F, EF>,
+        proof: &ZkWhirProof<F, EF, MT>,
+        commitment: &MT::Commitment,
+        claims: &[(Point<EF>, EF)],
+    ) -> Result<(), ZkVerifierError>
+    where
+        F: PrimeField64,
+    {
+        let config = self.config;
+        let n_rounds = config.n_rounds();
+
         // Initial relation: claims batched by powers of alpha.
-        let alpha: EF = challenger.sample_algebra_element();
+        let alpha: EF = transcript.initial_batching();
         let mut source = SourceClaim::new();
         let mut target = EF::ZERO;
         for ((point, eval), coeff) in claims.iter().zip(alpha.powers()) {
@@ -244,16 +297,22 @@ where
         let mut masks = VerifierMasks::new();
 
         // Initial masked sumcheck batch.
-        let mut randomness = self.replay_sumcheck_batch(
-            proof,
-            0,
-            config.round_folding_factor(0),
-            config.starting_folding_pow_bits,
-            &mut target,
-            &mut source,
-            &mut masks,
-            challenger,
-        )?;
+        //
+        // The batch is a protocol of its own.
+        //
+        // The run therefore records it as one bracket.
+        let mut randomness = transcript.delegate_initial_fold(|challenger| {
+            self.replay_sumcheck_batch(
+                proof,
+                0,
+                config.round_folding_factor(0),
+                config.starting_folding_pow_bits,
+                &mut target,
+                &mut source,
+                &mut masks,
+                challenger,
+            )
+        })?;
 
         let mut active = ActiveOracle::Base(commitment);
         let mut num_variables = config.num_variables - config.round_folding_factor(0);
@@ -267,9 +326,9 @@ where
 
             // New oracle and code-switch mask commitments.
             let new_commitment = &round_proof.commitment;
-            challenger.observe(new_commitment.clone());
+            transcript.oracle_commitment(new_commitment.clone());
             let mask_commitment = &round_proof.mask_commitment;
-            challenger.observe(mask_commitment.clone());
+            transcript.switch_mask_commitment(mask_commitment.clone());
 
             // Private out-of-domain answers.
             if round_proof.ood_answers.len() != round_params.ood_samples {
@@ -281,23 +340,16 @@ where
             }
             let mut rho_points = Vec::with_capacity(round_params.ood_samples);
             for &answer in &round_proof.ood_answers {
-                let rho: EF = challenger.sample_algebra_element();
-                challenger.observe_algebra_element(answer);
+                let rho: EF = transcript.ood_point();
+                transcript.ood_answer(answer);
                 rho_points.push(rho);
             }
 
             // PoW, then STIR queries on the previous oracle.
-            if round_params.pow_bits > 0
-                && !challenger.check_witness(round_params.pow_bits, round_proof.pow_witness)
-            {
-                return Err(ZkVerifierError::InvalidPowWitness { round });
-            }
-            let stir_indexes = get_challenge_stir_queries::<Challenger, F>(
-                round_params.domain_size,
-                folding,
-                round_params.num_queries,
-                challenger,
-            );
+            transcript
+                .query_pow(round, round_proof.pow_witness)
+                .map_err(|_| ZkVerifierError::InvalidPowWitness { round })?;
+            let stir_indexes = transcript.query_indices(round);
             // Authenticate the leaves in one multiproof and fold them at the
             // batch randomness.
             let dims = vec![Dimensions {
@@ -318,7 +370,7 @@ where
                 .collect();
 
             // Batch the carried claim with the fresh constraints.
-            let combination: EF = challenger.sample_algebra_element();
+            let combination: EF = transcript.round_batching();
             let coeffs: Vec<EF> = combination
                 .shifted_powers(combination)
                 .collect_n(rho_points.len() + query_points.len());
@@ -356,64 +408,70 @@ where
             );
 
             // Next masked sumcheck batch over the new oracle.
-            randomness = self.replay_sumcheck_batch(
-                proof,
-                round + 1,
-                folding_next,
-                round_params.folding_pow_bits,
-                &mut target,
-                &mut source,
-                &mut masks,
-                challenger,
-            )?;
+            //
+            // The batch is a protocol of its own.
+            //
+            // The run therefore records it as one bracket.
+            randomness = transcript.delegate_round_fold(|challenger| {
+                self.replay_sumcheck_batch(
+                    proof,
+                    round + 1,
+                    folding_next,
+                    round_params.folding_pow_bits,
+                    &mut target,
+                    &mut source,
+                    &mut masks,
+                    challenger,
+                )
+            })?;
 
             active = ActiveOracle::Ext(new_commitment);
             num_variables -= folding_next;
         }
 
         // Masked base case on the virtual folded oracle.
-        let final_config = config.final_round_config();
-        let source_code = super::committer::FoldedRsCode::<F>::new(
-            1 << final_config.num_variables,
-            config.oracle_randomness[n_rounds],
-            final_config.domain_size >> final_config.folding_factor,
-        );
-        let base_config = BaseCaseZkConfig {
-            code: source_code,
-            mask_groups: masks.groups,
-            num_queries: config.final_queries,
-            mask_queries: config.mask_queries,
-            pow_bits: config.final_pow_bits,
-        };
+        //
+        // The closing phase reads its numbers from the configuration.
+        //
+        // The description read them from that same place.
+        let base_config = config.base_case_config();
+        // The replay rebuilt the same group list the configuration derives.
+        debug_assert_eq!(base_config.mask_groups, masks.groups);
         let base_verifier = BaseCaseZkVerifier {
             config: &base_config,
             extension_mmcs: &self.extension_mmcs,
         };
 
+        let final_config = config.final_round_config();
         let source_covector = source.materialize(final_config.num_variables);
         let dims = vec![Dimensions {
             height: final_config.domain_size >> final_config.folding_factor,
             width: 1 << final_config.folding_factor,
         }];
-        base_verifier.verify(
-            &proof.base_case,
-            source_covector.as_slice(),
-            &masks.claims.covectors,
-            &masks.commitments,
-            target,
-            |positions, openings| {
-                self.verify_and_fold_leaves(
-                    &active,
-                    &dims,
-                    positions,
-                    openings,
-                    n_rounds,
-                    &randomness,
-                )
-                .map_err(|_| BaseCaseZkError::SourceOpeningsRejected)
-            },
-            challenger,
-        )?;
+        // The base case is a protocol of its own.
+        //
+        // The run therefore records it as one bracket.
+        transcript.delegate_base_case(|challenger| {
+            base_verifier.verify(
+                &proof.base_case,
+                source_covector.as_slice(),
+                &masks.claims.covectors,
+                &masks.commitments,
+                target,
+                |positions, openings| {
+                    self.verify_and_fold_leaves(
+                        &active,
+                        &dims,
+                        positions,
+                        openings,
+                        n_rounds,
+                        &randomness,
+                    )
+                    .map_err(|_| BaseCaseZkError::SourceOpeningsRejected)
+                },
+                challenger,
+            )
+        })?;
 
         Ok(())
     }
