@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 
 use p3_air::symbolic::AirLayout;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::Field;
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_security::multilinear::{MultilinearAirParams, MultilinearLookupParams, reduction_terms};
 use p3_security::{ErrorBits, SecurityTerm};
@@ -270,13 +270,6 @@ where
         return Err(invalid("padded dimensions or round degree overflow"));
     }
     let plan = LookupPlan::build::<C::Challenge, A>(&instances.airs(), &heights)?;
-    if plan.as_ref().is_some_and(|plan| {
-        <C::Val as PrimeCharacteristicRing>::PrimeSubfield::order() < plan.num_buses.into()
-    }) {
-        return Err(invalid(
-            "lookup bus identifiers wrap around the characteristic",
-        ));
-    }
     let lookup = plan.map(|plan| MultilinearLookupParams {
         num_variables: plan.num_variables,
         num_fractions,
@@ -319,9 +312,6 @@ where
                 .preprocessed_pcs()
                 .prescribed_security(&instances.preprocessed_opening_protocol()),
         );
-    }
-    if !log2_candidates.is_finite() {
-        report.unassessed.push("joint-trace-candidate-count");
     }
     for term in &mut report.terms[..num_reduction_terms] {
         term.bits = ErrorBits::from_log2((term.bits.bits() - log2_candidates).max(0.0));

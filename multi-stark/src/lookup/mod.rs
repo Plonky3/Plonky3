@@ -283,6 +283,10 @@ impl<F: Field> LookupPlan<F> {
                 .collect();
         }
 
+        if F::PrimeSubfield::order() < bus_to_id.len().into() {
+            return Err(LookupError::BusIdentifierCapacityExceeded);
+        }
+
         // The bus offset sits one beta power above every payload coordinate.
         // An all-empty payload leaves no power free for it.
         assert!(
@@ -611,6 +615,9 @@ impl<EF: Field> ActiveLookupRuntime<EF> {
 /// Reasons the lookup phase rejects a proof.
 #[derive(Debug, Error)]
 pub enum LookupError {
+    /// Distinct bus identifiers must remain distinct in the prime subfield.
+    #[error("lookup bus identifiers wrap around the characteristic")]
+    BusIdentifierCapacityExceeded,
     /// The counting argument and fractional-GKR kernels do not support binary fields.
     #[error("multi-STARK lookups do not support characteristic two")]
     UnsupportedCharacteristic,
@@ -881,6 +888,30 @@ mod tests {
             assert_eq!(materialize(&actual), expected_fraction);
         }
     }
+    struct ManyBusesAir(usize);
+
+    impl BaseAir<Tiny> for ManyBusesAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: InteractionBuilder<F = Tiny>> Air<AB> for ManyBusesAir {
+        fn eval(&self, builder: &mut AB) {
+            let value = builder.main().current_slice()[0];
+            for _ in 0..self.0 {
+                builder
+                    .push_local_interaction([(vec![value.into()], Count::provided(AB::Expr::ONE))]);
+            }
+        }
+    }
+
+    #[test]
+    fn lookup_plan_rejects_bus_identifier_wraparound() {
+        assert!(LookupPlan::<Tiny>::build::<Tiny, _>(&[&ManyBusesAir(3)], &[0]).is_ok());
+        assert!(LookupPlan::<Tiny>::build::<Tiny, _>(&[&ManyBusesAir(4)], &[0]).is_err());
+    }
+
     struct BinaryLookupAir;
 
     impl BaseAir<p3_binary_field::BinaryField128> for BinaryLookupAir {
