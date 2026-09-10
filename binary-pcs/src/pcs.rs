@@ -32,7 +32,7 @@ use crate::PcsLayout;
 use crate::error::BinaryPcsError;
 use crate::params::BinaryPcsConfig;
 use crate::proof::BinaryPcsProof;
-use crate::prover::{BinaryPcsProverData, commit, fold_rounds, open_queries};
+use crate::prover::{BinaryPcsProverData, commit, fold_rounds_with, open_queries};
 use crate::verifier::{
     check_canonical_pow_witness, check_round_and_final_lengths, verify_query_paths,
 };
@@ -187,8 +187,39 @@ where
             + CanSampleUniformBits<BinaryField128>
             + CanObserve<MT::Commitment>,
     {
+        self.finish_open_with::<false, Challenger>(prover_data, evals, challenger)
+    }
+
+    /// The body of [`Self::finish_open`], with the fold route selected by a const parameter.
+    ///
+    /// `BIND_EACH_ROUND` is [`fold_rounds_with`]'s parameter, carried one level up:
+    ///
+    /// ```text
+    ///     false: the shipped route, each held challenge absorbed by the next round's pass
+    ///     true : the reference route, each round's binding applied on its own pass
+    /// ```
+    ///
+    /// Both routes send the same transcript, so a test can pin one against the other
+    /// without reproducing anything the shipped path does after the fold rounds.
+    fn finish_open_with<const BIND_EACH_ROUND: bool, Challenger>(
+        &self,
+        prover_data: BinaryPcsProverData<MT>,
+        evals: Vec<OpeningEvals<BinaryField128>>,
+        challenger: &mut Challenger,
+    ) -> BinaryPcsProof<MT>
+    where
+        Challenger: FieldChallenger<BinaryField128>
+            + GrindingChallenger<Witness = BinaryField128>
+            + CanSampleUniformBits<BinaryField128>
+            + CanObserve<MT::Commitment>,
+    {
         let (base_merkle_data, sumcheck_data, rounds, _randomness, final_codeword) =
-            fold_rounds(prover_data, &self.config, &self.mmcs, challenger);
+            fold_rounds_with::<BIND_EACH_ROUND, _, _>(
+                prover_data,
+                &self.config,
+                &self.mmcs,
+                challenger,
+            );
         let query_proofs = open_queries(
             &self.config,
             &self.mmcs,
@@ -490,8 +521,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use alloc::vec::Vec;
+    use alloc::{format, vec};
 
     use p3_binary_field::BinaryField128;
     use p3_challenger::{CanObserve, FieldChallenger};
@@ -506,7 +537,8 @@ mod tests {
     use crate::error::BinaryPcsError;
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::proof::BinaryPcsProof;
-    use crate::test_util::{MyMmcs, challenger, mmcs, run_lifecycle};
+    use crate::prover::BinaryPcsProverData;
+    use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs, run_lifecycle};
 
     type F = BinaryField128;
 
@@ -538,6 +570,131 @@ mod tests {
         let mut verifier_challenger = challenger();
         pcs.verify(&commitment, &decoded, &mut verifier_challenger, protocol)
             .unwrap();
+    }
+
+    /// Opens through the reference fold route, and through the shipped path everywhere else.
+    ///
+    /// The claims are recorded exactly as [`BinaryPcs::try_open`] records them, then
+    /// [`BinaryPcs::finish_open_with`] runs the rest with `BIND_EACH_ROUND = true`.
+    ///
+    /// Nothing the shipped path does after the fold rounds is reproduced here.
+    ///
+    /// So the two proofs can only differ if a round polynomial did.
+    fn open_binding_each_round(
+        pcs: &BinaryPcs<MyMmcs>,
+        mut prover_data: BinaryPcsProverData<MyMmcs>,
+        protocol: &OpeningProtocol,
+        challenger: &mut MyChallenger,
+    ) -> BinaryPcsProof<MyMmcs> {
+        let evals = protocol
+            .iter_openings()
+            .map(|(table_idx, batch)| prover_data.layout.eval(table_idx, batch, challenger))
+            .collect();
+
+        pcs.finish_open_with::<true, MyChallenger>(prover_data, evals, challenger)
+    }
+
+    #[test]
+    fn fusing_the_binding_into_the_measuring_pass_leaves_the_proof_byte_identical() {
+        // Invariant: how many passes compute a round polynomial never changes its value.
+        //
+        //     shipped  : round r measures and applies round r-1's binding in one pass
+        //     reference: round r measures, then a second pass applies round r's binding
+        //
+        // Both routes must send the same transcript, so the proof bytes must match.
+        //
+        // Fixture state: one random single-column table.
+        //
+        //     opened at : a transcript-sampled point
+        //     driven    : twice, from identically seeded challengers
+        //
+        // The grinding budget is zero, which is what makes the whole proof reproducible.
+        //
+        // A non-zero budget searches its witness across threads.
+        //
+        // It keeps whichever witness a thread finds first.
+        //
+        // The witness, and every transcript draw after it, then varies run to run.
+        //
+        // Both folding factors, because a held challenge takes a different path in each:
+        //
+        //     1: every round is its own fold batch, so it only ever crosses a batch
+        //     3: three rounds share a batch, so it also crosses a round boundary inside one
+        let num_variables = NUM_VARIABLES;
+        let params = BinaryPcsParams {
+            log_inv_rate: 2,
+            pow_bits: 0,
+            security_level: 40,
+        };
+
+        for log_folding_factor in [1usize, 3] {
+            let mut rng = SmallRng::seed_from_u64(0x50FA);
+            let table = Table::rand(&mut rng, 1, num_variables);
+            let shape = format!("arity {log_folding_factor}");
+
+            let protocol = OpeningProtocol::new(vec![TableSpec::new(
+                TableShape::new(num_variables, 1),
+                vec![OpeningBatch::new(vec![0], Vec::new())],
+            )]);
+
+            let config =
+                BinaryPcsConfig::try_new_with_folding(num_variables, params, log_folding_factor)
+                    .unwrap();
+            let pcs = BinaryPcs::new(config, mmcs());
+
+            // Shipped route.
+            let mut got_challenger = challenger();
+            let (got_commitment, got_data) = pcs.commit(
+                SuffixProver::<F, F>::new_witness(vec![table.clone()], 0),
+                &mut got_challenger,
+            );
+            let got = pcs.open(got_data, protocol.clone(), &mut got_challenger);
+
+            // Reference route, from an identically seeded challenger.
+            let mut want_challenger = challenger();
+            let (want_commitment, want_data) = pcs.commit(
+                SuffixProver::<F, F>::new_witness(vec![table], 0),
+                &mut want_challenger,
+            );
+            let want = open_binding_each_round(&pcs, want_data, &protocol, &mut want_challenger);
+
+            // Round by round first, so a discrepancy is localised to the round that drifted.
+            assert_eq!(
+                got.sumcheck.num_rounds(),
+                want.sumcheck.num_rounds(),
+                "{shape}: round counts"
+            );
+            for (round, (got_msg, want_msg)) in got
+                .sumcheck
+                .polynomial_evaluations()
+                .iter()
+                .zip(want.sumcheck.polynomial_evaluations())
+                .enumerate()
+            {
+                assert_eq!(got_msg, want_msg, "{shape}: round {round} message");
+            }
+
+            // Then the whole proof, on the wire.
+            let got_bytes = postcard::to_allocvec(&got).unwrap();
+            let want_bytes = postcard::to_allocvec(&want).unwrap();
+            assert_eq!(got_bytes, want_bytes, "{shape}: proof bytes");
+
+            // The transcripts must also be left in the same state.
+            //
+            // Equal proof bytes do not show that on their own.
+            //
+            // Two challengers that diverged could still have produced the same bytes.
+            assert_eq!(
+                got_challenger.sample_algebra_element::<F>(),
+                want_challenger.sample_algebra_element::<F>(),
+                "{shape}: transcript state after opening"
+            );
+
+            // And the proof both routes produced verifies.
+            assert_eq!(got_commitment, want_commitment, "{shape}");
+            pcs.verify(&got_commitment, &got, &mut challenger(), protocol)
+                .unwrap();
+        }
     }
 
     const fn params() -> BinaryPcsParams {
