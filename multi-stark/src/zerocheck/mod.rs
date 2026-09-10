@@ -199,8 +199,11 @@ where
         0
     };
 
-    let has_interactions =
-        !builder.global_interactions().is_empty() || !builder.local_interactions().is_empty();
+    let has_interactions = !builder.global_interactions().is_empty()
+        || builder
+            .local_interactions()
+            .iter()
+            .any(|local| !local.tuples.is_empty());
     let global_interaction_degree = builder
         .global_interactions()
         .iter()
@@ -1473,6 +1476,37 @@ mod tests {
     }
 
     struct InteractionDegreeAir;
+
+    struct EmptyLocalInteractionAir;
+
+    impl<X> BaseAir<X> for EmptyLocalInteractionAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: InteractionBuilder> Air<AB> for EmptyLocalInteractionAir {
+        fn eval(&self, builder: &mut AB) {
+            builder.assert_zero(builder.main().current_slice()[0]);
+            builder.push_local_interaction(core::iter::empty::<(Vec<AB::Expr>, Count<AB::Expr>)>());
+        }
+    }
+
+    #[test]
+    fn empty_local_interactions_are_inert() {
+        assert_eq!(
+            get_air_degrees::<F, EF, _>(&EmptyLocalInteractionAir),
+            AirDegrees {
+                constraints: 1,
+                interactions: 0
+            }
+        );
+        assert!(
+            crate::lookup::LookupPlan::<F>::build::<EF, _>(&[&EmptyLocalInteractionAir], &[3])
+                .unwrap()
+                .is_none()
+        );
+    }
 
     struct ConstantInteractionAir;
 
