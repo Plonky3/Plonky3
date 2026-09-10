@@ -3,15 +3,17 @@ use core::fmt::Debug;
 use p3_air::Air;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_challenger::{DuplexChallenger, SerializingChallenger32};
-use p3_circle::CirclePcs;
+use p3_circle::{CircleDomain, CirclePcs};
 use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::extension::ComplexExtendable;
 use p3_field::{
     ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField, UniformSamplingField,
 };
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
+use p3_matrix::Matrix;
 use p3_mersenne_31::{Mersenne31, QM31};
 use p3_stir::{SecurityAssumption, StirParameters, TwoAdicStirPcs};
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
@@ -159,18 +161,18 @@ where
     let fri_params =
         example_fri_parameters::<EF, _>(FriParameters::new_benchmark_high_arity(challenge_mmcs));
 
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
+        TwoAdicMultiplicativeCoset::new(F::ONE, trace.height().ilog2() as usize).unwrap(),
         EF::bits(),
         128,
         2,
         OpeningShape::new(),
         fri_params.grinding_sites(),
     );
-
-    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_params);
     let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
@@ -217,18 +219,18 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params =
         example_fri_parameters::<EF, _>(FriParameters::new_benchmark_high_arity(challenge_mmcs));
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
+        TwoAdicMultiplicativeCoset::new(F::ONE, trace.height().ilog2() as usize).unwrap(),
         EF::bits(),
         128,
         2,
         OpeningShape::new(),
         fri_params.grinding_sites(),
     );
-
-    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_params);
     let challenger = DuplexChallenger::new(perm24);
@@ -374,18 +376,18 @@ pub fn prove_m31_keccak<
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = example_circle_parameters::<EF, _>(challenge_mmcs);
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
+        CircleDomain::standard(trace.height().ilog2() as usize),
         EF::bits(),
         128,
         2,
         OpeningShape::Circle,
         fri_params.grinding_sites(),
     );
-
-    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
     let pcs = CirclePcs::new(val_mmcs, fri_params);
     let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
@@ -430,18 +432,18 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = example_circle_parameters::<EF, _>(challenge_mmcs);
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
+        CircleDomain::standard(trace.height().ilog2() as usize),
         EF::bits(),
         128,
         2,
         OpeningShape::Circle,
         fri_params.grinding_sites(),
     );
-
-    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
     let pcs = CirclePcs::new(val_mmcs, fri_params);
     let challenger = DuplexChallenger::new(perm24);
@@ -574,6 +576,7 @@ mod tests {
             params.security_regime(),
             &air,
             AirLayout::from_air::<Mersenne31>(&air),
+            CircleDomain::standard(18),
             QM31::bits(),
             128,
             2,

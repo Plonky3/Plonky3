@@ -216,6 +216,7 @@ mod tests {
         let air = StarkAirParams {
             num_constraints: 1,
             max_constraint_degree: 2,
+            num_quotient_chunks: 1,
             max_combo: 2,
         };
         // Small field so the lookup term is in range of the other terms.

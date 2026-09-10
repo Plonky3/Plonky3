@@ -240,6 +240,7 @@ fn batch_grinding_raises_the_level_when_the_batch_round_binds() {
         9,
         2,
         1 << 8,
+        8,
     );
     let degree_bits = 20;
 
@@ -280,6 +281,7 @@ fn out_of_domain_grinding_raises_the_level_when_the_deep_round_binds() {
         9,
         2,
         1,
+        8,
     );
     let degree_bits = 24;
 
@@ -318,6 +320,7 @@ fn grinding_is_monotone_at_every_site() {
         9,
         2,
         1 << 8,
+        8,
     );
     let degree_bits = 20;
 

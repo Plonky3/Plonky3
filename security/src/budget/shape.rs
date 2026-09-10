@@ -89,6 +89,8 @@ pub struct AirShape {
     pub num_composed_constraints: u32,
     /// Maximum constraint degree over all AIRs.
     pub max_constraint_degree: u32,
+    /// Exact committed quotient chunk count, including ZK degree padding and doubling.
+    pub num_quotient_chunks: u32,
     /// Maximum number of out-of-domain points referenced per committed column — one per distinct
     /// point the AIR's rotations induce: `2` for an AIR that opens `local` and `next`, `1` for an
     /// AIR whose constraints all read a single row, and higher for a wider rotation set.

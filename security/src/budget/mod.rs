@@ -114,6 +114,7 @@ pub const fn security_report(
     let out_of_domain = out_of_domain_round(
         instance,
         air.max_constraint_degree,
+        air.num_quotient_chunks,
         air.max_combo,
         params.ood_pow_bits,
         cap,
@@ -215,8 +216,8 @@ const fn round(
 
 /// Bounds the out-of-domain round: error `max(d · (H + combo − 1) + (H − 1), (c + 1) · H + combo
 /// − 1) / |E|`, with `H` the trace height, `d` the maximum constraint degree, `combo` the number
-/// of out-of-domain points referenced per column, and `c = 2^⌈log2(max(d, 2) − 1)⌉` the number of
-/// power-of-two quotient chunks Plonky3 commits (`uni_stark::symbolic::get_log_num_quotient_chunks`).
+/// of out-of-domain points referenced per column, and `c` the exact number of committed
+/// quotient chunks, including ZK degree padding and doubling.
 ///
 /// Checking the DEEP-ALI identity at the sampled point clears the common denominator
 /// `Π_i (x − z_i)`, which lifts each of a constraint's `d` trace factors from degree `≤ H − 1` to
@@ -230,8 +231,7 @@ const fn round(
 /// That is ethSTARK's `X^i · h_i(X^d)` split. Plonky3 instead commits the quotient as `c`
 /// power-of-two chunks reconstructed with degree-`(c − 1) · H` coset selectors, giving identity
 /// degree `(c + 1) · H + combo − 1`; this exceeds the first term whenever `c > d`, which is why
-/// the two are combined by a maximum rather than the first alone. `c` assumes a non-`zk` quotient
-/// split.
+/// the two are combined by a maximum rather than the first alone.
 ///
 /// [`crate::deep::deep_ali_error`] states the same bound in `f64`. Unlike [`round`], both terms
 /// are additive rather than a multiple of `H`, so the whole product is folded into the size
@@ -250,11 +250,12 @@ const fn round(
 const fn out_of_domain_round(
     instance: &InstanceShape,
     max_constraint_degree: u32,
+    num_quotient_chunks: u32,
     max_combo: u32,
     pow_bits: u32,
     cap: u64,
 ) -> SecurityTerm {
-    if instance.log_max_height >= u64::BITS {
+    if instance.log_max_height >= u64::BITS || !num_quotient_chunks.is_power_of_two() {
         return SecurityTerm::new(OUT_OF_DOMAIN_LABEL, 0);
     }
 
@@ -267,15 +268,7 @@ const fn out_of_domain_round(
     let height = 1u128 << instance.log_max_height;
     let ethstark = d * (height + combo - 1) + (height - 1);
 
-    // `c = 2^⌈log2(chunk_arg)⌉`, mirroring `p3_util::log2_ceil_usize` in `u128`: the smallest
-    // power of two at least `chunk_arg`, found by counting the leading zeros of `chunk_arg − 1`.
-    let chunk_arg = (if max_constraint_degree < 2 {
-        2
-    } else {
-        max_constraint_degree as u128
-    }) - 1;
-    let log_chunks = u128::BITS - chunk_arg.saturating_sub(1).leading_zeros();
-    let chunks = 1u128 << log_chunks;
+    let chunks = num_quotient_chunks as u128;
     let chunked = (chunks + 1) * height + combo - 1;
 
     let size = if ethstark > chunked {
@@ -329,6 +322,7 @@ mod tests {
         AirShape {
             num_composed_constraints: 531,
             max_constraint_degree: 9,
+            num_quotient_chunks: 8,
             max_combo: 2,
             num_deep_terms: Some(130),
             lookup: LookupShape {
@@ -498,6 +492,7 @@ mod tests {
         let large = AirShape {
             num_composed_constraints: 4096,
             max_constraint_degree: 9,
+            num_quotient_chunks: 8,
             max_combo: 2,
             num_deep_terms: Some(1024),
             lookup: LookupShape {

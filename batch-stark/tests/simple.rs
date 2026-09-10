@@ -727,6 +727,7 @@ fn security_estimate_with_and_without_lookups() {
     let air = StarkAirParams {
         num_constraints: 3,
         max_constraint_degree: 2,
+        num_quotient_chunks: 1,
         max_combo: 2,
     };
     // A width-100 AIR that reads its own next row, committing two quotient chunks over the

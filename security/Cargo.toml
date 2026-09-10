@@ -12,6 +12,7 @@ categories.workspace = true
 [dependencies]
 libm.workspace = true
 p3-air.workspace = true
+p3-commit.workspace = true
 p3-field.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
 
