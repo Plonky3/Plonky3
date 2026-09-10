@@ -23,6 +23,14 @@ use crate::{
 /// Type alias for the unified [`ExtField`] with `Shape = Binomial<F>`.
 pub type BinomialExtensionField<F, const D: usize, A = F> = ExtField<F, D, Binomial<F>, A>;
 
+impl<F: BinomiallyExtendable<D>, const D: usize> crate::AlgebraIdentity<F>
+    for BinomialExtensionField<F, D>
+{
+    fn algebra_id() -> Vec<u8> {
+        F::binomial_algebra_id()
+    }
+}
+
 impl<F: Copy, const D: usize> BinomialExtensionField<F, D, F> {
     /// Convert a `[[F; D]; N]` array to an array of extension field elements.
     ///

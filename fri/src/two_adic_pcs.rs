@@ -1067,7 +1067,9 @@ mod tests {
         // The witness must satisfy the proof-of-work predicate at the difficulty
         // the run was described with, even though the proof was produced at it.
         let (pcs, claims, mut proof, mut challenger) = make_pcs_fixture();
-        proof.batch_pow_witness += F::ONE;
+        // Fixed invalid candidate for this transcript seed. Adding one to a valid
+        // 1-bit witness can produce another valid witness.
+        proof.batch_pow_witness = F::TWO;
 
         let err = run_pcs_verify(&pcs, claims, &proof, &mut challenger)
             .expect_err("a tampered batch grinding witness must be rejected");

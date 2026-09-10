@@ -49,12 +49,13 @@ fn binary_type_tag_commits_to_the_coefficient_field() {
         native.type_tag(),
         TypeTag::Algebra {
             modulus: 2,
-            degree: 128
+            degree: 128,
+            basis: [0; 32],
         }
     );
     assert_eq!(
         format!("{native:#}"),
-        "Atomic Message 1 x Scalar BinaryTower(128^1)"
+        "Atomic Message 1 x Scalar BinaryTower(128^1;cfa353fe66eeeae7600254a68073d57125abac3820fde7a3e32c84482b826469)"
     );
 }
 

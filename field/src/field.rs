@@ -563,6 +563,25 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     }
 }
 
+/// Compiler-independent identity of an algebra's ordered coefficient basis over `F`.
+///
+/// Together with the coefficient field identity and dimension, these bytes must
+/// uniquely identify the defining relations and the ordered basis used by
+/// [`BasedVectorSpace`]. Different polynomials or basis orderings require different
+/// identifiers, even for isomorphic fields. Use an unambiguous, versioned encoding;
+/// Rust type names, memory layouts, and compiler-dependent encodings are forbidden.
+/// Changing this identity changes Fiat-Shamir transcripts.
+pub trait AlgebraIdentity<F: PrimeCharacteristicRing>: BasedVectorSpace<F> {
+    /// Return the stable, unambiguous identifier of the defining relations and basis.
+    fn algebra_id() -> Vec<u8>;
+}
+
+impl<F: PrimeCharacteristicRing> AlgebraIdentity<F> for F {
+    fn algebra_id() -> Vec<u8> {
+        b"p3-scalar-basis-v1".to_vec()
+    }
+}
+
 /// Values that can act as sponge lanes for delimiter padding.
 ///
 /// This is used by symmetric sponge adapters that need canonical `0` and `1` symbols while
@@ -1283,7 +1302,9 @@ pub trait PrimeField32: PrimeField64 {
 /// standard methods provided by `Field`, `Algebra<F>` and `BasedVectorSpace<F>`.
 ///
 /// It also provides a type which handles packed vectors of extension field elements.
-pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + BasedVectorSpace<Base> {
+pub trait ExtensionField<Base: Field>:
+    Field + Algebra<Base> + BasedVectorSpace<Base> + AlgebraIdentity<Base>
+{
     type ExtensionPacking: PackedFieldExtension<Base, Self> + 'static + Copy + Send + Sync;
 
     /// Determine if the given element lies in the base field.

@@ -3035,8 +3035,8 @@ mod babybear_pcs {
             ProofShapeError::InputOpenedRowCount {
                 log_height: log_d + 1,
                 commitment: 0,
-                expected: 19,
-                got: 18,
+                expected: 20,
+                got: 19,
             }
         );
     }

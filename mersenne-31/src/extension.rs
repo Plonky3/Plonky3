@@ -19,6 +19,15 @@ impl ExtensionAlgebra<Self, 3, Binomial<Self>> for Mersenne31 {
 }
 
 impl BinomiallyExtendable<3> for Mersenne31 {
+    fn binomial_algebra_id() -> alloc::vec::Vec<u8> {
+        use p3_field::PrimeField32;
+        alloc::format!(
+            "p3-power-basis-v1:X^3-{}",
+            <Self as BinomiallyExtendable<3>>::W.as_canonical_u32()
+        )
+        .into_bytes()
+    }
+
     // ```sage
     // p = 2^31 - 1
     // F = GF(p)
@@ -39,6 +48,17 @@ impl BinomiallyExtendable<3> for Mersenne31 {
 }
 
 impl HasComplexBinomialExtension<2> for Mersenne31 {
+    fn complex_binomial_algebra_id() -> alloc::vec::Vec<u8> {
+        use p3_field::PrimeField32;
+        let w = <Self as HasComplexBinomialExtension<2>>::W;
+        alloc::format!(
+            "p3-complex-power-basis-v1:X^2-({}+{}i)",
+            w.real().as_canonical_u32(),
+            w.imag().as_canonical_u32()
+        )
+        .into_bytes()
+    }
+
     // Verifiable in Sage with
     // ```sage
     // p = 2**31 - 1  # Mersenne31
@@ -90,6 +110,17 @@ impl HasTwoAdicComplexBinomialExtension<2> for Mersenne31 {
 }
 
 impl HasComplexBinomialExtension<3> for Mersenne31 {
+    fn complex_binomial_algebra_id() -> alloc::vec::Vec<u8> {
+        use p3_field::PrimeField32;
+        let w = <Self as HasComplexBinomialExtension<3>>::W;
+        alloc::format!(
+            "p3-complex-power-basis-v1:X^3-({}+{}i)",
+            w.real().as_canonical_u32(),
+            w.imag().as_canonical_u32()
+        )
+        .into_bytes()
+    }
+
     // Verifiable in Sage with
     // ```sage
     // p = 2**31 - 1  # Mersenne31
