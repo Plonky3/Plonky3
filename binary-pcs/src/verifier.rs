@@ -224,7 +224,7 @@ where
 /// to the next.
 ///
 /// `betas` is the fold challenge used at each round, `betas[r]` for round `r`, in the order
-/// `fold_rounds` samples them; the caller derives it by replaying the sumcheck transcript
+/// `fold_rounds_with` samples them; the caller derives it by replaying the sumcheck transcript
 /// (this function does not touch the sumcheck rounds or the commitments' own transcript
 /// order). All proof-shape checks run before `challenger` is touched, so a malformed proof is
 /// rejected without ever grinding or sampling against it.
@@ -369,7 +369,7 @@ mod tests {
     use super::{BinaryPcsError, sample_query_cosets, sample_query_indices, verify_query_paths};
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::proof::BinaryPcsProof;
-    use crate::prover::{RoundCommitment, commit, fold_rounds, open_queries};
+    use crate::prover::{RoundCommitment, commit, fold_rounds_with, open_queries};
     use crate::test_util::{challenger, mmcs};
 
     type F = BinaryField128;
@@ -503,7 +503,7 @@ mod tests {
         let (base_commitment, prover_data) =
             commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
         let (base_merkle_data, sumcheck_data, rounds, randomness, final_codeword) =
-            fold_rounds(prover_data, &config, &mmcs_instance, &mut prover_ch);
+            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_ch);
 
         let mut verifier_ch = prover_ch.clone();
 
@@ -540,15 +540,15 @@ mod tests {
     /// A fresh verifier challenger, seeded identically to the prover's but touched only by
     /// what the proof carries, must sample the same query indices the prover did.
     ///
-    /// `a_genuine_proof_verifies` clones the prover's own challenger after `fold_rounds`
+    /// `a_genuine_proof_verifies` clones the prover's own challenger after `fold_rounds_with`
     /// returns, so its `verifier_ch` already carries every observation the prover made,
     /// correct or not — it can never disagree with the prover, so it cannot catch a mismatch
-    /// between what `fold_rounds` observes and what the proof actually carries. This test
+    /// between what `fold_rounds_with` observes and what the proof actually carries. This test
     /// instead rebuilds the verifier's side of the transcript from an empty challenger: the
     /// base commitment, the batching challenge `into_sumcheck` samples even though it consumes
     /// zero preprocessing rounds, each fold round's polynomial and challenge (from
     /// `proof.sumcheck`), and each intermediate round's commitment (one per fold round except
-    /// the last). If `fold_rounds` observes one more or one fewer commitment than this replay
+    /// the last). If `fold_rounds_with` observes one more or one fewer commitment than this replay
     /// does, the two challengers desync and the sampled indices diverge.
     #[test]
     fn a_fresh_verifier_challenger_samples_the_same_query_indices() {
@@ -565,7 +565,7 @@ mod tests {
         let (base_commitment, prover_data) =
             commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
         let (base_merkle_data, sumcheck_data, rounds, randomness, final_codeword) =
-            fold_rounds(prover_data, &config, &mmcs_instance, &mut prover_ch);
+            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_ch);
 
         // The prover's own transcript state, snapshotted right before the query phase, gives
         // an independent readout of the indices `open_queries` samples: replaying the actual
@@ -655,7 +655,7 @@ mod tests {
         let (base_commitment, prover_data) =
             commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
         let (base_merkle_data, sumcheck_data, mut rounds, randomness, final_codeword) =
-            fold_rounds(prover_data, &config, &mmcs_instance, &mut prover_ch);
+            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_ch);
 
         // `rounds[0]` carries fold round 1, the round the base round's fold must reproduce.
         let shifted: Vec<F> = mmcs_instance.get_matrices(&rounds[0].merkle_data)[0]

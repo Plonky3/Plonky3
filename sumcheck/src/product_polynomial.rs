@@ -30,7 +30,10 @@ use tracing::instrument;
 
 use crate::SumcheckData;
 use crate::constraints::Constraint;
-use crate::strategy::{Basis, RoundMessage, VariableOrder, fold_and_round_coefficients_prefix};
+use crate::strategy::{
+    Basis, RoundMessage, VariableOrder, fold_and_round_coefficients_prefix,
+    fold_and_round_coefficients_suffix,
+};
 use crate::transcript::ProverTranscript;
 
 /// A paired representation of evaluation and weight polynomials for quadratic sumcheck.
@@ -477,19 +480,37 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///
     /// The bound pair's round polynomial at 0, and its leading coefficient.
     ///
-    /// # Why two states fall back
+    /// # Why one state falls back
     ///
-    /// - Suffix binding pairs adjacent entries, not half-apart faces.
-    ///   An in-place write would race its own reads.
-    /// - A table below four entries leaves the bound half with nothing to sum over.
+    /// A table below four entries leaves the bound half with nothing to sum over,
+    /// so the message the pass would return does not exist yet.
+    ///
+    /// # Binding orders
+    ///
+    /// Both are fused, by two kernels that differ in where the bound variable lives:
+    ///
+    /// ```text
+    ///     prefix: the high index bit, faces half the table apart, bound in place
+    ///     suffix: the low index bit, faces adjacent, bound into a half-size buffer
+    /// ```
+    ///
+    /// The suffix half-size buffer is pure cost below `PARALLEL_THRESHOLD` entries,
+    /// where `Poly::fix_suffix_var_mut` folds in place and allocates nothing.
+    ///
+    /// No size gate routes those rounds back to two passes, because the tail of a
+    /// ladder cannot move its total:
+    ///
+    /// ```text
+    ///     a 2^20 ladder reads ~2^21 entries in all
+    ///     its rounds below the threshold hold ~2^13 of them, or ~0.4%
+    /// ```
     pub(crate) fn fold_round_coefficients(&mut self, r: EF) -> (EF, EF) {
-        // The fused pass binds a prefix variable and needs the bound table to keep one.
+        // The fused pass needs the bound table to keep a variable for the message.
         // That is four entries in the table it starts from.
-        let fusable = self.order == VariableOrder::Prefix
-            && match &self.inner {
-                MaybePacked::Packed { evals, .. } => evals.num_evals() >= 4,
-                MaybePacked::Unpacked { evals, .. } => evals.num_evals() >= 4,
-            };
+        let fusable = match &self.inner {
+            MaybePacked::Packed { evals, .. } => evals.num_evals() >= 4,
+            MaybePacked::Unpacked { evals, .. } => evals.num_evals() >= 4,
+        };
 
         // Bind and measure as two separate passes, exactly as a plain round does.
         if !fusable {
@@ -497,20 +518,35 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
             return self.round_coefficients();
         }
 
-        let RoundMessage { c_a, c_inf } = match &mut self.inner {
-            MaybePacked::Packed { evals, weights } => {
-                let msg = fold_and_round_coefficients_prefix(evals, weights, r);
+        let RoundMessage { c_a, c_inf } = match self.order {
+            VariableOrder::Prefix => match &mut self.inner {
+                MaybePacked::Packed { evals, weights } => {
+                    let msg = fold_and_round_coefficients_prefix(evals, weights, r);
 
-                // Horizontal reduction across SIMD lanes, as in the unfused round.
-                RoundMessage {
-                    c_a: EF::ExtensionPacking::to_ext_iter([msg.c_a]).sum(),
-                    c_inf: EF::ExtensionPacking::to_ext_iter([msg.c_inf]).sum(),
+                    // Horizontal reduction across SIMD lanes, as in the unfused round.
+                    RoundMessage {
+                        c_a: EF::ExtensionPacking::to_ext_iter([msg.c_a]).sum(),
+                        c_inf: EF::ExtensionPacking::to_ext_iter([msg.c_inf]).sum(),
+                    }
                 }
-            }
-            // Scalar storage needs no lane reduction.
-            MaybePacked::Unpacked { evals, weights } => {
-                fold_and_round_coefficients_prefix(evals, weights, r)
-            }
+                // Scalar storage needs no lane reduction.
+                MaybePacked::Unpacked { evals, weights } => {
+                    fold_and_round_coefficients_prefix(evals, weights, r)
+                }
+            },
+            VariableOrder::Suffix => match &mut self.inner {
+                MaybePacked::Unpacked { evals, weights } => {
+                    fold_and_round_coefficients_suffix(evals, weights, r)
+                }
+                // The lanes carry the last variables.
+                //
+                // So a suffix round cannot reach the variable it names.
+                //
+                // Construction unpacks such a pair before it is ever stored packed.
+                MaybePacked::Packed { .. } => {
+                    unreachable!("packed storage cannot bind a suffix variable")
+                }
+            },
         };
 
         // The bound tables may now be small enough that scalar storage is faster.
