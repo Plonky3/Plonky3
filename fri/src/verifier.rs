@@ -182,6 +182,18 @@ where
         expected: usize,
         got: usize,
     },
+    #[error(
+        "hiding PCS round {round}, matrix {matrix}, point {point}: random opening value count mismatch: expected {expected}, got {got}"
+    )]
+    HidingRandomOpeningValueCountMismatch {
+        round: usize,
+        matrix: usize,
+        point: usize,
+        expected: usize,
+        got: usize,
+    },
+    #[error("hiding PCS preprocessing index {index} is outside {num_rounds} commitment rounds")]
+    HidingPreprocessedCommitmentOutOfBounds { index: usize, num_rounds: usize },
     #[error("hiding PCS requires at least {required} random codewords, got {got}")]
     InsufficientHidingRandomCodewords { required: usize, got: usize },
     #[error(

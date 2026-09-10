@@ -217,6 +217,22 @@ where
         self.open(commitment_data_with_opening_points, fiat_shamir_challenger)
     }
 
+    /// Verify with trusted metadata identifying the unrandomized preprocessing commitment.
+    ///
+    /// The index identifies a commitment request, not a matrix. It must come from the
+    /// verifier's statement or key, never from the proof or its random-opening lengths.
+    /// `None` requires every commitment to use the ordinary PCS opening format.
+    /// Non-hiding implementations behave exactly like [`Pcs::verify`].
+    fn verify_with_preprocessing(
+        &self,
+        rounds: Vec<CommitmentOpening<Challenge, Self::Commitment, Self::Domain>>,
+        proof: &Self::Proof,
+        challenger: &mut Challenger,
+        _preprocessed_commitment: Option<usize>,
+    ) -> Result<(), Self::Error> {
+        self.verify(rounds, proof, challenger)
+    }
+
     #[allow(clippy::type_complexity)]
     fn get_opt_randomization_poly_commitment(
         &self,

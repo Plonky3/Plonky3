@@ -1877,6 +1877,21 @@ fn generate_circle_fixture() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn test_preprocessed_constraint_zk() {
+    let config = make_config_zk(8888);
+    let (air, trace, pis) = create_preprocessed_mul_instance(5, 2);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: pis.clone(),
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    assert!(prover_data.common.preprocessed.is_some());
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    verify_batch(&config, &[air], &proof, &[pis], &prover_data.common).unwrap();
+}
+
+#[test]
 fn test_preprocessed_constraint_positive() -> Result<(), impl Debug> {
     // Test that preprocessed columns are correctly used in constraints
     // Enforces: main[0] = 2 * preprocessed[0]

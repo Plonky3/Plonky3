@@ -554,6 +554,9 @@ where
 
     // A preprocessed commitment is bound only when the width in force is positive.
     let preprocessed_commit = preprocessed_commit.filter(|_| preprocessed_width > 0);
+    let preprocessed_index = preprocessed_commit
+        .as_ref()
+        .map(|_| crate::StarkOpeningLayout::new(SC::Pcs::ZK).preprocessed);
 
     // Describe the transcript before replaying it.
     //
@@ -618,7 +621,7 @@ where
             periodic_values,
             claims,
         } = prepared?;
-        pcs.verify(claims, opening_proof, challenger)
+        pcs.verify_with_preprocessing(claims, opening_proof, challenger, preprocessed_index)
             .map_err(VerificationError::InvalidOpeningArgument)?;
         Ok(periodic_values)
     });
