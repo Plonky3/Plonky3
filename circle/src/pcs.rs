@@ -1201,7 +1201,7 @@ mod tests {
         InputError<<ValMmcs as Mmcs<Val>>::Error, <ChallengeMmcs as Mmcs<Challenge>>::Error>,
     >;
 
-    /// `FriParameters::new_benchmark` must satisfy [`CirclePcs::new`]'s guard.
+    /// The benchmark parameter preset must satisfy the constructor's own guard.
     ///
     /// It reaches that constructor from `p3-examples` and from `monolith-air`'s
     /// benchmark, so a nonzero `batch_proof_of_work_bits` there turns both into
@@ -1721,39 +1721,51 @@ mod tests {
 
     #[test]
     fn reject_under_reported_commit_rounds() {
-        // Invariant: the reported commit-round count must cover the claimed matrix height.
-        //   - log_global_max_height is derived from the proof's round count
-        //   - under-reporting drives it below a matrix's log_height
-        //   - then `index >> (log_global_max_height - log_height)` would underflow
-        // The verifier must reject before that subtraction runs.
+        // Invariant: the commit-round count is fixed by the claimed matrix height.
+        //
+        //   - the height comes from the claim
+        //   - the round count follows from the height
+        //   - a proof carrying fewer rounds is a proof of a different shape
+        //   - the fold chain and the transcript are sized by the derived count
+        //
+        // The verifier must reject before either of them is walked.
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
-        // On an honest proof the two height derivations coincide:
+        // The round count the claim fixes.
         //
-        //     H_claim = log_n + log_blowup                            (claimed matrix)
-        //     H_proof = commit_phase_commits.len() + log_blowup + 1   (first-layer fold)
-        let log_blowup = pcs.fri_params.log_blowup;
-        let expected = d.log_n + log_blowup;
-        let original = proof.fri_proof.commit_phase_commits.len() + log_blowup + 1;
-        assert_eq!(original, expected, "fixture must start height-consistent");
+        // The bivariate layer takes one bit before FRI folds anything.
+        //
+        //     H_claim = log_n + log_blowup
+        //     rounds  = H_claim - log_blowup - 1 = log_n - 1
+        //
+        // The blowup cancels.
+        //
+        // So the claimed matrix height alone fixes the count.
+        let rounds = d.log_n - 1;
+        assert_eq!(
+            proof.fri_proof.commit_phase_commits.len(),
+            rounds,
+            "fixture must start round-consistent"
+        );
 
         // Mutation: drop one commit-phase commitment so the round count falls short.
         //
-        //     before: commit_phase_commits = [c_0, ..., c_{n-1}]   → H_proof = expected
-        //     after:  commit_phase_commits = [c_0, ..., c_{n-2}]   → H_proof = expected - 1
-        //     → H_proof < H_claim → GlobalMaxHeightMismatch (no underflow)
+        //     claim fixes:  [c_0, ..., c_{n-1}]   (n rounds)
+        //     proof holds:  [c_0, ..., c_{n-2}]   (n - 1 rounds)
+        //
+        //     n - 1 != n  ->  rejected before the fold chain runs
         proof.fri_proof.commit_phase_commits.pop();
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
-            .expect_err("expected GlobalMaxHeightMismatch");
+            .expect_err("expected CommitRoundCountMismatch");
 
-        let FriError::GlobalMaxHeightMismatch { expected: exp, got } = err else {
-            panic!("expected GlobalMaxHeightMismatch, got {err:?}");
+        let FriError::CommitRoundCountMismatch { expected, got } = err else {
+            panic!("expected CommitRoundCountMismatch, got {err:?}");
         };
-        // The verifier wants the height the claimed matrix demands.
-        assert_eq!(exp, expected);
+        // The verifier wants one round per bit the claimed height has to travel.
+        assert_eq!(expected, rounds);
         // The proof under-reports by exactly the one round we removed.
-        assert_eq!(got, expected - 1);
+        assert_eq!(got, rounds - 1);
     }
 
     #[test]
@@ -1791,9 +1803,12 @@ mod tests {
         // the remaining one).
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
-        // Capture the original sibling count and arity before mutating.
-        let log_arity = proof.fri_proof.commit_phase_openings[0].log_arity as usize;
-        let arity = 1usize << log_arity;
+        // Circle folding halves the domain, so every round folds by two.
+        //
+        // The verifier derives that arity.
+        //
+        // So the fixture states it rather than reading it back out of the proof.
+        let arity = 2usize;
         let original_sibling_count =
             proof.fri_proof.commit_phase_openings[0].sibling_values[0].len();
 
@@ -2087,30 +2102,6 @@ mod tests {
             ),
             "expected NonCanonicalPowWitness for the query phase, got {err:?}"
         );
-    }
-
-    #[test]
-    fn reject_invalid_log_arity() {
-        // Invariant: each log_arity must be in 1..=max_log_arity.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
-
-        // Mutation: force an invalid zero arity in query 0, round 0.
-        proof.fri_proof.commit_phase_openings[0].log_arity = 0;
-
-        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
-            .expect_err("expected InvalidLogArity");
-
-        let FriError::InvalidLogArity {
-            round,
-            log_arity,
-            max,
-        } = err
-        else {
-            panic!("expected InvalidLogArity, got {err:?}");
-        };
-        assert_eq!(round, 0);
-        assert_eq!(log_arity, 0);
-        assert_eq!(max, pcs.fri_params.max_log_arity);
     }
 
     #[test]
