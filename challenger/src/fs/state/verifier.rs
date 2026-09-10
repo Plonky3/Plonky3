@@ -466,6 +466,17 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ///
     /// The prover-side method of the same name carries what the step does and does not record.
     ///
+    /// # What the shape does not part
+    ///
+    /// This draw and the unconstrained one record the same step.
+    ///
+    /// So no fingerprint and no seed tells the two apart.
+    ///
+    /// A predicate changes both the distribution and the sponge stream.
+    ///
+    /// Replacing this call with the unconstrained draw is therefore a format change
+    /// no shape check catches.
+    ///
     /// # Panics
     ///
     /// Never returns if `accept` rejects every value in the field.
@@ -815,6 +826,41 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         TranscriptBound::wrap(ExtensionFieldCodec::<F, EF, Cdc>::sample(
             &mut self.challenger,
         ))
+    }
+
+    /// Sample a fixed-length list of challenge extension-field elements as one step.
+    ///
+    /// Mirrors the proving side.
+    ///
+    /// Both draw the same list from the same sponge state.
+    ///
+    /// The count comes from the replaying side's own configuration, never from the wire.
+    pub fn challenge_extensions<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        count: usize,
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: TranscriptField,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        assert_challenge_security::<C, F, Cdc>();
+        // Validate: the next pattern step is a fixed-length list of extension challenges.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            Length::Fixed(count),
+        ));
+        // Draw the coordinates in the order the proving side drew them.
+        (0..count)
+            .map(|_| {
+                TranscriptBound::wrap(ExtensionFieldCodec::<F, EF, Cdc>::sample(
+                    &mut self.challenger,
+                ))
+            })
+            .collect()
     }
 
     /// Replay a proof-of-work step.

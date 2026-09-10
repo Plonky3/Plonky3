@@ -94,8 +94,8 @@ use p3_commit::{
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PrimeCharacteristicRing,
-    PrimeField32, PrimeField64, TwoAdicField, batch_multiplicative_inverse,
+    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PrimeField32, PrimeField64,
+    TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -112,6 +112,10 @@ use tracing::instrument;
 use crate::config::{StirConfig, StirConfigError, StirOptions, StirParameters};
 use crate::error::{ProofShapeError, StirError};
 use crate::pcs_budget::PcsBatch;
+use crate::pcs_transcript::{
+    OpeningProverTranscript, OpeningVerifierTranscript, StirPcsBucketShape, StirPcsOpeningShape,
+    observe_claims, observe_commitment, observe_opened_values,
+};
 use crate::proof::StirProof;
 use crate::prover::prove_stir_multi_from_codewords;
 use crate::utils::{combine_on_coset, eval_degree_correction};
@@ -195,11 +199,15 @@ impl<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> StirProverData<Val, InputMm
 /// group, not across the whole commitment) and committed in its own tree. A commitment whose
 /// heights all fit one group therefore holds a single root.
 ///
-/// The roots are wrapped rather than handed out as a bare `Vec` so a challenger can observe
-/// the whole commitment in one call — which is what
-/// `p3_uni_stark::StarkGenericConfig`'s `Challenger: CanObserve<Pcs::Commitment>` bound asks
-/// for. Observing runs the root count first, so two commitments that split a given total of
-/// roots differently cannot reach the same transcript state.
+/// The roots are wrapped rather than handed out as a bare `Vec`.
+///
+/// A challenger can then observe the whole commitment in one call.
+///
+/// That single call is what a generic proving configuration asks its challenger for.
+///
+/// The absorption is seeded with the root count.
+///
+/// Two commitments that split a given total of roots differently stay apart.
 ///
 /// Dereferences to its roots, so reading them needs no unwrapping.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,11 +222,13 @@ impl<C> Deref for StirCommitment<C> {
     }
 }
 
-/// Absorbs a commitment's group count, then each of its roots.
+/// Absorbs a commitment's roots under the commitment scheme's own transcript.
 ///
-/// The count goes in first, as one fixed-width field element.
-/// Two commitments with different group counts therefore cannot produce the same transcript.
-/// Absorbing three roots as one commitment also stays distinct from absorbing them as two.
+/// The seed fixes how many roots the commitment holds.
+///
+/// Two commitments that split a given total of roots differently stay apart.
+///
+/// So do two commitments over the same roots in the opposite order.
 ///
 /// Every challenger backend routes here rather than writing the sequence out again.
 /// A backend that absorbed a commitment differently would not fail a test: prover and verifier
@@ -226,12 +236,11 @@ impl<C> Deref for StirCommitment<C> {
 fn observe_stir_commitment<Ch, F, C>(challenger: &mut Ch, commitment: StirCommitment<C>)
 where
     Ch: CanObserve<F> + CanObserve<C>,
-    F: PrimeCharacteristicRing,
+    F: PrimeField64,
+    C: Clone,
 {
-    challenger.observe(F::from_usize(commitment.0.len()));
-    for root in commitment.0 {
-        challenger.observe(root);
-    }
+    // The typed phase owns the whole sequence: the seed, then the roots.
+    observe_commitment::<Ch, F, C>(challenger, commitment.0);
 }
 
 // The shared body above is a free function rather than a blanket impl.
@@ -243,8 +252,9 @@ where
 impl<F, P, C, const WIDTH: usize, const RATE: usize> CanObserve<StirCommitment<C>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy + PrimeCharacteristicRing,
+    F: PrimeField64,
     P: CryptographicPermutation<[F; WIDTH]>,
+    C: Clone,
     Self: CanObserve<C>,
 {
     fn observe(&mut self, commitment: StirCommitment<C>) {
@@ -256,6 +266,7 @@ impl<F, Inner, C> CanObserve<StirCommitment<C>> for SerializingChallenger32<F, I
 where
     F: PrimeField32,
     Inner: CanObserve<u8>,
+    C: Clone,
     Self: CanObserve<C>,
 {
     fn observe(&mut self, commitment: StirCommitment<C>) {
@@ -759,7 +770,7 @@ type BucketCombine<Challenge> = Option<(
 type ProverDataWithPoints<'a, Val, InputMmcs, Challenge> =
     OpeningRequest<'a, StirProverData<Val, InputMmcs>, Challenge>;
 
-/// Everything `open` settles before STIR runs.
+/// Everything `open` settles before the bucket phase runs.
 struct PreparedOpen<Val, Challenge, StirMmcs, Challenger> {
     batch_pow_witness: Option<Val>,
     /// Claimed evaluations, already absorbed into the transcript.
@@ -767,11 +778,20 @@ struct PreparedOpen<Val, Challenge, StirMmcs, Challenger> {
     /// Distinct shared LDE heights across every commitment's groups, descending: one STIR
     /// instance ("bucket") each.
     bucket_log_heights: Vec<usize>,
+    /// Native-height classes present in each bucket, descending.
+    ///
+    /// One entry per bucket, in the order the heights above are in.
+    bucket_native_heights: Vec<Vec<usize>>,
     /// The derived config of each bucket's instance.
     stir_configs: Vec<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>>,
-    /// Each bucket's initial codeword in natural order: its reduced opening, `Combine`d across
-    /// native-height classes when the bucket holds more than one.
-    initial_codewords: Vec<Vec<Challenge>>,
+    /// One alpha-batched reduced opening per height class, bit-reversed and unmerged.
+    ///
+    /// A class is keyed by its shared LDE height and its native height.
+    ///
+    /// Merging a bucket's classes needs a challenge.
+    ///
+    /// The bucket phase is what draws it.
+    reduced_openings: alloc::collections::BTreeMap<(usize, usize), Vec<Challenge>>,
 }
 
 impl<Val, Dft, InputMmcs, StirMmcs, Challenge, Challenger>
@@ -909,19 +929,28 @@ where
                                 // Slice the precomputed adjusted weights to match this matrix's height.
                                 // Zero-allocation hot path: straight to the SIMD dot product.
                                 let adj = &adjusted_weights.get(&point).unwrap()[..h];
-                                let ys = low_coset.interpolate_coset_with_precomputation(
+                                low_coset.interpolate_coset_with_precomputation(
                                     Val::GENERATOR,
                                     point,
                                     adj,
-                                );
-                                challenger.observe_algebra_slice(&ys);
-                                ys
+                                )
                             })
                             .collect_vec()
                     })
                     .collect_vec()
             })
             .collect_vec();
+
+        // Bind every claimed evaluation before any challenge can depend on one.
+        //
+        // The description of this phase is derived from the same tree.
+        //
+        // It holds one container per level of it.
+        //
+        //     commitment -> matrix -> opening point -> one value per column
+        //
+        // So the grouping reaches the seed, not only the absorbed values.
+        observe_opened_values::<Challenger, Val, Challenge>(challenger, &all_opened_values);
 
         // Step 2: Alpha-batch into one reduced-opening vector per (shared LDE domain, native
         // height) class. Every matrix in a class lives on the same physical domain (its
@@ -1049,23 +1078,16 @@ where
                 })
                 .collect();
 
-        let initial_codewords: Vec<Vec<Challenge>> = bucket_log_heights
-            .iter()
-            .map(|&log_shared_h| {
-                combined_bucket_codeword::<Val, Challenge, Challenger>(
-                    &mut reduced_openings,
-                    log_shared_h,
-                    challenger,
-                )
-            })
-            .collect();
-
+        // Merging a bucket's classes needs a challenge drawn in the bucket phase.
+        //
+        // So the classes travel on unmerged.
         PreparedOpen {
             batch_pow_witness,
             opened_values: all_opened_values,
             bucket_log_heights,
+            bucket_native_heights,
             stir_configs,
-            initial_codewords,
+            reduced_openings,
         }
     }
 
@@ -1101,47 +1123,103 @@ where
             batch_pow_witness,
             opened_values,
             bucket_log_heights,
+            bucket_native_heights,
             stir_configs,
-            initial_codewords,
+            mut reduced_openings,
         } = prepared;
         let stir_config_refs: Vec<&StirConfig<Val, Challenge, StirMmcs, Challenger>> =
             stir_configs.iter().map(AsRef::as_ref).collect();
 
-        let bucket_results = prove_stir_multi_from_codewords(
-            &stir_config_refs,
-            initial_codewords,
-            &self.dft,
-            challenger,
+        // One description covers the whole bucket phase.
+        //
+        //     merging challenges  ->  bracketed proximity test  ->  lane draws
+        let shape = StirPcsOpeningShape::new(
+            izip!(&bucket_log_heights, &bucket_native_heights, &stir_configs)
+                .map(|(&log_h, native_heights, config)| {
+                    StirPcsBucketShape::new(log_h, native_heights.clone(), config)
+                })
+                .collect(),
         );
+        let mut transcript =
+            OpeningProverTranscript::<Challenger, Val, Challenge>::new(challenger, shape);
 
-        let bucket_proofs = bucket_log_heights
+        // Phase 1: merge each bucket's classes into the codeword STIR runs on.
+        //
+        // A bucket holding one class is already its own codeword and draws nothing.
+        let initial_codewords: Vec<Vec<Challenge>> = bucket_log_heights
             .iter()
-            .zip(&stir_configs)
-            .zip(bucket_results)
-            .map(|((&log_h, stir_config), (stir_proof, first_round))| {
-                let log_arity0 = stir_config.log_starting_folding_factor;
-                let lanes = sample_lanes::<Val, _>(challenger, first_round.draws.len(), log_arity0);
-                let positions = query_positions(&first_round.draws, &lanes, log_h, log_arity0);
-                let row_indices = positions_to_row_indices(&positions, log_h);
-
-                let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> = prover_data
-                    .iter()
-                    .map(|data| {
-                        // Each group has its own tree on its own domain, so a bucket reads
-                        // exactly the group committed at its LDE height.
-                        let group = data.group_at(log_h)?;
-                        let (opened_values, opening_proof) =
-                            self.input_mmcs.open_multi_batch(&row_indices, &group.data);
-                        Some(InputOpenings {
-                            opened_values,
-                            opening_proof,
-                        })
-                    })
-                    .collect();
-
-                (stir_proof, input_openings)
+            .zip(&bucket_native_heights)
+            .enumerate()
+            .map(|(bucket, (&log_h, native_heights))| {
+                let r_comb = transcript.combination_challenge(bucket);
+                combined_bucket_codeword(&mut reduced_openings, log_h, native_heights, r_comb)
             })
             .collect();
+
+        // Phase 2: every bucket's proximity test runs in lockstep, inside the bracket.
+        let bucket_results = transcript.delegate(|challenger| {
+            prove_stir_multi_from_codewords(
+                &stir_config_refs,
+                initial_codewords,
+                &self.dft,
+                challenger,
+            )
+        });
+
+        // Phase 3: one lane per first-round query draw, per bucket.
+        //
+        // Every STIR message is already in the sponge, the commitments above all.
+        //
+        // So no lane can be chosen to dodge a disagreement.
+        let bucket_lanes: Vec<Vec<usize>> = (0..bucket_log_heights.len())
+            .map(|bucket| transcript.lanes(bucket))
+            .collect();
+        transcript.finish();
+
+        let bucket_proofs = izip!(
+            &bucket_log_heights,
+            &stir_configs,
+            bucket_results,
+            bucket_lanes
+        )
+        .map(|(&log_h, stir_config, (stir_proof, first_round), lanes)| {
+            let log_arity0 = stir_config.log_starting_folding_factor;
+            // Both counts come from the schedule, derived independently of each other.
+            //
+            // The description fixes the lane count before the driver is seeded.
+            //
+            // The draw count comes out of the run.
+            //
+            // Pairing them zips two lists, which would silently truncate to the shorter.
+            assert_eq!(
+                lanes.len(),
+                first_round.draws.len(),
+                "the schedule describes {} lanes but the run drew {} round-0 queries",
+                lanes.len(),
+                first_round.draws.len(),
+            );
+            let positions = query_positions(&first_round.draws, &lanes, log_h, log_arity0);
+            let row_indices = positions_to_row_indices(&positions, log_h);
+
+            let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> = prover_data
+                .iter()
+                .map(|data| {
+                    // Each group has its own tree on its own domain.
+                    //
+                    // So a bucket reads exactly the group committed at its LDE height.
+                    let group = data.group_at(log_h)?;
+                    let (opened_values, opening_proof) =
+                        self.input_mmcs.open_multi_batch(&row_indices, &group.data);
+                    Some(InputOpenings {
+                        opened_values,
+                        opening_proof,
+                    })
+                })
+                .collect();
+
+            (stir_proof, input_openings)
+        })
+        .collect();
 
         (
             opened_values,
@@ -1297,26 +1375,36 @@ where
             }
         }
 
-        // Observe all opened values to keep the transcript in sync.
-        for CommitmentOpening {
-            matrices: domain_claims,
-            ..
-        } in &commitments_with_opening_points
-        {
-            for MatrixOpening {
-                points: point_claims,
-                ..
-            } in domain_claims
-            {
-                for PointOpening {
-                    values: opened_vals,
-                    ..
-                } in point_claims
-                {
-                    challenger.observe_algebra_slice(opened_vals);
-                }
-            }
-        }
+        // Bind every claimed evaluation before any challenge can depend on one.
+        //
+        // The description of this phase is derived from the claims themselves.
+        //
+        // It holds one container per level of them.
+        //
+        //     commitment -> matrix -> opening point -> one value per column
+        //
+        // So the grouping reaches the seed, not only the absorbed values.
+        //
+        // The claims are the statement this call was handed, not proof fields it read.
+        //
+        // Their shape is the caller's to fix, and this function does not fix it.
+        //
+        //     the caller  ->  decides the claim tree, and constrains it
+        //     here        ->  binds whatever tree it was handed
+        //
+        // A STARK caller builds that tree out of the proof's own opened values.
+        //
+        // It checks the widths against its AIR before reaching this call.
+        //
+        // The pre-check just above enforces only internal consistency of the tree.
+        //
+        // So deriving the seed from the claim layout binds the statement to the run.
+        //
+        // It is not STIR validating that layout on its own behalf.
+        observe_claims::<Challenger, Val, Challenge, _, _>(
+            challenger,
+            &commitments_with_opening_points,
+        );
 
         let alpha: Challenge = crate::batch_transcript::verify(
             challenger,
@@ -1585,36 +1673,77 @@ where
         let stir_proofs: Vec<&StirProof<Challenge, StirMmcs, Val>> =
             proof.iter().map(|(p, _)| p).collect();
 
-        // For every bucket with more than one native-height class present, sample the
-        // `Combine` challenge and derive its per-class coefficients up front, at the same
-        // transcript position the prover's `combined_bucket_codeword` used (before any
-        // STIR-internal transcript operations) — mirroring how `alpha` itself is sampled
-        // once, up front, rather than lazily inside a bucket's closure.
-        let bucket_combine: Vec<BucketCombine<Challenge>> = bucket_log_heights
-            .iter()
-            .zip(&bucket_native_heights)
-            .map(|(_, native_heights)| {
-                if native_heights.len() <= 1 {
-                    return None;
-                }
+        // One description covers the whole bucket phase.
+        //
+        //     merging challenges  ->  bracketed proximity test  ->  lane draws
+        //
+        // Every count in it comes from the schedules and the claimed heights.
+        //
+        // None comes from the proof.
+        //
+        // Both sides fix the description up front.
+        let shape = StirPcsOpeningShape::new(
+            izip!(&bucket_log_heights, &bucket_native_heights, &stir_configs)
+                .map(|(&log_h, native_heights, config)| {
+                    StirPcsBucketShape::new(log_h, native_heights.clone(), config)
+                })
+                .collect(),
+        );
+        let mut transcript =
+            OpeningVerifierTranscript::<Challenger, Val, Challenge>::new(challenger, shape);
 
+        // Phase 1: redraw each merging challenge and derive its per-class coefficients.
+        //
+        // Both happen at the transcript position the prover merged its classes at.
+        //
+        // A bucket holding one native-height class merges nothing and draws nothing.
+        let bucket_combine: Vec<BucketCombine<Challenge>> = bucket_native_heights
+            .iter()
+            .enumerate()
+            .map(|(bucket, native_heights)| {
+                let r_comb = transcript.combination_challenge(bucket)?;
+                // The tallest class heads the list.
+                //
+                // Its own degree is the target degree.
                 let log_d_star = native_heights[0];
-                let r_comb: Challenge = challenger.sample_algebra_element();
                 let coeffs =
                     combine_coefficients(r_comb, log_d_star, native_heights.iter().copied());
                 Some((r_comb, native_heights.iter().copied().zip(coeffs).collect()))
             })
             .collect();
 
-        // STIR runs first: it absorbs each bucket's initial-oracle commitment, checks every
-        // round, and hands back the round-0 fibers it authenticated against that commitment
-        // together with the draws that selected them.
-        let outputs = verify_stir_multi_inner(
-            &stir_config_refs,
-            &stir_proofs,
-            challenger,
-            None::<Vec<NoExternalFibers<Challenge, StirMmcs::Error, InputMmcs::Error>>>,
-        )?;
+        // Phase 2: the proximity test runs inside the bracket.
+        //
+        // It absorbs each bucket's initial-oracle commitment and checks every round.
+        //
+        // It then hands back the round-0 fibers it authenticated against that commitment.
+        //
+        // The draws that selected those fibers come back alongside them.
+        let outputs = match transcript.delegate(|challenger| {
+            verify_stir_multi_inner(
+                &stir_config_refs,
+                &stir_proofs,
+                challenger,
+                None::<Vec<NoExternalFibers<Challenge, StirMmcs::Error, InputMmcs::Error>>>,
+            )
+        }) {
+            Ok(outputs) => outputs,
+            Err(err) => {
+                // Releasing the completeness check keeps this rejection the only failure.
+                transcript.abort();
+                return Err(err);
+            }
+        };
+
+        // Phase 3: one lane per first-round query draw, per bucket.
+        //
+        // Every STIR message is already in the sponge, the commitments above all.
+        //
+        // So no lane can be chosen to dodge a disagreement.
+        let bucket_lanes: Vec<Vec<usize>> = (0..bucket_log_heights.len())
+            .map(|bucket| transcript.lanes(bucket))
+            .collect();
+        transcript.finish();
 
         for (bucket, (&log_h, output)) in bucket_log_heights.iter().zip(&outputs).enumerate() {
             let stir_config = &stir_configs[bucket];
@@ -1628,11 +1757,20 @@ where
             let fold_height0 = bucket_height >> log_arity0;
             let domain_gen = Val::two_adic_generator(log_h);
 
-            // One lane per round-0 draw, sampled only now that every STIR message — the
-            // initial-oracle commitment above all — is in the transcript.
-            let lanes =
-                sample_lanes::<Val, _>(challenger, output.first_round_draws.len(), log_arity0);
-            let positions = query_positions(&output.first_round_draws, &lanes, log_h, log_arity0);
+            // The lanes this bucket drew, one per first-round query draw.
+            //
+            // Both counts come from the schedule, derived independently of each other.
+            //
+            // Pairing them zips two lists, which would silently truncate to the shorter.
+            let lanes = &bucket_lanes[bucket];
+            assert_eq!(
+                lanes.len(),
+                output.first_round_draws.len(),
+                "the schedule describes {} lanes but the replay drew {} round-0 queries",
+                lanes.len(),
+                output.first_round_draws.len(),
+            );
+            let positions = query_positions(&output.first_round_draws, lanes, log_h, log_arity0);
             let n_q = positions.len();
             let row_indices = positions_to_row_indices(&positions, log_h);
             // Coset point of each queried position: `GENERATOR * g^p`.
@@ -2099,24 +2237,6 @@ pub struct StirPcsProof<
 /// has STIR commit the initial oracle itself, so no such source ever exists.
 type NoExternalFibers<EF, E, IE> = fn(&[usize]) -> Result<Vec<Vec<EF>>, StirError<E, IE>>;
 
-/// One uniformly sampled fiber lane per round-0 query draw, in draw order.
-fn sample_lanes<Val, Challenger>(
-    challenger: &mut Challenger,
-    num_draws: usize,
-    log_arity0: usize,
-) -> Vec<usize>
-where
-    Challenger: CanSampleUniformBits<Val>,
-{
-    (0..num_draws)
-        .map(|_| {
-            challenger
-                .sample_uniform_bits::<true>(log_arity0)
-                .expect("RESAMPLE = true: rejection loops internally, never errors")
-        })
-        .collect()
-}
-
 /// The natural-order LDE positions `j + lane * 2^(log_h - log_arity0)` of every
 /// `(draw, lane)` pair, ascending and deduplicated.
 ///
@@ -2234,52 +2354,78 @@ fn combine_coefficients<EF: Field>(
 /// Merge one shared-LDE-height bucket's native-height classes into a single codeword on
 /// their shared domain, via `Combine` (§4.5) when more than one class is present.
 ///
-/// `reduced_openings` is keyed by `(log_shared_lde_height, log_native_height)`; this removes
-/// every class at `log_shared_h`, descending by native height, and returns the natural
-/// (not yet bit-reversed) combined codeword STIR should run on.
+/// # Overview
 ///
-/// Each class's codeword is taken out of the map rather than borrowed so it can be
-/// un-bit-reversed in place: at PCS scale a class spans the whole shared domain, so cloning
-/// them all would double peak memory for the duration of `Combine`.
-fn combined_bucket_codeword<Val, Challenge, Challenger>(
+/// The map is keyed by `(log_shared_lde_height, log_native_height)`.
+///
+/// This removes every class of the given shared height.
+///
+/// It returns the merged codeword in natural order, not bit-reversed.
+///
+/// Each class is taken out of the map rather than borrowed, to un-reverse it in place.
+///
+/// A class spans the whole shared domain at PCS scale.
+///
+/// Cloning them all would double peak memory for the duration of the merge.
+///
+/// # Arguments
+///
+/// - `reduced_openings`: every class's alpha-batched reduced opening, bit-reversed.
+/// - `log_shared_h`: log of the shared domain whose classes are merged.
+/// - `log_native_heights`: log of every native height present, descending.
+/// - `r_comb`: the merging challenge, or nothing when a single height is present.
+///
+/// # Panics
+///
+/// - When a listed class is absent from the map.
+/// - When several heights are present and no merging challenge was drawn for them.
+fn combined_bucket_codeword<Val, Challenge>(
     reduced_openings: &mut alloc::collections::BTreeMap<(usize, usize), Vec<Challenge>>,
     log_shared_h: usize,
-    challenger: &mut Challenger,
+    log_native_heights: &[usize],
+    r_comb: Option<Challenge>,
 ) -> Vec<Challenge>
 where
     Val: TwoAdicField + PrimeField64,
     Challenge: ExtensionField<Val> + TwoAdicField,
-    Challenger: FieldChallenger<Val>,
 {
-    let mut log_ds: Vec<usize> = reduced_openings
-        .keys()
-        .filter(|(h, _)| *h == log_shared_h)
-        .map(|&(_, log_d)| log_d)
-        .collect();
-    log_ds.sort_unstable_by(|a, b| b.cmp(a));
-
-    // `combine_on_coset` indexes its inputs (and produces its output) in natural order, but
-    // `reduced_openings` is bit-reversed (built from the bit-reversed LDE matrices), so each
-    // class's codeword is un-reversed before combining; the combined result is then already
-    // in the natural order STIR expects, with no further reversal needed.
-    let mut natural_ros: Vec<Vec<Challenge>> = log_ds
+    // The merge indexes its inputs, and produces its output, in natural order.
+    //
+    // The reduced openings are bit-reversed.
+    //
+    // They were built from the bit-reversed LDE matrices.
+    //
+    // So each class's codeword is un-reversed on the way in.
+    //
+    // The merged result then sits in the natural order the proximity test expects.
+    let mut natural_ros: Vec<Vec<Challenge>> = log_native_heights
         .iter()
         .map(|&log_d| {
             let mut natural = reduced_openings
                 .remove(&(log_shared_h, log_d))
-                .expect("key came from this map");
+                .expect("every listed class was accumulated into this map");
             reverse_slice_index_bits(&mut natural);
             natural
         })
         .collect();
 
-    if natural_ros.len() == 1 {
-        return natural_ros.pop().expect("checked non-empty above");
-    }
+    // A bucket of one class is already its own codeword.
+    let Some(r_comb) = r_comb else {
+        assert_eq!(
+            natural_ros.len(),
+            1,
+            "several native heights on one domain must be merged under a challenge",
+        );
+        return natural_ros
+            .pop()
+            .expect("a bucket holds at least one class");
+    };
 
-    let log_d_star = log_ds[0];
-    let r_comb: Challenge = challenger.sample_algebra_element();
-    let coeffs = combine_coefficients(r_comb, log_d_star, log_ds.iter().copied());
+    // The tallest class heads the descending list.
+    //
+    // Its own degree is the target degree.
+    let log_d_star = log_native_heights[0];
+    let coeffs = combine_coefficients(r_comb, log_d_star, log_native_heights.iter().copied());
 
     let groups: Vec<(Challenge, usize, &[Challenge])> = coeffs
         .into_iter()
@@ -2335,6 +2481,7 @@ mod tests {
     use alloc::{format, vec};
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::testing::seed_digest;
     use p3_challenger::{CanSampleBits, DuplexChallenger, HashChallenger};
     use p3_commit::ExtensionMmcs;
     use p3_dft::Radix2DitParallel;
@@ -2432,40 +2579,43 @@ mod tests {
     }
 
     #[test]
-    fn every_backend_absorbs_a_commitment_the_same_way() {
-        // Invariant: a backend's impl is the shared sequence, never a hand-written variant.
+    fn every_backend_absorbs_a_commitment_through_the_shared_phase() {
+        // Invariant: a backend's impl routes through the shared typed phase.
         //
-        //     observe(commitment)  ==  observe(len) then observe(each root)
+        // It never writes out a hand-written variant of the sequence.
         //
-        // Checked per backend against the sequence spelled out by hand, since prover and
-        // verifier share one challenger type and would be wrong together if it drifted.
+        //     observe(commitment)  ==  the commitment phase over the same roots
+        //
+        // This is checked per backend.
+        //
+        // Prover and verifier share one challenger type.
+        //
+        // A drifting backend would make both of them wrong together.
+        //
+        // Fixture state: three digests absorbed as one commitment of three roots.
         let roots = vec![digest(0x01), digest(0x02), digest(0x03)];
 
         let mut via_commitment = byte_challenger();
         via_commitment.observe(StirCommitment(roots.clone()));
 
-        let mut by_hand = byte_challenger();
-        by_hand.observe(BabyBear::from_usize(roots.len()));
-        for root in roots {
-            by_hand.observe(root);
-        }
+        let mut via_phase = byte_challenger();
+        observe_commitment::<_, BabyBear, _>(&mut via_phase, roots);
 
-        assert_eq!(via_commitment.sample_bits(24), by_hand.sample_bits(24));
+        assert_eq!(via_commitment.sample_bits(24), via_phase.sample_bits(24));
 
         // The same obligation, for the duplex backend the Poseidon2 configurations use.
         let perm = TestPerm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
+        let duplex_roots = vec![BabyBear::ONE, BabyBear::TWO];
 
         let mut duplex_via_commitment = TestChallenger::new(perm.clone());
-        duplex_via_commitment.observe(StirCommitment(vec![BabyBear::ONE, BabyBear::TWO]));
+        duplex_via_commitment.observe(StirCommitment(duplex_roots.clone()));
 
-        let mut duplex_by_hand = TestChallenger::new(perm);
-        duplex_by_hand.observe(BabyBear::TWO);
-        duplex_by_hand.observe(BabyBear::ONE);
-        duplex_by_hand.observe(BabyBear::TWO);
+        let mut duplex_via_phase = TestChallenger::new(perm);
+        observe_commitment::<_, BabyBear, _>(&mut duplex_via_phase, duplex_roots);
 
         assert_eq!(
             duplex_via_commitment.sample_bits(24),
-            duplex_by_hand.sample_bits(24)
+            duplex_via_phase.sample_bits(24)
         );
     }
 
@@ -2528,6 +2678,52 @@ mod tests {
         )
     }
 
+    /// Add a random codeword of a bucket's own degree bound to its reduced opening.
+    ///
+    /// # Overview
+    ///
+    /// The sum is still a codeword of that degree bound.
+    ///
+    /// So every proximity-test round accepts it.
+    ///
+    /// Only the lane checks stand between such a prover and acceptance.
+    ///
+    /// # Arguments
+    ///
+    /// - `pcs`: the instance whose transform evaluates the perturbation.
+    /// - `reduced_openings`: the class map a prepared opening handed back.
+    /// - `log_native_h`: log of the bucket's only native height.
+    /// - `log_lde`: log of the shared domain the bucket runs on.
+    /// - `rng`: source of the perturbing polynomial's coefficients.
+    ///
+    /// # Panics
+    ///
+    /// When the map holds no class at that pair of heights.
+    fn add_low_degree_codeword(
+        pcs: &TestPcs,
+        reduced_openings: &mut alloc::collections::BTreeMap<(usize, usize), Vec<EF>>,
+        log_native_h: usize,
+        log_lde: usize,
+        rng: &mut SmallRng,
+    ) {
+        // A random polynomial of the bucket's degree bound, on the bucket's shared coset.
+        let mut coeffs: Vec<EF> = (0..1usize << log_native_h).map(|_| rng.random()).collect();
+        coeffs.resize(1 << log_lde, EF::ZERO);
+        let mut low_degree = codeword_from_coeffs(&pcs.dft, coeffs, TestVal::GENERATOR, log_lde);
+
+        // Reduced openings are stored bit-reversed, and un-reversed on the way in.
+        //
+        // So the perturbation is reversed here, to land in natural order there.
+        reverse_slice_index_bits(&mut low_degree);
+
+        let ro = reduced_openings
+            .get_mut(&(log_lde, log_native_h))
+            .expect("the bucket's only native-height class");
+        for (value, extra) in ro.iter_mut().zip(low_degree) {
+            *value += extra;
+        }
+    }
+
     /// A PCS over `TestVal`/`EF` at the given layout and soundness knobs.
     fn test_pcs_with(
         max_log_height_spread: usize,
@@ -2575,12 +2771,13 @@ mod tests {
                 }],
                 &mut prover,
             );
-            // Replay just the claims and batching site independently of `prepare_open`.
-            // Moving the prover's grind before a claim or after alpha breaks this check.
+            // Replay just the claim phase and the batching site.
+            //
+            // Neither reads anything the opening path settled.
+            //
+            // Moving the prover's grind before a claim, or after alpha, breaks this.
             let mut batch_replay = base.clone();
-            for claim in values.iter().flatten().flatten() {
-                batch_replay.observe_algebra_slice(claim);
-            }
+            observe_opened_values::<TestChallenger, TestVal, EF>(&mut batch_replay, &values);
             let _: EF = crate::batch_transcript::verify::<TestVal, EF, _, (), ()>(
                 &mut batch_replay,
                 8,
@@ -3721,16 +3918,21 @@ mod tests {
             }],
             &mut p_ch,
         );
-        assert_eq!(prepared.initial_codewords.len(), 1);
+        // Fixture state: one commitment at one height.
+        //
+        // That is one bucket holding one class.
+        assert_eq!(prepared.bucket_log_heights.len(), 1);
 
-        // A random polynomial of the same degree bound, evaluated on the same coset in the
-        // same natural order STIR reads `initial_codewords` in.
-        let mut coeffs: Vec<EF> = (0..1usize << log_h).map(|_| rng.random()).collect();
-        coeffs.resize(1 << log_lde, EF::ZERO);
-        let low_degree = codeword_from_coeffs(&pcs.dft, coeffs, TestVal::GENERATOR, log_lde);
-        for (value, extra) in prepared.initial_codewords[0].iter_mut().zip(low_degree) {
-            *value += extra;
-        }
+        // Mutation: the codeword the bucket will run on is no longer its reduced opening.
+        //
+        //     f_0 = reduced opening + a random codeword of the same degree bound
+        add_low_degree_codeword(
+            &pcs,
+            &mut prepared.reduced_openings,
+            log_h,
+            log_lde,
+            &mut rng,
+        );
 
         let (opened_values, proof) = pcs.prove_buckets(&[&data], prepared, &mut p_ch);
 
@@ -3791,12 +3993,14 @@ mod tests {
             "this test exists to cover the zero-intermediate-round schedule"
         );
 
-        let mut coeffs: Vec<EF> = (0..1usize << log_h).map(|_| rng.random()).collect();
-        coeffs.resize(1 << log_lde, EF::ZERO);
-        let low_degree = codeword_from_coeffs(&pcs.dft, coeffs, TestVal::GENERATOR, log_lde);
-        for (value, extra) in prepared.initial_codewords[0].iter_mut().zip(low_degree) {
-            *value += extra;
-        }
+        // Mutation: the same corruption, on a schedule with no intermediate round.
+        add_low_degree_codeword(
+            &pcs,
+            &mut prepared.reduced_openings,
+            log_h,
+            log_lde,
+            &mut rng,
+        );
 
         let (opened_values, proof) = pcs.prove_buckets(&[&data], prepared, &mut p_ch);
 
@@ -3818,15 +4022,8 @@ mod tests {
         );
     }
 
-    /// One lane per round-0 *draw*, in draw order — never one per distinct fiber.
-    ///
-    /// Sampling per unique fiber would leave a repeated fiber contributing no fresh
-    /// randomness, and the per-draw product the round's query count is priced on would no
-    /// longer hold. The two counts only differ when a fiber repeats, so this runs a
-    /// zero-intermediate-round bucket whose fold domain holds two indices and repeats are
-    /// forced; the transcript state after the draws is what tells the two apart.
     #[test]
-    fn lanes_are_sampled_once_per_round_zero_draw() {
+    fn lanes_are_drawn_once_per_round_zero_draw() {
         let pcs = test_pcs_with(
             DEFAULT_MAX_LOG_HEIGHT_SPREAD,
             SecurityAssumption::CapacityBound,
@@ -3845,6 +4042,20 @@ mod tests {
         base.observe(commit);
         let zeta: EF = base.sample_algebra_element();
 
+        // Invariant: one lane per first-round query draw, in draw order.
+        //
+        // Never one lane per distinct fiber.
+        //
+        // A repeated fiber would then contribute no fresh randomness.
+        //
+        // The per-draw product the round's query count is priced on would not hold.
+        //
+        // Fixture state: a zero-intermediate-round bucket, fold domain of two indices.
+        //
+        // A repeated fiber is forced there.
+        //
+        // The two counts actually differ.
+
         // The whole prover side, lanes included.
         let mut ch_full = base.clone();
         let prepared = pcs.prepare_open(
@@ -3858,54 +4069,90 @@ mod tests {
         let final_queries = prepared.stir_configs[0].final_queries;
         let _ = pcs.prove_buckets(&[&data], prepared, &mut ch_full);
 
-        // The same transcript, stopped right after STIR so the lane draws can be replayed by
-        // hand at both counts.
+        // The same run, replayed step by step.
+        //
+        // Both the draws and the lanes are visible that way.
         let mut ch_draws = base;
-        let prepared = pcs.prepare_open(
+        let PreparedOpen {
+            bucket_log_heights,
+            bucket_native_heights,
+            stir_configs,
+            mut reduced_openings,
+            ..
+        } = pcs.prepare_open(
             &[OpeningRequest {
                 prover_data: &data,
                 points: vec![vec![zeta]],
             }],
             &mut ch_draws,
         );
-        let PreparedOpen {
-            stir_configs,
-            initial_codewords,
-            ..
-        } = prepared;
+
+        // The bucket phase's description, built exactly as the prover builds it.
+        let shape = StirPcsOpeningShape::new(vec![StirPcsBucketShape::new(
+            bucket_log_heights[0],
+            bucket_native_heights[0].clone(),
+            &stir_configs[0],
+        )]);
+        let described_draws = shape.buckets[0].num_query_draws;
+        assert_eq!(
+            described_draws, final_queries,
+            "a zero-round bucket reads its initial oracle through the final round's queries"
+        );
+
         let configs: Vec<&TestConfig> = stir_configs.iter().map(AsRef::as_ref).collect();
-        let results =
-            prove_stir_multi_from_codewords(&configs, initial_codewords, &pcs.dft, &mut ch_draws);
+        let mut transcript = OpeningProverTranscript::<TestChallenger, TestVal, EF>::new(
+            &mut ch_draws,
+            shape.clone(),
+        );
+
+        // One native height.
+        //
+        // The bucket merges nothing and draws no challenge.
+        assert!(transcript.combination_challenge(0).is_none());
+        let codeword = combined_bucket_codeword::<TestVal, EF>(
+            &mut reduced_openings,
+            bucket_log_heights[0],
+            &bucket_native_heights[0],
+            None,
+        );
+        let results = transcript.delegate(|challenger| {
+            prove_stir_multi_from_codewords(&configs, vec![codeword], &pcs.dft, challenger)
+        });
+        let lanes = transcript.lanes(0);
+        transcript.finish();
 
         let draws = &results[0].1.draws;
         let unique = &results[0].1.unique_sorted;
-        assert_eq!(
-            draws.len(),
-            final_queries,
-            "a zero-round bucket draws its initial-oracle queries in the final round"
-        );
         assert!(
             unique.len() < draws.len(),
             "the fold domain must be small enough that a fiber repeats, or the two lane \
              counts are indistinguishable"
         );
 
-        let mut ch_per_unique = ch_draws.clone();
-        let lanes = sample_lanes::<TestVal, _>(&mut ch_draws, draws.len(), log_arity0);
+        // The described count is the draw count.
+        //
+        // One lane came out per draw.
+        assert_eq!(described_draws, draws.len());
         assert_eq!(lanes.len(), draws.len());
-        let _ = sample_lanes::<TestVal, _>(&mut ch_per_unique, unique.len(), log_arity0);
 
+        // The replay lands where the real prover landed.
         let after_full: EF = ch_full.sample_algebra_element();
-        let after_per_draw: EF = ch_draws.sample_algebra_element();
-        let after_per_unique: EF = ch_per_unique.sample_algebra_element();
-        assert_eq!(
-            after_full, after_per_draw,
-            "the implementation must draw one lane per draw"
-        );
+        let after_replay: EF = ch_draws.sample_algebra_element();
+        assert_eq!(after_full, after_replay);
+
+        // Mutation: describe one lane per unique fiber instead of one per draw.
+        //
+        //     draws  : 2 draws of fiber 1  ->  2 lanes described
+        //     unique : 1 distinct fiber    ->  1 lane described
+        //
+        // The count travels in the description.
+        //
+        // The two cannot share a seed.
+        let mut per_unique = shape.clone();
+        per_unique.buckets[0].num_query_draws = unique.len();
         assert_ne!(
-            after_full, after_per_unique,
-            "one lane per unique fiber would leave a different transcript, so this comparison \
-             is what makes the assertion above meaningful"
+            seed_digest(&shape.domain_separator::<TestVal, EF>()),
+            seed_digest(&per_unique.domain_separator::<TestVal, EF>()),
         );
 
         // Two draws of one fiber with different lanes are two distinct positions and both get

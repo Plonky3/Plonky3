@@ -8,20 +8,52 @@
 //! a claim `t'(r') = s'` about the packed polynomial alone. Discharging that claim against a
 //! commitment to `t'` is the caller's business.
 //!
-//! The tensor element `ŝ` is the only prover message the two checks share: the verifier reads
-//! it by columns to test the incoming claim, and derives the sumcheck's initial sum from its
-//! rows itself rather than take that sum from the prover. That makes this a reduction, not a
-//! filter: a false input claim survives as a false surviving claim `t'(r') = s'` rather than
-//! being rejected outright — except with probability bounded by the error below, whose
-//! `2ℓ'/|EF|` term covers the degenerate `A(r') = 0` case, where the final check reads
-//! `sum == 0`, constrains `s'` not at all, and lets a false input claim survive as a *true*
-//! surviving claim, which is the one direction a caller discharging `s'` against a commitment
-//! cannot catch. A prover who tampers with `ŝ` and adapts the rest of the proof to the sum that
-//! tampering implies is not caught by [`verify_ring_switch`] either — only by the caller
-//! discharging `s'` against a commitment to `t'`. What the row reading buys is the
-//! `κ/|EF|` term of the soundness bound below: a tampered `ŝ` shifts the derived initial sum
-//! away from the value an honest packing would produce, at the Schwartz–Zippel rate of the
-//! batching draw.
+//! The tensor element `ŝ` is the only prover message the two checks share.
+//!
+//! ```text
+//!     read by columns  ->  tests the incoming claim
+//!     read by rows     ->  gives the sumcheck its initial sum
+//! ```
+//!
+//! The verifier derives that initial sum itself.
+//!
+//! It never takes the sum from the prover.
+//!
+//! # A reduction, not a filter
+//!
+//! A false input claim is not rejected outright.
+//!
+//! It survives as a false surviving claim `t'(r') = s'`.
+//!
+//! The probability of anything else is bounded by the error below.
+//!
+//! # Two things this does not catch
+//!
+//! The degenerate case `A(r') = 0` is one.
+//!
+//! There the final check reads `sum == 0`.
+//!
+//! That constrains `s'` not at all.
+//!
+//! A false input claim then survives as a *true* surviving claim.
+//!
+//! That is the one direction discharging `s'` against a commitment cannot catch.
+//!
+//! The `2ℓ'/|EF|` term of the bound covers it.
+//!
+//! The second is a prover who tampers with `ŝ`.
+//!
+//! Adapting the rest of the proof to the implied sum defeats the checks here.
+//!
+//! Only the caller catches it, by discharging `s'` against a commitment to `t'`.
+//!
+//! # What the row reading buys
+//!
+//! It buys the `κ/|EF|` term of the bound.
+//!
+//! A tampered `ŝ` shifts the derived initial sum away from an honest packing's value.
+//!
+//! It does so at the Schwartz–Zippel rate of the batching draw.
 //!
 //! # Soundness
 //!
@@ -72,12 +104,14 @@ use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 pub mod equality;
 pub mod packing;
 pub mod tensor;
+pub mod transcript;
 pub mod weights;
 
 pub use equality::equality_element;
 use packing::compute_s_hat_with_eq;
 pub use packing::{compute_s_hat, pack, packed_vars};
 pub use tensor::TensorAlgebra;
+pub use transcript::{RingSwitchProverTranscript, RingSwitchShape, RingSwitchVerifierTranscript};
 use weights::batched_weights_with_eq;
 pub use weights::{batch_rows, batched_weights};
 
@@ -111,6 +145,17 @@ pub enum RingSwitchError {
         actual: usize,
     },
 
+    /// The evaluation point does not name the coordinate count the description fixes.
+    ///
+    /// Neither side can then bind it as the step the description names.
+    #[error("Ring switching: the evaluation point names {actual} coordinates, expected {expected}")]
+    PointWidthMismatch {
+        /// The coordinate count the description fixes.
+        expected: usize,
+        /// The number the point supplied.
+        actual: usize,
+    },
+
     /// The claimed evaluation is not the `eq̃(·, r_low)`-combination of `ŝ`'s columns.
     #[error("Ring switching: the claimed evaluation is not the column reading of s_hat")]
     ClaimMismatch,
@@ -132,42 +177,53 @@ pub enum RingSwitchError {
     },
 }
 
-/// The `κ` batching challenges `r'' ∈ EF^κ`, drawn identically by both sides.
-fn sample_batching_point<F, EF, Challenger>(challenger: &mut Challenger) -> Point<EF>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    Challenger: FieldChallenger<F>,
-{
-    Point::new(
-        (0..packed_vars::<F, EF>())
-            .map(|_| challenger.sample_algebra_element())
-            .collect(),
-    )
-}
-
 /// Proves the reduction of `t(r) = s` to a claim about `packed`, the packing of `t`.
 ///
-/// Returns the proof, the sumcheck's random point `r'`, and the surviving claim's value
-/// `s' = t'(r')`.
+/// # Returns
 ///
-/// Takes only the packed polynomial: every value that reaches the proof is computed from it,
-/// and the claim it proves is a statement about it. Callers hold `t` and obtain `packed` from
-/// [`pack`]; a `packed` that is not the packing of the `t` the claim is about proves a
-/// statement about a different multilinear, which nothing here can detect and which the
-/// caller's commitment to `packed` is what pins down.
+/// - The proof.
+/// - The sumcheck's random point `r'`.
+/// - The surviving claim's value `s' = t'(r')`.
 ///
-/// The sumcheck runs on a scalar [`ProductPolynomial`]. For the binary tower
-/// `EF::ExtensionPacking` is `EF` itself, so packing the operands would buy nothing there;
-/// over an extension with a wider packing it leaves throughput unclaimed.
+/// # Why only the packed polynomial
 ///
-/// The evaluation point and the surviving claim are both transcript-bound: `r` is observed
-/// before `s_hat`, and `final_eval` alongside `s_hat` and the sumcheck's own rounds before this
-/// function returns. A caller composing this into a larger protocol need not bind `r` itself.
+/// Every value that reaches the proof is computed from it.
+///
+/// The claim it proves is a statement about it.
+///
+/// Callers hold `t` and pack it themselves.
+///
+/// Pack the wrong `t` and the claim proves a statement about a different multilinear.
+///
+/// Nothing here can detect that.
+///
+/// The caller's commitment to `packed` is what pins it down.
+///
+/// # Packing
+///
+/// The sumcheck runs on a scalar product polynomial.
+///
+/// ```text
+///     binary tower       ->  extension packing is the extension itself, nothing to gain
+///     wider packing      ->  throughput left unclaimed
+/// ```
+///
+/// # What the transcript binds
+///
+/// The evaluation point and the surviving claim are both bound here.
+///
+/// ```text
+///     r            absorbed before s_hat
+///     final_eval   absorbed after the sumcheck rounds
+/// ```
+///
+/// A caller composing this into a larger protocol need not bind `r` itself.
 ///
 /// # Panics
-/// Panics unless `r` names at least the `κ` packed variables and `packed` has exactly the
-/// `ℓ − κ` variables that leaves.
+///
+/// Unless `r` names at least the `κ` packed variables.
+///
+/// Unless `packed` has exactly the `ℓ − κ` variables that leaves.
 pub fn prove_ring_switch<F, EF, Challenger>(
     packed: &Poly<EF>,
     r: &Point<EF>,
@@ -178,13 +234,15 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
-    let kappa = packed_vars::<F, EF>();
-    assert!(
-        r.num_variables() >= kappa,
-        "the evaluation point must name at least the {kappa} packed variables, got {}",
-        r.num_variables()
-    );
-    let ell_prime = r.num_variables() - kappa;
+    // The description is derived from the point handed in, never from a proof.
+    //
+    // Every width the transcript declares follows from it and from the field pair:
+    //
+    //     point width      ->  the coordinates `r` names
+    //     tensor width     ->  the extension degree, squared
+    //     batching width   ->  log2 of the extension degree
+    let shape = RingSwitchShape::new(r.num_variables());
+    let ell_prime = shape.sumcheck_rounds::<F, EF>();
     assert_eq!(
         packed.num_variables(),
         ell_prime,
@@ -193,21 +251,32 @@ where
     );
     let (r_high, _) = r.split_at(ell_prime);
 
-    // Bind the evaluation point first. `ŝ` is a function of `r_high` alone, and every later
-    // check the verifier forms from `r` it forms locally, so without this the proof would be
-    // replayable against a different point.
-    challenger.observe_algebra_slice(r.as_slice());
-
     // `ŝ` and the weight multilinear are both readings of the same `eq̃(r_high, ·)` table, so it
     // is built once, shared, and freed before the rounds rather than held across them.
     let eq = Poly::<EF>::new_from_point(r_high.as_slice(), EF::ONE);
 
-    // Send `ŝ`, binding the transcript to the base coefficients that cross the wire rather
-    // than to either of the readings derived from them.
+    // `ŝ` is a function of `r_high` alone.
+    //
+    // It is computed before the transcript needs it.
     let s_hat = compute_s_hat_with_eq::<F, EF>(packed, &eq);
-    challenger.observe_slice(s_hat.coefficients());
 
-    let r_batch = sample_batching_point::<F, EF, _>(challenger);
+    // Seeding folds the description's fingerprint into the borrowed sponge.
+    let mut transcript = RingSwitchProverTranscript::<Challenger, F, EF>::new(challenger, shape);
+
+    // One call binds the point, binds `ŝ`'s base coefficients, and draws `r''`.
+    //
+    // The point goes first.
+    //
+    // Every later check the verifier forms from `r` it forms locally.
+    //
+    // An unbound `r` would leave the proof replayable at a different point.
+    //
+    // What is bound for `ŝ` is the coefficients that cross the wire.
+    //
+    // Neither derived reading is bound directly.
+    //
+    // Both are still pinned: both are readings of that one step.
+    let r_batch = transcript.statement(r, s_hat.coefficients());
 
     // `ℓ'` rounds on `h(X) = A(X) · t'(X)`, whose sum over the hypercube is the batched row
     // reading of `ŝ`.
@@ -216,14 +285,27 @@ where
     let poly = ProductPolynomial::new_unpacked(VariableOrder::Prefix, packed.clone(), weights);
     let mut prover = SumcheckProver::new(poly, batch_rows::<F, EF>(&s_hat, &r_batch));
     let mut sumcheck = SumcheckData::default();
-    let r_prime =
-        prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, ell_prime, 0, None);
+
+    // The rounds are a sub-protocol.
+    //
+    // They seed a transcript of their own from this sponge.
+    //
+    // The bracket records the delegation and hands the sponge over for it.
+    let r_prime = transcript.batched_sumcheck(|challenger| {
+        prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, ell_prime, 0, None)
+    });
 
     // After the last round the evaluation side has been folded to a single value, which is
     // `t'(r')` — the same number a fresh `packed.eval_ext(&r_prime)` would recompute in
     // another full pass over the packed evaluations.
     let final_eval = prover.evals().as_slice()[0];
-    challenger.observe_algebra_element(final_eval);
+
+    // The surviving claim is bound before the sponge goes back.
+    //
+    // A caller discharging it discharges the value this run produced.
+    transcript.surviving_claim(final_eval);
+    transcript.finish();
+
     (
         RingSwitchProof {
             s_hat,
@@ -235,28 +317,54 @@ where
     )
 }
 
-/// Verifies the reduction of `claimed_sum = t(r)` and returns the surviving claim
-/// `t'(r') = s'` as the pair `(r', s')`.
+/// Verifies the reduction of `claimed_sum = t(r)`.
 ///
-/// The round count is taken from `r`, which the verifier owns, so a proof carrying a different
-/// number of rounds is rejected by [`SumcheckData::verify_rounds`] instead of desynchronising
-/// the transcript.
+/// # Returns
 ///
-/// `r` and `(r', s')` are transcript-bound: this function observes `r` before `ŝ` and
-/// `proof.final_eval` after the rounds, at the same two points [`prove_ring_switch`] does, so a
-/// proof is usable only against the point it was produced for. `claimed_sum` is bound
-/// indirectly, through the column check against the observed `ŝ`. Both structural rejections
-/// below happen before the challenger is touched, so a malformed proof cannot leave a
-/// half-advanced transcript.
+/// The surviving claim `t'(r') = s'`, as the pair `(r', s')`.
+///
+/// # Where the round count comes from
+///
+/// It is taken from `r`, the point the verifier owns.
+///
+/// A proof carrying a different number of rounds is rejected by the round replay.
+///
+/// # What the transcript binds
+///
+/// ```text
+///     r            absorbed before s_hat
+///     final_eval   absorbed after the rounds
+/// ```
+///
+/// Both land at the same two points the prover uses.
+///
+/// A proof is therefore usable only against the point it was produced for.
+///
+/// The claimed sum is bound indirectly, by the column check against `ŝ`.
+///
+/// Both structural rejections below happen before the challenger is touched.
+///
+/// A malformed proof cannot leave a half-advanced transcript.
 ///
 /// # Panics
-/// Panics unless `r` names at least the `κ` packed variables. Everything read out of `proof`
-/// is validated and reported as an error.
+///
+/// Unless `r` names at least the `κ` packed variables.
+///
+/// Everything read out of the proof is validated and reported as an error instead.
 ///
 /// # Errors
-/// Returns [`RingSwitchError`] for a malformed `ŝ`, a non-empty `pow_witnesses` (this reduction
-/// never grinds), a claim that disagrees with `ŝ`'s columns, a failed sumcheck round, or a
-/// final claim that does not close the sumcheck.
+///
+/// - A malformed `ŝ`.
+/// - A non-empty proof-of-work witness list, since this reduction never grinds.
+/// - A claim that disagrees with `ŝ`'s columns.
+/// - A failed sumcheck round.
+/// - A final claim that does not close the sumcheck.
+///
+/// The point width is never among them.
+///
+/// The description is derived from `r` itself.
+///
+/// The two cannot disagree.
 pub fn verify_ring_switch<F, EF, Challenger>(
     proof: &RingSwitchProof<F, EF>,
     r: &Point<EF>,
@@ -268,20 +376,21 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
-    let kappa = packed_vars::<F, EF>();
-    assert!(
-        r.num_variables() >= kappa,
-        "the evaluation point must name at least the {kappa} packed variables, got {}",
-        r.num_variables()
-    );
-    let ell_prime = r.num_variables() - kappa;
+    // The description is derived from the point this side holds, never from the proof.
+    //
+    // Both sides therefore declare the same widths.
+    //
+    // A proof disagreeing with any of them is rejected.
+    //
+    // It is never left to desynchronise the sponge.
+    let shape = RingSwitchShape::new(r.num_variables());
+    let ell_prime = shape.sumcheck_rounds::<F, EF>();
 
     // `columns` and `rows` index a `DIMENSION × DIMENSION` matrix, so a short `ŝ` must be
     // rejected before either reading is taken.
     if !proof.s_hat.is_well_formed() {
-        let dimension = TensorAlgebra::<F, EF>::DIMENSION;
         return Err(RingSwitchError::MalformedTensor {
-            expected: dimension * dimension,
+            expected: RingSwitchShape::tensor_coefficients::<F, EF>(),
             actual: proof.s_hat.coefficients().len(),
         });
     }
@@ -295,8 +404,16 @@ where
     }
 
     let (r_high, r_low) = r.split_at(ell_prime);
-    challenger.observe_algebra_slice(r.as_slice());
-    challenger.observe_slice(proof.s_hat.coefficients());
+
+    // Seeding folds the description's fingerprint into the borrowed sponge.
+    let mut transcript = RingSwitchVerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
+
+    // One call absorbs the point, absorbs `ŝ`'s base coefficients, and redraws `r''`.
+    //
+    // A width the description does not allow is reported here.
+    //
+    // The failing step releases the driver's completeness check on its way out.
+    let r_batch = transcript.statement(r, proof.s_hat.coefficients())?;
 
     // The incoming claim must be the `eq̃(·, r_low)`-combination of `ŝ`'s columns. This is the
     // only use of `r_low`.
@@ -309,19 +426,42 @@ where
         .map(|(&column, &weight)| column * weight)
         .sum();
     if combined != claimed_sum {
+        // Two described steps are still unplayed, and this rejection plays neither.
+        //
+        // Releasing the completeness check keeps this the only failure reported.
+        transcript.abort();
         return Err(RingSwitchError::ClaimMismatch);
     }
 
     // The sumcheck's initial sum is derived from `ŝ`'s rows, never sent, which is what makes a
     // dishonest `ŝ` catchable: the two readings are of the same coefficients.
-    let r_batch = sample_batching_point::<F, EF, _>(challenger);
     let mut sum = batch_rows::<F, EF>(&proof.s_hat, &r_batch);
 
-    let r_prime =
+    // The rounds are a sub-protocol.
+    //
+    // They seed a transcript of their own from this sponge.
+    //
+    // The bracket closes whatever the delegated replay returned.
+    //
+    // A rejection inside it leaves only the closing step unplayed.
+    let rounds = transcript.batched_sumcheck(|challenger| {
         proof
             .sumcheck
-            .verify_rounds(challenger, &mut sum, ell_prime, 0, Basis::Evaluation)?;
-    challenger.observe_algebra_element(proof.final_eval);
+            .verify_rounds(challenger, &mut sum, ell_prime, 0, Basis::Evaluation)
+    });
+    let r_prime = match rounds {
+        Ok(r_prime) => r_prime,
+        Err(error) => {
+            transcript.abort();
+            return Err(error.into());
+        }
+    };
+
+    // The surviving claim is absorbed where the prover absorbed it.
+    //
+    // The sponge is handed back in the state the prover left it in.
+    transcript.surviving_claim(proof.final_eval);
+    transcript.finish();
 
     // The batched rows of the equality element are `A(r')`, so the sumcheck closes on
     // `A(r') · t'(r')`.
@@ -335,13 +475,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_challenger::CanObserve;
+    use p3_challenger::CanSample;
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::point::Point;
+    use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::test_util::{EF, F, base_poly, challenger};
+    use super::test_util::{Challenger, EF, F, base_poly, challenger};
     use super::*;
 
     /// Prover and verifier agree, and the surviving claim is true.
@@ -364,6 +505,62 @@ mod tests {
         assert_eq!(s_prime_p, s_prime_v);
         // The surviving claim is the truth about the committed polynomial.
         assert_eq!(s_prime_v, packed.eval_ext::<F>(&r_prime_v));
+    }
+
+    proptest! {
+        // Sixteen cases keep the suite fast.
+        //
+        // Each one runs a full reduction on both sides.
+        #![proptest_config(ProptestConfig { cases: 16, ..ProptestConfig::default() })]
+
+        #[test]
+        fn the_reduction_round_trips_over_random_inputs(
+            ell in 5usize..=8,
+            poly_seed in any::<u64>(),
+            point_seed in any::<u64>(),
+        ) {
+            // Completeness: an honest run replays, and the claim it leaves is the truth.
+            //
+            // Fixture state: 4 packed variables.
+            //
+            // `ell` between 5 and 8 then leaves 1 to 4 rounds.
+            //
+            //     ell = 5  ->  32 base evaluations  ->  2 packed elements  ->  1 round
+            //     ell = 8  ->  256 base evaluations ->  16 packed elements ->  4 rounds
+            let t = base_poly(ell, poly_seed);
+            let packed = pack::<F, EF>(t.clone());
+
+            // The point is the verifier's own input, and the claim is the truth at it.
+            let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(point_seed), ell);
+            let s = t.eval_base(&r);
+
+            // Both sides start from the same fresh sponge, as a composing protocol would.
+            let mut p_chal = challenger();
+            let (proof, r_prime_p, s_prime_p) =
+                prove_ring_switch::<F, EF, _>(&packed, &r, &mut p_chal);
+
+            let mut v_chal = challenger();
+            let (r_prime_v, s_prime_v) =
+                verify_ring_switch::<F, EF, _>(&proof, &r, s, &mut v_chal)
+                    .expect("an honest reduction must verify");
+
+            // The two sides walked one description.
+            //
+            // They landed on one surviving claim.
+            prop_assert_eq!(&r_prime_p, &r_prime_v);
+            prop_assert_eq!(s_prime_p, s_prime_v);
+
+            // The surviving claim is the truth about the committed polynomial.
+            prop_assert_eq!(s_prime_v, packed.eval_ext::<F>(&r_prime_v));
+
+            // The sponge is handed back in one state.
+            //
+            // The caller stays in step afterwards.
+            prop_assert_eq!(
+                CanSample::<F>::sample(&mut p_chal),
+                CanSample::<F>::sample(&mut v_chal),
+            );
+        }
     }
 
     /// A wrong claimed value is rejected at the column check.
@@ -587,10 +784,13 @@ mod tests {
             .map(|(&column, &weight)| column * weight)
             .sum();
 
+        // Driven through the same transcript the honest prover uses.
+        //
+        // The tampered element reaches the sponge where an honest one would.
         let mut chal = challenger();
-        chal.observe_algebra_slice(r.as_slice());
-        chal.observe_slice(s_hat.coefficients());
-        let r_batch = sample_batching_point::<F, EF, _>(&mut chal);
+        let shape = RingSwitchShape::new(ell);
+        let mut transcript = RingSwitchProverTranscript::<Challenger, F, EF>::new(&mut chal, shape);
+        let r_batch = transcript.statement(&r, s_hat.coefficients());
 
         // The genuine sumcheck's initial sum, derived from the tampered `ŝ` exactly as the
         // verifier will derive it — not the true dot product of any real polynomial.
@@ -613,8 +813,9 @@ mod tests {
         let poly = ProductPolynomial::new_unpacked(VariableOrder::Prefix, fake_packed, weights);
         let mut prover = SumcheckProver::new(poly, shifted_sum);
         let mut sumcheck = SumcheckData::default();
-        let r_prime =
-            prover.compute_sumcheck_polynomials(&mut sumcheck, &mut chal, ell_prime, 0, None);
+        let r_prime = transcript.batched_sumcheck(|challenger| {
+            prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, ell_prime, 0, None)
+        });
         let sum_final = prover.claimed_sum();
 
         // `final_eval` set to whatever the final identity needs, computed the same way the
@@ -622,6 +823,10 @@ mod tests {
         let e = equality_element::<F, EF>(&r_high, &r_prime);
         let a_r_prime = batch_rows::<F, EF>(&e, &r_batch);
         let final_eval = sum_final * a_r_prime.inverse();
+
+        // The description is only fully played once the surviving claim is bound.
+        transcript.surviving_claim(final_eval);
+        transcript.finish();
 
         let proof = RingSwitchProof {
             s_hat,
