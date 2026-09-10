@@ -40,6 +40,7 @@ use p3_security::fri::FriRegime;
 use p3_security::grinding::{GrindingBudget, GrindingSites, RecordedGrind};
 use p3_stir::{SecurityAssumption, StirInstanceShape, StirRoundShape, StirShape};
 use p3_sumcheck::generic_degree::GenericDegreeShape;
+use p3_sumcheck::ring_switch::RingSwitchShape;
 use p3_sumcheck::strategy::Basis;
 use p3_sumcheck::transcript::SumcheckShape;
 use p3_sumcheck::zk::ZkSumcheckShape;
@@ -514,6 +515,24 @@ fn sumcheck_quadratic_cases() -> Vec<Case> {
     .collect()
 }
 
+/// The ring-switching cases: three coordinate counts of the incoming evaluation point.
+///
+/// The point width is the reduction's only knob.
+///
+/// Everything else its description declares follows from the field pair.
+fn ring_switch_cases() -> Vec<Case> {
+    [6, 7, 8]
+        .into_iter()
+        .map(|num_variables| {
+            let shape = RingSwitchShape::new(num_variables);
+            (
+                format!("p3-sumcheck-ring-switch/num_variables={num_variables}"),
+                shape.domain_separator::<F, EF>(),
+            )
+        })
+        .collect()
+}
+
 /// Every protocol's cases, the default configuration first in each group.
 /// Number of opening claims the WHIR fixture runs with.
 ///
@@ -651,6 +670,7 @@ fn protocols() -> Vec<Vec<Case>> {
         sumcheck_quadratic_cases(),
         multi_stark_cases(),
         zk_sumcheck_cases(),
+        ring_switch_cases(),
     ]
 }
 
