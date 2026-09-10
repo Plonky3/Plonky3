@@ -213,7 +213,11 @@ where
             challenger,
             commitment,
             protocol.num_openings(),
-            |alpha| layout_verifier.constraint(alpha),
+            |challenger| {
+                // The layout owns the batching challenge for the claims recorded above.
+                let alpha = layout_verifier.batching_challenge(challenger);
+                layout_verifier.constraint(alpha)
+            },
         )?;
 
         Ok(())
@@ -357,7 +361,11 @@ where
             challenger,
             commitment,
             protocol.num_openings(),
-            |alpha| layout_verifier.constraint(alpha),
+            |challenger| {
+                // The layout owns the batching challenge for the claims recorded above.
+                let alpha = layout_verifier.batching_challenge(challenger);
+                layout_verifier.constraint(alpha)
+            },
         )?;
 
         // The opening verified.

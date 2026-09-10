@@ -92,9 +92,16 @@ where
     /// - `challenger`: the sponge the whole proof shares, borrowed for this run.
     /// - `parsed_commitment`: the initial commitment the run opens.
     /// - `num_opening_claims`: opening claims the caller bound before this run.
-    /// - `initial_constraint`: builds the batched claim from the challenge drawn here.
+    /// - `initial_constraint`: draws the batching challenge and builds the batched claim.
     ///
-    /// The batching challenge is drawn inside the initial delegation bracket.
+    /// The batching challenge belongs to the claims the caller recorded.
+    ///
+    /// It does not belong to this run.
+    ///
+    /// It is drawn inside the initial delegation bracket.
+    ///
+    /// The sponge is lent to the builder for that draw.
+    ///
     /// The caller therefore hands over a builder, not a finished constraint.
     ///
     /// # Returns
@@ -115,7 +122,7 @@ where
     ) -> Result<Point<EF>, VerifierError>
     where
         Challenger: CanObserve<MT::Commitment>,
-        MakeConstraint: FnOnce(EF) -> Constraint<F, EF>,
+        MakeConstraint: FnOnce(&mut Challenger) -> Constraint<F, EF>,
     {
         // Reject a proof that carries the wrong number of rounds before any
         // transcript work. The per-round commitment slot is checked further
@@ -186,7 +193,7 @@ where
     ) -> Result<Point<EF>, VerifierError>
     where
         Challenger: CanObserve<MT::Commitment>,
-        MakeConstraint: FnOnce(EF) -> Constraint<F, EF>,
+        MakeConstraint: FnOnce(&mut Challenger) -> Constraint<F, EF>,
     {
         let mut constraints = Vec::new();
         let mut round_folding_randomness = Vec::new();
@@ -194,12 +201,17 @@ where
 
         // The delegate draws the claim-batching challenge, then replays its own rounds.
         //
+        // The builder owns that draw.
+        //
+        // The claims it batches are the caller's own.
+        //
+        // Both it and the rounds after it seed sub-transcripts inside this bracket.
+        //
         // Initial sumcheck rounds == first-round folding factor.
         // `verify_rounds` rejects a proof that carries the wrong number of rounds.
         let (constraint, mut claimed_eval, folding_randomness) =
             transcript.delegate_initial_fold(|challenger| {
-                let alpha: EF = challenger.sample_algebra_element();
-                let constraint = initial_constraint(alpha);
+                let constraint = initial_constraint(challenger);
                 let mut claimed_eval = EF::ZERO;
                 constraint.combine_evals(&mut claimed_eval);
                 let randomness = proof.initial_sumcheck.verify_rounds(

@@ -4,6 +4,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use p3_challenger::fs::TranscriptField;
+use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, dot_product};
 use p3_multilinear_util::point::Point;
 
@@ -12,6 +14,10 @@ use crate::constraints::{Constraint, Statements};
 use crate::layout::LayoutStrategy;
 use crate::layout::opening::{VerifierMultiClaim, VerifierOpening, VerifierVirtualClaim};
 use crate::layout::plan::{LayoutShape, plan_layout};
+use crate::layout::transcript::{
+    BatchingShape, LayoutBinding, OpeningShape, OpeningVerifierTranscript, PointSource,
+    VirtualShape, VirtualVerifierTranscript, verifier_batching_challenge,
+};
 use crate::layout::witness::{Selector, TablePlacement};
 use crate::strategy::VariableOrder;
 use crate::table::{OpeningEvals, OpeningRequest, TableShape};
@@ -103,30 +109,39 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         self.k - selector_vars
     }
 
-    /// Records concrete opening claims for one table.
+    /// Records concrete opening claims for one table at a point drawn here.
+    ///
+    /// # Overview
+    ///
+    /// - The local-frame opening point is drawn from the transcript.
+    /// - Direct openings pair a column with its claimed evaluation.
+    /// - Successor openings pair a repeat-last view with its claimed evaluation.
+    ///
+    /// # Transcript
+    ///
+    /// One sub-transcript spans the whole call, mirroring the prover's step for step.
+    ///
+    /// ```text
+    ///     draw the point  ->  check the counts  ->  bind the evaluations
+    /// ```
     ///
     /// # Arguments
     ///
-    /// - `table_idx`  — source table index.
-    /// - `batch`      — current and next columns opened at this point.
-    /// - `evals`      — claimed evaluations split the same way as the columns.
-    /// - `challenger` — Fiat-Shamir transcript.
-    ///
-    /// # Fiat-Shamir
-    ///
-    /// - Samples the opening point internally from the transcript.
-    /// - Absorbs the evaluations, current group first then next.
-    /// - Mirrors exactly the prover-side absorption order.
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Claimed evaluations, split the same way as the columns.
+    /// - Sponge of the surrounding protocol, borrowed for this call.
     ///
     /// # Errors
     ///
-    /// - Returns [`SumcheckError::OpeningShapeMismatch`] when the proof's
-    ///   evaluations do not match the requested column shape.
+    /// When the claimed evaluations do not match the requested column counts.
+    ///
+    /// A rejected claim leaves the registry untouched.
     ///
     /// # Panics
     ///
-    /// - At least one current or next column must be requested.
-    /// - Every column index must be in range for this table.
+    /// - When the request names no column at all.
+    /// - When a requested column is out of range for this table.
     pub fn add_claim<Ch>(
         &mut self,
         table_idx: usize,
@@ -135,43 +150,72 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         challenger: &mut Ch,
     ) -> Result<(), SumcheckError>
     where
-        Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // Draw the local-frame opening point as powers of one challenge.
-        // This is the standalone-PCS convention: the verifier picks the evaluation point.
-        let point = Point::expand_from_univariate(
-            challenger.sample_algebra_element(),
-            self.num_variables_table(table_idx),
-        );
-        self.add_claim_at(table_idx, batch, &point, evals, challenger)
+        // The schedule is the caller's own.
+        //
+        // Its shape is therefore checked with assertions.
+        self.check_request(table_idx, batch);
+
+        // Both column counts come from the schedule, never from the proof.
+        let shape = self.opening_shape(table_idx, batch, PointSource::Drawn);
+        let mut transcript = OpeningVerifierTranscript::<Ch, F, EF>::new(challenger, shape);
+
+        // The standalone-PCS convention: the verifier picks the evaluation point.
+        let point = transcript.point();
+
+        // The evaluations come from the proof.
+        //
+        // A count mismatch is therefore a rejection.
+        //
+        // The driver releases its own completeness check on the way out.
+        transcript.evaluations(evals)?;
+
+        // Require that every described step was replayed.
+        transcript.finish();
+
+        // Nothing can fail from here.
+        //
+        // The registry is therefore touched exactly once.
+        self.record(table_idx, batch, &point, evals);
+
+        Ok(())
     }
 
-    /// Records an opening claim at a prescribed point.
+    /// Records concrete opening claims for one table at a point the caller supplies.
     ///
-    /// The caller supplies the local-frame opening point instead of sampling it.
     /// An outer protocol that fixes the point opens its columns through this entry.
     ///
-    /// Soundness requires `point` to be sampled from, or bound to, the same `challenger`
-    /// before this call (see `PrescribedPointPcs`'s Fiat-Shamir/Soundness doc) — this
-    /// method absorbs the evaluations but not the point itself.
+    /// # Soundness
+    ///
+    /// This call binds the evaluations.
+    ///
+    /// It binds nothing else.
+    ///
+    /// The point must already have been drawn from, or bound to, the same sponge.
+    ///
+    /// A caller choosing its own point owes the transcript that binding.
     ///
     /// # Arguments
     ///
     /// - Index of the table whose columns are opened.
     /// - Column indices opened directly and through the successor view.
     /// - Local-frame opening point.
-    /// - Claimed evaluations matching the batch shape.
-    /// - Fiat-Shamir transcript.
+    /// - Claimed evaluations, split the same way as the columns.
+    /// - Sponge of the surrounding protocol, borrowed for this call.
     ///
     /// # Errors
     ///
-    /// - Returns an error when the evaluations do not match the requested shape.
+    /// When the claimed evaluations do not match the requested column counts.
+    ///
+    /// A rejected claim leaves the registry untouched.
     ///
     /// # Panics
     ///
-    /// - At least one current or next column must be requested.
-    /// - Every column index must be in range for this table.
-    /// - The point must carry one coordinate per table variable.
+    /// - When the request names no column at all.
+    /// - When a requested column is out of range for this table.
+    /// - When the point does not carry one coordinate per table variable.
     pub fn add_claim_at<Ch>(
         &mut self,
         table_idx: usize,
@@ -181,93 +225,203 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         challenger: &mut Ch,
     ) -> Result<(), SumcheckError>
     where
-        Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        let placement = self.placement(table_idx);
-        // Split the request into its two column groups.
-        let current = batch.current();
-        let next = batch.next();
-        // An empty request would silently record nothing. The schedule is built
-        // by the verifier, so an empty request is a caller bug, not a bad proof.
+        // The schedule is the caller's own.
+        //
+        // Its shape is therefore checked with assertions.
+        self.check_request(table_idx, batch);
+
+        // The point lives in the table's local frame, one coordinate per variable.
+        assert_eq!(point.num_variables(), self.num_variables_table(table_idx));
+
+        // A caller-fixed point contributes no step.
+        //
+        // This description therefore holds no challenge.
+        let shape = self.opening_shape(table_idx, batch, PointSource::Given);
+        let mut transcript = OpeningVerifierTranscript::<Ch, F, EF>::new(challenger, shape);
+
+        // The evaluations come from the proof.
+        //
+        // A count mismatch is therefore a rejection.
+        transcript.evaluations(evals)?;
+
+        // Require that every described step was replayed.
+        transcript.finish();
+
+        // Nothing can fail from here.
+        //
+        // The registry is therefore touched exactly once.
+        self.record(table_idx, batch, point, evals);
+
+        Ok(())
+    }
+
+    /// Records an out-of-domain evaluation claim on the full stacked polynomial.
+    ///
+    /// # Transcript
+    ///
+    /// One sub-transcript spans the whole call, mirroring the prover's step for step.
+    ///
+    /// ```text
+    ///     draw the point  ->  bind the claimed evaluation
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// - Claimed evaluation of the stacked polynomial at the drawn point.
+    /// - Sponge of the surrounding protocol, borrowed for this call.
+    pub fn add_virtual_eval<Ch>(&mut self, eval: EF, challenger: &mut Ch)
+    where
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // The stacked arity is the whole configuration of this component.
+        let shape = VirtualShape::new(self.binding());
+        let mut transcript = VirtualVerifierTranscript::<Ch, F, EF>::new(challenger, shape);
+
+        // Draw first, then bind, exactly as the prover did.
+        let point = transcript.point();
+        transcript.evaluation(eval);
+
+        // Require that every described step was replayed.
+        transcript.finish();
+
+        // Record the claim with unit payload: the verifier side carries no extras.
+        self.virtual_claims.push(Claim {
+            point,
+            eval,
+            data: (),
+        });
+    }
+
+    /// Draws the challenge that collapses every recorded claim into a single one.
+    ///
+    /// # Overview
+    ///
+    /// Each claim is weighted by a successive power of the drawn challenge.
+    ///
+    /// ```text
+    ///     sum = sum_i  alpha^i * eval_i
+    /// ```
+    ///
+    /// Direct and successor openings take the low powers, in insertion order.
+    ///
+    /// Out-of-domain claims continue the sequence after them.
+    ///
+    /// # Transcript
+    ///
+    /// Both claim counts reach the seed of the draw's own sub-transcript.
+    ///
+    /// A run that recorded a different number of claims lands elsewhere.
+    ///
+    /// # Arguments
+    ///
+    /// - Sponge of the surrounding protocol, borrowed for the draw.
+    pub fn batching_challenge<Ch>(&self, challenger: &mut Ch) -> EF
+    where
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Both counts come from the claims this run recorded, never from a proof.
+        let shape =
+            BatchingShape::new(self.binding(), self.num_claims(), self.virtual_claims.len());
+        verifier_batching_challenge::<Ch, F, EF>(challenger, shape)
+    }
+
+    /// Returns the layout geometry every claim of this run is bound against.
+    ///
+    /// The prover derives the same three numbers from its own configuration.
+    const fn binding(&self) -> LayoutBinding {
+        LayoutBinding::new(self.k, self.strategy)
+    }
+
+    /// Describes the transcript of one recorded batch on one table.
+    ///
+    /// Both column counts are read off the schedule.
+    ///
+    /// No proof value therefore reaches a step width.
+    fn opening_shape(
+        &self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: PointSource,
+    ) -> OpeningShape {
+        OpeningShape::new(
+            self.binding(),
+            table_idx,
+            self.num_variables_table(table_idx),
+            batch.current().len(),
+            batch.next().len(),
+            point,
+        )
+    }
+
+    /// Checks the caller's own opening schedule before any transcript step runs.
+    ///
+    /// Everything checked here is fixed by the schedule.
+    ///
+    /// Both sides build that schedule themselves.
+    ///
+    /// A violation is therefore a caller bug, not a malformed proof.
+    ///
+    /// # Panics
+    ///
+    /// - When the request names no column at all.
+    /// - When a requested column is out of range for this table.
+    fn check_request(&self, table_idx: usize, batch: &OpeningRequest) {
+        // An empty request would silently record nothing.
         assert!(
             !batch.is_empty(),
             "opening schedule must name at least one column"
         );
-        // The point lives in the table's local frame.
-        // It carries one coordinate per variable.
-        assert_eq!(point.num_variables(), self.num_variables_table(table_idx));
-        // The evaluations come from the proof, so a shape mismatch is a malformed
-        // proof and must be rejected rather than aborting the verifier.
-        if !batch.has_same_shape(evals) {
-            return Err(SumcheckError::OpeningShapeMismatch {
-                table_idx,
-                expected_current: current.len(),
-                expected_next: next.len(),
-                actual_current: evals.current().len(),
-                actual_next: evals.next().len(),
-            });
-        }
+
         // Every requested column must address an existing slot in this table.
-        assert!(
-            current
-                .iter()
-                .all(|&poly_idx| poly_idx < placement.num_polys())
-        );
-        assert!(
-            next.iter()
-                .all(|&poly_idx| poly_idx < placement.num_polys())
-        );
+        let num_polys = self.placement(table_idx).num_polys();
+        assert!(batch.current().iter().all(|&poly_idx| poly_idx < num_polys));
+        assert!(batch.next().iter().all(|&poly_idx| poly_idx < num_polys));
+    }
 
-        // Absorb the evals in the same current-then-next order as the prover.
-        challenger.observe_algebra_slice(evals.current());
-        challenger.observe_algebra_slice(evals.next());
-
-        // Pair each current column with its claimed evaluation.
-        let current_openings = current
+    /// Pairs each requested column with its claimed evaluation and stores the batch.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point shared by every column in the batch.
+    /// - Claimed evaluations, already counted against the requested columns.
+    fn record(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    ) {
+        // Pair each direct column with its claimed evaluation.
+        let current_openings = batch
+            .current()
             .iter()
             .copied()
             .zip(evals.current().iter().copied())
             .map(|(poly_idx, eval)| VerifierOpening::new(poly_idx, eval))
             .collect();
-        // Pair each next column with its claimed evaluation.
-        let next_openings = next
+
+        // Pair each successor view with its claimed evaluation.
+        let next_openings = batch
+            .next()
             .iter()
             .copied()
             .zip(evals.next().iter().copied())
             .map(|(poly_idx, eval)| VerifierOpening::new(poly_idx, eval))
             .collect();
 
-        // Store the batch under this table's claim list.
+        // Store the batch under this table's claim list, in insertion order.
         self.claim_map[table_idx].push(VerifierMultiClaim::new(
             point.clone(),
             current_openings,
             next_openings,
         ));
-
-        Ok(())
-    }
-
-    /// Records a virtual evaluation claim on the full stacked polynomial.
-    ///
-    /// # Fiat–Shamir
-    ///
-    /// - Samples the opening point from the challenger.
-    /// - Absorbs the evaluation into the transcript.
-    /// - Mirrors exactly the prover's `add_virtual_eval` absorption order.
-    pub fn add_virtual_eval<Ch>(&mut self, eval: EF, challenger: &mut Ch)
-    where
-        Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
-    {
-        // Sample a challenge point covering every stacked variable.
-        let point = Point::expand_from_univariate(challenger.sample_algebra_element(), self.k);
-        // Absorb the evaluation into the transcript.
-        challenger.observe_algebra_element(eval);
-        // Record the claim with unit payload (verifier side carries no extras).
-        self.virtual_claims.push(Claim {
-            point,
-            eval,
-            data: (),
-        });
     }
 
     /// Computes the batched claimed sum across concrete and virtual openings.

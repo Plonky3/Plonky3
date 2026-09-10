@@ -63,48 +63,34 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
         &self.claims
     }
 
-    /// Records opening claims for the selected columns of one table.
+    /// Evaluates the selected columns of one table at a point and records the claim.
     ///
-    /// All requested columns share one sampled local opening point.
+    /// All requested columns share the one supplied local opening point.
     ///
-    /// - Current openings evaluate a column at that point.
-    /// - Next openings evaluate the repeat-last successor view at that point.
-    /// - Returned evaluations list all current openings first, then all next openings.
+    /// - Direct openings evaluate a column at that point.
+    /// - Successor openings evaluate the repeat-last view at that point.
+    /// - Returned evaluations list every direct opening first.
     ///
     /// # Arguments
     ///
-    /// - `table_idx`  — source table index.
-    /// - `batch`      — current and next columns opened at this point.
-    /// - `challenger` — Fiat-Shamir transcript.
+    /// - Source table index.
+    /// - Columns opened directly and through the successor view.
+    /// - Local-frame opening point, one coordinate per table variable.
     ///
-    /// # Fiat-Shamir
+    /// # Performance
     ///
-    /// - Samples the opening point internally from the transcript.
-    /// - Absorbs the evaluations before returning.
-    /// - The verifier performs the symmetric absorption.
-    ///
-    /// # Panics
-    ///
-    /// - At least one current or next column must be requested.
+    /// - The point is factorised once and reused by every selected column.
+    /// - Each column is an independent linear pass, so columns run in parallel.
     #[tracing::instrument(skip_all)]
-    fn eval_at<Ch>(
+    fn record_opening(
         &mut self,
         table_idx: usize,
         batch: &OpeningRequest,
         point: &Point<EF>,
-        challenger: &mut Ch,
-    ) -> OpeningEvals<EF>
-    where
-        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    {
+    ) -> OpeningEvals<EF> {
         // Split the request into its two column groups.
         let current = batch.current();
         let next = batch.next();
-        // Precondition: opening nothing would silently push an empty claim.
-        assert!(
-            !batch.is_empty(),
-            "opening schedule must name at least one column"
-        );
         let table = &self.claims.tables[table_idx];
         // The opening point lives in the table's local frame, one coordinate per variable.
         debug_assert_eq!(point.num_variables(), table.num_variables());
@@ -135,11 +121,6 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
             })
             .unzip();
 
-        // Bind the evaluations into the transcript, current group first then next.
-        // The verifier absorbs the same bytes in the same order.
-        challenger.observe_algebra_slice(&current_evals);
-        challenger.observe_algebra_slice(&next_evals);
-
         // Store the batch for the later sumcheck reduction.
         self.claims.claim_map[table_idx].push(ProverMultiClaim::new(
             point,
@@ -151,24 +132,35 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
         OpeningBatch::new(current_evals, next_evals)
     }
 
-    /// Samples a virtual evaluation on the full stacked polynomial.
+    /// Evaluates the full stacked polynomial at a point and records the claim.
     ///
-    /// # Why
+    /// # Overview
     ///
-    /// The WHIR protocol occasionally pins the stacked polynomial at a fresh
-    /// random point for soundness amplification. Prefix mode evaluates the
-    /// stacked polynomial directly — no per-column weighting needed.
+    /// WHIR pins the stacked polynomial at a fresh point for soundness amplification.
+    ///
+    /// The stacked evaluation factors per column through the slot selector:
+    ///
+    /// ```text
+    ///     stacked(point) = sum_i  eq(selector_i, point_selector_part)
+    ///                             * col_i(point_local_part)
+    /// ```
+    ///
+    /// Per-column preprocessing residuals are collected on the way.
+    ///
+    /// They feed the accumulator batcher.
+    ///
+    /// The folding rounds then read them instead of the columns.
+    ///
+    /// # Arguments
+    ///
+    /// - Point covering every stacked variable.
     #[tracing::instrument(skip_all)]
-    fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
-    where
-        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    {
-        // Sample a challenge point covering every stacked variable.
-        let point = Point::expand_from_univariate(
-            challenger.sample_algebra_element(),
-            self.claims.num_variables,
-        );
-
+    fn record_virtual(&mut self, point: &Point<EF>) -> EF {
+        // Per-column accumulation state:
+        //
+        //     eval    : running stacked evaluation
+        //     openings: one virtual opening per column, carrying its residuals
+        //     weights : per-column selector-equality scalars
         let mut eval = EF::ZERO;
         let mut openings = Vec::new();
         let mut weights = Vec::new();
@@ -176,39 +168,50 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
         for placement in &self.claims.placements {
             let table = &self.claims.tables[placement.idx()];
             for (poly_idx, selector) in placement.selectors().iter().enumerate() {
+                // Source column behind this slot.
                 let poly = table.poly(poly_idx);
 
+                // Prefix binding puts the local bits first.
+                //
+                // The split therefore takes them first.
                 let (local_part, selector_part) = point.split_at(table.num_variables());
 
+                // Scalar weight picking this slot out of the stacked space.
                 let weight =
                     Point::eval_eq::<EF>(selector.point().as_slice(), selector_part.as_slice());
 
+                // Factorise the local part, then evaluate the column at it.
                 let local_svo = SvoPoint::new_packed(self.claims.folding, &local_part);
                 let (column_eval, partial_evals) = local_svo.eval(poly);
 
+                // Add the weighted column evaluation into the stacked total.
                 eval += weight * column_eval;
+
+                // Record a virtual opening: no source column tag, residuals attached.
                 openings.push(Opening {
                     poly_idx: None,
                     eval: column_eval,
                     data: partial_evals,
                 });
+
+                // Stash the weight for the accumulator-batcher call below.
                 weights.push(weight);
             }
         }
 
+        // Batch every per-column opening into per-round preprocessing accumulators.
         let accumulators = calculate_accumulators_batch(
             &ProverMultiClaim::new(
-                SvoPoint::new_unpacked(self.claims.folding, &point, VariableOrder::Prefix),
+                SvoPoint::new_unpacked(self.claims.folding, point, VariableOrder::Prefix),
                 openings,
                 Vec::new(),
             ),
             &weights,
         );
 
-        // Commit the evaluation to the transcript.
-        challenger.observe_algebra_element(eval);
+        // Record the claim so the folding rounds can read its accumulators.
         self.claims.virtual_claims.push(Claim {
-            point,
+            point: point.clone(),
             eval,
             data: accumulators,
         });
@@ -253,7 +256,10 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
         // Sanity: preprocessing cannot consume more rounds than the stacked arity.
         assert!(self.claims.folding <= self.claims.num_variables);
 
-        let alpha: EF = challenger.sample_algebra_element();
+        // The batching challenge seeds a sub-transcript of its own.
+        //
+        // Both claim counts therefore reach the sponge before the challenge is drawn.
+        let alpha: EF = self.batching_challenge(challenger);
         let n_claims = self.num_claims();
 
         let mut alphas = alpha.powers();

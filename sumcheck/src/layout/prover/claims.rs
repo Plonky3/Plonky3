@@ -95,6 +95,11 @@ impl<F: Field, EF: ExtensionField<F>> StackedClaims<F, EF> {
             .sum()
     }
 
+    /// Returns the number of out-of-domain claims recorded on the stacked polynomial.
+    pub(crate) const fn num_virtual_claims(&self) -> usize {
+        self.virtual_claims.len()
+    }
+
     /// Walks concrete claims in placement order.
     ///
     /// - Outer: placements, in the order the witness laid them out.

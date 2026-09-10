@@ -340,7 +340,8 @@ where
                 .add_claim(table_idx, batch, evals, &mut verifier_challenger)
                 .unwrap();
         }
-        let alpha = verifier_challenger.sample_algebra_element();
+        // The batching challenge is drawn through the layout on both sides.
+        let alpha = layout_verifier.batching_challenge(&mut verifier_challenger);
         let constraint = layout_verifier.constraint(alpha);
         constraint.combine_evals(&mut sum);
         assert_eq!(sum, layout_verifier.sum(alpha));
