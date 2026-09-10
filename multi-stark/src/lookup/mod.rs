@@ -1127,18 +1127,13 @@ mod tests {
     }
 
     #[test]
-    fn materialization_rejects_a_trace_shorter_than_the_packing_width() {
+    fn materialization_handles_a_trace_shorter_than_the_packing_width() {
         let packing_variables = log2_strict_usize(<F as Field>::Packing::WIDTH);
         if packing_variables == 0 {
             // Scalar packing has width one, so no nonempty trace can be shorter.
             return;
         }
 
-        // Mutation: give the prover a trace one variable below its own lane group.
-        //
-        //     block rows    : 2^(packing_variables - 1)
-        //     rows per lane : 2^packing_variables
-        //     -----> zero packed entries per block, so the block would stay unwritten
         let air = BalancedLookupAir;
         let mut rng = SmallRng::seed_from_u64(0x5170_2ACE);
         let main = Table::<F>::rand(&mut rng, 1, packing_variables - 1);
@@ -1146,19 +1141,20 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let payload = std::panic::catch_unwind(|| {
-            plan.materialize_fraction(&[&main], &[None], &[&[]], EF::ONE, EF::ONE)
-        })
-        .expect_err("materialization must refuse a trace below its lane group");
-
-        // A panic payload is an owned string only when the message was formatted.
-        // A plain message arrives as a static string slice, so accept both shapes.
-        let message = payload
-            .downcast_ref::<std::string::String>()
-            .map(std::string::String::as_str)
-            .or_else(|| payload.downcast_ref::<&'static str>().copied())
-            .expect("the panic carries a message");
-        assert!(message.contains("SIMD packing width"), "{message}");
+        let fraction = plan.materialize_fraction(&[&main], &[None], &[&[]], EF::ONE, EF::ONE);
+        let height = 1 << main.num_variables();
+        assert_eq!(&fraction.n.as_slice()[..height], &vec![F::ONE; height]);
+        assert_eq!(&fraction.n.as_slice()[height..], &vec![F::NEG_ONE; height]);
+        let column = main.iter_polys().next().unwrap();
+        let mut denominators = EF::zero_vec(2 * height);
+        fraction.d.unpack_into(&mut denominators);
+        for row in 0..height {
+            // alpha = beta = 1, width = 1, bus 0: prefix = alpha + beta = 2.
+            let expected =
+                EF::TWO - EF::from(column[row].square() - column[(row + 1).min(height - 1)]);
+            assert_eq!(denominators[row], expected);
+            assert_eq!(denominators[height + row], expected);
+        }
     }
 
     #[test]
@@ -1445,11 +1441,11 @@ mod tests {
         // Invariant: a shorter AIR's lookup claim stays dormant until the cube reaches its
         // height, and the global claim is exactly the sum of the two shares throughout.
         //
-        //     rounds : | block selectors | 64-row stage | 16-row stage |
+        //     rounds : | block selectors | 64-row stage | 2-row stage |
         let air = BalancedLookupAir;
         let mut rng = SmallRng::seed_from_u64(0xA17_57A6E);
         let tall = Table::<F>::rand(&mut rng, 1, 6);
-        let short = Table::<F>::rand(&mut rng, 1, 4);
+        let short = Table::<F>::rand(&mut rng, 1, 1);
         let public_values: &[F] = &[];
         let airs = [&air, &air];
         let publics = [public_values, public_values];
