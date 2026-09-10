@@ -17,7 +17,6 @@ use super::config::ZkWhirConfig;
 use super::proof::ZkWhirProof;
 use super::prover::{HidingWhirProver, HidingWhirProverData};
 use super::verifier::{HidingWhirVerifier, ZkVerifierError};
-use crate::transcript::zk::ZkWhirShape;
 
 /// A hiding WHIR PCS, mirroring the hiding FRI adapter.
 ///
@@ -70,27 +69,6 @@ where
             mmcs,
             rng: Mutex::new(rng),
         }
-    }
-}
-
-impl<EF, F, Dft, MT, Challenger, R> HidingWhirPcs<EF, F, Dft, MT, Challenger, R>
-where
-    F: TwoAdicField + PrimeField64,
-    EF: ExtensionField<F> + TwoAdicField,
-    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-{
-    /// Absorb this instance's transcript seed into the challenger.
-    ///
-    /// The opening and verifying entry points call this themselves.
-    /// An integrator wiring up the scheme has nothing left to remember.
-    ///
-    /// # Arguments
-    ///
-    /// - `challenger`: the sponge the whole proof shares.
-    fn seed_transcript(&self, challenger: &mut Challenger) {
-        ZkWhirShape::new(&self.config)
-            .domain_separator::<F, EF>()
-            .seed(challenger);
     }
 }
 
@@ -147,10 +125,6 @@ where
             })
             .collect();
 
-        // The claims are bound and the hiding run starts here.
-        // Its seed therefore lands here, ahead of the run's first challenge.
-        self.seed_transcript(challenger);
-
         let prover = HidingWhirProver::new(&self.config, &self.dft, &self.mmcs);
         let mut rng = StdRng::from_rng(&mut *self.rng.lock());
         prover.prove(prover_data, &claims, challenger, &mut rng)
@@ -181,10 +155,6 @@ where
                 (point, eval)
             })
             .collect();
-
-        // The claims are bound and the hiding run starts here.
-        // Its seed therefore lands here, ahead of the run's first challenge.
-        self.seed_transcript(challenger);
 
         let verifier = HidingWhirVerifier::new(&self.config, &self.mmcs);
         verifier.verify(proof, commitment, &claims, challenger)

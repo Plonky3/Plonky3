@@ -4,7 +4,7 @@
 //!
 //! One statement of what a hiding WHIR run absorbs and draws, consumed by both sides.
 //!
-//! It is built from the derived HVZK configuration alone.
+//! It is built from the derived HVZK configuration and the trusted opening-claim count.
 //!
 //! # Shape
 //!
@@ -33,9 +33,11 @@
 //! # What is bound
 //!
 //! - Shape: every count above, every grinding difficulty, every query width.
+//! - Instance label: the trusted number of opening claims.
 //! - Instance label: the plain WHIR parameters, unchanged.
 //! - Instance label: the mask rate, the mask geometry, the randomness budgets.
 
+mod player;
 use alloc::vec::Vec;
 
 use p3_challenger::fs::{
@@ -44,72 +46,55 @@ use p3_challenger::fs::{
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 use p3_util::log2_strict_usize;
+pub(crate) use player::{ZkWhirProverTranscript, ZkWhirVerifierTranscript};
 
 use super::{
-    Alphabet, FOLD_CHALLENGE, INITIAL_BATCHING, OOD_ANSWER, OOD_POINT, QUERY_INDICES, QUERY_POW,
-    ROUND_BATCHING, bind_folding_factor, query_draws,
+    Alphabet, INITIAL_BATCHING, OOD_ANSWER, OOD_POINT, QUERY_INDICES, QUERY_POW, ROUND_BATCHING,
+    bind_folding_factor, query_draws,
 };
 use crate::parameters::{FoldingFactor, SecurityAssumption};
 use crate::pcs::zk::{MaskCodeShape, MaskGroupShape, ZkWhirConfig};
 
 /// Version byte bound into the transcript seed.
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 
 /// Protocol name bound into the transcript seed.
 ///
 /// Distinct from the plain name, so the two pipelines can never share a seed.
 const NAME: &[u8] = b"p3-whir-hvzk";
 
-/// Step label of the joint claim opening a masked sumcheck batch.
-const JOINT_CLAIM: &str = "joint_claim";
-
-/// Step label of the interleaved mask oracle of a masked sumcheck batch.
-const SUMCHECK_MASK_COMMITMENT: &str = "sumcheck_mask_commitment";
-
-/// Step label of `mu_tilde`, the sum of the batch's mask endpoints.
-const MU_TILDE: &str = "mu_tilde";
-
-/// Step label of `eps`, the challenge combining mask and plain pieces.
-const MASK_COMBINATION: &str = "mask_combination";
-
-/// Step label of the wire coefficients one masked sumcheck round sends.
-const ZK_SUMCHECK_POLY: &str = "zk_sumcheck_poly";
-
-/// Step label of the grinding step inside a masked sumcheck round.
-const ZK_SUMCHECK_POW: &str = "zk_sumcheck_pow";
-
 /// Step label of the oracle committed by a code-switching round.
-const ORACLE_COMMITMENT: &str = "oracle_commitment";
+pub(crate) const ORACLE_COMMITMENT: &str = "oracle_commitment";
 
 /// Step label of the mask committed alongside it.
-const SWITCH_MASK_COMMITMENT: &str = "switch_mask_commitment";
+pub(crate) const SWITCH_MASK_COMMITMENT: &str = "switch_mask_commitment";
 
 /// Step label of the fresh source mask of the base case.
-const BASE_FRESH_COMMITMENT: &str = "base_fresh_commitment";
+pub(crate) const BASE_FRESH_COMMITMENT: &str = "base_fresh_commitment";
 
 /// Step label of one group of fresh blinds of the base case.
-const BASE_BLIND_COMMITMENT: &str = "base_blind_commitment";
+pub(crate) const BASE_BLIND_COMMITMENT: &str = "base_blind_commitment";
 
 /// Step label of the fresh-side claim `mu_g`.
-const BASE_CLAIM: &str = "base_claim";
+pub(crate) const BASE_CLAIM: &str = "base_claim";
 
 /// Step label of the blinding challenge `gamma`.
-const BASE_GAMMA: &str = "base_gamma";
+pub(crate) const BASE_GAMMA: &str = "base_gamma";
 
 /// Step label of a one-time-pad reveal of a message word.
-const BASE_REVEAL_MESSAGE: &str = "base_reveal_message";
+pub(crate) const BASE_REVEAL_MESSAGE: &str = "base_reveal_message";
 
 /// Step label of a one-time-pad reveal of an encoding-randomness word.
-const BASE_REVEAL_RANDOMNESS: &str = "base_reveal_randomness";
+pub(crate) const BASE_REVEAL_RANDOMNESS: &str = "base_reveal_randomness";
 
 /// Step label of the grinding step guarding the base-case spot checks.
-const BASE_POW: &str = "base_pow";
+pub(crate) const BASE_POW: &str = "base_pow";
 
 /// Step label of the source spot-check positions.
-const BASE_SOURCE_QUERIES: &str = "base_source_queries";
+pub(crate) const BASE_SOURCE_QUERIES: &str = "base_source_queries";
 
 /// Step label of one group's mask spot-check positions.
-const BASE_MASK_QUERIES: &str = "base_mask_queries";
+pub(crate) const BASE_MASK_QUERIES: &str = "base_mask_queries";
 
 /// Numbers that fix one masked sumcheck batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,65 +109,8 @@ pub struct ZkSumcheckShape {
 
 impl ZkSumcheckShape {
     /// Append this batch's steps to a step sequence under construction.
-    fn extend<F, EF>(&self, steps: &mut Vec<Interaction>)
-    where
-        F: PrimeField64,
-        EF: ExtensionField<F>,
-    {
-        // The batch binds the claim it inherits before drawing anything.
-        steps.push(Interaction::algebra::<F, EF>(
-            Hierarchy::Atomic,
-            Kind::Message,
-            JOINT_CLAIM,
-            Length::Scalar,
-        ));
-
-        // One interleaved oracle carries every mask of the batch.
-        steps.push(Interaction::opaque(
-            Hierarchy::Atomic,
-            Kind::Message,
-            SUMCHECK_MASK_COMMITMENT,
-            Length::Scalar,
-        ));
-
-        steps.push(Interaction::algebra::<F, EF>(
-            Hierarchy::Atomic,
-            Kind::Message,
-            MU_TILDE,
-            Length::Scalar,
-        ));
-
-        steps.push(Interaction::algebra::<F, EF>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            MASK_COMBINATION,
-            Length::Scalar,
-        ));
-
-        for _ in 0..self.rounds {
-            steps.push(Interaction::algebra::<F, EF>(
-                Hierarchy::Atomic,
-                Kind::Message,
-                ZK_SUMCHECK_POLY,
-                Length::Fixed(self.wire_len),
-            ));
-
-            if self.pow_bits > 0 {
-                steps.push(Interaction::algebra::<F, F>(
-                    Hierarchy::Atomic,
-                    Kind::Pow,
-                    ZK_SUMCHECK_POW,
-                    Length::Fixed(self.pow_bits),
-                ));
-            }
-
-            steps.push(Interaction::algebra::<F, EF>(
-                Hierarchy::Atomic,
-                Kind::Challenge,
-                FOLD_CHALLENGE,
-                Length::Scalar,
-            ));
-        }
+    fn extend(&self, steps: &mut Vec<Interaction>) {
+        super::push_delegation(steps, "masked_sumcheck");
     }
 }
 
@@ -228,7 +156,7 @@ impl ZkWhirRoundShape {
                 Hierarchy::Atomic,
                 Kind::Challenge,
                 OOD_POINT,
-                Length::Scalar,
+                Length::Fixed(1),
             ));
             steps.push(Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
@@ -264,7 +192,7 @@ impl ZkWhirRoundShape {
             Length::Scalar,
         ));
 
-        self.sumcheck.extend::<F, EF>(steps);
+        self.sumcheck.extend(steps);
     }
 }
 
@@ -289,7 +217,7 @@ pub struct ZkBaseCaseShape {
 
 impl ZkBaseCaseShape {
     /// Append the base case's steps to a step sequence under construction.
-    fn extend<F, EF>(&self, steps: &mut Vec<Interaction>)
+    pub(crate) fn extend<F, EF>(&self, steps: &mut Vec<Interaction>)
     where
         F: PrimeField64,
         EF: ExtensionField<F>,
@@ -385,6 +313,8 @@ impl ZkBaseCaseShape {
 /// Both sides build this from their own configuration, never from a proof.
 #[derive(Clone, Debug)]
 pub struct ZkWhirShape {
+    /// Number of trusted opening claims, supplied by the caller, never the proof.
+    pub num_claims: usize,
     /// Variable count of the committed multilinear polynomial.
     pub num_variables: usize,
     /// Plain-pipeline numbers the hiding run never replays.
@@ -432,8 +362,12 @@ impl ZkWhirShape {
     /// # Arguments
     ///
     /// - `config`: the derived HVZK protocol configuration.
+    /// - `num_claims`: the trusted statement's opening-claim count, never a proof length.
     #[must_use]
-    pub fn new<EF, F, Challenger>(config: &ZkWhirConfig<EF, F, Challenger>) -> Self
+    pub fn new<EF, F, Challenger>(
+        config: &ZkWhirConfig<EF, F, Challenger>,
+        num_claims: usize,
+    ) -> Self
     where
         F: TwoAdicField,
         EF: ExtensionField<F> + TwoAdicField,
@@ -479,6 +413,7 @@ impl ZkWhirShape {
             .collect();
 
         Self {
+            num_claims,
             num_variables: config.num_variables,
             unreplayed_plain: [
                 config.commitment_ood_samples,
@@ -519,14 +454,13 @@ impl ZkWhirShape {
     ///
     /// # Scope
     ///
-    /// The description reaches the sponge as a seed fingerprint, and no driver plays it.
-    ///
-    /// Every phase is a leaf step, so the delegations to the sumcheck batches carry no markers.
+    /// The outer player enforces every step. Masked sumchecks use typed delegation
+    /// markers and enforce their own complete sub-transcripts.
     ///
     /// # Panics
     ///
     /// Never in practice.
-    /// A flat sequence of leaf steps always passes structural validation.
+    /// Leaf steps and their paired delegation markers are constructed together.
     #[must_use]
     pub fn pattern<F, EF>(&self) -> InteractionPattern
     where
@@ -543,7 +477,7 @@ impl ZkWhirShape {
             Length::Scalar,
         ));
 
-        self.initial_sumcheck.extend::<F, EF>(&mut steps);
+        self.initial_sumcheck.extend(&mut steps);
 
         for round in &self.rounds {
             round.extend::<F, EF>(&mut steps);
@@ -551,7 +485,7 @@ impl ZkWhirShape {
 
         self.base_case.extend::<F, EF>(&mut steps);
 
-        InteractionPattern::new(steps).expect("a flat sequence of leaf steps is always well formed")
+        InteractionPattern::new(steps).expect("HVZK steps and delegation markers are well formed")
     }
 
     /// Bind the protocol identity, this shape, and the remaining parameters.
@@ -571,6 +505,16 @@ impl ZkWhirShape {
         EF: ExtensionField<F>,
     {
         let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
+        separator.instance(&(self.num_claims as u64).to_be_bytes());
+
+        // Delegated sumchecks are also bound before entering their sub-transcripts.
+        for batch in
+            core::iter::once(&self.initial_sumcheck).chain(self.rounds.iter().map(|r| &r.sumcheck))
+        {
+            for value in [batch.rounds, batch.pow_bits, batch.wire_len] {
+                separator.instance(&(value as u64).to_be_bytes());
+            }
+        }
 
         // The plain WHIR statement, bound exactly as the plain pipeline binds it.
         separator.instance(&(self.num_variables as u64).to_be_bytes());
@@ -618,6 +562,7 @@ mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Field, PrimeCharacteristicRing};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -692,10 +637,59 @@ mod tests {
         config_from(base_params(), base_zk())
     }
 
+    #[test]
+    fn trusted_claim_count_changes_the_first_challenge() {
+        let first = |count| {
+            let mut challenger = fresh_challenger();
+            ZkWhirShape::new(&base_config(), count)
+                .domain_separator::<F, EF>()
+                .seed(&mut challenger);
+            let challenge: EF = challenger.sample_algebra_element();
+            challenge
+        };
+        assert_ne!(first(1), first(2));
+    }
+
+    #[test]
+    fn masked_sumcheck_is_a_delegated_typed_protocol() {
+        use p3_challenger::fs::{FieldToFieldCodec, VerifierState};
+        let shape = ZkWhirShape::new(&base_config(), 1);
+        let separator = shape.domain_separator::<F, EF>();
+        let mut challenger = fresh_challenger();
+        let mut state = VerifierState::new(&mut challenger, &separator, &[]);
+        state.challenge_extension::<F, EF, FieldToFieldCodec<F>>(INITIAL_BATCHING);
+        state.begin_protocol::<super::super::Sumcheck>("masked_sumcheck");
+        state.end_protocol::<super::super::Sumcheck>("masked_sumcheck");
+        state.abort();
+    }
+
+    #[test]
+    fn ood_step_supports_rejection_without_consuming_another_step() {
+        use p3_challenger::fs::{FieldToFieldCodec, VerifierState};
+        let mut steps = Vec::new();
+        ZkWhirShape::new(&base_config(), 1).rounds[0].extend::<F, EF>(&mut steps);
+        let separator = DomainSeparator::<Alphabet<F>>::new(
+            VERSION,
+            NAME,
+            InteractionPattern::new(steps).unwrap(),
+        );
+        let mut challenger = fresh_challenger();
+        let mut state = VerifierState::new(&mut challenger, &separator, &[]);
+        state.observe_opaque(ORACLE_COMMITMENT, [F::ONE; 8]);
+        state.observe_opaque(SWITCH_MASK_COMMITMENT, [F::ONE; 8]);
+        let points = state.challenge_extensions_rejecting::<F, EF, FieldToFieldCodec<F>>(
+            OOD_POINT,
+            1,
+            |point, _| !point.is_zero(),
+        );
+        assert!(!points[0].as_inner().is_zero());
+        state.abort();
+    }
+
     /// First challenge the seed of a configuration produces on a fresh sponge.
     fn first_challenge(config: &Config) -> F {
         let mut challenger = fresh_challenger();
-        ZkWhirShape::new(config)
+        ZkWhirShape::new(config, 1)
             .domain_separator::<F, EF>()
             .seed(&mut challenger);
         challenger.sample()
@@ -744,7 +738,7 @@ mod tests {
         let plain = WhirConfig::<EF, F, Ch>::new(NUM_VARIABLES, base_params()).unwrap();
 
         let mut hiding_challenger = fresh_challenger();
-        ZkWhirShape::new(&zk)
+        ZkWhirShape::new(&zk, 1)
             .domain_separator::<F, EF>()
             .seed(&mut hiding_challenger);
 

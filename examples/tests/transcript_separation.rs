@@ -374,7 +374,7 @@ fn zk_whir_cases() -> Vec<Case> {
         case(
             "p3-whir-hvzk",
             name,
-            ZkWhirShape::new(&config).domain_separator::<F, EF>(),
+            ZkWhirShape::new(&config, 1).domain_separator::<F, EF>(),
         )
     })
     .collect()
