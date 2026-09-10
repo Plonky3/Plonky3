@@ -12,8 +12,8 @@ use p3_util::{log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    BatchMultiOpening, CommitPhaseMultiStep, FriFoldingStrategy, FriParameters, FriProof, FriShape,
-    ProverDataWithOpeningPoints, ProverTranscript,
+    BatchMultiOpening, CommitPhaseMultiStep, FriFoldingStrategy, FriParameters, FriProof,
+    FriProverError, FriShape, ProverDataWithOpeningPoints, ProverTranscript,
 };
 
 /// Create a proof that an opening `f(zeta)` is correct by proving that the
@@ -43,6 +43,9 @@ use crate::{
 ///   That challenge is consumed in building the inputs, so it is drawn before this call.
 ///   The witness still travels in the proof assembled here, which is the proof the caller ships.
 ///   A caller that batches nothing passes a zero witness and a zero difficulty.
+///
+/// Returns a terminal-height configuration error before changing the challenger if any
+/// input is too short. A constant final polynomial permits the zero-fold boundary.
 #[instrument(name = "FRI prover", skip_all)]
 // The argument list is the protocol's own shape: the folding strategy, the parameters, the inputs,
 // the transcript, the instance height, the committed data, its MMCS, and the caller's batch witness.
@@ -61,7 +64,7 @@ pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     >],
     input_mmcs: &InputMmcs,
     batch_pow_witness: Val,
-) -> FriProof<Challenge, FriMmcs, Val, Folding::InputProof>
+) -> Result<FriProof<Challenge, FriMmcs, Val, Folding::InputProof>, FriProverError>
 where
     Val: TwoAdicField + PrimeField64,
     Challenge: ExtensionField<Val>,
@@ -106,7 +109,7 @@ pub(crate) fn prove_fri_with_schedule<Folding, Val, Challenge, InputMmcs, FriMmc
     input_mmcs: &InputMmcs,
     batch_pow_witness: Challenger::Witness,
     schedule: Option<Vec<usize>>,
-) -> FriProof<Challenge, FriMmcs, Val, Folding::InputProof>
+) -> Result<FriProof<Challenge, FriMmcs, Val, Folding::InputProof>, FriProverError>
 where
     Val: TwoAdicField + PrimeField64,
     Challenge: ExtensionField<Val>,
@@ -145,10 +148,7 @@ where
         "log_global_max_height must match the largest input length"
     );
     let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
-    if params.log_final_poly_len > 0 {
-        // Final_poly_degree must be less than or equal to the degree of the smallest polynomial.
-        assert!(log_min_height > params.log_final_poly_len + params.log_blowup);
-    }
+    params.validate_input_height(log_min_height)?;
 
     // Describe the transcript before running it.
     //
@@ -214,7 +214,7 @@ where
         (input_openings, commit_phase_openings)
     });
 
-    FriProof {
+    Ok(FriProof {
         batch_pow_witness,
         commit_phase_commits: commit_phase_result.commits,
         commit_pow_witnesses: commit_phase_result.pow_witnesses,
@@ -222,7 +222,7 @@ where
         commit_phase_openings,
         final_poly: commit_phase_result.final_poly,
         query_pow_witness: pow_witness,
-    }
+    })
 }
 
 struct CommitPhaseResult<F: Field, M: Mmcs<F>, Witness> {

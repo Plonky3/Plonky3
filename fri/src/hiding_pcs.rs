@@ -15,6 +15,7 @@ use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
+use p3_util::log2_strict_usize;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{CryptoRng, RngExt, SeedableRng};
 use spin::Mutex;
@@ -26,6 +27,9 @@ use crate::{BatchMultiOpening, FriParameters, FriProof, TwoAdicFriPcs};
 /// A hiding commitment cannot safely support the requested disclosure budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum HidingFriProverError {
+    /// The inner FRI parameters cannot fold every committed input.
+    #[error(transparent)]
+    Fri(#[from] crate::FriProverError),
     /// Too few independent random codewords for the challenge extension.
     #[error("hiding FRI requires {required} random codewords, got {got}")]
     InsufficientRandomCodewords { required: usize, got: usize },
@@ -42,12 +46,6 @@ pub enum HidingFriProverError {
         num_opening_points: usize,
         extension_degree: usize,
     },
-}
-
-impl From<core::convert::Infallible> for HidingFriProverError {
-    fn from(error: core::convert::Infallible) -> Self {
-        match error {}
-    }
 }
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
@@ -640,6 +638,9 @@ where
             let matrices = self.inner.mmcs.get_matrices(&round.prover_data.inner);
             assert_eq!(matrices.len(), round.points.len());
             for (matrix, points) in matrices.iter().zip(&round.points) {
+                self.inner
+                    .fri
+                    .validate_input_height(log2_strict_usize(matrix.height()))?;
                 self.check_hiding_budget(
                     self.lde_mask_height(matrix.height()),
                     Challenge::DIMENSION,
@@ -1064,6 +1065,42 @@ mod tests {
             challenger.sample_algebra_element::<Challenge>(),
             before.sample_algebra_element::<Challenge>()
         );
+    }
+
+    #[test]
+    fn terminal_height_rejection_preserves_hiding_opening_state() {
+        let (mut pcs, _, _, mut challenger) = make_fixture();
+        let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 32);
+        let (_, data) = <MyPcs as Pcs<Challenge, Challenger>>::commit(
+            &pcs,
+            [(domain, RowMajorMatrix::new(vec![Val::ONE; 16], 1))],
+        )
+        .unwrap();
+        pcs.inner.fri.log_final_poly_len = 5;
+        let mut before = challenger.clone();
+        let result = pcs.open(
+            vec![(&data, vec![vec![Challenge::TWO]]).into()],
+            &mut challenger,
+        );
+        assert!(matches!(
+            result,
+            Err(HidingFriProverError::Fri(
+                crate::FriProverError::InputHeightTooSmall {
+                    log_input_height: 6,
+                    log_final_height: 6,
+                }
+            ))
+        ));
+        assert_eq!(
+            challenger.sample_algebra_element::<Challenge>(),
+            before.sample_algebra_element::<Challenge>()
+        );
+        pcs.inner.fri.log_final_poly_len = 0;
+        pcs.open(
+            vec![(&data, vec![vec![Challenge::TWO]]).into()],
+            &mut challenger,
+        )
+        .unwrap();
     }
 
     #[test]

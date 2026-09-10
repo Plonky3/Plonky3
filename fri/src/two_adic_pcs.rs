@@ -298,7 +298,7 @@ where
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchMultiOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
-    type ProverError = core::convert::Infallible;
+    type ProverError = crate::FriProverError;
 
     /// Get the unique subgroup `H` of size `|H| = degree`.
     ///
@@ -418,6 +418,14 @@ where
                 },
             )
             .collect_vec();
+
+        // Reject every committed height before absorbing claims or starting a driver.
+        for (matrices, _) in &mats_and_points {
+            for matrix in matrices {
+                self.fri
+                    .validate_input_height(log2_strict_usize(matrix.height()))?;
+            }
+        }
 
         // Find the maximum height and the maximum width of matrices in the batch.
         // These do not need to correspond to the same matrix.
@@ -656,7 +664,7 @@ where
         // Every described step has now been played.
         transcript.finish();
 
-        Ok((all_opened_values, fri_proof))
+        Ok((all_opened_values, fri_proof?))
     }
 
     fn verify(
@@ -1029,6 +1037,128 @@ mod tests {
         challenger: &mut Challenger,
     ) -> Result<(), TestError> {
         <MyPcs as Pcs<EF, Challenger>>::verify(pcs, claims, proof, challenger)
+    }
+
+    #[test]
+    fn terminal_height_rejection_preserves_pcs_challenger() {
+        for (heights, expected_log_height) in [(vec![2], 2), (vec![1], 1), (vec![8, 2], 2)] {
+            let (mut pcs, _, _, mut challenger) = make_pcs_fixture();
+            pcs.fri.log_final_poly_len = 1;
+            let evaluations = heights
+                .iter()
+                .map(|&height| {
+                    let domain =
+                        <MyPcs as Pcs<EF, Challenger>>::natural_domain_for_degree(&pcs, height);
+                    (domain, RowMajorMatrix::new(vec![F::ONE; height], 1))
+                })
+                .collect_vec();
+            let (_, data) = <MyPcs as Pcs<EF, Challenger>>::commit(&pcs, evaluations).unwrap();
+            let mut before = challenger.clone();
+            let result = pcs.open(
+                vec![(&data, vec![vec![EF::TWO]; heights.len()]).into()],
+                &mut challenger,
+            );
+            assert!(
+                matches!(result, Err(crate::FriProverError::InputHeightTooSmall {
+                log_input_height, log_final_height: 2,
+            }) if log_input_height == expected_log_height)
+            );
+            assert_eq!(
+                challenger.sample_algebra_element::<EF>(),
+                before.sample_algebra_element::<EF>()
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_height_rejection_preserves_core_challenger() {
+        for (heights, max_log_height, min_log_height) in
+            [(vec![4], 2, 2), (vec![2], 1, 1), (vec![16, 4], 4, 2)]
+        {
+            let (mut pcs, _, _, mut challenger) = make_pcs_fixture();
+            pcs.fri.log_final_poly_len = 1;
+            let mut before = challenger.clone();
+            let folding: TwoAdicFriFoldingForMmcs<F, ValMmcs> = TwoAdicFriFolding(PhantomData);
+            let proof = prover::prove_fri(
+                &folding,
+                &pcs.fri,
+                heights
+                    .into_iter()
+                    .map(|height| vec![EF::ZERO; height])
+                    .collect(),
+                &mut challenger,
+                max_log_height,
+                &[],
+                &pcs.mmcs,
+                F::ZERO,
+            );
+            assert!(
+                matches!(proof, Err(crate::FriProverError::InputHeightTooSmall {
+                log_input_height, log_final_height: 2,
+            }) if log_input_height == min_log_height)
+            );
+            assert_eq!(
+                challenger.sample_algebra_element::<EF>(),
+                before.sample_algebra_element::<EF>()
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_height_valid_boundaries_roundtrip() {
+        for (height, log_final_poly_len) in [(4, 1), (1, 0)] {
+            let (mut pcs, _, _, mut challenger) = make_pcs_fixture();
+            pcs.fri.log_final_poly_len = log_final_poly_len;
+            let domain = <MyPcs as Pcs<EF, Challenger>>::natural_domain_for_degree(&pcs, height);
+            let (commitment, data) = <MyPcs as Pcs<EF, Challenger>>::commit(
+                &pcs,
+                [(domain, RowMajorMatrix::new(vec![F::ONE; height], 1))],
+            )
+            .unwrap();
+            challenger.observe(&commitment);
+            let mut verifier = challenger.clone();
+            let (values, proof) = pcs
+                .open(vec![(&data, vec![vec![EF::TWO]]).into()], &mut challenger)
+                .unwrap();
+            pcs.verify(
+                vec![
+                    (
+                        commitment,
+                        vec![(domain, vec![(EF::TWO, values[0][0][0].clone())])],
+                    )
+                        .into(),
+                ],
+                &proof,
+                &mut verifier,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn terminal_height_overflow_is_recoverable() {
+        let (mut pcs, _, _, mut challenger) = make_pcs_fixture();
+        pcs.fri.log_final_poly_len = usize::MAX;
+        let mut before = challenger.clone();
+        let folding: TwoAdicFriFoldingForMmcs<F, ValMmcs> = TwoAdicFriFolding(PhantomData);
+        let proof = prover::prove_fri(
+            &folding,
+            &pcs.fri,
+            vec![vec![EF::ZERO; 4]],
+            &mut challenger,
+            2,
+            &[],
+            &pcs.mmcs,
+            F::ZERO,
+        );
+        assert!(matches!(
+            proof,
+            Err(crate::FriProverError::FinalHeightOverflow)
+        ));
+        assert_eq!(
+            challenger.sample_algebra_element::<EF>(),
+            before.sample_algebra_element::<EF>()
+        );
     }
 
     #[test]
