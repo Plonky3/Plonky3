@@ -805,6 +805,50 @@ impl<C, U: Unit> ProverState<C, U> {
         ))
     }
 
+    /// Sample a fixed-length list of challenge extension-field elements as one step.
+    ///
+    /// ```text
+    ///     one step  of width n   <- here
+    ///     n steps   of width 1   <- not this
+    /// ```
+    ///
+    /// The count comes from the caller's configuration.
+    ///
+    /// It is part of the recorded shape.
+    ///
+    /// The seed covers it.
+    ///
+    /// Use the rejecting draw when the protocol constrains what a coordinate may be.
+    pub fn challenge_extensions<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        count: usize,
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: TranscriptField,
+        EF: Field + BasedVectorSpace<F>,
+        Cdc: Codec<C, F>,
+    {
+        assert_challenge_security::<C, F, Cdc>();
+        // Validate: the next pattern step is a fixed-length list of extension challenges.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            Length::Fixed(count),
+        ));
+        // Draw the coordinates in order.
+        //
+        // The replaying side then lands on the same list.
+        (0..count)
+            .map(|_| {
+                TranscriptBound::wrap(ExtensionFieldCodec::<F, EF, Cdc>::sample(
+                    &mut self.challenger,
+                ))
+            })
+            .collect()
+    }
+
     /// Run a proof-of-work step and append the witness to the wire buffer.
     ///
     /// The difficulty is recorded as `Length::Fixed(bits)`.
@@ -1203,6 +1247,93 @@ mod tests {
 
         assert_eq!(read.into_inner(), value);
         assert_eq!(zeta_p, zeta_v);
+    }
+
+    #[test]
+    fn a_fixed_length_extension_challenge_list_is_one_step_both_sides_replay() {
+        // Invariant: a whole point of challenges is one step.
+        //
+        // Both sides draw it alike.
+        //
+        // Fixture state: one step of 3 extension challenges, nothing on the wire.
+        //
+        //     described:  Fixed(3) of degree-4 elements
+        //     prover  :   draws 3, in order
+        //     verifier:   redraws the same 3 from the same seeded state
+        let pattern = InteractionPattern::new(vec![Interaction::algebra::<F, EF4>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            "point",
+            Length::Fixed(3),
+        )])
+        .unwrap();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"ext-point", pattern);
+
+        let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
+        let drawn: Vec<EF4> = p
+            .challenge_extensions::<F, EF4, ByteCodec>("point", 3)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        let narg = p.finalize();
+
+        // A challenge is squeezed, never sent.
+        //
+        // The wire stays empty.
+        assert!(narg.is_empty());
+
+        // Three coordinates, and a sponge that advances between them.
+        assert_eq!(drawn.len(), 3);
+        assert_ne!(drawn[0], drawn[1]);
+        assert_ne!(drawn[1], drawn[2]);
+
+        let mut v = VerifierState::<_, u8>::new(byte_sponge(), &ds, &narg);
+        let replayed: Vec<EF4> = v
+            .challenge_extensions::<F, EF4, ByteCodec>("point", 3)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        v.finalize().expect("NARG fully consumed");
+
+        assert_eq!(drawn, replayed);
+    }
+
+    #[test]
+    fn an_extension_challenge_list_of_the_wrong_width_fails_the_shape_check() {
+        // Invariant: the count is part of the recorded shape, not a caller's free choice.
+        //
+        // Fixture state: the description asks for 3 coordinates.
+        //
+        // Mutation: draw 2 instead.
+        //
+        //     described:  Fixed(3)
+        //     drawn:      Fixed(2)  -> the player rejects the step
+        let pattern = InteractionPattern::new(vec![Interaction::algebra::<F, EF4>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            "point",
+            Length::Fixed(3),
+        )])
+        .unwrap();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"ext-point", pattern);
+
+        // A driver abandoned mid-description panics on drop as well.
+        //
+        // The closure below lets it go out of scope first.
+        //
+        // Only one panic then reaches the catch.
+        #[cfg(panic = "unwind")]
+        {
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
+                let _ = p.challenge_extensions::<F, EF4, ByteCodec>("point", 2);
+                p.finalize()
+            }));
+            assert!(
+                outcome.is_err(),
+                "a narrower draw must fail the shape check"
+            );
+        }
     }
 
     #[test]

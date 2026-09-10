@@ -2,7 +2,7 @@
 //!
 //! # Overview
 //!
-//! Fifteen protocols in this workspace seed their transcript from a domain separator.
+//! Sixteen protocols in this workspace seed their transcript from a domain separator.
 //!
 //! The version byte is a format version each protocol owns, so names carry the separation.
 //!
@@ -11,7 +11,7 @@
 //!                     ^     ^                 ^
 //!                     |     |                 disambiguates zero-padded prefixes
 //!                     |     the only field that differs between protocols
-//!                     the same byte for all fifteen
+//!                     the same byte for all sixteen
 //! ```
 //!
 //! Separation therefore rests entirely on `NAME`, and this file is where that is checked.
@@ -19,7 +19,10 @@
 //! # Placement
 //!
 //! Every protocol crate depends on `p3-challenger`, so the check cannot live there.
-//! `p3-examples` is a leaf: nothing depends on it, and it already pulls in most of the fifteen.
+//!
+//! `p3-examples` is a leaf: nothing depends on it.
+//!
+//! It already pulls in most of the sixteen.
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::BatchShape;
@@ -36,6 +39,7 @@ use p3_multi_stark::transcript::{MultiStarkInstanceShape, MultiStarkShape};
 use p3_multi_stark::zerocheck::transcript::ZerocheckShape;
 use p3_stir::{SecurityAssumption, StirInstanceShape, StirRoundShape, StirShape};
 use p3_sumcheck::generic_degree::GenericDegreeShape;
+use p3_sumcheck::ring_switch::RingSwitchShape;
 use p3_sumcheck::strategy::Basis;
 use p3_sumcheck::transcript::SumcheckShape;
 use p3_sumcheck::zk::ZkSumcheckShape;
@@ -47,7 +51,9 @@ use p3_whir::{
 
 /// Base field every separator below is derived over.
 ///
-/// One field for all fifteen, so nothing is separated by the field choice.
+/// One field for all sixteen.
+///
+/// Nothing is separated by the field choice.
 type F = BabyBear;
 
 /// Extension field every separator below draws its challenges from.
@@ -70,14 +76,14 @@ type Case = (String, DomainSeparator<Alphabet>);
 /// Number of protocols on the typed transcript layer.
 ///
 /// A protocol added without an entry below leaves its name unchecked against the others.
-const NUM_PROTOCOLS: usize = 15;
+const NUM_PROTOCOLS: usize = 16;
 
 /// Configurations swept per protocol: one default, then two single-field moves of it.
 ///
 /// The pairwise check is quadratic, so the sweep is a budget rather than a maximum.
 ///
 /// ```text
-///     15 protocols x 3 configurations = 45 seeds -> 990 pairs
+///     16 protocols x 3 configurations = 48 seeds -> 1128 pairs
 /// ```
 const CASES_PER_PROTOCOL: usize = 3;
 
@@ -510,6 +516,24 @@ fn sumcheck_quadratic_cases() -> Vec<Case> {
     .collect()
 }
 
+/// The ring-switching cases: three coordinate counts of the incoming evaluation point.
+///
+/// The point width is the reduction's only knob.
+///
+/// Everything else its description declares follows from the field pair.
+fn ring_switch_cases() -> Vec<Case> {
+    [6, 7, 8]
+        .into_iter()
+        .map(|num_variables| {
+            let shape = RingSwitchShape::new(num_variables);
+            (
+                format!("p3-sumcheck-ring-switch/num_variables={num_variables}"),
+                shape.domain_separator::<F, EF>(),
+            )
+        })
+        .collect()
+}
+
 /// Every protocol's cases, the default configuration first in each group.
 /// Number of opening claims the WHIR fixture runs with.
 ///
@@ -585,6 +609,7 @@ fn protocols() -> Vec<Vec<Case>> {
         sumcheck_quadratic_cases(),
         multi_stark_cases(),
         zk_sumcheck_cases(),
+        ring_switch_cases(),
     ]
 }
 
