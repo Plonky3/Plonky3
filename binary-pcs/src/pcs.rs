@@ -195,6 +195,7 @@ where
             challenger,
             &base_merkle_data,
             &rounds,
+            &final_codeword,
         );
 
         BinaryPcsProof {

@@ -1,6 +1,7 @@
 //! Compare the real prover/verifier grinding sites with the security model. This records
 //! runtime calls, so it does not depend on an unmerged typed-transcript vocabulary.
 
+use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -10,13 +11,15 @@ use p3_challenger::{
     GrindingChallenger, ResamplingError,
 };
 use p3_commit::MultilinearPcs;
+use p3_field::PrimeCharacteristicRing;
 use p3_security::binary::BinaryPcsRegime;
 use p3_sumcheck::layout::{Layout, SuffixProver, Table};
-use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
+use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
+use p3_symmetric::MerkleCap;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
-use crate::test_util::{MyChallenger, challenger, mmcs};
+use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
 use crate::{BinaryPcs, BinaryPcsConfig, BinaryPcsParams};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +34,9 @@ enum Event {
 struct RecordingChallenger {
     inner: MyChallenger,
     events: Vec<Event>,
+    fields: Vec<F>,
+    fields_before_query_grind: Vec<F>,
+    queries: Vec<usize>,
 }
 
 impl RecordingChallenger {
@@ -38,15 +44,21 @@ impl RecordingChallenger {
         Self {
             inner: challenger(),
             events: Vec::new(),
+            fields: Vec::new(),
+            fields_before_query_grind: Vec::new(),
+            queries: Vec::new(),
         }
     }
 }
 
-impl<T> CanObserve<T> for RecordingChallenger
-where
-    MyChallenger: CanObserve<T>,
-{
-    fn observe(&mut self, value: T) {
+impl CanObserve<F> for RecordingChallenger {
+    fn observe(&mut self, value: F) {
+        self.fields.push(value);
+        self.inner.observe(value);
+    }
+}
+impl CanObserve<MerkleCap<F, [u8; 32]>> for RecordingChallenger {
+    fn observe(&mut self, value: MerkleCap<F, [u8; 32]>) {
         self.inner.observe(value);
     }
 }
@@ -67,7 +79,9 @@ impl CanSampleUniformBits<F> for RecordingChallenger {
         bits: usize,
     ) -> Result<usize, ResamplingError> {
         self.events.push(Event::QuerySample);
-        self.inner.sample_uniform_bits::<RESAMPLE>(bits)
+        let result = self.inner.sample_uniform_bits::<RESAMPLE>(bits)?;
+        self.queries.push(result);
+        Ok(result)
     }
 }
 impl FieldChallenger<F> for RecordingChallenger {}
@@ -75,11 +89,84 @@ impl GrindingChallenger for RecordingChallenger {
     type Witness = F;
     fn grind(&mut self, bits: usize) -> F {
         self.events.push(Event::Grind(bits));
+        self.fields_before_query_grind = self.fields.clone();
         self.inner.grind(bits)
     }
     fn check_witness(&mut self, bits: usize, witness: F) -> bool {
         self.events.push(Event::Check(bits));
+        self.fields_before_query_grind = self.fields.clone();
         self.inner.check_witness(bits, witness)
+    }
+}
+
+#[test]
+fn zero_claim_final_codeword_is_bound_before_query_grinding_and_sampling() {
+    for folding in [1, 3] {
+        for prescribed in [false, true] {
+            for pow_bits in [0, 4] {
+                let config = BinaryPcsConfig::try_new(
+                    8,
+                    BinaryPcsParams {
+                        log_inv_rate: 2,
+                        pow_bits,
+                        security_level: 40,
+                    },
+                )
+                .unwrap()
+                .try_with_folding(folding)
+                .unwrap();
+                assert!(config.num_queries() < config.domain_size() >> folding);
+                let pcs = BinaryPcs::new(config, mmcs());
+                let mut rng = SmallRng::seed_from_u64(935);
+                let witness =
+                    SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, 8)], 0);
+                let protocol =
+                    OpeningProtocol::new(vec![TableSpec::new(TableShape::new(8, 1), vec![])]);
+                let mut pc = RecordingChallenger::new();
+                let (root, data) = pcs.commit(witness, &mut pc);
+                let proof = if prescribed {
+                    pcs.try_open_at(data, &protocol, &[], &mut pc).unwrap()
+                } else {
+                    pcs.try_open(data, &protocol, &mut pc).unwrap()
+                };
+                let replay = |proof: &crate::BinaryPcsProof<MyMmcs>,
+                              ch: &mut RecordingChallenger| {
+                    if prescribed {
+                        ch.observe(root.clone());
+                        pcs.verify_at(&root, proof, &protocol, &[], ch).map(|_| ())
+                    } else {
+                        pcs.verify(&root, proof, ch, protocol.clone())
+                    }
+                };
+                let mut vc = RecordingChallenger::new();
+                replay(&proof, &mut vc).unwrap();
+                assert!(!vc.queries.is_empty());
+                assert_eq!(pc.queries, vc.queries);
+
+                if pow_bits == 0 {
+                    // No claims: the sumcheck product check is 0 == 0. A uniform shift
+                    // reaches query sampling, isolating final-codeword transcript binding.
+                    let mut tampered = proof.clone();
+                    for symbol in tampered.final_codeword.as_mut_slice() {
+                        *symbol += F::ONE;
+                    }
+                    let mut tc = RecordingChallenger::new();
+                    assert!(replay(&tampered, &mut tc).is_err());
+                    assert!(!tc.queries.is_empty());
+                    assert_ne!(
+                        vc.queries.iter().copied().collect::<BTreeSet<_>>(),
+                        tc.queries.iter().copied().collect::<BTreeSet<_>>(),
+                        "final codeword did not affect queries",
+                    );
+                }
+
+                // Every symbol, not just the first value or a post-query observation,
+                // must be bound before the query phase's grinding call on both sides.
+                let final_word = proof.final_codeword.as_slice();
+                assert!(pc.fields_before_query_grind.ends_with(final_word));
+                assert!(vc.fields_before_query_grind.ends_with(final_word));
+            }
+        }
     }
 }
 

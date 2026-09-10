@@ -733,8 +733,8 @@ fn permuted_round_commitments_are_rejected() {
 /// `claimed_sum` and its evaluation at the fold point both collapse to zero; the final check's
 /// product clause, `claimed_sum == w(r) * final_value`, then reads `0 == 0` regardless of what
 /// `final_value` is. The only thing standing between a proximity-only commitment and an
-/// arbitrary uniform final codeword in that branch is the fold-consistency chain
-/// `verify_query_paths` walks.
+/// arbitrary uniform final codeword in that branch is the transcript-bound query phase
+/// and the fold-consistency chain `verify_query_paths` walks.
 fn zero_claim_lifecycle(
     num_variables: usize,
     seed: u64,
@@ -775,10 +775,11 @@ fn zero_claim_lifecycle(
 /// zero-claim configuration alone is not what is under test.
 ///
 /// Shifting every symbol by the same constant instead keeps the codeword uniform, so both the
-/// product clause and the uniformity check pass; `FoldMismatch` is the only remaining check
-/// that ties the final codeword to the rounds committed before it, and it is what catches this.
+/// product clause and the uniformity check pass. Binding that word before queries now makes
+/// the old grinding witness or Merkle paths fail first; if those still match (e.g. exhaustive
+/// queries), the final fold-consistency check rejects the shifted value.
 #[test]
-fn a_zero_claim_proof_with_a_uniformly_shifted_final_codeword_is_rejected_by_the_fold_chain() {
+fn a_zero_claim_proof_with_a_uniformly_shifted_final_codeword_is_rejected() {
     let (pcs, commitment, proof, protocol) = zero_claim_lifecycle(NUM_VARIABLES, 11, 1);
 
     let mut honest_challenger = challenger();
@@ -819,10 +820,11 @@ fn a_zero_claim_proof_with_a_uniformly_shifted_final_codeword_is_rejected_by_the
             protocol,
         )
         .unwrap_err();
-    assert!(
-        matches!(err, BinaryPcsError::FoldMismatch { round, query: 0 } if round == NUM_VARIABLES),
-        "expected FoldMismatch at round {NUM_VARIABLES} query 0, got {err:?}"
-    );
+    match err {
+        BinaryPcsError::InvalidPowWitness | BinaryPcsError::MerkleFailed { round: 0, .. } => {}
+        BinaryPcsError::FoldMismatch { round, query: 0 } => assert_eq!(round, NUM_VARIABLES),
+        err => panic!("expected rejection in the query phase, got {err:?}"),
+    }
 }
 
 /// With no opening claims, the sumcheck's final product check is vacuous. Batched query
@@ -838,10 +840,14 @@ fn batched_zero_claim_proofs_reject_a_shifted_final_codeword() {
             *symbol += F::ONE;
         }
         let expected_round = NUM_VARIABLES.div_ceil(arity);
-        assert!(matches!(
-            pcs.verify(&commitment, &proof, &mut challenger(), protocol),
-            Err(BinaryPcsError::FoldMismatch { round, query: 0 }) if round == expected_round
-        ));
+        let err = pcs
+            .verify(&commitment, &proof, &mut challenger(), protocol)
+            .unwrap_err();
+        match err {
+            BinaryPcsError::InvalidPowWitness | BinaryPcsError::MerkleFailed { round: 0, .. } => {}
+            BinaryPcsError::FoldMismatch { round, query: 0 } => assert_eq!(round, expected_round),
+            err => panic!("expected rejection in the query phase, got {err:?}"),
+        }
     }
 }
 
