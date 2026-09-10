@@ -23,7 +23,7 @@
 //!
 //! Two sites at different difficulties therefore cannot share a transcript.
 //!
-//! An ungrounded site shares one with neither.
+//! An ungrounded site shares one with no ground site either.
 //!
 //! Its description omits the step entirely.
 
@@ -38,13 +38,18 @@ use p3_field::{ExtensionField, PrimeField64};
 
 use crate::error::{ProofShapeError, StirError};
 
+/// Protocol name bound into this phase's transcript seed.
+///
+/// The security model keys its grinding table on this name.
+const NAME: &[u8] = b"p3-stir-pcs-batch";
+
 /// Step label of the grinding that guards the batching challenge.
 const BATCH_POW: &str = "batch_pow";
 
 /// Step label of the batching challenge itself.
 const ALPHA: &str = "alpha";
 
-/// Describe and seed the batching phase at one difficulty.
+/// Describe the batching phase at one difficulty.
 ///
 /// # Arguments
 ///
@@ -75,12 +80,14 @@ fn separator<F: PrimeField64, EF: ExtensionField<F>>(bits: usize) -> DomainSepar
         Length::Scalar,
     ));
 
-    // A seed exists for every difficulty, zero included.
+    // A separator exists for every difficulty, zero included.
+    //
+    // Both drivers seed from it.
     //
     // No site draws from a bare sponge.
     DomainSeparator::new(
         1,
-        b"p3-stir-pcs-batch",
+        NAME,
         InteractionPattern::new(steps)
             .expect("a flat sequence of leaf steps is always well formed"),
     )
@@ -187,12 +194,18 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::str::from_utf8;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_challenger::testing::{assert_seeds_pairwise_distinct, seed_digest};
+    use p3_challenger::testing::{assert_seeds_pairwise_distinct, pow_difficulties, seed_digest};
     use p3_challenger::{CanObserve, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_security::GrindingSites;
+    use p3_security::grinding::{
+        GRINDING_VOCABULARY, GrindingBudget, GrindingSite, RecordedGrind, ZeroBitConvention,
+        grinding_step,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -357,5 +370,56 @@ mod tests {
             verify::<F, EF, _, (), ()>(&mut base, 8, Some(weak)),
             Err(StirError::InvalidBatchPowWitness { bits: 8 }),
         );
+    }
+
+    fn protocol() -> &'static str {
+        from_utf8(NAME).expect("the protocol name is ASCII")
+    }
+
+    #[test]
+    fn the_grinding_vocabulary_maps_the_one_grind_this_protocol_describes() {
+        // The security model keys its table on the name and the label bound here.
+        let batch = grinding_step(protocol(), BATCH_POW).expect("the batching grind is mapped");
+        assert_eq!(batch.site, GrindingSite::BatchCombination);
+
+        // A zero difficulty contributes no step, which is the elided convention.
+        assert_eq!(batch.zero_bits, ZeroBitConvention::Elided);
+
+        // One grind described, so one row.
+        assert_eq!(
+            GRINDING_VOCABULARY
+                .iter()
+                .filter(|step| step.protocol == protocol())
+                .count(),
+            1,
+        );
+    }
+
+    #[test]
+    fn the_recorded_difficulty_matches_the_one_the_security_model_credits() {
+        // Invariant: the bits this phase describes are the bits the model credits.
+        //
+        // The credited half is the batch-combination site of a parameter set.
+        //
+        // The recorded half is read back out of the description.
+        //
+        // Sweep: zero and two positive difficulties, so both sides of the
+        // elided-at-zero convention are exercised.
+        for bits in [0, 1, 10] {
+            let recorded: Vec<_> = pow_difficulties(separator::<F, EF>(bits).pattern())
+                .into_iter()
+                .map(|(label, described)| RecordedGrind::new(protocol(), label, described))
+                .collect();
+
+            // A zero difficulty describes no step, so nothing is recorded to credit.
+            assert_eq!(recorded.len(), usize::from(bits > 0));
+
+            GrindingBudget::from_sites(&GrindingSites {
+                batch_combination: bits,
+                ..GrindingSites::NONE
+            })
+            .check(&[protocol()], &recorded)
+            .unwrap_or_else(|mismatch| panic!("bits={bits}: {mismatch}"));
+        }
     }
 }
