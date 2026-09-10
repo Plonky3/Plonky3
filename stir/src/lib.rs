@@ -66,6 +66,7 @@ pub mod transcript;
 pub mod utils;
 pub mod verifier;
 
+pub use batch_transcript::batch_domain_separator;
 pub use config::{
     Stage, StirConfig, StirConfigError, StirOptions, StirParameters, StirRoundConfig,
 };

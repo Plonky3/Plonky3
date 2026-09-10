@@ -17,7 +17,12 @@ use crate::error::{ProofShapeError, StirError};
 const BATCH_POW: &str = "batch_pow";
 const ALPHA: &str = "alpha";
 
-fn separator<F: PrimeField64, EF: ExtensionField<F>>(bits: usize) -> DomainSeparator<FieldUnit<F>> {
+/// Domain separator for an enabled PCS batching grind.
+///
+/// At zero difficulty the PCS skips this transcript and samples alpha directly.
+pub fn batch_domain_separator<F: PrimeField64, EF: ExtensionField<F>>(
+    bits: usize,
+) -> DomainSeparator<FieldUnit<F>> {
     let pattern = InteractionPattern::new(vec![
         Interaction::algebra::<F, F>(Hierarchy::Atomic, Kind::Pow, BATCH_POW, Length::Fixed(bits)),
         Interaction::algebra::<F, EF>(Hierarchy::Atomic, Kind::Challenge, ALPHA, Length::Scalar),
@@ -35,7 +40,7 @@ where
     if bits == 0 {
         return (challenger.sample_algebra_element(), None);
     }
-    let mut state = ProverState::new(challenger, &separator::<F, EF>(bits));
+    let mut state = ProverState::new(challenger, &batch_domain_separator::<F, EF>(bits));
     let witness = state.observe_pow(BATCH_POW, bits);
     let alpha = state
         .challenge_extension::<F, EF, FieldToFieldCodec<F>>(ALPHA)
@@ -64,7 +69,7 @@ where
     let Some(witness) = witness else {
         return Ok(challenger.sample_algebra_element());
     };
-    let mut state = VerifierState::new(challenger, &separator::<F, EF>(bits), &[]);
+    let mut state = VerifierState::new(challenger, &batch_domain_separator::<F, EF>(bits), &[]);
     state
         .observe_pow(BATCH_POW, bits, witness)
         .map_err(|_| StirError::InvalidBatchPowWitness { bits })?;
@@ -121,7 +126,7 @@ mod tests {
         let mut base = challenger();
         base.observe(F::from_u64(123));
         let mut seeded = base.clone();
-        separator::<F, EF>(8).seed(&mut seeded);
+        batch_domain_separator::<F, EF>(8).seed(&mut seeded);
         let weak = (0..1024)
             .map(F::from_u64)
             .find(|&witness| {

@@ -2,7 +2,7 @@
 //!
 //! # Overview
 //!
-//! Fifteen protocols in this workspace seed their transcript from a domain separator.
+//! Sixteen protocols in this workspace seed their transcript from a domain separator.
 //!
 //! The version byte is a format version each protocol owns, so names carry the separation.
 //!
@@ -11,7 +11,7 @@
 //!                     ^     ^                 ^
 //!                     |     |                 disambiguates zero-padded prefixes
 //!                     |     the only field that differs between protocols
-//!                     the same byte for all fifteen
+//!                     the same byte for all sixteen
 //! ```
 //!
 //! Separation therefore rests entirely on `NAME`, and this file is where that is checked.
@@ -19,13 +19,15 @@
 //! # Placement
 //!
 //! Every protocol crate depends on `p3-challenger`, so the check cannot live there.
-//! `p3-examples` is a leaf: nothing depends on it, and it already pulls in most of the fifteen.
+//! `p3-examples` is a leaf: nothing depends on it, and it already pulls in most of the sixteen.
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::BatchShape;
 use p3_challenger::DuplexChallenger;
 use p3_challenger::fs::{DomainSeparator, FieldUnit, PROTOCOL_ID_LEN};
-use p3_challenger::testing::{SeedDigest, assert_seeds_pairwise_distinct, seed_digest};
+use p3_challenger::testing::{
+    SeedDigest, assert_seeds_pairwise_distinct, pow_difficulties, seed_digest,
+};
 use p3_circle::CirclePcsShape;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriShape, PcsShape};
@@ -34,6 +36,8 @@ use p3_multi_stark::lookup::transcript::{LookupInstanceShape, LookupShape};
 use p3_multi_stark::rounds::AirDegrees;
 use p3_multi_stark::transcript::{MultiStarkInstanceShape, MultiStarkShape};
 use p3_multi_stark::zerocheck::transcript::ZerocheckShape;
+use p3_security::fri::FriRegime;
+use p3_security::grinding::{GrindingBudget, GrindingSites, RecordedGrind};
 use p3_stir::{SecurityAssumption, StirInstanceShape, StirRoundShape, StirShape};
 use p3_sumcheck::generic_degree::GenericDegreeShape;
 use p3_sumcheck::strategy::Basis;
@@ -47,7 +51,7 @@ use p3_whir::{
 
 /// Base field every separator below is derived over.
 ///
-/// One field for all fifteen, so nothing is separated by the field choice.
+/// One field for all sixteen, so nothing is separated by the field choice.
 type F = BabyBear;
 
 /// Extension field every separator below draws its challenges from.
@@ -70,14 +74,14 @@ type Case = (String, DomainSeparator<Alphabet>);
 /// Number of protocols on the typed transcript layer.
 ///
 /// A protocol added without an entry below leaves its name unchecked against the others.
-const NUM_PROTOCOLS: usize = 15;
+const NUM_PROTOCOLS: usize = 16;
 
 /// Configurations swept per protocol: one default, then two single-field moves of it.
 ///
 /// The pairwise check is quadratic, so the sweep is a budget rather than a maximum.
 ///
 /// ```text
-///     15 protocols x 3 configurations = 45 seeds -> 990 pairs
+///     16 protocols x 3 configurations = 48 seeds -> 1128 pairs
 /// ```
 const CASES_PER_PROTOCOL: usize = 3;
 
@@ -568,6 +572,63 @@ fn zk_sumcheck_cases() -> Vec<Case> {
     .collect()
 }
 
+fn stir_pcs_batch_cases() -> Vec<Case> {
+    [("plain", 1), ("pow_bits_2", 2), ("pow_bits_3", 3)]
+        .into_iter()
+        .map(|(name, bits)| {
+            case(
+                "p3-stir-pcs-batch",
+                name,
+                p3_stir::batch_domain_separator::<F, EF>(bits),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn circle_and_stir_patterns_match_grinding_budgets() {
+    for (batch, commit, query) in [(0, 0, 0), (5, 3, 7)] {
+        let shape = CirclePcsShape {
+            opened_widths: vec![vec![vec![1]]],
+            num_commit_rounds: 2,
+            batch_pow_bits: batch,
+            commit_pow_bits: commit,
+            query_pow_bits: query,
+            num_queries: 2,
+            index_bits: 8,
+            log_blowup: 1,
+        };
+        let sites = GrindingSites {
+            batch_combination: batch,
+            ..GrindingSites::NONE
+        };
+        let budget = GrindingBudget::from_sites(&sites).with_fri(&FriRegime {
+            log_blowup: 1,
+            num_queries: 2,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            commit_pow_bits: commit,
+            query_pow_bits: query,
+        });
+        let recorded: Vec<_> = pow_difficulties(shape.domain_separator::<F, EF>().pattern())
+            .into_iter()
+            .map(|(label, bits)| RecordedGrind::new("p3-circle-pcs", label, bits))
+            .collect();
+        budget.check(&["p3-circle-pcs"], &recorded).unwrap();
+        let recorded: Vec<_> = if batch == 0 {
+            vec![]
+        } else {
+            pow_difficulties(p3_stir::batch_domain_separator::<F, EF>(batch).pattern())
+                .into_iter()
+                .map(|(label, bits)| RecordedGrind::new("p3-stir-pcs-batch", label, bits))
+                .collect()
+        };
+        GrindingBudget::from_sites(&sites)
+            .check(&["p3-stir-pcs-batch"], &recorded)
+            .unwrap();
+    }
+}
+
 fn protocols() -> Vec<Vec<Case>> {
     vec![
         uni_stark_cases(),
@@ -576,6 +637,7 @@ fn protocols() -> Vec<Vec<Case>> {
         fri_pcs_cases(),
         circle_pcs_cases(),
         stir_cases(),
+        stir_pcs_batch_cases(),
         whir_cases(),
         zk_whir_cases(),
         zerocheck_cases(),
