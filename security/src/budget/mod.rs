@@ -60,6 +60,19 @@ pub const fn security_report(
     air: &AirShape,
 ) -> SecurityReport {
     let cap = instance.cap();
+    // In particular, reject malformed public field-size encodings before any
+    // arithmetic or grinding credit. A zero collision cap also needs no grading.
+    if cap == 0 {
+        return SecurityReport::new([
+            SecurityTerm::new(LOOKUP_LABEL, 0),
+            SecurityTerm::new(COMPOSITION_LABEL, 0),
+            SecurityTerm::new(OUT_OF_DOMAIN_LABEL, 0),
+            SecurityTerm::new(DEEP_COMPOSITION_LABEL, 0),
+            SecurityTerm::new(FOLDING_LABEL, 0),
+            SecurityTerm::new(QUERY_LABEL, 0),
+            SecurityTerm::new(COLLISION_LABEL, 0),
+        ]);
+    }
 
     // The lookup challenges are sampled once, right after the main-trace commitment, and shared
     // by every bus. Each bus denominator is affine in the first challenge with total degree at
@@ -85,7 +98,12 @@ pub const fn security_report(
     let lookup = round(
         LOOKUP_LABEL,
         instance,
-        (air.lookup.max_message_width as u64 + 2) * air.lookup.fractions_per_row as u64,
+        match air.lookup {
+            Some(lookup) => {
+                Some((lookup.max_message_width as u64 + 2) * lookup.fractions_per_row as u64)
+            }
+            None => None,
+        },
         instance.log_max_height,
         params.lookup_pow_bits,
         cap,
@@ -97,7 +115,7 @@ pub const fn security_report(
     let composition = round(
         COMPOSITION_LABEL,
         instance,
-        air.num_composed_constraints as u64,
+        Some(air.num_composed_constraints as u64),
         0,
         0,
         cap,
@@ -126,8 +144,8 @@ pub const fn security_report(
         DEEP_COMPOSITION_LABEL,
         instance,
         match air.num_deep_terms {
-            Some(n) => n as u64,
-            None => 0,
+            Some(n) => Some(n as u64),
+            None => None,
         },
         0,
         params.deep_pow_bits,
@@ -140,7 +158,7 @@ pub const fn security_report(
         Some(coefficient) => round(
             FOLDING_LABEL,
             instance,
-            coefficient,
+            Some(coefficient),
             instance.log_max_height.saturating_add(params.log_blowup),
             params.folding_pow_bits,
             cap,
@@ -175,11 +193,8 @@ pub const fn security_report(
 /// `2^63` is the last shift that does not itself overflow `u64`, and `2 · (2^63 − 1) = 2^64 − 2`
 /// still fits, so `log_folding_arity = 63` could be computed exactly; the cutoff at `63` is one
 /// notch more conservative than the arithmetic strictly requires, refusing the input a step early
-/// rather than relying on that margin. From `64` upwards a wrapped shift is the dangerous case
-/// rather than a merely wrong one: `1u64 << 64` masks to `1u64 << 0`, leaving the coefficient at
-/// zero, and [`round`] reads a zero coefficient as "the protocol has no such round" and reports it
-/// at the cap. The round would then vanish from the budget of a verifier compiled in release,
-/// where the shift does not panic. Reporting zero bits instead refuses the configuration loudly.
+/// rather than relying on that margin. Larger exponents must never wrap to a smaller arity;
+/// reporting zero bits refuses these unrepresentable configurations.
 const fn folding_coefficient(log_folding_arity: u32) -> Option<u64> {
     if log_folding_arity >= u64::BITS - 1 {
         return None;
@@ -190,21 +205,25 @@ const fn folding_coefficient(log_folding_arity: u32) -> Option<u64> {
 /// Bounds one round whose error is `coefficient · 2^log_size / |E|`, crediting the grinding sited
 /// before its challenge and capping at the transcript's own ceiling.
 ///
-/// A zero coefficient means the protocol has no such round, which contributes no constraint on
-/// security and is reported at the cap.
+/// Presence is explicit: only `None` waives a round. A present coefficient must validate as
+/// nonzero before entering the arithmetic; malformed present rounds report zero security.
 const fn round(
     label: &'static str,
     instance: &InstanceShape,
-    coefficient: u64,
+    coefficient: Option<u64>,
     log_size: u32,
     pow_bits: u32,
     cap: u64,
 ) -> SecurityTerm {
-    if coefficient == 0 {
-        return SecurityTerm::new(label, cap);
-    }
+    let coefficient = match coefficient {
+        None => return SecurityTerm::new(label, cap),
+        Some(coefficient) => match core::num::NonZeroU64::new(coefficient) {
+            Some(coefficient) => coefficient,
+            None => return SecurityTerm::new(label, 0),
+        },
+    };
 
-    let error = fixed::ceil_log2(coefficient) + fixed::from_bits(log_size);
+    let error = fixed::ceil_log2(coefficient.get()) + fixed::from_bits(log_size);
     let bits = if error >= instance.field_bits {
         fixed::from_bits(pow_bits)
     } else {
@@ -325,10 +344,67 @@ mod tests {
             num_quotient_chunks: 8,
             max_combo: 2,
             num_deep_terms: Some(130),
-            lookup: LookupShape {
+            lookup: Some(LookupShape {
                 fractions_per_row: 27,
                 max_message_width: 16,
-            },
+            }),
+        }
+    }
+
+    #[test]
+    fn malformed_field_bits_report_zero_security_without_panicking() {
+        for field_bits in [
+            0,
+            18_446_744_073_709_391_531,
+            u64::MAX,
+            fixed::from_bits(u32::MAX) + 1,
+        ] {
+            let instance = InstanceShape {
+                field_bits,
+                ..instance(20)
+            };
+            let params = ProtocolParams {
+                log_blowup: 1,
+                // Grinding must not rescue an invalid field-size encoding.
+                query_pow_bits: u32::MAX,
+                ..params()
+            };
+            assert_eq!(
+                security_report(&params, &instance, &air()).security_level(),
+                0
+            );
+        }
+        let supported = InstanceShape {
+            field_bits: fixed::from_bits(u32::MAX),
+            ..instance(20)
+        };
+        assert!(security_report(&params(), &supported, &air()).security_level() > 0);
+    }
+
+    #[test]
+    fn present_zero_coefficient_rounds_cannot_claim_the_cap() {
+        for kind in [
+            LOOKUP_LABEL,
+            COMPOSITION_LABEL,
+            DEEP_COMPOSITION_LABEL,
+            FOLDING_LABEL,
+        ] {
+            let mut air = air();
+            let mut params = params();
+            match kind {
+                LOOKUP_LABEL => air.lookup.as_mut().unwrap().fractions_per_row = 0,
+                COMPOSITION_LABEL => air.num_composed_constraints = 0,
+                DEEP_COMPOSITION_LABEL => air.num_deep_terms = Some(0),
+                FOLDING_LABEL => params.log_folding_arity = 0,
+                _ => unreachable!(),
+            }
+            let report = security_report(&params, &instance(20), &air);
+            let term = report
+                .terms()
+                .iter()
+                .find(|term| term.label == kind)
+                .unwrap();
+            assert_eq!(term.bits, 0, "malformed present round {kind}");
         }
     }
 
@@ -495,10 +571,10 @@ mod tests {
             num_quotient_chunks: 8,
             max_combo: 2,
             num_deep_terms: Some(1024),
-            lookup: LookupShape {
+            lookup: Some(LookupShape {
                 fractions_per_row: 64,
                 max_message_width: 16,
-            },
+            }),
         };
         let large = security_report(&params(), &instance(24), &large);
         assert!(large.security_level() <= small.security_level());
@@ -509,10 +585,7 @@ mod tests {
     #[test]
     fn absent_lookup_argument_contributes_no_round() {
         let air = AirShape {
-            lookup: LookupShape {
-                fractions_per_row: 0,
-                max_message_width: 0,
-            },
+            lookup: None,
             ..air()
         };
         let report = security_report(&params(), &instance(29), &air);

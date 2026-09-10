@@ -125,10 +125,10 @@ fn every_round_direction_and_tightness() {
                         .next_power_of_two(),
                     max_combo,
                     num_deep_terms: Some(air_vector.num_deep_terms),
-                    lookup: LookupShape {
+                    lookup: Some(LookupShape {
                         fractions_per_row: air_vector.fractions_per_row,
                         max_message_width: air_vector.max_message_width,
-                    },
+                    }),
                 };
 
                 for log_max_height in 6..=29u32 {
@@ -327,10 +327,10 @@ fn collision_term_is_the_cap() {
         num_quotient_chunks: (LARGE.max_constraint_degree.max(2) - 1).next_power_of_two(),
         max_combo: OOD_MAX_COMBO,
         num_deep_terms: Some(LARGE.num_deep_terms),
-        lookup: LookupShape {
+        lookup: Some(LookupShape {
             fractions_per_row: LARGE.fractions_per_row,
             max_message_width: LARGE.max_message_width,
-        },
+        }),
     };
     let report = security_report(&params, &instance, &air_shape);
     assert_eq!(term_bits(&report, COLLISION_LABEL), 96.0);
@@ -374,10 +374,10 @@ proptest! {
             max_combo,
             num_quotient_chunks,
             num_deep_terms: Some(SMALL.num_deep_terms),
-            lookup: LookupShape {
+            lookup: Some(LookupShape {
                 fractions_per_row: SMALL.fractions_per_row,
                 max_message_width: SMALL.max_message_width,
-            },
+            }),
         };
         let fixed_bits = term_bits(
             &security_report(&params, &instance, &air_shape),
