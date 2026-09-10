@@ -987,6 +987,11 @@ where
         b,
         "one initial codeword per instance"
     );
+    // An empty batch is a transcript no-op. Even an empty pattern's player would
+    // absorb its domain separator, so return before constructing it.
+    if b == 0 {
+        return Vec::new();
+    }
 
     // Describe the transcript before running it.
     //

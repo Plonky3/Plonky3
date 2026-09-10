@@ -4417,14 +4417,74 @@ mod babybear_stir_multi {
         );
     }
 
-    /// An empty batch has no transcript operations, matching the prover, so it verifies.
+    fn assert_same_challenger(actual: &Challenger, expected: &Challenger) {
+        assert_eq!(actual.sponge_state, expected.sponge_state);
+        assert_eq!(actual.input_buffer, expected.input_buffer);
+        assert_eq!(actual.output_buffer, expected.output_buffer);
+    }
+
+    type EmptySource = fn(&[usize]) -> Result<Vec<Vec<EF>>, StirError<<MyMmcs as Mmcs<EF>>::Error>>;
+
+    /// Empty batches leave all caller-visible transcript state untouched on both sides.
     #[test]
     fn test_multi_empty_batch_verifies() {
-        let (_params, _dft, challenger) = make_params(1, 2, 32, 12);
-        let mut v_ch = challenger;
-        let outputs = verify_stir_multi::<F, EF, MyMmcs, Challenger>(&[], &[], &mut v_ch)
-            .expect("an empty batch must verify");
-        assert!(outputs.is_empty());
+        use p3_challenger::CanSample;
+        use p3_stir::prover::prove_stir_multi_from_codewords;
+
+        let (_params, dft, challenger) = make_params(1, 2, 32, 12);
+        let mut sampled = challenger.clone();
+        sampled.observe(F::from_u32(42));
+        let _: F = sampled.sample();
+        let mut pending = sampled.clone();
+        pending.observe(F::from_u32(43));
+        for original in [challenger, sampled, pending] {
+            for prove in [
+                prove_stir_multi::<F, EF, Dft, MyMmcs, Challenger>,
+                prove_stir_multi_from_codewords,
+                prove_stir_multi_from_external_codewords,
+            ] {
+                let mut p_ch = original.clone();
+                assert!(prove(&[], vec![], &dft, &mut p_ch).is_empty());
+                assert_same_challenger(&p_ch, &original);
+            }
+            let mut v_ch = original.clone();
+            assert!(
+                verify_stir_multi::<F, EF, MyMmcs, Challenger>(&[], &[], &mut v_ch)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_same_challenger(&v_ch, &original);
+            assert!(
+                verify_stir_multi_with_external_initial::<F, EF, MyMmcs, Challenger, (), EmptySource>(
+                    &[], &[], &mut v_ch, vec![],
+                )
+                .unwrap()
+                .is_empty()
+            );
+            assert_same_challenger(&v_ch, &original);
+        }
+    }
+
+    #[test]
+    fn test_multi_empty_batch_rejects_extra_external_source() {
+        let (_params, _dft, original) = make_params(1, 2, 32, 12);
+        let mut challenger = original.clone();
+        let source: EmptySource = |_| panic!("an extra source must not be invoked");
+        let err = verify_stir_multi_with_external_initial::<F, EF, MyMmcs, Challenger, (), _>(
+            &[],
+            &[],
+            &mut challenger,
+            vec![source],
+        )
+        .expect_err("an empty batch must reject an extra source");
+        assert!(matches!(
+            err,
+            StirError::ExternalSource(ExternalSourceError::SourceCount {
+                expected: 0,
+                got: 1
+            })
+        ));
+        assert_same_challenger(&challenger, &original);
     }
 }
 

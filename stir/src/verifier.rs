@@ -1359,9 +1359,18 @@ where
         .into());
     }
 
-    // Why: an empty batch is a transcript no-op on both sides.
-    //   prover:   shared grinds fall back to zero bits
-    //   verifier: check_witness(0, _) observes nothing
+    if let Some(sources) = &external_fibers
+        && sources.len() != b
+    {
+        return Err(ExternalSourceError::SourceCount {
+            expected: b,
+            got: sources.len(),
+        }
+        .into());
+    }
+
+    // As on the prover, an empty batch returns before a transcript player can
+    // absorb the domain separator. Arity checks still apply to empty batches.
     if b == 0 {
         return Ok(Vec::new());
     }
@@ -1384,19 +1393,10 @@ where
     // A shared grind is checked once, so every active instance must carry the same witness.
     check_replicated_witnesses(configs, proofs)?;
 
-    let external_fibers: Vec<Option<Src>> = match external_fibers {
-        None => (0..b).map(|_| None).collect(),
-        Some(sources) => {
-            if sources.len() != b {
-                return Err(ExternalSourceError::SourceCount {
-                    expected: b,
-                    got: sources.len(),
-                }
-                .into());
-            }
-            sources.into_iter().map(Some).collect()
-        }
-    };
+    let external_fibers: Vec<Option<Src>> = external_fibers.map_or_else(
+        || (0..b).map(|_| None).collect(),
+        |sources| sources.into_iter().map(Some).collect(),
+    );
 
     let mut transcript = VerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
 
