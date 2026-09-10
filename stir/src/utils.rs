@@ -8,7 +8,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_challenger::FieldChallenger;
 use p3_field::{
     ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
 };
@@ -358,42 +357,6 @@ impl<F: Field> OodFilter<F> {
         // Deduplicate OOD points.
         outside_all_domains && kept.iter().all(|&existing| existing != z)
     }
-}
-
-/// Sample `num_ood_samples` distinct out-of-domain points for a STIR round from the
-/// transcript.
-///
-/// `excluded_domains` gives the `(shift, log_size)` of the current, next, and fold-query
-/// domains for the round: each candidate is drawn until it lies outside all three cosets,
-/// so that it cannot collide with the interpolation nodes used elsewhere in the round.
-/// Prover and verifier both call this to derive identical points from identical
-/// transcript state.
-pub fn sample_ood_points<F, EF, Challenger>(
-    challenger: &mut Challenger,
-    excluded_domains: [(F, usize); 3],
-    num_ood_samples: usize,
-) -> Vec<EF>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    Challenger: FieldChallenger<F>,
-{
-    // Nothing to sample, and nothing to precompute for it: keeps the contract identical to
-    // evaluating the predicate lazily, which did no inversions at all in this case.
-    if num_ood_samples == 0 {
-        return Vec::new();
-    }
-
-    let filter = OodFilter::new(excluded_domains);
-
-    let mut ood_points: Vec<EF> = Vec::with_capacity(num_ood_samples);
-    while ood_points.len() < num_ood_samples {
-        let z: EF = challenger.sample_algebra_element();
-        if filter.accepts(&z, &ood_points) {
-            ood_points.push(z);
-        }
-    }
-    ood_points
 }
 
 /// Interpolate a polynomial through the given `(points, values)` pairs.
@@ -790,8 +753,7 @@ pub fn lagrange_interpolate_at<F: Field, EF: ExtensionField<F>>(
 
 #[cfg(test)]
 mod tests {
-    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_challenger::DuplexChallenger;
+    use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use proptest::prelude::*;
@@ -802,8 +764,6 @@ mod tests {
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
-    type Perm = Poseidon2BabyBear<16>;
-    type TestChallenger = DuplexChallenger<F, Perm, 16, 8>;
 
     #[test]
     fn test_eval_poly_zero() {
@@ -869,47 +829,51 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sample_ood_points_returns_nothing_for_zero_samples() {
-        let mut rng = SmallRng::seed_from_u64(3);
-        let perm = Perm::new_from_rng_128(&mut rng);
-        let mut challenger = TestChallenger::new(perm);
-        let excluded = [(F::GENERATOR, 4), (F::GENERATOR, 3), (F::GENERATOR, 2)];
-        let points: Vec<EF> = sample_ood_points(&mut challenger, excluded, 0);
-        assert!(points.is_empty());
-    }
-
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        /// The hoisted `shift^{-2^log_size}` and the shared squaring chain must compose back
-        /// into `(z / shift)^{2^log_size}`. The oracle is the original three-line predicate,
-        /// evaluated independently below; `log_sizes` are drawn freely so that equal sizes, a
-        /// zero size, and the maximum sitting at each of the three positions all occur.
         #[test]
-        fn sample_ood_points_avoids_every_excluded_domain(
+        fn the_out_of_domain_filter_matches_the_predicate_it_hoists(
             log_sizes in prop::collection::vec(0usize..=8, 3..=3),
             shift_seeds in prop::collection::vec(1u64..(1 << 20), 3..=3),
-            num_ood_samples in 1usize..=3,
-            seed: u64,
+            candidate_seeds in prop::collection::vec(1u64..(1 << 24), 1..=4),
         ) {
-            let mut rng = SmallRng::seed_from_u64(seed);
-            let perm = Perm::new_from_rng_128(&mut rng);
-            let mut challenger = TestChallenger::new(perm);
-
+            // Invariant: the filter agrees with the predicate it hoists.
+            //
+            //     hoisted:  z^(2^l) * shift^(-2^l)  ==  1
+            //     plain  :  (z / shift)^(2^l)       ==  1
+            //
+            // Fixture state: three excluded domains, drawn freely.
+            //
+            // So equal sizes, a zero size, and the maximum at each position all occur.
             let excluded: [(F, usize); 3] =
                 core::array::from_fn(|i| (F::from_u64(shift_seeds[i]), log_sizes[i]));
+            let filter = OodFilter::new(excluded);
 
-            let points: Vec<EF> = sample_ood_points(&mut challenger, excluded, num_ood_samples);
-            prop_assert_eq!(points.len(), num_ood_samples);
+            // Points already kept, grown one candidate at a time.
+            //
+            // So the dedup half meets a non-empty set as well as an empty one.
+            let mut kept: Vec<EF> = Vec::new();
 
-            for (i, &z) in points.iter().enumerate() {
-                for &(shift, log_size) in &excluded {
-                    let outside = (z * EF::from(shift).inverse()).exp_power_of_2(log_size)
-                        != EF::ONE;
-                    prop_assert!(log_size == 0 || outside);
+            for &seed in &candidate_seeds {
+                let candidate = EF::from(F::from_u64(seed));
+
+                // Reference: a candidate is admissible when it misses every coset.
+                //
+                // It must also repeat no point already kept.
+                let outside_all = excluded.iter().all(|&(shift, log_size)| {
+                    log_size == 0
+                        || (candidate * EF::from(shift).inverse()).exp_power_of_2(log_size)
+                            != EF::ONE
+                });
+                let expected = outside_all && !kept.contains(&candidate);
+
+                prop_assert_eq!(filter.accepts(&candidate, &kept), expected);
+
+                // Keeping the admissible ones mirrors what a rejection sampler does.
+                if expected {
+                    kept.push(candidate);
                 }
-                prop_assert!(!points[..i].contains(&z));
             }
         }
     }
