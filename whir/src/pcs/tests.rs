@@ -19,6 +19,7 @@ use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
+use crate::WhirConfigError;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use crate::pcs::prover::WhirProver;
 use crate::pcs::verifier::errors::VerifierError;
@@ -88,7 +89,7 @@ fn rejects_opening_batches_below_target_security() {
     let result = pcs.open(data, protocol, &mut challenger);
     assert!(matches!(
         result,
-        Err(crate::WhirConfigError::InitialClaimsBelowTarget {
+        Err(WhirConfigError::InitialClaimsBelowTarget {
             num_claims: 16386,
             ..
         })
@@ -133,7 +134,7 @@ fn prescribed_and_direct_open_reject_scalar_claim_budget() {
     let result = pcs.open_at(prescribed_data, &protocol, &[point], &mut challenger);
     assert!(matches!(
         result,
-        Err(crate::WhirConfigError::InitialClaimsBelowTarget { num_claims: 6, .. })
+        Err(WhirConfigError::InitialClaimsBelowTarget { num_claims: 6, .. })
     ));
     assert_eq!(CanSample::<F>::sample(&mut challenger), before.sample());
 
@@ -154,7 +155,7 @@ fn prescribed_and_direct_open_reject_scalar_claim_budget() {
     );
     assert!(matches!(
         result,
-        Err(crate::WhirConfigError::InitialClaimsBelowTarget { num_claims: 6, .. })
+        Err(WhirConfigError::InitialClaimsBelowTarget { num_claims: 6, .. })
     ));
     assert_eq!(CanSample::<F>::sample(&mut challenger), before.sample());
 }

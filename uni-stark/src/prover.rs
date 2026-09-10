@@ -16,9 +16,10 @@ use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    Com, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData,
-    Proof, ProverConstraintFolder, StarkGenericConfig, StarkProverTranscript, StarkShape, Val,
-    get_constraint_layout, get_log_num_quotient_chunks_for_domain,
+    Com, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PcsProverError,
+    PreprocessedProverData, Proof, ProverConstraintFolder, ProvingError, StarkGenericConfig,
+    StarkProverTranscript, StarkShape, Val, get_constraint_layout,
+    get_log_num_quotient_chunks_for_domain,
 };
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use crate::{VectorizedChallenge, VectorizedConstraintFolder, VectorizedVal};
@@ -96,7 +97,7 @@ pub fn prove_with_preprocessed<
     trace: RowMajorMatrix<Val<SC>>,
     public_values: &[Val<SC>],
     preprocessed: Option<&PreprocessedProverData<SC>>,
-) -> Result<Proof<SC>, crate::ProvingError<crate::config::PcsProverError<SC>>>
+) -> Result<Proof<SC>, ProvingError<PcsProverError<SC>>>
 where
     SC: StarkGenericConfig,
     SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
@@ -218,7 +219,7 @@ where
     //          - trace_data.leaves is the matrix containing `ET`.
     let (trace_commit, trace_data) = info_span!("commit to trace data")
         .in_scope(|| pcs.commit([(ext_trace_domain, trace)]))
-        .map_err(|source| crate::ProvingError::Pcs {
+        .map_err(|source| ProvingError::Pcs {
             phase: "trace commitment",
             source,
         })?;
@@ -328,7 +329,7 @@ where
     let (quotient_commit, quotient_data) = info_span!("commit to quotient poly chunks")
         .in_scope(|| pcs.commit_quotient(quotient_domain, quotient_flat, num_quotient_chunks))
         .inspect_err(|_| transcript.abort())
-        .map_err(|source| crate::ProvingError::Pcs {
+        .map_err(|source| ProvingError::Pcs {
             phase: "quotient commitment",
             source,
         })?;
@@ -345,7 +346,7 @@ where
         let (r_commit, r_data) = pcs
             .get_opt_randomization_poly_commitment(core::iter::once(ext_trace_domain))
             .inspect_err(|_| transcript.abort())
-            .map_err(|source| crate::ProvingError::Pcs {
+            .map_err(|source| ProvingError::Pcs {
                 phase: "randomization commitment",
                 source,
             })?
@@ -429,7 +430,7 @@ where
 
     let (opened_values, opening_proof) = opening_result
         .inspect_err(|_| transcript.abort())
-        .map_err(|source| crate::ProvingError::Pcs {
+        .map_err(|source| ProvingError::Pcs {
             phase: "opening",
             source,
         })?;
@@ -494,7 +495,7 @@ pub fn prove<
     air: &A,
     trace: RowMajorMatrix<Val<SC>>,
     public_values: &[Val<SC>],
-) -> Result<Proof<SC>, crate::ProvingError<crate::config::PcsProverError<SC>>>
+) -> Result<Proof<SC>, ProvingError<PcsProverError<SC>>>
 where
     SC: StarkGenericConfig,
     SC::Challenger: GrindingChallenger<Witness = Val<SC>>,

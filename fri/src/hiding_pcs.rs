@@ -22,14 +22,14 @@ use spin::Mutex;
 use tracing::info_span;
 
 use crate::verifier::FriError;
-use crate::{BatchMultiOpening, FriParameters, FriProof, TwoAdicFriPcs};
+use crate::{BatchMultiOpening, FriParameters, FriProof, FriProverError, TwoAdicFriPcs};
 
 /// A hiding commitment cannot safely support the requested disclosure budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum HidingFriProverError {
     /// The inner FRI parameters cannot fold every committed input.
     #[error(transparent)]
-    Fri(#[from] crate::FriProverError),
+    Fri(#[from] FriProverError),
     /// Too few independent random codewords for the challenge extension.
     #[error("hiding FRI requires {required} random codewords, got {got}")]
     InsufficientRandomCodewords { required: usize, got: usize },
@@ -1085,7 +1085,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(HidingFriProverError::Fri(
-                crate::FriProverError::InputHeightTooSmall {
+                FriProverError::InputHeightTooSmall {
                     log_input_height: 6,
                     log_final_height: 6,
                 }

@@ -21,6 +21,7 @@ use super::base_case::BaseCaseZkError;
 use super::config::{ZkParameters, ZkWhirConfig};
 use super::proof::ZkWhirProof;
 use super::verifier::ZkVerifierError;
+use crate::WhirConfigError;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption};
 use crate::pcs::proof::QueryOpenings;
 
@@ -234,7 +235,7 @@ fn zk_opening_budget_rejection_preserves_transcript_and_rng() {
     let result = pcs.open(data, vec![point; 1 << 14], &mut transcript);
     assert!(matches!(
         result,
-        Err(crate::WhirConfigError::InitialClaimsBelowTarget { .. })
+        Err(WhirConfigError::InitialClaimsBelowTarget { .. })
     ));
     assert_eq!(CanSample::<F>::sample(&mut transcript), before);
 
@@ -244,7 +245,7 @@ fn zk_opening_budget_rejection_preserves_transcript_and_rng() {
     let result = direct.prove(direct_data, &claims, &mut transcript, &mut direct_rng);
     assert!(matches!(
         result,
-        Err(crate::WhirConfigError::InitialClaimsBelowTarget { .. })
+        Err(WhirConfigError::InitialClaimsBelowTarget { .. })
     ));
     assert_eq!(CanSample::<F>::sample(&mut transcript), before.sample());
     assert_eq!(

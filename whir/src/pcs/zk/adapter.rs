@@ -17,6 +17,7 @@ use super::config::ZkWhirConfig;
 use super::proof::ZkWhirProof;
 use super::prover::{HidingWhirProver, HidingWhirProverData};
 use super::verifier::{HidingWhirVerifier, ZkVerifierError};
+use crate::WhirConfigError;
 
 /// A hiding WHIR PCS, mirroring the hiding FRI adapter.
 ///
@@ -91,7 +92,7 @@ where
     type ProverData = HidingWhirProverData<F, EF, MT>;
     type Proof = ZkWhirProof<F, EF, MT>;
     type Error = ZkVerifierError;
-    type ProverError = crate::WhirConfigError;
+    type ProverError = WhirConfigError;
     type Witness = Poly<F>;
     type OpeningProtocol = Vec<Point<EF>>;
 

@@ -2,7 +2,7 @@ use p3_commit::{Pcs, UnivariateStarkPcs};
 use p3_matrix::Matrix;
 use tracing::debug_span;
 
-use crate::{QuotientAir, StarkGenericConfig};
+use crate::{PcsProverError, ProvingError, QuotientAir, StarkGenericConfig};
 
 /// Prover-side reusable data for preprocessed columns.
 ///
@@ -50,7 +50,7 @@ pub fn setup_preprocessed<SC, A>(
     degree_bits: usize,
 ) -> Result<
     Option<(PreprocessedProverData<SC>, PreprocessedVerifierKey<SC>)>,
-    crate::ProvingError<crate::config::PcsProverError<SC>>,
+    ProvingError<PcsProverError<SC>>,
 >
 where
     SC: StarkGenericConfig,
@@ -80,7 +80,7 @@ where
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let (commitment, prover_data) = debug_span!("commit to preprocessed trace")
         .in_scope(|| pcs.commit_preprocessing([(trace_domain, preprocessed)]))
-        .map_err(|source| crate::ProvingError::Pcs {
+        .map_err(|source| ProvingError::Pcs {
             phase: "preprocessing commitment",
             source,
         })?;

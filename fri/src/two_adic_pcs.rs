@@ -42,8 +42,8 @@ use tracing::{debug_span, instrument};
 use crate::periodic::build_periodic_lde_table_two_adic;
 use crate::verifier::{self, FriError};
 use crate::{
-    BatchMultiOpening, FriFoldingStrategy, FriParameters, FriProof, PcsProverTranscript, PcsShape,
-    PcsVerifierTranscript, prover,
+    BatchMultiOpening, FriFoldingStrategy, FriParameters, FriProof, FriProverError,
+    PcsProverTranscript, PcsShape, PcsVerifierTranscript, prover,
 };
 
 /// A polynomial commitment scheme using FRI to generate opening proofs.
@@ -298,7 +298,7 @@ where
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchMultiOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
-    type ProverError = crate::FriProverError;
+    type ProverError = FriProverError;
 
     /// Get the unique subgroup `H` of size `|H| = degree`.
     ///
@@ -1058,11 +1058,9 @@ mod tests {
                 vec![(&data, vec![vec![EF::TWO]; heights.len()]).into()],
                 &mut challenger,
             );
-            assert!(
-                matches!(result, Err(crate::FriProverError::InputHeightTooSmall {
+            assert!(matches!(result, Err(FriProverError::InputHeightTooSmall {
                 log_input_height, log_final_height: 2,
-            }) if log_input_height == expected_log_height)
-            );
+            }) if log_input_height == expected_log_height));
             assert_eq!(
                 challenger.sample_algebra_element::<EF>(),
                 before.sample_algebra_element::<EF>()
@@ -1092,11 +1090,9 @@ mod tests {
                 &pcs.mmcs,
                 F::ZERO,
             );
-            assert!(
-                matches!(proof, Err(crate::FriProverError::InputHeightTooSmall {
+            assert!(matches!(proof, Err(FriProverError::InputHeightTooSmall {
                 log_input_height, log_final_height: 2,
-            }) if log_input_height == min_log_height)
-            );
+            }) if log_input_height == min_log_height));
             assert_eq!(
                 challenger.sample_algebra_element::<EF>(),
                 before.sample_algebra_element::<EF>()
@@ -1151,10 +1147,7 @@ mod tests {
             &pcs.mmcs,
             F::ZERO,
         );
-        assert!(matches!(
-            proof,
-            Err(crate::FriProverError::FinalHeightOverflow)
-        ));
+        assert!(matches!(proof, Err(FriProverError::FinalHeightOverflow)));
         assert_eq!(
             challenger.sample_algebra_element::<EF>(),
             before.sample_algebra_element::<EF>()

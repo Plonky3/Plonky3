@@ -8,7 +8,7 @@ use p3_field::{ExtensionField, Field};
 use p3_sumcheck::PrescribedPointPcs;
 
 use crate::ProverInstances;
-use crate::config::{Commitment, MultiStarkConfig, ProverData};
+use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 use crate::folder::ProverAir;
 use crate::instance::ProverParts;
 use crate::lookup::prove_lookup;
@@ -40,7 +40,7 @@ pub fn prove_with_security<'a, C, A>(
     pow_bits: usize,
     target_bits: usize,
     challenger: &mut C::Challenger,
-) -> Result<MultiStarkProof<C>, ProvingError<crate::config::PcsProverError<C>>>
+) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
 where
     C: MultiStarkConfig,
     C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
@@ -121,7 +121,7 @@ pub fn prove<'a, C, A>(
     instances: ProverInstances<'a, C, A>,
     pow_bits: usize,
     caller_challenger: &mut C::Challenger,
-) -> Result<MultiStarkProof<C>, ProvingError<crate::config::PcsProverError<C>>>
+) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
 where
     C: MultiStarkConfig,
     C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,

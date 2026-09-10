@@ -35,6 +35,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use tracing::instrument;
 
+use crate::WhirConfigError;
 use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::zk::base_case::{BaseCaseZkConfig, BaseCaseZkProver, MaskGroupWitness};
 use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
@@ -138,7 +139,7 @@ where
         claims: &[(Point<EF>, EF)],
         challenger: &mut Challenger,
         rng: &mut R,
-    ) -> Result<ZkWhirProof<F, EF, MT>, crate::WhirConfigError>
+    ) -> Result<ZkWhirProof<F, EF, MT>, WhirConfigError>
     where
         F: PrimeField64,
     {

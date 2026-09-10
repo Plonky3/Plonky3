@@ -19,7 +19,8 @@ use p3_matrix::Matrix;
 use p3_uni_stark::Val;
 use p3_util::log2_strict_usize;
 
-use crate::config::{Challenge, Commitment, Domain, StarkGenericConfig as SGC};
+use crate::ProvingError;
+use crate::config::{Challenge, Commitment, Domain, PcsProverError, StarkGenericConfig as SGC};
 use crate::prover::StarkInstance;
 use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 
@@ -160,7 +161,7 @@ where
     pub fn from_instances<A>(
         config: &SC,
         instances: &[StarkInstance<'_, SC, A>],
-    ) -> Result<Self, crate::ProvingError<crate::config::PcsProverError<SC>>>
+    ) -> Result<Self, ProvingError<PcsProverError<SC>>>
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
         A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>> + Clone,
@@ -188,7 +189,7 @@ where
         config: &SC,
         airs: &[A],
         trace_ext_degree_bits: &[usize],
-    ) -> Result<Self, crate::ProvingError<crate::config::PcsProverError<SC>>>
+    ) -> Result<Self, ProvingError<PcsProverError<SC>>>
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
         A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>,
@@ -232,7 +233,7 @@ where
         trace_ext_degree_bits: &[usize],
         lookup_budget_overrides: &[usize],
         log_blowup: usize,
-    ) -> Result<Self, crate::ProvingError<crate::config::PcsProverError<SC>>>
+    ) -> Result<Self, ProvingError<PcsProverError<SC>>>
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
         A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>,
@@ -299,7 +300,7 @@ where
         } else {
             let (commitment, prover_data) =
                 pcs.commit_preprocessing(domains_and_traces)
-                    .map_err(|source| crate::ProvingError::Pcs {
+                    .map_err(|source| ProvingError::Pcs {
                         phase: "preprocessing commitment",
                         source,
                     })?;

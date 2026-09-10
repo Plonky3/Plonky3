@@ -19,6 +19,7 @@ use p3_sumcheck::layout::Layout;
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use tracing::instrument;
 
+use crate::WhirConfigError;
 use crate::parameters::WhirConfig;
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{
@@ -143,7 +144,7 @@ where
         layout: L,
         prover_data: MT::ProverData<DenseMatrix<F>>,
         num_opening_claims: usize,
-    ) -> Result<WhirProof<F, EF, MT>, crate::WhirConfigError>
+    ) -> Result<WhirProof<F, EF, MT>, WhirConfigError>
     where
         Dft: TwoAdicSubgroupDft<F>,
         Challenger: CanObserve<MT::Commitment>,
@@ -153,7 +154,7 @@ where
             layout
                 .num_claims()
                 .checked_add(initial_ood_answers.len())
-                .ok_or(crate::WhirConfigError::InitialClaimCountOverflow)?,
+                .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
         )?;
         let variable_order = L::variable_order();
 

@@ -26,8 +26,11 @@ use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFol
 use p3_util::{DisjointMutPtr, log2_strict_usize};
 use tracing::{debug_span, info_span, instrument};
 
+use crate::ProvingError;
 use crate::common::ProverData;
-use crate::config::{Challenge, Commitment, Domain, StarkGenericConfig as SGC, Val};
+use crate::config::{
+    Challenge, Commitment, Domain, PcsProverError, StarkGenericConfig as SGC, Val,
+};
 use crate::folder::ProverConstraintFolderWithLookups;
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
 use crate::symbolic::{
@@ -116,14 +119,14 @@ pub fn prove_batch<
     config: &SC,
     instances: &[StarkInstance<'_, SC, A>],
     prover_data: &ProverData<SC>,
-) -> Result<BatchProof<SC>, crate::ProvingError<crate::config::PcsProverError<SC>>>
+) -> Result<BatchProof<SC>, ProvingError<PcsProverError<SC>>>
 where
     SC: SGC,
     Val<SC>: PrimeField64,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     Domain<SC>: Send + Sync,
     SC::Pcs: Sync,
-    crate::config::PcsProverError<SC>: Send,
+    PcsProverError<SC>: Send,
     SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::ProverData: Sync,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Commitment: Sync,
@@ -249,7 +252,7 @@ where
     let (main_commit, main_data) = pcs
         .commit(main_commit_inputs)
         .inspect_err(|_| transcript.abort())
-        .map_err(|source| crate::ProvingError::Pcs {
+        .map_err(|source| ProvingError::Pcs {
             phase: "trace commitment",
             source,
         })?;
@@ -342,7 +345,7 @@ where
         Some(
             pcs.commit(permutation_commit_inputs)
                 .inspect_err(|_| transcript.abort())
-                .map_err(|source| crate::ProvingError::Pcs {
+                .map_err(|source| ProvingError::Pcs {
                     phase: "permutation commitment",
                     source,
                 })?,
@@ -383,8 +386,7 @@ where
     // Each instance's quotient chunks are independent, so compute them in
     // parallel. `quotient_values` already parallelises over rows; with many
     // instances this fills the cores that a single instance leaves idle.
-    let per_instance: Result<Vec<InstanceQuotient<SC>>, crate::config::PcsProverError<SC>> = (0
-        ..n_instances)
+    let per_instance: Result<Vec<InstanceQuotient<SC>>, PcsProverError<SC>> = (0..n_instances)
         .into_par_iter()
         .map(|i| {
             let _air_span = info_span!("compute quotient", air_idx = i).entered();
@@ -493,7 +495,7 @@ where
     for (chunk_domains, ldes) in
         per_instance
             .inspect_err(|_| transcript.abort())
-            .map_err(|source| crate::ProvingError::Pcs {
+            .map_err(|source| ProvingError::Pcs {
                 phase: "quotient evaluations",
                 source,
             })?
@@ -509,7 +511,7 @@ where
     let (quotient_commit, quotient_data) = pcs
         .commit_ldes(quotient_chunk_mats)
         .inspect_err(|_| transcript.abort())
-        .map_err(|source| crate::ProvingError::Pcs {
+        .map_err(|source| ProvingError::Pcs {
             phase: "quotient commitment",
             source,
         })?;
@@ -526,7 +528,7 @@ where
         let (r_commit, r_data) = pcs
             .get_opt_randomization_poly_commitment(ext_trace_domains.iter().copied())
             .inspect_err(|_| transcript.abort())
-            .map_err(|source| crate::ProvingError::Pcs {
+            .map_err(|source| ProvingError::Pcs {
                 phase: "randomization commitment",
                 source,
             })?
@@ -645,7 +647,7 @@ where
 
     let (opened_values, opening_proof) = opening_result
         .inspect_err(|_| transcript.abort())
-        .map_err(|source| crate::ProvingError::Pcs {
+        .map_err(|source| ProvingError::Pcs {
             phase: "opening",
             source,
         })?;

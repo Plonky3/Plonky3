@@ -16,6 +16,7 @@ use p3_sumcheck::{OpeningEvals, OpeningProtocol, PrescribedPointPcs};
 use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
+use crate::WhirConfigError;
 use crate::pcs::proof::PcsProof;
 
 /// Prover-side handoff between the commit and open phases of the PCS.
@@ -77,7 +78,7 @@ where
     type ProverData = WhirProverData<F, EF, MT, L>;
     type Proof = PcsProof<F, EF, MT>;
     type Error = VerifierError;
-    type ProverError = crate::WhirConfigError;
+    type ProverError = WhirConfigError;
     type Witness = Witness<F>;
     type OpeningProtocol = OpeningProtocol;
 
@@ -121,7 +122,7 @@ where
                 .try_fold(self.commitment_ood_samples, |n, (_, batch)| {
                     n.checked_add(batch.len())
                 })
-                .ok_or(crate::WhirConfigError::InitialClaimCountOverflow)?,
+                .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
         )?;
         let initial_ood_answers = tracing::info_span!("ood claims").in_scope(|| {
             (0..self.commitment_ood_samples)
@@ -257,7 +258,7 @@ where
                 .try_fold(self.commitment_ood_samples, |n, (_, batch)| {
                     n.checked_add(batch.len())
                 })
-                .ok_or(crate::WhirConfigError::InitialClaimCountOverflow)?,
+                .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
         )?;
         // One prescribed point per opening batch.
         assert_eq!(protocol.num_openings(), points.len());

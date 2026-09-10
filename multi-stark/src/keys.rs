@@ -13,7 +13,8 @@ use p3_air::BaseAir;
 use p3_commit::MultilinearPcs;
 use p3_sumcheck::layout::Table;
 
-use crate::config::{Commitment, MultiStarkConfig, ProverData};
+use crate::ProvingError;
+use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 
 /// Batched preprocessed data the prover reuses across proofs.
 ///
@@ -66,7 +67,7 @@ pub fn setup<C, A>(
     config: &C,
     airs: &[&A],
     challenger: &mut C::Challenger,
-) -> Result<(ProvingKey<C>, VerifyingKey<C>), crate::ProvingError<crate::config::PcsProverError<C>>>
+) -> Result<(ProvingKey<C>, VerifyingKey<C>), ProvingError<PcsProverError<C>>>
 where
     C: MultiStarkConfig,
     A: BaseAir<C::Val>,
@@ -94,7 +95,7 @@ where
     let (commitment, prover_data) = config
         .preprocessed_pcs()
         .commit(witness, challenger)
-        .map_err(|source| crate::ProvingError::Pcs {
+        .map_err(|source| ProvingError::Pcs {
             phase: "preprocessing commitment",
             source,
         })?;
