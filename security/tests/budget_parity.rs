@@ -121,12 +121,14 @@ fn every_round_direction_and_tightness() {
                 let air_shape = AirShape {
                     num_composed_constraints: air_vector.num_composed_constraints,
                     max_constraint_degree: air_vector.max_constraint_degree,
+                    num_quotient_chunks: (air_vector.max_constraint_degree.max(2) - 1)
+                        .next_power_of_two(),
                     max_combo,
                     num_deep_terms: Some(air_vector.num_deep_terms),
-                    lookup: LookupShape {
+                    lookup: Some(LookupShape {
                         fractions_per_row: air_vector.fractions_per_row,
                         max_message_width: air_vector.max_message_width,
-                    },
+                    }),
                 };
 
                 for log_max_height in 6..=29u32 {
@@ -232,6 +234,8 @@ fn check_ood(
     let stark_air = StarkAirParams {
         num_constraints: air_vector.num_composed_constraints as usize,
         max_constraint_degree: air_vector.max_constraint_degree as usize,
+        num_quotient_chunks: (air_vector.max_constraint_degree.max(2) - 1).next_power_of_two()
+            as usize,
         max_combo: max_combo as usize,
     };
     let p3_bits = cap(boost(
@@ -320,12 +324,13 @@ fn collision_term_is_the_cap() {
     let air_shape = AirShape {
         num_composed_constraints: LARGE.num_composed_constraints,
         max_constraint_degree: LARGE.max_constraint_degree,
+        num_quotient_chunks: (LARGE.max_constraint_degree.max(2) - 1).next_power_of_two(),
         max_combo: OOD_MAX_COMBO,
         num_deep_terms: Some(LARGE.num_deep_terms),
-        lookup: LookupShape {
+        lookup: Some(LookupShape {
             fractions_per_row: LARGE.fractions_per_row,
             max_message_width: LARGE.max_message_width,
-        },
+        }),
     };
     let report = security_report(&params, &instance, &air_shape);
     assert_eq!(term_bits(&report, COLLISION_LABEL), 96.0);
@@ -344,7 +349,10 @@ proptest! {
         log_max_height in 0..=48u32,
         max_combo in 1..=16u32,
         ood_pow_bits in 0..=32u32,
+        is_zk in proptest::bool::ANY,
     ) {
+        let zk = u32::from(is_zk);
+        let num_quotient_chunks = ((max_constraint_degree + zk).max(2) - 1).next_power_of_two() << zk;
         let params = ProtocolParams {
             log_blowup: LOG_BLOWUP,
             log_folding_arity: LOG_FOLDING_ARITY,
@@ -364,11 +372,12 @@ proptest! {
             num_composed_constraints: SMALL.num_composed_constraints,
             max_constraint_degree,
             max_combo,
+            num_quotient_chunks,
             num_deep_terms: Some(SMALL.num_deep_terms),
-            lookup: LookupShape {
+            lookup: Some(LookupShape {
                 fractions_per_row: SMALL.fractions_per_row,
                 max_message_width: SMALL.max_message_width,
-            },
+            }),
         };
         let fixed_bits = term_bits(
             &security_report(&params, &instance, &air_shape),
@@ -378,6 +387,7 @@ proptest! {
         let stark_air = StarkAirParams {
             num_constraints: SMALL.num_composed_constraints as usize,
             max_constraint_degree: max_constraint_degree as usize,
+            num_quotient_chunks: num_quotient_chunks as usize,
             max_combo: max_combo as usize,
         };
         let reference = boost(

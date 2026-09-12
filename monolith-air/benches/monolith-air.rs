@@ -168,7 +168,7 @@ fn bench_prove_m31(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     let trace = air.generate_trace_rows(num_hashes, &bars, log_blowup);
-                    prove(&config, &air, trace, &[])
+                    prove(&config, &air, trace, &[]).unwrap()
                 });
             },
         );
@@ -192,7 +192,7 @@ fn bench_prove_verify_m31(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let trace = air.generate_trace_rows(num_hashes, &bars, log_blowup);
-                let proof = prove(&config, &air, trace, &[]);
+                let proof = prove(&config, &air, trace, &[]).unwrap();
                 verify(&config, &air, &proof, &[]).expect("verification failed");
             });
         },
@@ -349,7 +349,7 @@ fn bench_prove_goldilocks(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     let trace = air.generate_trace_rows(num_hashes, &bars, log_blowup);
-                    prove(&config, &air, trace, &[])
+                    prove(&config, &air, trace, &[]).unwrap()
                 });
             },
         );
@@ -373,7 +373,7 @@ fn bench_prove_verify_goldilocks(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let trace = air.generate_trace_rows(num_hashes, &bars, log_blowup);
-                let proof = prove(&config, &air, trace, &[]);
+                let proof = prove(&config, &air, trace, &[]).unwrap();
                 verify(&config, &air, &proof, &[]).expect("verification failed");
             });
         },

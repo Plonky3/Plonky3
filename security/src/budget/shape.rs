@@ -48,6 +48,8 @@ pub struct InstanceShape {
     /// with each AIR's own. A single-AIR statement uses its own trace height directly.
     pub log_max_height: u32,
     /// Log2 of the challenge field size, in fixed point.
+    /// Must be in `1..=fixed::from_bits(u32::MAX)`; values outside the supported
+    /// whole-bit range are malformed and report zero security.
     pub field_bits: u64,
     /// Collision resistance of the commitment hash, in whole bits.
     pub collision_resistance: u32,
@@ -58,6 +60,9 @@ impl InstanceShape {
     /// exceed the smaller of the challenge-field size and the commitment hash's collision
     /// resistance.
     pub const fn cap(&self) -> u64 {
+        if self.field_bits == 0 || self.field_bits > crate::fixed::from_bits(u32::MAX) {
+            return 0;
+        }
         let collision = crate::fixed::from_bits(self.collision_resistance);
         if collision < self.field_bits {
             collision
@@ -89,6 +94,8 @@ pub struct AirShape {
     pub num_composed_constraints: u32,
     /// Maximum constraint degree over all AIRs.
     pub max_constraint_degree: u32,
+    /// Exact committed quotient chunk count, including ZK degree padding and doubling.
+    pub num_quotient_chunks: u32,
     /// Maximum number of out-of-domain points referenced per committed column — one per distinct
     /// point the AIR's rotations induce: `2` for an AIR that opens `local` and `next`, `1` for an
     /// AIR whose constraints all read a single row, and higher for a wider rotation set.
@@ -100,7 +107,7 @@ pub struct AirShape {
     /// over its committed openings. The budget's out-of-domain round is charged regardless of this
     /// field; `None` only waives the separate DEEP-composition round.
     pub num_deep_terms: Option<u32>,
-    /// Lookup argument shape. A zero `fractions_per_row` means the protocol has no lookup
-    /// argument, and the round contributes no constraint on security.
-    pub lookup: LookupShape,
+    /// Lookup argument shape, or `None` when the protocol has no lookup round.
+    /// A present shape with zero fractions is invalid and reports zero security.
+    pub lookup: Option<LookupShape>,
 }

@@ -55,10 +55,11 @@ use crate::{
 macro_rules! impl_transcript_field {
     ($name:ty, $repr:ty, $bits:literal) => {
         impl TranscriptField for $name {
-            fn algebra_tag(degree: usize) -> TypeTag {
+            fn algebra_tag(degree: usize, basis: [u8; 32]) -> TypeTag {
                 TypeTag::BinaryTower {
                     bits: $bits,
                     degree,
+                    basis,
                 }
             }
 
@@ -262,14 +263,24 @@ mod tests {
     fn each_level_names_its_own_width() {
         // Two levels must never share an algebra tag, or one could stand in for the other.
         assert_eq!(
-            BinaryField8::algebra_tag(1),
-            TypeTag::BinaryTower { bits: 8, degree: 1 }
+            BinaryField8::algebra_tag(1, [0; 32]),
+            TypeTag::BinaryTower {
+                bits: 8,
+                degree: 1,
+                basis: [0; 32]
+            }
         );
-        assert_ne!(BinaryField8::algebra_tag(1), BinaryField16::algebra_tag(1));
-        assert_ne!(BinaryField32::algebra_tag(1), BinaryField64::algebra_tag(1));
         assert_ne!(
-            BinaryField64::algebra_tag(1),
-            BinaryField128::algebra_tag(1)
+            BinaryField8::algebra_tag(1, [0; 32]),
+            BinaryField16::algebra_tag(1, [0; 32])
+        );
+        assert_ne!(
+            BinaryField32::algebra_tag(1, [0; 32]),
+            BinaryField64::algebra_tag(1, [0; 32])
+        );
+        assert_ne!(
+            BinaryField64::algebra_tag(1, [0; 32]),
+            BinaryField128::algebra_tag(1, [0; 32])
         );
     }
 }

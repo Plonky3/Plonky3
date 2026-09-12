@@ -110,7 +110,7 @@ fn verify_with_period(bad_period: usize) -> Result<(), VerificationError<PcsErro
 
     // Prover side: period 2 column [0, 1], trace column [0, 1, 0, 1, ...].
     let good_air = SinglePeriodicAir { period: 2 };
-    let proof = prove(&config, &good_air, periodic_trace(2, TRACE_LENGTH), &[]);
+    let proof = prove(&config, &good_air, periodic_trace(2, TRACE_LENGTH), &[]).unwrap();
 
     // Verifier side: same shape, but a malformed period the verifier cannot evaluate.
     let bad_air = SinglePeriodicAir { period: bad_period };

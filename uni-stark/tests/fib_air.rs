@@ -290,7 +290,7 @@ fn check_circle_nonlinear_transition(with_hint: bool, extension_constraint: bool
                 })
                 .collect(),
         );
-        let mut proof = prove(&config, &air, trace, &[]);
+        let mut proof = prove(&config, &air, trace, &[]).unwrap();
         assert_eq!(
             proof.opened_values.quotient_chunks.len(),
             (degree + transition_power - 1).next_power_of_two(),
@@ -357,7 +357,7 @@ fn circle_periodic_products_use_full_trace_degree() {
         };
         let trace =
             RowMajorMatrix::new_col((0..16).map(|i| air.column[i % 2].exp_u64(degree)).collect());
-        let proof = prove(&config, &air, trace, &[]);
+        let proof = prove(&config, &air, trace, &[]).unwrap();
         assert_eq!(
             proof.opened_values.quotient_chunks.len(),
             (degree - 1) as usize
@@ -377,7 +377,7 @@ fn circle_invalid_nonlinear_transition_is_rejected() {
         extension_constraint: false,
     };
     let trace = RowMajorMatrix::new_col(vec![CircleVal::TWO; 16]);
-    let proof = prove(&config, &air, trace, &[]);
+    let proof = prove(&config, &air, trace, &[]).unwrap();
     assert!(verify(&config, &air, &proof, &[]).is_err());
 }
 
@@ -416,8 +416,41 @@ fn test_public_value_impl(n: usize, x: u64, log_final_poly_len: usize) {
     let config = make_two_adic_config(log_final_poly_len);
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
 
-    let proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    let proof = prove(&config, &FibonacciAir {}, trace, &pis).unwrap();
     verify(&config, &FibonacciAir {}, &proof, &pis).expect("verification failed");
+}
+
+#[test]
+fn hiding_budget_failure_is_recoverable() {
+    // Four rows fail at commit; sixteen commit successfully but cannot disclose two points.
+    for n in [4, 16] {
+        let config = make_zk_config();
+        let trace = generate_trace_rows::<Val>(0, 1, n);
+        let output = trace.values[2 * n - 1];
+        let result = prove(
+            &config,
+            &FibonacciAir {},
+            trace,
+            &[Val::ZERO, Val::ONE, output],
+        );
+        match result {
+            Err(p3_uni_stark::ProvingError::Pcs {
+                phase,
+                source: p3_fri::HidingFriProverError::HidingBudgetExceeded { mask_height, .. },
+            }) => {
+                assert_eq!(mask_height, n);
+                assert_eq!(
+                    phase,
+                    if n == 4 {
+                        "trace commitment"
+                    } else {
+                        "opening"
+                    }
+                );
+            }
+            _ => panic!("expected a recoverable hiding budget error"),
+        }
+    }
 }
 
 #[test]
@@ -428,7 +461,7 @@ fn test_zk() {
     let trace = generate_trace_rows::<Val>(0, 1, n);
     let config = make_zk_config();
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
-    let proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    let proof = prove(&config, &FibonacciAir {}, trace, &pis).unwrap();
     verify(&config, &FibonacciAir {}, &proof, &pis).expect("verification failed");
 }
 
@@ -449,7 +482,7 @@ fn test_short_public_values_rejected() {
     let config = make_two_adic_config(2);
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
 
-    let proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    let proof = prove(&config, &FibonacciAir {}, trace, &pis).unwrap();
     let short_pis = vec![BabyBear::ZERO, BabyBear::ONE];
     let err = verify(&config, &FibonacciAir {}, &proof, &short_pis)
         .expect_err("verification should reject short public values");
@@ -482,7 +515,7 @@ fn test_degree_bits_too_large_rejected() {
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
 
     // Produce a legitimate proof, then tamper with the degree_bits field.
-    let mut proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    let mut proof = prove(&config, &FibonacciAir {}, trace, &pis).unwrap();
 
     // Mutation: set degree_bits to exactly the bit width of usize, the
     // smallest value that overflows:
@@ -530,7 +563,7 @@ fn test_degree_bits_too_small_for_zk_rejected() {
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(2_178_309)];
 
     // Produce a legitimate ZK proof, then tamper with degree_bits.
-    let mut proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    let mut proof = prove(&config, &FibonacciAir {}, trace, &pis).unwrap();
 
     // Mutation: set degree_bits to 0, below the ZK minimum.
     //
@@ -585,7 +618,7 @@ fn verify_circle_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
 fn generate_two_adic_fixture() -> Result<(), Box<dyn std::error::Error>> {
     // Regen: cargo test -p p3-uni-stark --test fib_air -- --ignored
     let (config, air, pis, trace) = two_adic_compat_case();
-    let proof = prove(&config, &air, trace, &pis);
+    let proof = prove(&config, &air, trace, &pis).unwrap();
     let bytes = postcard::to_allocvec(&proof)?;
     write_fixture(TWO_ADIC_FIXTURE, &bytes)?;
     Ok(())
@@ -596,7 +629,7 @@ fn generate_two_adic_fixture() -> Result<(), Box<dyn std::error::Error>> {
 fn generate_circle_fixture() -> Result<(), Box<dyn std::error::Error>> {
     // Regen: cargo test -p p3-uni-stark --test fib_air -- --ignored
     let (config, air, pis, trace) = circle_compat_case();
-    let proof = prove(&config, &air, trace, &pis);
+    let proof = prove(&config, &air, trace, &pis).unwrap();
     let bytes = postcard::to_allocvec(&proof)?;
     write_fixture(CIRCLE_FIXTURE, &bytes)?;
     Ok(())
@@ -623,5 +656,5 @@ fn test_incorrect_public_value() {
         BabyBear::ONE,
         BabyBear::from_u32(123_123), // incorrect result
     ];
-    prove(&config, &FibonacciAir {}, trace, &pis);
+    prove(&config, &FibonacciAir {}, trace, &pis).unwrap();
 }

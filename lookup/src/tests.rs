@@ -1412,7 +1412,7 @@ fn generate_permutation_exclusive_rejects_non_boolean_flag() {
     // Fixture: row 0 sets flag0 = 2, a non-boolean value.
     //
     //     main row 0: [flag0=2, key0, flag1=0, key1]
-    //                  ^^^^^^^^ neither 0 nor 1 → debug_assert fires
+    //                  ^^^^^^^^ neither 0 nor 1 → assertion fires in every profile
     let lookups = exclusive_two_branch_lookup();
     let main = RowMajorMatrix::new(
         vec![
@@ -1444,7 +1444,7 @@ fn generate_permutation_exclusive_rejects_two_active_flags() {
     // Fixture: row 0 fires both branches at once.
     //
     //     main row 0: [flag0=1, key0, flag1=1, key1]
-    //                  both active → flag_sum = 2 → debug_assert fires
+    //                  both active → flag_sum = 2 → assertion fires in every profile
     let lookups = exclusive_two_branch_lookup();
     let main = RowMajorMatrix::new(
         vec![

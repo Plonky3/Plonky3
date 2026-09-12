@@ -54,8 +54,8 @@
 //! upper-bound the positive terms omitted by the shared proximity-gap approximation.
 //! Grouping checks Combine feasibility before commitment, when opening-point counts
 //! are unknown. The actual pooled width/point counts can still make an opening
-//! infeasible: `Pcs::open` then panics, while `Pcs::verify` returns a configuration
-//! error. Opening never repartitions matrices already committed to a shared domain.
+//! infeasible: `Pcs::open` returns a configuration error before touching the transcript,
+//! and `Pcs::verify` also rejects. Opening never repartitions already committed matrices.
 //!
 //! **Extraction relation**: quotients are tested at degree `< d`, where `d` is their
 //! native matrix height. Correlated agreement therefore reconstructs original
@@ -76,6 +76,7 @@
 //! blowup rather than the tallest one's.
 
 use alloc::borrow::Cow;
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -605,8 +606,8 @@ where
     /// commitment independently agrees on it.
     ///
     /// This is a necessary feasibility check. Widths and opening-point counts can
-    /// still make the *joint* budget infeasible. `open` then panics (the PCS trait
-    /// has no fallible opening API), while `verify` returns a configuration error.
+    /// still make the *joint* budget infeasible. Both `open` and `verify` return
+    /// configuration errors; opening checks the budget before touching the transcript.
     /// Opening never changes an already committed layout to make its budget fit.
     ///
     /// A width of `0` runs no `Combine` at all, so this always terminates: in the worst case
@@ -802,7 +803,7 @@ where
             Challenge,
         >],
         challenger: &mut Challenger,
-    ) -> PreparedOpen<Val, Challenge, StirMmcs, Challenger> {
+    ) -> Result<PreparedOpen<Val, Challenge, StirMmcs, Challenger>, StirConfigError> {
         // Step 1: Compute evaluations at opening points using Lagrange interpolation.
         let mats_and_points: Vec<_> = commitment_data_with_opening_points
             .iter()
@@ -847,6 +848,35 @@ where
                     );
                 }
             }
+        }
+
+        // Price every actual class before absorbing claims, sampling, or grinding.
+        let mut counts = BTreeMap::<(usize, usize), usize>::new();
+        for ((mats, points), layout) in mats_and_points.iter().zip(&matrix_layouts) {
+            for ((mat, points), &(native, shared)) in mats.iter().zip(points.iter()).zip(layout) {
+                let count = counts.entry((shared, native)).or_default();
+                *count = mat
+                    .width()
+                    .checked_mul(points.len())
+                    .and_then(|n| count.checked_add(n))
+                    .ok_or(StirConfigError::PcsBatchMultiplicityOverflow)?;
+            }
+        }
+        let mut checked_configs = BTreeMap::new();
+        for &(shared, _) in counts.keys() {
+            if checked_configs.contains_key(&shared) {
+                continue;
+            }
+            let classes: Vec<_> = counts
+                .iter()
+                .rev()
+                .filter(|((h, _), _)| *h == shared)
+                .map(|((_, native), count)| (*native, *count))
+                .collect();
+            checked_configs.insert(
+                shared,
+                self.get_or_try_compute_pcs_config(self.log_stir_degree(shared), &classes)?,
+            );
         }
 
         let (global_max_height, global_max_width) = mats_and_points
@@ -983,7 +1013,7 @@ where
                     let alpha_pow_offset = alpha.exp_u64(*height_count as u64);
                     *height_count = height_count
                         .checked_add(ys.len())
-                        .expect("PCS opening-batching multiplicity overflow");
+                        .ok_or(StirConfigError::PcsBatchMultiplicityOverflow)?;
 
                     let full_height = mat.height();
                     let inv_denom = &inv_denoms.get(point).unwrap()[..full_height];
@@ -1015,38 +1045,11 @@ where
             heights
         };
 
-        // Native-height classes present in each bucket, descending, computed once and
-        // shared by the `StirConfig` construction below (which needs the class count and
-        // `ell` to size round 0's `eta` for `Combine`) and `combined_bucket_codeword`
-        // (which needs the same classes to actually run `Combine`).
-        let bucket_native_heights: Vec<Vec<usize>> = bucket_log_heights
-            .iter()
-            .map(|&log_h| {
-                let mut heights: Vec<usize> = reduced_openings
-                    .keys()
-                    .filter(|&&(h, _)| h == log_h)
-                    .map(|&(_, log_d)| log_d)
-                    .collect();
-                heights.sort_unstable();
-                heights.dedup();
-                heights.reverse();
-                heights
-            })
-            .collect();
-
+        // Reuse the schedules validated before any transcript interaction.
         let stir_configs: Vec<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>> =
             bucket_log_heights
                 .iter()
-                .zip(&bucket_native_heights)
-                .map(|(&log_h, native_heights)| {
-                    let log_stir_degree = self.log_stir_degree(log_h);
-                    let classes: Vec<_> = native_heights
-                        .iter()
-                        .map(|&height| (height, num_reduced[&(log_h, height)]))
-                        .collect();
-                    self.get_or_try_compute_pcs_config(log_stir_degree, &classes)
-                        .unwrap_or_else(|e| panic!("{e}"))
-                })
+                .map(|log_h| checked_configs[log_h].clone())
                 .collect();
 
         let initial_codewords: Vec<Vec<Challenge>> = bucket_log_heights
@@ -1060,13 +1063,13 @@ where
             })
             .collect();
 
-        PreparedOpen {
+        Ok(PreparedOpen {
             batch_pow_witness,
             opened_values: all_opened_values,
             bucket_log_heights,
             stir_configs,
             initial_codewords,
-        }
+        })
     }
 
     /// Run STIR on every bucket in lockstep, then open the input trees at one lane per
@@ -1176,6 +1179,7 @@ where
     /// See `StirPcsProof`.
     type Proof = StirPcsProof<Val, Challenge, InputMmcs, StirMmcs>;
     type Error = StirError<StirMmcs::Error, InputMmcs::Error>;
+    type ProverError = StirConfigError;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
@@ -1185,7 +1189,7 @@ where
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         let min_height = 1usize << self.stir.log_starting_folding_factor;
         let inputs: Vec<(Self::Domain, RowMajorMatrix<Val>)> = evaluations.into_iter().collect();
         assert!(
@@ -1227,7 +1231,7 @@ where
                     .to_row_major_matrix()
             })
             .collect();
-        self.commit_groups(&plan, grouped, &log_native_heights)
+        Ok(self.commit_groups(&plan, grouped, &log_native_heights))
     }
 
     #[instrument(name = "STIR PCS open", skip_all)]
@@ -1235,8 +1239,8 @@ where
         &self,
         commitment_data_with_opening_points: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
-        let prepared = self.prepare_open(&commitment_data_with_opening_points, challenger);
+    ) -> Result<(OpenedValues<Challenge>, Self::Proof), Self::ProverError> {
+        let prepared = self.prepare_open(&commitment_data_with_opening_points, challenger)?;
         let prover_data: Vec<&Self::ProverData> = commitment_data_with_opening_points
             .iter()
             .map(
@@ -1245,7 +1249,7 @@ where
                  }| *data,
             )
             .collect();
-        self.prove_buckets(&prover_data, prepared, challenger)
+        Ok(self.prove_buckets(&prover_data, prepared, challenger))
     }
 
     #[instrument(name = "STIR PCS verify", skip_all)]
@@ -1978,9 +1982,9 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         _num_chunks: usize,
-    ) -> Vec<RowMajorMatrix<Val>> {
+    ) -> Result<Vec<RowMajorMatrix<Val>>, Self::ProverError> {
         let min_height = 1usize << self.stir.log_starting_folding_factor;
-        evaluations
+        Ok(evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
@@ -1997,10 +2001,13 @@ where
                     .bit_reverse_rows()
                     .to_row_major_matrix()
             })
-            .collect()
+            .collect())
     }
 
-    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+    fn commit_ldes(
+        &self,
+        ldes: Vec<RowMajorMatrix<Val>>,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         let min_lde_height =
             1usize << (self.stir.log_starting_folding_factor + self.stir.log_blowup);
         assert!(
@@ -2060,7 +2067,7 @@ where
                 }
             })
             .collect();
-        self.commit_groups(&plan, grouped, &log_native_heights)
+        Ok(self.commit_groups(&plan, grouped, &log_native_heights))
     }
 }
 
@@ -2564,17 +2571,19 @@ mod tests {
                     RowMajorMatrix::<TestVal>::rand(&mut rng, domain.size(), 3),
                 )
             });
-            let (commitment, data) = pcs.commit(matrices);
+            let (commitment, data) = pcs.commit(matrices).unwrap();
             base.observe(commitment.clone());
             let point: EF = base.sample_algebra_element();
             let mut prover = base.clone();
-            let (values, proof) = pcs.open(
-                vec![OpeningRequest {
-                    prover_data: &data,
-                    points: vec![vec![point]; 2],
-                }],
-                &mut prover,
-            );
+            let (values, proof) = pcs
+                .open(
+                    vec![OpeningRequest {
+                        prover_data: &data,
+                        points: vec![vec![point]; 2],
+                    }],
+                    &mut prover,
+                )
+                .unwrap();
             // Replay just the claims and batching site independently of `prepare_open`.
             // Moving the prover's grind before a claim or after alpha breaks this check.
             let mut batch_replay = base.clone();
@@ -2831,8 +2840,12 @@ mod tests {
         let pcs = test_pcs_with(0, SecurityAssumption::CapacityBound, 32);
         let mut rng = SmallRng::seed_from_u64(6);
         let domain = pcs.natural_domain_for_degree(64);
-        let (a, ad) = pcs.commit([(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 64, 3))]);
-        let (b, bd) = pcs.commit([(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 64, 5))]);
+        let (a, ad) = pcs
+            .commit([(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 64, 3))])
+            .unwrap();
+        let (b, bd) = pcs
+            .commit([(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 64, 5))])
+            .unwrap();
         let mut base = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
         base.observe(a.clone());
         base.observe(b.clone());
@@ -2849,7 +2862,7 @@ mod tests {
             },
         ];
         let mut prover = base.clone();
-        let prepared = pcs.prepare_open(&requests, &mut prover);
+        let prepared = pcs.prepare_open(&requests, &mut prover).unwrap();
         // 3 columns at two points plus 5 columns at one point = 11 powers.
         let expected = pcs.get_or_try_compute_pcs_config(6, &[(6, 11)]).unwrap();
         assert!(Arc::ptr_eq(&prepared.stir_configs[0], &expected));
@@ -2887,7 +2900,8 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(5);
         let domains = [6, 4].map(|h| pcs.natural_domain_for_degree(1 << h));
         let (commitment, _) = pcs
-            .commit(domains.map(|d| (d, RowMajorMatrix::<TestVal>::rand(&mut rng, d.size(), 2))));
+            .commit(domains.map(|d| (d, RowMajorMatrix::<TestVal>::rand(&mut rng, d.size(), 2))))
+            .unwrap();
         let bad = EF::from(TestVal::GENERATOR * TestVal::two_adic_generator(7));
         let mut challenger = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
         let claims = vec![
@@ -3060,8 +3074,9 @@ mod tests {
         pcs.stir.max_pow_bits = 20;
         let mut rng = SmallRng::seed_from_u64(19);
         let domain = pcs.natural_domain_for_degree(64);
-        let (commitment, _) =
-            pcs.commit([(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 64, 1))]);
+        let (commitment, _) = pcs
+            .commit([(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 64, 1))])
+            .unwrap();
         let proof = StirPcsProof {
             batch_pow_witness: None,
             buckets: vec![(
@@ -3105,20 +3120,22 @@ mod tests {
         let mut sizes = Vec::new();
         let mut queries = Vec::new();
         for pcs in [&original, &grinded] {
-            let (commitment, data) = pcs.commit(matrices.clone());
+            let (commitment, data) = pcs.commit(matrices.clone()).unwrap();
             assert_eq!(commitment.len(), 1, "compare the same grouped layout");
             let mut base =
                 TestChallenger::new(TestPerm::new_from_rng_128(&mut SmallRng::seed_from_u64(30)));
             base.observe(commitment.clone());
             let z: EF = base.sample_algebra_element();
             let mut prover = base.clone();
-            let prepared = pcs.prepare_open(
-                &[OpeningRequest {
-                    prover_data: &data,
-                    points: vec![vec![z]; 3],
-                }],
-                &mut prover,
-            );
+            let prepared = pcs
+                .prepare_open(
+                    &[OpeningRequest {
+                        prover_data: &data,
+                        points: vec![vec![z]; 3],
+                    }],
+                    &mut prover,
+                )
+                .unwrap();
             queries.push(prepared.stir_configs[0].round_configs[0].num_queries);
             let (values, proof) = pcs.prove_buckets(&[&data], prepared, &mut prover);
             let claims = vec![
@@ -3152,7 +3169,8 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(5);
         let domains = [6, 4].map(|h| pcs.natural_domain_for_degree(1 << h));
         let (_, data) = pcs
-            .commit(domains.map(|d| (d, RowMajorMatrix::<TestVal>::rand(&mut rng, d.size(), 2))));
+            .commit(domains.map(|d| (d, RowMajorMatrix::<TestVal>::rand(&mut rng, d.size(), 2))))
+            .unwrap();
         // In GEN*H_128, but outside the short matrix's GEN*H_16 domain.
         let bad = EF::from(TestVal::GENERATOR * TestVal::two_adic_generator(7));
         assert_ne!(
@@ -3166,7 +3184,8 @@ mod tests {
                 points: vec![vec![EF::ZERO], vec![bad]],
             }],
             &mut challenger,
-        );
+        )
+        .unwrap();
     }
 
     proptest! {
@@ -3351,7 +3370,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "PCS joint alpha/Combine bound")]
     fn pcs_rejects_infeasible_quotient_batching() {
         let mut pcs = test_pcs_with(0, SecurityAssumption::CapacityBound, 100);
         pcs.stir.max_pow_bits = 16;
@@ -3362,19 +3380,26 @@ mod tests {
         let (commitment, data) = <TestPcs as Pcs<EF, TestChallenger>>::commit(
             &pcs,
             vec![(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 256, 1024))],
-        );
+        )
+        .unwrap();
         challenger.observe(commitment);
         let points = vec![
             challenger.sample_algebra_element(),
             challenger.sample_algebra_element(),
         ];
-        let _ = pcs.prepare_open(
-            &[OpeningRequest {
+        let before: EF = challenger.clone().sample_algebra_element();
+        let result = pcs.open(
+            vec![OpeningRequest {
                 prover_data: &data,
                 points: vec![points],
             }],
             &mut challenger,
         );
+        assert!(matches!(
+            result,
+            Err(StirConfigError::EtaInfeasibleForTarget { .. })
+        ));
+        assert_eq!(challenger.sample_algebra_element::<EF>(), before);
     }
 
     #[test]
@@ -3387,7 +3412,8 @@ mod tests {
         let (commitment, data) = <TestPcs as Pcs<EF, TestChallenger>>::commit(
             &pcs,
             vec![(domain, RowMajorMatrix::<TestVal>::rand(&mut rng, 256, 32))],
-        );
+        )
+        .unwrap();
         challenger.observe(commitment);
         let points = [
             challenger.sample_algebra_element(),
@@ -3395,13 +3421,15 @@ mod tests {
         ];
         // Warming the same-degree cache with one point must not underbudget two points.
         for num_points in [1, 2] {
-            let prepared = pcs.prepare_open(
-                &[OpeningRequest {
-                    prover_data: &data,
-                    points: vec![points[..num_points].to_vec()],
-                }],
-                &mut challenger.clone(),
-            );
+            let prepared = pcs
+                .prepare_open(
+                    &[OpeningRequest {
+                        prover_data: &data,
+                        points: vec![points[..num_points].to_vec()],
+                    }],
+                    &mut challenger.clone(),
+                )
+                .unwrap();
             let config = &prepared.stir_configs[0];
             assert_eq!(config.quotient_batches, vec![(8, 32 * num_points)]);
             // Capacity bound, independently evaluated at the config's initial eta.
@@ -3551,7 +3579,8 @@ mod tests {
                         )
                     })
                     .collect();
-                let (commit, data) = <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, inputs);
+                let (commit, data) =
+                    <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, inputs).unwrap();
                 base.observe(commit.clone());
                 let zeta: EF = base.sample_algebra_element();
                 let (values, proof) = <TestPcs as Pcs<EF, TestChallenger>>::open(
@@ -3561,7 +3590,8 @@ mod tests {
                         points: vec![vec![zeta]; 3],
                     }],
                     &mut base.clone(),
-                );
+                )
+                .unwrap();
                 let claims = vec![CommitmentOpening {
                     commitment: commit,
                     matrices: domains
@@ -3613,7 +3643,8 @@ mod tests {
                         )
                     })
                     .collect();
-                let (commit, data) = <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, inputs);
+                let (commit, data) =
+                    <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, inputs).unwrap();
                 base.observe(commit.clone());
                 let zeta: EF = base.sample_algebra_element();
                 let mut full_p = base.clone();
@@ -3624,7 +3655,8 @@ mod tests {
                         points: vec![vec![zeta]; 3],
                     }],
                     &mut full_p,
-                );
+                )
+                .unwrap();
                 // Clone only after opening has warmed both ordinary and Combine schedules.
                 let compact = pcs.clone().with_options(StirOptions {
                     compact_answers: true,
@@ -3638,7 +3670,8 @@ mod tests {
                         points: vec![vec![zeta]; 3],
                     }],
                     &mut compact_p,
-                );
+                )
+                .unwrap();
                 assert_eq!(values, compact_values);
                 let next: EF = full_p.sample_algebra_element();
                 assert_eq!(next, compact_p.sample_algebra_element::<EF>());
@@ -3709,18 +3742,20 @@ mod tests {
             <TestPcs as Pcs<EF, TestChallenger>>::natural_domain_for_degree(&pcs, 1 << log_h);
         let mat = RowMajorMatrix::<TestVal>::rand(&mut rng, 1 << log_h, 4);
         let (commit, data) =
-            <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, vec![(domain, mat)]);
+            <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, vec![(domain, mat)]).unwrap();
         challenger.observe(commit.clone());
         let zeta: EF = challenger.sample_algebra_element();
 
         let mut p_ch = challenger.clone();
-        let mut prepared = pcs.prepare_open(
-            &[OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut p_ch,
-        );
+        let mut prepared = pcs
+            .prepare_open(
+                &[OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut p_ch,
+            )
+            .unwrap();
         assert_eq!(prepared.initial_codewords.len(), 1);
 
         // A random polynomial of the same degree bound, evaluated on the same coset in the
@@ -3773,18 +3808,20 @@ mod tests {
             <TestPcs as Pcs<EF, TestChallenger>>::natural_domain_for_degree(&pcs, 1 << log_h);
         let mat = RowMajorMatrix::<TestVal>::rand(&mut rng, 1 << log_h, 4);
         let (commit, data) =
-            <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, vec![(domain, mat)]);
+            <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, vec![(domain, mat)]).unwrap();
         challenger.observe(commit.clone());
         let zeta: EF = challenger.sample_algebra_element();
 
         let mut p_ch = challenger.clone();
-        let mut prepared = pcs.prepare_open(
-            &[OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut p_ch,
-        );
+        let mut prepared = pcs
+            .prepare_open(
+                &[OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut p_ch,
+            )
+            .unwrap();
         assert_eq!(
             prepared.stir_configs[0].num_rounds(),
             0,
@@ -3841,19 +3878,21 @@ mod tests {
             <TestPcs as Pcs<EF, TestChallenger>>::natural_domain_for_degree(&pcs, 1 << log_h);
         let mat = RowMajorMatrix::<TestVal>::rand(&mut rng, 1 << log_h, 2);
         let (commit, data) =
-            <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, vec![(domain, mat)]);
+            <TestPcs as Pcs<EF, TestChallenger>>::commit(&pcs, vec![(domain, mat)]).unwrap();
         base.observe(commit);
         let zeta: EF = base.sample_algebra_element();
 
         // The whole prover side, lanes included.
         let mut ch_full = base.clone();
-        let prepared = pcs.prepare_open(
-            &[OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut ch_full,
-        );
+        let prepared = pcs
+            .prepare_open(
+                &[OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut ch_full,
+            )
+            .unwrap();
         let log_arity0 = prepared.stir_configs[0].log_starting_folding_factor;
         let final_queries = prepared.stir_configs[0].final_queries;
         let _ = pcs.prove_buckets(&[&data], prepared, &mut ch_full);
@@ -3861,13 +3900,15 @@ mod tests {
         // The same transcript, stopped right after STIR so the lane draws can be replayed by
         // hand at both counts.
         let mut ch_draws = base;
-        let prepared = pcs.prepare_open(
-            &[OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut ch_draws,
-        );
+        let prepared = pcs
+            .prepare_open(
+                &[OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut ch_draws,
+            )
+            .unwrap();
         let PreparedOpen {
             stir_configs,
             initial_codewords,

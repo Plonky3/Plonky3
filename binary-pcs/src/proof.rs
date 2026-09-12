@@ -48,7 +48,7 @@ pub struct BinaryPcsProof<MT: Mmcs<BinaryField128>> {
     pub base_opened_values: Vec<Vec<BinaryField128>>,
     /// Multiproof for the base commitment's queried rows.
     pub base_multi_proof: MT::MultiProof,
-    /// The final folded codeword, sent in full.
+    /// The final folded codeword, sent in full and absorbed before query grinding/sampling.
     pub final_codeword: Poly<BinaryField128>,
     /// Witness for the single grind before the query phase.
     pub pow_witness: BinaryField128,

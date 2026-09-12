@@ -37,6 +37,9 @@ where
     /// Verification failure type.
     type Error: Debug;
 
+    /// Configuration or budget failure during commitment or opening.
+    type ProverError: Debug;
+
     /// Committed witness.
     type Witness;
 
@@ -76,11 +79,14 @@ where
     ///
     /// - A succinct commitment (e.g. a Merkle root).
     /// - Opaque prover data consumed by `open`.
+    ///
+    /// Configuration and budget rejection must not mutate the challenger or consume
+    /// private randomness. A successful call still binds the commitment exactly once.
     fn commit(
         &self,
         witness: Self::Witness,
         challenger: &mut Challenger,
-    ) -> (Self::Commitment, Self::ProverData);
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError>;
 
     /// Produce an opening proof for the supplied opening protocol.
     ///
@@ -92,12 +98,15 @@ where
     ///
     /// - The opening proof, including any implementation-specific claimed
     ///   evaluations needed by `verify`.
+    ///
+    /// Configuration and budget rejection leaves the challenger and private randomness
+    /// unchanged; it does not undo the preceding successful commitment.
     fn open(
         &self,
         prover_data: Self::ProverData,
         protocol: Self::OpeningProtocol,
         challenger: &mut Challenger,
-    ) -> Self::Proof;
+    ) -> Result<Self::Proof, Self::ProverError>;
 
     /// Verify an opening proof against a public commitment and opening protocol.
     ///

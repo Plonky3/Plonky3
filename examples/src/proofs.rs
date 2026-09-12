@@ -3,15 +3,17 @@ use core::fmt::Debug;
 use p3_air::Air;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_challenger::{DuplexChallenger, SerializingChallenger32};
-use p3_circle::CirclePcs;
+use p3_circle::{CircleDomain, CirclePcs};
 use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::extension::ComplexExtendable;
 use p3_field::{
     ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField, UniformSamplingField,
 };
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
+use p3_matrix::Matrix;
 use p3_mersenne_31::{Mersenne31, QM31};
 use p3_stir::{SecurityAssumption, StirParameters, TwoAdicStirPcs};
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
@@ -77,29 +79,43 @@ fn example_circle_parameters<EF: Field, M>(mmcs: M) -> FriParameters<M> {
     })
 }
 
+/// Distinguishes a rejected proving budget from a rejected proof.
+#[derive(Debug)]
+pub enum ProofRunError<P: Debug, V: Debug> {
+    /// Proof generation rejected its configuration or opening budget.
+    Prove(P),
+    /// The generated proof failed verification.
+    Verify(V),
+}
+
+type ProofRunResult<SC> = Result<
+    (),
+    ProofRunError<
+        p3_uni_stark::ProvingError<p3_uni_stark::PcsProverError<SC>>,
+        VerificationError<PcsError<SC>>,
+    >,
+>;
+
 /// Result type for Keccak-based two-adic proofs
-type KeccakTwoAdicResult<F, EF, DFT> =
-    Result<(), VerificationError<PcsError<KeccakStarkConfig<F, EF, DFT>>>>;
+type KeccakTwoAdicResult<F, EF, DFT> = ProofRunResult<KeccakStarkConfig<F, EF, DFT>>;
 
 /// Result type for Poseidon2-based two-adic proofs
 type Poseidon2TwoAdicResult<F, EF, DFT, Perm16, Perm24> =
-    Result<(), VerificationError<PcsError<Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>>>;
+    ProofRunResult<Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>;
 
 /// Result type for Keccak-based, STIR-backed two-adic proofs
-type StirKeccakTwoAdicResult<F, EF, DFT> =
-    Result<(), VerificationError<PcsError<StirKeccakStarkConfig<F, EF, DFT>>>>;
+type StirKeccakTwoAdicResult<F, EF, DFT> = ProofRunResult<StirKeccakStarkConfig<F, EF, DFT>>;
 
 /// Result type for Poseidon2-based, STIR-backed two-adic proofs
 type StirPoseidon2TwoAdicResult<F, EF, DFT, Perm16, Perm24> =
-    Result<(), VerificationError<PcsError<StirPoseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>>>;
+    ProofRunResult<StirPoseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>;
 
 /// Result type for Keccak-based circle proofs with Mersenne31
-type KeccakCircleResult =
-    Result<(), VerificationError<PcsError<KeccakCircleStarkConfig<Mersenne31, QM31>>>>;
+type KeccakCircleResult = ProofRunResult<KeccakCircleStarkConfig<Mersenne31, QM31>>;
 
 /// Result type for Poseidon2-based circle proofs
 type Poseidon2CircleResult<F, EF, Perm16, Perm24> =
-    Result<(), VerificationError<PcsError<Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>>>;
+    ProofRunResult<Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>;
 
 /// Produce a MerkleTreeMmcs which uses the KeccakF permutation.
 const fn get_keccak_mmcs<F: Field>(cap_height: usize) -> KeccakMerkleMmcs<F> {
@@ -159,10 +175,12 @@ where
     let fri_params =
         example_fri_parameters::<EF, _>(FriParameters::new_benchmark_high_arity(challenge_mmcs));
 
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
+        TwoAdicMultiplicativeCoset::new(F::ONE, trace.height().ilog2() as usize).unwrap(),
         EF::bits(),
         128,
         2,
@@ -170,21 +188,19 @@ where
         fri_params.grinding_sites(),
     );
 
-    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
-
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_params);
     let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
     let config = KeccakStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_parameter_security(&proof, &security_params);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree.
@@ -217,10 +233,12 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params =
         example_fri_parameters::<EF, _>(FriParameters::new_benchmark_high_arity(challenge_mmcs));
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
+        TwoAdicMultiplicativeCoset::new(F::ONE, trace.height().ilog2() as usize).unwrap(),
         EF::bits(),
         128,
         2,
@@ -228,21 +246,19 @@ where
         fri_params.grinding_sites(),
     );
 
-    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
-
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_params);
     let challenger = DuplexChallenger::new(perm24);
 
     let config = Poseidon2StarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_parameter_security(&proof, &security_params);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree, with
@@ -287,14 +303,14 @@ where
 
     let config = StirKeccakStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_stir_security_level(security_level, max_pow_bits);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree, with
@@ -343,14 +359,14 @@ where
 
     let config = StirPoseidon2StarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_stir_security_level(security_level, max_pow_bits);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -374,10 +390,12 @@ pub fn prove_m31_keccak<
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = example_circle_parameters::<EF, _>(challenge_mmcs);
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
+        CircleDomain::standard(trace.height().ilog2() as usize),
         EF::bits(),
         128,
         2,
@@ -385,21 +403,19 @@ pub fn prove_m31_keccak<
         fri_params.grinding_sites(),
     );
 
-    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
-
     let pcs = CirclePcs::new(val_mmcs, fri_params);
     let challenger = SerializingChallenger32::from_hasher(vec![], Keccak256Hash {});
 
     let config = KeccakCircleStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_parameter_security(&proof, &security_params);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -430,10 +446,12 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = example_circle_parameters::<EF, _>(challenge_mmcs);
+    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
     let security_params = StarkSecurityParams::from_air::<F, EF, _>(
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
+        CircleDomain::standard(trace.height().ilog2() as usize),
         EF::bits(),
         128,
         2,
@@ -441,21 +459,19 @@ where
         fri_params.grinding_sites(),
     );
 
-    let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
-
     let pcs = CirclePcs::new(val_mmcs, fri_params);
     let challenger = DuplexChallenger::new(perm24);
 
     let config = Poseidon2CircleStarkConfig::new(pcs, challenger);
 
-    let proof = prove(&config, proof_goal, trace, &[]);
+    let proof = prove(&config, proof_goal, trace, &[]).map_err(ProofRunError::Prove)?;
     report_proof_size(&proof);
 
     let result = verify(&config, proof_goal, &proof, &[]);
     if result.is_ok() {
         report_parameter_security(&proof, &security_params);
     }
-    result
+    result.map_err(ProofRunError::Verify)
 }
 
 /// Report the result of the proof.
@@ -574,6 +590,7 @@ mod tests {
             params.security_regime(),
             &air,
             AirLayout::from_air::<Mersenne31>(&air),
+            CircleDomain::standard(18),
             QM31::bits(),
             128,
             2,

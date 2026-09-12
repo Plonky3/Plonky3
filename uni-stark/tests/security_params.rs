@@ -1,9 +1,10 @@
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
-use p3_circle::CirclePcs;
+use p3_circle::{CircleDomain, CirclePcs};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
+use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
@@ -81,6 +82,7 @@ fn opening_count_matches_proof_with_overestimated_degree_hint() {
         fri.security_regime(),
         &air,
         AirLayout::from_air::<Val>(&air),
+        TwoAdicMultiplicativeCoset::new(Val::ONE, 4).unwrap(),
         124,
         128,
         1,
@@ -89,7 +91,7 @@ fn opening_count_matches_proof_with_overestimated_degree_hint() {
     );
     let pcs = TwoAdicFriPcs::new(Dft::default(), mmcs, fri);
     let config = StarkConfig::<_, Challenge, _>::new(pcs, Challenger::new(perm));
-    let proof = prove(&config, &air, trace(), &[]);
+    let proof = prove(&config, &air, trace(), &[]).unwrap();
     verify(&config, &air, &proof, &[]).unwrap();
 
     // The degree-five hint commits four chunks, each four base-field columns wide.
@@ -113,6 +115,7 @@ fn opening_count_matches_hiding_proof() {
         fri.security_regime(),
         &air,
         AirLayout::from_air::<Val>(&air),
+        TwoAdicMultiplicativeCoset::new(Val::ONE, 4).unwrap(),
         124,
         128,
         1,
@@ -121,7 +124,7 @@ fn opening_count_matches_hiding_proof() {
     );
     let pcs = HidingFriPcs::new(Dft::default(), mmcs, fri, 4, StdRng::seed_from_u64(43));
     let config = StarkConfig::<_, Challenge, _>::new(pcs, Challenger::new(perm));
-    let proof = prove(&config, &air, trace(), &[]);
+    let proof = prove(&config, &air, trace(), &[]).unwrap();
     verify(&config, &air, &proof, &[]).unwrap();
 
     let public = proof.opened_values.trace_local.len()
@@ -161,6 +164,7 @@ fn opening_count_matches_circle_batching_degree() {
         fri.security_regime(),
         &air,
         AirLayout::from_air::<F>(&air),
+        CircleDomain::standard(4),
         124,
         128,
         1,
@@ -170,7 +174,7 @@ fn opening_count_matches_circle_batching_degree() {
     let pcs = CirclePcs::<F, _, _>::new(mmcs, fri);
     let config = StarkConfig::<_, QM31, _>::new(pcs, DuplexChallenger::<F, _, 16, 8>::new(perm));
     let trace = RowMajorMatrix::new(vec![F::ONE; 32], 2);
-    let proof = prove(&config, &air, trace, &[]);
+    let proof = prove(&config, &air, trace, &[]).unwrap();
     verify(&config, &air, &proof, &[]).unwrap();
 
     let columns = proof.opened_values.trace_local.len()
@@ -183,4 +187,64 @@ fn opening_count_matches_circle_batching_degree() {
     assert_eq!(columns, 6);
     // Circle's DEEP quotient consumes two powers per column and opening point.
     assert_eq!(params.num_batched_functions, 2 * columns);
+}
+
+#[test]
+fn circle_transition_cubic_security_counts_all_committed_quotient_chunks() {
+    struct TransitionCubicAir;
+    impl BaseAir<Mersenne31> for TransitionCubicAir {
+        fn width(&self) -> usize {
+            1
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            vec![]
+        }
+    }
+    impl<AB: AirBuilder<F = Mersenne31>> Air<AB> for TransitionCubicAir {
+        fn eval(&self, builder: &mut AB) {
+            let x: AB::Expr = builder.main().current_slice()[0].into();
+            builder
+                .when_transition()
+                .assert_zero(x.clone() * x.clone() * x);
+        }
+    }
+    type F = Mersenne31;
+    type Perm = Poseidon2Mersenne31<16>;
+    type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type Mmcs = MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, Hash, Compress, 2, 8>;
+    let mut rng = StdRng::seed_from_u64(45);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = Mmcs::new(Hash::new(perm.clone()), Compress::new(perm.clone()), 0);
+    let mut fri = FriParameters::new_testing(ExtensionMmcs::<F, QM31, _>::new(mmcs.clone()), 0);
+    fri.log_blowup = 2;
+    let air = TransitionCubicAir;
+    let params = StarkSecurityParams::from_air::<F, QM31, _>(
+        fri.security_regime(),
+        &air,
+        AirLayout::from_air::<F>(&air),
+        CircleDomain::standard(4),
+        124,
+        128,
+        1,
+        OpeningShape::Circle,
+        fri.grinding_sites(),
+    );
+    let pcs = CirclePcs::<F, _, _>::new(mmcs, fri);
+    let config = StarkConfig::<_, QM31, _>::new(pcs, DuplexChallenger::<F, _, 16, 8>::new(perm));
+    let proof = prove(
+        &config,
+        &air,
+        RowMajorMatrix::new(vec![F::ZERO; 16], 1),
+        &[],
+    )
+    .unwrap();
+    verify(&config, &air, &proof, &[]).unwrap();
+    assert_eq!(proof.opened_values.quotient_chunks.len(), 4);
+    assert_eq!(
+        params.num_quotient_chunks,
+        proof.opened_values.quotient_chunks.len()
+    );
+    assert_eq!(params.air_max_constraint_degree, 4);
+    assert_eq!(params.num_batched_functions, 2 * (1 + 4 * 4));
 }

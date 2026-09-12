@@ -54,7 +54,9 @@ const ALPHA: &str = "alpha";
 /// # Arguments
 ///
 /// - `bits`: grinding difficulty guarding the challenge, or zero to omit grinding.
-fn separator<F: PrimeField64, EF: ExtensionField<F>>(bits: usize) -> DomainSeparator<FieldUnit<F>> {
+pub fn batch_domain_separator<F: PrimeField64, EF: ExtensionField<F>>(
+    bits: usize,
+) -> DomainSeparator<FieldUnit<F>> {
     // The challenge is the only step every site plays, and grinding may precede it.
     let mut steps = Vec::with_capacity(2);
 
@@ -112,7 +114,7 @@ where
     // Seeding is unconditional.
     //
     // The challenge is bound to this phase at every difficulty.
-    let mut state = ProverState::new(challenger, &separator::<F, EF>(bits));
+    let mut state = ProverState::new(challenger, &batch_domain_separator::<F, EF>(bits));
 
     // A zero difficulty describes no grinding step, so there is no witness to search for.
     let witness = (bits > 0).then(|| state.observe_pow(BATCH_POW, bits));
@@ -169,7 +171,7 @@ where
     }
 
     // The verifier seeds from the same difficulty, so both sides describe one phase.
-    let mut state = VerifierState::new(challenger, &separator::<F, EF>(bits), &[]);
+    let mut state = VerifierState::new(challenger, &batch_domain_separator::<F, EF>(bits), &[]);
 
     // Only a described grinding step is replayed, matching the prover's own branch.
     if let Some(witness) = witness {
@@ -293,7 +295,7 @@ mod tests {
         //     20  ->  [ pow(20), challenge ]
         let seeds: Vec<_> = [0, 1, 8, 20]
             .into_iter()
-            .map(|bits| (bits, seed_digest(&separator::<F, EF>(bits))))
+            .map(|bits| (bits, seed_digest(&batch_domain_separator::<F, EF>(bits))))
             .collect();
 
         assert_seeds_pairwise_distinct(&seeds);
@@ -351,7 +353,7 @@ mod tests {
         let mut base = challenger();
         base.observe(F::from_u64(123));
         let mut seeded = base.clone();
-        separator::<F, EF>(8).seed(&mut seeded);
+        batch_domain_separator::<F, EF>(8).seed(&mut seeded);
 
         // Mutation: search for a witness clearing one bit but fewer than eight.
         //
@@ -406,10 +408,11 @@ mod tests {
         // Sweep: zero and two positive difficulties, so both sides of the
         // elided-at-zero convention are exercised.
         for bits in [0, 1, 10] {
-            let recorded: Vec<_> = pow_difficulties(separator::<F, EF>(bits).pattern())
-                .into_iter()
-                .map(|(label, described)| RecordedGrind::new(protocol(), label, described))
-                .collect();
+            let recorded: Vec<_> =
+                pow_difficulties(batch_domain_separator::<F, EF>(bits).pattern())
+                    .into_iter()
+                    .map(|(label, described)| RecordedGrind::new(protocol(), label, described))
+                    .collect();
 
             // A zero difficulty describes no step, so nothing is recorded to credit.
             assert_eq!(recorded.len(), usize::from(bits > 0));

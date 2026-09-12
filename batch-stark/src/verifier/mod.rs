@@ -36,15 +36,16 @@ use crate::transcript::{BatchShape, BatchVerifierTranscript};
 pub type OpeningArgumentWithQuotientDomains<SC> = (
     Vec<CommitmentWithOpeningPoints<Challenge<SC>, Commitment<SC>, Domain<SC>>>,
     Vec<Vec<Domain<SC>>>,
+    Option<usize>,
 );
 
 /// Builds the `commitments_with_opening_points` a batch-STARK proof's PCS opening argument is
 /// checked against: one round per commitment (an optional ZK-randomization round, the trace
 /// round, the quotient-chunks round, an optional preprocessed round, an optional permutation
 /// round), each pairing a commitment with the domains/points/claimed-evaluations
-/// [`Pcs::verify`] checks it at.
+/// [`UnivariateStarkPcs::verify_with_preprocessing`] checks it at.
 ///
-/// This is exactly what [`verify_batch`] builds internally before calling `pcs.verify` — pulled
+/// This is exactly what [`verify_batch`] builds internally before checking the PCS — pulled
 /// out so a caller that has already sampled `zeta` from its own transcript replay (and already
 /// has the per-instance shape data `verify_batch`'s own precompute loop derives) can build the
 /// same structure without needing a live `A: Air<...>` reference for anything beyond
@@ -92,9 +93,11 @@ pub type OpeningArgumentWithQuotientDomains<SC> = (
 ///
 /// # Returns
 ///
-/// `(commitments_with_opening_points, quotient_domains)` — the second element is each
+/// `(commitments_with_opening_points, quotient_domains, preprocessed_index)` — the second element is each
 /// instance's quotient-chunk domains, a byproduct of this construction that `verify_batch`
 /// also needs for its own post-opening constraint check.
+/// The third element comes from trusted `common` metadata and must be passed to
+/// [`UnivariateStarkPcs::verify_with_preprocessing`], not inferred from the proof.
 #[expect(clippy::too_many_arguments)]
 pub fn commitments_with_opening_points<SC, A>(
     config: &SC,
@@ -241,6 +244,7 @@ where
 
     // Preprocessed rounds: a single global commitment with one matrix per
     // instance that has preprocessed columns.
+    let preprocessed_index = common.preprocessed.as_ref().map(|_| coms_to_verify.len());
     if let Some(global) = &common.preprocessed {
         let mut pre_round = Vec::new();
 
@@ -335,6 +339,7 @@ where
     Ok((
         coms_to_verify.into_iter().map(Into::into).collect(),
         quotient_domains,
+        preprocessed_index,
     ))
 }
 
@@ -634,7 +639,7 @@ where
         &preprocessed_widths,
         &log_num_quotient_chunks,
     );
-    let (coms_to_verify, quotient_domains) = match opening_argument {
+    let (coms_to_verify, quotient_domains, preprocessed_index) = match opening_argument {
         Ok(argument) => argument,
         Err(err) => {
             transcript.abort();
@@ -643,8 +648,14 @@ where
     };
 
     // Verify all openings via PCS, on the same sponge and under its own description.
-    let opening_result =
-        transcript.delegate(|challenger| pcs.verify(coms_to_verify, opening_proof, challenger));
+    let opening_result = transcript.delegate(|challenger| {
+        pcs.verify_with_preprocessing(
+            coms_to_verify,
+            opening_proof,
+            challenger,
+            preprocessed_index,
+        )
+    });
 
     // The bracket is closed either way, so the driver finishes before the rejection travels.
     transcript.finish();

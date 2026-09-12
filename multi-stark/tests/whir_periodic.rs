@@ -241,7 +241,7 @@ fn prove_verify_periodic_roundtrips() {
 
     // This AIR has no preprocessed trace, and periodic columns are never committed.
     // Setup therefore commits nothing and yields empty keys.
-    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger());
+    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger()).unwrap();
 
     let proof = p3_multi_stark::prove_with_security(
         &config,
@@ -299,7 +299,7 @@ fn security_rejects_invalid_periodic_metadata() {
     }
     let config = config_for(4, 1);
     let air = InvalidPeriod;
-    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let (_, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
     let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
     assert!(p3_multi_stark::security_report(&config, &instances).is_err());
 }
@@ -315,7 +315,7 @@ fn verify_rejects_violated_periodic_constraint() {
     trace.values[0] += F::ONE;
     let config = config_for(log2_strict_usize(n), MAIN_WIDTH);
 
-    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger());
+    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -327,7 +327,8 @@ fn verify_rejects_violated_periodic_constraint() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // The claimed zero sum cannot close against a nonzero constraint value.
     let err = verify(
@@ -442,7 +443,7 @@ fn prove_verify_periodic_with_preprocessed_roundtrips() {
     let config = config_for(log_height, MAIN_WIDTH);
 
     // Setup commits the preprocessed column and nothing else.
-    let (pk, vk) = setup(&config, &[&air], &mut challenger());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -454,7 +455,8 @@ fn prove_verify_periodic_with_preprocessed_roundtrips() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // The preprocessed commitment is opened at the bound point, hence one opening here.
     assert!(proof.preprocessed_opening.is_some());
@@ -482,7 +484,7 @@ fn verify_rejects_violated_periodic_preprocessed_constraint() {
     trace.values[0] += F::ONE;
     let config = config_for(log_height, MAIN_WIDTH);
 
-    let (pk, vk) = setup(&config, &[&air], &mut challenger());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -494,7 +496,8 @@ fn verify_rejects_violated_periodic_preprocessed_constraint() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // The claimed zero sum cannot close against a nonzero constraint value.
     let err = verify(

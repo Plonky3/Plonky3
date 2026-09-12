@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_field::{BasedVectorSpace, Field, PrimeField64};
+use p3_field::{AlgebraIdentity, Field, PrimeField64};
 
 use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::{
@@ -105,6 +105,12 @@ impl<C, U: Unit> ProverState<C, U> {
     /// Read-only access to the bytes buffered for the proof so far.
     pub fn narg(&self) -> &[u8] {
         &self.narg
+    }
+
+    /// Release the completeness check when proof generation returns an error.
+    /// This does not restore the underlying challenger or yield a partial proof.
+    pub fn abort(&mut self) {
+        self.player.abort();
     }
 
     /// Finalise the driver and return the serialised wire bytes.
@@ -318,7 +324,7 @@ impl<C, U: Unit> ProverState<C, U> {
     pub fn add_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of extension type.
@@ -358,7 +364,7 @@ impl<C, U: Unit> ProverState<C, U> {
     pub fn observe_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of extension type.
@@ -384,7 +390,7 @@ impl<C, U: Unit> ProverState<C, U> {
     ) -> Vec<TranscriptBound<EF>>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a fixed-length list of extension messages.
@@ -438,7 +444,7 @@ impl<C, U: Unit> ProverState<C, U> {
     ) -> Vec<TranscriptBound<EF>>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         C: CanObserve<U::Item>,
         Cdc: Codec<C, F>,
     {
@@ -614,7 +620,7 @@ impl<C, U: Unit> ProverState<C, U> {
     ) -> Vec<TranscriptBound<EF>>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -790,7 +796,7 @@ impl<C, U: Unit> ProverState<C, U> {
     pub fn challenge_extension<F, EF, Cdc>(&mut self, label: Label) -> TranscriptBound<EF>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -1011,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_over_a_native_field_sponge() {
+    fn native_field_unit_challenge_stream_is_pinned() {
         // Invariant: the field alphabet drives an existing production challenger.
         //
         // `SerializingChallenger32` observes and samples `F`, never bytes, so it
@@ -1040,6 +1046,14 @@ mod tests {
         assert_eq!(prover_challenges, verifier_challenges);
         // Property 3: the wire holds three canonical 4-byte encodings and nothing else.
         assert_eq!(narg.len(), 3 * 4);
+        // Literal FieldUnit KAT: pins native seed packing, absorption and sampling.
+        // Independently checked from the byte-level seed, 3-byte field packing,
+        // Montgomery observation bytes, and reversed Keccak output bytes.
+        let drawn: Vec<u32> = prover_challenges
+            .iter()
+            .map(|c| c.as_inner().as_canonical_u32())
+            .collect();
+        assert_eq!(drawn, [555_688_962, 664_512_199]);
     }
 
     #[test]
@@ -1588,6 +1602,15 @@ mod tests {
     }
 
     #[test]
+    fn prover_abort_releases_unfinished_pattern() {
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"abort", small_pattern());
+        let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
+        p.add_scalars::<F, ByteCodec>("msgs", &[F::ONE, F::ONE, F::ONE]);
+        p.abort();
+        drop(p);
+    }
+
+    #[test]
     #[should_panic(expected = "Dropped unfinalized ProverState")]
     fn prover_dropped_without_finalize_panics() {
         // Invariant: abandoning a transcript halfway is a bug, not a silent no-op.
@@ -1716,7 +1739,7 @@ mod tests {
     }
 
     /// First challenge of the pinned end-to-end vector.
-    const PINNED_ALPHA_0: u32 = 252_236_841;
+    const PINNED_ALPHA_0: u32 = 1_177_455_429;
     /// Second challenge of the pinned end-to-end vector.
-    const PINNED_ALPHA_1: u32 = 884_894_143;
+    const PINNED_ALPHA_1: u32 = 1_345_535_025;
 }

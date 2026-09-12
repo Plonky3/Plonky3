@@ -14,7 +14,9 @@
 use core::any::type_name;
 use core::fmt::{Display, Formatter};
 
-use p3_field::BasedVectorSpace;
+use p3_field::AlgebraIdentity;
+use p3_keccak::Keccak256Hash;
+use p3_symmetric::CryptographicHasher;
 
 use crate::fs::TranscriptField;
 
@@ -98,6 +100,8 @@ pub enum Length {
 ///
 /// Two protocols over two different 31-bit primes must not share a seed.
 /// Neither must a step that is an `F` in one protocol and a degree-4 element in the other.
+/// The defining polynomial and ordered coefficient basis are committed through
+/// [`AlgebraIdentity`], including when two extensions share a modulus and degree.
 ///
 /// A new encoding is a new variant, so downstream matches stay open.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -115,6 +119,8 @@ pub enum TypeTag {
         modulus: u64,
         /// Number of base-field coefficients per value.
         degree: usize,
+        /// Keccak-256 of the explicit defining-relations and ordered-basis identity.
+        basis: [u8; 32],
     },
     /// Coefficients in the recursively defined Wiedemann binary tower basis.
     ///
@@ -125,6 +131,8 @@ pub enum TypeTag {
         bits: usize,
         /// Number of tower-field coefficients per value.
         degree: usize,
+        /// Keccak-256 of the explicit defining-relations and ordered-basis identity.
+        basis: [u8; 32],
     },
     /// A value whose encoding belongs to the challenger, not to this layer.
     ///
@@ -201,14 +209,13 @@ impl Interaction {
     pub fn algebra<F, A>(hierarchy: Hierarchy, kind: Kind, label: Label, length: Length) -> Self
     where
         F: TranscriptField,
-        A: BasedVectorSpace<F>,
+        A: AlgebraIdentity<F>,
     {
         Self {
             hierarchy,
             kind,
             label,
-            // Stable field identity plus degree binds the coefficient representation.
-            type_tag: F::algebra_tag(A::DIMENSION),
+            type_tag: F::algebra_tag(A::DIMENSION, Keccak256Hash.hash_iter(A::algebra_id())),
             type_name: type_name::<A>(),
             length,
         }
@@ -417,8 +424,28 @@ impl Display for TypeTag {
         match self {
             Self::Marker => write!(f, "Marker"),
             Self::Bytes => write!(f, "Bytes"),
-            Self::Algebra { modulus, degree } => write!(f, "Algebra({modulus}^{degree})"),
-            Self::BinaryTower { bits, degree } => write!(f, "BinaryTower({bits}^{degree})"),
+            Self::Algebra {
+                modulus,
+                degree,
+                basis,
+            } => {
+                write!(f, "Algebra({modulus}^{degree};")?;
+                for byte in basis {
+                    write!(f, "{byte:02x}")?;
+                }
+                write!(f, ")")
+            }
+            Self::BinaryTower {
+                bits,
+                degree,
+                basis,
+            } => {
+                write!(f, "BinaryTower({bits}^{degree};")?;
+                for byte in basis {
+                    write!(f, "{byte:02x}")?;
+                }
+                write!(f, ")")
+            }
             Self::Opaque => write!(f, "Opaque"),
             Self::Bits { width } => write!(f, "Bits({width})"),
             Self::UniformBits { width } => write!(f, "UniformBits({width})"),
@@ -431,8 +458,8 @@ mod tests {
     use alloc::format;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeField64;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{BasedVectorSpace, PrimeField64};
     use p3_goldilocks::Goldilocks;
     use p3_koala_bear::KoalaBear;
 
@@ -440,6 +467,77 @@ mod tests {
 
     /// Degree-4 binomial extension used to exercise the degree field of the tag.
     type EF4 = BinomialExtensionField<BabyBear, 4>;
+
+    // Three coefficient representations: x^4 = 11, y^4 = 176 (y = 2x),
+    // and the first algebra with the nonconstant basis vectors reversed.
+    struct AlternateBasis<const REPRESENTATION: u8>([BabyBear; 4]);
+
+    impl<const R: u8> AlgebraIdentity<BabyBear> for AlternateBasis<R> {
+        fn algebra_id() -> alloc::vec::Vec<u8> {
+            match R {
+                0 | 3 => b"test:X^4-11;basis=1,X,X^2,X^3".to_vec(),
+                1 => b"test:X^4-176;basis=1,X,X^2,X^3".to_vec(),
+                _ => b"test:X^4-11;basis=1,X^3,X^2,X".to_vec(),
+            }
+        }
+    }
+
+    impl<const R: u8> BasedVectorSpace<BabyBear> for AlternateBasis<R> {
+        const DIMENSION: usize = 4;
+
+        fn as_basis_coefficients_slice(&self) -> &[BabyBear] {
+            &self.0
+        }
+
+        fn from_basis_coefficients_fn<F: FnMut(usize) -> BabyBear>(f: F) -> Self {
+            Self(core::array::from_fn(f))
+        }
+
+        fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = BabyBear>>(
+            mut iter: I,
+        ) -> Option<Self> {
+            (iter.len() == 4).then(|| Self(core::array::from_fn(|_| iter.next().unwrap())))
+        }
+    }
+
+    #[test]
+    fn fingerprint_separates_same_degree_polynomials_and_bases() {
+        let fingerprint = |step| {
+            crate::fs::InteractionPattern::new(alloc::vec![step])
+                .unwrap()
+                .pattern_hash()
+        };
+        let step = |representation| match representation {
+            0 => Interaction::algebra::<BabyBear, AlternateBasis<0>>(
+                Hierarchy::Atomic,
+                Kind::Challenge,
+                "x",
+                Length::Scalar,
+            ),
+            1 => Interaction::algebra::<BabyBear, AlternateBasis<1>>(
+                Hierarchy::Atomic,
+                Kind::Challenge,
+                "x",
+                Length::Scalar,
+            ),
+            3 => Interaction::algebra::<BabyBear, AlternateBasis<3>>(
+                Hierarchy::Atomic,
+                Kind::Challenge,
+                "x",
+                Length::Scalar,
+            ),
+            _ => Interaction::algebra::<BabyBear, AlternateBasis<2>>(
+                Hierarchy::Atomic,
+                Kind::Challenge,
+                "x",
+                Length::Scalar,
+            ),
+        };
+        assert_ne!(fingerprint(step(0)), fingerprint(step(1)));
+        assert_ne!(fingerprint(step(0)), fingerprint(step(2)));
+        // Distinct Rust types with identical algebra identities share the protocol.
+        assert_eq!(fingerprint(step(0)), fingerprint(step(3)));
+    }
 
     #[test]
     fn alternate_display_carries_the_tag_and_length_prefixes_the_label() {
@@ -452,7 +550,7 @@ mod tests {
         );
         assert_eq!(
             format!("{i:#}"),
-            "Atomic Message 12 test-message Scalar Algebra(2013265921^1)"
+            "Atomic Message 12 test-message Scalar Algebra(2013265921^1;cfa353fe66eeeae7600254a68073d57125abac3820fde7a3e32c84482b826469)"
         );
     }
 
@@ -516,6 +614,7 @@ mod tests {
             TypeTag::Algebra {
                 modulus: BabyBear::ORDER_U64,
                 degree: 4,
+                basis: Keccak256Hash.hash_iter(<EF4 as AlgebraIdentity<BabyBear>>::algebra_id()),
             }
         );
     }

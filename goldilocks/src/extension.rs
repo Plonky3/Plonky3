@@ -20,6 +20,15 @@ impl ExtensionAlgebra<Self, 2, Binomial<Self>> for Goldilocks {
 }
 
 impl BinomiallyExtendable<2> for Goldilocks {
+    fn binomial_algebra_id() -> alloc::vec::Vec<u8> {
+        use p3_field::PrimeField64;
+        alloc::format!(
+            "p3-power-basis-v1:X^2-{}",
+            <Self as BinomiallyExtendable<2>>::W.as_canonical_u64()
+        )
+        .into_bytes()
+    }
+
     // Verifiable in Sage with
     // `R.<x> = GF(p)[]; assert (x^2 - 7).is_irreducible()`.
     const W: Self = Self::new(7);
@@ -120,6 +129,15 @@ impl ExtensionAlgebra<Self, 5, Binomial<Self>> for Goldilocks {
 }
 
 impl BinomiallyExtendable<5> for Goldilocks {
+    fn binomial_algebra_id() -> alloc::vec::Vec<u8> {
+        use p3_field::PrimeField64;
+        alloc::format!(
+            "p3-power-basis-v1:X^5-{}",
+            <Self as BinomiallyExtendable<5>>::W.as_canonical_u64()
+        )
+        .into_bytes()
+    }
+
     // Verifiable via:
     //  ```sage
     //  # Define Fp

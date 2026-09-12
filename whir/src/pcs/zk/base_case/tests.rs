@@ -9,13 +9,17 @@ use core::slice::from_ref;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
+use p3_challenger::fs::{DomainSeparator, InteractionPattern};
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing, dot_product};
+use p3_field::{
+    ExtensionField, Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField, dot_product,
+};
 use p3_matrix::Dimensions;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_util::log2_strict_usize;
 use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
 use proptest::prelude::*;
 use rand::rngs::SmallRng;
@@ -26,6 +30,8 @@ use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::zk::committer::FoldedRsCode;
 use crate::pcs::zk::mask::{MaskCodeShape, MaskGroupShape};
 use crate::pcs::zk::proof::BaseCaseZkProof;
+use crate::transcript::zk::{ZkBaseCaseShape, ZkWhirProverTranscript, ZkWhirVerifierTranscript};
+use crate::transcript::{Alphabet, query_draws};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -175,6 +181,8 @@ fn honest_run(
         )
         .collect();
 
+    let separator = base_separator::<F, EF>(&config);
+    let mut transcript = ZkWhirProverTranscript::from_separator(&mut prover_challenger, &separator);
     let proof = prover.prove(
         &dft,
         &source_message,
@@ -188,9 +196,10 @@ fn honest_run(
                 &source_data,
             ))
         },
-        &mut prover_challenger,
+        &mut transcript,
         &mut rng,
     );
+    transcript.finish();
 
     (
         config,
@@ -226,7 +235,9 @@ fn verify_run(
         height: config.code.domain_size,
         width: 1,
     }];
-    verifier.verify(
+    let separator = base_separator::<F, EF>(config);
+    let mut transcript = ZkWhirVerifierTranscript::from_separator(&mut challenger, &separator);
+    let result = verifier.verify(
         proof,
         source_covector,
         mask_covectors,
@@ -242,8 +253,13 @@ fn verify_run(
             // Width-one source: the folded value is the single opened column.
             Ok(opening.rows.iter().map(|row| row[0]).collect())
         },
-        &mut challenger,
-    )
+        &mut transcript,
+    );
+    match result {
+        Ok(()) => transcript.finish(),
+        Err(_) => transcript.abort(),
+    }
+    result
 }
 
 proptest! {
@@ -350,7 +366,7 @@ fn base_case_rejects_unbound_source_reveal() {
     // The committed source genuinely differs from the reveal, so the source
     // spot check fails. The failing position is fixed by the test seed and
     // the query-index sampler.
-    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 2 });
+    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 10 });
 }
 
 #[test]
@@ -375,7 +391,7 @@ fn base_case_rejects_unbound_mask_reveal() {
         err,
         BaseCaseZkError::MaskSpotCheckFailed {
             group: 0,
-            position: 3
+            position: 5
         }
     );
 }
@@ -426,4 +442,31 @@ fn base_case_reveals_are_one_time_padded() {
         let g_from_b = proof_b.blinded_message[i] - gamma * secret_b[i];
         assert_eq!(g_from_a, g_from_b, "recovered fresh mask differs at {i}");
     }
+}
+
+/// Standalone base-case users play exactly the same suffix as the full pipeline.
+fn base_separator<F, EF>(config: &BaseCaseZkConfig<F>) -> DomainSeparator<Alphabet<F>>
+where
+    F: PrimeField64 + TwoAdicField,
+    EF: ExtensionField<F>,
+{
+    let shape = ZkBaseCaseShape {
+        source_message_len: config.code.message_len,
+        source_randomness_len: config.code.randomness_len,
+        source_index_bits: log2_strict_usize(config.code.domain_size),
+        source_query_draws: query_draws(config.code.domain_size, config.num_queries),
+        pow_bits: config.pow_bits,
+        groups: config.mask_groups.clone(),
+        mask_query_draws: config
+            .mask_groups
+            .iter()
+            .map(|g| query_draws(g.shape.domain_size, config.mask_queries))
+            .collect(),
+    };
+    let mut steps = Vec::new();
+    shape.extend::<F, EF>(&mut steps);
+    let mut separator =
+        DomainSeparator::new(2, b"p3-whir-hvzk", InteractionPattern::new(steps).unwrap());
+    separator.instance(b"standalone-base-case");
+    separator
 }

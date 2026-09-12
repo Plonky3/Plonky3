@@ -162,6 +162,6 @@ fn prove_bb_trivial_deg4(air: &RangeCheckAir, log_n: usize) {
     let challenger = Challenger::new(perm);
     let config = Config::new(pcs, challenger);
 
-    let proof = prove(&config, air, trace, &[]);
+    let proof = prove(&config, air, trace, &[]).unwrap();
     verify(&config, air, &proof, &[]).expect("verification failed");
 }

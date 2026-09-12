@@ -272,6 +272,9 @@ where
         check_round_shape(batch, round_values(batch), target_queries << arity)?;
     }
 
+    // Match `open_queries`: this uncommitted word must precede both query grinding
+    // and sampling, even when there are no evaluation claims to constrain its value.
+    challenger.observe_slice(proof.final_codeword.as_slice());
     if !challenger.check_witness(config.pow_bits(), proof.pow_witness) {
         return Err(BinaryPcsError::InvalidPowWitness);
     }
@@ -510,6 +513,7 @@ mod tests {
             &mut prover_ch,
             &base_merkle_data,
             &rounds,
+            &final_codeword,
         );
 
         let proof = BinaryPcsProof {
@@ -560,7 +564,7 @@ mod tests {
         let mut prover_ch = challenger();
         let (base_commitment, prover_data) =
             commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
-        let (base_merkle_data, sumcheck_data, rounds, randomness, _final_codeword) =
+        let (base_merkle_data, sumcheck_data, rounds, randomness, final_codeword) =
             fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_ch);
 
         // The prover's own transcript state, snapshotted right before the query phase, gives
@@ -579,8 +583,10 @@ mod tests {
             &mut prover_ch,
             &base_merkle_data,
             &rounds,
+            &final_codeword,
         );
 
+        prover_snapshot.observe_slice(&final_codeword);
         assert!(prover_snapshot.check_witness(config.pow_bits(), query_proofs.pow_witness));
         let domain_size = config.domain_size();
         let prover_indices = sample_query_indices::<_, BinaryField128>(
@@ -613,6 +619,7 @@ mod tests {
             }
         }
 
+        verifier_ch.observe_slice(&final_codeword);
         assert!(verifier_ch.check_witness(config.pow_bits(), query_proofs.pow_witness));
         let verifier_indices = sample_query_indices::<_, BinaryField128>(
             domain_size,
@@ -670,6 +677,7 @@ mod tests {
             &mut prover_ch,
             &base_merkle_data,
             &rounds,
+            &final_codeword,
         );
 
         let proof = BinaryPcsProof {

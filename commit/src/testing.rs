@@ -56,6 +56,7 @@ where
     type ProverData = Vec<RowMajorMatrix<Val>>;
     type Proof = ();
     type Error = ();
+    type ProverError = core::convert::Infallible;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         // This panics if (and only if) `degree` is not a power of 2 or `degree`
@@ -66,7 +67,7 @@ where
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         let coeffs: Vec<_> = evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -87,10 +88,10 @@ where
                 coeffs
             })
             .collect();
-        (
+        Ok((
             coeffs.clone().into_iter().map(|m| m.values).collect(),
             coeffs,
-        )
+        ))
     }
 
     fn open(
@@ -98,8 +99,8 @@ where
         // For each round,
         rounds: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         _challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
-        (
+    ) -> Result<(OpenedValues<Challenge>, Self::Proof), Self::ProverError> {
+        Ok((
             rounds
                 .into_iter()
                 .map(
@@ -123,7 +124,7 @@ where
                 )
                 .collect(),
             (),
-        )
+        ))
     }
 
     // This is a testing function, so we allow panics for convenience.
@@ -182,7 +183,7 @@ where
         quotient_domain: Self::Domain,
         quotient_evaluations: RowMajorMatrix<crate::Val<Self::Domain>>,
         num_chunks: usize,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         let quotient_sub_evaluations =
             quotient_domain.split_evals(num_chunks, quotient_evaluations);
         let quotient_sub_domains = quotient_domain.split_domains(num_chunks);
@@ -199,11 +200,14 @@ where
         &self,
         _evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         _num_chunks: usize,
-    ) -> Vec<RowMajorMatrix<crate::Val<Self::Domain>>> {
+    ) -> Result<Vec<RowMajorMatrix<crate::Val<Self::Domain>>>, Self::ProverError> {
         unimplemented!("This PCS does not support computing of LDEs");
     }
 
-    fn commit_ldes(&self, _ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+    fn commit_ldes(
+        &self,
+        _ldes: Vec<RowMajorMatrix<Val>>,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         unimplemented!("This PCS does not support computing of LDEs");
     }
 

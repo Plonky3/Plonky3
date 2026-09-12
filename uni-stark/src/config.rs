@@ -9,6 +9,12 @@ pub type PcsError<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenger,
 >>::Error;
 
+/// Configuration or budget failure reported by the proving commitment scheme.
+pub type PcsProverError<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
+    <SC as StarkGenericConfig>::Challenge,
+    <SC as StarkGenericConfig>::Challenger,
+>>::ProverError;
+
 pub type Domain<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenge,
     <SC as StarkGenericConfig>::Challenger,
