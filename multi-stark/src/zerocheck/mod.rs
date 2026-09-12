@@ -251,6 +251,12 @@ where
 }
 
 /// Visit each DAG node once, including shared subexpressions across constraints.
+///
+/// Nodes are keyed by address.
+///
+/// Every expression reachable from a call must outlive that call.
+///
+/// A freed address would otherwise hide a live node later allocated there.
 fn visit_leaves<A>(
     expression: &SymbolicExpr<A>,
     seen: &mut BTreeSet<*const SymbolicExpr<A>>,
@@ -328,15 +334,29 @@ fn validate_successor_columns<F: Field, EF: ExtensionField<F>, A: BaseAir<F>>(
             visit_leaves(expression, &mut seen, &mut check);
         }
     }
+    // Reading a local count yields an owned root.
+    //
+    // Every root is collected before the scan starts.
+    //
+    // Why: the memo keys on address, and a root dropped mid-scan frees its key.
+    let local_counts: Vec<_> = builder
+        .local_interactions()
+        .iter()
+        .flat_map(|interaction| interaction.tuples.iter())
+        .map(|(_, count)| count.clone().into_parts().0)
+        .collect();
     for interaction in builder.local_interactions() {
-        for (fields, count) in &interaction.tuples {
+        for (fields, _) in &interaction.tuples {
             for expression in fields {
                 visit_leaves(expression, &mut seen, &mut check);
             }
-            // The owned count expression is temporary, so its address must not be cached.
-            let (count, _) = count.clone().into_parts();
-            visit_leaves(&count, &mut BTreeSet::new(), &mut check);
         }
+    }
+    // Counts share one memo with every other expression.
+    //
+    // A subexpression reachable from several paths is then visited once.
+    for count in &local_counts {
+        visit_leaves(count, &mut seen, &mut check);
     }
 }
 

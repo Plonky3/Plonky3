@@ -661,10 +661,21 @@ where
             }
         });
 
+        // A rejected run played fewer steps than it described.
+        //
+        // Release the driver rather than close it, since no proof is emitted.
+        let fri_proof = match fri_proof {
+            Ok(fri_proof) => fri_proof,
+            Err(error) => {
+                transcript.abort();
+                return Err(error);
+            }
+        };
+
         // Every described step has now been played.
         transcript.finish();
 
-        Ok((all_opened_values, fri_proof?))
+        Ok((all_opened_values, fri_proof))
     }
 
     fn verify(

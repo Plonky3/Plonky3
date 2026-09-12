@@ -845,6 +845,72 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_scalar_fallback_matches_the_packed_path() {
+        // Invariant: the SIMD path and the row-by-row fallback compute the same map.
+        //
+        //     height >= lane group  ->  SIMD path
+        //     height <  lane group  ->  row-by-row fallback
+        //
+        // Only heights at or above the lane group admit both, so they are compared there.
+        let sources = TestAir(Declaration::SymbolicSources);
+        let next = TestAir(Declaration::NextGlobal);
+        let airs = [&sources, &next];
+
+        // Two distinct heights, so the second instance also exercises a nonzero base offset.
+        let tall = 2 << test_lookup_num_variables();
+        let short = 1 << test_lookup_num_variables();
+
+        // Counts stay inside the declared bound of three.
+        let counts = |height: usize| (0..height).map(|row| (row % 4) as u64).collect::<Vec<_>>();
+        let ramp = |height: usize, offset: u64| {
+            (0..height)
+                .map(|row| row as u64 + offset)
+                .collect::<Vec<_>>()
+        };
+
+        let sources_key = ramp(tall, 2);
+        let sources_count = counts(tall);
+        let sources_unused = vec![0; tall];
+        let sources_preprocessed_column = ramp(tall, 11);
+        let next_left = ramp(short, 3);
+        let next_right = ramp(short, 5);
+        let next_count = counts(short);
+
+        let sources_main = table(&[&sources_key, &sources_count, &sources_unused]);
+        let sources_preprocessed = table(&[&sources_preprocessed_column]);
+        let next_main = table(&[&next_left, &next_right, &next_count]);
+
+        let main = [&sources_main, &next_main];
+        let preprocessed = [Some(&sources_preprocessed), None];
+        let public_values = [F::from_u64(6)];
+        let publics: [&[F]; 2] = [&public_values, &[]];
+
+        let plan = LookupPlan::<F>::build::<EF, TestAir>(
+            &airs,
+            &[log2_strict_usize(tall), log2_strict_usize(short)],
+        )
+        .unwrap()
+        .unwrap();
+
+        let alpha = EF::from_u64(1_000);
+        let beta = EF::from_u64(7);
+        let packed = plan.materialize_fraction(&main, &preprocessed, &publics, alpha, beta);
+        let scalar = plan.materialize_fraction_scalar(&main, &preprocessed, &publics, alpha, beta);
+
+        // The comparison is only meaningful while the two paths stay distinct.
+        assert!(matches!(packed.d, PolyMaybePacked::Packed(_)));
+        assert!(matches!(scalar.d, PolyMaybePacked::Scalar(_)));
+
+        assert_eq!(packed.n.as_slice(), scalar.n.as_slice());
+        let packed_denominators = packed.d.unpack();
+        let scalar_denominators = scalar.d.unpack();
+        assert_eq!(
+            packed_denominators.as_slice(),
+            scalar_denominators.as_slice()
+        );
+    }
+
+    #[test]
     fn resolves_all_symbolic_sources_with_extension_challenges() {
         let air = TestAir(Declaration::SymbolicSources);
         let mut rng = SmallRng::seed_from_u64(0xA11_50CE5);

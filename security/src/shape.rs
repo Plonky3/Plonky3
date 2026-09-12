@@ -71,10 +71,14 @@ impl StarkAirParams {
                 .unwrap_or(0)
         }
         .max(1);
+        // The prover sizes the quotient from whichever of the two degrees is larger.
+        //
+        // An undersized hint therefore never shrinks the committed chunk count.
         let committed_degree = air
             .max_constraint_degree()
-            .unwrap_or(max_constraint_degree)
-            .max(max_constraint_degree);
+            .map_or(max_constraint_degree, |hint| {
+                hint.max(max_constraint_degree)
+            });
         let zk = usize::from(is_zk);
         let num_quotient_chunks = committed_degree
             .checked_add(zk)
