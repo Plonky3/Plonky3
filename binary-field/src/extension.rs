@@ -70,6 +70,12 @@ macro_rules! binary_tower_extension {
 
         impl Algebra<$lower> for $upper {}
 
+        impl p3_field::AlgebraIdentity<$lower> for $upper {
+            fn algebra_id() -> Vec<u8> {
+                alloc::format!("p3-Wiedemann-tower-v1:chunk-basis:{}:{}", <$lower>::BITS, <$upper>::BITS).into_bytes()
+            }
+        }
+
         impl BasedVectorSpace<$lower> for $upper {
             const DIMENSION: usize = <$upper>::BITS / <$lower>::BITS;
 

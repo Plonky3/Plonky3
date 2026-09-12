@@ -285,7 +285,7 @@ fn fib_public_values_for_trace(trace: &RowMajorMatrix<F>) -> [F; 3] {
 fn security_rejects_missing_collision_evidence() {
     let config = config_for(4, NUM_COLS);
     let air = FibAir;
-    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let (_, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
     let public = fib_public_values(16);
     let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &public)]);
     let report = p3_multi_stark::security_report(&config, &instances).unwrap();
@@ -297,7 +297,7 @@ fn security_rejects_missing_collision_evidence() {
 fn security_rejects_verifier_height_overflow_without_panicking() {
     let config = config_for(4, NUM_COLS);
     let air = FibAir;
-    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let (_, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
     let public = fib_public_values(16);
     let instances = VerifierInstances::new(vec![VerifierInstance::new(
         &air,
@@ -318,7 +318,7 @@ fn security_checked_whir_roundtrip_and_target_rejection() {
     let mut config = config_for(4, NUM_COLS);
     config.collision_bits = Some(100);
     let air = FibAir;
-    let (pk, vk) = setup(&config, &[&air], &mut challenger());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
     let public = fib_public_values(16);
     let verifier_instances =
         || VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &public)]);
@@ -363,7 +363,9 @@ fn security_checked_whir_roundtrip_and_target_rejection() {
     let mut rejected = challenger();
     assert!(matches!(
         prove_with_security(&config, prover_instances(), 0, 100, &mut rejected),
-        Err(SecurityError::InsufficientSecurity { .. })
+        Err(p3_multi_stark::ProvingError::Security(
+            SecurityError::InsufficientSecurity { .. }
+        ))
     ));
     let after_rejection: F = rejected.sample();
     let untouched: F = challenger().sample();
@@ -397,7 +399,7 @@ fn security_checked_lookup_accounts_for_every_reduction() {
     let mut config = config_for(4, 2);
     config.collision_bits = Some(100);
     let air = LocalPermutationLookupAir;
-    let (pk, vk) = setup(&config, &[&air], &mut challenger());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
     let verifier_instances =
         || VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
     let report = security_report(&config, &verifier_instances()).unwrap();
@@ -457,7 +459,7 @@ fn security_rejects_degree_underhints_in_all_build_profiles() {
     }
     let config = config_for(4, 1);
     let air = UnderhintAir;
-    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let (_, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
     let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
     assert!(matches!(
         p3_multi_stark::security_report(&config, &instances),
@@ -511,7 +513,7 @@ fn security_small_base_challenges_cannot_claim_a_large_target() {
     let mmcs = MyMmcs::new(MyHash::new(perm()), MyCompress::new(perm()), 0);
     let config = BaseConfig(BasePcs::new(whir, MyDft::default(), mmcs));
     let air = FibAir;
-    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let (_, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
     let public = fib_public_values(16);
     let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &public)]);
     let report = p3_multi_stark::security_report(&config, &instances).unwrap();
@@ -520,6 +522,54 @@ fn security_small_base_challenges_cannot_claim_a_large_target() {
         report.require_security(100),
         Err(p3_multi_stark::SecurityError::InsufficientSecurity { .. })
     ));
+}
+
+#[test]
+fn opening_budget_failure_preserves_challenger() {
+    use p3_challenger::CanSample;
+    let mut config = config_for(16, NUM_COLS);
+    let folding_factor = FoldingFactor::Constant(FOLDING);
+    config.pcs.config = WhirConfig::new(
+        17,
+        ProtocolParameters {
+            security_level: 100,
+            pow_bits: 16,
+            round_log_inv_rates: default_round_log_inv_rates(17, &folding_factor),
+            folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        },
+    )
+    .unwrap();
+    let air = FibAir;
+    let (pk, _) = setup(&config, &[&air], &mut challenger()).unwrap();
+    let trace = fib_trace(1 << 16);
+    let pis = fib_public_values(1 << 16);
+    let mut transcript = challenger();
+    let before: F = transcript.clone().sample();
+    let result = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
+        0,
+        &mut transcript,
+    );
+    assert!(matches!(
+        result,
+        Err(p3_multi_stark::ProvingError::Pcs {
+            phase: "main opening",
+            source: p3_whir::WhirConfigError::InitialClaimsBelowTarget {
+                num_claims: 6,
+                security_level: 100,
+                ..
+            },
+        })
+    ));
+    assert_eq!(CanSample::<F>::sample(&mut transcript), before);
 }
 
 #[test]
@@ -533,7 +583,7 @@ fn prove_verify_fibonacci_roundtrips() {
     let airs = [&FibAir];
 
     // Fibonacci has no preprocessed trace, so setup yields empty keys.
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -545,7 +595,8 @@ fn prove_verify_fibonacci_roundtrips() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     verify(
         &config,
@@ -569,7 +620,7 @@ fn prove_verify_lookup_roundtrips_through_pcs() {
     let air = LocalPermutationLookupAir;
     let trace = permutation_trace(n);
     let config = config_for(log_height, air.width());
-    let (pk, vk) = setup(&config, &[&air], &mut challenger());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -581,7 +632,8 @@ fn prove_verify_lookup_roundtrips_through_pcs() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
     // A lookup-declaring AIR must produce a reduction section in the proof.
     assert!(proof.lookup.is_some());
 
@@ -611,7 +663,7 @@ fn prove_verify_mixed_height_lookups_roundtrip_through_pcs() {
     let trace_b = permutation_trace(height_b);
     let stacked_num_variables = log2_ceil_usize(2 * height_a + 2 * height_b);
     let config = config_for_stacked(stacked_num_variables);
-    let (pk, vk) = setup(&config, &[&air, &air], &mut challenger());
+    let (pk, vk) = setup(&config, &[&air, &air], &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -621,7 +673,8 @@ fn prove_verify_mixed_height_lookups_roundtrip_through_pcs() {
         ]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     verify(
         &config,
@@ -649,7 +702,7 @@ fn prove_verify_batched_fibonacci_roundtrips() {
     let config = batch_config_for(log_height, NUM_COLS, 2);
     let airs = [&air, &air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -659,7 +712,8 @@ fn prove_verify_batched_fibonacci_roundtrips() {
         ]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     assert!(proof.preprocessed_opening.is_none());
 
@@ -708,7 +762,7 @@ fn prove_verify_mixed_height_fibonacci_roundtrips() {
     let airs = [&air, &air];
 
     // One setup, then one proof binding both traces under a shared commitment.
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = p3_multi_stark::prove_with_security(
         &config,
@@ -762,7 +816,7 @@ fn verify_rejects_violated_constraint_in_shorter_table() {
     let config = config_for_stacked(log2_ceil_usize(cells));
     let airs = [&air, &air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -772,7 +826,8 @@ fn verify_rejects_violated_constraint_in_shorter_table() {
         ]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     let err = verify(
         &config,
@@ -804,7 +859,7 @@ fn verify_rejects_tampered_opening() {
     let config = config_for(log_height, NUM_COLS);
     let airs = [&FibAir];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let mut proof = prove(
         &config,
@@ -816,7 +871,8 @@ fn verify_rejects_tampered_opening() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // Mutation: shift the first claimed current-row value by one field element.
     let batch = &proof.opening.evals[0];
@@ -857,7 +913,7 @@ fn verify_rejects_violated_constraint() {
     let config = config_for(log_height, NUM_COLS);
     let airs = [&FibAir];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -869,7 +925,8 @@ fn verify_rejects_violated_constraint() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // Expected rejection: the zerocheck closes on a nonzero constraint value.
     let err = verify(
@@ -899,7 +956,7 @@ fn verify_rejects_tampered_public_values() {
     let config = config_for(log_height, NUM_COLS);
     let airs = [&FibAir];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -911,7 +968,8 @@ fn verify_rejects_tampered_public_values() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // Mutation: shift the claimed output by one field element.
     let mut wrong = pis;
@@ -949,7 +1007,7 @@ fn verify_rejects_tampered_main_commitment() {
     let config = config_for(log_height, NUM_COLS);
     let airs = [&FibAir];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let mut proof = prove(
         &config,
@@ -961,7 +1019,8 @@ fn verify_rejects_tampered_main_commitment() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // Mutation: shift the first word of the committed Merkle root.
     let mut roots = proof.commitment.roots().to_vec();
@@ -1021,7 +1080,7 @@ fn read_fixture(path: &str) -> std::io::Result<Vec<u8>> {
 fn verify_whir_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let (config, _, pis, log_height) = whir_compat_case();
     let airs = [&FibAir];
-    let (_, vk) = setup(&config, &airs, &mut challenger());
+    let (_, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof_bytes = read_fixture(WHIR_FIXTURE).expect(
         "Missing fixture. Run: cargo test -p p3-multi-stark --test whir_fibonacci -- --ignored",
@@ -1044,7 +1103,7 @@ fn generate_whir_fixture() -> Result<(), Box<dyn std::error::Error>> {
     // Regen: cargo test -p p3-multi-stark --test whir_fibonacci -- --ignored
     let (config, trace, pis, _) = whir_compat_case();
     let airs = [&FibAir];
-    let (pk, _) = setup(&config, &airs, &mut challenger());
+    let (pk, _) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -1056,7 +1115,8 @@ fn generate_whir_fixture() -> Result<(), Box<dyn std::error::Error>> {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     let bytes = postcard::to_allocvec(&proof)?;
     write_fixture(WHIR_FIXTURE, &bytes)?;

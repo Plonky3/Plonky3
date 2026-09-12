@@ -13,13 +13,16 @@ use crate::CanObserve;
 /// Implementations must make seed absorption injective and use a unique, fixed-width
 /// wire encoding for every element. The algebra tag must identify the coefficient
 /// field and its representation independently of Rust type names, and bind the
-/// supplied extension degree. These contracts are required for transcript binding.
+/// supplied extension degree and basis digest unchanged. These contracts are required
+/// for transcript binding.
 ///
 /// Prime fields below `2^64` retain their canonical big-endian wire format and
 /// length-prefixed little-endian seed packing through the blanket implementation.
 pub trait TranscriptField: Field {
     /// Stable identity of an algebra with `degree` coefficients over this field.
-    fn algebra_tag(degree: usize) -> TypeTag;
+    /// `basis` is Keccak-256 of its [`p3_field::AlgebraIdentity`] bytes and must be
+    /// included unchanged in the returned tag.
+    fn algebra_tag(degree: usize, basis: [u8; 32]) -> TypeTag;
 
     /// Absorb a byte string injectively into this field's sponge alphabet.
     fn observe_seed<C: CanObserve<Self>>(challenger: &mut C, bytes: &[u8]);
@@ -35,10 +38,11 @@ pub trait TranscriptField: Field {
 }
 
 impl<F: PrimeField64> TranscriptField for F {
-    fn algebra_tag(degree: usize) -> TypeTag {
+    fn algebra_tag(degree: usize, basis: [u8; 32]) -> TypeTag {
         TypeTag::Algebra {
             modulus: F::ORDER_U64,
             degree,
+            basis,
         }
     }
 

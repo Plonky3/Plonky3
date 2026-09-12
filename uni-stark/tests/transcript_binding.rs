@@ -162,6 +162,7 @@ fn honest_proof(config: &MyConfig) -> Proof<MyConfig> {
         square_trace::<Val>(1 << LOG_DEGREE),
         &[],
     )
+    .unwrap()
 }
 
 #[test]
@@ -206,7 +207,7 @@ fn a_tampered_randomization_commitment_is_rejected() {
     // Fixture state: a zero-knowledge proof, which carries a randomization commitment.
     let config = make_zk_config();
     let trace = square_trace::<Val>(1 << 5);
-    let mut proof = prove(&config, &SquareAir::<0>, trace, &[]);
+    let mut proof = prove(&config, &SquareAir::<0>, trace, &[]).unwrap();
 
     verify(&config, &SquareAir::<0>, &proof, &[]).expect("an untouched proof verifies");
 
@@ -253,7 +254,7 @@ fn an_air_of_a_different_shape_proves_and_verifies_on_its_own() {
     // Both AIRs are honest AIRs; the shape alone is what separates their transcripts.
     let config = make_config();
     let trace = square_trace::<Val>(1 << LOG_DEGREE);
-    let proof = prove(&config, &SquareAir::<1>, trace, &[]);
+    let proof = prove(&config, &SquareAir::<1>, trace, &[]).unwrap();
 
     verify(&config, &SquareAir::<1>, &proof, &[]).expect("the periodic AIR verifies its own proof");
 }

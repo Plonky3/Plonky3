@@ -258,9 +258,9 @@ pub(crate) struct QueryProofs<MT: Mmcs<BinaryField128>> {
     pub pow_witness: BinaryField128,
 }
 
-/// Runs the query phase: grinds the single proof-of-work witness, samples query indices from
-/// the base codeword's domain, then opens the base commitment and every intermediate
-/// fold-batch commitment at all coset indices each sampled query needs.
+/// Runs the query phase: binds the full final codeword, grinds the single proof-of-work
+/// witness, samples query indices from the base codeword's domain, then opens the base
+/// commitment and every intermediate fold-batch commitment at all coset indices each query needs.
 ///
 /// `rounds` is every [`RoundCommitment`] `fold_rounds_with` produced: one per fold batch except the
 /// last, whose codeword is never committed — it travels in the clear as the proof's
@@ -273,6 +273,7 @@ pub(crate) fn open_queries<MT, Ch>(
     challenger: &mut Ch,
     base_merkle_data: &MT::ProverData<DenseMatrix<BinaryField128>>,
     rounds: &[RoundCommitment<MT>],
+    final_codeword: &[BinaryField128],
 ) -> QueryProofs<MT>
 where
     MT: Mmcs<BinaryField128>,
@@ -286,6 +287,9 @@ where
         "rounds is the caller's own fold_rounds_with output, never proof-supplied data"
     );
 
+    // The last word is sent in the clear, not committed by a Merkle root. Bind every
+    // symbol before grinding or sampling so it cannot be chosen after seeing queries.
+    challenger.observe_slice(final_codeword);
     let pow_witness = challenger.grind(config.pow_bits());
 
     let indices = sample_query_cosets(config, challenger);

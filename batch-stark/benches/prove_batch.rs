@@ -155,11 +155,11 @@ fn bench_prove_batch(c: &mut Criterion) {
             })
             .collect();
 
-        let prover_data = ProverData::from_instances(&config, &instances);
+        let prover_data = ProverData::from_instances(&config, &instances).unwrap();
 
         group.bench_function(BenchmarkId::new("fib", n_instances), |b| {
             b.iter(|| {
-                let proof = prove_batch(&config, &instances, &prover_data);
+                let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
                 // Lightweight sanity check — only on the first iteration would be
                 // enough, but verify is cheap relative to prove so we keep it.

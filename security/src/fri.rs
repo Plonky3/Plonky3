@@ -358,6 +358,7 @@ mod tests {
         StarkAirParams {
             num_constraints: 1,
             max_constraint_degree: 2,
+            num_quotient_chunks: 1,
             max_combo: 2,
         }
     }

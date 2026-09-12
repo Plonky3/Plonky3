@@ -451,7 +451,7 @@ mod tests {
         let rendered = format!("{p:#}");
         let expected = "Plonky3 Fiat-Shamir Transcript (3 interactions)\n\
                         0 Begin Protocol 4 test None Marker\n\
-                        1   Atomic Challenge 5 nonce Scalar Algebra(2013265921^1)\n\
+                        1   Atomic Challenge 5 nonce Scalar Algebra(2013265921^1;cfa353fe66eeeae7600254a68073d57125abac3820fde7a3e32c84482b826469)\n\
                         2 End Protocol 4 test None Marker\n";
         assert_eq!(rendered, expected);
 

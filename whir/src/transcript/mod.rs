@@ -110,7 +110,7 @@ const VERSION: u8 = 3;
 const NAME: &[u8] = b"p3-whir";
 
 /// Step label of the challenge batching the incoming evaluation claims.
-const INITIAL_BATCHING: &str = "initial_batching";
+pub(crate) const INITIAL_BATCHING: &str = "initial_batching";
 
 /// Container label of the fold that opens the run.
 ///
@@ -124,21 +124,22 @@ const COMMITMENT: &str = "commitment";
 const OOD_POINT: &str = "ood_point";
 
 /// Step label of the answer at an out-of-domain point.
-const OOD_ANSWER: &str = "ood_answer";
+pub(crate) const OOD_ANSWER: &str = "ood_answer";
 
 /// Step label of the grinding step guarding a round's query indices.
-const QUERY_POW: &str = "query_pow";
+pub(crate) const QUERY_POW: &str = "query_pow";
 
 /// Step label of a round's query indices.
-const QUERY_INDICES: &str = "query_indices";
+pub(crate) const QUERY_INDICES: &str = "query_indices";
 
 /// Step label of the challenge batching one round's fresh constraints.
-const ROUND_BATCHING: &str = "round_batching";
+pub(crate) const ROUND_BATCHING: &str = "round_batching";
 
 /// Container label of the fold that closes one intermediate round.
 const ROUND_FOLD: &str = "round_fold";
 
 /// Step label of a sumcheck folding challenge.
+#[cfg(test)]
 const FOLD_CHALLENGE: &str = "fold_challenge";
 
 /// Step label of the final polynomial, sent in the clear.

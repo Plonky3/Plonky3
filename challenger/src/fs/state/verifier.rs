@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_field::{BasedVectorSpace, Field, PrimeField64};
+use p3_field::{AlgebraIdentity, Field, PrimeField64};
 
 use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::{
@@ -220,7 +220,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     pub fn observe_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of extension type.
@@ -252,7 +252,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ) -> Result<Vec<TranscriptBound<EF>>, TranscriptError>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // The recorded count is the only one this step accepts.
@@ -312,7 +312,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ) -> Result<Vec<TranscriptBound<EF>>, TranscriptError>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         C: CanObserve<U::Item>,
         Cdc: Codec<C, F>,
     {
@@ -477,7 +477,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ) -> Vec<TranscriptBound<EF>>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -644,7 +644,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ) -> Result<TranscriptBound<EF>, TranscriptError>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of extension type `EF`.
@@ -802,7 +802,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     pub fn challenge_extension<F, EF, Cdc>(&mut self, label: Label) -> TranscriptBound<EF>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();

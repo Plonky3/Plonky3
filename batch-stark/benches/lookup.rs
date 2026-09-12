@@ -638,14 +638,14 @@ struct Metrics {
 fn measure(config: &MyConfig, case: &Case, variant: &Variant) -> Metrics {
     let (airs, traces, public_values) = build_batch(case, variant.air);
     let instances = make_instances(&airs, &traces, &public_values);
-    let mut prover_data = ProverData::from_instances(config, &instances);
+    let mut prover_data = ProverData::from_instances(config, &instances).unwrap();
     if variant.force_unpacked {
         force_unpacked(&mut prover_data, &airs);
     }
 
     // One-shot prove with a wall-clock estimate; the metrics table reads this.
     let t = Instant::now();
-    let proof = prove_batch(config, &instances, &prover_data);
+    let proof = prove_batch(config, &instances, &prover_data).unwrap();
     let prove_ms = t.elapsed().as_secs_f64() * 1e3;
 
     // Verify is the correctness gate: a malformed workload panics here.
@@ -661,7 +661,7 @@ fn measure(config: &MyConfig, case: &Case, variant: &Variant) -> Metrics {
 
     // Peak heap of a fresh prove, measured in isolation.
     arm_heap();
-    let proof = prove_batch(config, &instances, &prover_data);
+    let proof = prove_batch(config, &instances, &prover_data).unwrap();
     let peak_bytes = disarm_heap();
     drop(proof);
 
@@ -726,7 +726,7 @@ fn bench_lookup(c: &mut Criterion) {
 
             let (airs, traces, public_values) = build_batch(case, variant.air);
             let instances = make_instances(&airs, &traces, &public_values);
-            let mut prover_data = ProverData::from_instances(&config, &instances);
+            let mut prover_data = ProverData::from_instances(&config, &instances).unwrap();
             if variant.force_unpacked {
                 force_unpacked(&mut prover_data, &airs);
             }
@@ -734,11 +734,11 @@ fn bench_lookup(c: &mut Criterion) {
             let id = format!("{}/{}", case.name, variant.label);
 
             group.bench_function(BenchmarkId::new("prove", id.clone()), |b| {
-                b.iter(|| prove_batch(&config, &instances, &prover_data));
+                b.iter(|| prove_batch(&config, &instances, &prover_data).unwrap());
             });
 
             // A committed proof to verify repeatedly.
-            let proof = prove_batch(&config, &instances, &prover_data);
+            let proof = prove_batch(&config, &instances, &prover_data).unwrap();
             group.bench_function(BenchmarkId::new("verify", id), |b| {
                 b.iter(|| {
                     verify_batch(&config, &airs, &proof, &public_values, &prover_data.common)

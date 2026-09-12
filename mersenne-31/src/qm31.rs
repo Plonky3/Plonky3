@@ -151,6 +151,12 @@ impl BasedVectorSpace<Mersenne31> for QM31 {
     }
 }
 
+impl p3_field::AlgebraIdentity<Mersenne31> for QM31 {
+    fn algebra_id() -> Vec<u8> {
+        b"p3-QM31-v1:i^2=-1,u^2=2+i;basis=1,i,u,iu".to_vec()
+    }
+}
+
 impl ExtensionField<Mersenne31> for QM31 {
     type ExtensionPacking = PackedQM31;
 

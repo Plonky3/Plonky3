@@ -257,7 +257,7 @@ where
     let mut prover_challenger = base_challenger.clone();
 
     let t = Instant::now();
-    let (commit, prover_data) = pcs.commit(tables);
+    let (commit, prover_data) = pcs.commit(tables).unwrap();
     let commit_ms = t.elapsed().as_millis();
 
     observe(&mut prover_challenger, &commit);
@@ -268,13 +268,15 @@ where
 
     let t = Instant::now();
     let opening_points = domains.iter().map(|_| vec![zeta]).collect();
-    let (openings, proof) = pcs.open(
-        vec![p3_commit::OpeningRequest {
-            prover_data: &prover_data,
-            points: opening_points,
-        }],
-        &mut prover_challenger,
-    );
+    let (openings, proof) = pcs
+        .open(
+            vec![p3_commit::OpeningRequest {
+                prover_data: &prover_data,
+                points: opening_points,
+            }],
+            &mut prover_challenger,
+        )
+        .unwrap();
     let open_ms = t.elapsed().as_millis();
     let values: Vec<_> = openings[0]
         .iter()
@@ -329,7 +331,8 @@ fn run_whir(
 
     let t = Instant::now();
     let (commitment, prover_data) =
-        <WhirPcsTy as MultilinearPcs<EF, Challenger>>::commit(pcs, witness, &mut prover_challenger);
+        <WhirPcsTy as MultilinearPcs<EF, Challenger>>::commit(pcs, witness, &mut prover_challenger)
+            .unwrap();
     let commit_ms = t.elapsed().as_millis();
 
     let t = Instant::now();
@@ -338,7 +341,8 @@ fn run_whir(
         prover_data,
         protocol.clone(),
         &mut prover_challenger,
-    );
+    )
+    .unwrap();
     let open_ms = t.elapsed().as_millis();
 
     let verifier_challenger = base_challenger.clone();

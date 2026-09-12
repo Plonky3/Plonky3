@@ -514,6 +514,7 @@ mod tests {
         StarkAirParams {
             num_constraints: 1,
             max_constraint_degree: 2,
+            num_quotient_chunks: 1,
             max_combo: 2,
         }
     }
@@ -1098,6 +1099,7 @@ mod tests {
                 num_constraints,
                 max_constraint_degree,
                 max_combo,
+                num_quotient_chunks: (max_constraint_degree.max(2) - 1).next_power_of_two(),
             };
             let grinding = GrindingSites {
                 out_of_domain: grinding.0,

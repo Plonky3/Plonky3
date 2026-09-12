@@ -161,7 +161,7 @@ fn bench_prove(c: &mut Criterion) {
                     // Trace is regenerated per sample - fair comparison because
                     // the optimized version will reuse the same code path.
                     let trace = air.generate_trace_rows::<Val>(num_hashes, log_blowup);
-                    prove(&config, &air, trace, &[])
+                    prove(&config, &air, trace, &[]).unwrap()
                 });
             },
         );
@@ -190,7 +190,7 @@ fn bench_prove_verify(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let trace = air.generate_trace_rows::<Val>(num_hashes, log_blowup);
-                let proof = prove(&config, &air, trace, &[]);
+                let proof = prove(&config, &air, trace, &[]).unwrap();
                 verify(&config, &air, &proof, &[]).expect("verification failed");
             });
         },

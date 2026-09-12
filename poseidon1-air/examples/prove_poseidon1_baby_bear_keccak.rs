@@ -140,7 +140,7 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     let config = MyConfig::new(pcs, challenger);
 
     // Generate the STARK proof.
-    let proof = prove(&config, &air, trace, &[]);
+    let proof = prove(&config, &air, trace, &[]).unwrap();
 
     // Verify the proof.
     verify(&config, &air, &proof, &[])

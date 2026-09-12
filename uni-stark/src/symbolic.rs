@@ -12,7 +12,7 @@ use tracing::instrument;
 
 /// Size the quotient using the trace domain's transition-selector degree.
 ///
-/// Two-adic domains retain the cached degree and hint fast paths. Circle uses
+/// Two-adic domains retain the cached symbolic degree fast path. Circle uses
 /// full trace-space degrees for selectors and periodic columns. Its symbolic
 /// degree is checked even with a hint, since the hint does not encode how many
 /// transition factors occur in a constraint.
@@ -64,28 +64,6 @@ where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    assert!(is_zk <= 1, "is_zk must be either 0 or 1");
-
-    if let Some(degree_hint) = air.max_constraint_degree() {
-        let constraint_degree = (degree_hint + is_zk).max(2);
-        let result = log2_ceil_usize(constraint_degree - 1);
-
-        // This check remains at the `debug` level, as the AIR is known by both
-        // prover and verifier, i.e. a malicious prover cannot feed the verifier
-        // a different hint than the verifier computes for itself.
-        debug_assert!(
-            {
-                let symbolic =
-                    get_log_quotient_degree_extension::<F, F, A>(air, layout, trace_len, is_zk);
-                result >= symbolic
-            },
-            "max_constraint_degree() hint {} is too small; actual log quotient degree is larger",
-            degree_hint
-        );
-
-        return result;
-    }
-
     get_log_quotient_degree_extension(air, layout, trace_len, is_zk)
 }
 
@@ -108,26 +86,10 @@ where
 {
     assert!(is_zk <= 1, "is_zk must be either 0 or 1");
 
-    if let Some(degree_hint) = air.max_constraint_degree() {
-        let constraint_degree = (degree_hint + is_zk).max(2);
-        let result = log2_ceil_usize(constraint_degree - 1);
-
-        debug_assert!(
-            {
-                let actual =
-                    get_max_constraint_degree_extension::<F, EF, A>(air, layout, trace_len);
-                degree_hint >= actual
-            },
-            "max_constraint_degree() hint {} is too small; symbolic evaluation found a larger degree",
-            degree_hint
-        );
-
-        return result;
-    }
-
+    let degree = get_max_constraint_degree_extension::<F, EF, A>(air, layout, trace_len)
+        .max(air.max_constraint_degree().unwrap_or(0));
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
-    let constraint_degree =
-        (get_max_constraint_degree_extension::<F, EF, A>(air, layout, trace_len) + is_zk).max(2);
+    let constraint_degree = (degree + is_zk).max(2);
 
     // We bound the degree of the quotient polynomial by constraint_degree - 1,
     // then choose the number of quotient chunks as the smallest power of two
@@ -282,16 +244,48 @@ mod tests {
         assert_eq!(with_hint, without_hint);
     }
 
-    #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "max_constraint_degree() hint")]
-    fn test_max_constraint_degree_hint_too_small_panics() {
-        // Actual degree is 1, hint says 0 — debug_assert should fire.
+    fn test_max_constraint_degree_hint_too_small_uses_symbolic_degree() {
         let air = HintedMockAir {
             constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
             width: 4,
             degree_hint: Some(0),
         };
-        let _ = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 8, 0);
+        assert_eq!(
+            get_log_num_quotient_chunks(&air, air_layout(&air, 0), 8, 0),
+            0
+        );
+    }
+
+    #[test]
+    fn undersized_cubic_hint_preserves_quotient_chunks() {
+        struct CubicAir;
+        impl BaseAir<BabyBear> for CubicAir {
+            fn width(&self) -> usize {
+                1
+            }
+            fn max_constraint_degree(&self) -> Option<usize> {
+                Some(1)
+            }
+        }
+        impl Air<SymbolicAirBuilder<BabyBear>> for CubicAir {
+            fn eval(&self, builder: &mut SymbolicAirBuilder<BabyBear>) {
+                let x = SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0);
+                builder.assert_zero(x * x * x);
+            }
+        }
+        let layout = air_layout(&CubicAir, 0);
+        for (is_zk, expected) in [(0, 1), (1, 2)] {
+            assert_eq!(
+                get_log_num_quotient_chunks(&CubicAir, layout, 8, is_zk),
+                expected
+            );
+            assert_eq!(
+                get_log_quotient_degree_extension::<BabyBear, BabyBear, _>(
+                    &CubicAir, layout, 8, is_zk
+                ),
+                expected
+            );
+        }
     }
 }

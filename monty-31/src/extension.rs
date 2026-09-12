@@ -78,6 +78,11 @@ impl<const WIDTH: usize, FP> BinomiallyExtendable<WIDTH> for MontyField31<FP>
 where
     FP: BinomialExtensionData<WIDTH> + FieldParameters,
 {
+    fn binomial_algebra_id() -> alloc::vec::Vec<u8> {
+        use p3_field::PrimeField32;
+        alloc::format!("p3-power-basis-v1:X^{WIDTH}-{}", FP::W.as_canonical_u32()).into_bytes()
+    }
+
     const W: Self = FP::W;
 
     const DTH_ROOT: Self = FP::DTH_ROOT;

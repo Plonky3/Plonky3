@@ -48,6 +48,8 @@
 //!
 //! The same ordering holds inside a layer's sumcheck.
 //! Every round polynomial is absorbed before the challenge evaluated on it is drawn.
+//! Round and branch coordinates reject zero because the AIR zerocheck inherits this point
+//! and divides by its coordinates. Both sides use the same rejection sampling.
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -62,7 +64,7 @@ use p3_field::ExtensionField;
 use super::SplitFraction;
 
 /// Version byte bound into the transcript seed.
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 
 /// Protocol name bound into the transcript seed.
 const NAME: &[u8] = b"p3-multi-stark-fraction-gkr";
@@ -173,7 +175,7 @@ impl FractionGkrShape {
                     Hierarchy::Atomic,
                     Kind::Challenge,
                     ROUND_CHALLENGE,
-                    Length::Scalar,
+                    Length::Fixed(1),
                 ));
             }
 
@@ -190,7 +192,7 @@ impl FractionGkrShape {
                 Hierarchy::Atomic,
                 Kind::Challenge,
                 BRANCH,
-                Length::Scalar,
+                Length::Fixed(1),
             ));
 
             steps.push(Interaction::marker::<ReductionLayer>(
@@ -274,7 +276,13 @@ where
         self.state
             .observe_extensions::<F, EF, FieldToFieldCodec<F>>(ROUND_POLY, round_poly);
         self.state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(ROUND_CHALLENGE)
+            .challenge_extensions_rejecting::<F, EF, FieldToFieldCodec<F>>(
+                ROUND_CHALLENGE,
+                1,
+                |candidate, _| !candidate.is_zero(),
+            )
+            .pop()
+            .expect("one nonzero coordinate")
             .into_inner()
     }
 
@@ -291,7 +299,13 @@ where
             );
         let branch = self
             .state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(BRANCH)
+            .challenge_extensions_rejecting::<F, EF, FieldToFieldCodec<F>>(
+                BRANCH,
+                1,
+                |candidate, _| !candidate.is_zero(),
+            )
+            .pop()
+            .expect("one nonzero coordinate")
             .into_inner();
         self.state.end_protocol::<ReductionLayer>(LAYER);
         branch
@@ -368,7 +382,13 @@ where
             .observe_extensions::<F, EF, FieldToFieldCodec<F>>(ROUND_POLY, round_poly)
             .expect("a round polynomial of fixed width always matches the description");
         self.state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(ROUND_CHALLENGE)
+            .challenge_extensions_rejecting::<F, EF, FieldToFieldCodec<F>>(
+                ROUND_CHALLENGE,
+                1,
+                |candidate, _| !candidate.is_zero(),
+            )
+            .pop()
+            .expect("one nonzero coordinate")
             .into_inner()
     }
 
@@ -386,7 +406,13 @@ where
             .expect("a claim of fixed width always matches the description");
         let branch = self
             .state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(BRANCH)
+            .challenge_extensions_rejecting::<F, EF, FieldToFieldCodec<F>>(
+                BRANCH,
+                1,
+                |candidate, _| !candidate.is_zero(),
+            )
+            .pop()
+            .expect("one nonzero coordinate")
             .into_inner();
         self.state.end_protocol::<ReductionLayer>(LAYER);
         branch
@@ -418,6 +444,50 @@ mod tests {
     type EF = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2BabyBear<16>;
     type Ch = DuplexChallenger<F, Perm, 16, 8>;
+
+    #[test]
+    fn inherited_coordinates_resample_zero_on_both_sides() {
+        use p3_field::PrimeCharacteristicRing;
+        #[derive(Default)]
+        struct ZeroThenOne(usize);
+        impl CanObserve<F> for ZeroThenOne {
+            fn observe(&mut self, _: F) {}
+        }
+        impl CanSample<F> for ZeroThenOne {
+            fn sample(&mut self) -> F {
+                self.0 += 1;
+                F::from_bool(self.0.is_multiple_of(2))
+            }
+        }
+        let shape = FractionGkrShape { num_variables: 3 };
+        let claims = SplitFraction {
+            n0: F::ZERO,
+            d0: F::ONE,
+            n1: F::ZERO,
+            d1: F::ONE,
+        };
+        let mut pc = ZeroThenOne::default();
+        let mut vc = ZeroThenOne::default();
+        let mut prover = FractionGkrProverTranscript::<_, F, F>::new(&mut pc, shape, F::ONE);
+        let mut verifier = FractionGkrVerifierTranscript::<_, F, F>::new(&mut vc, shape, F::ONE);
+        let mut coordinates = Vec::new();
+        for layer in 0..3 {
+            assert_eq!(prover.begin_layer(), verifier.begin_layer());
+            for _ in 0..layer {
+                let p = prover.round(&[F::ZERO; ROUND_POLY_LEN]);
+                let v = verifier.round(&[F::ZERO; ROUND_POLY_LEN]);
+                assert_eq!(p, v);
+                coordinates.push(p);
+            }
+            let p = prover.end_layer(&claims);
+            assert_eq!(p, verifier.end_layer(&claims));
+            coordinates.push(p);
+        }
+        prover.finish();
+        verifier.finish();
+        assert!(coordinates.iter().all(|coordinate| *coordinate != F::ZERO));
+        assert_eq!(pc.0, vc.0);
+    }
 
     fn fresh_challenger() -> Ch {
         // Fixed seed so two runs differ only where the transcript makes them differ.

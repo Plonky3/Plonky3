@@ -3,7 +3,9 @@
 use p3_commit::Pcs;
 pub use p3_uni_stark::StarkGenericConfig as SGC;
 // Re-export the canonical config and common aliases from uni-stark to avoid duplication.
-pub use p3_uni_stark::{Domain, PackedChallenge, PackedVal, PcsError, StarkGenericConfig, Val};
+pub use p3_uni_stark::{
+    Domain, PackedChallenge, PackedVal, PcsError, PcsProverError, StarkGenericConfig, Val,
+};
 
 /// The challenge (extension field) type.
 pub type Challenge<SC> = <SC as StarkGenericConfig>::Challenge;

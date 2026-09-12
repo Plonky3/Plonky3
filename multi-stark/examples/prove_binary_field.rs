@@ -158,7 +158,7 @@ fn main() {
     let log_height = 18;
     let config = config(log_height);
     let (table, public) = trace(log_height);
-    let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
+    let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger()).unwrap();
 
     let proof = prove_with_security(
         &config,
@@ -219,7 +219,7 @@ mod tests {
         fn new(log_height: usize, pow_bits: usize) -> Self {
             let config = config(log_height);
             let (table, public) = trace(log_height);
-            let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
+            let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger()).unwrap();
             let proof = prove(
                 &config,
                 ProverInstances::new(vec![ProverInstance::new(
@@ -230,7 +230,8 @@ mod tests {
                 )]),
                 pow_bits,
                 &mut challenger(),
-            );
+            )
+            .unwrap();
             // Exercise the wire boundary before checking either honest or tampered proofs.
             let bytes = postcard::to_allocvec(&proof).unwrap();
             let proof = postcard::from_bytes(&bytes).unwrap();
@@ -273,7 +274,7 @@ mod tests {
     fn security_certifies_binary_pcs_and_rejects_an_excessive_target() {
         for log_height in [1, 4, 18] {
             let config = config(log_height);
-            let (_, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
+            let (_, vk) = setup(&config, &[&RecurrenceAir], &mut challenger()).unwrap();
             let public = [F::ZERO; 3];
             let instances = VerifierInstances::new(vec![VerifierInstance::new(
                 &RecurrenceAir,
@@ -288,7 +289,7 @@ mod tests {
         }
         let config = config(4);
         let (table, public) = trace(4);
-        let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
+        let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger()).unwrap();
         let proof = prove_with_security(
             &config,
             ProverInstances::new(vec![ProverInstance::new(
@@ -348,7 +349,7 @@ mod tests {
         // Corrupt an interior row while preserving all public boundary values.
         columns[2] += F::ONE;
         let table = Table::new(RowMajorMatrix::new(columns, 1 << log_height));
-        let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger());
+        let (pk, vk) = setup(&config, &[&RecurrenceAir], &mut challenger()).unwrap();
         let proof = prove(
             &config,
             ProverInstances::new(vec![ProverInstance::new(
@@ -359,7 +360,8 @@ mod tests {
             )]),
             0,
             &mut challenger(),
-        );
+        )
+        .unwrap();
         let fixture = Fixture {
             config,
             vk,
@@ -386,7 +388,8 @@ mod tests {
         let expected = table.clone();
         let (commitment, data) = config
             .pcs
-            .commit(config.build_witness(vec![table]), &mut challenger());
+            .commit(config.build_witness(vec![table]), &mut challenger())
+            .unwrap();
         for seed in [b"first opening".as_slice(), b"second opening".as_slice()] {
             use p3_challenger::CanObserve;
 
@@ -396,8 +399,10 @@ mod tests {
             for (actual, expected) in cloned.table(0).iter_polys().zip(expected.iter_polys()) {
                 assert_eq!(actual, expected);
             }
-            let proof: BinaryPcsProof<Mmcs> =
-                config.pcs.open(cloned, protocol.clone(), &mut prover);
+            let proof: BinaryPcsProof<Mmcs> = config
+                .pcs
+                .open(cloned, protocol.clone(), &mut prover)
+                .unwrap();
             let mut verifier = Challenger::from_hasher(seed.to_vec(), Keccak256Hash);
             config
                 .pcs
@@ -416,7 +421,8 @@ mod tests {
             &config,
             &[&RecurrenceAir, &RecurrenceAir],
             &mut challenger(),
-        );
+        )
+        .unwrap();
         let proof = prove(
             &config,
             ProverInstances::new(vec![
@@ -425,7 +431,8 @@ mod tests {
             ]),
             0,
             &mut challenger(),
-        );
+        )
+        .unwrap();
         verify(
             &config,
             VerifierInstances::new(vec![
@@ -512,7 +519,7 @@ mod tests {
         use p3_challenger::CanObserve;
 
         let config = PreprocessedConfig(config(3));
-        let (pk, vk) = setup(&config, &[&PreprocessedAir], &mut challenger());
+        let (pk, vk) = setup(&config, &[&PreprocessedAir], &mut challenger()).unwrap();
         for seed in [2, 3] {
             let fresh = || {
                 let mut ch = challenger();
@@ -530,7 +537,8 @@ mod tests {
                 )]),
                 0,
                 &mut fresh(),
-            );
+            )
+            .unwrap();
             let check = |proof: &MultiStarkProof<PreprocessedConfig>| {
                 verify(
                     &config,

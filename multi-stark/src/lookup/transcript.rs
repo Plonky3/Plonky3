@@ -87,7 +87,7 @@ pub struct LookupInstanceShape {
     pub num_variables: usize,
     /// First scalar leaf this AIR owns in the materialized fraction tables.
     pub base_offset: usize,
-    /// Bus identifier of each of this AIR's declarations, in emission order.
+    /// Bus identifier of each nonempty declaration, in emission order.
     pub bus_ids: Vec<usize>,
 }
 
@@ -126,7 +126,12 @@ impl LookupShape {
                     air_index: instance.air_index,
                     num_variables: instance.num_variables,
                     base_offset: instance.base_offset,
-                    bus_ids: instance.bus_ids.clone(),
+                    bus_ids: instance
+                        .lookups
+                        .iter()
+                        .zip(&instance.bus_ids)
+                        .filter_map(|(lookup, &id)| (!lookup.elements.is_empty()).then_some(id))
+                        .collect(),
                 })
                 .collect(),
         }

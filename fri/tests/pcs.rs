@@ -54,7 +54,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
 
     let (commits_by_round, data_by_round): (Vec<_>, Vec<_>) = domains_and_polys_by_round
         .iter()
-        .map(|domains_and_polys| pcs.commit(domains_and_polys.iter().cloned()))
+        .map(|domains_and_polys| pcs.commit(domains_and_polys.iter().cloned()).unwrap())
         .unzip();
     assert_eq!(commits_by_round.len(), num_rounds);
     assert_eq!(data_by_round.len(), num_rounds);
@@ -71,7 +71,7 @@ fn do_test_fri_pcs<Val, Challenge, Challenger, P>(
         .zip(points_by_round)
         .map(Into::into)
         .collect();
-    let (opening_by_round, proof) = pcs.open(data_and_points, &mut p_challenger);
+    let (opening_by_round, proof) = pcs.open(data_and_points, &mut p_challenger).unwrap();
     assert_eq!(opening_by_round.len(), num_rounds);
 
     // Verify the proof.
@@ -357,7 +357,7 @@ mod babybear_fri_pcs {
 
         let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, degree);
         let (_, data) =
-            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace.clone())]);
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace.clone())]).unwrap();
 
         let disjoint_domain = domain.create_disjoint_domain(degree);
         let evals = <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_evaluations_on_domain(

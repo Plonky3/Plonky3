@@ -182,6 +182,18 @@ where
         expected: usize,
         got: usize,
     },
+    #[error(
+        "hiding PCS round {round}, matrix {matrix}, point {point}: random opening value count mismatch: expected {expected}, got {got}"
+    )]
+    HidingRandomOpeningValueCountMismatch {
+        round: usize,
+        matrix: usize,
+        point: usize,
+        expected: usize,
+        got: usize,
+    },
+    #[error("hiding PCS preprocessing index {index} is outside {num_rounds} commitment rounds")]
+    HidingPreprocessedCommitmentOutOfBounds { index: usize, num_rounds: usize },
     #[error("hiding PCS requires at least {required} random codewords, got {got}")]
     InsufficientHidingRandomCodewords { required: usize, got: usize },
     #[error(
@@ -1420,20 +1432,23 @@ mod tests {
             <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
                 Challenge,
                 Challenger,
-            >>::commit(&pcs, [(domain, trace)]);
+            >>::commit(&pcs, [(domain, trace)])
+            .unwrap();
 
         // Prover side:
         // Observe the commitment, sample an opening point, and produce the FRI proof.
         let mut p_challenger = Challenger::new(perm.clone());
         p_challenger.observe(&commitment);
         let zeta: Challenge = p_challenger.sample_algebra_element();
-        let (opened_values, proof) = pcs.open(
-            vec![p3_commit::OpeningRequest {
-                prover_data: &prover_data,
-                points: vec![vec![zeta]],
-            }],
-            &mut p_challenger,
-        );
+        let (opened_values, proof) = pcs
+            .open(
+                vec![p3_commit::OpeningRequest {
+                    prover_data: &prover_data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut p_challenger,
+            )
+            .unwrap();
 
         // Verifier side:
         // Replay the transcript up to the point where the top-level FRI verification begins.
@@ -2007,18 +2022,21 @@ mod tests {
             <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
                 Challenge,
                 Challenger,
-            >>::commit(&pcs, [(domain, trace)]);
+            >>::commit(&pcs, [(domain, trace)])
+            .unwrap();
 
         let mut p_challenger = Challenger::new(perm.clone());
         p_challenger.observe(&commitment);
         let zeta: Challenge = p_challenger.sample_algebra_element();
-        let (opened_values, proof) = pcs.open(
-            vec![p3_commit::OpeningRequest {
-                prover_data: &prover_data,
-                points: vec![vec![zeta]],
-            }],
-            &mut p_challenger,
-        );
+        let (opened_values, proof) = pcs
+            .open(
+                vec![p3_commit::OpeningRequest {
+                    prover_data: &prover_data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut p_challenger,
+            )
+            .unwrap();
 
         let mut v_challenger = Challenger::new(perm);
         v_challenger.observe(&commitment);
@@ -2926,18 +2944,21 @@ mod tests {
             <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
                 Challenge,
                 Challenger,
-            >>::commit(&pcs, [(domain, trace)]);
+            >>::commit(&pcs, [(domain, trace)])
+            .unwrap();
 
         let mut challenger = Challenger::new(perm);
         challenger.observe(&commitment);
         let zeta: Challenge = challenger.sample_algebra_element();
-        let _ = pcs.open(
-            vec![p3_commit::OpeningRequest {
-                prover_data: &prover_data,
-                points: vec![vec![zeta]],
-            }],
-            &mut challenger,
-        );
+        let _ = pcs
+            .open(
+                vec![p3_commit::OpeningRequest {
+                    prover_data: &prover_data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut challenger,
+            )
+            .unwrap();
     }
 
     #[test]

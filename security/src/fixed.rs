@@ -101,11 +101,13 @@ pub const fn ceil_log2(x: u64) -> u64 {
 /// directly. The correction is rounded up and then subtracted, keeping the rate conservative.
 ///
 /// `field_bits` is `log2(q)` for the field FRI operates over — the challenge field, in fixed point.
+/// Values outside `1..=from_bits(u32::MAX)` are unsupported and return zero. This bound keeps
+/// the numerator representable even at the largest `log_blowup`.
 ///
 /// Returns zero when the correction would exceed `log_blowup`, i.e. when the rate is not positive
 /// and queries contribute nothing.
 pub const fn bits_per_query(log_blowup: u32, field_bits: u64) -> u64 {
-    if log_blowup == 0 || field_bits == 0 {
+    if log_blowup == 0 || field_bits == 0 || field_bits > from_bits(u32::MAX) {
         return 0;
     }
 
@@ -121,6 +123,20 @@ mod tests {
     use super::*;
     use crate::fri::{FriRegime, conjectured_error};
     use crate::shape::InstanceShape;
+
+    #[test]
+    fn malformed_field_bits_have_no_query_security() {
+        for field_bits in [
+            0,
+            18_446_744_073_709_391_531,
+            u64::MAX,
+            from_bits(u32::MAX) + 1,
+        ] {
+            assert_eq!(bits_per_query(1, field_bits), 0);
+        }
+        assert!(bits_per_query(1, from_bits(u32::MAX)) > 0);
+        assert!(bits_per_query(u32::MAX, from_bits(u32::MAX)) > 0);
+    }
 
     /// The true value of `log2` must never be understated by [`ceil_log2`] nor overstated by
     /// [`floor_log2`], and both must track it to within one unit in the last place. These are the

@@ -29,7 +29,10 @@ use super::config::ZkWhirConfig;
 use super::constraint::SourceClaim;
 use super::proof::ZkWhirProof;
 use crate::pcs::proof::QueryOpenings;
-use crate::pcs::utils::get_challenge_stir_queries;
+use crate::transcript::zk::{
+    ORACLE_COMMITMENT, SWITCH_MASK_COMMITMENT, ZkWhirShape, ZkWhirVerifierTranscript,
+};
+use crate::transcript::{INITIAL_BATCHING, OOD_ANSWER, QUERY_INDICES, QUERY_POW, ROUND_BATCHING};
 
 /// Failure modes of the HVZK-WHIR verifier.
 #[derive(Debug, PartialEq, Eq, Error)]
@@ -234,188 +237,199 @@ where
         }
 
         // Initial relation: claims batched by powers of alpha.
-        let alpha: EF = challenger.sample_algebra_element();
-        let mut source = SourceClaim::new();
-        let mut target = EF::ZERO;
-        for ((point, eval), coeff) in claims.iter().zip(alpha.powers()) {
-            source.push_eq(point.clone(), coeff);
-            target += coeff * *eval;
-        }
-        let mut masks = VerifierMasks::new();
-
-        // Initial masked sumcheck batch.
-        let mut randomness = self.replay_sumcheck_batch(
-            proof,
-            0,
-            config.round_folding_factor(0),
-            config.starting_folding_pow_bits,
-            &mut target,
-            &mut source,
-            &mut masks,
-            challenger,
-        )?;
-
-        let mut active = ActiveOracle::Base(commitment);
-        let mut num_variables = config.num_variables - config.round_folding_factor(0);
-
-        // Code-switching rounds.
-        for round in 0..n_rounds {
-            let round_params = &config.round_parameters[round];
-            let round_proof = &proof.rounds[round];
-            let folding = config.round_folding_factor(round);
-            let folding_next = config.round_folding_factor(round + 1);
-
-            // New oracle and code-switch mask commitments.
-            let new_commitment = &round_proof.commitment;
-            challenger.observe(new_commitment.clone());
-            let mask_commitment = &round_proof.mask_commitment;
-            challenger.observe(mask_commitment.clone());
-
-            // Private out-of-domain answers.
-            if round_proof.ood_answers.len() != round_params.ood_samples {
-                return Err(ZkVerifierError::OodAnswerCountMismatch {
-                    round,
-                    expected: round_params.ood_samples,
-                    actual: round_proof.ood_answers.len(),
-                });
+        let mut transcript =
+            ZkWhirVerifierTranscript::new(challenger, ZkWhirShape::new(config, claims.len()));
+        let result = (|| {
+            let alpha: EF = transcript.challenge(INITIAL_BATCHING);
+            let mut source = SourceClaim::new();
+            let mut target = EF::ZERO;
+            for ((point, eval), coeff) in claims.iter().zip(alpha.powers()) {
+                source.push_eq(point.clone(), coeff);
+                target += coeff * *eval;
             }
-            let mut rho_points = Vec::with_capacity(round_params.ood_samples);
-            for &answer in &round_proof.ood_answers {
-                let rho: EF = challenger.sample_algebra_element();
-                challenger.observe_algebra_element(answer);
-                rho_points.push(rho);
-            }
+            let mut masks = VerifierMasks::new();
 
-            // PoW, then STIR queries on the previous oracle.
-            if round_params.pow_bits > 0
-                && !challenger.check_witness(round_params.pow_bits, round_proof.pow_witness)
-            {
-                return Err(ZkVerifierError::InvalidPowWitness { round });
-            }
-            let stir_indexes = get_challenge_stir_queries::<Challenger, F>(
-                round_params.domain_size,
-                folding,
-                round_params.num_queries,
-                challenger,
-            );
-            // Authenticate the leaves in one multiproof and fold them at the
-            // batch randomness.
-            let dims = vec![Dimensions {
-                height: round_params.domain_size >> folding,
-                width: 1 << folding,
-            }];
-            let folded_values = self.verify_and_fold_leaves(
-                &active,
-                &dims,
-                &stir_indexes,
-                &round_proof.openings,
-                round,
-                &randomness,
-            )?;
-            let query_points: Vec<EF> = stir_indexes
-                .iter()
-                .map(|&index| EF::from(round_params.folded_domain_gen.exp_u64(index as u64)))
-                .collect();
+            // Initial masked sumcheck batch.
+            let mut randomness = transcript.sumcheck(|challenger| {
+                self.replay_sumcheck_batch(
+                    proof,
+                    0,
+                    config.round_folding_factor(0),
+                    config.starting_folding_pow_bits,
+                    &mut target,
+                    &mut source,
+                    &mut masks,
+                    challenger,
+                )
+            })?;
 
-            // Batch the carried claim with the fresh constraints.
-            let combination: EF = challenger.sample_algebra_element();
-            let coeffs: Vec<EF> = combination
-                .shifted_powers(combination)
-                .collect_n(rho_points.len() + query_points.len());
-            let (ood_coeffs, query_coeffs) = coeffs.split_at(rho_points.len());
+            let mut active = ActiveOracle::Base(commitment);
+            let mut num_variables = config.num_variables - config.round_folding_factor(0);
 
-            let mask_claim = ZkMaskClaim {
-                base_claim_coeff: EF::ONE,
-                ood_coeffs: ood_coeffs.to_vec(),
-                in_domain_coeffs: query_coeffs.to_vec(),
-            };
-            target = mask_claim.batched_claim(target, &round_proof.ood_answers, &folded_values)?;
+            // Code-switching rounds.
+            for round in 0..n_rounds {
+                let round_params = &config.round_parameters[round];
+                let round_proof = &proof.rounds[round];
+                let folding = config.round_folding_factor(round);
+                let folding_next = config.round_folding_factor(round + 1);
 
-            // Source side: fresh power constraints over the new message.
-            for (&rho, &coeff) in rho_points.iter().zip(ood_coeffs) {
-                source.push_pow(rho, num_variables, coeff);
-            }
-            for (&x, &coeff) in query_points.iter().zip(query_coeffs) {
-                source.push_pow(x, num_variables, coeff);
-            }
+                // New oracle and code-switch mask commitments.
+                let new_commitment = &round_proof.commitment;
+                transcript.commitment(ORACLE_COMMITMENT, new_commitment.clone());
+                let mask_commitment = &round_proof.mask_commitment;
+                transcript.commitment(SWITCH_MASK_COMMITMENT, mask_commitment.clone());
 
-            // Mask side: the fresh code-switch mask enters the relation as
-            // its own width-one group.
-            masks.push_switch_mask(
-                switch_mask_covector(
-                    1 << num_variables,
-                    config.oracle_randomness[round],
-                    round_params.ood_samples,
-                    &rho_points,
-                    ood_coeffs,
-                    &query_points,
-                    query_coeffs,
-                ),
-                config.switch_masks[round],
-                mask_commitment.clone(),
-            );
+                // Private out-of-domain answers.
+                if round_proof.ood_answers.len() != round_params.ood_samples {
+                    return Err(ZkVerifierError::OodAnswerCountMismatch {
+                        round,
+                        expected: round_params.ood_samples,
+                        actual: round_proof.ood_answers.len(),
+                    });
+                }
+                let mut rho_points = Vec::with_capacity(round_params.ood_samples);
+                for &answer in &round_proof.ood_answers {
+                    let rho = transcript.ood_point(&rho_points);
+                    transcript.observe(OOD_ANSWER, answer);
+                    rho_points.push(rho);
+                }
 
-            // Next masked sumcheck batch over the new oracle.
-            randomness = self.replay_sumcheck_batch(
-                proof,
-                round + 1,
-                folding_next,
-                round_params.folding_pow_bits,
-                &mut target,
-                &mut source,
-                &mut masks,
-                challenger,
-            )?;
-
-            active = ActiveOracle::Ext(new_commitment);
-            num_variables -= folding_next;
-        }
-
-        // Masked base case on the virtual folded oracle.
-        let final_config = config.final_round_config();
-        let source_code = super::committer::FoldedRsCode::<F>::new(
-            1 << final_config.num_variables,
-            config.oracle_randomness[n_rounds],
-            final_config.domain_size >> final_config.folding_factor,
-        );
-        let base_config = BaseCaseZkConfig {
-            code: source_code,
-            mask_groups: masks.groups,
-            num_queries: config.final_queries,
-            mask_queries: config.mask_queries,
-            pow_bits: config.final_pow_bits,
-        };
-        let base_verifier = BaseCaseZkVerifier {
-            config: &base_config,
-            extension_mmcs: &self.extension_mmcs,
-        };
-
-        let source_covector = source.materialize(final_config.num_variables);
-        let dims = vec![Dimensions {
-            height: final_config.domain_size >> final_config.folding_factor,
-            width: 1 << final_config.folding_factor,
-        }];
-        base_verifier.verify(
-            &proof.base_case,
-            source_covector.as_slice(),
-            &masks.claims.covectors,
-            &masks.commitments,
-            target,
-            |positions, openings| {
-                self.verify_and_fold_leaves(
+                // PoW, then STIR queries on the previous oracle.
+                if !transcript.pow(QUERY_POW, round_params.pow_bits, round_proof.pow_witness) {
+                    return Err(ZkVerifierError::InvalidPowWitness { round });
+                }
+                let stir_indexes = transcript.indices(
+                    QUERY_INDICES,
+                    round_params.domain_size >> folding,
+                    round_params.num_queries,
+                );
+                // Authenticate the leaves in one multiproof and fold them at the
+                // batch randomness.
+                let dims = vec![Dimensions {
+                    height: round_params.domain_size >> folding,
+                    width: 1 << folding,
+                }];
+                let folded_values = self.verify_and_fold_leaves(
                     &active,
                     &dims,
-                    positions,
-                    openings,
-                    n_rounds,
+                    &stir_indexes,
+                    &round_proof.openings,
+                    round,
                     &randomness,
-                )
-                .map_err(|_| BaseCaseZkError::SourceOpeningsRejected)
-            },
-            challenger,
-        )?;
+                )?;
+                let query_points: Vec<EF> = stir_indexes
+                    .iter()
+                    .map(|&index| EF::from(round_params.folded_domain_gen.exp_u64(index as u64)))
+                    .collect();
 
-        Ok(())
+                // Batch the carried claim with the fresh constraints.
+                let combination: EF = transcript.challenge(ROUND_BATCHING);
+                let coeffs: Vec<EF> = combination
+                    .shifted_powers(combination)
+                    .collect_n(rho_points.len() + query_points.len());
+                let (ood_coeffs, query_coeffs) = coeffs.split_at(rho_points.len());
+
+                let mask_claim = ZkMaskClaim {
+                    base_claim_coeff: EF::ONE,
+                    ood_coeffs: ood_coeffs.to_vec(),
+                    in_domain_coeffs: query_coeffs.to_vec(),
+                };
+                target =
+                    mask_claim.batched_claim(target, &round_proof.ood_answers, &folded_values)?;
+
+                // Source side: fresh power constraints over the new message.
+                for (&rho, &coeff) in rho_points.iter().zip(ood_coeffs) {
+                    source.push_pow(rho, num_variables, coeff);
+                }
+                for (&x, &coeff) in query_points.iter().zip(query_coeffs) {
+                    source.push_pow(x, num_variables, coeff);
+                }
+
+                // Mask side: the fresh code-switch mask enters the relation as
+                // its own width-one group.
+                masks.push_switch_mask(
+                    switch_mask_covector(
+                        1 << num_variables,
+                        config.oracle_randomness[round],
+                        round_params.ood_samples,
+                        &rho_points,
+                        ood_coeffs,
+                        &query_points,
+                        query_coeffs,
+                    ),
+                    config.switch_masks[round],
+                    mask_commitment.clone(),
+                );
+
+                // Next masked sumcheck batch over the new oracle.
+                randomness = transcript.sumcheck(|challenger| {
+                    self.replay_sumcheck_batch(
+                        proof,
+                        round + 1,
+                        folding_next,
+                        round_params.folding_pow_bits,
+                        &mut target,
+                        &mut source,
+                        &mut masks,
+                        challenger,
+                    )
+                })?;
+
+                active = ActiveOracle::Ext(new_commitment);
+                num_variables -= folding_next;
+            }
+
+            // Masked base case on the virtual folded oracle.
+            let final_config = config.final_round_config();
+            let source_code = super::committer::FoldedRsCode::<F>::new(
+                1 << final_config.num_variables,
+                config.oracle_randomness[n_rounds],
+                final_config.domain_size >> final_config.folding_factor,
+            );
+            let base_config = BaseCaseZkConfig {
+                code: source_code,
+                mask_groups: masks.groups,
+                num_queries: config.final_queries,
+                mask_queries: config.mask_queries,
+                pow_bits: config.final_pow_bits,
+            };
+            let base_verifier = BaseCaseZkVerifier {
+                config: &base_config,
+                extension_mmcs: &self.extension_mmcs,
+            };
+
+            let source_covector = source.materialize(final_config.num_variables);
+            let dims = vec![Dimensions {
+                height: final_config.domain_size >> final_config.folding_factor,
+                width: 1 << final_config.folding_factor,
+            }];
+            base_verifier.verify(
+                &proof.base_case,
+                source_covector.as_slice(),
+                &masks.claims.covectors,
+                &masks.commitments,
+                target,
+                |positions, openings| {
+                    self.verify_and_fold_leaves(
+                        &active,
+                        &dims,
+                        positions,
+                        openings,
+                        n_rounds,
+                        &randomness,
+                    )
+                    .map_err(|_| BaseCaseZkError::SourceOpeningsRejected)
+                },
+                &mut transcript,
+            )?;
+
+            Ok(())
+        })();
+        match result {
+            Ok(()) => transcript.finish(),
+            Err(_) => transcript.abort(),
+        }
+        result
     }
 
     /// Replays one masked sumcheck batch and updates the carried relation.

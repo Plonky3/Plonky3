@@ -82,7 +82,7 @@ pub fn reduction_terms(
     );
     // A fixed nonzero constraint table has a multilinear extension. Its
     // evaluation at tau vanishes with probability at most h/(q-1). The tail
-    // inherited from GKR is uniform over q, so using q-1 for it is conservative.
+    // inherited from GKR is also rejection-sampled over the nonzero elements.
     add("zerocheck", air.num_variables as f64, nonzero_field_bits);
     // The equality weight raises the native AIR degree by one in every round.
     add(
@@ -102,7 +102,7 @@ pub fn reduction_terms(
         add(
             "fractional-gkr",
             2.0 * layers + 3.0 * layers * (layers - 1.0) / 2.0,
-            field_bits,
+            nonzero_field_bits,
         );
         add("lookup-opening-link", 1.0, field_bits); // theta
         add("lookup-air-link", 1.0, field_bits); // eta
@@ -163,7 +163,7 @@ mod tests {
         };
         assert!((find("logup-fingerprint") - (100.0 - libm::log2(192.0))).abs() < 1e-12);
         // Five lambda and branch draws, plus 0+1+2+3+4 cubic rounds.
-        assert!((find("fractional-gkr") - (100.0 - libm::log2(40.0))).abs() < 1e-12);
+        assert!((find("fractional-gkr") - (99.0 - libm::log2(40.0))).abs() < 1e-12);
         assert_eq!(find("lookup-opening-link"), 100.0);
         assert_eq!(find("lookup-air-link"), 100.0);
     }

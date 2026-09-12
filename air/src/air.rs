@@ -168,25 +168,19 @@ pub trait BaseAir<F>: Sync {
     /// For example, a constraint `x * y * z` where x, y, z are trace
     /// variables has degree multiple 3.
     ///
-    /// Normally the prover runs a full symbolic evaluation to compute this.
-    /// Overriding this method lets both the prover and verifier skip that
-    /// pass when only the degree (not the full constraint list) is needed.
+    /// Uni-STARK and batch-STARK size the quotient using the maximum of this
+    /// hint and the symbolically inferred degree, including base and extension
+    /// constraints. Supplying a hint does not skip symbolic evaluation, and an
+    /// undersized hint does not reduce the quotient below the inferred bound.
     /// Domains with a full trace-space transition selector, such as Circle,
-    /// still infer the domain-specific degree and take the maximum of it and
-    /// this hint. The cached degree multiple used by this hint treats transition
-    /// selectors as degree zero and cannot bound their repeated products there.
+    /// include that selector in the inferred degree. The cached degree multiple
+    /// used by this hint treats transition selectors as degree zero and cannot
+    /// bound their repeated products there.
     ///
-    /// The value must be an upper bound on the degree multiple of every
-    /// constraint (base and extension). It does not need to be tight, but
-    /// overestimating wastes prover work (larger quotient domain).
+    /// Overestimating is permitted but increases prover work by selecting a
+    /// larger quotient domain.
     ///
-    /// # Correctness
-    ///
-    /// The returned value **must** be >= the actual max constraint degree.
-    /// A value that is too small will cause the prover to produce an
-    /// invalid proof.
-    ///
-    /// Returns `None` by default, which falls back to symbolic evaluation.
+    /// Returns `None` by default, which uses the inferred degree alone.
     fn max_constraint_degree(&self) -> Option<usize> {
         None
     }

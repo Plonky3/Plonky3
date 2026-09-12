@@ -35,13 +35,17 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use tracing::instrument;
 
+use crate::WhirConfigError;
 use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
-use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::base_case::{BaseCaseZkConfig, BaseCaseZkProver, MaskGroupWitness};
 use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
 use crate::pcs::zk::committer::{FoldedRsCode, zk_padded_matrix};
 use crate::pcs::zk::config::ZkWhirConfig;
 use crate::pcs::zk::proof::{ZkRoundProof, ZkWhirProof};
+use crate::transcript::zk::{
+    ORACLE_COMMITMENT, SWITCH_MASK_COMMITMENT, ZkWhirProverTranscript, ZkWhirShape,
+};
+use crate::transcript::{INITIAL_BATCHING, OOD_ANSWER, QUERY_INDICES, QUERY_POW, ROUND_BATCHING};
 use crate::utils::{eval_ze_star_n, par_add_scaled_powers, par_eval_ze_star_n};
 
 /// Chunk length for the parallel power runs over message-length vectors.
@@ -135,14 +139,12 @@ where
         claims: &[(Point<EF>, EF)],
         challenger: &mut Challenger,
         rng: &mut R,
-    ) -> ZkWhirProof<F, EF, MT>
+    ) -> Result<ZkWhirProof<F, EF, MT>, WhirConfigError>
     where
         F: PrimeField64,
     {
         let config = self.config;
-        config
-            .validate_initial_claims(claims.len())
-            .unwrap_or_else(|error| panic!("{error}"));
+        config.validate_initial_claims(claims.len())?;
         let num_variables = config.num_variables;
         let sumcheck_mask_encoding = config.sumcheck_mask.encoding::<EF>();
 
@@ -152,7 +154,9 @@ where
         // Initial relation: claims batched by powers of alpha.
         //
         //     W = sum_i alpha^i eq(z_i, .)        claim = sum_i alpha^i v_i
-        let alpha: EF = challenger.sample_algebra_element();
+        let mut transcript =
+            ZkWhirProverTranscript::new(challenger, ZkWhirShape::new(config, claims.len()));
+        let alpha: EF = transcript.challenge(INITIAL_BATCHING);
         let coeffs: Vec<EF> = alpha.powers().collect_n(claims.len());
         let mut claim = EF::ZERO;
         for ((point, eval), coeff) in claims.iter().zip(&coeffs) {
@@ -199,16 +203,18 @@ where
         // Initial masked sumcheck batch.
         let mut masks = ProverMasks::<F, EF, MT>::new();
         let mut zk_data = ZkSumcheckData::default();
-        let handoff = sumcheck_prover.into_zk_sumcheck(
-            &mut zk_data,
-            &sumcheck_mask_encoding,
-            &self.extension_mmcs,
-            config.round_folding_factor(0),
-            config.starting_folding_pow_bits,
-            EF::ZERO,
-            challenger,
-            rng,
-        );
+        let handoff = transcript.sumcheck(|challenger| {
+            sumcheck_prover.into_zk_sumcheck(
+                &mut zk_data,
+                &sumcheck_mask_encoding,
+                &self.extension_mmcs,
+                config.round_folding_factor(0),
+                config.starting_folding_pow_bits,
+                EF::ZERO,
+                challenger,
+                rng,
+            )
+        });
         // Proof accumulators
         let mut sumchecks = Vec::new();
         let mut sumcheck_mask_commitments = Vec::new();
@@ -252,7 +258,7 @@ where
                 zk_padded_matrix(message.as_slice(), &fresh_randomness, folding_next, height);
             let encoded = self.dft.dft_algebra_batch(padded);
             let (commitment, merkle) = self.extension_mmcs.commit_matrix(encoded);
-            challenger.observe(commitment.clone());
+            transcript.commitment(ORACLE_COMMITMENT, commitment.clone());
 
             // Commit the code-switch mask (folded randomness || pad).
             let mask_shape = &config.switch_masks[round];
@@ -268,29 +274,22 @@ where
             let mask_codeword =
                 mask_encoding.encode_with_randomness(&mask_message, &mask_encoding_randomness);
             let (mask_commitment, mask_data) = self.extension_mmcs.commit_matrix(mask_codeword);
-            challenger.observe(mask_commitment.clone());
+            transcript.commitment(SWITCH_MASK_COMMITMENT, mask_commitment.clone());
 
             // Private out-of-domain answers over (message || randomness || pad).
             //
             // OOD privacy needs the pad-coefficient matrix {rho_i^{l+r+s}}
             // invertible, i.e. the rho_i pairwise distinct and nonzero.
-            // Over the quartic extension both hold but for a 1/|F| event,
-            // folded into the HVZK error; the debug_assert flags a future
-            // small-field instantiation loudly rather than leaking silently.
+            // Reject zero and repeated points before releasing an answer, in every build.
             let mut rho_points = Vec::with_capacity(round_params.ood_samples);
             let mut ood_answers = Vec::with_capacity(round_params.ood_samples);
             for _ in 0..round_params.ood_samples {
-                let rho: EF = challenger.sample_algebra_element();
-                debug_assert!(!rho.is_zero(), "OOD point must be nonzero");
-                debug_assert!(
-                    !rho_points.contains(&rho),
-                    "OOD points must be pairwise distinct",
-                );
+                let rho = transcript.ood_point(&rho_points);
                 // ze*(rho) over (message || mask_message): the long message side
                 // runs as chunked parallel Horner, the short mask tail serially.
                 let answer = par_eval_ze_star_n(rho, message.as_slice(), POW_CHUNK)
                     + eval_ze_star_n(rho, &mask_message) * rho.exp_u64(message_len as u64);
-                challenger.observe_algebra_element(answer);
+                transcript.observe(OOD_ANSWER, answer);
                 rho_points.push(rho);
                 ood_answers.push(answer);
             }
@@ -298,16 +297,11 @@ where
             // PoW, then STIR queries on the previous oracle.
             //
             //     pow_bits = 0  ->  no grind, zero witness on the wire
-            let pow_witness = if round_params.pow_bits > 0 {
-                challenger.grind(round_params.pow_bits)
-            } else {
-                F::ZERO
-            };
-            let stir_indexes = get_challenge_stir_queries::<Challenger, F>(
-                round_params.domain_size,
-                folding,
+            let pow_witness = transcript.pow(QUERY_POW, round_params.pow_bits);
+            let stir_indexes = transcript.indices(
+                QUERY_INDICES,
+                round_params.domain_size >> folding,
                 round_params.num_queries,
-                challenger,
             );
 
             // Open the previous oracle in one multiproof and fold each leaf
@@ -328,7 +322,7 @@ where
             //
             // Starting at the first power keeps every fresh constraint
             // independent of the carried claim.
-            let combination: EF = challenger.sample_algebra_element();
+            let combination: EF = transcript.challenge(ROUND_BATCHING);
             let coeffs: Vec<EF> = combination
                 .shifted_powers(combination)
                 .collect_n(rho_points.len() + query_points.len());
@@ -440,16 +434,18 @@ where
             // The mask-claim total rides the batch as its auxiliary constant.
             let aux = masks.aux;
             let mut zk_data = ZkSumcheckData::default();
-            let handoff = sumcheck_prover.into_zk_sumcheck(
-                &mut zk_data,
-                &sumcheck_mask_encoding,
-                &self.extension_mmcs,
-                folding_next,
-                round_params.folding_pow_bits,
-                aux,
-                challenger,
-                rng,
-            );
+            let handoff = transcript.sumcheck(|challenger| {
+                sumcheck_prover.into_zk_sumcheck(
+                    &mut zk_data,
+                    &sumcheck_mask_encoding,
+                    &self.extension_mmcs,
+                    folding_next,
+                    round_params.folding_pow_bits,
+                    aux,
+                    challenger,
+                    rng,
+                )
+            });
             batch = masks.record_batch(
                 &mut sumchecks,
                 &mut sumcheck_mask_commitments,
@@ -511,17 +507,18 @@ where
                 self.open_and_fold(&round_data, positions, &batch.randomness)
                     .0
             },
-            challenger,
+            &mut transcript,
             rng,
         );
+        transcript.finish();
 
-        ZkWhirProof {
+        Ok(ZkWhirProof {
             evals: claimed_evals,
             sumchecks,
             sumcheck_mask_commitments,
             rounds,
             base_case,
-        }
+        })
     }
 
     /// Opens the active oracle at every index in one multiproof and folds

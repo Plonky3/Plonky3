@@ -6,15 +6,19 @@ use core::iter::repeat_n;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_field::{ExtensionField, TwoAdicField, dot_product};
+use p3_field::{ExtensionField, PrimeField64, TwoAdicField, dot_product};
 use p3_matrix::Dimensions;
 use p3_util::log2_strict_usize;
 
 use super::config::BaseCaseZkConfig;
 use super::error::BaseCaseZkError;
 use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
-use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::proof::BaseCaseZkProof;
+use crate::transcript::zk::{
+    BASE_BLIND_COMMITMENT, BASE_CLAIM, BASE_FRESH_COMMITMENT, BASE_GAMMA, BASE_MASK_QUERIES,
+    BASE_POW, BASE_REVEAL_MESSAGE, BASE_REVEAL_RANDOMNESS, BASE_SOURCE_QUERIES,
+    ZkWhirVerifierTranscript,
+};
 use crate::utils::padded_ood_t1;
 
 /// HVZK base-case verifier (Construction 7.2).
@@ -32,7 +36,7 @@ where
 
 impl<F, EF, MT> BaseCaseZkVerifier<'_, F, EF, MT>
 where
-    F: TwoAdicField,
+    F: TwoAdicField + PrimeField64,
     EF: ExtensionField<F> + TwoAdicField,
     MT: Mmcs<F>,
 {
@@ -65,7 +69,7 @@ where
             &[usize],
             &QueryOpenings<F, EF, MT::MultiProof>,
         ) -> Result<Vec<EF>, BaseCaseZkError>,
-        challenger: &mut Challenger,
+        transcript: &mut ZkWhirVerifierTranscript<'_, Challenger, F, EF>,
     ) -> Result<(), BaseCaseZkError>
     where
         Challenger: FieldChallenger<F>
@@ -155,17 +159,25 @@ where
         //     move 3  ->  sample gamma (now bound to everything above)
         //     move 4  ->  reveals f*, r*, xi*_i, r*_i
         let fresh_main_commitment = &proof.fresh_main_commitment;
-        challenger.observe(fresh_main_commitment.clone());
+        transcript.commitment(BASE_FRESH_COMMITMENT, fresh_main_commitment.clone());
         for commitment in &proof.fresh_mask_commitments {
-            challenger.observe(commitment.clone());
+            transcript.commitment(BASE_BLIND_COMMITMENT, commitment.clone());
         }
-        challenger.observe_algebra_element(proof.masked_claim);
-        let gamma: EF = challenger.sample_algebra_element();
-        challenger.observe_algebra_slice(&proof.blinded_message);
-        challenger.observe_algebra_slice(&proof.blinded_randomness);
+        transcript.observe(BASE_CLAIM, proof.masked_claim);
+        let gamma: EF = transcript.challenge(BASE_GAMMA);
+        transcript
+            .observe_slice(BASE_REVEAL_MESSAGE, &proof.blinded_message)
+            .expect("reveal lengths validated above");
+        transcript
+            .observe_slice(BASE_REVEAL_RANDOMNESS, &proof.blinded_randomness)
+            .expect("reveal lengths validated above");
         for blinded in &proof.blinded_masks {
-            challenger.observe_algebra_slice(&blinded.message);
-            challenger.observe_algebra_slice(&blinded.randomness);
+            transcript
+                .observe_slice(BASE_REVEAL_MESSAGE, &blinded.message)
+                .expect("reveal lengths validated above");
+            transcript
+                .observe_slice(BASE_REVEAL_RANDOMNESS, &blinded.randomness)
+                .expect("reveal lengths validated above");
         }
 
         // Check 2: the joint target identity.
@@ -188,9 +200,7 @@ where
         }
 
         // Check 3: proof of work before the spot positions are drawn.
-        if self.config.pow_bits > 0
-            && !challenger.check_witness(self.config.pow_bits, proof.pow_witness)
-        {
+        if !transcript.pow(BASE_POW, self.config.pow_bits, proof.pow_witness) {
             return Err(BaseCaseZkError::InvalidPowWitness);
         }
 
@@ -200,11 +210,10 @@ where
         // These checks tie them to the committed oracles, per position z:
         //
         //     Enc(f*, r*)(z) = g(z) + gamma * f(z)
-        let positions = get_challenge_stir_queries::<Challenger, F>(
+        let positions = transcript.indices(
+            BASE_SOURCE_QUERIES,
             code.domain_size,
-            0,
             self.config.num_queries,
-            challenger,
         );
         // One opened row per sampled position, for the source and the fresh mask.
         let openings = |kind, actual: usize, expected: usize| {
@@ -262,11 +271,10 @@ where
             .zip(&proof.mask_openings)
             .enumerate()
         {
-            let positions = get_challenge_stir_queries::<Challenger, F>(
+            let positions = transcript.indices(
+                BASE_MASK_QUERIES,
                 group.shape.domain_size,
-                0,
                 self.config.mask_queries,
-                challenger,
             );
             let dims = vec![Dimensions {
                 height: group.shape.domain_size,

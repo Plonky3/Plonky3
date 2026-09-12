@@ -262,7 +262,7 @@ fn prove_verify_preprocessed_roundtrips() {
     let airs = [&air];
 
     // Commit the preprocessed trace once, so both keys carry its commitment.
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = p3_multi_stark::prove_with_security(
         &config,
@@ -295,7 +295,7 @@ fn prove_verify_preprocessed_roundtrips() {
 fn security_requires_the_actual_preprocessed_opening_shape() {
     let mut config = config_for(4);
     let air = PreprocessedAir { height: 16 };
-    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let (_, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
     let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
     let report = p3_multi_stark::security_report(&config, &instances).unwrap();
     // Main and preprocessed commitments leave 2560 and 1280 candidates.
@@ -332,7 +332,7 @@ fn prove_verify_batched_preprocessed_roundtrips() {
     let config = batch_config_for(log_height, 2);
     let airs = [&air, &air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -342,7 +342,8 @@ fn prove_verify_batched_preprocessed_roundtrips() {
         ]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     assert!(proof.preprocessed_opening.is_some());
 
@@ -390,7 +391,7 @@ fn prove_verify_mixed_height_preprocessed_roundtrips() {
     };
     let airs = [&air_a, &air_b];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -400,7 +401,8 @@ fn prove_verify_mixed_height_preprocessed_roundtrips() {
         ]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     assert!(proof.preprocessed_opening.is_some());
 
@@ -428,7 +430,7 @@ fn setup_is_reusable_across_proofs() {
     let config = config_for(log_height);
     let airs = [&air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     // Each proof clones the committed preprocessed data and opens it at its own point.
     for _ in 0..2 {
@@ -442,7 +444,8 @@ fn setup_is_reusable_across_proofs() {
             )]),
             0,
             &mut challenger(),
-        );
+        )
+        .unwrap();
         verify(
             &config,
             VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
@@ -467,7 +470,7 @@ fn verify_rejects_violated_main_constraint() {
     let config = config_for(log_height);
     let airs = [&air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -479,7 +482,8 @@ fn verify_rejects_violated_main_constraint() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // Expected rejection: the zerocheck closes on a nonzero constraint value.
     let err = verify(
@@ -510,7 +514,7 @@ fn verify_rejects_tampered_preprocessed_opening() {
     let config = config_for(log_height);
     let airs = [&air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let mut proof = prove(
         &config,
@@ -522,7 +526,8 @@ fn verify_rejects_tampered_preprocessed_opening() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // Mutation: shift the first preprocessed current-row value by one field element.
     let opening = proof.preprocessed_opening.as_mut().unwrap();
@@ -627,7 +632,7 @@ fn a_rejected_main_opening_leaves_the_preprocessed_opening_unrun() {
     let config = CountingConfig::new(config_for(log_height));
     let airs = [&air];
 
-    let (pk, vk) = setup(&config, &airs, &mut challenger());
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
 
     let mut proof = prove(
         &config,
@@ -639,7 +644,8 @@ fn a_rejected_main_opening_leaves_the_preprocessed_opening_unrun() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // Setup and proving reach for the scheme as well, so the verifier starts from zero.
     config.take_preprocessed_lookups();

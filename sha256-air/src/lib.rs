@@ -396,7 +396,7 @@ mod tests {
         let config = StarkConfig::new(pcs, challenger);
 
         // Prove: build a STARK proof over the committed trace.
-        let proof = prove(&config, &air, trace, &[]);
+        let proof = prove(&config, &air, trace, &[]).unwrap();
         // Verify: the same config must accept the proof.
         verify(&config, &air, &proof, &[]).expect("Verification failed");
     }

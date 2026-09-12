@@ -12,11 +12,12 @@
 
 pub mod transcript;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
 
+use p3_air::symbolic::{BaseEntry, BaseLeaf, ExtLeaf, SymbolicExpr};
 use p3_air::{Air, AirLayout, BaseAir};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
@@ -152,7 +153,7 @@ pub struct AirZerocheck<'a, A> {
 ///     hint too large -> larger proof and more per-row work, nothing else
 /// ```
 ///
-/// A debug assertion pins the hint against the symbolic value.
+/// The symbolic degree is a lower bound even when the AIR supplies a smaller hint.
 ///
 /// # Panics
 ///
@@ -175,6 +176,7 @@ where
 
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
+    validate_successor_columns(air, &builder, &base_constraints, &extension_constraints);
     let has_constraints = !base_constraints.is_empty() || !extension_constraints.is_empty();
     let symbolic_constraint_degree = base_constraints
         .iter()
@@ -189,18 +191,17 @@ where
     let constraint_degree = if has_constraints {
         air.max_constraint_degree()
             .map_or(symbolic_constraint_degree, |degree| {
-                debug_assert!(
-                    degree >= symbolic_constraint_degree,
-                    "max_constraint_degree hint is below the symbolic constraint degree"
-                );
-                degree
+                degree.max(symbolic_constraint_degree)
             })
     } else {
         0
     };
 
-    let has_interactions =
-        !builder.global_interactions().is_empty() || !builder.local_interactions().is_empty();
+    let has_interactions = !builder.global_interactions().is_empty()
+        || builder
+            .local_interactions()
+            .iter()
+            .any(|local| !local.tuples.is_empty());
     let global_interaction_degree = builder
         .global_interactions()
         .iter()
@@ -246,6 +247,96 @@ where
     AirDegrees {
         constraints: constraint_degree,
         interactions: interaction_degree,
+    }
+}
+
+/// Visit each DAG node once, including shared subexpressions across constraints.
+fn visit_leaves<A>(
+    expression: &SymbolicExpr<A>,
+    seen: &mut BTreeSet<*const SymbolicExpr<A>>,
+    visit: &mut impl FnMut(&A),
+) {
+    if !seen.insert(expression) {
+        return;
+    }
+    match expression {
+        SymbolicExpr::Leaf(leaf) => visit(leaf),
+        SymbolicExpr::Add { x, y, .. }
+        | SymbolicExpr::Sub { x, y, .. }
+        | SymbolicExpr::Mul { x, y, .. } => {
+            visit_leaves(x, seen, visit);
+            visit_leaves(y, seen, visit);
+        }
+        SymbolicExpr::Neg { x, .. } => visit_leaves(x, seen, visit),
+    }
+}
+
+/// Undeclared successor values would otherwise be replaced by zero in the verifier's folder.
+fn validate_successor_columns<F: Field, EF: ExtensionField<F>, A: BaseAir<F>>(
+    air: &A,
+    builder: &SymbolicAirBuilder<F, EF>,
+    base: &[SymbolicExpr<BaseLeaf<F>>],
+    extension: &[SymbolicExpr<ExtLeaf<F, EF>>],
+) {
+    let main = air.main_next_row_columns();
+    let preprocessed = air.preprocessed_next_row_columns();
+    for (columns, width) in [
+        (&main, air.width()),
+        (&preprocessed, air.preprocessed_width()),
+    ] {
+        assert!(
+            columns.iter().all(|&column| column < width),
+            "successor column is outside the trace width"
+        );
+        assert_eq!(
+            columns.iter().collect::<BTreeSet<_>>().len(),
+            columns.len(),
+            "duplicate successor column"
+        );
+    }
+    let mut check = |leaf: &BaseLeaf<F>| {
+        if let BaseLeaf::Variable(variable) = leaf {
+            let declared = match variable.entry {
+                BaseEntry::Main { offset: 1 } => Some(&main),
+                BaseEntry::Preprocessed { offset: 1 } => Some(&preprocessed),
+                _ => None,
+            };
+            assert!(
+                declared.is_none_or(|columns| columns.contains(&variable.index)),
+                "AIR reads an undeclared successor column"
+            );
+        }
+    };
+    let mut seen = BTreeSet::new();
+    for expression in base {
+        visit_leaves(expression, &mut seen, &mut check);
+    }
+    let mut seen_ext = BTreeSet::new();
+    for expression in extension {
+        visit_leaves(expression, &mut seen_ext, &mut |leaf| {
+            if let ExtLeaf::Base(expression) = leaf {
+                visit_leaves(expression, &mut seen, &mut check);
+            }
+        });
+    }
+    for interaction in builder.global_interactions() {
+        for expression in interaction
+            .fields
+            .iter()
+            .chain(iter::once(&interaction.count))
+        {
+            visit_leaves(expression, &mut seen, &mut check);
+        }
+    }
+    for interaction in builder.local_interactions() {
+        for (fields, count) in &interaction.tuples {
+            for expression in fields {
+                visit_leaves(expression, &mut seen, &mut check);
+            }
+            // The owned count expression is temporary, so its address must not be cached.
+            let (count, _) = count.clone().into_parts();
+            visit_leaves(&count, &mut BTreeSet::new(), &mut check);
+        }
     }
 }
 
@@ -1473,6 +1564,111 @@ mod tests {
     }
 
     struct InteractionDegreeAir;
+
+    struct UnderstatedDegreeAir;
+    impl<X> BaseAir<X> for UnderstatedDegreeAir {
+        fn width(&self) -> usize {
+            1
+        }
+        fn max_constraint_degree(&self) -> Option<usize> {
+            Some(1)
+        }
+    }
+    impl<AB: AirBuilder> Air<AB> for UnderstatedDegreeAir {
+        fn eval(&self, builder: &mut AB) {
+            let x: AB::Expr = builder.main().current_slice()[0].into();
+            builder.assert_zero(x.clone() * x);
+        }
+    }
+    #[test]
+    fn understated_degree_hint_uses_symbolic_degree() {
+        assert_eq!(
+            get_air_degrees::<F, EF, _>(&UnderstatedDegreeAir).constraints,
+            2
+        );
+    }
+
+    struct UndeclaredSuccessorAir {
+        preprocessed: bool,
+        lookup: bool,
+    }
+    impl<X> BaseAir<X> for UndeclaredSuccessorAir {
+        fn width(&self) -> usize {
+            1
+        }
+        fn preprocessed_width(&self) -> usize {
+            1
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            vec![]
+        }
+        fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+            vec![]
+        }
+    }
+    impl<AB: InteractionBuilder> Air<AB> for UndeclaredSuccessorAir {
+        fn eval(&self, builder: &mut AB) {
+            let next = if self.preprocessed {
+                builder.preprocessed().next_slice()[0]
+            } else {
+                builder.main().next_slice()[0]
+            };
+            if self.lookup {
+                builder
+                    .push_local_interaction([(vec![next.into()], Count::provided(AB::Expr::ONE))]);
+            } else {
+                builder.assert_zero(next);
+            }
+        }
+    }
+
+    #[test]
+    fn undeclared_successor_columns_are_rejected() {
+        for preprocessed in [false, true] {
+            for lookup in [false, true] {
+                assert!(
+                    std::panic::catch_unwind(|| get_air_degrees::<F, EF, _>(
+                        &UndeclaredSuccessorAir {
+                            preprocessed,
+                            lookup
+                        }
+                    ))
+                    .is_err()
+                );
+            }
+        }
+    }
+
+    struct EmptyLocalInteractionAir;
+
+    impl<X> BaseAir<X> for EmptyLocalInteractionAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: InteractionBuilder> Air<AB> for EmptyLocalInteractionAir {
+        fn eval(&self, builder: &mut AB) {
+            builder.assert_zero(builder.main().current_slice()[0]);
+            builder.push_local_interaction(core::iter::empty::<(Vec<AB::Expr>, Count<AB::Expr>)>());
+        }
+    }
+
+    #[test]
+    fn empty_local_interactions_are_inert() {
+        assert_eq!(
+            get_air_degrees::<F, EF, _>(&EmptyLocalInteractionAir),
+            AirDegrees {
+                constraints: 1,
+                interactions: 0
+            }
+        );
+        assert!(
+            crate::lookup::LookupPlan::<F>::build::<EF, _>(&[&EmptyLocalInteractionAir], &[3])
+                .unwrap()
+                .is_none()
+        );
+    }
 
     struct ConstantInteractionAir;
 

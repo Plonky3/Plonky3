@@ -6,6 +6,20 @@ use p3_matrix::Matrix;
 use p3_security::fri::FriRegime;
 use p3_security::grinding::GrindingSites;
 
+/// A proving input cannot be folded with the configured terminal polynomial size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum FriProverError {
+    #[error(
+        "FRI input log height {log_input_height} must exceed terminal log height {log_final_height}"
+    )]
+    InputHeightTooSmall {
+        log_input_height: usize,
+        log_final_height: usize,
+    },
+    #[error("FRI terminal log height overflows usize")]
+    FinalHeightOverflow,
+}
+
 /// A set of parameters defining a specific instance of the FRI protocol.
 #[derive(Clone, Debug)]
 pub struct FriParameters<M> {
@@ -37,6 +51,28 @@ pub struct FriParameters<M> {
 }
 
 impl<M> FriParameters<M> {
+    /// Preflight a committed LDE or reduced-opening height before changing prover state.
+    pub(crate) fn validate_input_height(
+        &self,
+        log_input_height: usize,
+    ) -> Result<(), FriProverError> {
+        // Constant terminal polynomials support the zero-fold boundary.
+        if self.log_final_poly_len == 0 {
+            return Ok(());
+        }
+        let log_final_height = self
+            .log_final_poly_len
+            .checked_add(self.log_blowup)
+            .ok_or(FriProverError::FinalHeightOverflow)?;
+        if log_input_height <= log_final_height {
+            return Err(FriProverError::InputHeightTooSmall {
+                log_input_height,
+                log_final_height,
+            });
+        }
+        Ok(())
+    }
+
     pub const fn blowup(&self) -> usize {
         1 << self.log_blowup
     }

@@ -42,8 +42,8 @@ use tracing::{debug_span, instrument};
 use crate::periodic::build_periodic_lde_table_two_adic;
 use crate::verifier::{self, FriError};
 use crate::{
-    BatchMultiOpening, FriFoldingStrategy, FriParameters, FriProof, PcsProverTranscript, PcsShape,
-    PcsVerifierTranscript, prover,
+    BatchMultiOpening, FriFoldingStrategy, FriParameters, FriProof, FriProverError,
+    PcsProverTranscript, PcsShape, PcsVerifierTranscript, prover,
 };
 
 /// A polynomial commitment scheme using FRI to generate opening proofs.
@@ -298,6 +298,7 @@ where
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchMultiOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
+    type ProverError = FriProverError;
 
     /// Get the unique subgroup `H` of size `|H| = degree`.
     ///
@@ -318,7 +319,7 @@ where
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         let ldes: Vec<_> = evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -337,8 +338,10 @@ where
             })
             .collect();
 
-        // Commit to the bit-reversed LDEs.
-        self.mmcs.commit(ldes)
+        Ok(
+            // Commit to the bit-reversed LDEs.
+            self.mmcs.commit(ldes),
+        )
     }
 
     /// Open a batch of matrices at a collection of points.
@@ -353,7 +356,7 @@ where
         // For each multi-matrix commitment,
         commitment_data_with_opening_points: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
+    ) -> Result<(OpenedValues<Challenge>, Self::Proof), Self::ProverError> {
         /*
 
         A quick rundown of the optimizations in this function:
@@ -415,6 +418,14 @@ where
                 },
             )
             .collect_vec();
+
+        // Reject every committed height before absorbing claims or starting a driver.
+        for (matrices, _) in &mats_and_points {
+            for matrix in matrices {
+                self.fri
+                    .validate_input_height(log2_strict_usize(matrix.height()))?;
+            }
+        }
 
         // Find the maximum height and the maximum width of matrices in the batch.
         // These do not need to correspond to the same matrix.
@@ -653,7 +664,7 @@ where
         // Every described step has now been played.
         transcript.finish();
 
-        (all_opened_values, fri_proof)
+        Ok((all_opened_values, fri_proof?))
     }
 
     fn verify(
@@ -741,8 +752,8 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         _num_chunks: usize,
-    ) -> Vec<RowMajorMatrix<Val>> {
-        evaluations
+    ) -> Result<Vec<RowMajorMatrix<Val>>, Self::ProverError> {
+        Ok(evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
@@ -758,10 +769,13 @@ where
                     .bit_reverse_rows()
                     .to_row_major_matrix()
             })
-            .collect()
+            .collect())
     }
 
-    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+    fn commit_ldes(
+        &self,
+        ldes: Vec<RowMajorMatrix<Val>>,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         // Opening assumes every committed matrix is an LDE at `self.fri.log_blowup` and recovers the
         // underlying polynomial degree as `height >> log_blowup`. A matrix shorter than the blowup
         // factor would silently yield a zero-height degree and a malformed proof, so reject it here.
@@ -773,7 +787,7 @@ where
                 lde.height()
             );
         }
-        self.mmcs.commit(ldes)
+        Ok(self.mmcs.commit(ldes))
     }
 
     /// Given the evaluations on a domain `gH`, return the evaluations on a different domain `g'K`.
@@ -978,16 +992,19 @@ mod tests {
                 RowMajorMatrix::<F>::rand_nonzero(&mut rng, 1 << log_degree, width),
             )
         });
-        let (commitment, prover_data) = <MyPcs as Pcs<EF, Challenger>>::commit(&pcs, traces);
+        let (commitment, prover_data) =
+            <MyPcs as Pcs<EF, Challenger>>::commit(&pcs, traces).unwrap();
 
         // Prover: observe the commitment, sample the point, open.
         let mut p_challenger = Challenger::new(perm.clone());
         p_challenger.observe(&commitment);
         let zeta: EF = p_challenger.sample_algebra_element();
-        let (opened_values, proof) = pcs.open(
-            vec![(&prover_data, vec![vec![zeta], vec![zeta]]).into()],
-            &mut p_challenger,
-        );
+        let (opened_values, proof) = pcs
+            .open(
+                vec![(&prover_data, vec![vec![zeta], vec![zeta]]).into()],
+                &mut p_challenger,
+            )
+            .unwrap();
 
         // Verifier: replay up to the point sample so a valid proof must pass.
         let mut v_challenger = Challenger::new(perm);
@@ -1020,6 +1037,121 @@ mod tests {
         challenger: &mut Challenger,
     ) -> Result<(), TestError> {
         <MyPcs as Pcs<EF, Challenger>>::verify(pcs, claims, proof, challenger)
+    }
+
+    #[test]
+    fn terminal_height_rejection_preserves_pcs_challenger() {
+        for (heights, expected_log_height) in [(vec![2], 2), (vec![1], 1), (vec![8, 2], 2)] {
+            let (mut pcs, _, _, mut challenger) = make_pcs_fixture();
+            pcs.fri.log_final_poly_len = 1;
+            let evaluations = heights
+                .iter()
+                .map(|&height| {
+                    let domain =
+                        <MyPcs as Pcs<EF, Challenger>>::natural_domain_for_degree(&pcs, height);
+                    (domain, RowMajorMatrix::new(vec![F::ONE; height], 1))
+                })
+                .collect_vec();
+            let (_, data) = <MyPcs as Pcs<EF, Challenger>>::commit(&pcs, evaluations).unwrap();
+            let mut before = challenger.clone();
+            let result = pcs.open(
+                vec![(&data, vec![vec![EF::TWO]; heights.len()]).into()],
+                &mut challenger,
+            );
+            assert!(matches!(result, Err(FriProverError::InputHeightTooSmall {
+                log_input_height, log_final_height: 2,
+            }) if log_input_height == expected_log_height));
+            assert_eq!(
+                challenger.sample_algebra_element::<EF>(),
+                before.sample_algebra_element::<EF>()
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_height_rejection_preserves_core_challenger() {
+        for (heights, max_log_height, min_log_height) in
+            [(vec![4], 2, 2), (vec![2], 1, 1), (vec![16, 4], 4, 2)]
+        {
+            let (mut pcs, _, _, mut challenger) = make_pcs_fixture();
+            pcs.fri.log_final_poly_len = 1;
+            let mut before = challenger.clone();
+            let folding: TwoAdicFriFoldingForMmcs<F, ValMmcs> = TwoAdicFriFolding(PhantomData);
+            let proof = prover::prove_fri(
+                &folding,
+                &pcs.fri,
+                heights
+                    .into_iter()
+                    .map(|height| vec![EF::ZERO; height])
+                    .collect(),
+                &mut challenger,
+                max_log_height,
+                &[],
+                &pcs.mmcs,
+                F::ZERO,
+            );
+            assert!(matches!(proof, Err(FriProverError::InputHeightTooSmall {
+                log_input_height, log_final_height: 2,
+            }) if log_input_height == min_log_height));
+            assert_eq!(
+                challenger.sample_algebra_element::<EF>(),
+                before.sample_algebra_element::<EF>()
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_height_valid_boundaries_roundtrip() {
+        for (height, log_final_poly_len) in [(4, 1), (1, 0)] {
+            let (mut pcs, _, _, mut challenger) = make_pcs_fixture();
+            pcs.fri.log_final_poly_len = log_final_poly_len;
+            let domain = <MyPcs as Pcs<EF, Challenger>>::natural_domain_for_degree(&pcs, height);
+            let (commitment, data) = <MyPcs as Pcs<EF, Challenger>>::commit(
+                &pcs,
+                [(domain, RowMajorMatrix::new(vec![F::ONE; height], 1))],
+            )
+            .unwrap();
+            challenger.observe(&commitment);
+            let mut verifier = challenger.clone();
+            let (values, proof) = pcs
+                .open(vec![(&data, vec![vec![EF::TWO]]).into()], &mut challenger)
+                .unwrap();
+            pcs.verify(
+                vec![
+                    (
+                        commitment,
+                        vec![(domain, vec![(EF::TWO, values[0][0][0].clone())])],
+                    )
+                        .into(),
+                ],
+                &proof,
+                &mut verifier,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn terminal_height_overflow_is_recoverable() {
+        let (mut pcs, _, _, mut challenger) = make_pcs_fixture();
+        pcs.fri.log_final_poly_len = usize::MAX;
+        let mut before = challenger.clone();
+        let folding: TwoAdicFriFoldingForMmcs<F, ValMmcs> = TwoAdicFriFolding(PhantomData);
+        let proof = prover::prove_fri(
+            &folding,
+            &pcs.fri,
+            vec![vec![EF::ZERO; 4]],
+            &mut challenger,
+            2,
+            &[],
+            &pcs.mmcs,
+            F::ZERO,
+        );
+        assert!(matches!(proof, Err(FriProverError::FinalHeightOverflow)));
+        assert_eq!(
+            challenger.sample_algebra_element::<EF>(),
+            before.sample_algebra_element::<EF>()
+        );
     }
 
     #[test]
@@ -1067,7 +1199,9 @@ mod tests {
         // The witness must satisfy the proof-of-work predicate at the difficulty
         // the run was described with, even though the proof was produced at it.
         let (pcs, claims, mut proof, mut challenger) = make_pcs_fixture();
-        proof.batch_pow_witness += F::ONE;
+        // Fixed invalid candidate for this transcript seed. Adding one to a valid
+        // 1-bit witness can produce another valid witness.
+        proof.batch_pow_witness = F::TWO;
 
         let err = run_pcs_verify(&pcs, claims, &proof, &mut challenger)
             .expect_err("a tampered batch grinding witness must be rejected");
