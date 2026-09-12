@@ -21,6 +21,7 @@ use p3_uni_stark::{
     AirLayout, ConjecturedSecurity, OpeningShape, PcsError, Proof, StarkGenericConfig,
     StarkSecurityParams, VerificationError, prove, verify,
 };
+use p3_util::log2_strict_usize;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
@@ -180,7 +181,7 @@ where
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
-        TwoAdicMultiplicativeCoset::new(F::ONE, trace.height().ilog2() as usize).unwrap(),
+        TwoAdicMultiplicativeCoset::new(F::ONE, log2_strict_usize(trace.height())).unwrap(),
         EF::bits(),
         128,
         2,
@@ -238,7 +239,7 @@ where
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
-        TwoAdicMultiplicativeCoset::new(F::ONE, trace.height().ilog2() as usize).unwrap(),
+        TwoAdicMultiplicativeCoset::new(F::ONE, log2_strict_usize(trace.height())).unwrap(),
         EF::bits(),
         128,
         2,
@@ -395,7 +396,7 @@ pub fn prove_m31_keccak<
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
-        CircleDomain::standard(trace.height().ilog2() as usize),
+        CircleDomain::standard(log2_strict_usize(trace.height())),
         EF::bits(),
         128,
         2,
@@ -451,7 +452,7 @@ where
         fri_params.security_regime(),
         proof_goal,
         AirLayout::from_air(proof_goal),
-        CircleDomain::standard(trace.height().ilog2() as usize),
+        CircleDomain::standard(log2_strict_usize(trace.height())),
         EF::bits(),
         128,
         2,

@@ -35,6 +35,7 @@ p3-poseidon2-air.workspace = true
 p3-stir.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
+p3-util.workspace = true
 
 clap.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
@@ -52,7 +53,6 @@ p3-multi-stark = { path = "../multi-stark" }
 p3-poseidon1 = { path = "../poseidon1" }
 p3-security = { path = "../security" }
 p3-sumcheck = { path = "../sumcheck" }
-p3-util = { path = "../util" }
 p3-whir = { path = "../whir" }
 
 tracing.workspace = true
