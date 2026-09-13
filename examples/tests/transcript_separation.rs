@@ -2,7 +2,7 @@
 //!
 //! # Overview
 //!
-//! Sixteen protocols in this workspace seed their transcript from a domain separator.
+//! Twenty protocols in this workspace seed their transcript from a domain separator.
 //!
 //! The version byte is a format version each protocol owns, so names carry the separation.
 //!
@@ -11,7 +11,7 @@
 //!                     ^     ^                 ^
 //!                     |     |                 disambiguates zero-padded prefixes
 //!                     |     the only field that differs between protocols
-//!                     the same byte for all nineteen
+//!                     the same byte for all twenty
 //! ```
 //!
 //! Separation therefore rests entirely on `NAME`, and this file is where that is checked.
@@ -78,14 +78,14 @@ type Case = (String, DomainSeparator<Alphabet>);
 /// Number of protocols on the typed transcript layer.
 ///
 /// A protocol added without an entry below leaves its name unchecked against the others.
-const NUM_PROTOCOLS: usize = 19;
+const NUM_PROTOCOLS: usize = 20;
 
 /// Configurations swept per protocol: one default, then two single-field moves of it.
 ///
 /// The pairwise check is quadratic, so the sweep is a budget rather than a maximum.
 ///
 /// ```text
-///     16 protocols x 3 configurations = 48 seeds -> 1128 pairs
+///     20 protocols x 3 configurations = 60 seeds -> 1770 pairs
 /// ```
 const CASES_PER_PROTOCOL: usize = 3;
 
@@ -837,13 +837,10 @@ fn a_shared_name_prefix_is_separated_by_the_name_length_byte() {
     //     [1 | p3-whir-hvzk            | 0 .. 0 | 12]
     //
     //     [1 | p3-stir                 | 0 .. 0 |  7]
-    //     [1 | p3-stir-pcs-commitment  | 0 .. 0 | 22]
+    //     [1 | p3-stir-pcs-batch       | 0 .. 0 | 17]
     //     [1 | p3-stir-pcs-claims      | 0 .. 0 | 18]
     //     [1 | p3-stir-pcs-opening     | 0 .. 0 | 19]
-    //
-    // The batching phase's name extends it too, but its separator is crate-private.
-    //
-    // That pair is asserted inside the STIR crate instead, where the name is reachable.
+    //     [1 | p3-stir-pcs-commitment  | 0 .. 0 | 22]
     //
     // Zero padding alone cannot tell a short name from a longer one starting with it.
     //
@@ -851,6 +848,7 @@ fn a_shared_name_prefix_is_separated_by_the_name_length_byte() {
     let pairs = [
         (fri_cases(), fri_pcs_cases()),
         (whir_cases(), zk_whir_cases()),
+        (stir_cases(), stir_pcs_batch_cases()),
         (stir_cases(), stir_pcs_commitment_cases()),
         (stir_cases(), stir_pcs_claim_cases()),
         (stir_cases(), stir_pcs_opening_cases()),

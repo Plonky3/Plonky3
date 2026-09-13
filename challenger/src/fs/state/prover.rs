@@ -861,7 +861,7 @@ impl<C, U: Unit> ProverState<C, U> {
     ) -> Vec<TranscriptBound<EF>>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();

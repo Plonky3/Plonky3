@@ -842,7 +842,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ) -> Vec<TranscriptBound<EF>>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
