@@ -593,7 +593,7 @@ impl<EF: Field> Opening<EF, ()> {
 /// # Alpha-ordering contract
 ///
 /// - Each recorded opening consumes one power of the batching challenge.
-/// - The canonical ordering is insertion order, walked as:
+/// - The canonical ordering is placement order, walked as:
 ///     - placements, in witness-layout order,
 ///     - claims inside each placement, in recording order,
 ///     - current openings inside each claim, in recording order,

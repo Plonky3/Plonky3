@@ -13,6 +13,7 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::constraints::statement::SelectStatement;
 use p3_sumcheck::constraints::{Constraint, Statements};
+use p3_sumcheck::layout::Verifier as LayoutVerifier;
 use p3_sumcheck::strategy::{Basis, VariableOrder};
 use p3_sumcheck::verify_final_sumcheck_rounds;
 use tracing::instrument;
@@ -92,10 +93,22 @@ where
     /// - `challenger`: the sponge the whole proof shares, borrowed for this run.
     /// - `parsed_commitment`: the initial commitment the run opens.
     /// - `num_opening_claims`: opening claims the caller bound before this run.
-    /// - `initial_constraint`: builds the batched claim from the challenge drawn here.
+    /// - `layout`: the layout the caller recorded those claims against.
     ///
-    /// The batching challenge is drawn inside the initial delegation bracket.
-    /// The caller therefore hands over a builder, not a finished constraint.
+    /// The batching challenge belongs to the claims the caller recorded.
+    ///
+    /// It does not belong to this run.
+    ///
+    /// It is drawn inside the initial delegation bracket, from the layout.
+    ///
+    /// The layout is taken rather than a closure over the sponge.
+    ///
+    /// A bracket checks nothing about the draws inside it.
+    ///
+    /// A closure could therefore draw nothing, or twice, and only fail as a
+    /// well-formed proof that does not verify.
+    ///
+    /// Taking the layout makes one draw the only expressible shape.
     ///
     /// # Returns
     ///
@@ -105,17 +118,16 @@ where
     ///
     /// Any rejection the replay raises, transcript failures included.
     #[instrument(skip_all)]
-    pub fn verify<MakeConstraint>(
+    pub fn verify(
         &self,
         proof: &WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
         parsed_commitment: &MT::Commitment,
         num_opening_claims: usize,
-        initial_constraint: MakeConstraint,
+        layout: &LayoutVerifier<F, EF>,
     ) -> Result<Point<EF>, VerifierError>
     where
         Challenger: CanObserve<MT::Commitment>,
-        MakeConstraint: FnOnce(EF) -> Constraint<F, EF>,
     {
         // Reject a proof that carries the wrong number of rounds before any
         // transcript work. The per-round commitment slot is checked further
@@ -154,12 +166,7 @@ where
 
         // A rejection releases the driver's completeness check on its way out.
         // Dropping an unfinished driver otherwise panics on top of the error.
-        match self.replay(
-            proof,
-            &mut transcript,
-            parsed_commitment,
-            initial_constraint,
-        ) {
+        match self.replay(proof, &mut transcript, parsed_commitment, layout) {
             Ok(randomness) => {
                 transcript.finish();
                 Ok(randomness)
@@ -177,16 +184,15 @@ where
     ///
     /// Any rejection a step raises, or any consistency check that fails.
     #[allow(clippy::too_many_lines)]
-    fn replay<MakeConstraint>(
+    fn replay(
         &self,
         proof: &WhirProof<F, EF, MT>,
         transcript: &mut WhirVerifierTranscript<'_, Challenger, F, EF>,
         parsed_commitment: &MT::Commitment,
-        initial_constraint: MakeConstraint,
+        layout: &LayoutVerifier<F, EF>,
     ) -> Result<Point<EF>, VerifierError>
     where
         Challenger: CanObserve<MT::Commitment>,
-        MakeConstraint: FnOnce(EF) -> Constraint<F, EF>,
     {
         let mut constraints = Vec::new();
         let mut round_folding_randomness = Vec::new();
@@ -194,12 +200,16 @@ where
 
         // The delegate draws the claim-batching challenge, then replays its own rounds.
         //
+        // The layout owns that draw, and the claims it batches are the caller's own.
+        //
+        // Both it and the rounds after it seed sub-transcripts inside this bracket.
+        //
         // Initial sumcheck rounds == first-round folding factor.
         // `verify_rounds` rejects a proof that carries the wrong number of rounds.
         let (constraint, mut claimed_eval, folding_randomness) =
             transcript.delegate_initial_fold(|challenger| {
-                let alpha: EF = challenger.sample_algebra_element();
-                let constraint = initial_constraint(alpha);
+                let alpha = layout.batching_challenge(challenger);
+                let constraint = layout.constraint(alpha);
                 let mut claimed_eval = EF::ZERO;
                 constraint.combine_evals(&mut claimed_eval);
                 let randomness = proof.initial_sumcheck.verify_rounds(

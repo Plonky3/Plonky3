@@ -213,7 +213,7 @@ where
             challenger,
             commitment,
             protocol.num_openings(),
-            |alpha| layout_verifier.constraint(alpha),
+            &layout_verifier,
         )?;
 
         Ok(())
@@ -357,7 +357,7 @@ where
             challenger,
             commitment,
             protocol.num_openings(),
-            |alpha| layout_verifier.constraint(alpha),
+            &layout_verifier,
         )?;
 
         // The opening verified.

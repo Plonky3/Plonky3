@@ -340,7 +340,8 @@ where
                 .add_claim(table_idx, batch, evals, &mut verifier_challenger)
                 .unwrap();
         }
-        let alpha = verifier_challenger.sample_algebra_element();
+        // The batching challenge is drawn through the layout on both sides.
+        let alpha = layout_verifier.batching_challenge(&mut verifier_challenger);
         let constraint = layout_verifier.constraint(alpha);
         constraint.combine_evals(&mut sum);
         assert_eq!(sum, layout_verifier.sum(alpha));
@@ -625,4 +626,73 @@ fn test_invalid_pow_witness() {
             difficulty: 20
         }
     ));
+}
+
+/// Every protocol name this crate seeds a transcript from.
+///
+/// `p3-examples` runs the workspace-wide pairwise check, but it can only reach
+/// names whose shapes are public. The three layout names are `pub(crate)`, so
+/// they are checked here instead, against the four that do travel.
+const CRATE_PROTOCOL_NAMES: [(&str, &[u8]); 7] = [
+    ("quadratic", crate::transcript::NAME),
+    ("hvzk", crate::zk::transcript::NAME),
+    ("ring switch", crate::ring_switch::transcript::NAME),
+    ("generic degree", crate::generic_degree::transcript::NAME),
+    ("layout opening", crate::layout::transcript::OPENING_NAME),
+    ("layout ood", crate::layout::transcript::VIRTUAL_NAME),
+    ("layout batching", crate::layout::transcript::BATCHING_NAME),
+];
+
+#[test]
+fn no_two_protocols_in_this_crate_share_a_name() {
+    // Invariant: a name is what separates two protocols on the typed layer.
+    //
+    // Two protocols sharing one name derive the same seed from the same shape.
+    //
+    // Fixture state: the seven names above, taken from the constants themselves.
+    //
+    // Renaming one therefore moves this check with it.
+    for (i, (left_label, left)) in CRATE_PROTOCOL_NAMES.iter().enumerate() {
+        // A name is one length byte in the identifier, so it must fit.
+        assert!(
+            left.len() < p3_challenger::fs::PROTOCOL_ID_LEN - 1,
+            "{left_label} does not fit the protocol identifier"
+        );
+
+        for (right_label, right) in &CRATE_PROTOCOL_NAMES[i + 1..] {
+            assert_ne!(left, right, "{left_label} and {right_label} share a name");
+        }
+    }
+}
+
+#[test]
+fn a_layout_name_is_separated_from_the_one_it_extends() {
+    // Invariant: a name is separated from a shorter name it starts with.
+    //
+    // Fixture state: the three layout names all extend `p3-sumcheck-layout`.
+    //
+    //     [1 | p3-sumcheck-layout-opening   | 0 .. 0 | 26]
+    //     [1 | p3-sumcheck-layout-ood       | 0 .. 0 | 22]
+    //     [1 | p3-sumcheck-layout-batching  | 0 .. 0 | 27]
+    //
+    // Zero padding alone cannot part names in a prefix relation.
+    //
+    // The last byte carries the name length, and that is what parts them.
+    let layout_names = [
+        crate::layout::transcript::OPENING_NAME,
+        crate::layout::transcript::VIRTUAL_NAME,
+        crate::layout::transcript::BATCHING_NAME,
+    ];
+
+    // The shared stem is real, so the leading bytes do not separate them.
+    for name in layout_names {
+        assert!(name.starts_with(b"p3-sumcheck-layout-"));
+    }
+
+    // No name here is a prefix of another, and the lengths differ pairwise.
+    for (i, left) in layout_names.iter().enumerate() {
+        for right in &layout_names[i + 1..] {
+            assert_ne!(left.len(), right.len());
+        }
+    }
 }

@@ -125,6 +125,7 @@ where
         challenger: &mut Ch,
     ) -> OpeningEvals<EF>
     where
+        F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Delegate; the HVZK overlay carries no extra state at claim time.
@@ -134,6 +135,7 @@ where
     /// Records a virtual opening claim on the inner prover.
     pub fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
     where
+        F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Same delegation pattern as concrete openings.
