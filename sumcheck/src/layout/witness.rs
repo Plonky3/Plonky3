@@ -150,6 +150,16 @@ impl<F: Field> Table<F> {
         PolyView::new(&self.0.values[start..start + self.0.width])
     }
 
+    /// Returns the evaluations of the polynomial at column `id`, for in-place editing.
+    ///
+    /// The slice has a fixed length.
+    /// No write through it can change the arity of any column.
+    pub fn poly_mut(&mut self, id: usize) -> &mut [F] {
+        // Columns are laid out one after another, each spanning the row count.
+        let start = id * self.0.width;
+        &mut self.0.values[start..start + self.0.width]
+    }
+
     /// Returns the number of columns.
     pub fn num_polys(&self) -> usize {
         self.0.height()

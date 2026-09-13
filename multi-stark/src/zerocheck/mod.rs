@@ -136,6 +136,14 @@ pub struct AirZerocheck<'a, A> {
     pow_bits: usize,
 }
 
+/// Per-variable degree of one public boundary pin, scored at domain size two.
+///
+/// ```text
+///     selector * (column - public)
+///        1     *      1             = 2
+/// ```
+const BOUNDARY_IO_PIN_DEGREE: usize = 2;
+
 /// Native per-variable degrees of one AIR's ordinary constraints and lookup links.
 ///
 /// Both families come from one symbolic pass and are measured with the eq weight stripped.
@@ -154,6 +162,15 @@ pub struct AirZerocheck<'a, A> {
 /// ```
 ///
 /// The symbolic degree is a lower bound even when the AIR supplies a smaller hint.
+///
+/// A hint never covers the public boundary pins the folder injects:
+///
+/// ```text
+///     hint -> the AIR's own constraints
+///     pins -> one per cell the AIR lists as a public input, scored separately
+/// ```
+///
+/// A hinted degree of one therefore still yields two once an AIR lists a cell.
 ///
 /// # Panics
 ///
@@ -177,7 +194,9 @@ where
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     validate_successor_columns(air, &builder, &base_constraints, &extension_constraints);
-    let has_constraints = !base_constraints.is_empty() || !extension_constraints.is_empty();
+    let has_own_constraints = !base_constraints.is_empty() || !extension_constraints.is_empty();
+    let has_boundary_io = !air.public_boundary_io().is_empty();
+    let has_constraints = has_own_constraints || has_boundary_io;
     let symbolic_constraint_degree = base_constraints
         .iter()
         .map(|expression| expression.poly_degree(2, &[]))
@@ -188,13 +207,21 @@ where
         )
         .max()
         .unwrap_or(0);
-    let constraint_degree = if has_constraints {
+    let own_constraint_degree = if has_own_constraints {
         air.max_constraint_degree()
             .map_or(symbolic_constraint_degree, |degree| {
                 degree.max(symbolic_constraint_degree)
             })
     } else {
         0
+    };
+
+    // Neither source above sees the pins.
+    // Score them here so the round polynomials carry enough evaluations for both groups.
+    let constraint_degree = if has_boundary_io {
+        own_constraint_degree.max(BOUNDARY_IO_PIN_DEGREE)
+    } else {
+        own_constraint_degree
     };
 
     let has_interactions = !builder.global_interactions().is_empty()
@@ -1464,7 +1491,7 @@ mod tests {
     use alloc::vec::Vec;
     use core::borrow::Borrow;
 
-    use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+    use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
     use p3_baby_bear::{
         BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
         BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear,
@@ -2692,6 +2719,220 @@ mod tests {
             .verify::<F, EF, _>(&proof, &log_heights, &public_refs, &mut verifier_challenger)
             .unwrap_err();
         assert!(matches!(err, ZerocheckError::FinalSumMismatch));
+    }
+
+    /// Fibonacci recurrence with no boundary constraint at all.
+    ///
+    /// Nothing reads its three public values.
+    /// Nothing binds them either.
+    struct FibTransitionAir;
+
+    impl<X> BaseAir<X> for FibTransitionAir {
+        fn width(&self) -> usize {
+            NUM_COLS
+        }
+
+        fn num_public_values(&self) -> usize {
+            3
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for FibTransitionAir {
+        fn eval(&self, builder: &mut AB) {
+            // Read the current row and the row after it.
+            let main = builder.main();
+            let local: &FibRow<AB::Var> = main.current_slice().borrow();
+            let next: &FibRow<AB::Var> = main.next_slice().borrow();
+
+            // Advance the recurrence on every row but the last.
+            //
+            //     next.left  = right
+            //     next.right = left + right
+            let mut trans = builder.when_transition();
+            trans.assert_eq(local.right, next.left);
+            trans.assert_eq(local.left + local.right, next.right);
+        }
+    }
+
+    /// The seed and output cells the Fibonacci AIR below binds by position.
+    ///
+    /// ```text
+    ///     column 0, first row -> public value 0
+    ///     column 1, first row -> public value 1
+    ///     column 1, last  row -> public value 2
+    /// ```
+    const FIB_IO_CELLS: [BoundaryPublic; 3] = [
+        BoundaryPublic::new(0, BoundaryEnd::First, 0),
+        BoundaryPublic::new(1, BoundaryEnd::First, 1),
+        BoundaryPublic::new(1, BoundaryEnd::Last, 2),
+    ];
+
+    /// The same Fibonacci recurrence, with its three public values bound by position.
+    ///
+    /// Both AIRs assert an identical constraint set.
+    /// Only the injected pins tell their proofs apart.
+    struct FibIoAir;
+
+    impl<X> BaseAir<X> for FibIoAir {
+        fn width(&self) -> usize {
+            NUM_COLS
+        }
+
+        fn num_public_values(&self) -> usize {
+            3
+        }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            &FIB_IO_CELLS
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for FibIoAir {
+        fn eval(&self, builder: &mut AB) {
+            // Identical constraints, with only the declaration setting the two apart.
+            FibTransitionAir.eval(builder);
+        }
+    }
+
+    #[test]
+    fn boundary_io_pin_binds_the_public_value_to_the_folded_trace() {
+        // Invariant: the pin ties the folded cell value to the public value.
+        //
+        // The attack it stops, for a trace ending at X and a claimed output X + 1:
+        //
+        //     commits cell  : X - (X + 1)    instead of 0
+        //     verifier adds : eq_cell * (X + 1)
+        //     opened column : the true trace  → every transition holds
+        //     fold required : the true trace  → what the prover below produces
+        //
+        // Fixture state: an honest length-8 trace, output claim shifted by one.
+        //
+        //     trace last right : X
+        //     public values    : [0, 1, X + 1]
+        let n = 8;
+        let trace = fib_trace(n);
+        let mut pis = fib_public_values(n);
+        pis[2] += F::ONE;
+        let log_heights = [log2_strict_usize(n)];
+        let traces = [&trace];
+        let public_values = [&pis[..]];
+
+        // Control: the AIR that declares nothing never reads public value 2.
+        // Its fold sums to zero, and the shifted claim slips through unnoticed.
+        let loose_air = FibTransitionAir;
+        let loose_airs = [&loose_air];
+        let loose = AirZerocheck::new(&loose_airs, 0);
+        let (loose_proof, _) =
+            prove_traces(&loose, &traces, &public_values, &mut fresh_challenger());
+        loose
+            .verify::<F, EF, _>(
+                &loose_proof,
+                &log_heights,
+                &public_values,
+                &mut fresh_challenger(),
+            )
+            .expect("an unbound public value is not checked at all");
+
+        // With the declaration one pin survives on the folded trace:
+        //
+        //     is_last_row * (right - public) = X - (X + 1) = -1
+        //
+        // The fold no longer sums to zero, and the claimed zero sum fails to close.
+        let pinned_air = FibIoAir;
+        let pinned_airs = [&pinned_air];
+        let pinned = AirZerocheck::new(&pinned_airs, 0);
+        let (pinned_proof, _) =
+            prove_traces(&pinned, &traces, &public_values, &mut fresh_challenger());
+        let err = pinned
+            .verify::<F, EF, _>(
+                &pinned_proof,
+                &log_heights,
+                &public_values,
+                &mut fresh_challenger(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch));
+    }
+
+    #[test]
+    fn boundary_io_pin_raises_the_sumcheck_degree() {
+        // Invariant: a pin can set the sumcheck degree on its own.
+        //
+        //     own constraint : col_0 - col_1              -> degree 1
+        //     injected pin   : is_first_row * (col_0 - p) -> degree 2
+        //     eq weight      : + 1                        -> sumcheck degree 3
+        let air = EqualColumnsIoAir;
+        assert_eq!(
+            get_air_degrees::<F, EF, EqualColumnsIoAir>(&air).constraints,
+            2
+        );
+        assert_eq!(
+            get_air_degrees::<F, EF, EqualColumnsIoAir>(&air).max() + 1,
+            3
+        );
+
+        // Fixture state: 8 rows, both columns holding the public value 7.
+        //
+        //     col_0 - col_1              = 0
+        //     is_first_row * (7 - 7)     = 0
+        //                                  → an honest proof must verify
+        let n = 8;
+        let public = F::from_u64(7);
+        let trace = RowMajorMatrix::new(alloc::vec![public; 2 * n], 2);
+        let airs = [&air];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+
+        let traces = [&trace];
+        let public_values = [&[public] as &[F]];
+        let (proof, _) = prove_traces(&zerocheck, &traces, &public_values, &mut fresh_challenger());
+
+        // Scoring the pins at degree 1 would send 2 evaluations per round instead of 3.
+        for round in &proof.sumcheck.round_polys {
+            assert_eq!(round.len(), 3);
+        }
+
+        // A truncated round polynomial would not reduce to the constraint at the point.
+        zerocheck
+            .verify::<F, EF, _>(
+                &proof,
+                &[log2_strict_usize(n)],
+                &public_values,
+                &mut fresh_challenger(),
+            )
+            .expect("a degree-one AIR with a boundary cell must still verify");
+    }
+
+    /// The one cell the degree probe AIR below binds by position.
+    const EQUAL_COLUMNS_IO_CELLS: [BoundaryPublic; 1] =
+        [BoundaryPublic::new(0, BoundaryEnd::First, 0)];
+
+    /// AIR whose own constraint scores degree one, with one cell bound by position.
+    ///
+    /// The equality is ungated.
+    /// No selector lifts its degree above one.
+    struct EqualColumnsIoAir;
+
+    impl<X> BaseAir<X> for EqualColumnsIoAir {
+        fn width(&self) -> usize {
+            2
+        }
+
+        fn num_public_values(&self) -> usize {
+            1
+        }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            &EQUAL_COLUMNS_IO_CELLS
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for EqualColumnsIoAir {
+        fn eval(&self, builder: &mut AB) {
+            // Both columns agree on every row, with no selector in front.
+            let main = builder.main();
+            let row = main.current_slice();
+            builder.assert_eq(row[0], row[1]);
+        }
     }
 
     #[test]

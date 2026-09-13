@@ -8,6 +8,7 @@ use p3_sumcheck::PrescribedPointPcs;
 use thiserror::Error;
 
 use crate::VerifierInstances;
+use crate::boundary::{self, BoundaryIo, BoundaryIoError};
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::VerifierAir;
 use crate::lookup::{LookupError, verify_lookup};
@@ -46,6 +47,14 @@ where
     /// A statement-level transcript step could not be replayed.
     #[error("transcript: {0}")]
     Transcript(MultiStarkTranscriptFailure),
+    /// An AIR names a public boundary cell or public value it does not have.
+    #[error("instance {instance} boundary IO: {error}")]
+    BoundaryIo {
+        /// Index of the offending instance in verifier-instance order.
+        instance: usize,
+        /// What is wrong with the declaration.
+        error: BoundaryIoError,
+    },
 }
 
 /// Verify only when the verifier's statement meets the requested security target.
@@ -137,6 +146,7 @@ where
 /// Returns an error when the key and the AIRs disagree on whether a preprocessed trace exists.
 /// Returns an error when an instance supplies a public-value count its AIR does not declare.
 /// Returns an error when the proof and the AIRs disagree on whether a lookup exists.
+/// Returns an error when an AIR names a public boundary cell it does not have.
 ///
 /// # Panics
 ///
@@ -184,6 +194,14 @@ where
     let airs = instances.airs();
     let log_heights = instances.num_variables();
     let public_values = instances.public_values();
+
+    // Reject a malformed public boundary declaration before the transcript is touched.
+    // The reconstruction below indexes columns and public values by those numbers.
+    for (instance, air) in airs.iter().enumerate() {
+        boundary::validate::<C::Val, _>(*air)
+            .map_err(|error| VerificationError::BoundaryIo { instance, error })?;
+    }
+
     let mut transcript = MultiStarkVerifierTranscript::<C::Challenger, C::Val>::new(
         challenger,
         MultiStarkShape::new::<C::Val, A>(&airs, &log_heights, pow_bits),
@@ -253,12 +271,13 @@ where
 
     // 6. Open the committed main trace tables at their suffixes of the bound point.
     // The returned values are bound to the main commitment.
+    let main_points = instances.main_points(&reduction.point);
     let main_evals = match transcript.main_opening(|challenger| {
         config.pcs().verify_at(
             &proof.commitment,
             &proof.opening,
             &instances.opening_protocol(),
-            &instances.main_points(&reduction.point),
+            &main_points,
             challenger,
         )
     }) {
@@ -297,10 +316,32 @@ where
 
     let preprocessed_next_columns = instances.preprocessed_next_columns();
     let next_columns = instances.next_columns();
-    let main_openings = main_evals
+
+    // Add each public value back to the openings of the blanked commitment.
+    //
+    //     no declared cells : openings borrowed through untouched
+    //     declared cells    : one Lagrange correction per cell and view
+    //
+    // The result equals what the prover folded.
+    // The closing recompute below therefore lands on the same value.
+    let reconstructed = main_evals
+        .iter()
+        .zip(airs.iter())
+        .enumerate()
+        .map(|(instance, (batch, air))| {
+            BoundaryIo::new(air.public_boundary_io()).reconstruct(
+                batch.current(),
+                batch.next(),
+                &next_columns[instance],
+                main_points[instance].as_slice(),
+                public_values[instance],
+            )
+        })
+        .collect::<Vec<_>>();
+    let main_openings = reconstructed
         .iter()
         .zip(next_columns.iter())
-        .map(|(batch, next_columns)| TableOpening::new(batch.current(), next_columns, batch.next()))
+        .map(|((current, next), next_columns)| TableOpening::new(current, next_columns, next))
         .collect::<Vec<_>>();
 
     // Build one preprocessed opening view per instance, in instance order.

@@ -1,7 +1,7 @@
 use core::borrow::Borrow;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_field::PrimeCharacteristicRing;
@@ -130,6 +130,54 @@ fn wide_fib_trace(n: usize) -> RowMajorMatrix<F> {
     RowMajorMatrix::new(values, WIDE_COLS)
 }
 
+/// Fibonacci AIR binding its public inputs by position instead of by constraint.
+///
+/// Only the transition recurrence is asserted here.
+/// The folder injects one pin per declared cell in place of the boundary constraints.
+struct FibIoAir;
+
+/// The seed and output cells the AIR above binds by position.
+///
+/// ```text
+///     column 0, first row -> public value 0
+///     column 1, first row -> public value 1
+///     column 1, last  row -> public value 2
+/// ```
+const FIB_IO_CELLS: [BoundaryPublic; 3] = [
+    BoundaryPublic::new(0, BoundaryEnd::First, 0),
+    BoundaryPublic::new(1, BoundaryEnd::First, 1),
+    BoundaryPublic::new(1, BoundaryEnd::Last, 2),
+];
+
+impl<X> BaseAir<X> for FibIoAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &FIB_IO_CELLS
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for FibIoAir {
+    fn eval(&self, builder: &mut AB) {
+        // Read the current row and the row after it.
+        let main = builder.main();
+        let local: &FibRow<AB::Var> = main.current_slice().borrow();
+        let next: &FibRow<AB::Var> = main.next_slice().borrow();
+
+        // Advance the recurrence on every row but the last.
+        //
+        //     next.left  = right
+        //     next.right = left + right
+        let mut trans = builder.when_transition();
+        trans.assert_eq(local.right, next.left);
+        trans.assert_eq(local.left + local.right, next.right);
+    }
+}
+
 fn fresh_challenger() -> Ch {
     let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
     let perm = Perm::new_from_rng_128(&mut rng);
@@ -203,5 +251,61 @@ fn bench_wide_zerocheck(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_zerocheck, bench_wide_zerocheck);
+/// Compare the two ways to bind a Fibonacci AIR's public inputs, at equal size.
+///
+/// ```text
+///     constraint  : first-row and last-row boundary constraints
+///     boundary_io : one injected pin per declared cell
+/// ```
+///
+/// Both arms assert the same number of degree-two constraints.
+/// This therefore isolates the per-round fold cost of the two bindings.
+///
+/// Binding by position also clones each committed table that carries a cell.
+/// That cost lives in the committed prover and is not exercised here.
+fn bench_public_input_binding(c: &mut Criterion) {
+    let mut group = c.benchmark_group("public_input_binding");
+    group.sample_size(10);
+    for log_height in [18, 20] {
+        // A shared Fibonacci trace and its public seeds and output.
+        let n = 1 << log_height;
+        let trace = fib_trace(n);
+        let last = trace.values[(n - 1) * NUM_COLS + 1];
+        let pis = [F::ZERO, F::ONE, last];
+        let table = Table::new(trace.transpose());
+        let public_values = vec![&pis[..]];
+        let preprocessed = vec![None; 1];
+        let tables = vec![&table; 1];
+
+        // Constraint binding: the AIR asserts the boundary equalities directly.
+        let constraint_air = FibAir;
+        let constraint_airs = vec![&constraint_air];
+        let constraint = AirZerocheck::new(&constraint_airs, 0);
+        group.bench_with_input(BenchmarkId::new("constraint", log_height), &n, |b, _| {
+            b.iter(|| {
+                let mut ch = fresh_challenger();
+                constraint.prove::<F, EF, _>(&preprocessed, &tables, &public_values, &mut ch)
+            });
+        });
+
+        // Position binding: the folder injects one pin per declared cell instead.
+        let io_air = FibIoAir;
+        let io_airs = vec![&io_air];
+        let io = AirZerocheck::new(&io_airs, 0);
+        group.bench_with_input(BenchmarkId::new("boundary_io", log_height), &n, |b, _| {
+            b.iter(|| {
+                let mut ch = fresh_challenger();
+                io.prove::<F, EF, _>(&preprocessed, &tables, &public_values, &mut ch)
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_zerocheck,
+    bench_wide_zerocheck,
+    bench_public_input_binding
+);
 criterion_main!(benches);

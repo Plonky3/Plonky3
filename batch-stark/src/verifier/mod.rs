@@ -360,6 +360,13 @@ where
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
     SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        airs.iter().all(|air| air.public_boundary_io().is_empty()),
+        "batch-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     // TODO: Extend if additional lookup gadgets are added.
     let lookup_gadget = LogUpGadget::new();
 

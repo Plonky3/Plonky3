@@ -7,7 +7,7 @@
 
 use alloc::vec::Vec;
 
-use p3_air::{Air, AirBuilder, BaseAir, RowWindow};
+use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, RowWindow, WindowAccess};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_lookup::{Count, InteractionBuilder, InteractionSymbolicBuilder};
 
@@ -255,6 +255,7 @@ where
     ///
     /// This is the terminal step of the builder: it consumes the folder.
     /// Attach preprocessed and periodic columns before calling, if the AIR reads them.
+    /// Cells the AIR lists as public inputs add one pin each, after its own constraints.
     ///
     /// # Arguments
     ///
@@ -264,7 +265,7 @@ where
     ///
     /// The alpha-batched sum `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
     ///
-    /// - `C_0, ..., C_{n-1}` are the constraints asserted by the AIR in declaration order.
+    /// - `C_0, ..., C_{n-1}` are the asserted constraints, public boundary pins last.
     /// - `n` is the total number of asserted constraints.
     #[inline]
     #[must_use]
@@ -274,7 +275,52 @@ where
         Self: AirBuilder,
     {
         air.eval(&mut self);
+        self.eval_boundary_io(air);
         self.into_accumulator()
+    }
+
+    /// Assert that each cell the AIR lists as a public input holds that public value.
+    ///
+    /// ```text
+    ///     first-end cell:  is_first_row * (column - public) = 0
+    ///     last-end  cell:  is_last_row  * (column - public) = 0
+    /// ```
+    ///
+    /// This is what makes the verifier's reconstruction of a blanked commitment binding:
+    ///
+    /// ```text
+    ///     folded   = committed + eq_cell * cell_value    (the prover's side)
+    ///     restored = committed + eq_cell * public        (the verifier's side)
+    /// ```
+    ///
+    /// The two sides coincide exactly when the cell value equals the public value.
+    /// Without the pin a prover could commit any cell and let the public value absorb into it.
+    ///
+    /// An honest trace already carries the public value, leaving the pin at zero.
+    ///
+    /// The pins batch into the accumulator with the same scalar as the AIR's own constraints.
+    /// Prover fold and verifier recompute therefore agree on the batched value.
+    #[inline]
+    fn eval_boundary_io<A>(&mut self, air: &A)
+    where
+        A: Air<Self>,
+        Self: AirBuilder,
+    {
+        for cell in air.public_boundary_io() {
+            // Read both operands out first.
+            // Asserting takes a mutable borrow of the folder.
+            let value = self.main().current_slice()[cell.column];
+            let public = self.public_values()[cell.public_value];
+
+            // Gate the equality by the selector for this cell's end.
+            //
+            //     first end -> is_first_row
+            //     last  end -> is_last_row
+            match cell.end {
+                BoundaryEnd::First => self.when_first_row().assert_eq(value, public),
+                BoundaryEnd::Last => self.when_last_row().assert_eq(value, public),
+            }
+        }
     }
 }
 
