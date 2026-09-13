@@ -110,7 +110,9 @@ where
     /// The folding cap exceeds what this verifier can fold.
     ///
     /// Circle FRI folds two points at a time and nothing else.
-    /// A larger cap would let a proof declare an arity its fold cannot apply.
+    ///
+    /// The schedule is derived from the cap, never read out of a proof, so any other
+    /// cap would have that derivation name an arity the fold cannot apply.
     #[error("folding cap 2^{max_log_arity} exceeds the supported arity 2")]
     UnsupportedFoldingCap {
         /// The configured cap, in log form.
@@ -120,7 +122,8 @@ where
     ///
     /// A round that folds nothing away never reaches the final height.
     ///
-    /// A schedule derived against such a cap has no answer to give.
+    /// `fold_schedule` asserts a positive cap rather than returning such a schedule,
+    /// so this rejection is what keeps a zero cap from reaching that assert.
     #[error("FRI instance has max_log_arity = 0; a positive folding cap is required")]
     ZeroFoldingArity,
     /// The instance is configured with `log_blowup == 0`.
@@ -162,6 +165,20 @@ where
     },
     #[error("final folded height mismatch: expected {expected}, got {got}")]
     FinalFoldHeightMismatch { expected: usize, got: usize },
+    /// One schedule entry names an arity this fold cannot apply.
+    ///
+    /// A zero entry is a round that folds nothing away, so the chain never descends.
+    ///
+    /// An entry at or above `usize::BITS` overflows the `1 << log_arity` the fold needs.
+    ///
+    /// `fold_schedule` produces neither, so only a caller-supplied schedule reaches this.
+    #[error("round {round}: fold schedule arity 2^{log_arity} is out of range")]
+    FoldScheduleArityOutOfRange {
+        /// Position of the offending entry in the schedule.
+        round: usize,
+        /// The entry itself, in log form.
+        log_arity: usize,
+    },
     /// The arity schedule folds past the final domain size.
     ///
     /// Reducing `log_global_max_height` by `total_log_reduction` bits would drop below
@@ -497,11 +514,11 @@ where
     }
     // Reject a cap that folds nothing away.
     //
-    // The schedule below walks the height down one round at a time.
+    // `compute_log_arity_for_round` asserts a positive cap, so without this guard
+    // `fold_schedule` panics on its first round rather than looping.
     //
-    // A cap of zero leaves every round folding by zero bits.
-    //
-    // The walk would then never terminate.
+    // A rejection is the right answer either way: a cap of zero leaves every round
+    // folding by zero bits, and no schedule over it ever reaches the final height.
     if params.max_log_arity == 0 {
         return Err(FriError::ZeroFoldingArity);
     }
@@ -840,12 +857,17 @@ where
 ///
 /// So this pass is total on well-typed input:
 ///
+/// - Each schedule entry must name an arity this pass can shift and fold by.
 /// - Each round must open this query with one value fewer than its arity.
 /// - The schedule must not fold past the final height.
 ///
-/// One obligation remains the caller's.
+/// Two obligations remain the caller's.
 ///
 /// The two collectors must each hold one entry per round, since this pass indexes them.
+///
+/// Each schedule entry must be at most the configured `max_log_arity`, as
+/// `fold_schedule` produces. This pass does not see that cap, so it bounds each
+/// entry only by what it can itself apply.
 ///
 /// # Panics
 ///
@@ -886,6 +908,20 @@ where
     M: Mmcs<EF>,
     Folding: FriFoldingStrategy<F, EF>,
 {
+    // Each entry must name a real arity before anything shifts or sums by it.
+    //
+    //     log_arity == 0   ->  a round that folds nothing away
+    //     log_arity >= 64  ->  `1 << log_arity` overflows the shift below
+    //
+    // `verify_fri` derives its schedule from `fold_schedule`, whose entries are already
+    // in `1..=max_log_arity`. A caller replaying one query on its own is not assumed to
+    // have done that, and this pass is the last place to catch it.
+    for (round, &log_arity) in log_arities.iter().enumerate() {
+        if log_arity == 0 || log_arity >= usize::BITS as usize {
+            return Err(FriError::FoldScheduleArityOutOfRange { round, log_arity });
+        }
+    }
+
     // Shape checks on the proof-controlled openings, before any indexing into them.
     // `verify_fri` establishes these for every query up front; a caller replaying a single
     // query cannot be assumed to have, and the row reconstruction below indexes
@@ -911,10 +947,14 @@ where
         }
     }
 
-    // The arity schedule is proof-controlled, so it may fold past the final height, which
-    // would underflow `log_current_height - log_arity` below. Under-folding is caught by the
-    // terminal height check instead, which reports the height actually reached.
-    let total_log_reduction: usize = log_arities.iter().sum();
+    // The schedule may still fold past the final height, which would underflow
+    // `log_current_height - log_arity` below. Under-folding is caught by the terminal
+    // height check instead, which reports the height actually reached.
+    //
+    // Every entry is under `usize::BITS` by now, but the sum over enough rounds is not,
+    // so it saturates. A saturated total exceeds any reachable reduction and is rejected
+    // right here, which is where an overflowing schedule belongs anyway.
+    let total_log_reduction: usize = log_arities.iter().copied().fold(0, usize::saturating_add);
     if total_log_reduction > log_global_max_height.saturating_sub(log_final_height) {
         return Err(FriError::FoldScheduleTooLong {
             total_log_reduction,
@@ -1415,6 +1455,77 @@ mod tests {
     type Folding = TwoAdicFriFoldingForMmcs<Val, ValMmcs>;
     type TestError =
         FriError<<ChallengeMmcs as Mmcs<Challenge>>::Error, <ValMmcs as Mmcs<Val>>::Error>;
+
+    /// Replay one query against a caller-supplied schedule, with everything else empty.
+    ///
+    /// The schedule is validated before any opening is indexed, so no proof is needed.
+    fn fold_query_with_schedule(log_arities: &[usize]) -> Result<Challenge, TestError> {
+        let mut index = 0;
+        let mut group_indices = vec![Vec::new(); log_arities.len()];
+        let mut rows = vec![Vec::new(); log_arities.len()];
+        fold_query::<Folding, Val, Challenge, ChallengeMmcs>(
+            &TwoAdicFriFolding(PhantomData),
+            0,
+            &mut index,
+            &[],
+            log_arities,
+            &[],
+            vec![],
+            8,
+            1,
+            &mut group_indices,
+            &mut rows,
+        )
+    }
+
+    #[test]
+    fn a_caller_schedule_naming_an_unusable_arity_is_rejected() {
+        // Invariant: `fold_query` is public and takes the schedule from its caller.
+        //
+        // `verify_fri` derives its own from `fold_schedule`, so entries are sane there.
+        //
+        // A caller replaying one query supplies its own, and these three would have
+        // reached a shift, a sum, or a fold that cannot make progress.
+        //
+        // Fixture state: three schedules, each unusable for its own reason.
+        //
+        //     [64]             ->  `1 << 64` overflows the shift
+        //     [usize::MAX, 1]  ->  the total overflows the sum
+        //     [0, 2]           ->  a round that folds nothing away
+
+        // An entry at the word width cannot be shifted by.
+        assert!(matches!(
+            fold_query_with_schedule(&[usize::BITS as usize]),
+            Err(FriError::FoldScheduleArityOutOfRange {
+                round: 0,
+                log_arity: 64
+            } | FriError::FoldScheduleArityOutOfRange {
+                round: 0,
+                log_arity: 32
+            })
+        ));
+
+        // A saturating entry is caught by the same bound, before the sum runs.
+        assert!(matches!(
+            fold_query_with_schedule(&[usize::MAX, 1]),
+            Err(FriError::FoldScheduleArityOutOfRange { round: 0, .. })
+        ));
+
+        // A zero entry is a round that never descends.
+        assert!(matches!(
+            fold_query_with_schedule(&[0, 2]),
+            Err(FriError::FoldScheduleArityOutOfRange {
+                round: 0,
+                log_arity: 0
+            })
+        ));
+
+        // A schedule of usable entries that still folds too far is a different rejection.
+        assert!(matches!(
+            fold_query_with_schedule(&[4, 4]),
+            Err(FriError::FoldScheduleTooLong { .. })
+        ));
+    }
 
     /// All the data needed to invoke the top-level FRI verification.
     struct TestFixture {
@@ -2938,14 +3049,16 @@ mod tests {
     fn rejects_with_zero_folding_arity() {
         // Invariant: the verifier rejects a degenerate configuration.
         //
-        // It neither hangs nor panics on one.
+        // It rejects rather than panicking on one.
         //
-        // The schedule walks the global height down one round at a time.
-        //
-        // A cap of zero makes every round fold by zero bits.
+        // A cap of zero would make every round fold by zero bits.
         //
         //     cap 1:  4 -> 3 -> 2 -> 1     reaches the final height
-        //     cap 0:  4 -> 4 -> 4 -> ...   never reaches it
+        //     cap 0:  no round makes progress
+        //
+        // `fold_schedule` does not run such a walk: `compute_log_arity_for_round`
+        // asserts a positive cap, so the guard here is what stands between a zero
+        // cap and that assert.
         //
         // Fixture state: an honest proof built with a folding cap of 1.
         //

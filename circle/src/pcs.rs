@@ -1888,20 +1888,18 @@ mod tests {
         assert_eq!(got, original_sibling_count - 1);
     }
 
-    // Two error variants cannot be triggered through the PCS verification
-    // layer because Merkle commitment checks or input-proof validation
-    // fail first for any proof mutation that would reach those code paths:
+    // Two error variants cannot be triggered through the PCS verification layer,
+    // because a cheaper check rejects first for any mutation that would reach them:
     //
-    // - Final fold height mismatch: requires the total folding to stop at
-    //   the wrong domain size, but altering round counts also invalidates
-    //   Merkle proofs.
-    // - Unconsumed reduced openings: requires leftover polynomial data
-    //   after folding completes, but input-proof checks reject the shape
-    //   before the folding loop runs.
+    // - Final fold height mismatch: requires the total folding to stop at the wrong
+    //   domain size. The round count comes from the claimed heights, so a proof
+    //   carrying a different one is rejected by `CommitRoundCountMismatch` before
+    //   any folding runs.
+    // - Unconsumed reduced openings: requires leftover polynomial data after folding
+    //   completes, but input-proof checks reject the shape before the folding loop.
     //
-    // Both are reachable by a malicious prover who crafts openings that
-    // pass Merkle checks but have wrong structure — they serve as defense
-    // in depth in the low-level verifier.
+    // Both stay reachable in the low-level verifier, where a caller supplies its own
+    // schedule, so they are defense in depth rather than dead code.
 
     #[test]
     fn reject_input_openings_query_count_mismatch() {
@@ -1909,9 +1907,8 @@ mod tests {
         // first-layer siblings carry one entry per query, so dropping one
         // leaves a query without its opened row.
         //
-        // The cross-query arity-schedule check this test used to perform is
-        // now unrepresentable: `log_arity` lives once per round, not once per
-        // query, so no two queries can disagree.
+        // A cross-query arity disagreement is unrepresentable: `log_arity` lives
+        // once per round, not once per query, so no two queries can disagree.
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         // Mutation: drop the last query's first-layer siblings.

@@ -67,7 +67,9 @@ where
     // Capping the arity at one forces every per-round arity to one.
     // The pinned height sum then determines the schedule uniquely.
     //
-    // A larger cap would let a proof declare an arity this fold cannot apply.
+    // No proof declares an arity: the schedule is derived, not read. This check is
+    // what licenses deriving a unit schedule at all, since any other cap would make
+    // that derivation state an arity this fold cannot apply.
     if params.max_log_arity != 1 {
         return Err(FriError::UnsupportedFoldingCap {
             max_log_arity: params.max_log_arity,
