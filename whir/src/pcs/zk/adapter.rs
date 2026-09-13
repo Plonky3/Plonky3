@@ -128,6 +128,8 @@ where
             })
             .collect();
 
+        // The claims are bound and the hiding run starts here.
+        // Its driver therefore seeds here, ahead of the run's first challenge.
         let prover = HidingWhirProver::new(&self.config, &self.dft, &self.mmcs);
         let mut rng = StdRng::from_rng(&mut *self.rng.lock());
         prover.prove(prover_data, &claims, challenger, &mut rng)
@@ -159,6 +161,8 @@ where
             })
             .collect();
 
+        // The claims are bound and the hiding run starts here.
+        // Its driver therefore seeds here, ahead of the run's first challenge.
         let verifier = HidingWhirVerifier::new(&self.config, &self.mmcs);
         verifier.verify(proof, commitment, &claims, challenger)
     }

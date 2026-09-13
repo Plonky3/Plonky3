@@ -56,7 +56,7 @@
 //! - <https://eprint.iacr.org/2024/1586> (base WHIR).
 
 mod adapter;
-mod base_case;
+pub(crate) mod base_case;
 mod code_switch;
 mod committer;
 mod config;
@@ -68,7 +68,7 @@ mod security;
 mod verifier;
 
 pub use adapter::HidingWhirPcs;
-pub use base_case::BaseCaseZkError;
+pub use base_case::{BaseCaseZkConfig, BaseCaseZkError};
 pub use code_switch::CodeSwitchError;
 pub use config::{ZkConfigError, ZkParameters, ZkWhirConfig};
 pub use mask::{MaskCodeShape, MaskGroupShape};
