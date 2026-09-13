@@ -1685,9 +1685,14 @@ fn security_checked_roundtrip_for_an_air_bound_only_by_boundary_io() {
     //
     // Fixture state: one column counting up, its last row the public output.
     //
-    //     rows          : [0, 1, ..., 15]
-    //     public values : [15]
-    let n = 16;
+    //     rows          : [0, 1, ..., 255]
+    //     public values : [255]
+    //
+    // A single column stacks to the trace arity alone.
+    // The PCS opening folds a packed prefix, which needs arity >= folding + log2(SIMD width):
+    //
+    //     arity 8 >= 2 + 4    -> covers every packing width up to 16
+    let n = 256;
     let log_height = log2_strict_usize(n);
     let mut config = config_for(log_height, 1);
     config.collision_bits = Some(100);
