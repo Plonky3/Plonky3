@@ -216,10 +216,14 @@ where
         if !builder.exclusive_interactions().is_empty() {
             return Err(invalid("exclusive lookups are unsupported"));
         }
-        let constraints = builder
+        let own_constraints = builder
             .base_constraints()
             .len()
             .checked_add(builder.extension_constraints().len())
+            .ok_or_else(|| invalid("constraint count overflow"))?;
+        // The folder batches one public boundary pin per listed cell with the AIR's own constraints.
+        let constraints = own_constraints
+            .checked_add(air.public_boundary_io().len())
             .ok_or_else(|| invalid("constraint count overflow"))?;
         max_num_constraints = max_num_constraints.max(constraints);
         let symbolic_degree = builder
@@ -242,7 +246,7 @@ where
                 "constraint degree hint understates the symbolic degree",
             ));
         }
-        if constraints > 0 && symbolic_degree == 0 {
+        if own_constraints > 0 && symbolic_degree == 0 {
             return Err(invalid("constant constraint families are unsupported"));
         }
         let tuples = builder

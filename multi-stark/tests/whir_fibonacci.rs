@@ -1426,3 +1426,297 @@ fn setup_rejects_an_invalid_boundary_io_declaration() {
     let airs = [&FibIoAirBadColumn];
     let _ = setup(&config, &airs, &mut challenger());
 }
+
+#[test]
+fn prove_verify_mixed_height_fibonacci_boundary_io_roundtrips() {
+    // Invariant: each instance corrects its openings at its own suffix of the common point.
+    //
+    // Fixture state:
+    //
+    //     trace a: height 256 -> 8 variables, corrected at the full point
+    //     trace b: height 128 -> 7 variables, corrected at the point minus its leading coordinate
+    //
+    // A shared correction point would misplace every cell of the shorter trace.
+    let air = FibIoAir;
+    let n_a = 256;
+    let n_b = 128;
+    let log_a = log2_strict_usize(n_a);
+    let log_b = log2_strict_usize(n_b);
+    let trace_a = fib_trace(n_a);
+    let trace_b = fib_trace(n_b);
+    let pis_a = fib_public_values_for_trace(&trace_a);
+    let pis_b = fib_public_values_for_trace(&trace_b);
+
+    // Size the config for the stacked cell count the layout planner computes.
+    let cells = NUM_COLS * n_a + NUM_COLS * n_b;
+    let mut config = config_for_stacked(log2_ceil_usize(cells));
+    config.collision_bits = Some(100);
+    let airs = [&air, &air];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
+
+    let proof = p3_multi_stark::prove_with_security(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&air, Table::new(trace_a.transpose()), &pk, &pis_a),
+            ProverInstance::new(&air, Table::new(trace_b.transpose()), &pk, &pis_b),
+        ]),
+        0,
+        20,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    p3_multi_stark::verify_with_security(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&air, &vk, log_a, &pis_a),
+            VerifierInstance::new(&air, &vk, log_b, &pis_b),
+        ]),
+        &proof,
+        0,
+        20,
+        &mut challenger(),
+    )
+    .expect("honest mixed-height boundary-IO proof must verify");
+}
+
+/// The cells the permutation lookup AIR below binds by position.
+///
+/// ```text
+///     column 0, last  row -> public value 0
+///     column 1, first row -> public value 1
+/// ```
+const PERMUTATION_IO_CELLS: [BoundaryPublic; 2] = [
+    BoundaryPublic::new(0, BoundaryEnd::Last, 0),
+    BoundaryPublic::new(1, BoundaryEnd::First, 1),
+];
+
+/// The local permutation lookup, with two of its cells bound by position.
+///
+/// It asserts no constraint of its own:
+///
+/// ```text
+///     lookup family   : the two-tuple permutation
+///     ordinary family : the injected pins, and nothing else
+/// ```
+struct PermutationIoLookupAir;
+
+impl BaseAir<F> for PermutationIoLookupAir {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn num_public_values(&self) -> usize {
+        2
+    }
+
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &PERMUTATION_IO_CELLS
+    }
+}
+
+impl<AB> Air<AB> for PermutationIoLookupAir
+where
+    AB: AirBuilder<F = F> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        // Identical lookups, with only the declaration setting the two apart.
+        LocalPermutationLookupAir.eval(builder);
+    }
+}
+
+/// Public values an honest reversed trace of `n` rows carries at the declared cells.
+///
+/// ```text
+///     column 0, last  row : n - 1
+///     column 1, first row : n - 1
+/// ```
+fn permutation_io_public_values(n: usize) -> [F; 2] {
+    [F::from_usize(n - 1), F::from_usize(n - 1)]
+}
+
+/// Prove the permutation lookup AIR with boundary IO, then verify under the same public values.
+fn prove_verify_permutation_io(
+    n: usize,
+    pis: &[F; 2],
+) -> Result<(), VerificationError<p3_whir::VerifierError>> {
+    let log_height = log2_strict_usize(n);
+    let air = PermutationIoLookupAir;
+    let config = config_for(log_height, air.width());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(permutation_trace(n).transpose()),
+            &pk,
+            pis,
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    assert!(proof.lookup.is_some());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, pis)]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+}
+
+#[test]
+fn prove_verify_lookup_boundary_io_roundtrips_through_pcs() {
+    // Invariant: an AIR with lookups and boundary IO folds the pins in both folders.
+    //
+    //     pin degree 2 > lookup degree 1
+    //     -> nodes 0, 1 : lookup-aware folder
+    //     -> node  2    : ordinary folder
+    //     -> the two must batch the same ordinary family
+    let n = 64;
+    prove_verify_permutation_io(n, &permutation_io_public_values(n))
+        .expect("honest lookup proof with boundary IO must verify");
+}
+
+#[test]
+fn verify_rejects_wrong_claimed_output_lookup_boundary_io() {
+    // Invariant: a lookup AIR's boundary cells are bound even though the lookup alone passes.
+    //
+    // Mutation: claim column 0 ends one past the value the reversed trace ends on.
+    //
+    //     lookup : still a permutation  -> accepted on its own
+    //     pin    : (n - 1) - n != 0     -> the zerocheck rejects
+    let n = 64;
+    let mut pis = permutation_io_public_values(n);
+    pis[0] += F::ONE;
+
+    let err = prove_verify_permutation_io(n, &pis).unwrap_err();
+    assert!(
+        matches!(err, VerificationError::Zerocheck(_)),
+        "expected a zerocheck rejection, got {err:?}"
+    );
+}
+
+#[test]
+fn security_counts_boundary_io_pins_as_constraints() {
+    // Invariant: the security report sees the constraints the folder batches, pins included.
+    //
+    //     constraint AIR  : 2 first-row + 2 transition + 1 last-row = 5 constraints, degree 2
+    //     boundary-IO AIR : 2 transition + 3 pins                    = 5 constraints, degree 2
+    //                       → identical batching and sumcheck terms
+    let config = config_for(4, NUM_COLS);
+    let public = fib_public_values(16);
+    let term_bits = |report: &p3_multi_stark::MultiStarkSecurityReport, label: &str| {
+        report
+            .terms()
+            .iter()
+            .find(|term| term.label == label)
+            .unwrap_or_else(|| panic!("missing {label}"))
+            .bits
+            .bits()
+    };
+
+    let (_, vk) = setup(&config, &[&FibAir], &mut challenger()).unwrap();
+    let constraint = p3_multi_stark::security_report(
+        &config,
+        &VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, 4, &public)]),
+    )
+    .unwrap();
+
+    let (_, vk) = setup(&config, &[&FibIoAir], &mut challenger()).unwrap();
+    let boundary_io = p3_multi_stark::security_report(
+        &config,
+        &VerifierInstances::new(vec![VerifierInstance::new(&FibIoAir, &vk, 4, &public)]),
+    )
+    .unwrap();
+
+    for label in ["constraint-batching", "constraint-sumcheck"] {
+        assert_eq!(
+            term_bits(&boundary_io, label),
+            term_bits(&constraint, label),
+            "{label}"
+        );
+    }
+}
+
+/// The one cell the constraint-free AIR below binds by position.
+const OUTPUT_ONLY_CELLS: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::Last, 0)];
+
+/// AIR that asserts nothing and binds its only public value by position.
+///
+/// Its ordinary constraint family is the single injected pin.
+struct OutputOnlyIoAir;
+
+impl<X> BaseAir<X> for OutputOnlyIoAir {
+    fn width(&self) -> usize {
+        1
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn num_public_values(&self) -> usize {
+        1
+    }
+
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &OUTPUT_ONLY_CELLS
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for OutputOnlyIoAir {
+    fn eval(&self, _builder: &mut AB) {
+        // Empty: the public value is bound by position, not by a constraint.
+    }
+}
+
+#[test]
+fn security_checked_roundtrip_for_an_air_bound_only_by_boundary_io() {
+    // Invariant: a pin counts as a constraint, so an AIR asserting nothing else is a valid statement.
+    //
+    // Fixture state: one column counting up, its last row the public output.
+    //
+    //     rows          : [0, 1, ..., 15]
+    //     public values : [15]
+    let n = 16;
+    let log_height = log2_strict_usize(n);
+    let mut config = config_for(log_height, 1);
+    config.collision_bits = Some(100);
+    let air = OutputOnlyIoAir;
+    let trace = RowMajorMatrix::new((0..n).map(F::from_usize).collect(), 1);
+    let public = [F::from_usize(n - 1)];
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+
+    let proof = p3_multi_stark::prove_with_security(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &public,
+        )]),
+        0,
+        20,
+        &mut challenger(),
+    )
+    .expect("a pin-only AIR must pass the security assessment");
+
+    p3_multi_stark::verify_with_security(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &public)]),
+        &proof,
+        0,
+        20,
+        &mut challenger(),
+    )
+    .expect("honest pin-only proof must verify");
+}

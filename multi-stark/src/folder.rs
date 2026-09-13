@@ -7,7 +7,7 @@
 
 use alloc::vec::Vec;
 
-use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, RowWindow, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, RowWindow, WindowAccess};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_lookup::{Count, InteractionBuilder, InteractionSymbolicBuilder};
 
@@ -275,51 +275,49 @@ where
         Self: AirBuilder,
     {
         air.eval(&mut self);
-        self.eval_boundary_io(air);
+        eval_boundary_io(&mut self, air.public_boundary_io());
         self.into_accumulator()
     }
+}
 
-    /// Assert that each cell the AIR lists as a public input holds that public value.
-    ///
-    /// ```text
-    ///     first-end cell:  is_first_row * (column - public) = 0
-    ///     last-end  cell:  is_last_row  * (column - public) = 0
-    /// ```
-    ///
-    /// This is what makes the verifier's reconstruction of a blanked commitment binding:
-    ///
-    /// ```text
-    ///     folded   = committed + eq_cell * cell_value    (the prover's side)
-    ///     restored = committed + eq_cell * public        (the verifier's side)
-    /// ```
-    ///
-    /// The two sides coincide exactly when the cell value equals the public value.
-    /// Without the pin a prover could commit any cell and let the public value absorb into it.
-    ///
-    /// An honest trace already carries the public value, leaving the pin at zero.
-    ///
-    /// The pins batch into the accumulator with the same scalar as the AIR's own constraints.
-    /// Prover fold and verifier recompute therefore agree on the batched value.
-    #[inline]
-    fn eval_boundary_io<A>(&mut self, air: &A)
-    where
-        A: Air<Self>,
-        Self: AirBuilder,
-    {
-        for cell in air.public_boundary_io() {
-            // Read both operands out first.
-            // Asserting takes a mutable borrow of the folder.
-            let value = self.main().current_slice()[cell.column];
-            let public = self.public_values()[cell.public_value];
+/// Assert that each cell the AIR lists as a public input holds that public value.
+///
+/// ```text
+///     first-end cell:  is_first_row * (column - public) = 0
+///     last-end  cell:  is_last_row  * (column - public) = 0
+/// ```
+///
+/// This is what makes the verifier's reconstruction of a blanked commitment binding:
+///
+/// ```text
+///     folded   = committed + eq_cell * cell_value    (the prover's side)
+///     restored = committed + eq_cell * public        (the verifier's side)
+/// ```
+///
+/// The two sides coincide exactly when the cell value equals the public value.
+/// Without the pin a prover could commit any cell and let the public value absorb into it.
+///
+/// An honest trace already carries the public value, leaving the pin at zero.
+///
+/// The pins batch into the accumulator with the same scalar as the AIR's own constraints.
+/// Prover fold and verifier recompute therefore agree on the batched value.
+///
+/// Both folders run this after the AIR's own evaluation, so every node batches the same family.
+#[inline]
+fn eval_boundary_io<AB: AirBuilder>(builder: &mut AB, cells: &[BoundaryPublic]) {
+    for cell in cells {
+        // Read both operands out first.
+        // Asserting takes a mutable borrow of the folder.
+        let value = builder.main().current_slice()[cell.column];
+        let public = builder.public_values()[cell.public_value];
 
-            // Gate the equality by the selector for this cell's end.
-            //
-            //     first end -> is_first_row
-            //     last  end -> is_last_row
-            match cell.end {
-                BoundaryEnd::First => self.when_first_row().assert_eq(value, public),
-                BoundaryEnd::Last => self.when_last_row().assert_eq(value, public),
-            }
+        // Gate the equality by the selector for this cell's end.
+        //
+        //     first end -> is_first_row
+        //     last  end -> is_last_row
+        match cell.end {
+            BoundaryEnd::First => builder.when_first_row().assert_eq(value, public),
+            BoundaryEnd::Last => builder.when_last_row().assert_eq(value, public),
         }
     }
 }
@@ -503,6 +501,8 @@ where
     }
 
     /// Run the AIR once and return its ordinary and lookup expressions separately.
+    ///
+    /// Cells the AIR lists as public inputs add one pin each to the ordinary family.
     #[inline]
     #[must_use]
     pub(crate) fn eval_air<A>(mut self, air: &A) -> FolderEvaluations<Acc>
@@ -511,6 +511,7 @@ where
         Self: AirBuilder,
     {
         air.eval(&mut self);
+        eval_boundary_io(&mut self, air.public_boundary_io());
         // Both families come out of the one pass, batched independently.
         FolderEvaluations {
             constraints: self.inner.accumulator,
@@ -1048,6 +1049,81 @@ mod tests {
         // The constraint was dropped, while the link is unaffected by the switch.
         assert_eq!(evaluations.constraints, EF::ZERO);
         assert_ne!(evaluations.interactions, EF::ZERO);
+    }
+
+    /// The one cell the lookup AIR below binds by position.
+    const LINKED_IO_CELLS: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::First, 0)];
+
+    /// The linked AIR above, with column 0's first row bound to public value 0.
+    struct LinkedIoAir;
+
+    impl<X> BaseAir<X> for LinkedIoAir {
+        fn width(&self) -> usize {
+            2
+        }
+
+        fn num_public_values(&self) -> usize {
+            1
+        }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            &LINKED_IO_CELLS
+        }
+    }
+
+    impl<AB: AirBuilder + InteractionBuilder> Air<AB> for LinkedIoAir {
+        fn eval(&self, builder: &mut AB) {
+            // Identical constraints and lookups, with only the declaration setting the two apart.
+            LinkedAir.eval(builder);
+        }
+    }
+
+    #[test]
+    fn interaction_folder_asserts_the_boundary_io_pins() {
+        // Invariant: both folders batch the same ordinary family, pins included.
+        //
+        // Fixture state: the first row, both columns 5, the public value 6.
+        //
+        //     own constraint : a - b                    = 0
+        //     injected pin   : is_first_row * (a - 6)   = -1
+        let link = AirLinkInstance {
+            num_local_lookups: 1,
+            lookups: vec![AirLinkLookup {
+                theta_bus_offset: EF::from_u64(13),
+                block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
+            }],
+        };
+        let theta_beta_powers = [EF::from_u64(2)];
+        let boundary = BoundaryEvals {
+            first: EF::ONE,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+        let alpha = EF::from_u64(11);
+        let local = [EF::from_u64(5), EF::from_u64(5)];
+        let next = [EF::ZERO, EF::ZERO];
+        let pis = [F::from_u64(6)];
+
+        // The ordinary folder sees the pin after the AIR's own constraint.
+        let ordinary = TestFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&LinkedIoAir);
+        assert_eq!(
+            ordinary,
+            alpha * (EF::from_u64(5) - EF::from_u64(5)) - EF::ONE
+        );
+
+        // The lookup-aware folder must batch the identical ordinary value.
+        let folder = TestFolder::new(&local, &next, boundary, &pis, alpha);
+        let evaluations =
+            InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, true)
+                .eval_air(&LinkedIoAir);
+        assert_eq!(evaluations.constraints, ordinary);
+
+        // Past the ordinary family's degree the pins are dropped together with it.
+        let folder = TestFolder::new(&local, &next, boundary, &pis, alpha);
+        let evaluations =
+            InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, false)
+                .eval_air(&LinkedIoAir);
+        assert_eq!(evaluations.constraints, EF::ZERO);
     }
 
     #[test]
