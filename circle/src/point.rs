@@ -105,6 +105,16 @@ impl<F: Field> Point<F> {
         (at - self).to_projective_line().unwrap()
     }
 
+    /// Return the numerator and denominator of the reciprocal selector.
+    ///
+    /// More precisely, if `v_tilde_p(self, at) = denom / numer`, then its reciprocal is
+    /// `numer / denom`. This form lets callers batch-invert only `denom` values.
+    #[inline]
+    pub(crate) fn v_tilde_p_num_den<EF: ExtensionField<F>>(self, at: Point<EF>) -> (EF, EF) {
+        let diff = at - self;
+        (diff.x + EF::ONE, diff.y)
+    }
+
     /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P=self, used for normalization.
     /// Circle STARKs, Section 5.1, Remark 16 (page 22 of the first revision PDF)
     pub fn s_p_at_p(self, log_n: usize) -> F {
@@ -283,6 +293,20 @@ mod tests {
         let log_n = 10;
         let vn_prod_gen = (1..log_n).map(|i| generator.v_n(i)).product();
         assert_eq!(generator.v_n_prod(log_n), vn_prod_gen);
+    }
+
+    #[test]
+    fn v_tilde_p_num_den_matches_selector_value() {
+        let p = Pt::generator(8);
+        let at = Point::<EF>::from_projective_line(EF::from(F::new(7)));
+
+        let (numer, denom) = p.v_tilde_p_num_den(at);
+        let diff = at - p;
+
+        assert_eq!(numer, diff.x + EF::ONE);
+        assert_eq!(denom, diff.y);
+        assert_eq!(p.v_tilde_p(at), diff.to_projective_line().unwrap());
+        assert_eq!(diff.to_projective_line().unwrap() * numer, denom);
     }
 
     #[cfg(debug_assertions)]
