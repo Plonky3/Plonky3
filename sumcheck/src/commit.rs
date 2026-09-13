@@ -12,8 +12,9 @@ use crate::strategy::VariableOrder;
 ///
 /// # Overview
 ///
-/// The polynomial is laid out in the residual variable order, expanded by the
-/// Reed-Solomon encoder, and committed.
+/// The polynomial is laid out in the residual variable order.
+///
+/// It is then expanded by the Reed-Solomon encoder, and committed.
 ///
 /// Nothing is absorbed here.
 ///
@@ -21,13 +22,15 @@ use crate::strategy::VariableOrder;
 ///
 /// # Layout
 ///
-/// Prefix order transposes the local folding block, so the first folded
-/// variables become columns.
+/// Prefix order transposes the local folding block.
+///
+/// The first folded variables then become columns.
 ///
 /// Suffix order keeps the folding block as the row width.
 ///
-/// The message is built directly at codeword height, with a zero tail, so the
-/// encoder can skip the zero coefficients while reusing this one allocation.
+/// The message is built directly at codeword height, with a zero tail.
+///
+/// The encoder can then skip the zero coefficients, and reuse this one allocation.
 pub fn commit_base<F, E, MT>(
     order: VariableOrder,
     encoder: &E,

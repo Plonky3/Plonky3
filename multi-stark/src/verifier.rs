@@ -198,9 +198,9 @@ where
 
     // 2. Replay the binding the commitment scheme performs inside the prover's commit phase.
     //
-    // The scheme owns that binding, so asking it is what keeps the two sides
-    // from drifting: a scheme whose commitment rides a typed phase replays that
-    // same phase here.
+    // The scheme owns that binding, and asking it is what keeps the two sides together.
+    //
+    // A scheme whose commitment rides a typed phase replays that same phase here.
     transcript.main_commitment(|challenger| {
         config
             .pcs()

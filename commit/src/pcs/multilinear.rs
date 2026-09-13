@@ -98,8 +98,9 @@ where
     ///
     /// The prover binds its commitment while producing it.
     ///
-    /// A verifier never produces one, so it binds the commitment it was handed
-    /// by calling this method at the same point in the sponge stream.
+    /// A verifier never produces one.
+    ///
+    /// It calls this method instead, at the same point in the sponge stream.
     ///
     /// ```text
     ///     prover  : commit(..)  ->  binds the root it produced
@@ -108,9 +109,13 @@ where
     ///
     /// # Soundness
     ///
-    /// Both sides reach the binding through this one method, so neither can
-    /// drift from the other by absorbing a different value, or in a different
-    /// encoding, or under a different phase.
+    /// Both sides reach the binding through this one method.
+    ///
+    /// Neither can then drift from the other:
+    ///
+    /// - by absorbing a different value,
+    /// - in a different encoding,
+    /// - or under a different phase.
     ///
     /// A scheme whose binding is a typed phase keeps that phase here.
     ///

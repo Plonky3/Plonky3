@@ -942,8 +942,9 @@ where
 ///
 /// Both therefore reach the fingerprint.
 ///
-/// Two runs cannot share a seed unless they state the same number of claims,
-/// over points of the same arity.
+/// Two runs share a seed only when they state the same number of claims.
+///
+/// Those claims must also stand over points of the same arity.
 ///
 /// # Arguments
 ///
@@ -2862,8 +2863,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "every opening point must carry")]
     fn a_point_of_the_wrong_arity_is_a_caller_bug() {
-        // The width is the caller's own configuration, so a point that cannot
-        // fill it never came from a proof.
+        // The width is the caller's own configuration.
+        //
+        // A point that cannot fill it therefore never came from a proof.
         //
         // Fixture state: one claim over four coordinates, bound as five.
         let mut challenger = fresh_challenger();

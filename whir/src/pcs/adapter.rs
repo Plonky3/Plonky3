@@ -100,8 +100,9 @@ where
             self.config.starting_log_inv_rate,
         );
 
-        // The verifier binds the same root, through the same call, before it
-        // replays anything else.
+        // The verifier binds the same root, through the same call.
+        //
+        // It does so before replaying anything else.
         self.observe_commitment(&commitment, challenger);
         Ok((
             commitment,
@@ -303,8 +304,9 @@ where
     ///
     /// The commitment is not bound here.
     ///
-    /// The caller binds it once, through the layout's commitment phase, before
-    /// drawing any challenge of its own.
+    /// The caller binds it once, through the layout's commitment phase.
+    ///
+    /// That happens before the caller draws any challenge of its own.
     fn verify_at(
         &self,
         commitment: &Self::Commitment,

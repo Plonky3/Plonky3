@@ -452,8 +452,9 @@ where
     }
 
     fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
-        // Binary tower fields are not transcript fields, so this scheme binds the
-        // root directly rather than through a typed phase.
+        // A binary tower field is not a transcript field.
+        //
+        // So this scheme binds the root directly, with no typed phase.
         challenger.observe(commitment.clone());
     }
 

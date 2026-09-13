@@ -113,8 +113,9 @@ where
         let encoded = self.dft.dft_batch(padded).to_row_major_matrix();
         let (commitment, merkle) = self.mmcs.commit_matrix(encoded);
 
-        // The verifier binds the same root, through the same phase, before it
-        // replays anything else.
+        // The verifier binds the same root, through the same phase.
+        //
+        // It does so before replaying anything else.
         observe_commitment::<F, _, _>(challenger, commitment.clone());
         (
             commitment,

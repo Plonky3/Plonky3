@@ -283,12 +283,13 @@ pub struct GrindingStep {
 /// | `p3-sumcheck-hvzk`           | `round_pow`                                                  |
 /// | `p3-sumcheck-generic-degree` | `round_pow`                                                  |
 ///
-/// The comparison below skips these, and each protocol prices them in its own
-/// security report instead.
+/// The comparison below skips these.
 ///
-/// A site that is in neither place would be a difficulty nobody compares, so the
-/// workspace transcript suite asserts that every grinding step it sweeps is
-/// classified one way or the other.
+/// Each protocol prices them in its own security report instead.
+///
+/// A site in neither place is a difficulty nobody compares.
+///
+/// So the workspace transcript suite asserts that every step it sweeps is classified.
 pub const GRINDING_VOCABULARY: [GrindingStep; 10] = [
     GrindingStep {
         protocol: "p3-circle-pcs",

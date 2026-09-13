@@ -21,7 +21,10 @@
 //! # Placement
 //!
 //! Every protocol crate depends on `p3-challenger`, so the check cannot live there.
-//! `p3-examples` is a leaf: nothing depends on it, and it already pulls in most of the twenty-four.
+//!
+//! `p3-examples` is a leaf: nothing depends on it.
+//!
+//! It also already pulls in most of the twenty-four.
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::BatchShape;
@@ -587,7 +590,9 @@ fn stir_pcs_commitment_cases() -> Vec<Case> {
 ///
 /// The phase has no configuration at all.
 ///
-/// It contributes one case, and the suite compares its name against every other.
+/// It contributes one case.
+///
+/// The suite still compares its name against every other.
 fn layout_commitment_cases() -> Vec<Case> {
     vec![case(
         "p3-sumcheck-layout-commitment",
@@ -983,8 +988,11 @@ fn no_two_configurations_of_any_two_protocols_share_a_seed() {
 
     // Every protocol contributes at least one case and at most the sweep budget.
     //
-    // A configuration-free phase has one seed to offer, so a fixed product would
-    // demand two duplicates of it and fail the pairwise check below.
+    // A configuration-free phase has one seed to offer.
+    //
+    // A fixed product would demand two duplicates of it.
+    //
+    // The pairwise check below would then fail on its own fixtures.
     let groups = protocols();
     assert_eq!(groups.len(), NUM_PROTOCOLS);
     assert!(groups.iter().all(|group| !group.is_empty()));
@@ -1000,11 +1008,13 @@ fn no_two_configurations_of_any_two_protocols_share_a_seed() {
 
 /// Grinding sites the shared budget deliberately does not compare.
 ///
-/// A protocol here credits its own grinding inside its own security report,
-/// rather than through the budget every FRI-backed STARK shares.
+/// A protocol here credits its own grinding inside its own security report.
 ///
-/// The entry is the acknowledgement: a site is either compared against the
-/// model, or listed here on purpose.
+/// It does not go through the budget every FRI-backed STARK shares.
+///
+/// The entry is the acknowledgement.
+///
+/// A site is either compared against the model, or listed here on purpose.
 const UNBUDGETED_GRINDING_SITES: [(&str, &str); 5] = [
     // The hiding sumcheck grinds once per masked round, priced by the round itself.
     ("p3-sumcheck-hvzk", "round_pow"),
@@ -1023,11 +1033,13 @@ fn every_grinding_site_is_either_budgeted_or_listed_as_unbudgeted() {
     //     transcript  ->  the difficulty the pattern describes
     //     model       ->  the difficulty the security report credits
     //
-    // A site in neither vocabulary is a difficulty nobody compares, which is how
-    // a grinding budget and a transcript drift apart unnoticed.
+    // A site in neither vocabulary is a difficulty nobody compares.
     //
-    // This walks the configurations swept above, so it sees a site only where one
-    // of them describes a positive difficulty.
+    // That is how a grinding budget and a transcript drift apart unnoticed.
+    //
+    // This walks the configurations swept above.
+    //
+    // So it sees a site only where one of them describes it.
     for group in protocols() {
         for (name, separator) in group {
             // Case labels are "protocol/configuration", and the name leads.
@@ -1036,8 +1048,11 @@ fn every_grinding_site_is_either_budgeted_or_listed_as_unbudgeted() {
                 .next()
                 .expect("a case label names its protocol");
 
-            // A step may be described at zero difficulty: that is one of the
-            // zero-bit conventions, not an anomaly, so the difficulty is not read here.
+            // A step may be described at zero difficulty.
+            //
+            // That is one of the zero-bit conventions, not an anomaly.
+            //
+            // So the difficulty itself is not read here.
             for (label, _bits) in pow_difficulties(separator.pattern()) {
                 let budgeted = grinding_step(protocol, label).is_some();
                 let unbudgeted = UNBUDGETED_GRINDING_SITES.contains(&(protocol, label));

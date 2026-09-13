@@ -58,8 +58,9 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     ///
     /// The root is returned instead, and the caller binds it.
     ///
-    /// A verifier never reaches this method, so both sides bind the root in the
-    /// same place: the caller.
+    /// A verifier never reaches this method.
+    ///
+    /// So both sides bind the root in one place, the caller.
     fn commit<E, MT>(
         encoder: &E,
         mmcs: &MT,

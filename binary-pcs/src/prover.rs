@@ -94,11 +94,11 @@ where
     let (layout, commitment, merkle_data) =
         PcsLayout::commit(encoder, mmcs, witness, FOLDING, config.log_inv_rate());
 
-    // Binary tower fields are not transcript fields, so this crate binds the root
-    // by hand rather than through the typed commitment phase.
+    // A binary tower field is not a transcript field.
     //
-    // The verifier binds the same root, in the same position, at the top of its
-    // own entry point.
+    // So the root is bound here by hand, with no typed phase.
+    //
+    // The verifier binds it in the same position, at the top of its own entry point.
     challenger.observe(commitment.clone());
 
     (

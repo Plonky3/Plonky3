@@ -217,8 +217,9 @@ pub fn commitment_domain_separator<F: TranscriptField>() -> DomainSeparator<Alph
 ///
 /// It is bound under a phase of its own.
 ///
-/// The two sides therefore bind it in the same place, though they reach it
-/// from opposite directions.
+/// The two sides therefore bind it in the same place.
+///
+/// They reach that place from opposite directions.
 ///
 /// ```text
 ///     prover  : commits, then binds the root it produced
@@ -229,8 +230,7 @@ pub fn commitment_domain_separator<F: TranscriptField>() -> DomainSeparator<Alph
 ///
 /// The root travels as an opaque value, so the challenger owns its encoding.
 ///
-/// A caller that skips this call leaves every later challenge independent of
-/// the commitment.
+/// A caller that skips this call leaves every later challenge free of the commitment.
 ///
 /// # Arguments
 ///
