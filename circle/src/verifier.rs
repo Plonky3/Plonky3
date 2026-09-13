@@ -37,7 +37,7 @@ use crate::{CircleCommitPhaseMultiStep, CircleFriProof};
 /// - The folding cap is one this verifier cannot fold with.
 /// - The proof declares a round count the configuration does not fix.
 /// - A per-round list does not carry one entry per round, or one entry per query.
-/// - A round declares an arity outside `1..=max_log_arity`.
+/// - An opened group is not exactly one value short of its round's arity.
 /// - A grinding witness is not the value its zero difficulty admits.
 pub(crate) fn validate_proof_shape<Challenge, M, Witness, InputProof, InputErr>(
     params: &FriParameters<M>,
@@ -67,7 +67,9 @@ where
     // Capping the arity at one forces every per-round arity to one.
     // The pinned height sum then determines the schedule uniquely.
     //
-    // A larger cap would let a proof declare an arity this fold cannot apply.
+    // No proof declares an arity: the schedule is derived, not read. This check is
+    // what licenses deriving a unit schedule at all, since any other cap would make
+    // that derivation state an arity this fold cannot apply.
     if params.max_log_arity != 1 {
         return Err(FriError::UnsupportedFoldingCap {
             max_log_arity: params.max_log_arity,
@@ -79,12 +81,13 @@ where
     //     H_claim = max claimed log_n + log_blowup
     //     rounds  = H_claim - 1 - log_blowup      (the first layer takes one bit)
     //
-    // The error reports heights rather than counts.
-    // That is the pair the query phase would have compared, so the two read alike.
+    // One commitment per round.
+    //
+    // So the two counts are the same number twice.
     if proof.commit_phase_commits.len() != num_commit_rounds {
-        return Err(FriError::GlobalMaxHeightMismatch {
-            expected: num_commit_rounds + params.log_blowup + 1,
-            got: proof.commit_phase_commits.len() + params.log_blowup + 1,
+        return Err(FriError::CommitRoundCountMismatch {
+            expected: num_commit_rounds,
+            got: proof.commit_phase_commits.len(),
         });
     }
 
@@ -131,22 +134,14 @@ where
         });
     }
 
-    // In variable-arity FRI, each round folds by 2^{log_arity_i} points. The
-    // schedule is a protocol-wide constant, so it lives once per round.
-    let log_arities: Vec<usize> = proof
-        .commit_phase_openings
-        .iter()
-        .enumerate()
-        .map(|(round, opening)| {
-            opening
-                .checked_log_arity(params.max_log_arity)
-                .ok_or(FriError::InvalidLogArity {
-                    round,
-                    log_arity: opening.log_arity as usize,
-                    max: params.max_log_arity,
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    // The folding schedule, derived rather than read.
+    //
+    // The cap check above pinned the arity to two.
+    //
+    // So every round folds by exactly one bit.
+    //
+    // The round count then fixes the whole schedule.
+    let log_arities = vec![1; num_commit_rounds];
 
     // Every round must open every query, and each opening must carry exactly
     // arity - 1 sibling values.

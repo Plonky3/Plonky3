@@ -123,6 +123,9 @@ impl From<TranscriptFailure> for VerifierError {
     fn from(failure: TranscriptFailure) -> Self {
         match failure {
             TranscriptFailure::PowWitness { .. } => Self::InvalidPowWitness,
+            TranscriptFailure::NonCanonicalPowWitness { round } => {
+                Self::NonCanonicalPowWitness { round }
+            }
             TranscriptFailure::FinalPolyLength { expected, got } => Self::FinalPolyLengthMismatch {
                 expected,
                 actual: got,

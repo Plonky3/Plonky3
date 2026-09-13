@@ -138,10 +138,6 @@ pub(crate) const ROUND_BATCHING: &str = "round_batching";
 /// Container label of the fold that closes one intermediate round.
 const ROUND_FOLD: &str = "round_fold";
 
-/// Step label of a sumcheck folding challenge.
-#[cfg(test)]
-const FOLD_CHALLENGE: &str = "fold_challenge";
-
 /// Step label of the final polynomial, sent in the clear.
 const FINAL_POLY: &str = "final_poly";
 
@@ -226,16 +222,22 @@ fn push_query_indices(
     }
 }
 
-/// Append the opener and closer of one delegated sumcheck phase.
+/// Append the opener and closer of one delegated phase.
 ///
 /// The phase's own steps live in its own pattern, under its own seed.
-fn push_delegation(steps: &mut Vec<Interaction>, label: &'static str) {
-    steps.push(Interaction::marker::<Sumcheck>(
+///
+/// The type parameter names the delegate.
+///
+/// It is compared where a closer meets its opener.
+///
+/// It never reaches the pattern fingerprint.
+fn push_delegation<T: ?Sized>(steps: &mut Vec<Interaction>, label: &'static str) {
+    steps.push(Interaction::marker::<T>(
         Hierarchy::Begin,
         Kind::Protocol,
         label,
     ));
-    steps.push(Interaction::marker::<Sumcheck>(
+    steps.push(Interaction::marker::<T>(
         Hierarchy::End,
         Kind::Protocol,
         label,
@@ -357,7 +359,7 @@ impl WhirRoundShape {
             Length::Scalar,
         ));
 
-        push_delegation(steps, ROUND_FOLD);
+        push_delegation::<Sumcheck>(steps, ROUND_FOLD);
     }
 
     /// Number of steps this round contributes.
@@ -541,7 +543,7 @@ impl WhirShape {
         let mut steps = Vec::with_capacity(capacity);
 
         // The delegate draws the claim-batching challenge, so the bracket covers it.
-        push_delegation(&mut steps, INITIAL_FOLD);
+        push_delegation::<Sumcheck>(&mut steps, INITIAL_FOLD);
 
         for round in &self.rounds {
             round.extend::<F, EF>(&mut steps);
@@ -565,7 +567,7 @@ impl WhirShape {
 
         // A run described with no closing rounds delegates nothing at all.
         if self.final_sumcheck.rounds > 0 {
-            push_delegation(&mut steps, FINAL_FOLD);
+            push_delegation::<Sumcheck>(&mut steps, FINAL_FOLD);
         }
 
         InteractionPattern::new(steps).expect("every container opened here is closed here")
@@ -640,6 +642,21 @@ pub enum TranscriptFailure {
         round: usize,
         /// Difficulty the site requires, in bits.
         bits: usize,
+    },
+    /// A grinding witness is not the value a zero difficulty admits.
+    ///
+    /// At zero bits the site reads no witness at all, so nothing binds the field.
+    ///
+    /// ```text
+    ///     bits = 0  ->  the step is elided, and any value rides along unread
+    ///     bits > 0  ->  the grind is what pins the value
+    /// ```
+    ///
+    /// Zero is the only value an honest prover emits, so zero is the only one accepted.
+    #[error("round {round}: query grinding witness is non-canonical at zero difficulty")]
+    NonCanonicalPowWitness {
+        /// Round whose query site carries the witness, `n_rounds` for the final one.
+        round: usize,
     },
     /// The final polynomial carries a coefficient count the run never described.
     #[error("expected {expected} final evaluations, got {got}")]
@@ -1007,6 +1024,27 @@ mod tests {
     /// Opening claims every shape in this module is derived with.
     const CLAIMS: usize = 3;
 
+    /// Every label the plain run plays for itself, brackets included.
+    ///
+    /// A delegated sumcheck names its own steps inside its own description, so any
+    /// label outside this list reaching the run's pattern is a step the run is
+    /// trying to play on the delegate's behalf.
+    const OWN_LABELS: [&str; 13] = [
+        INITIAL_BATCHING,
+        INITIAL_FOLD,
+        COMMITMENT,
+        OOD_POINT,
+        OOD_ANSWER,
+        QUERY_POW,
+        QUERY_INDICES,
+        ROUND_BATCHING,
+        ROUND_FOLD,
+        FINAL_POLY,
+        FINAL_QUERY_POW,
+        FINAL_QUERY_INDICES,
+        FINAL_FOLD,
+    ];
+
     /// A commitment shaped like the ones a Merkle scheme hands this layer.
     const DIGEST: [F; 8] = [F::ONE; 8];
 
@@ -1292,12 +1330,20 @@ mod tests {
         assert_eq!(openers[0], INITIAL_FOLD);
 
         // No round of any sumcheck phase reaches this pattern as a step of its own.
-        assert!(
-            pattern
-                .interactions()
-                .iter()
-                .all(|step| step.label() != FOLD_CHALLENGE),
-        );
+        //
+        // Asserted in the positive: every label in the pattern is one this run plays,
+        // taken from the constants themselves.
+        //
+        // Naming the child's labels instead would check nothing. The quadratic
+        // sumcheck plays `round_challenge`, not `fold_challenge`, so a blacklist
+        // built from a guess at the child's names passes whatever the pattern holds.
+        for step in pattern.interactions() {
+            assert!(
+                OWN_LABELS.contains(&step.label()),
+                "the run describes a step no phase of it plays: {}",
+                step.label(),
+            );
+        }
     }
 
     #[test]
