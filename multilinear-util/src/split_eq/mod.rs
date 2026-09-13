@@ -816,6 +816,14 @@ mod tests {
     /// Minimum number of variables required for SIMD packing.
     const K_PACK: usize = log2_strict_usize(PackedF::WIDTH);
 
+    /// Item charge that drives a split arm down to one item per task.
+    ///
+    /// The price saturates, so the per-task cap floors at a single item.
+    ///
+    /// A split arm handed the gate's own charge would run these small shapes as one task,
+    /// leaving the merge that joins two tasks untested.
+    const SPLIT_EVERY_ITEM: usize = usize::MAX;
+
     /// Naive multilinear evaluation by materializing the full eq table.
     fn eval_reference<F: Field, EF: ExtensionField<F>>(evals: &[F], point: &[EF]) -> EF {
         let eq = Poly::new_from_point(point, EF::ONE);
@@ -872,25 +880,15 @@ mod tests {
             let eq = SplitEq::<F, EF>::new_packed(&point, EF::ONE);
             let k_inner = poly.num_variables() - eq.num_variables();
             let size_outer = poly.num_evals() / eq.eq0.num_evals();
-            let item_bytes = prefix_fold_bytes::<EF, EF>(
-                size_outer,
-                SplitEq::<F, EF>::FOLD_LANES,
-                1 << k_inner,
-            );
 
             // Plain prefix compression: shared accumulator against per-task accumulators.
             prop_assert_eq!(
                 eq.compress_prefix_whole(poly.as_view(), k_inner, size_outer),
-                eq.compress_prefix_split(poly.as_view(), k_inner, size_outer, item_bytes),
+                eq.compress_prefix_split(poly.as_view(), k_inner, size_outer, SPLIT_EVERY_ITEM),
             );
 
             // Shifted prefix compression: threaded carry against rebuilt boundaries.
             let inner_size = 1 << k_inner;
-            let shifted_bytes = prefix_fold_bytes::<EF, EF>(
-                size_outer,
-                SplitEq::<F, EF>::FOLD_LANES,
-                inner_size,
-            );
             prop_assert_eq!(
                 eq.compress_prefix_shifted_whole(
                     poly.as_view(),
@@ -903,7 +901,7 @@ mod tests {
                     k_inner,
                     size_outer,
                     inner_size,
-                    shifted_bytes,
+                    SPLIT_EVERY_ITEM,
                 ),
             );
         }
@@ -925,11 +923,6 @@ mod tests {
             let eq = SplitEq::<F, EF>::new_packed(&point, EF::ONE);
             let k_inner = poly.num_variables() - eq.num_variables() - k_pack;
             let size_outer = poly.num_evals() / eq.eq0.num_evals();
-            let item_bytes = prefix_fold_bytes::<EF, <EF as ExtensionField<F>>::ExtensionPacking>(
-                size_outer,
-                SplitEq::<F, EF>::FOLD_LANES,
-                1 << k_inner,
-            );
 
             prop_assert_eq!(
                 eq.compress_prefix_to_packed_whole(poly.as_view(), k_inner, size_outer),
@@ -937,7 +930,7 @@ mod tests {
                     poly.as_view(),
                     k_inner,
                     size_outer,
-                    item_bytes,
+                    SPLIT_EVERY_ITEM,
                 ),
             );
         }
