@@ -310,11 +310,15 @@ pub fn compute_log_arity_for_round(
 /// One log-arity per commit round, in round order.
 ///
 /// Empty when nothing sits above the final height.
-/// A verifier derives this from untrusted heights, so it returns rather than panics.
+/// A verifier derives this from untrusted heights, so a height it cannot fold is a
+/// returned empty schedule, never a panic.
 ///
 /// # Panics
 ///
-/// When the input heights are not strictly decreasing.
+/// - When the input heights are not strictly decreasing.
+/// - When `max_log_arity` is zero, through `compute_log_arity_for_round`.
+///
+/// Both are configuration, never proof data: a caller reaching either has a bug.
 #[must_use]
 pub fn fold_schedule(
     input_log_heights: &[usize],

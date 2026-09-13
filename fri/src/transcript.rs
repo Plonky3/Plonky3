@@ -454,6 +454,9 @@ where
     /// - The commitments do not number one per described round.
     /// - The witnesses do not number one per described round.
     /// - A witness misses the difficulty its grinding step requires.
+    ///
+    /// The counts are checked before the first commitment is absorbed, so a round
+    /// never reaches its grinding step without the witness that step demands.
     pub fn commit_rounds<Com>(
         &mut self,
         commitments: &[Com],
@@ -498,7 +501,7 @@ where
         commitments
             .iter()
             .zip(witnesses)
-            .map(|(commitment, &witness)| self.commit_round(commitment.clone(), Some(witness)))
+            .map(|(commitment, &witness)| self.commit_round(commitment.clone(), witness))
             .collect()
     }
 
@@ -508,15 +511,14 @@ where
     ///
     /// Only the entry point that checks a supplied count against it may call it.
     ///
+    /// That entry point checks the witness count too, so a witness always exists
+    /// here. Taking it by value rather than as an option is what makes that
+    /// structural instead of a branch nothing can reach.
+    ///
     /// # Errors
     ///
-    /// - The round carries no witness for a described grinding step.
-    /// - The witness misses the required difficulty.
-    fn commit_round<Com>(
-        &mut self,
-        commitment: Com,
-        witness: Option<F>,
-    ) -> Result<EF, TranscriptFailure>
+    /// The witness misses the required difficulty.
+    fn commit_round<Com>(&mut self, commitment: Com, witness: F) -> Result<EF, TranscriptFailure>
     where
         Com: Clone,
         C: CanObserve<Com>,
@@ -524,13 +526,6 @@ where
         self.state.observe_opaque(COMMITMENT, commitment);
 
         if self.shape.commit_pow_bits > 0 {
-            // With no witness the described step cannot be played at all.
-            //
-            // Releasing the completeness check keeps this rejection the only failure.
-            let Some(witness) = witness else {
-                self.state.abort();
-                return Err(TranscriptFailure::MissingPowWitness(PowPhase::CommitPhase));
-            };
             self.state
                 .observe_pow(COMMIT_POW, self.shape.commit_pow_bits, witness)
                 .map_err(|_| TranscriptFailure::PowWitness(PowPhase::CommitPhase))?;
@@ -606,6 +601,10 @@ pub enum TranscriptFailure {
     #[error("{0} phase PoW witness does not meet the required difficulty")]
     PowWitness(PowPhase),
     /// A described grinding step arrived with no witness to replay it.
+    ///
+    /// Only the query phase reaches this: `commit_rounds` checks the witness count
+    /// against the described round count, so every commit round takes its witness
+    /// by value.
     #[error("{0} phase PoW step arrived with no witness")]
     MissingPowWitness(PowPhase),
     /// The final polynomial carries a coefficient count the run never described.
@@ -919,27 +918,6 @@ mod tests {
     }
 
     #[test]
-    fn a_commit_round_missing_its_grinding_witness_is_rejected() {
-        // Described run: one round guarded by 4 bits of grinding.
-        //
-        // A described grinding step cannot be replayed with no witness to feed it.
-        let mut shape = shape_with(vec![1]);
-        shape.commit_pow_bits = 4;
-
-        let mut challenger = fresh_challenger();
-        let mut transcript = VerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape);
-
-        let err = transcript
-            .commit_round([F::ONE; 8], None)
-            .expect_err("a described grinding step with no witness must error");
-
-        assert_eq!(
-            err,
-            TranscriptFailure::MissingPowWitness(PowPhase::CommitPhase)
-        );
-    }
-
-    #[test]
     fn a_run_carrying_the_wrong_number_of_commit_rounds_is_rejected() {
         // Invariant: the round count is a length of the description.
         //
@@ -1049,7 +1027,7 @@ mod tests {
             VerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape_with(vec![1]));
 
         let _beta = transcript
-            .commit_round([F::ONE; 8], None)
+            .commit_round([F::ONE; 8], F::ZERO)
             .expect("a round without grinding replays from the commitment alone");
 
         let err = transcript
