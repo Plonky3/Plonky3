@@ -162,6 +162,16 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX512 {
         mul_2exp_i::<30, 1>(*self)
     }
 
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        Self(self.0.map(|x| x.mul_2exp_u64(exp)))
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        Self(self.0.map(|x| x.div_2exp_u64(exp)))
+    }
+
     #[inline(always)]
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY: this is a repr(transparent) wrapper around an array.

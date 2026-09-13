@@ -160,6 +160,16 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX2 {
         mul_2exp_i::<30, 1>(*self)
     }
 
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        Self(self.0.map(|x| x.mul_2exp_u64(exp)))
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        Self(self.0.map(|x| x.div_2exp_u64(exp)))
+    }
+
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         // We provide specialised code for power 5 as this turns up regularly.

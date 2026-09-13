@@ -692,7 +692,10 @@ impl UniformSamplingField for Mersenne31 {
 #[cfg(test)]
 mod tests {
     use num_bigint::BigUint;
-    use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeCharacteristicRing};
+    use p3_field::{
+        Field, InjectiveMonomial, PackedValue, PermutationMonomial, PrimeCharacteristicRing,
+        PrimeField32,
+    };
     use p3_field_testing::{
         test_field, test_prime_field, test_prime_field_32, test_prime_field_64,
     };
@@ -736,6 +739,31 @@ mod tests {
         let max_canonical_json = serde_json::to_string(&((1u32 << 31) - 2)).unwrap();
         let max_canonical: F = serde_json::from_str(&max_canonical_json).unwrap();
         assert_eq!(max_canonical, F::new((1 << 31) - 2));
+    }
+
+    #[test]
+    fn packed_two_power_scaling_matches_scalar() {
+        type PF = <F as Field>::Packing;
+
+        let values = [
+            F::ZERO,
+            F::ONE,
+            F::NEG_ONE,
+            F::new_reduced(F::ORDER_U32),
+            F::new(0x1234_5678),
+        ];
+        let packed = PF::from_fn(|lane| values[lane % values.len()]);
+
+        for exp in [0, 1, 2, 30, 31, 32, 62, u64::MAX] {
+            assert_eq!(
+                packed.mul_2exp_u64(exp),
+                PF::from_fn(|lane| values[lane % values.len()].mul_2exp_u64(exp)),
+            );
+            assert_eq!(
+                packed.div_2exp_u64(exp),
+                PF::from_fn(|lane| values[lane % values.len()].div_2exp_u64(exp)),
+            );
+        }
     }
 
     // Mersenne31 has a redundant representation of Zero but no redundant representation of One.
