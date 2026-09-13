@@ -3,7 +3,7 @@
 mod error;
 mod proof;
 mod prover;
-mod transcript;
+pub(crate) mod transcript;
 mod util;
 
 pub use error::GenericDegreeError;

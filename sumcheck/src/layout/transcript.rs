@@ -99,10 +99,21 @@
 //! - Arity of the stacked polynomial.
 //! - Whether selector bits sit after the local bits.
 //! - Order the residual rounds bind the variables in.
+//! - Arity and width of every source table, in caller order.
 //! - Index of the source table a batch opens.
 //! - Arity of that source table.
+//! - Columns that batch opens directly.
+//! - Columns it opens through the successor view.
 //! - Number of concrete claims.
 //! - Number of out-of-domain claims.
+//!
+//! The last four are the opening schedule, and the schedule is the statement.
+//!
+//! Two batches of equal width on one table lift through different selectors.
+//!
+//! Two table lists of equal stacked arity place one table at different slots.
+//!
+//! Neither difference moves a step, so neither can ride the fingerprint.
 //!
 //! Both sides read every one of these from their own configuration.
 //!
@@ -123,7 +134,7 @@ use p3_multilinear_util::point::Point;
 use crate::error::SumcheckError;
 use crate::layout::LayoutStrategy;
 use crate::strategy::VariableOrder;
-use crate::table::OpeningEvals;
+use crate::table::{OpeningEvals, TableShape};
 
 /// Version byte bound into every seed this phase produces.
 ///
@@ -133,13 +144,13 @@ use crate::table::OpeningEvals;
 const VERSION: u8 = 1;
 
 /// Protocol name of one recorded batch of concrete openings.
-const OPENING_NAME: &[u8] = b"p3-sumcheck-layout-opening";
+pub(crate) const OPENING_NAME: &[u8] = b"p3-sumcheck-layout-opening";
 
 /// Protocol name of one out-of-domain evaluation of the stacked polynomial.
-const VIRTUAL_NAME: &[u8] = b"p3-sumcheck-layout-ood";
+pub(crate) const VIRTUAL_NAME: &[u8] = b"p3-sumcheck-layout-ood";
 
 /// Protocol name of the claim-batching challenge.
-const BATCHING_NAME: &[u8] = b"p3-sumcheck-layout-batching";
+pub(crate) const BATCHING_NAME: &[u8] = b"p3-sumcheck-layout-batching";
 
 /// Step label of a local-frame opening point drawn from the transcript.
 const OPENING_POINT: &str = "opening_point";
@@ -167,12 +178,16 @@ type Alphabet<F> = FieldUnit<F>;
 /// Both sides derive it from their own configuration.
 ///
 /// Every field moves the transcript seed of every component that carries it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LayoutBinding {
     /// Arity of the stacked polynomial claims are lifted into.
     pub(crate) num_variables: usize,
     /// Selector placement and residual binding order of this layout.
     pub(crate) strategy: LayoutStrategy,
+    /// Every source table of this layout, in caller order.
+    ///
+    /// The stacked arity alone does not say where a table's columns sit.
+    pub(crate) tables: Vec<TableShape>,
 }
 
 impl LayoutBinding {
@@ -182,10 +197,16 @@ impl LayoutBinding {
     ///
     /// - `num_variables`: arity of the stacked polynomial.
     /// - `strategy`: selector placement and residual binding order.
-    pub(crate) const fn new(num_variables: usize, strategy: LayoutStrategy) -> Self {
+    /// - `tables`: every source table of the layout, in caller order.
+    pub(crate) const fn new(
+        num_variables: usize,
+        strategy: LayoutStrategy,
+        tables: Vec<TableShape>,
+    ) -> Self {
         Self {
             num_variables,
             strategy,
+            tables,
         }
     }
 
@@ -204,6 +225,19 @@ impl LayoutBinding {
     where
         F: TranscriptField,
     {
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        //
+        // A field added to the geometry stops this from compiling until it is bound.
+        let Self {
+            num_variables: _,
+            strategy:
+                LayoutStrategy {
+                    reverse_selectors: _,
+                    variable_order: _,
+                },
+            tables: _,
+        } = self;
+
         // Stacked arity decides how wide a lifted claim point is.
         separator.instance(&(self.num_variables as u64).to_be_bytes());
 
@@ -219,6 +253,23 @@ impl LayoutBinding {
             VariableOrder::Prefix => 0,
             VariableOrder::Suffix => 1,
         }]);
+
+        // The stacked arity fixes the total width, never the slot each table lands in.
+        //
+        //     [(9, 2), (10, 2)]  ->  table 0 sits behind selector 1
+        //     [(9, 3), (10, 1)]  ->  table 0 sits behind selector 10
+        //
+        // Both stack to 12 variables, so the arity above cannot part them.
+        //
+        // One opening of table 0 then means two different constraints.
+        //
+        // The count leads, so a shorter list cannot borrow the chunks after it.
+        separator.instance(&(self.tables.len() as u64).to_be_bytes());
+        for shape in &self.tables {
+            separator
+                .instance(&(shape.num_variables() as u64).to_be_bytes())
+                .instance(&(shape.width() as u64).to_be_bytes());
+        }
     }
 }
 
@@ -238,7 +289,7 @@ pub(crate) enum PointSource {
 /// Both sides build this from their own opening schedule.
 ///
 /// No part of it is ever read out of a proof.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OpeningShape {
     /// Geometry of the layout this batch is recorded against.
     pub(crate) binding: LayoutBinding,
@@ -248,10 +299,10 @@ pub(crate) struct OpeningShape {
     ///
     /// This is the width of the local-frame opening point.
     pub(crate) table_variables: usize,
-    /// Number of columns opened directly.
-    pub(crate) num_current: usize,
-    /// Number of columns opened through the successor view.
-    pub(crate) num_next: usize,
+    /// Columns opened directly, in the order the schedule names them.
+    pub(crate) current: Vec<usize>,
+    /// Columns opened through the successor view, in the order the schedule names them.
+    pub(crate) next: Vec<usize>,
     /// How the local-frame opening point is fixed.
     pub(crate) point: PointSource,
 }
@@ -264,25 +315,35 @@ impl OpeningShape {
     /// - `binding`: geometry of the layout the batch is recorded against.
     /// - `table_index`: index of the source table the batch opens.
     /// - `table_variables`: arity of that source table.
-    /// - `num_current`: number of columns opened directly.
-    /// - `num_next`: number of columns opened through the successor view.
+    /// - `current`: columns opened directly.
+    /// - `next`: columns opened through the successor view.
     /// - `point`: how the local-frame opening point is fixed.
-    pub(crate) const fn new(
+    pub(crate) fn new(
         binding: LayoutBinding,
         table_index: usize,
         table_variables: usize,
-        num_current: usize,
-        num_next: usize,
+        current: &[usize],
+        next: &[usize],
         point: PointSource,
     ) -> Self {
         Self {
             binding,
             table_index,
             table_variables,
-            num_current,
-            num_next,
+            current: current.to_vec(),
+            next: next.to_vec(),
             point,
         }
+    }
+
+    /// Number of columns opened directly.
+    pub(crate) const fn num_current(&self) -> usize {
+        self.current.len()
+    }
+
+    /// Number of columns opened through the successor view.
+    pub(crate) const fn num_next(&self) -> usize {
+        self.next.len()
     }
 
     /// Describe the transcript this shape fixes.
@@ -323,22 +384,22 @@ impl OpeningShape {
         // A group of size zero would declare a step carrying nothing.
         //
         // Such a step is omitted.
-        if self.num_current > 0 {
+        if self.num_current() > 0 {
             steps.push(Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
                 Kind::Message,
                 CURRENT_EVALS,
-                Length::Fixed(self.num_current),
+                Length::Fixed(self.num_current()),
             ));
         }
 
         // The successor views follow, in the same one-step-per-group form.
-        if self.num_next > 0 {
+        if self.num_next() > 0 {
             steps.push(Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
                 Kind::Message,
                 NEXT_EVALS,
-                Length::Fixed(self.num_next),
+                Length::Fixed(self.num_next()),
             ));
         }
 
@@ -351,6 +412,18 @@ impl OpeningShape {
         F: TranscriptField,
         EF: ExtensionField<F>,
     {
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        //
+        // A field added to the shape stops this from compiling until it is bound.
+        let Self {
+            binding: _,
+            table_index: _,
+            table_variables: _,
+            current: _,
+            next: _,
+            point: _,
+        } = self;
+
         let mut separator = DomainSeparator::new(VERSION, OPENING_NAME, self.pattern::<F, EF>());
 
         // Layout geometry comes first.
@@ -365,6 +438,25 @@ impl OpeningShape {
         //
         // The draw itself is one challenge at any arity.
         separator.instance(&(self.table_variables as u64).to_be_bytes());
+
+        // The counts above say how many columns a batch opens, never which ones.
+        //
+        // Each claim is lifted through its own column's selector.
+        //
+        //     open column 0 at y  ->  P(selector_0, point) = y
+        //     open column 1 at y  ->  P(selector_1, point) = y
+        //
+        // So two batches of equal width on one table state different things.
+        //
+        // Each list leads with its length, so neither can borrow the other's chunks.
+        separator.instance(&(self.current.len() as u64).to_be_bytes());
+        for &column in &self.current {
+            separator.instance(&(column as u64).to_be_bytes());
+        }
+        separator.instance(&(self.next.len() as u64).to_be_bytes());
+        for &column in &self.next {
+            separator.instance(&(column as u64).to_be_bytes());
+        }
 
         separator
     }
@@ -463,13 +555,13 @@ where
         // Direct columns come first.
         //
         // That is the order the batched sum walks them in.
-        if self.shape.num_current > 0 {
+        if self.shape.num_current() > 0 {
             self.state
                 .observe_extensions::<F, EF, FieldToFieldCodec<F>>(CURRENT_EVALS, evals.current());
         }
 
         // Successor views continue the same walk.
-        if self.shape.num_next > 0 {
+        if self.shape.num_next() > 0 {
             self.state
                 .observe_extensions::<F, EF, FieldToFieldCodec<F>>(NEXT_EVALS, evals.next());
         }
@@ -579,15 +671,15 @@ where
         // A group of size zero has no step to fail on.
         //
         // This check is the only guard on such a group.
-        if evals.current().len() != self.shape.num_current
-            || evals.next().len() != self.shape.num_next
+        if evals.current().len() != self.shape.num_current()
+            || evals.next().len() != self.shape.num_next()
         {
             // Releasing the completeness check keeps this rejection the only failure.
             self.state.abort();
             return Err(SumcheckError::OpeningShapeMismatch {
                 table_idx: self.shape.table_index,
-                expected_current: self.shape.num_current,
-                expected_next: self.shape.num_next,
+                expected_current: self.shape.num_current(),
+                expected_next: self.shape.num_next(),
                 actual_current: evals.current().len(),
                 actual_next: evals.next().len(),
             });
@@ -596,12 +688,12 @@ where
         // Both counts now match the description.
         //
         // Neither absorb can then disagree with its step.
-        if self.shape.num_current > 0 {
+        if self.shape.num_current() > 0 {
             self.state
                 .observe_extensions::<F, EF, FieldToFieldCodec<F>>(CURRENT_EVALS, evals.current())
                 .expect("the direct group was counted against its step first");
         }
-        if self.shape.num_next > 0 {
+        if self.shape.num_next() > 0 {
             self.state
                 .observe_extensions::<F, EF, FieldToFieldCodec<F>>(NEXT_EVALS, evals.next())
                 .expect("the successor group was counted against its step first");
@@ -632,7 +724,7 @@ where
 /// Both sides build this from their own configuration.
 ///
 /// No part of it is ever read out of a proof.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct VirtualShape {
     /// Geometry of the layout the claim is recorded against.
     pub(crate) binding: LayoutBinding,
@@ -687,6 +779,11 @@ impl VirtualShape {
         F: TranscriptField,
         EF: ExtensionField<F>,
     {
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        //
+        // A field added to the shape stops this from compiling until it is bound.
+        let Self { binding: _ } = self;
+
         let mut separator = DomainSeparator::new(VERSION, VIRTUAL_NAME, self.pattern::<F, EF>());
 
         // Layout geometry, including the arity the drawn point is expanded to.
@@ -834,7 +931,7 @@ where
 /// Both sides build this from the claims they recorded.
 ///
 /// No part of it is ever read out of a proof.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BatchingShape {
     /// Geometry of the layout whose claims are collapsed.
     pub(crate) binding: LayoutBinding,
@@ -893,16 +990,27 @@ impl BatchingShape {
     ///     sum = sum_i  alpha^i * eval_i
     /// ```
     ///
-    /// The claim counts decide which power lands on which claim.
+    /// The counts decide how many powers the sequence holds.
     ///
-    /// They move no step.
+    /// Placement order decides which power lands on which claim.
     ///
-    /// They are bound here instead.
+    /// Neither moves a step.
+    ///
+    /// The counts are bound here, and the placement follows from the table list above.
     pub(crate) fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
     where
         F: TranscriptField,
         EF: ExtensionField<F>,
     {
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        //
+        // A field added to the shape stops this from compiling until it is bound.
+        let Self {
+            binding: _,
+            num_claims: _,
+            num_virtual_claims: _,
+        } = self;
+
         let mut separator = DomainSeparator::new(VERSION, BATCHING_NAME, self.pattern::<F, EF>());
 
         // Layout geometry comes first.
@@ -936,7 +1044,7 @@ impl BatchingShape {
 /// Never in practice.
 ///
 /// The single described step is played before the driver closes.
-pub(crate) fn prover_batching_challenge<C, F, EF>(challenger: &mut C, shape: BatchingShape) -> EF
+pub(crate) fn prover_batching_challenge<C, F, EF>(challenger: &mut C, shape: &BatchingShape) -> EF
 where
     F: TranscriptField,
     EF: ExtensionField<F>,
@@ -978,7 +1086,7 @@ where
 /// Never in practice.
 ///
 /// The single described step is replayed before the driver closes.
-pub(crate) fn verifier_batching_challenge<C, F, EF>(challenger: &mut C, shape: BatchingShape) -> EF
+pub(crate) fn verifier_batching_challenge<C, F, EF>(challenger: &mut C, shape: &BatchingShape) -> EF
 where
     F: TranscriptField,
     EF: ExtensionField<F>,
@@ -1030,6 +1138,13 @@ mod tests {
         Ch::new(Perm::new_from_rng_128(&mut rng))
     }
 
+    /// The two source tables every layout in these tests stacks.
+    ///
+    /// Table 0 has arity 9, table 1 arity 9, and both are two columns wide.
+    fn base_tables() -> Vec<TableShape> {
+        vec![TableShape::new(9, 2), TableShape::new(9, 2)]
+    }
+
     /// The layout geometry every shape in these tests is built on.
     fn base_binding() -> LayoutBinding {
         // Stacked arity 11.
@@ -1037,12 +1152,64 @@ mod tests {
         // Selectors after the local bits.
         //
         // Prefix-first residual binding.
-        LayoutBinding::new(11, LayoutStrategy::new(true, VariableOrder::Prefix))
+        //
+        // Two source tables of arity 9 and width 2.
+        LayoutBinding::new(
+            11,
+            LayoutStrategy::new(true, VariableOrder::Prefix),
+            base_tables(),
+        )
     }
 
     /// A batch of three direct and one successor opening on table 1 of arity 9.
     fn base_opening() -> OpeningShape {
-        OpeningShape::new(base_binding(), 1, 9, 3, 1, PointSource::Drawn)
+        OpeningShape::new(base_binding(), 1, 9, &[0, 1, 2], &[3], PointSource::Drawn)
+    }
+
+    /// Every field of the layout geometry, each moved one step from the baseline.
+    ///
+    /// A field added to `LayoutBinding` or `LayoutStrategy` stops this from compiling.
+    fn one_step_from_base_binding() -> Vec<(&'static str, LayoutBinding)> {
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        //
+        // The bindings go unused: naming the fields is all this has to do.
+        let LayoutBinding {
+            num_variables: _,
+            strategy:
+                LayoutStrategy {
+                    reverse_selectors: _,
+                    variable_order: _,
+                },
+            tables: _,
+        } = base_binding();
+
+        // Stacked arity: the width every claim point is lifted into.
+        let mut wider = base_binding();
+        wider.num_variables = 12;
+
+        // Selector placement: which end of a claim point the slot bits occupy.
+        let mut selectors_first = base_binding();
+        selectors_first.strategy.reverse_selectors = false;
+
+        // Residual binding order: the knob that moves no step at all.
+        let mut suffix_first = base_binding();
+        suffix_first.strategy.variable_order = VariableOrder::Suffix;
+
+        // One more source table: a longer list, and a wider stack behind it.
+        let mut extra_table = base_binding();
+        extra_table.tables.push(TableShape::new(8, 1));
+
+        // Same stacked arity, same table count, columns placed at other slots.
+        let mut regrouped = base_binding();
+        regrouped.tables = vec![TableShape::new(9, 3), TableShape::new(9, 1)];
+
+        vec![
+            ("stacked arity", wider),
+            ("selector placement", selectors_first),
+            ("variable order", suffix_first),
+            ("table count", extra_table),
+            ("table widths", regrouped),
+        ]
     }
 
     /// Evaluations matching the described widths of the reference batch.
@@ -1052,7 +1219,7 @@ mod tests {
     }
 
     /// Label a shape's seed digest so a failing pairwise check names the knob.
-    fn labelled_opening(name: &str, shape: OpeningShape) -> (String, SeedDigest) {
+    fn labelled_opening(name: &str, shape: &OpeningShape) -> (String, SeedDigest) {
         (
             String::from(name),
             seed_digest(&shape.domain_separator::<F, EF>()),
@@ -1069,86 +1236,75 @@ mod tests {
         //     stacked arity     11
         //     selectors         reversed
         //     binding order     prefix
+        //     source tables     [(9, 2), (9, 2)]
         //     source table      index 1, arity 9
-        //     direct openings   3
-        //     successor         1
+        //     direct openings   columns [0, 1, 2]
+        //     successor         column [3]
         //     opening point     drawn here
-        let base = base_opening();
+        //
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        //
+        // A field added to `OpeningShape` stops this from compiling.
+        let OpeningShape {
+            binding: _,
+            table_index: _,
+            table_variables: _,
+            current: _,
+            next: _,
+            point: _,
+        } = base_opening();
 
-        // Each entry moves exactly one field away from the baseline.
-        let mut seeds = vec![labelled_opening("baseline", base)];
+        let mut seeds = vec![labelled_opening("baseline", &base_opening())];
 
-        // Stacked arity: the width every claim point is lifted into.
-        seeds.push(labelled_opening(
-            "stacked arity",
-            OpeningShape {
-                binding: LayoutBinding::new(12, base.binding.strategy),
-                ..base
-            },
-        ));
-
-        // Selector placement: which end of a claim point the slot bits occupy.
-        seeds.push(labelled_opening(
-            "selector placement",
-            OpeningShape {
-                binding: LayoutBinding::new(11, LayoutStrategy::new(false, VariableOrder::Prefix)),
-                ..base
-            },
-        ));
-
-        // Residual binding order: the knob that moves no step at all.
-        seeds.push(labelled_opening(
-            "variable order",
-            OpeningShape {
-                binding: LayoutBinding::new(11, LayoutStrategy::new(true, VariableOrder::Suffix)),
-                ..base
-            },
-        ));
+        // Layout geometry: one entry per field of the shared binding.
+        for (name, binding) in one_step_from_base_binding() {
+            let mut moved = base_opening();
+            moved.binding = binding;
+            seeds.push(labelled_opening(name, &moved));
+        }
 
         // Source table index: two equal-width batches on two tables.
-        seeds.push(labelled_opening(
-            "table index",
-            OpeningShape {
-                table_index: 2,
-                ..base
-            },
-        ));
+        let mut other_table = base_opening();
+        other_table.table_index = 0;
+        seeds.push(labelled_opening("table index", &other_table));
 
         // Source table arity: the expansion width of the drawn point.
-        seeds.push(labelled_opening(
-            "table arity",
-            OpeningShape {
-                table_variables: 8,
-                ..base
-            },
-        ));
+        let mut narrower = base_opening();
+        narrower.table_variables = 8;
+        seeds.push(labelled_opening("table arity", &narrower));
 
         // Direct column count: a declared step width.
-        seeds.push(labelled_opening(
-            "direct count",
-            OpeningShape {
-                num_current: 2,
-                ..base
-            },
-        ));
+        let mut fewer_direct = base_opening();
+        fewer_direct.current = vec![0, 1];
+        seeds.push(labelled_opening("direct count", &fewer_direct));
+
+        // Direct columns: the same width, opened on other columns.
+        //
+        // Each claim lifts through its own column's selector, so this is a
+        // different statement carrying the same step.
+        let mut other_direct = base_opening();
+        other_direct.current = vec![0, 1, 3];
+        seeds.push(labelled_opening("direct columns", &other_direct));
+
+        // Direct order: the same columns, in the order the powers walk them.
+        let mut reordered_direct = base_opening();
+        reordered_direct.current = vec![2, 1, 0];
+        seeds.push(labelled_opening("direct order", &reordered_direct));
 
         // Successor column count: the other declared step width.
-        seeds.push(labelled_opening(
-            "successor count",
-            OpeningShape {
-                num_next: 2,
-                ..base
-            },
-        ));
+        let mut more_next = base_opening();
+        more_next.next = vec![3, 4];
+        seeds.push(labelled_opening("successor count", &more_next));
+
+        // Successor columns: the same width, read through another column's view.
+        let mut other_next = base_opening();
+        other_next.next = vec![4];
+        seeds.push(labelled_opening("successor columns", &other_next));
 
         // Point source: a step present in one case and absent in the other.
-        seeds.push(labelled_opening(
-            "point source",
-            OpeningShape {
-                point: PointSource::Given,
-                ..base
-            },
-        ));
+        let mut given = base_opening();
+        given.point = PointSource::Given;
+        seeds.push(labelled_opening("point source", &given));
 
         assert_seeds_pairwise_distinct(&seeds);
     }
@@ -1157,43 +1313,21 @@ mod tests {
     fn every_knob_of_an_out_of_domain_claim_reaches_the_seed() {
         // Invariant:
         //     The layout geometry is the whole configuration here.
-        //     Each of its three fields moves the seed.
+        //     Each of its fields moves the seed.
         //
         // Fixture state:
         //     stacked arity  11
         //     selectors      reversed
         //     binding order  prefix
+        //     source tables  [(9, 2), (9, 2)]
         let digest = |binding: LayoutBinding| {
             seed_digest(&VirtualShape::new(binding).domain_separator::<F, EF>())
         };
 
-        let seeds = [
-            ("baseline", digest(base_binding())),
-            // Stacked arity: the width the drawn point is expanded to.
-            (
-                "stacked arity",
-                digest(LayoutBinding::new(
-                    12,
-                    LayoutStrategy::new(true, VariableOrder::Prefix),
-                )),
-            ),
-            // Selector placement.
-            (
-                "selector placement",
-                digest(LayoutBinding::new(
-                    11,
-                    LayoutStrategy::new(false, VariableOrder::Prefix),
-                )),
-            ),
-            // Residual binding order.
-            (
-                "variable order",
-                digest(LayoutBinding::new(
-                    11,
-                    LayoutStrategy::new(true, VariableOrder::Suffix),
-                )),
-            ),
-        ];
+        let mut seeds = vec![(String::from("baseline"), digest(base_binding()))];
+        for (name, binding) in one_step_from_base_binding() {
+            seeds.push((String::from(name), digest(binding)));
+        }
 
         assert_seeds_pairwise_distinct(&seeds);
     }
@@ -1201,53 +1335,43 @@ mod tests {
     #[test]
     fn every_knob_of_the_batching_challenge_reaches_the_seed() {
         // Invariant:
-        //     The claim counts decide which power lands on which claim.
+        //     The claim counts decide how many powers there are.
         //     Both counts therefore move the seed, alongside the geometry.
         //
         // Fixture state:
         //     stacked arity  11
         //     selectors      reversed
         //     binding order  prefix
+        //     source tables  [(9, 2), (9, 2)]
         //     concrete       4
         //     out-of-domain  2
+        //
+        // Exhaustiveness check: every field named, none elided by a rest pattern.
+        //
+        // A field added to `BatchingShape` stops this from compiling.
+        let BatchingShape {
+            binding: _,
+            num_claims: _,
+            num_virtual_claims: _,
+        } = BatchingShape::new(base_binding(), 4, 2);
+
         let digest = |binding: LayoutBinding, claims: usize, virtuals: usize| {
             seed_digest(&BatchingShape::new(binding, claims, virtuals).domain_separator::<F, EF>())
         };
 
-        let seeds = [
-            ("baseline", digest(base_binding(), 4, 2)),
-            // Stacked arity.
-            (
-                "stacked arity",
-                digest(
-                    LayoutBinding::new(12, LayoutStrategy::new(true, VariableOrder::Prefix)),
-                    4,
-                    2,
-                ),
-            ),
-            // Selector placement.
-            (
-                "selector placement",
-                digest(
-                    LayoutBinding::new(11, LayoutStrategy::new(false, VariableOrder::Prefix)),
-                    4,
-                    2,
-                ),
-            ),
-            // Residual binding order.
-            (
-                "variable order",
-                digest(
-                    LayoutBinding::new(11, LayoutStrategy::new(true, VariableOrder::Suffix)),
-                    4,
-                    2,
-                ),
-            ),
-            // One more concrete opening shifts every out-of-domain power by one.
-            ("concrete count", digest(base_binding(), 5, 2)),
-            // One more out-of-domain claim extends the power sequence.
-            ("out-of-domain count", digest(base_binding(), 4, 3)),
-        ];
+        let mut seeds = vec![(String::from("baseline"), digest(base_binding(), 4, 2))];
+        for (name, binding) in one_step_from_base_binding() {
+            seeds.push((String::from(name), digest(binding, 4, 2)));
+        }
+
+        // One more concrete opening shifts every out-of-domain power by one.
+        seeds.push((String::from("concrete count"), digest(base_binding(), 5, 2)));
+
+        // One more out-of-domain claim extends the power sequence.
+        seeds.push((
+            String::from("out-of-domain count"),
+            digest(base_binding(), 4, 3),
+        ));
 
         assert_seeds_pairwise_distinct(&seeds);
     }
@@ -1263,7 +1387,8 @@ mod tests {
         //     shared geometry  stacked arity 11, selectors reversed, prefix binding
         //     the batch        table 0, arity 11, 1 direct opening, no successor
         let binding = base_binding();
-        let single_column = OpeningShape::new(binding, 0, 11, 1, 0, PointSource::Drawn);
+        let single_column =
+            OpeningShape::new(binding.clone(), 0, 11, &[0], &[], PointSource::Drawn);
 
         let seeds = [
             (
@@ -1272,7 +1397,7 @@ mod tests {
             ),
             (
                 "out-of-domain claim",
-                seed_digest(&VirtualShape::new(binding).domain_separator::<F, EF>()),
+                seed_digest(&VirtualShape::new(binding.clone()).domain_separator::<F, EF>()),
             ),
             (
                 "batching challenge",
@@ -1309,7 +1434,8 @@ mod tests {
         let evals = base_evals();
 
         let mut prover_challenger = fresh_challenger();
-        let mut prover = OpeningProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, shape);
+        let mut prover =
+            OpeningProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, shape.clone());
         let prover_point = prover.point();
         prover.evaluations(&evals);
         prover.finish();
@@ -1342,7 +1468,7 @@ mod tests {
         let tampered = OpeningBatch::new(tampered_current, honest.next().to_vec());
 
         assert_ne!(
-            replay_opening(shape, &honest).1,
+            replay_opening(shape.clone(), &honest).1,
             replay_opening(shape, &tampered).1
         );
     }
@@ -1366,7 +1492,7 @@ mod tests {
         let tampered = OpeningBatch::new(honest.current().to_vec(), vec![EF::from_u8(5)]);
 
         assert_ne!(
-            replay_opening(shape, &honest).1,
+            replay_opening(shape.clone(), &honest).1,
             replay_opening(shape, &tampered).1
         );
     }
@@ -1425,7 +1551,7 @@ mod tests {
         //     direct-only: 3 direct, 0 successor
         //     mixed:       3 direct, 1 successor
         let binding = base_binding();
-        let direct_only = OpeningShape::new(binding, 1, 9, 3, 0, PointSource::Drawn);
+        let direct_only = OpeningShape::new(binding, 1, 9, &[0, 1, 2], &[], PointSource::Drawn);
 
         let seeds = [
             (
@@ -1457,11 +1583,12 @@ mod tests {
         //
         // Fixture state:
         //     table 1 of arity 9, 3 direct openings, 1 successor opening.
-        let shape = OpeningShape::new(base_binding(), 1, 9, 3, 1, PointSource::Given);
+        let shape = OpeningShape::new(base_binding(), 1, 9, &[0, 1, 2], &[3], PointSource::Given);
         let evals = base_evals();
 
         let mut prover_challenger = fresh_challenger();
-        let mut prover = OpeningProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, shape);
+        let mut prover =
+            OpeningProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, shape.clone());
         prover.evaluations(&evals);
         prover.finish();
 
@@ -1484,7 +1611,7 @@ mod tests {
         // Invariant:
         //     Asking for a point the description does not hold is a caller bug.
         //     It is reported loudly rather than desynchronising the sponge.
-        let shape = OpeningShape::new(base_binding(), 1, 9, 3, 1, PointSource::Given);
+        let shape = OpeningShape::new(base_binding(), 1, 9, &[0, 1, 2], &[3], PointSource::Given);
         let mut challenger = fresh_challenger();
         let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(&mut challenger, shape);
         let _ = transcript.point();
@@ -1501,7 +1628,8 @@ mod tests {
         let shape = VirtualShape::new(base_binding());
 
         let mut prover_challenger = fresh_challenger();
-        let mut prover = VirtualProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, shape);
+        let mut prover =
+            VirtualProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, shape.clone());
         let prover_point = prover.point();
         prover.evaluation(EF::from_u8(7));
         prover.finish();
@@ -1539,7 +1667,7 @@ mod tests {
         let replay = |eval: EF| {
             let mut challenger = fresh_challenger();
             let mut transcript =
-                VirtualVerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape);
+                VirtualVerifierTranscript::<Ch, F, EF>::new(&mut challenger, shape.clone());
             let _point = transcript.point();
             transcript.evaluation(eval);
             transcript.finish();
@@ -1559,11 +1687,11 @@ mod tests {
         let shape = BatchingShape::new(base_binding(), 4, 2);
 
         let mut prover_challenger = fresh_challenger();
-        let prover: EF = prover_batching_challenge::<Ch, F, EF>(&mut prover_challenger, shape);
+        let prover: EF = prover_batching_challenge::<Ch, F, EF>(&mut prover_challenger, &shape);
 
         let mut verifier_challenger = fresh_challenger();
         let verifier: EF =
-            verifier_batching_challenge::<Ch, F, EF>(&mut verifier_challenger, shape);
+            verifier_batching_challenge::<Ch, F, EF>(&mut verifier_challenger, &shape);
 
         assert_eq!(prover, verifier);
 

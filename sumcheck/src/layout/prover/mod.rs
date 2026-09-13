@@ -29,7 +29,7 @@ use crate::layout::transcript::{
 };
 use crate::layout::{LayoutStrategy, Table, Witness};
 use crate::strategy::{SumcheckProver, VariableOrder};
-use crate::table::{OpeningEvals, OpeningRequest};
+use crate::table::{OpeningEvals, OpeningRequest, TableShape};
 
 /// Stacked-sumcheck prover layout
 pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
@@ -122,6 +122,15 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         self.claims().num_variables_table(id)
     }
 
+    /// Returns every source table's `(arity, width)`, in caller order.
+    ///
+    /// The verifier rebuilds the same list from its placements.
+    ///
+    /// Both sides bind it, so a layout cannot be restated with the columns moved.
+    fn table_shapes(&self) -> Vec<TableShape> {
+        self.claims().table_shapes()
+    }
+
     /// Returns source table `id`.
     fn table(&self, id: usize) -> &Table<F> {
         self.claims().table(id)
@@ -179,11 +188,11 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
 
         // Both column counts come from the schedule, never from a value in flight.
         let shape = OpeningShape::new(
-            LayoutBinding::new(self.num_variables(), Self::strategy()),
+            LayoutBinding::new(self.num_variables(), Self::strategy(), self.table_shapes()),
             table_idx,
             self.num_variables_table(table_idx),
-            batch.current().len(),
-            batch.next().len(),
+            batch.current(),
+            batch.next(),
             PointSource::Drawn,
         );
         let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(challenger, shape);
@@ -254,11 +263,11 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         //
         // This description therefore holds no challenge.
         let shape = OpeningShape::new(
-            LayoutBinding::new(self.num_variables(), Self::strategy()),
+            LayoutBinding::new(self.num_variables(), Self::strategy(), self.table_shapes()),
             table_idx,
             self.num_variables_table(table_idx),
-            batch.current().len(),
-            batch.next().len(),
+            batch.current(),
+            batch.next(),
             PointSource::Given,
         );
         let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(challenger, shape);
@@ -332,7 +341,11 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // The stacked arity is the whole configuration of this component.
-        let shape = VirtualShape::new(LayoutBinding::new(self.num_variables(), Self::strategy()));
+        let shape = VirtualShape::new(LayoutBinding::new(
+            self.num_variables(),
+            Self::strategy(),
+            self.table_shapes(),
+        ));
         let mut transcript = VirtualProverTranscript::<Ch, F, EF>::new(challenger, shape);
 
         // Draw first.
@@ -375,7 +388,11 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     ///     sum = sum_i  alpha^i * eval_i
     /// ```
     ///
-    /// Direct and successor openings take the low powers, in insertion order.
+    /// Direct and successor openings take the low powers, in placement order.
+    ///
+    /// Tables are walked largest arity first, not in the order they were opened.
+    ///
+    /// Insertion order holds only among the claims of one table.
     ///
     /// Out-of-domain claims continue the sequence after them.
     ///
@@ -397,11 +414,11 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     {
         // Both counts come from the claims this run recorded, never from a proof.
         let shape = BatchingShape::new(
-            LayoutBinding::new(self.num_variables(), Self::strategy()),
+            LayoutBinding::new(self.num_variables(), Self::strategy(), self.table_shapes()),
             self.num_claims(),
             self.num_virtual_claims(),
         );
-        prover_batching_challenge::<Ch, F, EF>(challenger, shape)
+        prover_batching_challenge::<Ch, F, EF>(challenger, &shape)
     }
 
     /// Processes initial rounds of sumcheck and returns the residual sumcheck prover.
@@ -917,6 +934,13 @@ mod tests {
     #[test]
     fn eval_current_preserves_order() {
         // Invariant: returned evals follow the requested column order, not a sorted order.
+        //
+        // The point is supplied rather than drawn, so both runs evaluate at one point.
+        //
+        // A drawn point would not serve here: the column list reaches the seed, so
+        // the two orders draw two different points and the evals stop being a
+        // permutation of each other. That separation is checked in `transcript.rs`,
+        // by `every_knob_of_a_recorded_batch_reaches_the_seed`.
         fn run_eval_current_test_with<L>()
         where
             L: Layout<F, EF>,
@@ -925,20 +949,29 @@ mod tests {
             let mut prover = L::from_witness(L::new_witness(build_tables(), FOLDING));
             let mut reversed = L::from_witness(L::new_witness(build_tables(), FOLDING));
 
-            // Independent transcripts seeded identically, so draws match.
+            // Independent transcripts seeded identically.
             let mut prover_ch = challenger();
             let mut reversed_ch = challenger();
 
+            // One point, shared by both runs, so only the column order differs.
+            let point = Point::<EF>::new(
+                (0..prover.num_variables_table(0))
+                    .map(|i| EF::from_u64(i as u64 + 1))
+                    .collect(),
+            );
+
             // Request columns [1, 0]: evals must come back in that exact order.
-            let evals = prover.eval(
+            let evals = prover.eval_at(
                 0,
                 &OpeningBatch::new(vec![1, 0], Vec::new()),
+                &point,
                 &mut prover_ch,
             );
             // Request the same columns in swapped order [0, 1].
-            let reversed_evals = reversed.eval(
+            let reversed_evals = reversed.eval_at(
                 0,
                 &OpeningBatch::new(vec![0, 1], Vec::new()),
+                &point,
                 &mut reversed_ch,
             );
 

@@ -306,7 +306,11 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     ///     sum = sum_i  alpha^i * eval_i
     /// ```
     ///
-    /// Direct and successor openings take the low powers, in insertion order.
+    /// Direct and successor openings take the low powers, in placement order.
+    ///
+    /// Tables are walked largest arity first, not in the order they were opened.
+    ///
+    /// Insertion order holds only among the claims of one table.
     ///
     /// Out-of-domain claims continue the sequence after them.
     ///
@@ -327,14 +331,33 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         // Both counts come from the claims this run recorded, never from a proof.
         let shape =
             BatchingShape::new(self.binding(), self.num_claims(), self.virtual_claims.len());
-        verifier_batching_challenge::<Ch, F, EF>(challenger, shape)
+        verifier_batching_challenge::<Ch, F, EF>(challenger, &shape)
     }
 
     /// Returns the layout geometry every claim of this run is bound against.
     ///
-    /// The prover derives the same three numbers from its own configuration.
-    const fn binding(&self) -> LayoutBinding {
-        LayoutBinding::new(self.k, self.strategy)
+    /// The prover derives the same numbers from its own configuration.
+    fn binding(&self) -> LayoutBinding {
+        LayoutBinding::new(self.k, self.strategy, self.table_shapes())
+    }
+
+    /// Returns every source table's `(arity, width)`, in caller order.
+    ///
+    /// The placements are a function of this list, so rebuilding it is exact.
+    ///
+    /// ```text
+    ///     arity  =  stacked arity - the selector bits addressing the slot
+    ///     width  =  one selector per column
+    /// ```
+    fn table_shapes(&self) -> Vec<TableShape> {
+        (0..self.placement_by_table.len())
+            .map(|table_idx| {
+                TableShape::new(
+                    self.num_variables_table(table_idx),
+                    self.placement(table_idx).num_polys(),
+                )
+            })
+            .collect()
     }
 
     /// Describes the transcript of one recorded batch on one table.
@@ -352,8 +375,8 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
             self.binding(),
             table_idx,
             self.num_variables_table(table_idx),
-            batch.current().len(),
-            batch.next().len(),
+            batch.current(),
+            batch.next(),
             point,
         )
     }
@@ -438,7 +461,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         let mut concrete = EF::ZERO;
         let mut alphas = alpha.powers();
 
-        // Walk every concrete opening in the canonical insertion order.
+        // Walk every concrete opening in the canonical batching order.
         //     placements -> claims -> current openings -> next openings
         // Each opening consumes the next power of alpha, matching the prover.
         for placement in &self.placements {
@@ -473,14 +496,14 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     ///
     /// # Why the split
     ///
-    /// - The emitted statements preserve the same mixed insertion order the batched sum walks.
+    /// - The emitted statements preserve the same mixed order the batched sum walks.
     /// - That keeps each statement aligned with the alpha power assigned to its opening.
     pub fn constraint(&self, alpha: EF) -> Constraint<F, EF> {
         // Accumulate statements over the full stacked variable space.
         // The push order mirrors the batched-sum walk, so alpha powers stay aligned.
         let mut statements = Vec::new();
 
-        // Concrete contributions, walked in canonical insertion order.
+        // Concrete contributions, walked in canonical batching order.
         for placement in &self.placements {
             for claim in &self.claim_map[placement.idx()] {
                 // Current group: one equality statement per claim's current openings.
