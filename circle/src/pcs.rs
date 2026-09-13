@@ -30,7 +30,7 @@ use crate::domain::CircleDomain;
 use crate::folding::{
     CircleFriFolding, CircleFriFoldingForMmcs, fold_row_with_inv_twiddle, fold_y,
 };
-use crate::point::{Point, compute_lagrange_den_batched};
+use crate::point::{Point, compute_lagrange_den_on_domain};
 use crate::prover::prove;
 use crate::transcript::{
     CirclePcsShape, CircleProverTranscript, CircleTranscriptFailure, CircleVerifierTranscript,
@@ -345,10 +345,10 @@ where
                                         .unwrap_or_else(|| {
                                             let den = info_span!("compute Lagrange denominators")
                                                 .in_scope(|| {
-                                                    compute_lagrange_den_batched(
+                                                    compute_lagrange_den_on_domain(
                                                         &permuted_points[&log_height][..sub_height],
                                                         Point::from_projective_line(zeta_uni),
-                                                        log_sub,
+                                                        sub_domain,
                                                     )
                                                 });
                                             lagrange_dens.push((key, den));

@@ -53,5 +53,9 @@ harness = false
 name = "deep_quotient"
 harness = false
 
+[[bench]]
+name = "lagrange"
+harness = false
+
 [lints]
 workspace = true

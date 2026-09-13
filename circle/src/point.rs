@@ -2,10 +2,10 @@ use alloc::vec::Vec;
 use core::ops::{Add, AddAssign, Mul, Neg, Sub};
 
 use p3_field::extension::ComplexExtendable;
-use p3_field::{
-    ExtensionField, Field, PackedValue, PrimeCharacteristicRing, batch_multiplicative_inverse,
-};
+use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
 use p3_maybe_rayon::prelude::*;
+
+use crate::domain::CircleDomain;
 
 /// Affine representation of a point on the circle.
 /// x^2 + y^2 == 1
@@ -132,75 +132,34 @@ impl<F: Field> Point<F> {
     }
 }
 
-/// Compute (ṽ_P(x,y) * s_p)^{-1} for each element in the list.
+/// Compute Lagrange denominators for CFFT-ordered points of `domain`.
 ///
-/// All denominators share a single batch inversion instead of one inversion per point.
-pub(crate) fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
+/// A twin-coset has a common selector normalization on each half. CFFT ordering keeps those
+/// halves at even and odd indices, respectively, so this avoids recomputing the `s_p` chain for
+/// every point.
+pub(crate) fn compute_lagrange_den_on_domain<F: ComplexExtendable, EF: ExtensionField<F>>(
     points: &[Point<F>],
     at: Point<EF>,
-    log_n: usize,
+    domain: CircleDomain<F>,
 ) -> Vec<EF> {
-    // Selector normalization `s_p` for every point, computed packed.
-    let s_p = {
-        let mut s_p = F::zero_vec(points.len());
+    debug_assert_eq!(points.len(), 1 << domain.log_n);
 
-        if log_n < 2 {
-            // The squaring chain is empty, so the packed path buys nothing.
-            for (slot, p) in s_p.iter_mut().zip(points) {
-                *slot = p.s_p_at_p(log_n);
-            }
-        } else {
-            // Power-of-two scaling and chain length, shared by every lane.
-            let exp = (2 * log_n - 1) as u64;
-            let iters = log_n - 2;
-            let width = F::Packing::WIDTH;
-            let packed_len = (points.len() / width) * width;
-
-            s_p[..packed_len]
-                .par_chunks_exact_mut(width)
-                .zip(points.par_chunks_exact(width))
-                .for_each(|(slots, chunk)| {
-                    // Seed the running product with the x-coordinates of the lane.
-                    let mut cur = F::Packing::from_fn(|l| chunk[l].x);
-                    let mut output = cur;
-
-                    // Fold in each squaring-chain step `x -> 2 x^2 - 1`.
-                    for _ in 0..iters {
-                        cur = cur.square().double() - F::Packing::ONE;
-                        output *= cur;
-                    }
-
-                    // Close the formula: scale by the power of two and the y-coordinate.
-                    let ys = F::Packing::from_fn(|l| chunk[l].y);
-                    let packed_s_p = -(output.mul_2exp_u64(exp) * ys);
-
-                    slots.copy_from_slice(packed_s_p.as_slice());
-                });
-
-            // Trailing points below one full lane fall back to the scalar formula.
-            for (slot, &pt) in s_p[packed_len..].iter_mut().zip(&points[packed_len..]) {
-                *slot = pt.s_p_at_p(log_n);
-            }
-        }
-        s_p
-    };
-
-    // Pair each numerator with its denominator before inverting.
+    let s_p_at_shift = domain.shift.s_p_at_p(domain.log_n);
     let (numer, denom): (Vec<_>, Vec<_>) = points
         .par_iter()
-        .zip(&s_p)
-        .map(|(&pt, &s_p)| {
+        .enumerate()
+        .map(|(i, &pt)| {
             let diff = at - pt;
-            let numer = diff.x + F::ONE;
-            let denom = diff.y * s_p;
-            (numer, denom)
+            let s_p = if i & 1 == 0 {
+                s_p_at_shift
+            } else {
+                -s_p_at_shift
+            };
+            (diff.x + F::ONE, diff.y * s_p)
         })
         .unzip();
 
-    // One inversion covers the whole batch via Montgomery's trick.
     let inv_d = batch_multiplicative_inverse(&denom);
-
-    // Recombine each numerator with its inverted denominator.
     numer
         .par_iter()
         .zip(inv_d.par_iter())
@@ -268,6 +227,7 @@ impl<F: Field> Mul<usize> for Point<F> {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_mersenne_31::Mersenne31;
     use proptest::prelude::*;
@@ -340,14 +300,12 @@ mod tests {
 
     proptest! {
         #[test]
-        fn compute_lagrange_den_batched_matches_scalar(
-            log_n in 1usize..19,
-            len in 0usize..40,
+        fn compute_lagrange_den_on_domain_matches_scalar(
+            log_n in 1usize..11,
             at_seed in any::<u64>(),
         ) {
-            // A small prefix of real domain points keeps every `s_p` nonzero.
-            let prefix: Vec<Pt> = crate::CircleDomain::standard(log_n).points().take(40).collect();
-            let points = &prefix[..len.min(prefix.len())];
+            let domain = crate::CircleDomain::standard(log_n);
+            let points = crate::cfft_permute_slice(&domain.points().collect::<Vec<_>>());
 
             // A pseudo-random extension point stands in for the out-of-domain query.
             let mut rng = SmallRng::seed_from_u64(at_seed);
@@ -360,8 +318,22 @@ mod tests {
             prop_assume!(all_invertible);
 
             prop_assert_eq!(
-                compute_lagrange_den_batched(points, at, log_n),
-                lagrange_den_scalar(points, at, log_n)
+                compute_lagrange_den_on_domain(&points, at, domain),
+                lagrange_den_scalar(&points, at, log_n)
+            );
+        }
+    }
+
+    #[test]
+    fn compute_lagrange_den_on_nonstandard_domain_matches_scalar() {
+        for log_n in 1..10 {
+            let domain = crate::CircleDomain::new(log_n, Pt::generator(log_n + 2));
+            let points = crate::cfft_permute_slice(&domain.points().collect::<Vec<_>>());
+            let at = Point::<EF>::from_projective_line(EF::from_u8(9));
+
+            assert_eq!(
+                compute_lagrange_den_on_domain(&points, at, domain),
+                lagrange_den_scalar(&points, at, log_n),
             );
         }
     }
