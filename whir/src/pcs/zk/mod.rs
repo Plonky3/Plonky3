@@ -68,7 +68,7 @@ mod security;
 mod verifier;
 
 pub use adapter::HidingWhirPcs;
-pub use base_case::BaseCaseZkError;
+pub use base_case::{BaseCaseZkConfig, BaseCaseZkError};
 pub use code_switch::CodeSwitchError;
 pub use config::{ZkConfigError, ZkParameters, ZkWhirConfig};
 pub use mask::{MaskCodeShape, MaskGroupShape};

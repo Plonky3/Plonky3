@@ -186,14 +186,6 @@ where
             count(covector.len(), shape.message_len)?;
         }
 
-        // Still check 0: a zero-difficulty grind leaves the witness unread, so pin it.
-        //
-        //     pow_bits = 0 -> prover emits zero, verifier reads nothing -> pin it here
-        //     pow_bits > 0 -> prover grinds,     verifier resamples     -> check 3 pins it
-        if self.config.pow_bits == 0 && proof.pow_witness != F::ZERO {
-            return Err(BaseCaseZkError::NonCanonicalPowWitness);
-        }
-
         // Check 1: replay the prover's moves into the Fiat-Shamir sponge.
         //
         //     move 1  ->  fresh commitments g, s'_i

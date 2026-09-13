@@ -643,6 +643,21 @@ pub enum TranscriptFailure {
         /// Difficulty the site requires, in bits.
         bits: usize,
     },
+    /// A grinding witness is not the value a zero difficulty admits.
+    ///
+    /// At zero bits the site reads no witness at all, so nothing binds the field.
+    ///
+    /// ```text
+    ///     bits = 0  ->  the step is elided, and any value rides along unread
+    ///     bits > 0  ->  the grind is what pins the value
+    /// ```
+    ///
+    /// Zero is the only value an honest prover emits, so zero is the only one accepted.
+    #[error("round {round}: query grinding witness is non-canonical at zero difficulty")]
+    NonCanonicalPowWitness {
+        /// Round whose query site carries the witness, `n_rounds` for the final one.
+        round: usize,
+    },
     /// The final polynomial carries a coefficient count the run never described.
     #[error("expected {expected} final evaluations, got {got}")]
     FinalPolyLength {
@@ -1009,11 +1024,26 @@ mod tests {
     /// Opening claims every shape in this module is derived with.
     const CLAIMS: usize = 3;
 
-    /// Step label a delegated sumcheck round carries inside its own description.
+    /// Every label the plain run plays for itself, brackets included.
     ///
-    /// No step of a delegated phase belongs to the description built here.
-    /// The label is what one check below looks for and must not find.
-    const FOLD_CHALLENGE: &str = "fold_challenge";
+    /// A delegated sumcheck names its own steps inside its own description, so any
+    /// label outside this list reaching the run's pattern is a step the run is
+    /// trying to play on the delegate's behalf.
+    const OWN_LABELS: [&str; 13] = [
+        INITIAL_BATCHING,
+        INITIAL_FOLD,
+        COMMITMENT,
+        OOD_POINT,
+        OOD_ANSWER,
+        QUERY_POW,
+        QUERY_INDICES,
+        ROUND_BATCHING,
+        ROUND_FOLD,
+        FINAL_POLY,
+        FINAL_QUERY_POW,
+        FINAL_QUERY_INDICES,
+        FINAL_FOLD,
+    ];
 
     /// A commitment shaped like the ones a Merkle scheme hands this layer.
     const DIGEST: [F; 8] = [F::ONE; 8];
@@ -1300,12 +1330,20 @@ mod tests {
         assert_eq!(openers[0], INITIAL_FOLD);
 
         // No round of any sumcheck phase reaches this pattern as a step of its own.
-        assert!(
-            pattern
-                .interactions()
-                .iter()
-                .all(|step| step.label() != FOLD_CHALLENGE),
-        );
+        //
+        // Asserted in the positive: every label in the pattern is one this run plays,
+        // taken from the constants themselves.
+        //
+        // Naming the child's labels instead would check nothing. The quadratic
+        // sumcheck plays `round_challenge`, not `fold_challenge`, so a blacklist
+        // built from a guess at the child's names passes whatever the pattern holds.
+        for step in pattern.interactions() {
+            assert!(
+                OWN_LABELS.contains(&step.label()),
+                "the run describes a step no phase of it plays: {}",
+                step.label(),
+            );
+        }
     }
 
     #[test]

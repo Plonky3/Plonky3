@@ -334,6 +334,9 @@ where
     /// All three read them here.
     ///
     /// None of the three can then drift from the others.
+    ///
+    /// The returned type is re-exported from the crate root, so an outside caller
+    /// can name it and hand it to `ZkBaseCaseShape::new`.
     #[must_use]
     pub fn base_case_config(&self) -> BaseCaseZkConfig<F> {
         // The base case runs against the folded terminal oracle.

@@ -1044,10 +1044,18 @@ where
     ///
     /// # Errors
     ///
-    /// When the witness misses the difficulty the site requires.
+    /// - The witness is not zero where the site asks for no work.
+    /// - The witness misses the difficulty the site requires.
     pub fn query_pow(&mut self, round: usize, witness: F) -> Result<(), TranscriptFailure> {
         let bits = self.shape.query_pow_bits(round);
         if bits == 0 {
+            // A zero-difficulty site plays no step, so nothing else reads this field.
+            //
+            // Pinning it here is what stops any value from riding along unbound,
+            // and it holds for every caller of this driver, not just the one in-crate.
+            if witness != F::ZERO {
+                return Err(TranscriptFailure::NonCanonicalPowWitness { round });
+            }
             return Ok(());
         }
         // A failed check poisons the driver.
@@ -1419,9 +1427,17 @@ where
     ///
     /// # Errors
     ///
-    /// When the witness misses the difficulty the site requires.
+    /// - The witness is not zero where the site asks for no work.
+    /// - The witness misses the difficulty the site requires.
     pub fn spot_check_pow(&mut self, witness: F) -> Result<(), BaseCaseZkError> {
         if self.shape.pow_bits == 0 {
+            // A zero-difficulty site plays no step, so nothing else reads this field.
+            //
+            // Pinning it here is what stops any value from riding along unbound,
+            // and it holds for every caller of this driver, not just the one in-crate.
+            if witness != F::ZERO {
+                return Err(BaseCaseZkError::NonCanonicalPowWitness);
+            }
             return Ok(());
         }
         // A failed check poisons the driver.
@@ -1506,7 +1522,9 @@ mod tests {
     use super::*;
     use crate::parameters::{ProtocolParameters, WhirConfig};
     use crate::pcs::zk::ZkParameters;
-    use crate::transcript::WhirShape;
+    use crate::transcript::{
+        FINAL_FOLD, FINAL_POLY, FINAL_QUERY_INDICES, FINAL_QUERY_POW, WhirShape,
+    };
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -1931,6 +1949,29 @@ mod tests {
         assert_eq!(openers[openers.len() - 1], BASE_CASE);
     }
 
+    /// Every label the hiding run plays for itself, brackets included.
+    ///
+    /// A delegated phase names its own steps inside its own description, so any
+    /// label outside this list reaching the run's pattern is a step the run is
+    /// trying to play on the delegate's behalf.
+    const OWN_LABELS: [&str; 15] = [
+        INITIAL_BATCHING,
+        INITIAL_FOLD,
+        ORACLE_COMMITMENT,
+        SWITCH_MASK_COMMITMENT,
+        OOD_POINT,
+        OOD_ANSWER,
+        QUERY_POW,
+        QUERY_INDICES,
+        ROUND_BATCHING,
+        ROUND_FOLD,
+        BASE_CASE,
+        FINAL_POLY,
+        FINAL_QUERY_POW,
+        FINAL_QUERY_INDICES,
+        FINAL_FOLD,
+    ];
+
     #[test]
     fn no_step_of_a_delegated_phase_reaches_this_description() {
         // A masked batch names its own steps inside its own description.
@@ -1940,22 +1981,20 @@ mod tests {
         //     child plays   mask_commitment  mu_tilde  round_poly  round_challenge
         //     run records   one bracket
         //
-        // A label leaking through would mean the run tries to play the child's steps.
+        // Asserted in the positive: every label in the pattern is one of the run's
+        // own, taken from the constants themselves.
+        //
+        // A blacklist of the child's labels would not do. It only catches the names
+        // someone remembered to list, it goes stale the moment the child renames a
+        // step, and a mislabelled step of the run's own would pass it untouched.
         let config = base_config();
         let pattern = ZkWhirShape::new(&config).pattern::<F, EF>();
 
-        for label in [
-            "mask_commitment",
-            "mu_tilde",
-            "mask_combination",
-            "round_poly",
-            "round_pow",
-            "round_challenge",
-            "joint_claim",
-        ] {
+        for step in pattern.interactions() {
             assert!(
-                pattern.interactions().iter().all(|s| s.label() != label),
-                "the run describes a step the delegate plays for itself: {label}",
+                OWN_LABELS.contains(&step.label()),
+                "the run describes a step no phase of it plays: {}",
+                step.label(),
             );
         }
     }

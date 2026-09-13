@@ -776,7 +776,6 @@ fn protocols() -> Vec<Vec<Case>> {
         whir_cases(),
         zk_whir_cases(),
         zk_whir_base_case_cases(),
-        zk_whir_base_case_cases(),
         zerocheck_cases(),
         lookup_cases(),
         fraction_gkr_cases(),

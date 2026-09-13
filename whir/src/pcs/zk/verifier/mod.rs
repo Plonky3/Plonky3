@@ -29,6 +29,7 @@ use super::config::ZkWhirConfig;
 use super::constraint::SourceClaim;
 use super::proof::ZkWhirProof;
 use crate::pcs::proof::QueryOpenings;
+use crate::transcript::TranscriptFailure;
 use crate::transcript::zk::{ZkWhirShape, ZkWhirVerifierTranscript};
 
 /// Failure modes of the HVZK-WHIR verifier.
@@ -218,21 +219,6 @@ where
             });
         }
 
-        // A zero-difficulty site leaves its witness unread, so the value is pinned here
-        // rather than by the grind.
-        //
-        //     pow_bits = 0 -> prover emits zero, verifier reads nothing -> pin it here
-        //     pow_bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
-        //
-        // Each round carries its own difficulty, so each is compared against its own.
-        //
-        // The base case pins its own witness the same way.
-        for (round, round_proof) in proof.rounds.iter().enumerate() {
-            if config.round_parameters[round].pow_bits == 0 && round_proof.pow_witness != F::ZERO {
-                return Err(ZkVerifierError::NonCanonicalPowWitness { round });
-            }
-        }
-
         // Reject malformed statements before any folding arithmetic runs.
         //
         //     point arity != committed arity  ->  error, never a panic
@@ -346,9 +332,17 @@ where
             }
 
             // PoW, then STIR queries on the previous oracle.
+            //
+            // The driver pins a zero-difficulty witness to zero itself, so both the
+            // grind and the canonical-value rule are enforced in one place.
             transcript
                 .query_pow(round, round_proof.pow_witness)
-                .map_err(|_| ZkVerifierError::InvalidPowWitness { round })?;
+                .map_err(|failure| match failure {
+                    TranscriptFailure::NonCanonicalPowWitness { round } => {
+                        ZkVerifierError::NonCanonicalPowWitness { round }
+                    }
+                    _ => ZkVerifierError::InvalidPowWitness { round },
+                })?;
             let stir_indexes = transcript.query_indices(round);
             // Authenticate the leaves in one multiproof and fold them at the
             // batch randomness.

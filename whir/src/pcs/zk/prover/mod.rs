@@ -35,6 +35,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use tracing::instrument;
 
+use crate::WhirConfigError;
 use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::zk::base_case::{BaseCaseZkProver, MaskGroupWitness};
 use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
@@ -143,14 +144,15 @@ where
         claims: &[(Point<EF>, EF)],
         challenger: &mut Challenger,
         rng: &mut R,
-    ) -> ZkWhirProof<F, EF, MT>
+    ) -> Result<ZkWhirProof<F, EF, MT>, WhirConfigError>
     where
         F: PrimeField64,
     {
         let config = self.config;
-        config
-            .validate_initial_claims(claims.len())
-            .unwrap_or_else(|error| panic!("{error}"));
+        // The claim budget is a configuration check, so it runs before the driver seeds.
+        //
+        // A rejection therefore leaves the sponge and the masking RNG where it found them.
+        config.validate_initial_claims(claims.len())?;
         let num_variables = config.num_variables;
         let sumcheck_mask_encoding = config.sumcheck_mask.encoding::<EF>();
 
@@ -529,13 +531,13 @@ where
         // Require that every described step was played.
         transcript.finish();
 
-        ZkWhirProof {
+        Ok(ZkWhirProof {
             evals: claimed_evals,
             sumchecks,
             sumcheck_mask_commitments,
             rounds,
             base_case,
-        }
+        })
     }
 
     /// Opens the active oracle at every index in one multiproof and folds
