@@ -204,6 +204,7 @@ where
         challenger: &mut Ch,
     ) -> Result<(), SumcheckError>
     where
+        F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Delegate; the HVZK overlay carries no extra state at claim time.
@@ -213,6 +214,7 @@ where
     /// Records a virtual evaluation claim on the inner verifier.
     pub fn add_virtual_eval<Ch>(&mut self, eval: EF, challenger: &mut Ch)
     where
+        F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Same delegation pattern as concrete openings.

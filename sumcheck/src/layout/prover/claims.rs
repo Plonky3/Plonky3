@@ -12,6 +12,7 @@ use p3_field::{ExtensionField, Field, dot_product};
 use crate::Claim;
 use crate::layout::witness::{Table, TablePlacement};
 use crate::layout::{ProverMultiClaim, ProverVirtualClaim};
+use crate::table::TableShape;
 
 /// Opening claims recorded against one stacked polynomial, shared by both binding modes.
 ///
@@ -82,6 +83,11 @@ impl<F: Field, EF: ExtensionField<F>> StackedClaims<F, EF> {
         self.tables[id].num_variables()
     }
 
+    /// Returns every source table's `(arity, width)`, in caller order.
+    pub(crate) fn table_shapes(&self) -> Vec<TableShape> {
+        self.tables.iter().map(Table::shape).collect()
+    }
+
     /// Returns source table `id`.
     pub fn table(&self, id: usize) -> &Table<F> {
         &self.tables[id]
@@ -93,6 +99,11 @@ impl<F: Field, EF: ExtensionField<F>> StackedClaims<F, EF> {
             .iter()
             .flat_map(|claims| claims.iter().map(ProverMultiClaim::len))
             .sum()
+    }
+
+    /// Returns the number of out-of-domain claims recorded on the stacked polynomial.
+    pub(crate) const fn num_virtual_claims(&self) -> usize {
+        self.virtual_claims.len()
     }
 
     /// Walks concrete claims in placement order.
@@ -115,7 +126,7 @@ impl<F: Field, EF: ExtensionField<F>> StackedClaims<F, EF> {
     ///
     /// # Alpha ordering
     ///
-    /// Powers of `alpha` are handed out in insertion order:
+    /// Powers of `alpha` are handed out in placement order, not insertion order:
     ///
     /// - Outer: placements, in the order the witness laid them out.
     /// - Middle: claims recorded against that placement's source table.
@@ -134,7 +145,7 @@ impl<F: Field, EF: ExtensionField<F>> StackedClaims<F, EF> {
         let mut sum = EF::ZERO;
         let mut alphas = alpha.powers();
 
-        // Walk every concrete opening in the canonical insertion order.
+        // Walk every concrete opening in the canonical batching order.
         //     placements -> claims -> current openings -> next openings
         // Each opening consumes the next power of alpha, matching the verifier.
         for placement in &self.placements {

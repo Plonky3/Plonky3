@@ -794,6 +794,12 @@ fn every_protocol_is_listed_here() {
     // Enumerating them across a workspace at compile time has no clean form.
     //
     // So the list is a convention this test keeps consistent, not one it discovers.
+    //
+    // Three names cannot join: `p3-sumcheck-layout-{opening,ood,batching}` describe
+    // shapes that are `pub(crate)` to `p3-sumcheck`, and publishing them to reach
+    // this file would widen that crate's API for a test. They are compared against
+    // the crate's other four names in `p3_sumcheck`'s own suite instead, by
+    // `no_two_protocols_in_this_crate_share_a_name`.
     assert_eq!(default_cases().len(), NUM_PROTOCOLS);
 }
 

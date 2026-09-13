@@ -109,7 +109,7 @@ const VERSION: u8 = 1;
 /// Distinct from every plain sumcheck name.
 ///
 /// No reduction then shares a seed with a bare batch.
-const NAME: &[u8] = b"p3-sumcheck-ring-switch";
+pub(crate) const NAME: &[u8] = b"p3-sumcheck-ring-switch";
 
 /// Step label of the point the incoming evaluation claim is stated at.
 const EVALUATION_POINT: &str = "evaluation_point";

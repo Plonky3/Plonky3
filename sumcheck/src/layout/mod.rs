@@ -73,6 +73,7 @@
 mod opening;
 mod plan;
 mod prover;
+pub(crate) mod transcript;
 mod verifier;
 mod witness;
 

@@ -44,7 +44,7 @@ use super::error::GenericDegreeError;
 const VERSION: u8 = 1;
 
 /// Protocol name bound into the transcript seed.
-const NAME: &[u8] = b"p3-sumcheck-generic-degree";
+pub(crate) const NAME: &[u8] = b"p3-sumcheck-generic-degree";
 
 /// Step label of the claimed sum.
 const CLAIMED_SUM: &str = "claimed_sum";

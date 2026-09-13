@@ -71,7 +71,7 @@ use crate::strategy::Basis;
 const VERSION: u8 = 1;
 
 /// Protocol name bound into the transcript seed.
-const NAME: &[u8] = b"p3-sumcheck-quadratic";
+pub(crate) const NAME: &[u8] = b"p3-sumcheck-quadratic";
 
 /// Step label of the two round-polynomial values a round sends.
 const ROUND_POLY: &str = "round_poly";

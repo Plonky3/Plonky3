@@ -95,7 +95,7 @@ const VERSION: u8 = 1;
 /// Protocol name bound into the transcript seed.
 ///
 /// Distinct from the plain sumcheck names, so no masked batch shares a seed with a plain one.
-const NAME: &[u8] = b"p3-sumcheck-hvzk";
+pub(crate) const NAME: &[u8] = b"p3-sumcheck-hvzk";
 
 /// Step label of the challenge that weights the claims a layout recorded.
 const CLAIM_BATCHING: &str = "claim_batching";
