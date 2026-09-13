@@ -1424,12 +1424,8 @@ mod tests {
     fn lookup_folder_binds_boundary_io_cells_at_the_closing_check() {
         // Invariant: an AIR with lookups still binds its listed cells.
         //
-        // The attack, for a trace ending at X and a claimed output X + 1:
-        //
-        //     commits cell  : X - (X + 1)    instead of 0
-        //     verifier adds : eq_cell * (X + 1)
-        //     opened column : the true trace
-        //     fold required : the true trace, with no pin
+        // The pin rides the lookup-aware folder, which batches the same ordinary family.
+        // Without it the lookup passes on its own and the output claim goes unread.
         //
         // Fixture state: a reversed 64-row trace, column 0 ending at 63, output claim 64.
         let n = 64;

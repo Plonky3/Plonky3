@@ -8,6 +8,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
 
+use crate::boundary::{self, BoundaryPublic};
 use crate::{
     Air, AirBuilder, AirBuilderWithContext, BaseAir, ExtensionBuilder, Name, NamedAirBuilder,
     NamedExtensionBuilder, PermutationAirBuilder, RowWindow,
@@ -410,7 +411,7 @@ impl<F: Field, EF: ExtensionField<F>> NamedExtensionBuilder for DebugConstraintB
     }
 }
 
-/// Check that every cell an AIR lists as a public boundary input holds its public value.
+/// Find every cell an AIR lists as a public boundary input that does not hold its value.
 ///
 /// A listed cell carries no AIR constraint of its own:
 ///
@@ -419,49 +420,51 @@ impl<F: Field, EF: ExtensionField<F>> NamedExtensionBuilder for DebugConstraintB
 ///     this checker    : compares the two directly
 /// ```
 ///
+/// # Returns
+///
+/// One entry per mismatch, as `(index in declaration order, trace row)`.
+///
 /// # Panics
 ///
-/// Panics when a listed cell names a column outside the trace.
-/// Panics when a listed cell names a public value the caller did not supply.
-/// Panics when a listed cell does not hold its public value.
-fn check_public_boundary_io<F, A>(air: &A, main: &RowMajorMatrix<F>, public_values: &[F])
+/// Panics when the declaration names a column or a public value that does not exist.
+/// That is a bug in the AIR rather than a failure of the witness.
+fn boundary_io_mismatches<F, A>(
+    air: &A,
+    main: &RowMajorMatrix<F>,
+    public_values: &[F],
+) -> Vec<(usize, usize)>
 where
     F: Field,
     A: BaseAir<F>,
 {
+    let cells = air.public_boundary_io();
+
+    // Check the declaration against what is actually on hand, not against what the AIR declares.
+    boundary::validate(cells, main.width(), public_values.len())
+        .unwrap_or_else(|error| panic!("{error}"));
+
     // Both trace ends are addressed relative to the row count.
     let height = main.height();
 
-    for cell in air.public_boundary_io() {
-        // A declaration out of range would index past the trace.
-        assert!(
-            cell.column < main.width(),
-            "boundary-IO column {} is out of range for a trace of width {}",
-            cell.column,
-            main.width()
-        );
+    cells
+        .iter()
+        .enumerate()
+        .filter_map(|(index, cell)| {
+            let row = cell.row(height);
+            let value = main
+                .get(row, cell.column)
+                .expect("row and column checked in range");
+            (value != public_values[cell.public_value]).then_some((index, row))
+        })
+        .collect()
+}
 
-        // A declaration out of range would index past the caller's public values.
-        assert!(
-            cell.public_value < public_values.len(),
-            "boundary-IO public value {} is out of range for {} public values",
-            cell.public_value,
-            public_values.len()
-        );
-
-        // Read the cell the declaration names.
-        let row = cell.row(height);
-        let value = main
-            .get(row, cell.column)
-            .expect("row and column checked in range");
-
-        // The cell must already carry the public value it is paired with.
-        assert_eq!(
-            value, public_values[cell.public_value],
-            "boundary-IO cell at row {row}, column {} does not hold public value {}",
-            cell.column, cell.public_value
-        );
-    }
+/// Human-readable name of one listed public boundary cell.
+fn boundary_io_label(cell: &BoundaryPublic) -> String {
+    format!(
+        "boundary-IO cell in column {} does not hold public value {}",
+        cell.column, cell.public_value
+    )
 }
 
 /// Evaluate every AIR constraint against a concrete trace and panic on failure.
@@ -476,7 +479,7 @@ where
 /// 4. Stops at the first row that has at least one violation and panics
 ///    with a summary of every violated constraint on that row.
 ///
-/// Listed public boundary cells are checked before the loop.
+/// Cells the AIR lists as public inputs are compared before the loop.
 /// No AIR constraint asserts them.
 ///
 /// This is the simple variant that does not involve permutation or lookup
@@ -500,7 +503,13 @@ where
         );
     }
 
-    check_public_boundary_io(air, main, public_values);
+    // A listed cell has no AIR constraint, so the row loop below would never see it.
+    if let Some(&(index, row)) = boundary_io_mismatches(air, main, public_values).first() {
+        panic!(
+            "row {row}: {}",
+            boundary_io_label(&air.public_boundary_io()[index])
+        );
+    }
 
     for row_index in 0..height {
         let row_index_next = (row_index + 1) % height;
@@ -584,10 +593,11 @@ where
 /// This is the simple variant — no permutation or lookup arguments.
 /// Batch-stark provides its own wrapper for those.
 ///
-/// # Panics
+/// # Public boundary cells
 ///
-/// Panics when a listed public boundary cell does not hold its public value.
-/// A listed cell has no AIR constraint, and therefore no failure slot to record.
+/// A cell an AIR lists as a public input is compared after the row scan.
+/// Each mismatch is reported at an index past the AIR's own constraints,
+/// which is where the proving backend injects its pin.
 #[allow(unused)] // Suppresses warnings in release mode where this is dead code.
 pub fn check_all_constraints<F, A>(
     air: &A,
@@ -610,8 +620,6 @@ where
             height
         );
     }
-
-    check_public_boundary_io(air, main, public_values);
 
     // Accumulate violations across all rows.
     let mut all_failures = Vec::new();
@@ -684,6 +692,19 @@ where
         // Collect any violations from this row.
         all_failures.extend(builder.into_failures());
     }
+
+    // A listed cell has no AIR constraint, so it takes an index after the AIR's own.
+    // That is where the proving backend injects its pin.
+    let cells = air.public_boundary_io();
+    all_failures.extend(
+        boundary_io_mismatches(air, main, public_values)
+            .into_iter()
+            .map(|(index, row)| ConstraintFailure {
+                row,
+                constraint: total_constraints_per_row + index,
+                label: Some(boundary_io_label(&cells[index])),
+            }),
+    );
 
     ConstraintReport {
         failures: all_failures,
@@ -1238,6 +1259,32 @@ mod tests {
 
         // Expected: panic before the row loop starts.
         check_constraints(&BoundaryIoAir, &main, &[BabyBear::new(8)]);
+    }
+
+    #[test]
+    fn test_boundary_io_mismatch_is_collected_rather_than_panicking() {
+        // Invariant: the collecting variant reports a cell mismatch like any other failure.
+        //
+        // Mutation: claim a public value the last row does not carry.
+        //
+        //     rows          : [4, 5, 6, 7]
+        //     public values : [8]
+        //                     → one failure on row 3
+        let main = RowMajorMatrix::new([4u32, 5, 6, 7].map(BabyBear::new).to_vec(), 1);
+
+        let report = check_all_constraints(&BoundaryIoAir, &main, &[BabyBear::new(8)], None);
+
+        // The AIR asserts nothing, so the pin is the only constraint there is.
+        assert_eq!(report.total_constraints_per_row, 0);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].row, 3);
+        assert_eq!(report.failures[0].constraint, 0);
+        assert!(
+            report.failures[0]
+                .label
+                .as_deref()
+                .is_some_and(|label| label.contains("public value 0"))
+        );
     }
 
     #[test]

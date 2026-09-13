@@ -3,72 +3,8 @@ use alloc::vec::Vec;
 
 use p3_matrix::dense::RowMajorMatrix;
 
+use crate::boundary::BoundaryPublic;
 use crate::builder::AirBuilder;
-
-/// Which end of the trace a boundary cell lives on.
-///
-/// These are the two rows a first-row and a last-row selector single out.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum BoundaryEnd {
-    /// The first trace row, index `0`.
-    First,
-    /// The last trace row, index `height - 1`.
-    Last,
-}
-
-/// One main-trace cell whose value is a public input, named by its position.
-///
-/// A cell pairs a trace position with one of the AIR's public values:
-///
-/// ```text
-///     (column, end) holds public_values[public_value]
-/// ```
-///
-/// This is a declaration, not a constraint.
-/// Binding the cell to the value is the proving backend's job.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct BoundaryPublic {
-    /// Main-trace column holding the cell.
-    pub column: usize,
-    /// Trace end the cell sits on.
-    pub end: BoundaryEnd,
-    /// Index into the AIR's public values supplying the cell's value.
-    pub public_value: usize,
-}
-
-impl BoundaryPublic {
-    /// Bundle a column, a trace end, and a public-value index into a boundary cell.
-    pub const fn new(column: usize, end: BoundaryEnd, public_value: usize) -> Self {
-        Self {
-            column,
-            end,
-            public_value,
-        }
-    }
-
-    /// Row index this cell sits on in a trace of `height` rows.
-    ///
-    /// ```text
-    ///     first end -> 0
-    ///     last  end -> height - 1
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics when `height` is zero.
-    /// An empty trace has no boundary row to name.
-    #[must_use]
-    pub const fn row(&self, height: usize) -> usize {
-        // A zero-height trace has no row to address at all.
-        assert!(height > 0, "a boundary cell needs at least one trace row");
-
-        // The two ends are the low and high rows of the trace.
-        match self.end {
-            BoundaryEnd::First => 0,
-            BoundaryEnd::Last => height - 1,
-        }
-    }
-}
 
 /// The underlying structure of an AIR.
 pub trait BaseAir<F>: Sync {
@@ -278,6 +214,10 @@ pub trait BaseAir<F>: Sync {
     ///
     /// The default is the empty slice.
     /// An AIR that overrides nothing keeps binding its public inputs by constraint.
+    ///
+    /// A wrapper or enum AIR must forward this method along with [`Self::width`].
+    /// Forgetting to leaves every wrapped cell unbound, and nothing reports it,
+    /// because an empty list is a valid declaration.
     ///
     /// # Correctness
     ///

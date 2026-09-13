@@ -157,6 +157,13 @@ where
     A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
     PcsErr: core::fmt::Debug,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        air.public_boundary_io().is_empty(),
+        "uni-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     let sels = trace_domain.selectors_at_point(zeta);
 
     let main = VerticalPair::new(

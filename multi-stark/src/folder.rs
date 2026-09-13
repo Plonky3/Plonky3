@@ -287,17 +287,12 @@ where
 ///     last-end  cell:  is_last_row  * (column - public) = 0
 /// ```
 ///
-/// This is what makes the verifier's reconstruction of a blanked commitment binding:
-///
-/// ```text
-///     folded   = committed + eq_cell * cell_value    (the prover's side)
-///     restored = committed + eq_cell * public        (the verifier's side)
-/// ```
-///
-/// The two sides coincide exactly when the cell value equals the public value.
-/// Without the pin a prover could commit any cell and let the public value absorb into it.
+/// This is the whole binding: nothing else ties a listed cell to its public value.
 ///
 /// An honest trace already carries the public value, leaving the pin at zero.
+///
+/// A pin is the boundary constraint the AIR would otherwise write by hand.
+/// Injecting it here is what lets the AIR name the cell instead of asserting it.
 ///
 /// The pins batch into the accumulator with the same scalar as the AIR's own constraints.
 /// Prover fold and verifier recompute therefore agree on the batched value.

@@ -13,7 +13,7 @@
 
 use std::borrow::Cow;
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
@@ -230,6 +230,113 @@ fn periodic_trace(n: usize) -> RowMajorMatrix<F> {
         .map(|i| cols[0][i % PERIOD_A] + cols[1][i % PERIOD_B])
         .collect();
     RowMajorMatrix::new(values, MAIN_WIDTH)
+}
+
+/// The one cell the periodic AIR below binds by position.
+///
+/// ```text
+///     main column 0, last row -> public value 0
+/// ```
+const LAST_MAIN_CELL: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::Last, 0)];
+
+/// The same periodic sum AIR, with its last main cell listed as a public input.
+///
+/// A pin is gated by the last-row selector, which the periodic values sit beside.
+/// Both are evaluated in the same fold, so the two must compose.
+struct PeriodicIoAir;
+
+impl BaseAir<F> for PeriodicIoAir {
+    fn width(&self) -> usize {
+        MAIN_WIDTH
+    }
+    fn num_public_values(&self) -> usize {
+        1
+    }
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &LAST_MAIN_CELL
+    }
+    fn num_periodic_columns(&self) -> usize {
+        periodic_columns().len()
+    }
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+        Cow::Owned(periodic_columns())
+    }
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        // Current-row only: no successor claim is needed.
+        Vec::new()
+    }
+}
+
+impl<AB: AirBuilder<F = F>> Air<AB> for PeriodicIoAir {
+    fn eval(&self, builder: &mut AB) {
+        // Identical constraints, with only the declaration setting the two apart.
+        PeriodicAir.eval(builder);
+    }
+}
+
+/// Prove and verify the periodic AIR with a listed cell, under the given public value.
+fn prove_verify_periodic_io(
+    n: usize,
+    public: &[F],
+) -> Result<(), VerificationError<p3_whir::VerifierError>> {
+    let log_height = log2_strict_usize(n);
+    let trace = periodic_trace(n);
+    let config = config_for(log_height, MAIN_WIDTH);
+    let (pk, vk) = setup(&config, &[&PeriodicIoAir], &mut challenger()).unwrap();
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &PeriodicIoAir,
+            Table::new(trace.transpose()),
+            &pk,
+            public,
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &PeriodicIoAir,
+            &vk,
+            log_height,
+            public,
+        )]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+}
+
+#[test]
+fn prove_verify_periodic_with_boundary_io_roundtrips() {
+    // Invariant: a listed cell is bound on an AIR that also reads periodic columns.
+    let n = 256;
+    let last = periodic_trace(n).values[n - 1];
+
+    prove_verify_periodic_io(n, &[last])
+        .expect("honest periodic proof with a listed cell verifies");
+}
+
+#[test]
+fn verify_rejects_a_wrong_public_value_beside_periodic_columns() {
+    // Mutation: claim a last-row value the trace does not carry.
+    //
+    // Both sides share the wrong claim, so only the pin can reject.
+    let n = 256;
+    let last = periodic_trace(n).values[n - 1];
+
+    let err = prove_verify_periodic_io(n, &[last + F::ONE]).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerificationError::Zerocheck(ZerocheckError::FinalSumMismatch)
+        ),
+        "expected a zerocheck rejection, got {err:?}"
+    );
 }
 
 #[test]

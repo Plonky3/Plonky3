@@ -16,7 +16,6 @@
 
 extern crate alloc;
 
-pub mod boundary;
 pub mod config;
 pub mod folder;
 pub mod fractional_gkr;
@@ -34,9 +33,9 @@ pub mod transcript;
 pub mod verifier;
 pub mod zerocheck;
 
-pub use boundary::BoundaryIoError;
 pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};
 pub use keys::{ProvingKey, VerifyingKey, setup};
+pub use p3_air::BoundaryIoError;
 pub use proof::MultiStarkProof;
 pub use prover::{ProvingError, prove, prove_with_security};
 pub use security::{MultiStarkSecurityReport, SecurityError, security_report};

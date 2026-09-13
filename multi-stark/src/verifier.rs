@@ -3,12 +3,12 @@
 use alloc::vec::Vec;
 use core::fmt::Debug;
 
+use p3_air::{BoundaryIoError, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_sumcheck::PrescribedPointPcs;
 use thiserror::Error;
 
 use crate::VerifierInstances;
-use crate::boundary::{self, BoundaryIo, BoundaryIoError};
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::VerifierAir;
 use crate::lookup::{LookupError, verify_lookup};
@@ -196,10 +196,14 @@ where
     let public_values = instances.public_values();
 
     // Reject a malformed public boundary declaration before the transcript is touched.
-    // The reconstruction below indexes columns and public values by those numbers.
+    // The pins the folder injects read columns and public values by those numbers.
     for (instance, air) in airs.iter().enumerate() {
-        boundary::validate::<C::Val, _>(*air)
-            .map_err(|error| VerificationError::BoundaryIo { instance, error })?;
+        boundary::validate(
+            air.public_boundary_io(),
+            air.width(),
+            air.num_public_values(),
+        )
+        .map_err(|error| VerificationError::BoundaryIo { instance, error })?;
     }
 
     let mut transcript = MultiStarkVerifierTranscript::<C::Challenger, C::Val>::new(
@@ -271,13 +275,12 @@ where
 
     // 6. Open the committed main trace tables at their suffixes of the bound point.
     // The returned values are bound to the main commitment.
-    let main_points = instances.main_points(&reduction.point);
     let main_evals = match transcript.main_opening(|challenger| {
         config.pcs().verify_at(
             &proof.commitment,
             &proof.opening,
             &instances.opening_protocol(),
-            &main_points,
+            &instances.main_points(&reduction.point),
             challenger,
         )
     }) {
@@ -316,32 +319,10 @@ where
 
     let preprocessed_next_columns = instances.preprocessed_next_columns();
     let next_columns = instances.next_columns();
-
-    // Add each public value back to the openings of the blanked commitment.
-    //
-    //     no declared cells : openings borrowed through untouched
-    //     declared cells    : one Lagrange correction per cell and view
-    //
-    // The result equals what the prover folded.
-    // The closing recompute below therefore lands on the same value.
-    let reconstructed = main_evals
-        .iter()
-        .zip(airs.iter())
-        .enumerate()
-        .map(|(instance, (batch, air))| {
-            BoundaryIo::new(air.public_boundary_io()).reconstruct(
-                batch.current(),
-                batch.next(),
-                &next_columns[instance],
-                main_points[instance].as_slice(),
-                public_values[instance],
-            )
-        })
-        .collect::<Vec<_>>();
-    let main_openings = reconstructed
+    let main_openings = main_evals
         .iter()
         .zip(next_columns.iter())
-        .map(|((current, next), next_columns)| TableOpening::new(current, next_columns, next))
+        .map(|(batch, next_columns)| TableOpening::new(batch.current(), next_columns, batch.next()))
         .collect::<Vec<_>>();
 
     // Build one preprocessed opening view per instance, in instance order.

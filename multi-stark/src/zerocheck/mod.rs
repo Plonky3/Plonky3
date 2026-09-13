@@ -2721,13 +2721,28 @@ mod tests {
         assert!(matches!(err, ZerocheckError::FinalSumMismatch));
     }
 
-    /// Fibonacci recurrence with no boundary constraint at all.
+    /// The seed and output cells the Fibonacci AIR below can bind by position.
     ///
-    /// Nothing reads its three public values.
-    /// Nothing binds them either.
-    struct FibTransitionAir;
+    /// ```text
+    ///     column 0, first row -> public value 0
+    ///     column 1, first row -> public value 1
+    ///     column 1, last  row -> public value 2
+    /// ```
+    const FIB_IO_CELLS: [BoundaryPublic; 3] = [
+        BoundaryPublic::new(0, BoundaryEnd::First, 0),
+        BoundaryPublic::new(1, BoundaryEnd::First, 1),
+        BoundaryPublic::new(1, BoundaryEnd::Last, 2),
+    ];
 
-    impl<X> BaseAir<X> for FibTransitionAir {
+    /// Fibonacci recurrence with no boundary constraint, parameterized by its listed cells.
+    ///
+    /// Every instantiation asserts the same two transition constraints.
+    /// Only the listed cells set two instantiations apart.
+    struct FibRecurrenceAir {
+        cells: &'static [BoundaryPublic],
+    }
+
+    impl<X> BaseAir<X> for FibRecurrenceAir {
         fn width(&self) -> usize {
             NUM_COLS
         }
@@ -2735,9 +2750,13 @@ mod tests {
         fn num_public_values(&self) -> usize {
             3
         }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            self.cells
+        }
     }
 
-    impl<AB: AirBuilder> Air<AB> for FibTransitionAir {
+    impl<AB: AirBuilder> Air<AB> for FibRecurrenceAir {
         fn eval(&self, builder: &mut AB) {
             // Read the current row and the row after it.
             let main = builder.main();
@@ -2754,56 +2773,15 @@ mod tests {
         }
     }
 
-    /// The seed and output cells the Fibonacci AIR below binds by position.
-    ///
-    /// ```text
-    ///     column 0, first row -> public value 0
-    ///     column 1, first row -> public value 1
-    ///     column 1, last  row -> public value 2
-    /// ```
-    const FIB_IO_CELLS: [BoundaryPublic; 3] = [
-        BoundaryPublic::new(0, BoundaryEnd::First, 0),
-        BoundaryPublic::new(1, BoundaryEnd::First, 1),
-        BoundaryPublic::new(1, BoundaryEnd::Last, 2),
-    ];
-
-    /// The same Fibonacci recurrence, with its three public values bound by position.
-    ///
-    /// Both AIRs assert an identical constraint set.
-    /// Only the injected pins tell their proofs apart.
-    struct FibIoAir;
-
-    impl<X> BaseAir<X> for FibIoAir {
-        fn width(&self) -> usize {
-            NUM_COLS
-        }
-
-        fn num_public_values(&self) -> usize {
-            3
-        }
-
-        fn public_boundary_io(&self) -> &[BoundaryPublic] {
-            &FIB_IO_CELLS
-        }
-    }
-
-    impl<AB: AirBuilder> Air<AB> for FibIoAir {
-        fn eval(&self, builder: &mut AB) {
-            // Identical constraints, with only the declaration setting the two apart.
-            FibTransitionAir.eval(builder);
-        }
-    }
-
     #[test]
     fn boundary_io_pin_binds_the_public_value_to_the_folded_trace() {
         // Invariant: the pin ties the folded cell value to the public value.
         //
-        // The attack it stops, for a trace ending at X and a claimed output X + 1:
+        // Without it nothing in this AIR reads the claim at all:
         //
-        //     commits cell  : X - (X + 1)    instead of 0
-        //     verifier adds : eq_cell * (X + 1)
-        //     opened column : the true trace  → every transition holds
-        //     fold required : the true trace  → what the prover below produces
+        //     transitions : hold on the honest trace, whatever is claimed
+        //     public value: never mentioned by a constraint
+        //                   → any output claim passes
         //
         // Fixture state: an honest length-8 trace, output claim shifted by one.
         //
@@ -2819,7 +2797,7 @@ mod tests {
 
         // Control: the AIR that declares nothing never reads public value 2.
         // Its fold sums to zero, and the shifted claim slips through unnoticed.
-        let loose_air = FibTransitionAir;
+        let loose_air = FibRecurrenceAir { cells: &[] };
         let loose_airs = [&loose_air];
         let loose = AirZerocheck::new(&loose_airs, 0);
         let (loose_proof, _) =
@@ -2838,7 +2816,9 @@ mod tests {
         //     is_last_row * (right - public) = X - (X + 1) = -1
         //
         // The fold no longer sums to zero, and the claimed zero sum fails to close.
-        let pinned_air = FibIoAir;
+        let pinned_air = FibRecurrenceAir {
+            cells: &FIB_IO_CELLS,
+        };
         let pinned_airs = [&pinned_air];
         let pinned = AirZerocheck::new(&pinned_airs, 0);
         let (pinned_proof, _) =
@@ -2933,6 +2913,77 @@ mod tests {
             let row = main.current_slice();
             builder.assert_eq(row[0], row[1]);
         }
+    }
+
+    /// Both ends of one column, listed on the shortest trace a zerocheck accepts.
+    ///
+    /// ```text
+    ///     column 0, first row -> public value 0
+    ///     column 0, last  row -> public value 1
+    /// ```
+    const BOTH_ENDS_CELLS: [BoundaryPublic; 2] = [
+        BoundaryPublic::new(0, BoundaryEnd::First, 0),
+        BoundaryPublic::new(0, BoundaryEnd::Last, 1),
+    ];
+
+    /// Single-column AIR asserting nothing, with both of its ends listed.
+    struct BothEndsIoAir;
+
+    impl<X> BaseAir<X> for BothEndsIoAir {
+        fn width(&self) -> usize {
+            1
+        }
+
+        fn num_public_values(&self) -> usize {
+            2
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            // Current-row only: a pin never reads the successor.
+            Vec::new()
+        }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            &BOTH_ENDS_CELLS
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for BothEndsIoAir {
+        fn eval(&self, _builder: &mut AB) {
+            // Empty: both public values are bound by position, not by a constraint.
+        }
+    }
+
+    #[test]
+    fn boundary_io_pins_both_ends_of_a_two_row_trace() {
+        // Invariant: the two ends stay distinct when they are adjacent rows.
+        //
+        // Fixture state: the shortest trace a zerocheck accepts.
+        //
+        //     rows            : [5, 9]
+        //     is_first_row    : 1 on row 0
+        //     is_last_row     : 1 on row 1
+        //                       → one pin each, on neighbouring rows
+        let trace = RowMajorMatrix::new(alloc::vec![F::from_u64(5), F::from_u64(9)], 1);
+        let airs = [&BothEndsIoAir];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+        let traces = [&trace];
+
+        let honest = [F::from_u64(5), F::from_u64(9)];
+        let public_values = [&honest[..]];
+        let (proof, _) = prove_traces(&zerocheck, &traces, &public_values, &mut fresh_challenger());
+        zerocheck
+            .verify::<F, EF, _>(&proof, &[1], &public_values, &mut fresh_challenger())
+            .expect("both ends of a two-row trace must verify");
+
+        // Mutation: swap the two claims, which a single merged end would not notice.
+        let swapped = [F::from_u64(9), F::from_u64(5)];
+        let public_values = [&swapped[..]];
+        let (proof, _) = prove_traces(&zerocheck, &traces, &public_values, &mut fresh_challenger());
+        let err = zerocheck
+            .verify::<F, EF, _>(&proof, &[1], &public_values, &mut fresh_challenger())
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch), "{err:?}");
     }
 
     #[test]

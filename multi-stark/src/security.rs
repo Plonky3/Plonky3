@@ -14,6 +14,7 @@
 
 use alloc::vec::Vec;
 
+use p3_air::boundary;
 use p3_air::symbolic::AirLayout;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_field::Field;
@@ -207,6 +208,18 @@ where
                 .checked_mul(width)
                 .and_then(|cells| total.checked_add(cells))
                 .ok_or_else(|| invalid("stacked trace dimensions overflow"))?;
+        }
+
+        // A malformed declaration is rejected by prove and by verify.
+        // Reporting a security level for a statement neither accepts would mislead.
+        if boundary::validate(
+            air.public_boundary_io(),
+            air.width(),
+            air.num_public_values(),
+        )
+        .is_err()
+        {
+            return Err(invalid("public boundary declaration is malformed"));
         }
 
         let builder = InteractionSymbolicBuilder::<C::Val, C::Challenge>::from_air(

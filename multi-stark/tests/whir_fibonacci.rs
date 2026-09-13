@@ -203,13 +203,8 @@ impl<AB: AirBuilder> Air<AB> for FibAir {
 
 /// Fibonacci AIR that binds its public inputs by position instead of by constraint.
 ///
-/// Only the transition recurrence is asserted here:
-///
-/// ```text
-///     prover  : commits the seed and output cells as zero
-///     verifier: adds the public values back to the opened cells
-///     folder  : pins each cell to its public value, keeping the two in step
-/// ```
+/// Only the transition recurrence is asserted here.
+/// The folder pins each listed cell to its public value in place of a boundary constraint.
 struct FibIoAir;
 
 /// The cells the AIR above binds by position.
@@ -1180,8 +1175,8 @@ fn generate_whir_fixture() -> Result<(), Box<dyn std::error::Error>> {
 fn prove_verify_fibonacci_boundary_io_roundtrips() {
     // Invariant: a satisfying trace binding its public inputs by position round-trips.
     //
-    //     prover  : commits the seed and output cells as zero
-    //     verifier: adds the public values back to the opened cells
+    // The AIR asserts no boundary constraint of its own.
+    // Every seed and output cell is bound by an injected pin instead.
     let n = 256;
     let trace = fib_trace(n);
     let pis = fib_public_values(n);
@@ -1217,68 +1212,11 @@ fn prove_verify_fibonacci_boundary_io_roundtrips() {
 }
 
 #[test]
-fn verify_rejects_tampered_public_value_boundary_io() {
-    // Invariant: prover and verifier must agree on every public value.
-    //
-    // Fixture state: an honest proof whose output public value is the final trace row.
-    let n = 256;
-    let trace = fib_trace(n);
-    let pis = fib_public_values(n);
-    let log_height = log2_strict_usize(n);
-    let config = config_for(log_height, NUM_COLS);
-    let airs = [&FibIoAir];
-
-    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
-
-    let proof = prove(
-        &config,
-        ProverInstances::new(vec![ProverInstance::new(
-            &FibIoAir,
-            Table::new(trace.transpose()),
-            &pk,
-            &pis,
-        )]),
-        0,
-        &mut challenger(),
-    )
-    .unwrap();
-
-    // Mutation: shift the claimed output by one field element at verify time only.
-    //
-    //     public values absorbed  -> transcript diverges from the prover's
-    //     Lagrange correction     -> lands on the wrong column
-    //                                → the opened values no longer bind
-    let mut wrong = pis;
-    wrong[2] += F::ONE;
-    let err = verify(
-        &config,
-        VerifierInstances::new(vec![VerifierInstance::new(
-            &FibIoAir, &vk, log_height, &wrong,
-        )]),
-        &proof,
-        0,
-        &mut challenger(),
-    )
-    .unwrap_err();
-    match err {
-        VerificationError::Opening(WhirVerifierError::MerkleProofInvalid { position, reason }) => {
-            assert_eq!(position, 0);
-            assert_eq!(reason, "Base field Merkle multiproof verification failed");
-        }
-        other => panic!("expected a Merkle opening rejection, got {other:?}"),
-    }
-}
-
-#[test]
 fn verify_rejects_wrong_claimed_output_boundary_io() {
     // Invariant: an honest trace is rejected when the claimed output is not the one it ends on.
     //
-    // Two mechanisms reject it, and this end-to-end test separates neither:
-    //
-    //     pin            : the folded trace violates it
-    //     reconstruction : lands on a cell the prover never folded
-    //
-    // The zerocheck test module isolates the pin on its own.
+    // Both sides share the wrong claim, so the transcript stays in step.
+    // Only the pin can reject, which is what this checks end to end.
     //
     // Fixture state: a valid length-256 trace, output claim shifted by one.
     let n = 256;
@@ -1327,8 +1265,8 @@ fn verify_rejects_wrong_claimed_output_boundary_io() {
 
 /// A cell naming a column one past the last real column.
 ///
-/// Setup rejects a declaration like this.
-/// Only a verifier handed a different AIR than setup saw can reach it.
+/// Prover and verifier each validate the AIR they are handed.
+/// The keys carry no AIR, so nothing else ties the two declarations together.
 const OUT_OF_RANGE_CELLS: [BoundaryPublic; 1] =
     [BoundaryPublic::new(NUM_COLS, BoundaryEnd::Last, 2)];
 
@@ -1355,6 +1293,29 @@ impl<AB: AirBuilder> Air<AB> for FibIoAirBadColumn {
 }
 
 #[test]
+fn security_rejects_an_invalid_boundary_io_declaration() {
+    // Invariant: the report is fail-closed on a statement `verify` would reject.
+    //
+    // Mutation: name a column one past the last real one.
+    //
+    //     a level reported here would describe a statement nothing accepts
+    let config = config_for(4, NUM_COLS);
+    let public = fib_public_values(16);
+    let (_, vk) = setup(&config, &[&FibIoAir], &mut challenger()).unwrap();
+    let instances = VerifierInstances::new(vec![VerifierInstance::new(
+        &FibIoAirBadColumn,
+        &vk,
+        4,
+        &public,
+    )]);
+
+    assert!(matches!(
+        p3_multi_stark::security_report(&config, &instances),
+        Err(p3_multi_stark::SecurityError::InvalidShape(_))
+    ));
+}
+
+#[test]
 fn verify_rejects_an_invalid_boundary_io_declaration() {
     // Invariant: a malformed declaration is reported, not indexed past an end.
     //
@@ -1362,7 +1323,7 @@ fn verify_rejects_an_invalid_boundary_io_declaration() {
     //
     //     columns present : 0, 1
     //     column named    : 2
-    //                       → rejected before any opening work
+    //                       → rejected before the transcript is touched
     let n = 256;
     let trace = fib_trace(n);
     let pis = fib_public_values(n);
@@ -1386,7 +1347,7 @@ fn verify_rejects_an_invalid_boundary_io_declaration() {
     .unwrap();
 
     // The keys carry no AIR of their own.
-    // The verifier can therefore be handed a different one than setup saw.
+    // The verifier can therefore be handed a different one than the prover used.
     let err = verify(
         &config,
         VerifierInstances::new(vec![VerifierInstance::new(
@@ -1415,28 +1376,148 @@ fn verify_rejects_an_invalid_boundary_io_declaration() {
     );
 }
 
+/// Enum AIR carrying one instance of each way to bind a public input.
+///
+/// A wrapper forwards [`BaseAir`] by hand, one method at a time.
+/// Forwarding `width` but not `public_boundary_io` would leave every listed cell unbound,
+/// and an empty list is valid, so nothing would report it.
+enum MixedFibAir {
+    /// Public inputs asserted by the AIR's own boundary constraints.
+    Constrained(FibAir),
+    /// Public inputs listed for the backend to pin.
+    BoundaryIo(FibIoAir),
+}
+
+impl<X> BaseAir<X> for MixedFibAir {
+    fn width(&self) -> usize {
+        match self {
+            Self::Constrained(air) => <FibAir as BaseAir<X>>::width(air),
+            Self::BoundaryIo(air) => <FibIoAir as BaseAir<X>>::width(air),
+        }
+    }
+
+    fn num_public_values(&self) -> usize {
+        match self {
+            Self::Constrained(air) => <FibAir as BaseAir<X>>::num_public_values(air),
+            Self::BoundaryIo(air) => <FibIoAir as BaseAir<X>>::num_public_values(air),
+        }
+    }
+
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        match self {
+            Self::Constrained(air) => <FibAir as BaseAir<X>>::public_boundary_io(air),
+            Self::BoundaryIo(air) => <FibIoAir as BaseAir<X>>::public_boundary_io(air),
+        }
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for MixedFibAir {
+    fn eval(&self, builder: &mut AB) {
+        match self {
+            Self::Constrained(air) => air.eval(builder),
+            Self::BoundaryIo(air) => air.eval(builder),
+        }
+    }
+}
+
+/// Prove and verify one batch holding both bindings, under the given public values.
+fn prove_verify_mixed_binding_batch(
+    n: usize,
+    pis_constrained: &[F],
+    pis_boundary_io: &[F],
+) -> Result<(), VerificationError<p3_whir::VerifierError>> {
+    let log_height = log2_strict_usize(n);
+    let constrained = MixedFibAir::Constrained(FibAir);
+    let boundary_io = MixedFibAir::BoundaryIo(FibIoAir);
+    let config = batch_config_for(log_height, NUM_COLS, 2);
+    let airs = [&constrained, &boundary_io];
+
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
+
+    let trace = fib_trace(n);
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(
+                &constrained,
+                Table::new(trace.transpose()),
+                &pk,
+                pis_constrained,
+            ),
+            ProverInstance::new(
+                &boundary_io,
+                Table::new(trace.transpose()),
+                &pk,
+                pis_boundary_io,
+            ),
+        ]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&constrained, &vk, log_height, pis_constrained),
+            VerifierInstance::new(&boundary_io, &vk, log_height, pis_boundary_io),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+}
+
 #[test]
-#[should_panic = "boundary-IO column"]
-fn setup_rejects_an_invalid_boundary_io_declaration() {
-    // Invariant: a bad declaration is caught before any proof exists.
+fn prove_verify_mixed_binding_batch_roundtrips() {
+    // Invariant: one batch may hold an AIR that lists cells next to one that does not.
     //
-    //     column named : 2, one past the last real column
-    //                    → panic during key generation
-    let config = config_for(8, NUM_COLS);
-    let airs = [&FibIoAirBadColumn];
-    let _ = setup(&config, &airs, &mut challenger());
+    //     instance 0: boundary constraints, no listed cell
+    //     instance 1: no boundary constraint, three listed cells
+    //
+    // Both run through the same commitment, zerocheck and opening.
+    let n = 256;
+    let pis = fib_public_values(n);
+
+    prove_verify_mixed_binding_batch(n, &pis, &pis)
+        .expect("honest mixed-binding batch must verify");
+}
+
+#[test]
+fn verify_rejects_wrong_claimed_output_in_a_mixed_binding_batch() {
+    // Invariant: the wrapper forwards the declaration, so the listed instance stays bound.
+    //
+    // Mutation: shift the listed instance's output claim only.
+    //
+    //     instance 0: untouched, its boundary constraints still hold
+    //     instance 1: pin on the last row fails by one
+    //
+    // A wrapper that dropped `public_boundary_io` would accept this batch.
+    let n = 256;
+    let pis = fib_public_values(n);
+    let mut wrong = pis;
+    wrong[2] += F::ONE;
+
+    let err = prove_verify_mixed_binding_batch(n, &pis, &wrong).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerificationError::Zerocheck(ZerocheckError::FinalSumMismatch)
+        ),
+        "expected a zerocheck rejection, got {err:?}"
+    );
 }
 
 #[test]
 fn prove_verify_mixed_height_fibonacci_boundary_io_roundtrips() {
-    // Invariant: each instance corrects its openings at its own suffix of the common point.
+    // Invariant: instances of different heights each pin their own cells.
     //
     // Fixture state:
     //
-    //     trace a: height 256 -> 8 variables, corrected at the full point
-    //     trace b: height 128 -> 7 variables, corrected at the point minus its leading coordinate
+    //     trace a: height 256 -> 8 variables
+    //     trace b: height 128 -> 7 variables
     //
-    // A shared correction point would misplace every cell of the shorter trace.
+    // Each instance's selectors are drawn at its own suffix of the common point.
     let air = FibIoAir;
     let n_a = 256;
     let n_b = 128;
