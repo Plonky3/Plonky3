@@ -627,10 +627,8 @@ fn zk_whir_claim_cases() -> Vec<Case> {
             case(
                 "p3-whir-hvzk-claims",
                 &format!("claims={num_claims},vars={num_variables}"),
-                p3_whir::transcript::zk::claims_domain_separator::<F, EF>(
-                    num_claims,
-                    num_variables,
-                ),
+                p3_whir::transcript::zk::ZkClaimsShape::new(num_claims, num_variables)
+                    .domain_separator::<F, EF>(),
             )
         })
         .collect()

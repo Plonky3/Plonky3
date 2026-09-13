@@ -181,7 +181,11 @@ type Alphabet<F> = FieldUnit<F>;
 
 /// Describe the phase that binds the stacked commitment.
 ///
-/// One step, so the description is the same on both sides at every layout.
+/// A commitment is one Merkle root, so this phase has one step and no knobs.
+///
+/// Every other phase here carries its configuration in a shape type.
+///
+/// This one has no configuration to carry, so it has no shape type either.
 ///
 /// The layout geometry is deliberately absent.
 ///

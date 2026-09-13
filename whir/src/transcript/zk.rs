@@ -800,7 +800,11 @@ impl ZkWhirShape {
 
 /// Describe the phase that binds a hiding commitment.
 ///
-/// One step, so the description is the same on both sides at every configuration.
+/// A commitment is one Merkle root, so this phase has one step and no knobs.
+///
+/// Every other phase here carries its configuration in a shape type.
+///
+/// This one has no configuration to carry, so it has no shape type either.
 ///
 /// # Panics
 ///
@@ -869,54 +873,90 @@ where
     );
 }
 
-/// Describe the phase that binds a hiding run's opening claims.
+/// Numbers that fix the transcript of one hiding run's opening claims.
 ///
-/// Two steps per claim: the point it is stated at, then the value claimed there.
+/// Both sides build this from their own inputs, never from a proof.
 ///
-/// # Arguments
+/// The prover's inputs are the points it was asked to open at.
 ///
-/// - `num_claims`: how many claims the statement holds.
-/// - `num_variables`: coordinate count every point carries.
-///
-/// # Panics
-///
-/// Never in practice.
-///
-/// A flat sequence of leaf steps always passes structural validation.
-#[must_use]
-pub fn claims_domain_separator<F, EF>(
-    num_claims: usize,
-    num_variables: usize,
-) -> DomainSeparator<Alphabet<F>>
-where
-    F: TranscriptField,
-    EF: ExtensionField<F>,
-{
-    let steps = (0..num_claims)
-        .flat_map(|_| {
-            [
-                Interaction::algebra::<F, EF>(
-                    Hierarchy::Atomic,
-                    Kind::Message,
-                    CLAIM_POINT,
-                    Length::Fixed(num_variables),
-                ),
-                Interaction::algebra::<F, EF>(
-                    Hierarchy::Atomic,
-                    Kind::Message,
-                    CLAIM_EVAL,
-                    Length::Scalar,
-                ),
-            ]
-        })
-        .collect();
+/// The verifier's are the points it was asked to check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZkClaimsShape {
+    /// Number of claims the statement holds.
+    ///
+    /// Two steps are described per claim, so this is half the step count.
+    pub num_claims: usize,
+    /// Coordinate count every opening point carries.
+    ///
+    /// This is the width of every point step.
+    pub num_variables: usize,
+}
 
-    DomainSeparator::new(
-        STATEMENT_VERSION,
-        CLAIMS_NAME,
-        InteractionPattern::new(steps)
-            .expect("a flat sequence of leaf steps is always well formed"),
-    )
+impl ZkClaimsShape {
+    /// Collect the numbers that fix one statement.
+    ///
+    /// # Arguments
+    ///
+    /// - `num_claims`: how many claims the statement holds.
+    /// - `num_variables`: coordinate count every point carries.
+    #[must_use]
+    pub const fn new(num_claims: usize, num_variables: usize) -> Self {
+        Self {
+            num_claims,
+            num_variables,
+        }
+    }
+
+    /// Describe the transcript this shape fixes.
+    ///
+    /// Two steps per claim: the point it is stated at, then the value claimed there.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice.
+    ///
+    /// A flat sequence of leaf steps always passes structural validation.
+    #[must_use]
+    pub fn pattern<F, EF>(&self) -> InteractionPattern
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+    {
+        let steps = (0..self.num_claims)
+            .flat_map(|_| {
+                [
+                    Interaction::algebra::<F, EF>(
+                        Hierarchy::Atomic,
+                        Kind::Message,
+                        CLAIM_POINT,
+                        Length::Fixed(self.num_variables),
+                    ),
+                    Interaction::algebra::<F, EF>(
+                        Hierarchy::Atomic,
+                        Kind::Message,
+                        CLAIM_EVAL,
+                        Length::Scalar,
+                    ),
+                ]
+            })
+            .collect();
+
+        InteractionPattern::new(steps).expect("a flat sequence of leaf steps is always well formed")
+    }
+
+    /// Bind the protocol identity and this shape into a seed.
+    ///
+    /// Both numbers move the step sequence, so the fingerprint carries them.
+    ///
+    /// Neither needs an instance chunk of its own.
+    #[must_use]
+    pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+    {
+        DomainSeparator::new(STATEMENT_VERSION, CLAIMS_NAME, self.pattern::<F, EF>())
+    }
 }
 
 /// Bind the opening claims a hiding run is asked to prove.
@@ -974,7 +1014,7 @@ pub fn observe_claims<F, EF, C>(
         "every opening point must carry {num_variables} coordinates",
     );
 
-    let separator = claims_domain_separator::<F, EF>(claims.len(), num_variables);
+    let separator = ZkClaimsShape::new(claims.len(), num_variables).domain_separator::<F, EF>();
     let mut state = ProverState::new(challenger, &separator);
 
     // Each claim is bound point-first, so a value can never precede its point.
@@ -2845,15 +2885,15 @@ mod tests {
         let seeds = [
             (
                 "baseline",
-                seed_digest(&claims_domain_separator::<F, EF>(1, 4)),
+                seed_digest(&ZkClaimsShape::new(1, 4).domain_separator::<F, EF>()),
             ),
             (
                 "claim count",
-                seed_digest(&claims_domain_separator::<F, EF>(2, 4)),
+                seed_digest(&ZkClaimsShape::new(2, 4).domain_separator::<F, EF>()),
             ),
             (
                 "point width",
-                seed_digest(&claims_domain_separator::<F, EF>(1, 5)),
+                seed_digest(&ZkClaimsShape::new(1, 5).domain_separator::<F, EF>()),
             ),
         ];
 
@@ -2885,7 +2925,7 @@ mod tests {
             ),
             (
                 "claims",
-                seed_digest(&claims_domain_separator::<F, EF>(1, NUM_VARIABLES)),
+                seed_digest(&ZkClaimsShape::new(1, NUM_VARIABLES).domain_separator::<F, EF>()),
             ),
             (
                 "run",
