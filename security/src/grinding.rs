@@ -275,13 +275,20 @@ pub struct GrindingStep {
 ///
 /// | protocol                     | steps it grinds                                              |
 /// | ---------------------------- | ------------------------------------------------------------ |
-/// | `p3-whir`                    | `sumcheck_pow`, `query_pow`, `final_query_pow`               |
-/// | `p3-whir-hvzk`               | `zk_sumcheck_pow`, `base_pow`                                |
+/// | `p3-whir`                    | `query_pow`, `final_query_pow`                               |
+/// | `p3-whir-hvzk`               | `query_pow`, `final_query_pow`                               |
+/// | `p3-whir-hvzk-base`          | `base_pow`                                                   |
 /// | `p3-stir`                    | `folding_pow`, `query_pow`, `final_folding_pow`, `final_pow` |
 /// | `p3-sumcheck-quadratic`      | `round_pow`                                                  |
+/// | `p3-sumcheck-hvzk`           | `round_pow`                                                  |
 /// | `p3-sumcheck-generic-degree` | `round_pow`                                                  |
 ///
-/// [`GrindingBudget::check`] does not compare these additional sites.
+/// The comparison below skips these, and each protocol prices them in its own
+/// security report instead.
+///
+/// A site that is in neither place would be a difficulty nobody compares, so the
+/// workspace transcript suite asserts that every grinding step it sweeps is
+/// classified one way or the other.
 pub const GRINDING_VOCABULARY: [GrindingStep; 10] = [
     GrindingStep {
         protocol: "p3-circle-pcs",

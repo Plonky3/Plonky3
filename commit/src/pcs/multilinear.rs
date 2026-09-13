@@ -58,22 +58,24 @@ where
     ///
     /// # Transcript
     ///
-    /// The challenger is the sponge the whole proof shares, and this phase owes it one absorb.
+    /// The challenger is the sponge the whole proof shares.
+    ///
+    /// This phase owes it exactly one binding.
     ///
     /// ```text
-    ///     required   ->  the commitment being returned, absorbed once
+    ///     required   ->  the commitment being returned, bound once
     ///     forbidden  ->  any other absorb, any sample, any grind
     /// ```
     ///
-    /// A verifier never reaches this method, so it absorbs that same commitment in its place.
-    /// The obligation above is what makes the two interchangeable.
+    /// That binding is the one this scheme's commitment-binding method performs.
+    ///
+    /// A verifier never reaches this method, so it calls that same one in its place.
+    ///
+    /// Sharing the call is what makes the two sides interchangeable.
     ///
     /// An absorbed table height, or a batching challenge drawn here, desyncs the two sides.
-    /// Neither side has a step out of place, so the caller sees an unexplained rejection.
     ///
-    /// Absorbing at all needs a challenger able to observe this commitment type.
-    /// This trait bounds no challenger, so each implementation carries that bound itself.
-    /// The prescribed-point opening sub-trait requires it of every caller it serves.
+    /// Neither side has a step out of place, so the caller sees an unexplained rejection.
     ///
     /// # Returns
     ///
@@ -81,12 +83,42 @@ where
     /// - Opaque prover data consumed by `open`.
     ///
     /// Configuration and budget rejection must not mutate the challenger or consume
-    /// private randomness. A successful call still binds the commitment exactly once.
+    /// private randomness.
+    ///
+    /// A successful call still binds the commitment exactly once.
     fn commit(
         &self,
         witness: Self::Witness,
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError>;
+
+    /// Bind a commitment into the transcript.
+    ///
+    /// # Overview
+    ///
+    /// The prover binds its commitment while producing it.
+    ///
+    /// A verifier never produces one, so it binds the commitment it was handed
+    /// by calling this method at the same point in the sponge stream.
+    ///
+    /// ```text
+    ///     prover  : commit(..)  ->  binds the root it produced
+    ///     verifier: this method ->  binds the root it was handed
+    /// ```
+    ///
+    /// # Soundness
+    ///
+    /// Both sides reach the binding through this one method, so neither can
+    /// drift from the other by absorbing a different value, or in a different
+    /// encoding, or under a different phase.
+    ///
+    /// A scheme whose binding is a typed phase keeps that phase here.
+    ///
+    /// # Arguments
+    ///
+    /// - `commitment`: the commitment to bind.
+    /// - `challenger`: sponge of the surrounding protocol, borrowed for the binding.
+    fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger);
 
     /// Produce an opening proof for the supplied opening protocol.
     ///

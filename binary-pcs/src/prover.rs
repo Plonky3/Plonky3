@@ -91,14 +91,15 @@ where
         "witness arity must match the config it is committed against"
     );
 
-    let (layout, commitment, merkle_data) = PcsLayout::commit(
-        encoder,
-        mmcs,
-        challenger,
-        witness,
-        FOLDING,
-        config.log_inv_rate(),
-    );
+    let (layout, commitment, merkle_data) =
+        PcsLayout::commit(encoder, mmcs, witness, FOLDING, config.log_inv_rate());
+
+    // Binary tower fields are not transcript fields, so this crate binds the root
+    // by hand rather than through the typed commitment phase.
+    //
+    // The verifier binds the same root, in the same position, at the top of its
+    // own entry point.
+    challenger.observe(commitment.clone());
 
     (
         commitment,
@@ -368,7 +369,6 @@ mod tests {
         let (mut layout, _root, data) = SuffixProver::<F, F>::commit(
             &AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default(),
             &mmcs(),
-            &mut ch,
             witness,
             0,
             LOG_INV_RATE,
@@ -409,7 +409,6 @@ mod tests {
         let (mut layout, _root, data) = PrefixProver::<F, F>::commit(
             &AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default(),
             &mmcs(),
-            &mut ch,
             witness,
             0,
             LOG_INV_RATE,

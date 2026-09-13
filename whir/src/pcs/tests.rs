@@ -4,14 +4,14 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::{CanObserve, DuplexChallenger};
+use p3_challenger::DuplexChallenger;
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
-use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, Witness};
+use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, Witness, observe_commitment};
 use p3_sumcheck::test_util::{random_table_specs, table_specs_to_tables};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -413,9 +413,9 @@ fn run_whir_pcs_at_prescribed_points<L: Layout<F, EF>>(
     }
 
     let mut challenger = challenger();
-    // The prescribed-point verifier does not absorb the commitment.
-    // The caller absorbs it once, matching the prover's commit phase.
-    challenger.observe(commitment.clone());
+    // The prescribed-point verifier does not bind the commitment.
+    // The caller binds it once, through the phase the prover's commit ran.
+    observe_commitment::<F, _, _>(&mut challenger, commitment.clone());
     pcs.verify_at(
         &commitment,
         &proof,

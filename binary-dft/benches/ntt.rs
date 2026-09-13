@@ -162,8 +162,6 @@ fn bench_poly(c: &mut Criterion) {
 
 /// The production layout, encoder and Merkle commitment together.
 fn bench_commit(c: &mut Criterion) {
-    use p3_binary_field::BinaryChallenger;
-    use p3_challenger::HashChallenger;
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_multilinear_util::poly::Poly;
@@ -174,7 +172,6 @@ fn bench_commit(c: &mut Criterion) {
     type Hash = SerializingHasher<Keccak256Hash>;
     type Compress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
     type Mmcs = MerkleTreeMmcs<BinaryField128, u8, Hash, Compress, 2, 32>;
-    type Challenger = BinaryChallenger<BinaryField128, HashChallenger<u8, Keccak256Hash, 32>>;
     let mmcs = Mmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
     // Retain the previous padded full transform as an allocation-matched comparison.
     struct FullPaddedEncoder;
@@ -201,29 +198,11 @@ fn bench_commit(c: &mut Criterion) {
                     let parameter = format!("{order:?}/h{log_height}/w{}/r{added}", 1 << folding);
                     group.bench_function(format!("full/{parameter}"), |b| {
                         b.iter(|| {
-                            commit_base(
-                                order,
-                                &FullPaddedEncoder,
-                                &mmcs,
-                                &mut Challenger::from_hasher(Vec::new(), Keccak256Hash),
-                                &poly,
-                                folding,
-                                added,
-                            )
+                            commit_base(order, &FullPaddedEncoder, &mmcs, &poly, folding, added)
                         });
                     });
                     group.bench_function(parameter, |b| {
-                        b.iter(|| {
-                            commit_base(
-                                order,
-                                &encoder,
-                                &mmcs,
-                                &mut Challenger::from_hasher(Vec::new(), Keccak256Hash),
-                                &poly,
-                                folding,
-                                added,
-                            )
-                        });
+                        b.iter(|| commit_base(order, &encoder, &mmcs, &poly, folding, added));
                     });
                 }
             }

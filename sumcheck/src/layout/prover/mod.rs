@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 
 pub use claims::StackedClaims;
 use p3_challenger::fs::TranscriptField;
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, Mmcs};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::DenseMatrix;
@@ -48,23 +48,21 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     ///
     /// - `encoder`                — linear code used to encode the codeword.
     /// - `mmcs`                   — Merkle commitment scheme over the base field.
-    /// - `challenger`             — Fiat–Shamir transcript; absorbs the Merkle root.
     /// - `witness`                — stacked committed polynomial plus its tables.
     /// - `folding`                — folding factor consumed by the first WHIR round.
     /// - `starting_log_inv_rate`  — initial log-inverse rate of the RS code.
     ///
     /// # Transcript
     ///
-    /// The default body absorbs exactly one value, the Merkle root it returns.
+    /// Nothing is absorbed here, by this body or by any override.
     ///
-    /// An override owes the sponge that same single absorb, and no other absorb, sample or grind.
+    /// The root is returned instead, and the caller binds it.
     ///
-    /// A verifier never reaches this method, so it absorbs that one root in its place.
-    /// An absorbed table height would desync the two sides with no step out of place on either.
-    fn commit<E, MT, Challenger>(
+    /// A verifier never reaches this method, so both sides bind the root in the
+    /// same place: the caller.
+    fn commit<E, MT>(
         encoder: &E,
         mmcs: &MT,
-        challenger: &mut Challenger,
         witness: Witness<F>,
         folding: usize,
         starting_log_inv_rate: usize,
@@ -72,14 +70,12 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     where
         E: Encoder<F>,
         MT: Mmcs<F>,
-        Challenger: CanObserve<MT::Commitment>,
     {
         // Encode and Merkle-commit the stacked polynomial in the mode's variable order.
         let (root, prover_data) = commit_base(
             Self::variable_order(),
             encoder,
             mmcs,
-            challenger,
             &witness.poly,
             folding,
             starting_log_inv_rate,

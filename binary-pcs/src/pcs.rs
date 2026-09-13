@@ -451,6 +451,12 @@ where
         ))
     }
 
+    fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
+        // Binary tower fields are not transcript fields, so this scheme binds the
+        // root directly rather than through a typed phase.
+        challenger.observe(commitment.clone());
+    }
+
     /// Rejects an over-budget protocol before touching the challenger.
     fn open(
         &self,
@@ -468,9 +474,8 @@ where
         challenger: &mut Challenger,
         protocol: Self::OpeningProtocol,
     ) -> Result<(), Self::Error> {
-        // `commit` absorbs the base commitment itself (via `Layout::commit` -> `commit_base`);
-        // the verifier never calls `commit`, so it absorbs the same root here instead.
-        challenger.observe(commitment.clone());
+        // The prover binds the root while committing, so the verifier binds it here.
+        self.observe_commitment(commitment, challenger);
         self.verify_opening(commitment, proof, &protocol, None, challenger)
             .map(|_| ())
     }

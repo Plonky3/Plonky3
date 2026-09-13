@@ -1,8 +1,7 @@
 //! Phase 2 exit criterion: the multilinear commit path runs over a binary tower field.
 
 use p3_binary_dft::{AdditiveRsEncoder, LchNtt, NaiveAdditiveNtt};
-use p3_binary_field::{BinaryChallenger, BinaryField128};
-use p3_challenger::HashChallenger;
+use p3_binary_field::BinaryField128;
 use p3_commit::{Encoder, Mmcs};
 use p3_keccak::Keccak256Hash;
 use p3_matrix::Matrix;
@@ -21,7 +20,6 @@ type F = BinaryField128;
 type MyHash = SerializingHasher<Keccak256Hash>;
 type MyCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
 type MyMmcs = MerkleTreeMmcs<F, u8, MyHash, MyCompress, 2, 32>;
-type MyChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 const NUM_VARIABLES: usize = 8;
 const FOLDING: usize = 2;
@@ -33,10 +31,6 @@ const fn mmcs() -> MyMmcs {
         MyCompress::new(Keccak256Hash),
         0,
     )
-}
-
-const fn challenger() -> MyChallenger {
-    MyChallenger::from_hasher(Vec::new(), Keccak256Hash)
 }
 
 /// One fixed random table, rebuilt from the seed so the two commits below see the same data.
@@ -57,7 +51,6 @@ fn commit_base_matches_hand_encoding() {
         VariableOrder::Prefix,
         &AdditiveRsEncoder::<F, LchNtt<F>>::default(),
         &mmcs,
-        &mut challenger(),
         &Poly::new(values.clone()),
         FOLDING,
         LOG_INV_RATE,
@@ -85,7 +78,6 @@ fn prefix_prover_commits_over_a_binary_field() {
     let (_layout, root_fast, _data) = PrefixProver::<F, F>::commit(
         &AdditiveRsEncoder::<F, LchNtt<F>>::default(),
         &mmcs,
-        &mut challenger(),
         PrefixProver::<F, F>::new_witness(vec![table()], FOLDING),
         FOLDING,
         LOG_INV_RATE,
@@ -94,7 +86,6 @@ fn prefix_prover_commits_over_a_binary_field() {
     let (_layout_ref, root_ref, _data_ref) = PrefixProver::<F, F>::commit(
         &AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default(),
         &mmcs,
-        &mut challenger(),
         PrefixProver::<F, F>::new_witness(vec![table()], FOLDING),
         FOLDING,
         LOG_INV_RATE,
@@ -138,7 +129,6 @@ fn polynomial_commit_matches_naive_for_both_orders() {
                     order,
                     &AdditiveRsEncoder::<F>::default(),
                     &mmcs,
-                    &mut challenger(),
                     &Poly::new(values.clone()),
                     folding,
                     rate,
