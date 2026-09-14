@@ -219,6 +219,15 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 
         let g_big = F::two_adic_generator(log_h + added_bits);
 
+        // Resolve tables before the forward transforms, indexed by the exponent of g_big.
+        let coset_twiddles: Vec<_> = (0..(1usize << added_bits))
+            .into_par_iter()
+            .map(|coset_idx| {
+                let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
+                self.get_or_compute_coset_twiddles((log_h, total_shift))
+            })
+            .collect();
+
         let mat_ptr = mat.values.as_mut_ptr();
         let rest_ptr = unsafe { (mat_ptr as *mut MaybeUninit<F>).add(w * h) };
         let first_slice: &mut [F] = unsafe { slice::from_raw_parts_mut(mat_ptr, w * h) };
@@ -230,14 +239,13 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             .map(|slice| RowMajorMatrixViewMut::new(slice, w))
             .collect_vec();
 
-        for coset_idx in 1..(1 << added_bits) {
-            let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
-            let coset_idx = reverse_bits_len(coset_idx, added_bits);
-            let dest = &mut rest_cosets_mat[coset_idx - 1]; // - 1 because we removed the first matrix.
-            coset_dft_oop(self, &first_coset_mat.as_view(), dest, total_shift);
+        for (coset_idx, twiddles) in coset_twiddles.iter().enumerate().skip(1) {
+            let dest_idx = reverse_bits_len(coset_idx, added_bits);
+            let dest = &mut rest_cosets_mat[dest_idx - 1]; // - 1 because we removed the first matrix.
+            coset_dft_oop(&first_coset_mat.as_view(), dest, twiddles);
         }
 
-        // Now run a forward DFT on the very first coset, this time in-place.
+        // Coset zero overwrites the coefficients, so it must follow all out-of-place transforms.
         coset_dft(self, &mut first_coset_mat.as_view_mut(), shift);
 
         // SAFETY: We wrote all values above.
@@ -268,17 +276,32 @@ fn coset_dft<F: TwoAdicField + Ord>(
     second_half_general(mat, mid, &twiddles);
 }
 
-/// Like `coset_dft`, except out-of-place.
+/// Like `coset_dft`, except out-of-place and using precomputed twiddles.
+///
+/// Tables must use the layer layout of `get_or_compute_coset_twiddles` for the
+/// source height and intended shift. Each layer contains `height >> (layer + 1)` entries.
+///
+/// # Panics
+/// Panics if the matrix dimensions or twiddle table dimensions do not match,
+/// or if the height is not a positive power of two.
 #[instrument(level = "debug", skip_all)]
-fn coset_dft_oop<F: TwoAdicField + Ord>(
-    dft: &Radix2DitParallel<F>,
+fn coset_dft_oop<F: Field>(
     src: &RowMajorMatrixView<'_, F>,
     dst_maybe: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
-    shift: F,
+    twiddles: &[Vec<F>],
 ) {
     assert_eq!(src.dimensions(), dst_maybe.dimensions());
 
     let log_h = log2_strict_usize(dst_maybe.height());
+    // Short tables can leave destination rows uninitialized before the casts below.
+    assert_eq!(twiddles.len(), log_h, "incorrect number of twiddle layers");
+    for (layer, table) in twiddles.iter().enumerate() {
+        assert_eq!(
+            table.len(),
+            src.height() >> (layer + 1),
+            "incorrect twiddle count for layer {layer}"
+        );
+    }
 
     if log_h == 0 {
         // This is an edge case where first_half_general_oop doesn't work, as it expects there to be
@@ -292,10 +315,8 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 
     let mid = log_h.div_ceil(2);
 
-    let twiddles = dft.get_or_compute_coset_twiddles((log_h, shift));
-
     // The first half looks like a normal DIT.
-    first_half_general_oop(src, dst_maybe, mid, &twiddles);
+    first_half_general_oop(src, dst_maybe, mid, twiddles);
 
     // dst is now initialized.
     let dst = unsafe {
@@ -307,7 +328,7 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
     // For the second half, we flip the DIT, working in bit-reversed order.
     reverse_matrix_index_bits(dst);
 
-    second_half_general(dst, mid, &twiddles);
+    second_half_general(dst, mid, twiddles);
 }
 
 /// This can be used as the first half of a DIT butterfly network.
@@ -852,6 +873,34 @@ mod tests {
 
         assert!(Arc::ptr_eq(&result, &inserted));
         assert!(dropped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    #[should_panic(expected = "incorrect number of twiddle layers")]
+    fn coset_dft_oop_rejects_missing_twiddle_layer() {
+        let dft = Radix2DitParallel::<F>::default();
+        let mut twiddles = dft
+            .get_or_compute_coset_twiddles((3, F::GENERATOR))
+            .to_vec();
+        twiddles.pop();
+        let src = RowMajorMatrix::new(alloc::vec![F::ONE; 8], 1);
+        let mut dst = RowMajorMatrix::new(alloc::vec![MaybeUninit::uninit(); 8], 1);
+
+        coset_dft_oop(&src.as_view(), &mut dst.as_view_mut(), &twiddles);
+    }
+
+    #[test]
+    #[should_panic(expected = "incorrect twiddle count for layer 2")]
+    fn coset_dft_oop_rejects_short_twiddle_layer() {
+        let dft = Radix2DitParallel::<F>::default();
+        let mut twiddles = dft
+            .get_or_compute_coset_twiddles((3, F::GENERATOR))
+            .to_vec();
+        twiddles[2].clear();
+        let src = RowMajorMatrix::new(alloc::vec![F::ONE; 8], 1);
+        let mut dst = RowMajorMatrix::new(alloc::vec![MaybeUninit::uninit(); 8], 1);
+
+        coset_dft_oop(&src.as_view(), &mut dst.as_view_mut(), &twiddles);
     }
 
     #[test]
