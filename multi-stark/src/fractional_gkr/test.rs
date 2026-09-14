@@ -1,11 +1,14 @@
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::{DuplexChallenger, FieldChallenger};
+use p3_binary_field::{BinaryChallenger, BinaryField128};
+use p3_challenger::{DuplexChallenger, FieldChallenger, HashChallenger};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
+use p3_keccak::Keccak256Hash;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
 use p3_util::log2_strict_usize;
 use rand::SeedableRng;
+use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 
 use super::{
@@ -337,6 +340,89 @@ fn split_fraction_matches_unsplit_sum_and_evaluation() {
         assert_eq!(
             fraction.eval(&point),
             (numer.eval_ext::<F>(&point), denom.eval_ext::<F>(&point)),
+        );
+    }
+}
+
+/// Draw a random fraction table over one field whose fractions sum to zero.
+///
+/// The last leaf is solved for, so every other leaf is unconstrained.
+fn zero_sum_ext<A: Field>(rng: &mut SmallRng, num_variables: usize) -> (Poly<A>, Poly<A>)
+where
+    StandardUniform: Distribution<A>,
+{
+    loop {
+        let mut numer = Poly::<A>::rand(rng, num_variables);
+        let mut denom = Poly::<A>::rand(rng, num_variables);
+        let last = numer.num_evals() - 1;
+
+        // A zero denominator anywhere would leave the table meaningless.
+        if denom.as_slice()[..last].contains(&A::ZERO) {
+            continue;
+        }
+
+        // Everything but the last leaf sums to this, which the last leaf has to cancel.
+        let partial_sum = numer.as_slice()[..last]
+            .iter()
+            .zip(&denom.as_slice()[..last])
+            .map(|(&numer, &denom)| denom.inverse() * numer)
+            .sum::<A>();
+        if partial_sum == A::ZERO {
+            continue;
+        }
+
+        numer.as_mut_slice()[last] = A::ONE;
+        denom.as_mut_slice()[last] = -partial_sum.inverse();
+        return (numer, denom);
+    }
+}
+
+#[test]
+fn a_binary_field_reduction_round_trips() {
+    // A round polynomial is sent at the field's own first four values.
+    //
+    // Over a binary tower those are bit patterns, not the integers zero through three.
+    //
+    // Repeated addition, or naming a node by an integer, folds two of them onto one point.
+    //
+    // The message then no longer pins the round polynomial down.
+    //
+    // Every layer count from the degenerate single-variable case upwards runs here.
+    type B = BinaryField128;
+    let challenger = || {
+        BinaryChallenger::<B, HashChallenger<u8, Keccak256Hash, 32>>::from_hasher(
+            b"p3-fraction-gkr-binary-test".to_vec(),
+            Keccak256Hash,
+        )
+    };
+
+    let mut rng = SmallRng::seed_from_u64(0x0B14_A247);
+    for num_variables in 1..=8 {
+        let (numer, denom) = zero_sum_ext::<B>(&mut rng, num_variables);
+
+        let mut prover_challenger = challenger();
+        let (proof, prover_output) = prove_fractional_gkr(
+            &Fraction {
+                n: numer.clone(),
+                d: PolyMaybePacked::Scalar(denom.clone()),
+            },
+            &mut prover_challenger,
+        );
+
+        let mut verifier_challenger = challenger();
+        let verifier_output =
+            verify_fractional_gkr::<B, B, _>(&proof, num_variables, &mut verifier_challenger)
+                .expect("an honest reduction verifies");
+        assert_eq!(verifier_output, prover_output);
+
+        // The openings have to be the tables themselves at the point the reduction reached.
+        assert_eq!(
+            prover_output.numerator,
+            numer.eval_ext::<B>(&prover_output.point)
+        );
+        assert_eq!(
+            prover_output.denominator,
+            denom.eval_ext::<B>(&prover_output.point)
         );
     }
 }
