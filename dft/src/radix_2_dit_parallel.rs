@@ -239,13 +239,18 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             .map(|slice| RowMajorMatrixViewMut::new(slice, w))
             .collect_vec();
 
-        for (coset_idx, twiddles) in coset_twiddles.iter().enumerate().skip(1) {
-            let dest_idx = reverse_bits_len(coset_idx, added_bits);
-            let dest = &mut rest_cosets_mat[dest_idx - 1]; // - 1 because we removed the first matrix.
-            coset_dft_oop(&first_coset_mat.as_view(), dest, twiddles);
-        }
+        // Each task writes a disjoint destination while sharing the coefficient matrix.
+        // Physical slot k + 1 holds coset reverse_bits_len(k + 1, added_bits).
+        let src = first_coset_mat.as_view();
+        rest_cosets_mat
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(k, dest)| {
+                let coset_idx = reverse_bits_len(k + 1, added_bits);
+                coset_dft_oop(&src, dest, &coset_twiddles[coset_idx]);
+            });
 
-        // Coset zero overwrites the coefficients, so it must follow all out-of-place transforms.
+        // `for_each` joins all readers before coset zero overwrites the coefficients.
         coset_dft(self, &mut first_coset_mat.as_view_mut(), shift);
 
         // SAFETY: We wrote all values above.
