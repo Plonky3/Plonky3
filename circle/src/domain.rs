@@ -234,8 +234,8 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         let neg_shift = -self.shift;
         let k = neg_shift.s_p_at_p(self.log_n);
         let z = self.vanishing_poly(point);
-        let (num_shift, den_shift) = self.shift.v_tilde_p_num_den(point);
-        let (num_negshift, den_negshift) = neg_shift.v_tilde_p_num_den(point);
+        let (num_shift, den_shift) = self.shift.recip_v_tilde_p_num_den(point);
+        let (num_negshift, den_negshift) = neg_shift.recip_v_tilde_p_num_den(point);
         let den_negshift_k = den_negshift * k;
 
         let inv = batch_multiplicative_inverse(&[den_shift, den_negshift_k, z]);
@@ -292,8 +292,10 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .zip(pts.par_iter())
             .for_each(|(((z, ds), dnk), &at)| {
                 *z = at.v_n(self.log_n) - shift_v_n;
-                *ds = self.shift.v_tilde_p_num_den(at).1;
-                *dnk = neg_shift.v_tilde_p_num_den(at).1 * k;
+                let (_, den_shift) = self.shift.recip_v_tilde_p_num_den(at);
+                let (_, den_negshift) = neg_shift.recip_v_tilde_p_num_den(at);
+                *ds = den_shift;
+                *dnk = den_negshift * k;
             });
 
         // Batch inverses (already internally parallel).
@@ -314,8 +316,8 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .zip(inv_den_negshift_k.par_iter())
             .zip(pts.par_iter())
             .for_each(|((((((ifr, ilr), itr), &z), &inv_d), &inv_dk), &at)| {
-                let num_shift = self.shift.v_tilde_p_num_den(at).0;
-                let num_negshift = neg_shift.v_tilde_p_num_den(at).0;
+                let (num_shift, _) = self.shift.recip_v_tilde_p_num_den(at);
+                let (num_negshift, _) = neg_shift.recip_v_tilde_p_num_den(at);
                 let z_inv_dk = z * num_negshift * inv_dk;
                 *ifr = z * num_shift * inv_d;
                 *ilr = z_inv_dk * k;
