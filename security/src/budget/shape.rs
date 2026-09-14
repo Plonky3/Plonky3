@@ -32,8 +32,8 @@ pub struct ProtocolParams {
     pub folding_pow_bits: u32,
     /// Grinding bits before the lookup / permutation argument's challenges are sampled.
     ///
-    /// The lookup round's error grows linearly in trace length, so this is the only grinding site
-    /// whose absence degrades with instance size.
+    /// The lookup round's error grows linearly in trace length, so its absence degrades with
+    /// instance size.
     pub lookup_pow_bits: u32,
 }
 
