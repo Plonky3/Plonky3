@@ -172,12 +172,21 @@ impl PrimeCharacteristicRing for PackedMersenne31Neon {
 
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
-        Self(self.0.map(|x| x.mul_2exp_u64(exp)))
+        let res = mul_2exp(self.to_vector(), (exp % 31) as i32);
+        unsafe {
+            // Safety: `mul_2exp` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
     }
 
     #[inline]
     fn div_2exp_u64(&self, exp: u64) -> Self {
-        Self(self.0.map(|x| x.div_2exp_u64(exp)))
+        // `2^31 = 1`, so dividing by `2^exp` is multiplying by `2^(31 - exp)`.
+        let res = mul_2exp(self.to_vector(), ((31 - exp % 31) % 31) as i32);
+        unsafe {
+            // Safety: `mul_2exp` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
     }
 
     #[inline(always)]
@@ -432,6 +441,28 @@ fn neg(val: uint32x4_t) -> uint32x4_t {
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
         aarch64::vsubq_u32(P, val)
+    }
+}
+
+/// Multiply a vector of Mersenne-31 field elements that fit in 31 bits by `2^exp`.
+///
+/// `exp` must lie in `0..31`. As `2^31 = 1` in the field, this rotates each 31-bit lane left
+/// by `exp` bits. If the inputs do not fit in 31 bits, the result is undefined.
+#[inline]
+#[must_use]
+fn mul_2exp(val: uint32x4_t, exp: i32) -> uint32x4_t {
+    debug_assert!((0..31).contains(&exp));
+    unsafe {
+        // Safety: If this code got compiled then NEON intrinsics are available.
+
+        // Shift the low bits up. This also shifts something unwanted into the sign bit.
+        let hi_bits_dirty = aarch64::vshlq_u32(val, aarch64::vdupq_n_s32(exp));
+
+        // A negative count shifts right, bringing the high bits down.
+        let lo_bits = aarch64::vshlq_u32(val, aarch64::vdupq_n_s32(exp - 31));
+
+        // Clear the sign bit and combine the low and high bits.
+        aarch64::vorrq_u32(aarch64::vandq_u32(hi_bits_dirty, P), lo_bits)
     }
 }
 
