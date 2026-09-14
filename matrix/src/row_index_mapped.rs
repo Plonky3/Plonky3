@@ -3,7 +3,7 @@ use core::ops::Deref;
 
 use p3_field::PackedValue;
 
-use crate::Matrix;
+use crate::{Matrix, wrapping_row_index};
 use crate::dense::RowMajorMatrix;
 
 /// A trait for remapping row indices of a matrix.
@@ -164,14 +164,14 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         // inner rows, so unlike `DenseMatrix` we cannot take a contiguous-slice fast path.
         // Reading elements directly still avoids the `Vec` of row-slice guards that the
         // default implementation allocates via `wrapping_row_slices`.
-        let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
+        let no_wrap = P::WIDTH != 1 && height >= P::WIDTH && r <= height - P::WIDTH;
         (0..width).map(move |c| {
             if no_wrap {
                 // Safety: r + i < height (fast-path guard), and c < width (loop bound).
                 P::from_fn(|i| unsafe { self.get_unchecked(r + i, c) })
             } else {
                 // Safety: (r + i) % height < height, and c < width (loop bound).
-                P::from_fn(|i| unsafe { self.get_unchecked((r + i) % height, c) })
+                P::from_fn(|i| unsafe { self.get_unchecked(wrapping_row_index(r, i, height), c) })
             }
         })
     }
@@ -184,8 +184,12 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     {
         let height = self.height();
         let width = self.width();
-        let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
-        let next_no_wrap = P::WIDTH != 1 && r + step + P::WIDTH <= height;
+        let no_wrap = P::WIDTH != 1 && height >= P::WIDTH && r <= height - P::WIDTH;
+        let next_r = wrapping_row_index(r, step, height);
+        let next_no_wrap = P::WIDTH != 1
+            && height >= P::WIDTH
+            && r <= height - P::WIDTH
+            && step <= height - P::WIDTH - r;
 
         (0..width)
             .map(move |c| {
@@ -194,16 +198,20 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
                     P::from_fn(|i| unsafe { self.get_unchecked(r + i, c) })
                 } else {
                     // Safety: (r + i) % height < height, and c < width (loop bound).
-                    P::from_fn(|i| unsafe { self.get_unchecked((r + i) % height, c) })
+                    P::from_fn(|i| unsafe {
+                        self.get_unchecked(wrapping_row_index(r, i, height), c)
+                    })
                 }
             })
             .chain((0..width).map(move |c| {
                 if next_no_wrap {
                     // Safety: r + step + i < height (fast-path guard), and c < width (loop bound).
-                    P::from_fn(|i| unsafe { self.get_unchecked(r + step + i, c) })
+                    P::from_fn(|i| unsafe { self.get_unchecked(next_r + i, c) })
                 } else {
                     // Safety: (r + step + i) % height < height, and c < width (loop bound).
-                    P::from_fn(|i| unsafe { self.get_unchecked((r + step + i) % height, c) })
+                    P::from_fn(|i| unsafe {
+                        self.get_unchecked(wrapping_row_index(next_r, i, height), c)
+                    })
                 }
             }))
             .collect()
@@ -507,6 +515,39 @@ mod tests {
                 Packed::from([BabyBear::new(2), BabyBear::new(8)]),
                 Packed::from([BabyBear::new(5), BabyBear::new(3)]),
                 Packed::from([BabyBear::new(6), BabyBear::new(4)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_vertically_packed_rows_wrap_without_index_overflow() {
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let inner = RowMajorMatrix::new((1..=6).map(BabyBear::new).collect::<Vec<_>>(), 2);
+        let mapped_view = RowIndexMappedView {
+            index_map: IdentityMap(inner.height()),
+            inner,
+        };
+
+        let row = mapped_view
+            .vertically_packed_row::<Packed>(usize::MAX)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            row,
+            vec![
+                Packed::from([BabyBear::new(1), BabyBear::new(3)]),
+                Packed::from([BabyBear::new(2), BabyBear::new(4)]),
+            ]
+        );
+
+        let pair = mapped_view.vertically_packed_row_pair::<Packed>(usize::MAX, 1);
+        assert_eq!(
+            pair,
+            vec![
+                Packed::from([BabyBear::new(1), BabyBear::new(3)]),
+                Packed::from([BabyBear::new(2), BabyBear::new(4)]),
+                Packed::from([BabyBear::new(3), BabyBear::new(5)]),
+                Packed::from([BabyBear::new(4), BabyBear::new(6)]),
             ]
         );
     }

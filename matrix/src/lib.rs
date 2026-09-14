@@ -41,6 +41,19 @@ pub struct Dimensions {
     pub height: usize,
 }
 
+/// Add an offset to a row index modulo a non-empty matrix height without overflowing `usize`.
+#[inline]
+pub(crate) fn wrapping_row_index(row: usize, offset: usize, height: usize) -> usize {
+    debug_assert!(height > 0);
+    let row = row % height;
+    let offset = offset % height;
+    if row >= height - offset {
+        row - (height - offset)
+    } else {
+        row + offset
+    }
+}
+
 impl Debug for Dimensions {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}x{}", self.width, self.height)
@@ -234,7 +247,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         unsafe {
             // Safety: Thank to the `%`, the rows index is always less than `self.height()`.
             (0..c)
-                .map(|i| self.row_slice_unchecked((r + i) % self.height()))
+                .map(|i| self.row_slice_unchecked(wrapping_row_index(r, i, self.height())))
                 .collect_vec()
         }
     }
@@ -402,7 +415,10 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         // It's probably allowing the compiler to make some optimizations on the fly.
 
         let rows = self.wrapping_row_slices(r, P::WIDTH);
-        let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
+        let next_rows = self.wrapping_row_slices(
+            wrapping_row_index(r, step, self.height()),
+            P::WIDTH,
+        );
 
         (0..self.width())
             .map(|c| P::from_fn(|i| rows[i][c]))

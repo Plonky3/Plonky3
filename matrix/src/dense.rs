@@ -14,7 +14,7 @@ use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::Matrix;
+use crate::{Matrix, wrapping_row_index};
 
 /// A dense matrix in row-major format, with customizable backing storage.
 ///
@@ -530,7 +530,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         let width = self.width;
         let height = self.height();
         let row = r % height;
-        let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
+        let no_wrap = P::WIDTH != 1 && height >= P::WIDTH && r <= height - P::WIDTH;
         let rows = (!no_wrap && P::WIDTH != 1).then(|| self.wrapping_row_slices(r, P::WIDTH));
 
         (0..width).map(move |c| {
@@ -559,7 +559,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
 
         if P::WIDTH == 1 {
             let row = r % height;
-            let next_row = (r + step) % height;
+            let next_row = wrapping_row_index(r, step, height);
             let mut out = Vec::with_capacity(width * 2);
             out.extend(
                 // SAFETY: row < height and c < width (loop bound).
@@ -571,7 +571,11 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
                     .map(|c| unsafe { P::broadcast(*values.get_unchecked(next_row * width + c)) }),
             );
             out
-        } else if r + P::WIDTH <= height && r + step + P::WIDTH <= height {
+        } else if P::WIDTH != 1
+            && height >= P::WIDTH
+            && r <= height - P::WIDTH
+            && step <= height - P::WIDTH - r
+        {
             // SAFETY: for i in 0..P::WIDTH, both r+i < height and r+step+i < height (fast-path
             // guard), and c < width (loop bound).
             (0..width)
@@ -582,7 +586,8 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
                 .collect::<Vec<_>>()
         } else {
             let rows = self.wrapping_row_slices(r, P::WIDTH);
-            let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
+            let next_rows =
+                self.wrapping_row_slices(wrapping_row_index(r, step, height), P::WIDTH);
             (0..width)
                 .map(|c| P::from_fn(|i| rows[i][c]))
                 .chain((0..width).map(|c| P::from_fn(|i| next_rows[i][c])))
@@ -1932,6 +1937,35 @@ mod tests {
                 .chain(5..9)
                 .map(|i| [BabyBear::new(i), BabyBear::new(i + 4)].into())
                 .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_vertically_packed_rows_wrap_without_index_overflow() {
+        type Packed = FieldArray<BabyBear, 2>;
+
+        let matrix = RowMajorMatrix::new((1..=6).map(BabyBear::new).collect::<Vec<_>>(), 2);
+
+        let row = matrix
+            .vertically_packed_row::<Packed>(usize::MAX)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            row,
+            vec![
+                Packed::from([BabyBear::new(1), BabyBear::new(3)]),
+                Packed::from([BabyBear::new(2), BabyBear::new(4)]),
+            ]
+        );
+
+        let pair = matrix.vertically_packed_row_pair::<Packed>(usize::MAX, 1);
+        assert_eq!(
+            pair,
+            vec![
+                Packed::from([BabyBear::new(1), BabyBear::new(3)]),
+                Packed::from([BabyBear::new(2), BabyBear::new(4)]),
+                Packed::from([BabyBear::new(3), BabyBear::new(5)]),
+                Packed::from([BabyBear::new(4), BabyBear::new(6)]),
+            ]
         );
     }
 
