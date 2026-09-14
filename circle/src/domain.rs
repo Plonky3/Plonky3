@@ -316,6 +316,8 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .zip(inv_den_negshift_k.par_iter())
             .zip(pts.par_iter())
             .for_each(|((((((ifr, ilr), itr), &z), &inv_d), &inv_dk), &at)| {
+                // The numerators are recomputed rather than stored by the first pass: two more
+                // `n`-element buffers cost at least as much as the point subtractions they save.
                 let (num_shift, _) = self.shift.recip_v_tilde_p_num_den(at);
                 let (num_negshift, _) = neg_shift.recip_v_tilde_p_num_den(at);
                 let z_inv_dk = z * num_negshift * inv_dk;
