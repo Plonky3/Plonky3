@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 use core::fmt::Debug;
 
+use p3_air::{BoundaryIoError, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_sumcheck::PrescribedPointPcs;
 use thiserror::Error;
@@ -46,6 +47,14 @@ where
     /// A statement-level transcript step could not be replayed.
     #[error("transcript: {0}")]
     Transcript(MultiStarkTranscriptFailure),
+    /// An AIR names a public boundary cell or public value it does not have.
+    #[error("instance {instance} boundary IO: {error}")]
+    BoundaryIo {
+        /// Index of the offending instance in verifier-instance order.
+        instance: usize,
+        /// What is wrong with the declaration.
+        error: BoundaryIoError,
+    },
 }
 
 /// Verify only when the verifier's statement meets the requested security target.
@@ -137,6 +146,7 @@ where
 /// Returns an error when the key and the AIRs disagree on whether a preprocessed trace exists.
 /// Returns an error when an instance supplies a public-value count its AIR does not declare.
 /// Returns an error when the proof and the AIRs disagree on whether a lookup exists.
+/// Returns an error when an AIR names a public boundary cell it does not have.
 ///
 /// # Panics
 ///
@@ -184,6 +194,18 @@ where
     let airs = instances.airs();
     let log_heights = instances.num_variables();
     let public_values = instances.public_values();
+
+    // Reject a malformed public boundary declaration before the transcript is touched.
+    // The pins the folder injects read columns and public values by those numbers.
+    for (instance, air) in airs.iter().enumerate() {
+        boundary::validate(
+            air.public_boundary_io(),
+            air.width(),
+            air.num_public_values(),
+        )
+        .map_err(|error| VerificationError::BoundaryIo { instance, error })?;
+    }
+
     let mut transcript = MultiStarkVerifierTranscript::<C::Challenger, C::Val>::new(
         challenger,
         MultiStarkShape::new::<C::Val, A>(&airs, &log_heights, pow_bits),

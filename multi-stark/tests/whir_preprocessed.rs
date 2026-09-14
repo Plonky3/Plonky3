@@ -7,7 +7,7 @@
 use core::borrow::Borrow;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
@@ -184,6 +184,8 @@ fn challenger() -> MyChallenger {
 struct PreprocessedAir {
     /// Trace height that the preprocessed column is generated to match.
     height: usize,
+    /// Cells the backend binds to public values, in place of a boundary constraint.
+    cells: &'static [BoundaryPublic],
 }
 
 struct MainRow<T> {
@@ -203,6 +205,12 @@ impl<T> Borrow<MainRow<T>> for [T] {
 impl BaseAir<F> for PreprocessedAir {
     fn width(&self) -> usize {
         MAIN_WIDTH
+    }
+    fn num_public_values(&self) -> usize {
+        self.cells.len()
+    }
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        self.cells
     }
     fn preprocessed_width(&self) -> usize {
         PREPROCESSED_WIDTH
@@ -250,12 +258,118 @@ fn main_trace(fixed: &[F]) -> RowMajorMatrix<F> {
     RowMajorMatrix::new(values, MAIN_WIDTH)
 }
 
+/// The one cell the preprocessed AIR binds by position in the test below.
+///
+/// ```text
+///     main column 0, first row -> public value 0
+/// ```
+///
+/// The fixed column starts at `3`, and column 0 tracks it, so the honest value is `3`.
+const FIRST_MAIN_CELL: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::First, 0)];
+
+#[test]
+fn prove_verify_preprocessed_with_boundary_io_roundtrips() {
+    // Invariant: a listed cell is bound alongside a preprocessed trace.
+    //
+    // The preprocessed commitment and the main commitment are separate.
+    // A pin reads the main trace, so the two must still open at the same point.
+    let n = 256;
+    let fixed = fixed_column(n);
+    let air = PreprocessedAir {
+        height: n,
+        cells: &FIRST_MAIN_CELL,
+    };
+    let trace = main_trace(&fixed);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height);
+    let public = [fixed[0]];
+
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &public,
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    assert!(proof.preprocessed_opening.is_some());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &public)]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect("honest preprocessed proof with a listed cell must verify");
+}
+
+#[test]
+fn verify_rejects_a_wrong_public_value_alongside_a_preprocessed_trace() {
+    // Mutation: claim a first-row value the main trace does not carry.
+    //
+    //     honest cell : 3
+    //     claimed     : 4
+    //                   → the pin fails by one
+    let n = 256;
+    let fixed = fixed_column(n);
+    let air = PreprocessedAir {
+        height: n,
+        cells: &FIRST_MAIN_CELL,
+    };
+    let trace = main_trace(&fixed);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height);
+    let public = [fixed[0] + F::ONE];
+
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+
+    // Both sides share the wrong claim, so only the pin can reject.
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &public,
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &public)]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerificationError::Zerocheck(ZerocheckError::FinalSumMismatch)
+        ),
+        "expected a zerocheck rejection, got {err:?}"
+    );
+}
+
 #[test]
 fn prove_verify_preprocessed_roundtrips() {
     // A satisfying trace with a preprocessed column must prove and verify end to end.
     let n = 256;
     let fixed = fixed_column(n);
-    let air = PreprocessedAir { height: n };
+    let air = PreprocessedAir {
+        height: n,
+        cells: &[],
+    };
     let trace = main_trace(&fixed);
     let log_height = log2_strict_usize(n);
     let config = config_for(log_height);
@@ -294,7 +408,10 @@ fn prove_verify_preprocessed_roundtrips() {
 #[test]
 fn security_requires_the_actual_preprocessed_opening_shape() {
     let mut config = config_for(4);
-    let air = PreprocessedAir { height: 16 };
+    let air = PreprocessedAir {
+        height: 16,
+        cells: &[],
+    };
     let (_, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
     let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
     let report = p3_multi_stark::security_report(&config, &instances).unwrap();
@@ -327,7 +444,10 @@ fn prove_verify_batched_preprocessed_roundtrips() {
     let n = 256;
     let log_height = log2_strict_usize(n);
     let fixed = fixed_column(n);
-    let air = PreprocessedAir { height: n };
+    let air = PreprocessedAir {
+        height: n,
+        cells: &[],
+    };
     let trace = main_trace(&fixed);
     let config = batch_config_for(log_height, 2);
     let airs = [&air, &air];
@@ -377,8 +497,14 @@ fn prove_verify_mixed_height_preprocessed_roundtrips() {
     let n_b = 128;
     let log_a = log2_strict_usize(n_a);
     let log_b = log2_strict_usize(n_b);
-    let air_a = PreprocessedAir { height: n_a };
-    let air_b = PreprocessedAir { height: n_b };
+    let air_a = PreprocessedAir {
+        height: n_a,
+        cells: &[],
+    };
+    let air_b = PreprocessedAir {
+        height: n_b,
+        cells: &[],
+    };
     let trace_a = main_trace(&fixed_column(n_a));
     let trace_b = main_trace(&fixed_column(n_b));
 
@@ -424,7 +550,10 @@ fn setup_is_reusable_across_proofs() {
     // One setup commits the preprocessed trace, then two independent proofs reuse it.
     let n = 256;
     let fixed = fixed_column(n);
-    let air = PreprocessedAir { height: n };
+    let air = PreprocessedAir {
+        height: n,
+        cells: &[],
+    };
     let trace = main_trace(&fixed);
     let log_height = log2_strict_usize(n);
     let config = config_for(log_height);
@@ -462,7 +591,10 @@ fn verify_rejects_violated_main_constraint() {
     // Fixture state: a satisfying trace obeys `b == 2 * a`.
     let n = 256;
     let fixed = fixed_column(n);
-    let air = PreprocessedAir { height: n };
+    let air = PreprocessedAir {
+        height: n,
+        cells: &[],
+    };
     let mut trace = main_trace(&fixed);
     // Mutation: break column 1 of the first row so `b != 2 * a`.
     trace.values[1] += F::ONE;
@@ -508,7 +640,10 @@ fn verify_rejects_tampered_preprocessed_opening() {
     // Fixture state: the proof carries commitment-bound preprocessed openings.
     let n = 256;
     let fixed = fixed_column(n);
-    let air = PreprocessedAir { height: n };
+    let air = PreprocessedAir {
+        height: n,
+        cells: &[],
+    };
     let trace = main_trace(&fixed);
     let log_height = log2_strict_usize(n);
     let config = config_for(log_height);
@@ -626,7 +761,10 @@ fn a_rejected_main_opening_leaves_the_preprocessed_opening_unrun() {
     // The configuration counts every hand-out of the preprocessed scheme.
     let n = 256;
     let fixed = fixed_column(n);
-    let air = PreprocessedAir { height: n };
+    let air = PreprocessedAir {
+        height: n,
+        cells: &[],
+    };
     let trace = main_trace(&fixed);
     let log_height = log2_strict_usize(n);
     let config = CountingConfig::new(config_for(log_height));

@@ -35,6 +35,7 @@ pub mod zerocheck;
 
 pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};
 pub use keys::{ProvingKey, VerifyingKey, setup};
+pub use p3_air::BoundaryIoError;
 pub use proof::MultiStarkProof;
 pub use prover::{ProvingError, prove, prove_with_security};
 pub use security::{MultiStarkSecurityReport, SecurityError, security_report};

@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod air;
+pub mod boundary;
 mod builder;
 mod check_constraints;
 mod filtered;
@@ -15,6 +16,7 @@ mod virtual_column;
 mod window;
 
 pub use air::*;
+pub use boundary::{BoundaryEnd, BoundaryIoError, BoundaryPublic};
 pub use builder::*;
 pub use check_constraints::*;
 pub use filtered::*;

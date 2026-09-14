@@ -7,7 +7,7 @@
 
 use alloc::vec::Vec;
 
-use p3_air::{Air, AirBuilder, BaseAir, RowWindow};
+use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, RowWindow, WindowAccess};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_lookup::{Count, InteractionBuilder, InteractionSymbolicBuilder};
 
@@ -194,8 +194,11 @@ where
     /// Attach the descending alpha powers used to batch the asserted constraints.
     ///
     /// `alpha_powers[i]` must be `alpha^(n - 1 - i)`, where `n` is the number of constraints
-    /// the AIR asserts. The batched value is then identical to the Horner fold, while each
-    /// constraint costs one `Acc * Var` product instead of one `Acc * Acc` product.
+    /// asserted at this node. The batched value is then identical to the Horner fold, while
+    /// each constraint costs one `Acc * Var` product instead of one `Acc * Acc` product.
+    ///
+    /// `n` counts the AIR's own constraints plus one pin per listed public boundary cell.
+    /// A count taken from a symbolic pass misses the pins and indexes past the end.
     ///
     /// # Arguments
     ///
@@ -238,8 +241,8 @@ where
     ///
     /// The alpha-batched sum `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
     ///
-    /// - `C_0, ..., C_{n-1}` are the constraints asserted by the AIR in declaration order.
-    /// - `n` is the total number of asserted constraints.
+    /// - `C_0, ..., C_{n-1}` are the asserted constraints in declaration order.
+    /// - `n` is the AIR's own constraint count plus one pin per listed boundary cell.
     #[inline]
     #[must_use]
     pub fn into_accumulator(self) -> Acc {
@@ -255,6 +258,7 @@ where
     ///
     /// This is the terminal step of the builder: it consumes the folder.
     /// Attach preprocessed and periodic columns before calling, if the AIR reads them.
+    /// Cells the AIR lists as public inputs add one pin each, after its own constraints.
     ///
     /// # Arguments
     ///
@@ -264,8 +268,8 @@ where
     ///
     /// The alpha-batched sum `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
     ///
-    /// - `C_0, ..., C_{n-1}` are the constraints asserted by the AIR in declaration order.
-    /// - `n` is the total number of asserted constraints.
+    /// - `C_0, ..., C_{n-1}` are the asserted constraints, public boundary pins last.
+    /// - `n` is the AIR's own constraint count plus one pin per listed boundary cell.
     #[inline]
     #[must_use]
     pub fn eval_air<A>(mut self, air: &A) -> Acc
@@ -274,7 +278,83 @@ where
         Self: AirBuilder,
     {
         air.eval(&mut self);
+        eval_boundary_io(&mut self, air.public_boundary_io());
         self.into_accumulator()
+    }
+}
+
+/// Per-variable degree of one injected pin, scored at domain size two.
+///
+/// ```text
+///     selector * (column - public)
+///        1     *      1             = 2
+/// ```
+const BOUNDARY_IO_PIN_DEGREE: usize = 2;
+
+/// What the injected public boundary pins add to an AIR's constraint family.
+///
+/// A symbolic pass runs [`Air::eval`] alone, so it never sees the pins.
+/// Anything that counts or scores constraints from such a pass adds them back through here.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BoundaryIoPins {
+    /// One pin per listed cell.
+    pub(crate) count: usize,
+    /// Degree the pins score, or zero when the AIR lists no cell.
+    pub(crate) degree: usize,
+}
+
+/// Score the pins a folder injects for the given declaration.
+///
+/// Takes the declaration rather than the AIR, so a call site never has to name the field.
+#[inline]
+#[must_use]
+pub(crate) const fn boundary_io_pins(cells: &[BoundaryPublic]) -> BoundaryIoPins {
+    // An empty declaration injects nothing, and so lifts no degree.
+    let count = cells.len();
+    BoundaryIoPins {
+        count,
+        degree: if count == 0 {
+            0
+        } else {
+            BOUNDARY_IO_PIN_DEGREE
+        },
+    }
+}
+
+/// Assert that each cell the AIR lists as a public input holds that public value.
+///
+/// ```text
+///     first-end cell:  is_first_row * (column - public) = 0
+///     last-end  cell:  is_last_row  * (column - public) = 0
+/// ```
+///
+/// This is the whole binding: nothing else ties a listed cell to its public value.
+///
+/// An honest trace already carries the public value, leaving the pin at zero.
+///
+/// A pin is the boundary constraint the AIR would otherwise write by hand.
+/// Injecting it here is what lets the AIR name the cell instead of asserting it.
+///
+/// The pins batch into the accumulator with the same scalar as the AIR's own constraints.
+/// Prover fold and verifier recompute therefore agree on the batched value.
+///
+/// Both folders run this after the AIR's own evaluation, so every node batches the same family.
+#[inline]
+fn eval_boundary_io<AB: AirBuilder>(builder: &mut AB, cells: &[BoundaryPublic]) {
+    for cell in cells {
+        // Read both operands out first.
+        // Asserting takes a mutable borrow of the folder.
+        let value = builder.main().current_slice()[cell.column];
+        let public = builder.public_values()[cell.public_value];
+
+        // Gate the equality by the selector for this cell's end.
+        //
+        //     first end -> is_first_row
+        //     last  end -> is_last_row
+        match cell.end {
+            BoundaryEnd::First => builder.when_first_row().assert_eq(value, public),
+            BoundaryEnd::Last => builder.when_last_row().assert_eq(value, public),
+        }
     }
 }
 
@@ -457,6 +537,8 @@ where
     }
 
     /// Run the AIR once and return its ordinary and lookup expressions separately.
+    ///
+    /// Cells the AIR lists as public inputs add one pin each to the ordinary family.
     #[inline]
     #[must_use]
     pub(crate) fn eval_air<A>(mut self, air: &A) -> FolderEvaluations<Acc>
@@ -465,6 +547,7 @@ where
         Self: AirBuilder,
     {
         air.eval(&mut self);
+        eval_boundary_io(&mut self, air.public_boundary_io());
         // Both families come out of the one pass, batched independently.
         FolderEvaluations {
             constraints: self.inner.accumulator,
@@ -1002,6 +1085,81 @@ mod tests {
         // The constraint was dropped, while the link is unaffected by the switch.
         assert_eq!(evaluations.constraints, EF::ZERO);
         assert_ne!(evaluations.interactions, EF::ZERO);
+    }
+
+    /// The one cell the lookup AIR below binds by position.
+    const LINKED_IO_CELLS: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::First, 0)];
+
+    /// The linked AIR above, with column 0's first row bound to public value 0.
+    struct LinkedIoAir;
+
+    impl<X> BaseAir<X> for LinkedIoAir {
+        fn width(&self) -> usize {
+            2
+        }
+
+        fn num_public_values(&self) -> usize {
+            1
+        }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            &LINKED_IO_CELLS
+        }
+    }
+
+    impl<AB: AirBuilder + InteractionBuilder> Air<AB> for LinkedIoAir {
+        fn eval(&self, builder: &mut AB) {
+            // Identical constraints and lookups, with only the declaration setting the two apart.
+            LinkedAir.eval(builder);
+        }
+    }
+
+    #[test]
+    fn interaction_folder_asserts_the_boundary_io_pins() {
+        // Invariant: both folders batch the same ordinary family, pins included.
+        //
+        // Fixture state: the first row, both columns 5, the public value 6.
+        //
+        //     own constraint : a - b                    = 0
+        //     injected pin   : is_first_row * (a - 6)   = -1
+        let link = AirLinkInstance {
+            num_local_lookups: 1,
+            lookups: vec![AirLinkLookup {
+                theta_bus_offset: EF::from_u64(13),
+                block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
+            }],
+        };
+        let theta_beta_powers = [EF::from_u64(2)];
+        let boundary = BoundaryEvals {
+            first: EF::ONE,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+        let alpha = EF::from_u64(11);
+        let local = [EF::from_u64(5), EF::from_u64(5)];
+        let next = [EF::ZERO, EF::ZERO];
+        let pis = [F::from_u64(6)];
+
+        // The ordinary folder sees the pin after the AIR's own constraint.
+        let ordinary = TestFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&LinkedIoAir);
+        assert_eq!(
+            ordinary,
+            alpha * (EF::from_u64(5) - EF::from_u64(5)) - EF::ONE
+        );
+
+        // The lookup-aware folder must batch the identical ordinary value.
+        let folder = TestFolder::new(&local, &next, boundary, &pis, alpha);
+        let evaluations =
+            InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, true)
+                .eval_air(&LinkedIoAir);
+        assert_eq!(evaluations.constraints, ordinary);
+
+        // Past the ordinary family's degree the pins are dropped together with it.
+        let folder = TestFolder::new(&local, &next, boundary, &pis, alpha);
+        let evaluations =
+            InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, false)
+                .eval_air(&LinkedIoAir);
+        assert_eq!(evaluations.constraints, EF::ZERO);
     }
 
     #[test]

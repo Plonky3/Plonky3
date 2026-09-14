@@ -14,6 +14,7 @@
 
 use alloc::vec::Vec;
 
+use p3_air::boundary;
 use p3_air::symbolic::AirLayout;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_field::Field;
@@ -25,7 +26,7 @@ use thiserror::Error;
 
 use crate::VerifierInstances;
 use crate::config::{Commitment, MultiStarkConfig};
-use crate::folder::VerifierAir;
+use crate::folder::{VerifierAir, boundary_io_pins};
 use crate::instance::Instances;
 use crate::lookup::{LookupError, LookupPlan};
 use crate::selectors::{PeriodicError, periodic_num_variables};
@@ -209,6 +210,18 @@ where
                 .ok_or_else(|| invalid("stacked trace dimensions overflow"))?;
         }
 
+        // A malformed declaration is rejected by prove and by verify.
+        // Reporting a security level for a statement neither accepts would mislead.
+        if boundary::validate(
+            air.public_boundary_io(),
+            air.width(),
+            air.num_public_values(),
+        )
+        .is_err()
+        {
+            return Err(invalid("public boundary declaration is malformed"));
+        }
+
         let builder = InteractionSymbolicBuilder::<C::Val, C::Challenge>::from_air(
             air,
             AirLayout::from_air::<C::Val>(air),
@@ -216,10 +229,16 @@ where
         if !builder.exclusive_interactions().is_empty() {
             return Err(invalid("exclusive lookups are unsupported"));
         }
-        let constraints = builder
+        let own_constraints = builder
             .base_constraints()
             .len()
             .checked_add(builder.extension_constraints().len())
+            .ok_or_else(|| invalid("constraint count overflow"))?;
+        // The folder batches one pin per listed cell with the AIR's own constraints,
+        // and no symbolic pass sees them.
+        let pins = boundary_io_pins(air.public_boundary_io());
+        let constraints = own_constraints
+            .checked_add(pins.count)
             .ok_or_else(|| invalid("constraint count overflow"))?;
         max_num_constraints = max_num_constraints.max(constraints);
         let symbolic_degree = builder
@@ -242,7 +261,10 @@ where
                 "constraint degree hint understates the symbolic degree",
             ));
         }
-        if constraints > 0 && symbolic_degree == 0 {
+        // A constant family has no round polynomial of its own.
+        // A listed cell lifts it to the pin's degree, which is what `get_air_degrees` scores,
+        // so both entry points accept and reject the same statements.
+        if own_constraints > 0 && symbolic_degree.max(pins.degree) == 0 {
             return Err(invalid("constant constraint families are unsupported"));
         }
         let tuples = builder

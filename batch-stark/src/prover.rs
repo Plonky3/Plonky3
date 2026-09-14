@@ -131,6 +131,15 @@ where
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::ProverData: Sync,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Commitment: Sync,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        instances
+            .iter()
+            .all(|instance| instance.air.public_boundary_io().is_empty()),
+        "batch-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     let common = &prover_data.common;
     // TODO: Extend if additional lookup gadgets are added.
     let lookup_gadget = LogUpGadget::new();
@@ -835,6 +844,13 @@ where
     LG: LookupProtocol + Sync,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        air.public_boundary_io().is_empty(),
+        "batch-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     let quotient_size = quotient_domain.size();
     let main_width = trace_on_quotient_domain.width();
     let (perm_width, perm_height) = opt_permutation_on_quotient_domain

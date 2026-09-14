@@ -103,6 +103,13 @@ where
     SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
     A: QuotientAir<SC>,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        air.public_boundary_io().is_empty(),
+        "uni-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     #[cfg(debug_assertions)]
     p3_air::check_constraints(air, &trace, public_values);
 
@@ -523,6 +530,13 @@ where
     A: QuotientAir<SC>,
     Mat: Matrix<Val<SC>> + Sync,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        air.public_boundary_io().is_empty(),
+        "uni-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     if Val::<SC>::BENEFITS_FROM_LOCKSTEP_EVALUATION {
         return quotient_values_inner::<SC, A, Mat, VectorizedEval<QUOTIENT_ILP>>(

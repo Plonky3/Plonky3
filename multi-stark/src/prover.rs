@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 
+use p3_air::boundary;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
@@ -115,6 +116,7 @@ where
 /// - A preprocessed key, when present, must have the same height as the main trace.
 /// - A periodic column's period must be a power of two dividing the trace height.
 /// - A lookup-active trace must meet the prover's SIMD packing width.
+/// - An AIR's public boundary declaration must name only cells and values it has.
 #[tracing::instrument(skip_all)]
 pub fn prove<'a, C, A>(
     config: &C,
@@ -159,12 +161,23 @@ where
         "every trace arity must be at least the commitment scheme's padding floor"
     );
 
+    // Reject a malformed public boundary declaration before anything indexes by it.
+    // The pins the folder injects read columns and public values by those numbers.
+    let airs = instances.airs();
+    for (instance, air) in airs.iter().enumerate() {
+        boundary::validate(
+            air.public_boundary_io(),
+            air.width(),
+            air.num_public_values(),
+        )
+        .unwrap_or_else(|error| panic!("instance {instance} boundary IO: {error}"));
+    }
+
     // Describe the statement before binding anything into it.
     //
     // Every number comes from the AIRs, from the tables this caller holds, and from `pow_bits`.
     // No proof exists yet, so none of them can come from one.
     let num_instances = instances.len();
-    let airs = instances.airs();
     let public_values = instances.public_values();
     let mut transcript = MultiStarkProverTranscript::<C::Challenger, C::Val>::new(
         challenger,
