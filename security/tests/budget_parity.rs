@@ -16,7 +16,7 @@ use p3_security::fri::{FriRegime, commit_phase_error_udr, conjectured_error};
 use p3_security::grinding::{GrindingSites, boost};
 use p3_security::logup::{LogUpAir, security_term as logup_security_term};
 use p3_security::shape::{InstanceShape as F64InstanceShape, StarkAirParams};
-use p3_security::{air, deep, fixed};
+use p3_security::{ErrorBits, SecurityAssumption, air, deep, fixed};
 use proptest::prelude::*;
 
 const TIGHT_TOL: f64 = 1e-4;
@@ -144,7 +144,7 @@ fn every_round_direction_and_tightness() {
                     check_composition(&report, air_vector);
                     check_ood(&report, air_vector, max_combo, log_max_height, ood_pow_bits);
                     check_folding(&report, log_max_height, folding_pow_bits);
-                    check_deep_composition(&report, air_vector, deep_pow_bits);
+                    check_deep_composition(&report, air_vector, log_max_height, deep_pow_bits);
                 }
             }
         }
@@ -283,21 +283,42 @@ fn check_folding(report: &SecurityReport, log_max_height: u32, folding_pow_bits:
     );
 }
 
-fn check_deep_composition(report: &SecurityReport, air_vector: &AirVector, deep_pow_bits: u32) {
+fn check_deep_composition(
+    report: &SecurityReport,
+    air_vector: &AirVector,
+    log_max_height: u32,
+    deep_pow_bits: u32,
+) {
     let fixed_bits = term_bits(report, DEEP_COMPOSITION_LABEL);
+    let num_terms = air_vector.num_deep_terms as usize;
+    // The opening-batching term of `p3_security::stark`'s conjectured report: the proximity-gap
+    // error `(k − 1)·n / |F|` over the LDE domain.
     let p3_bits = cap(boost(
-        air::composition_error(air_vector.num_deep_terms as usize, 1.0, CAP_BITS),
+        ErrorBits::from_log2(
+            SecurityAssumption::UniqueDecoding
+                .prox_gaps_error(
+                    log_max_height as usize,
+                    LOG_BLOWUP as usize,
+                    CAP_BITS,
+                    num_terms,
+                )
+                .max(0.0),
+        ),
         deep_pow_bits as usize,
     )
     .bits());
 
+    // The budget's coefficient is `k` where the reference has `k − 1`, which costs it at most
+    // `log2(k / (k − 1))` bits.
+    let tolerance = (num_terms as f64 / (num_terms - 1) as f64).log2() + TIGHT_TOL;
     assert!(
         fixed_bits <= p3_bits + TIGHT_TOL,
-        "deep-composition: {fixed_bits} > {p3_bits}"
+        "deep-composition: {fixed_bits} > {p3_bits} at h={log_max_height}"
     );
     assert!(
-        p3_bits - fixed_bits < TIGHT_TOL,
-        "deep-composition: gap {} >= tolerance, fixed drifted conservative",
+        p3_bits - fixed_bits < tolerance,
+        "deep-composition: gap {} >= tolerance {tolerance} at h={log_max_height}, \
+         fixed drifted conservative",
         p3_bits - fixed_bits
     );
 }
