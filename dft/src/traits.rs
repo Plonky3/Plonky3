@@ -2,8 +2,8 @@ use alloc::vec::Vec;
 
 use p3_field::{BasedVectorSpace, TwoAdicField};
 use p3_matrix::Matrix;
-use p3_matrix::bitrev::BitReversibleMatrix;
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
+use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::util::swap_rows;
 
 use crate::util::{coset_shift_cols, divide_by_height};
@@ -256,6 +256,51 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         let new_len = coeffs.values.len().checked_mul(scale).unwrap();
         coeffs.values.resize(new_len, F::ZERO);
         self.coset_dft_batch(coeffs, shift)
+    }
+
+    /// Number of rows per completed LDE block.
+    ///
+    /// For valid LDE dimensions, implementations must return a positive power of two
+    /// dividing the output height. The default uses the entire output as one block.
+    fn lde_output_block_rows(&self, input_height: usize, added_bits: usize) -> usize {
+        let scale = 1usize.checked_shl(added_bits.try_into().unwrap()).unwrap();
+        input_height.checked_mul(scale).unwrap()
+    }
+
+    /// Like [`coset_lde_batch_with_transform`](Self::coset_lde_batch_with_transform),
+    /// but also visit completed evaluation blocks.
+    ///
+    /// The returned view has natural row order over bit-reversed storage. `consume`
+    /// receives each block's starting physical row and a read-only view of exactly
+    /// [`lde_output_block_rows`](Self::lde_output_block_rows) rows.
+    ///
+    /// On successful return, every output row has been visited exactly once. Calls may
+    /// overlap and arrive in any order. Each view lasts only for its call, and the DFT
+    /// never writes a block after publishing it. All calls finish before this method returns.
+    ///
+    /// `transform` runs once on the calling thread before any `consume` call. The default
+    /// implementation visits blocks after the full LDE; implementations may visit them earlier.
+    fn coset_lde_batch_with_blocks<T, C>(
+        &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        transform: T,
+        consume: C,
+    ) -> BitReversedMatrixView<RowMajorMatrix<F>>
+    where
+        T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+        C: Fn(usize, RowMajorMatrixView<'_, F>) + Sync,
+    {
+        let rows = self.lde_output_block_rows(mat.height(), added_bits);
+        let output = self
+            .coset_lde_batch_with_transform(mat, added_bits, shift, transform)
+            .bit_reverse_rows()
+            .to_row_major_matrix();
+        for (index, values) in output.values.chunks_exact(rows * output.width).enumerate() {
+            consume(index * rows, RowMajorMatrixView::new(values, output.width));
+        }
+        output.bit_reverse_rows()
     }
 
     /// Compute the discrete Fourier transform (DFT) of `vec`.

@@ -150,7 +150,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 
     fn coset_dft_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> Self::Evaluations {
         reverse_matrix_index_bits(&mut mat);
-        coset_dft(self, &mut mat.as_view_mut(), shift);
+        coset_dft(self, &mut mat.as_view_mut(), shift, 0, &|_, _| {});
         BitReversalPerm::new_view(mat)
     }
 
@@ -182,11 +182,47 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
     #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
     fn coset_lde_batch_with_transform<T>(
         &self,
-        mut mat: RowMajorMatrix<F>,
+        mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
         transform: T,
     ) -> Self::Evaluations
+    where
+        T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+    {
+        self.lde_with_consumer(mat, added_bits, shift, transform, &|_, _| {})
+    }
+
+    fn lde_output_block_rows(&self, input_height: usize, _added_bits: usize) -> usize {
+        1 << (log2_strict_usize(input_height) / 2)
+    }
+
+    #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
+    fn coset_lde_batch_with_blocks<T, C>(
+        &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        transform: T,
+        consume: C,
+    ) -> Self::Evaluations
+    where
+        T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+        C: Fn(usize, RowMajorMatrixView<'_, F>) + Sync,
+    {
+        self.lde_with_consumer(mat, added_bits, shift, transform, &consume)
+    }
+}
+
+impl<F: TwoAdicField + Ord> Radix2DitParallel<F> {
+    fn lde_with_consumer<T>(
+        &self,
+        mut mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        transform: T,
+        consume: &(impl Fn(usize, RowMajorMatrixView<'_, F>) + Sync),
+    ) -> BitReversedMatrixView<RowMajorMatrix<F>>
     where
         T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
     {
@@ -247,11 +283,11 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             .enumerate()
             .for_each(|(k, dest)| {
                 let coset_idx = reverse_bits_len(k + 1, added_bits);
-                coset_dft_oop(&src, dest, &coset_twiddles[coset_idx]);
+                coset_dft_oop(&src, dest, &coset_twiddles[coset_idx], (k + 1) * h, consume);
             });
 
-        // `for_each` joins all readers before coset zero overwrites the coefficients.
-        coset_dft(self, &mut first_coset_mat.as_view_mut(), shift);
+        // Join all coefficient readers and consumers before coset zero overwrites the coefficients.
+        coset_dft(self, &mut first_coset_mat.as_view_mut(), shift, 0, consume);
 
         // SAFETY: We wrote all values above.
         unsafe {
@@ -266,6 +302,8 @@ fn coset_dft<F: TwoAdicField + Ord>(
     dft: &Radix2DitParallel<F>,
     mat: &mut RowMajorMatrixViewMut<'_, F>,
     shift: F,
+    row_base: usize,
+    consume: &(impl Fn(usize, RowMajorMatrixView<'_, F>) + Sync),
 ) {
     let log_h = log2_strict_usize(mat.height());
     let mid = log_h.div_ceil(2);
@@ -278,7 +316,7 @@ fn coset_dft<F: TwoAdicField + Ord>(
     // For the second half, we flip the DIT, working in bit-reversed order.
     reverse_matrix_index_bits(mat);
 
-    second_half_general(mat, mid, &twiddles);
+    second_half_general(mat, mid, &twiddles, row_base, consume);
 }
 
 /// Like `coset_dft`, except out-of-place and using precomputed twiddles.
@@ -294,6 +332,8 @@ fn coset_dft_oop<F: Field>(
     src: &RowMajorMatrixView<'_, F>,
     dst_maybe: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
     twiddles: &[Vec<F>],
+    row_base: usize,
+    consume: &(impl Fn(usize, RowMajorMatrixView<'_, F>) + Sync),
 ) {
     assert_eq!(src.dimensions(), dst_maybe.dimensions());
 
@@ -308,6 +348,7 @@ fn coset_dft_oop<F: Field>(
         );
     }
 
+    let mid = log_h.div_ceil(2);
     if log_h == 0 {
         // This is an edge case where first_half_general_oop doesn't work, as it expects there to be
         // at least one layer in the network, so we just copy instead.
@@ -315,25 +356,27 @@ fn coset_dft_oop<F: Field>(
             transmute::<&RowMajorMatrixView<'_, F>, &RowMajorMatrixView<'_, MaybeUninit<F>>>(src)
         };
         dst_maybe.copy_from(src_maybe);
-        return;
+    } else {
+        // The first half looks like a normal DIT.
+        first_half_general_oop(src, dst_maybe, mid, twiddles);
     }
 
-    let mid = log_h.div_ceil(2);
-
-    // The first half looks like a normal DIT.
-    first_half_general_oop(src, dst_maybe, mid, twiddles);
-
-    // dst is now initialized.
+    // SAFETY: The copy or first FFT half initialized every destination element.
     let dst = unsafe {
         transmute::<&mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>, &mut RowMajorMatrixViewMut<'_, F>>(
             dst_maybe,
         )
     };
 
+    if log_h == 0 {
+        consume(row_base, dst.as_view());
+        return;
+    }
+
     // For the second half, we flip the DIT, working in bit-reversed order.
     reverse_matrix_index_bits(dst);
 
-    second_half_general(dst, mid, twiddles);
+    second_half_general(dst, mid, twiddles, row_base, consume);
 }
 
 /// This can be used as the first half of a DIT butterfly network.
@@ -521,6 +564,8 @@ fn second_half_general<F: Field>(
     mat: &mut RowMajorMatrixViewMut<'_, F>,
     mid: usize,
     twiddles_rev: &[Vec<F>],
+    row_base: usize,
+    consume: &(impl Fn(usize, RowMajorMatrixView<'_, F>) + Sync),
 ) {
     let log_h = log2_strict_usize(mat.height());
     mat.par_row_chunks_exact_mut(1 << (log_h - mid))
@@ -539,6 +584,7 @@ fn second_half_general<F: Field>(
                 );
                 backwards = !backwards;
             }
+            consume(row_base + thread * submat.height(), submat.as_view());
         });
 }
 
@@ -891,7 +937,13 @@ mod tests {
         let src = RowMajorMatrix::new(alloc::vec![F::ONE; 8], 1);
         let mut dst = RowMajorMatrix::new(alloc::vec![MaybeUninit::uninit(); 8], 1);
 
-        coset_dft_oop(&src.as_view(), &mut dst.as_view_mut(), &twiddles);
+        coset_dft_oop(
+            &src.as_view(),
+            &mut dst.as_view_mut(),
+            &twiddles,
+            0,
+            &|_, _| {},
+        );
     }
 
     #[test]
@@ -905,7 +957,13 @@ mod tests {
         let src = RowMajorMatrix::new(alloc::vec![F::ONE; 8], 1);
         let mut dst = RowMajorMatrix::new(alloc::vec![MaybeUninit::uninit(); 8], 1);
 
-        coset_dft_oop(&src.as_view(), &mut dst.as_view_mut(), &twiddles);
+        coset_dft_oop(
+            &src.as_view(),
+            &mut dst.as_view_mut(),
+            &twiddles,
+            0,
+            &|_, _| {},
+        );
     }
 
     #[test]
