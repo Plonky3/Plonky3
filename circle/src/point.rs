@@ -134,28 +134,44 @@ impl<F: Field> Point<F> {
 
 /// Compute Lagrange denominators for CFFT-ordered points of `domain`.
 ///
-/// A twin-coset has a common selector normalization on each half. CFFT ordering keeps those
-/// halves at even and odd indices, respectively, so this avoids recomputing the `s_p` chain for
-/// every point.
+/// Let `k = domain.log_n` and let `g` generate the subgroup of order `2^(k-1)`. Then
+/// `s_p_at_p(P, k) = -2^k * (2^(k-1) P).y`, and doubling `k - 1` times sends the half-coset
+/// `shift + <g>` to `2^(k-1) shift` and the half-coset `-shift + <g>` to its negation, for any
+/// `shift`. So `s_p_at_p` equals `s_p_at_p(shift, k)` on the first half and its negation on the
+/// second, which avoids recomputing the `s_p` chain for every point.
+///
+/// `points[i]` must lie in `shift + <g>` exactly when `i` is even. CFFT ordering satisfies this;
+/// any ordering that does not yields wrong denominators.
 pub(crate) fn compute_lagrange_den_on_domain<F: ComplexExtendable, EF: ExtensionField<F>>(
     points: &[Point<F>],
     at: Point<EF>,
     domain: CircleDomain<F>,
 ) -> Vec<EF> {
-    debug_assert_eq!(points.len(), 1 << domain.log_n);
+    let n = points.len();
+    debug_assert_eq!(n, 1 << domain.log_n);
 
     let s_p_at_shift = domain.shift.s_p_at_p(domain.log_n);
+    let s_p_at_index = |i: usize| {
+        if i & 1 == 0 {
+            s_p_at_shift
+        } else {
+            -s_p_at_shift
+        }
+    };
+    // Spot-check the parity precondition on both ends of the slice.
+    debug_assert!(
+        [0, 1, n - 2, n - 1]
+            .into_iter()
+            .all(|i| points[i].s_p_at_p(domain.log_n) == s_p_at_index(i)),
+        "points do not alternate between the half-cosets of the domain"
+    );
+
     let (numer, denom): (Vec<_>, Vec<_>) = points
         .par_iter()
         .enumerate()
         .map(|(i, &pt)| {
             let diff = at - pt;
-            let s_p = if i & 1 == 0 {
-                s_p_at_shift
-            } else {
-                -s_p_at_shift
-            };
-            (diff.x + F::ONE, diff.y * s_p)
+            (diff.x + F::ONE, diff.y * s_p_at_index(i))
         })
         .unzip();
 
@@ -336,5 +352,17 @@ mod tests {
                 lagrange_den_scalar(&points, at, log_n),
             );
         }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "points do not alternate between the half-cosets of the domain")]
+    fn compute_lagrange_den_on_domain_rejects_reversed_points() {
+        let domain = crate::CircleDomain::<F>::standard(4);
+        let mut points = crate::cfft_permute_slice(&domain.points().collect::<Vec<_>>());
+        points.reverse();
+        let at = Point::<EF>::from_projective_line(EF::from_u8(9));
+
+        let _ = compute_lagrange_den_on_domain(&points, at, domain);
     }
 }
