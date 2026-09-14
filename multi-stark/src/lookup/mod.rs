@@ -39,8 +39,8 @@ use p3_util::log2_ceil_usize;
 use thiserror::Error;
 
 use crate::fractional_gkr::{
-    Fraction, FractionGkrError, FractionGkrOutput, FractionGkrProof, prove_fractional_gkr,
-    verify_fractional_gkr,
+    Fraction, FractionGkrError, FractionGkrOutput, FractionGkrProof, LeafNumerator,
+    prove_fractional_gkr, verify_fractional_gkr,
 };
 use crate::lookup::transcript::{LookupProverTranscript, LookupShape, LookupVerifierTranscript};
 
@@ -694,8 +694,16 @@ where
     // Materialize every `multiplicity / denominator` fraction.
     // Prove their padded sum is zero and open both tables at one output point.
     let fraction = plan.materialize_fraction(main, preprocessed, public_values, alpha, beta);
-    let (fractional_gkr, output) =
-        transcript.reduction(|challenger| prove_fractional_gkr(&fraction, challenger));
+    let (fractional_gkr, output) = transcript.reduction(|challenger| {
+        // LogUp's numerators are multiplicities, so this leaf keeps them in the base field.
+        prove_fractional_gkr(
+            Fraction {
+                n: LeafNumerator::Base(&fraction.n),
+                d: &fraction.d,
+            },
+            challenger,
+        )
+    });
 
     // Theta is drawn only after the reduction has fixed its point and openings.
     // It folds the two openings into the one claim the zerocheck carries:
