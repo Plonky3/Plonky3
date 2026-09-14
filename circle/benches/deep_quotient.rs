@@ -9,6 +9,9 @@ use p3_mersenne_31::{Mersenne31, QM31};
 type F = Mersenne31;
 type EF = QM31;
 
+/// The points of `CircleDomain::standard(log_n)` in natural order.
+///
+/// `CircleDomain::points` is crate-private, so this spells out the same interleaved cosets.
 fn domain_points(log_n: usize) -> Vec<Point<F>> {
     let generator = Point::generator(log_n - 1);
     let mut coset_0 = Point::generator(log_n + 1);
@@ -23,7 +26,8 @@ fn domain_points(log_n: usize) -> Vec<Point<F>> {
     points
 }
 
-fn current_geometry(points: &[Point<F>], zeta: Point<EF>) -> (Vec<EF>, Vec<EF>, Vec<EF>) {
+/// Baseline that keeps `re` and `im` and inverts `re^2 + im^2` without the circle identity.
+fn unfactored_geometry(points: &[Point<F>], zeta: Point<EF>) -> (Vec<EF>, Vec<EF>, Vec<EF>) {
     let (re, im): (Vec<_>, Vec<_>) = points.iter().map(|&point| point.v_p(zeta)).unzip();
     let denoms = re
         .iter()
@@ -33,6 +37,7 @@ fn current_geometry(points: &[Point<F>], zeta: Point<EF>) -> (Vec<EF>, Vec<EF>, 
     (re, im, batch_multiplicative_inverse(&denoms))
 }
 
+/// Serial copy of the crate-private `compute_vanishing_parts`, which stores `im / (2 re)`.
 fn factored_geometry(points: &[Point<F>], zeta: Point<EF>) -> Vec<EF> {
     let (re, im): (Vec<_>, Vec<_>) = points.iter().map(|&point| point.v_p(zeta)).unzip();
     let denoms = re.iter().map(|re| re.double()).collect::<Vec<_>>();
@@ -43,8 +48,9 @@ fn factored_geometry(points: &[Point<F>], zeta: Point<EF>) -> Vec<EF> {
         .collect()
 }
 
+/// Baseline accumulation over the `re`, `im` and `1 / (re^2 + im^2)` from `unfactored_geometry`.
 #[allow(clippy::too_many_arguments)]
-fn current_accumulate(
+fn unfactored_accumulate(
     ro: &mut [EF],
     alpha_offset: EF,
     alpha_pow_width: EF,
@@ -65,6 +71,7 @@ fn current_accumulate(
     }
 }
 
+/// Serial copy of the crate-private `accumulate_deep_quotient`.
 fn factored_accumulate(
     ro: &mut [EF],
     alpha_offset: EF,
@@ -90,22 +97,22 @@ fn bench_deep_quotient(c: &mut Criterion) {
     let reduced_rows = (0..points.len())
         .map(|i| EF::from_u64(i as u64 + 1))
         .collect::<Vec<_>>();
-    let (re, im, denom_inv) = current_geometry(&points, zeta);
+    let (re, im, denom_inv) = unfactored_geometry(&points, zeta);
     let im_over_twice_re = factored_geometry(&points, zeta);
 
     let mut group = c.benchmark_group("circle/deep_quotient/log_n=18");
-    group.bench_function("geometry/current", |b| {
-        b.iter(|| black_box(current_geometry(black_box(&points), black_box(zeta))));
+    group.bench_function("geometry/unfactored", |b| {
+        b.iter(|| black_box(unfactored_geometry(black_box(&points), black_box(zeta))));
     });
     group.bench_function("geometry/factored", |b| {
         b.iter(|| black_box(factored_geometry(black_box(&points), black_box(zeta))));
     });
 
-    let mut current_ro = EF::zero_vec(points.len());
-    group.bench_function("accumulate/current", |b| {
+    let mut unfactored_ro = EF::zero_vec(points.len());
+    group.bench_function("accumulate/unfactored", |b| {
         b.iter(|| {
-            current_accumulate(
-                black_box(&mut current_ro),
+            unfactored_accumulate(
+                black_box(&mut unfactored_ro),
                 alpha_offset,
                 alpha_pow_width,
                 black_box(&reduced_rows),
@@ -114,7 +121,7 @@ fn bench_deep_quotient(c: &mut Criterion) {
                 black_box(&denom_inv),
                 reduced_at_zeta,
             );
-            black_box(&current_ro);
+            black_box(&unfactored_ro);
         });
     });
 

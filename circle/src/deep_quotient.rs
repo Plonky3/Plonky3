@@ -53,7 +53,8 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
     let numerator = re_v_zeta - alpha_pow_width * im_v_zeta;
 
     // The circle identity reduces |v_gamma|^2 = Re(v_gamma)^2 + Im(v_gamma)^2
-    // to 2 * Re(v_gamma).
+    // to 2 * Re(v_gamma). This is an exact equality, so even over an extension
+    // containing `i`, both forms vanish exactly when `x = zeta`.
     let denominator = re_v_zeta.double();
 
     (numerator, denominator)
