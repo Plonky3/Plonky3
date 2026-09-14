@@ -1,9 +1,14 @@
+use core::hint::black_box;
+
 use criterion::{Criterion, criterion_group, criterion_main};
+use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::{BinomialExtensionField, Complex};
 use p3_field_testing::bench_func::{
     benchmark_inv, benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,
 };
-use p3_mersenne_31::Mersenne31;
+use p3_mersenne_31::{Mersenne31, PackedQM31};
+use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 type EF2 = BinomialExtensionField<Complex<Mersenne31>, 2>;
 type EF3 = BinomialExtensionField<Complex<Mersenne31>, 3>;
@@ -27,7 +32,26 @@ fn bench_cubic_extension(c: &mut Criterion) {
     benchmark_mul_latency::<EF3, L_REPS>(c, name);
 }
 
-criterion_group!(bench_mersennecomplex_ef2, bench_quadratic_extension);
+fn bench_packed_qm31(c: &mut Criterion) {
+    let mut rng = SmallRng::seed_from_u64(1);
+    let x: PackedQM31 = rng.random();
+
+    c.bench_function("PackedQM31/square/dependent_64", |b| {
+        b.iter(|| {
+            let mut y = black_box(x);
+            for _ in 0..64 {
+                y = y.square();
+            }
+            black_box(y)
+        });
+    });
+}
+
+criterion_group!(
+    bench_mersennecomplex_ef2,
+    bench_quadratic_extension,
+    bench_packed_qm31
+);
 criterion_group!(bench_mersennecomplex_ef3, bench_cubic_extension);
 
 criterion_main!(bench_mersennecomplex_ef2, bench_mersennecomplex_ef3);
