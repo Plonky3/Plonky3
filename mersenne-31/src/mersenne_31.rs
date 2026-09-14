@@ -752,17 +752,21 @@ mod tests {
             F::new_reduced(F::ORDER_U32),
             F::new(0x1234_5678),
         ];
-        let packed = PF::from_fn(|lane| values[lane % values.len()]);
+        // Rotate the lane assignment so every value reaches a lane at every packing width.
+        for offset in 0..values.len() {
+            let value = |lane: usize| values[(lane + offset) % values.len()];
+            let packed = PF::from_fn(value);
 
-        for exp in [0, 1, 2, 30, 31, 32, 62, u64::MAX] {
-            assert_eq!(
-                packed.mul_2exp_u64(exp),
-                PF::from_fn(|lane| values[lane % values.len()].mul_2exp_u64(exp)),
-            );
-            assert_eq!(
-                packed.div_2exp_u64(exp),
-                PF::from_fn(|lane| values[lane % values.len()].div_2exp_u64(exp)),
-            );
+            for exp in [0, 1, 2, 30, 31, 32, 62, u64::MAX] {
+                assert_eq!(
+                    packed.mul_2exp_u64(exp),
+                    PF::from_fn(|lane| value(lane).mul_2exp_u64(exp)),
+                );
+                assert_eq!(
+                    packed.div_2exp_u64(exp),
+                    PF::from_fn(|lane| value(lane).div_2exp_u64(exp)),
+                );
+            }
         }
     }
 
