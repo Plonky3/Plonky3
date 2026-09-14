@@ -219,6 +219,14 @@ pub trait BaseAir<F>: Sync {
     /// Forgetting to leaves every wrapped cell unbound, and nothing reports it,
     /// because an empty list is a valid declaration.
     ///
+    /// An AIR that embeds another lists the embedded cells itself, in its own numbering.
+    /// Forwarding the embedded list verbatim is wrong: a sub-builder narrows the main
+    /// trace to a column range but passes the parent's public values straight through,
+    /// so each `column` shifts by the range start while `public_value` does not.
+    ///
+    /// Symbolic builders run only [`Air::eval`], so they never see the injected pins.
+    /// Anything that counts or scores constraints from a symbolic pass adds them back.
+    ///
     /// # Correctness
     ///
     /// - Every column index is less than the main width.

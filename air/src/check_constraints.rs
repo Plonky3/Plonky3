@@ -87,6 +87,10 @@ impl fmt::Display for ConstraintFailure {
 #[derive(Debug, Clone)]
 pub struct ConstraintReport {
     /// Every constraint violation found during the evaluation pass.
+    ///
+    /// Row-ordered for the AIR's own constraints.
+    /// Listed public boundary cells are compared after the row scan and appended last,
+    /// so they are not in row order with respect to the rest.
     pub failures: Vec<ConstraintFailure>,
 
     /// Total number of rows in the evaluated trace.
@@ -97,6 +101,10 @@ pub struct ConstraintReport {
     /// Captured from the first row's evaluation.
     /// If the AIR dynamically varies its constraint count per row,
     /// this reflects only the first.
+    ///
+    /// A listed public boundary cell is not one of these.
+    /// Its failure carries an index at or past this count, matching where the backend
+    /// injects the pin.
     pub total_constraints_per_row: usize,
 }
 
@@ -598,6 +606,8 @@ where
 /// A cell an AIR lists as a public input is compared after the row scan.
 /// Each mismatch is reported at an index past the AIR's own constraints,
 /// which is where the proving backend injects its pin.
+///
+/// These count against `max_failures` like any other violation.
 #[allow(unused)] // Suppresses warnings in release mode where this is dead code.
 pub fn check_all_constraints<F, A>(
     air: &A,
@@ -695,10 +705,14 @@ where
 
     // A listed cell has no AIR constraint, so it takes an index after the AIR's own.
     // That is where the proving backend injects its pin.
+    //
+    // The cap bounds these like any other failure, since the row loop may have used it up.
     let cells = air.public_boundary_io();
+    let remaining = max_failures.map_or(usize::MAX, |cap| cap.saturating_sub(all_failures.len()));
     all_failures.extend(
         boundary_io_mismatches(air, main, public_values)
             .into_iter()
+            .take(remaining)
             .map(|(index, row)| ConstraintFailure {
                 row,
                 constraint: total_constraints_per_row + index,
@@ -1202,10 +1216,12 @@ mod tests {
     /// ```
     const BOUNDARY_IO_CELLS: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::Last, 0)];
 
-    /// AIR that asserts nothing and binds its only public input by position.
+    /// AIR that binds its only public input by position, beside one constraint of its own.
     ///
     /// No constraint touches the cell.
     /// Only the boundary check can catch a mismatch.
+    ///
+    /// The one transition constraint is what gives the injected pin a nonzero index.
     #[derive(Debug)]
     struct BoundaryIoAir;
 
@@ -1224,8 +1240,13 @@ mod tests {
     }
 
     impl<F: Field> Air<DebugConstraintBuilder<'_, F>> for BoundaryIoAir {
-        fn eval(&self, _builder: &mut DebugConstraintBuilder<'_, F>) {
-            // Empty: the public input is bound by position, not by a constraint.
+        fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
+            // The column counts up by one, which every fixture below satisfies.
+            // The listed cell is bound by position, not by this or any other constraint.
+            let main = builder.main();
+            let local = main.current_slice()[0];
+            let next = main.next_slice()[0];
+            builder.when_transition().assert_eq(next, local + F::ONE);
         }
     }
 
@@ -1274,17 +1295,31 @@ mod tests {
 
         let report = check_all_constraints(&BoundaryIoAir, &main, &[BabyBear::new(8)], None);
 
-        // The AIR asserts nothing, so the pin is the only constraint there is.
-        assert_eq!(report.total_constraints_per_row, 0);
+        // The pin takes the index after the AIR's own constraint, which is where the
+        // backend injects it. Reporting it at `index` alone would put it at 0.
+        assert_eq!(report.total_constraints_per_row, 1);
         assert_eq!(report.failures.len(), 1);
         assert_eq!(report.failures[0].row, 3);
-        assert_eq!(report.failures[0].constraint, 0);
+        assert_eq!(report.failures[0].constraint, 1);
         assert!(
             report.failures[0]
                 .label
                 .as_deref()
                 .is_some_and(|label| label.contains("public value 0"))
         );
+    }
+
+    #[test]
+    fn test_boundary_io_mismatch_counts_against_the_failure_cap() {
+        // Invariant: a cell failure is capped like any other, even though it is found
+        //   after the row scan rather than inside it.
+        //
+        // Fixture state: the same wrong claim, with no room left to record it.
+        let main = RowMajorMatrix::new([4u32, 5, 6, 7].map(BabyBear::new).to_vec(), 1);
+
+        let report = check_all_constraints(&BoundaryIoAir, &main, &[BabyBear::new(8)], Some(0));
+
+        assert!(report.failures.is_empty());
     }
 
     #[test]

@@ -1681,8 +1681,11 @@ fn verify_rejects_wrong_claimed_output_lookup_boundary_io() {
 
     let err = prove_verify_permutation_io(n, &pis).unwrap_err();
     assert!(
-        matches!(err, VerificationError::Zerocheck(_)),
-        "expected a zerocheck rejection, got {err:?}"
+        matches!(
+            err,
+            VerificationError::Zerocheck(ZerocheckError::FinalSumMismatch)
+        ),
+        "expected a zerocheck final-sum mismatch, got {err:?}"
     );
 }
 
@@ -1758,6 +1761,133 @@ impl<AB: AirBuilder> Air<AB> for OutputOnlyIoAir {
     fn eval(&self, _builder: &mut AB) {
         // Empty: the public value is bound by position, not by a constraint.
     }
+}
+
+/// The same AIR shape, with one constant constraint of its own beside the listed cell.
+///
+/// A constant family carries no round polynomial, so on its own it is not a valid
+/// statement. The pin supplies the degree the round polynomials are sized against.
+struct ConstantFamilyIoAir;
+
+impl<X> BaseAir<X> for ConstantFamilyIoAir {
+    fn width(&self) -> usize {
+        1
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    fn num_public_values(&self) -> usize {
+        1
+    }
+
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &OUTPUT_ONLY_CELLS
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for ConstantFamilyIoAir {
+    fn eval(&self, builder: &mut AB) {
+        // Degree zero, and satisfied on every row.
+        builder.assert_zero(AB::Expr::ZERO);
+    }
+}
+
+#[test]
+fn security_checked_roundtrip_for_a_constant_family_lifted_by_a_pin() {
+    // Invariant: `get_air_degrees` and `security_report` agree on what is a valid statement.
+    //
+    // A constant own family scores degree zero and has no round polynomial.
+    // A listed cell injects a degree-two pin, which is what the rounds are sized for.
+    //
+    //     without the cell : rejected by both, the family has no degree
+    //     with    the cell : accepted by both, the pin supplies it
+    //
+    // Scoring it in one place and rejecting it in the other would make an AIR that proves
+    // and verifies fail every security-checked entry point.
+    let n = 256;
+    let log_height = log2_strict_usize(n);
+    let mut config = config_for(log_height, 1);
+    config.collision_bits = Some(100);
+    let air = ConstantFamilyIoAir;
+    let trace = RowMajorMatrix::new((0..n).map(F::from_usize).collect(), 1);
+    let public = [F::from_usize(n - 1)];
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+
+    // The report must produce a level rather than reject the shape.
+    p3_multi_stark::security_report(
+        &config,
+        &VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &public)]),
+    )
+    .expect("a constant family lifted by a pin is a valid shape");
+
+    let proof = p3_multi_stark::prove_with_security(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &public,
+        )]),
+        0,
+        20,
+        &mut challenger(),
+    )
+    .expect("a constant family lifted by a pin must pass the security assessment");
+
+    p3_multi_stark::verify_with_security(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &public)]),
+        &proof,
+        0,
+        20,
+        &mut challenger(),
+    )
+    .expect("honest proof must verify");
+}
+
+#[test]
+fn verify_rejects_a_wrong_claim_against_a_constant_family_lifted_by_a_pin() {
+    // Mutation: claim a last row the trace does not carry.
+    //
+    // The constant family says nothing about it, so only the pin can reject.
+    let n = 256;
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, 1);
+    let air = ConstantFamilyIoAir;
+    let trace = RowMajorMatrix::new((0..n).map(F::from_usize).collect(), 1);
+    let public = [F::from_usize(n)];
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &public,
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &public)]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerificationError::Zerocheck(ZerocheckError::FinalSumMismatch)
+        ),
+        "expected a zerocheck final-sum mismatch, got {err:?}"
+    );
 }
 
 #[test]

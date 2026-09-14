@@ -32,7 +32,9 @@ use p3_sumcheck::generic_degree::{
 use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
-use crate::folder::{InteractionMultilinearFolder, MultilinearFolder, ProverAir, VerifierAir};
+use crate::folder::{
+    InteractionMultilinearFolder, MultilinearFolder, ProverAir, VerifierAir, boundary_io_pins,
+};
 use crate::lookup::{ActiveLookupRuntime, AirLinkClaim, LookupRuntime};
 use crate::opening::{OpeningClaims, TableOpening};
 use crate::rounds::{AirDegrees, AirOpenings, RoundStateBase, RoundStateExt, Stage, StageCoupling};
@@ -136,14 +138,6 @@ pub struct AirZerocheck<'a, A> {
     pow_bits: usize,
 }
 
-/// Per-variable degree of one public boundary pin, scored at domain size two.
-///
-/// ```text
-///     selector * (column - public)
-///        1     *      1             = 2
-/// ```
-const BOUNDARY_IO_PIN_DEGREE: usize = 2;
-
 /// Native per-variable degrees of one AIR's ordinary constraints and lookup links.
 ///
 /// Both families come from one symbolic pass and are measured with the eq weight stripped.
@@ -175,7 +169,8 @@ const BOUNDARY_IO_PIN_DEGREE: usize = 2;
 /// # Panics
 ///
 /// Panics if the AIR declares mutually-exclusive interactions.
-/// Panics if a declared family is constant, since a constant has no round polynomial.
+/// Panics if a declared family is constant and no listed cell lifts it,
+/// since a constant has no round polynomial of its own.
 /// Panics if the AIR declares neither constraints nor interactions.
 pub(crate) fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
 where
@@ -195,8 +190,8 @@ where
     let extension_constraints = builder.extension_constraints();
     validate_successor_columns(air, &builder, &base_constraints, &extension_constraints);
     let has_own_constraints = !base_constraints.is_empty() || !extension_constraints.is_empty();
-    let has_boundary_io = !air.public_boundary_io().is_empty();
-    let has_constraints = has_own_constraints || has_boundary_io;
+    let pins = boundary_io_pins(air.public_boundary_io());
+    let has_constraints = has_own_constraints || pins.count > 0;
     let symbolic_constraint_degree = base_constraints
         .iter()
         .map(|expression| expression.poly_degree(2, &[]))
@@ -218,11 +213,7 @@ where
 
     // Neither source above sees the pins.
     // Score them here so the round polynomials carry enough evaluations for both groups.
-    let constraint_degree = if has_boundary_io {
-        own_constraint_degree.max(BOUNDARY_IO_PIN_DEGREE)
-    } else {
-        own_constraint_degree
-    };
+    let constraint_degree = own_constraint_degree.max(pins.degree);
 
     let has_interactions = !builder.global_interactions().is_empty()
         || builder
@@ -2976,7 +2967,10 @@ mod tests {
             .verify::<F, EF, _>(&proof, &[1], &public_values, &mut fresh_challenger())
             .expect("both ends of a two-row trace must verify");
 
-        // Mutation: swap the two claims, which a single merged end would not notice.
+        // Mutation: swap the two claims, which only inverted ends would accept.
+        //
+        // Two pins sharing one selector would already fail the honest half above,
+        // since 5 - 9 is nonzero on whichever row both would read.
         let swapped = [F::from_u64(9), F::from_u64(5)];
         let public_values = [&swapped[..]];
         let (proof, _) = prove_traces(&zerocheck, &traces, &public_values, &mut fresh_challenger());

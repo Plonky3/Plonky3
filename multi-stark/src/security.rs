@@ -26,7 +26,7 @@ use thiserror::Error;
 
 use crate::VerifierInstances;
 use crate::config::{Commitment, MultiStarkConfig};
-use crate::folder::VerifierAir;
+use crate::folder::{VerifierAir, boundary_io_pins};
 use crate::instance::Instances;
 use crate::lookup::{LookupError, LookupPlan};
 use crate::selectors::{PeriodicError, periodic_num_variables};
@@ -234,9 +234,11 @@ where
             .len()
             .checked_add(builder.extension_constraints().len())
             .ok_or_else(|| invalid("constraint count overflow"))?;
-        // The folder batches one public boundary pin per listed cell with the AIR's own constraints.
+        // The folder batches one pin per listed cell with the AIR's own constraints,
+        // and no symbolic pass sees them.
+        let pins = boundary_io_pins(air.public_boundary_io());
         let constraints = own_constraints
-            .checked_add(air.public_boundary_io().len())
+            .checked_add(pins.count)
             .ok_or_else(|| invalid("constraint count overflow"))?;
         max_num_constraints = max_num_constraints.max(constraints);
         let symbolic_degree = builder
@@ -259,7 +261,10 @@ where
                 "constraint degree hint understates the symbolic degree",
             ));
         }
-        if own_constraints > 0 && symbolic_degree == 0 {
+        // A constant family has no round polynomial of its own.
+        // A listed cell lifts it to the pin's degree, which is what `get_air_degrees` scores,
+        // so both entry points accept and reject the same statements.
+        if own_constraints > 0 && symbolic_degree.max(pins.degree) == 0 {
             return Err(invalid("constant constraint families are unsupported"));
         }
         let tuples = builder

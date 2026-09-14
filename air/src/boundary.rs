@@ -9,12 +9,13 @@
 //! A backend that supports the declaration binds each listed cell itself.
 //! The AIR then writes no boundary constraint of its own.
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Which end of the trace a boundary cell lives on.
 ///
 /// These are the two rows a first-row and a last-row selector single out.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BoundaryEnd {
     /// The first trace row, index `0`.
     First,
@@ -32,7 +33,7 @@ pub enum BoundaryEnd {
 ///
 /// This is a declaration, not a constraint.
 /// Binding the cell to the value is the proving backend's job.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BoundaryPublic {
     /// Main-trace column holding the cell.
     pub column: usize,

@@ -194,8 +194,11 @@ where
     /// Attach the descending alpha powers used to batch the asserted constraints.
     ///
     /// `alpha_powers[i]` must be `alpha^(n - 1 - i)`, where `n` is the number of constraints
-    /// the AIR asserts. The batched value is then identical to the Horner fold, while each
-    /// constraint costs one `Acc * Var` product instead of one `Acc * Acc` product.
+    /// asserted at this node. The batched value is then identical to the Horner fold, while
+    /// each constraint costs one `Acc * Var` product instead of one `Acc * Acc` product.
+    ///
+    /// `n` counts the AIR's own constraints plus one pin per listed public boundary cell.
+    /// A count taken from a symbolic pass misses the pins and indexes past the end.
     ///
     /// # Arguments
     ///
@@ -238,8 +241,8 @@ where
     ///
     /// The alpha-batched sum `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
     ///
-    /// - `C_0, ..., C_{n-1}` are the constraints asserted by the AIR in declaration order.
-    /// - `n` is the total number of asserted constraints.
+    /// - `C_0, ..., C_{n-1}` are the asserted constraints in declaration order.
+    /// - `n` is the AIR's own constraint count plus one pin per listed boundary cell.
     #[inline]
     #[must_use]
     pub fn into_accumulator(self) -> Acc {
@@ -266,7 +269,7 @@ where
     /// The alpha-batched sum `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
     ///
     /// - `C_0, ..., C_{n-1}` are the asserted constraints, public boundary pins last.
-    /// - `n` is the total number of asserted constraints.
+    /// - `n` is the AIR's own constraint count plus one pin per listed boundary cell.
     #[inline]
     #[must_use]
     pub fn eval_air<A>(mut self, air: &A) -> Acc
@@ -277,6 +280,44 @@ where
         air.eval(&mut self);
         eval_boundary_io(&mut self, air.public_boundary_io());
         self.into_accumulator()
+    }
+}
+
+/// Per-variable degree of one injected pin, scored at domain size two.
+///
+/// ```text
+///     selector * (column - public)
+///        1     *      1             = 2
+/// ```
+const BOUNDARY_IO_PIN_DEGREE: usize = 2;
+
+/// What the injected public boundary pins add to an AIR's constraint family.
+///
+/// A symbolic pass runs [`Air::eval`] alone, so it never sees the pins.
+/// Anything that counts or scores constraints from such a pass adds them back through here.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BoundaryIoPins {
+    /// One pin per listed cell.
+    pub(crate) count: usize,
+    /// Degree the pins score, or zero when the AIR lists no cell.
+    pub(crate) degree: usize,
+}
+
+/// Score the pins a folder injects for the given declaration.
+///
+/// Takes the declaration rather than the AIR, so a call site never has to name the field.
+#[inline]
+#[must_use]
+pub(crate) const fn boundary_io_pins(cells: &[BoundaryPublic]) -> BoundaryIoPins {
+    // An empty declaration injects nothing, and so lifts no degree.
+    let count = cells.len();
+    BoundaryIoPins {
+        count,
+        degree: if count == 0 {
+            0
+        } else {
+            BOUNDARY_IO_PIN_DEGREE
+        },
     }
 }
 
