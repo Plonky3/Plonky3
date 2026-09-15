@@ -52,10 +52,14 @@ pub struct ZerocheckClaim<EF> {
     ///
     /// Opening each operand at the point and recombining under the challenge must match this.
     pub value: EF,
+    /// Number of operands the claim was batched over.
+    ///
+    /// Held so discharging can refuse a batch of the wrong width rather than weighing it.
+    pub num_operands: usize,
 }
 
 impl<EF: Field> ZerocheckClaim<EF> {
-    /// Whether the committed openings at this claim's point recombine to its value.
+    /// Check the committed openings at this claim's point against its value.
     ///
     /// # Overview
     ///
@@ -65,16 +69,35 @@ impl<EF: Field> ZerocheckClaim<EF> {
     ///     open every operand at the point  ->  recombine under the challenge  ->  compare
     /// ```
     ///
-    /// The recombination is the same batching the reduction proved over.
+    /// Nothing before this ties the proof to the commitment.
     ///
-    /// It is taken from here rather than rebuilt by every caller.
+    /// A caller that skips it has verified a zerocheck over no particular witness.
+    ///
+    /// That is why the recombination lives here rather than in each caller.
+    ///
+    /// Its orientation has to match the batching the reduction proved over.
+    ///
+    /// Its order has to match the operand order.
     ///
     /// # Arguments
     ///
     /// The openings in operand order, as the constraint reads them.
-    #[must_use]
-    pub fn is_answered_by(&self, openings: &[EF]) -> bool {
-        SkipOpening::batch_claims(openings, self.gamma) == self.value
+    ///
+    /// # Errors
+    ///
+    /// - The opening count is not the one the claim was batched over.
+    /// - The openings do not recombine to the claimed value.
+    pub fn discharge(&self, openings: &[EF]) -> Result<(), ZerocheckError> {
+        if openings.len() != self.num_operands {
+            return Err(ZerocheckError::OpeningCountMismatch {
+                expected: self.num_operands,
+                actual: openings.len(),
+            });
+        }
+        if SkipOpening::batch_claims(openings, self.gamma) != self.value {
+            return Err(ZerocheckError::OpeningsDoNotMatchClaim);
+        }
+        Ok(())
     }
 }
 
@@ -96,9 +119,27 @@ pub enum ZerocheckError {
     /// The residual sumcheck claims a sum the skip round's message does not give.
     #[error("the residual claim does not match the round message")]
     ResidualClaimMismatch,
+    /// The operand blends the proof carries do not satisfy the constraint.
+    ///
+    /// The residual rounds end on the equality weight times that constraint.
+    ///
+    /// That is what checks the blends rather than trusting them.
+    #[error("the operand blends do not satisfy the constraint")]
+    BlendConstraintMismatch,
     /// The opening reduction claims a sum the residual rounds did not leave.
     #[error("the opening claim does not match the residual rounds")]
     OpeningClaimMismatch,
+    /// The commitment opened a different number of operands than the claim was batched over.
+    #[error("the commitment opened {actual} operands, expected {expected}")]
+    OpeningCountMismatch {
+        /// Operands the claim was batched over.
+        expected: usize,
+        /// Openings the commitment supplied.
+        actual: usize,
+    },
+    /// The committed openings do not recombine to the value the zerocheck claimed.
+    #[error("the committed openings do not recombine to the claimed value")]
+    OpeningsDoNotMatchClaim,
     /// The Lagrange weight vanished at the opening point, leaving the claim undetermined.
     ///
     /// The point is drawn after the weight is fixed.
@@ -321,6 +362,7 @@ where
                 point,
                 gamma,
                 value: opening_prover.surviving_claim(),
+                num_operands: self.composition.arity(),
             },
         )
     }
@@ -398,7 +440,7 @@ where
         let eq_at_rho = Poly::new_from_point(zerocheck_point.as_slice(), EF::ONE).eval_base(&rho);
         if residual_final != eq_at_rho * self.composition.eval(&proof.blends) {
             transcript.abort();
-            return Err(ZerocheckError::ResidualClaimMismatch);
+            return Err(ZerocheckError::BlendConstraintMismatch);
         }
 
         // Those blends are what the opening reduction has to start from.
@@ -445,6 +487,7 @@ where
             point,
             gamma,
             value: opening_final * weight.inverse(),
+            num_operands: self.composition.arity(),
         })
     }
 }
@@ -504,5 +547,351 @@ where
                 total
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_binary_field::{BinaryChallenger, BinaryField8, BinaryField128};
+    use p3_challenger::HashChallenger;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_keccak::Keccak256Hash;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+    use crate::univariate_skip::Conjunction;
+
+    /// The subspace the skip round runs over lives in a byte field.
+    type F = BinaryField8;
+
+    /// Challenges and every value the rounds carry live in the field above it.
+    type EF = BinaryField128;
+
+    /// Keccak-backed Fiat-Shamir, as the integration tests use.
+    type Challenger = BinaryChallenger<EF, HashChallenger<u8, Keccak256Hash, 32>>;
+
+    /// Variables the skip round binds in one go.
+    const LOG_SKIP: usize = 3;
+
+    /// Total variables, rows and skipped together.
+    const LOG_HEIGHT: usize = 6;
+
+    /// Operands the conjunction reads.
+    const ARITY: usize = 3;
+
+    const fn challenger() -> Challenger {
+        Challenger::from_hasher(Vec::new(), Keccak256Hash)
+    }
+
+    /// What a dishonest prover substitutes, in place of a value the protocol pins.
+    ///
+    /// # Why substitute rather than mutate
+    ///
+    /// Editing a finished proof desynchronises the transcript.
+    ///
+    /// Every later challenge moves, so the replay rejects for that reason alone.
+    ///
+    /// Substituting during proving leaves the transcript self-consistent.
+    ///
+    /// The rounds really run on the substituted value.
+    ///
+    /// Only the check named below then stands between the proof and acceptance.
+    ///
+    /// Each field therefore pins one check, rather than pinning the transcript again.
+    #[derive(Debug, Clone, Default)]
+    struct Dishonest {
+        /// Replaces the sum the residual rounds are run on.
+        residual_claim: Option<EF>,
+        /// Replaces the blends the proof carries, after the rounds have run.
+        blends: Option<Vec<EF>>,
+        /// Replaces the sum the opening reduction's rounds are run on.
+        opening_claim: Option<EF>,
+    }
+
+    /// A bit witness satisfying the conjunction, packed row by row.
+    fn witness(seed: u64, row_bytes: usize) -> [Vec<u8>; ARITY] {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let cells = (1 << (LOG_HEIGHT - LOG_SKIP)) * row_bytes;
+
+        let a = (0..cells).map(|_| rng.random::<u8>()).collect::<Vec<_>>();
+        let b = (0..cells).map(|_| rng.random::<u8>()).collect::<Vec<_>>();
+        let c = a.iter().zip(&b).map(|(&x, &y)| x & y).collect::<Vec<_>>();
+        [a, b, c]
+    }
+
+    /// Prove the zerocheck, substituting whatever the dishonest prover was told to.
+    ///
+    /// A mirror of the honest prover, kept beside it.
+    ///
+    /// A reader can then see that the two differ only in the three substitutions.
+    fn prove_dishonest(
+        check: &BinaryZerocheck<F, Conjunction>,
+        operands: &[&[u8]],
+        challenger: &mut Challenger,
+        dishonest: &Dishonest,
+    ) -> ZerocheckProof<EF> {
+        let log_rows = LOG_HEIGHT - check.round().log_size();
+        let mut transcript = ZerocheckProverTranscript::<Challenger, EF, EF>::new(
+            challenger,
+            check.shape(LOG_HEIGHT),
+        );
+
+        let zerocheck_point = transcript.zerocheck_point(log_rows);
+        let eq = Poly::new_from_point(zerocheck_point.as_slice(), EF::ONE);
+
+        let message =
+            check
+                .round()
+                .stream_round_message::<EF, _>(operands, eq.as_slice(), &Conjunction);
+        let (lambda, skip_pow) = transcript.skip_round(&message);
+
+        // The sum the residual rounds are run on, honest unless substituted.
+        let residual_claim = dishonest.residual_claim.unwrap_or_else(|| {
+            check
+                .round()
+                .evaluate(&message, lambda)
+                .expect("the prover built the message at this round's width")
+        });
+
+        let selector = check.round().selector::<EF>(lambda);
+        let bound = operands
+            .iter()
+            .map(|rows| selector.bind(rows))
+            .collect::<Vec<_>>();
+        let mut residual_prover = ResidualProver::<F, EF, Conjunction> {
+            eq,
+            operands: bound,
+            composition: &Conjunction,
+            _f: PhantomData,
+        };
+        let (residual, rho) = transcript.residual_sumcheck(|challenger| {
+            residual_prover.prove::<EF, _>(
+                challenger,
+                log_rows,
+                Composition::<F>::degree(&Conjunction) + 1,
+                0,
+                residual_claim,
+            )
+        });
+
+        // The blends the proof carries, honest unless substituted.
+        let blends = dishonest.blends.clone().unwrap_or_else(|| {
+            residual_prover
+                .operands
+                .iter()
+                .map(|poly| poly.as_slice()[0])
+                .collect()
+        });
+        transcript.operand_blends(&blends);
+
+        let opening = SkipOpening::new(check.round().lagrange::<EF>(lambda));
+        let folded = opening.partial_evaluations(operands.iter().copied(), &rho);
+        let gamma = transcript.opening_batching();
+
+        // The sum the opening rounds are run on, honest unless substituted.
+        let opening_claim = dishonest
+            .opening_claim
+            .unwrap_or_else(|| SkipOpening::batch_claims(&blends, gamma));
+
+        let mut opening_prover = opening.prover(SkipOpening::batch(&folded, gamma));
+        let (opening_proof, _) = transcript.opening_sumcheck(|challenger| {
+            opening_prover.prove::<EF, _>(
+                challenger,
+                check.round().log_size(),
+                OPENING_DEGREE,
+                0,
+                opening_claim,
+            )
+        });
+        transcript.finish();
+
+        ZerocheckProof {
+            message,
+            skip_pow,
+            residual,
+            blends,
+            opening: opening_proof,
+        }
+    }
+
+    /// The shape every test below runs, and its witness.
+    fn fixture(seed: u64) -> (BinaryZerocheck<F, Conjunction>, [Vec<u8>; ARITY]) {
+        let check = BinaryZerocheck::<F, _>::new(LOG_SKIP, Conjunction, 0).unwrap();
+        let operands = witness(seed, check.round().row_bytes());
+        (check, operands)
+    }
+
+    /// Verify one proof from a fresh transcript.
+    fn verify(
+        check: &BinaryZerocheck<F, Conjunction>,
+        proof: &ZerocheckProof<EF>,
+    ) -> Result<ZerocheckClaim<EF>, ZerocheckError> {
+        check.verify::<EF, _>(proof, LOG_HEIGHT, &mut challenger())
+    }
+
+    /// Prove with the given substitutions and verify the result.
+    fn round_trip(seed: u64, dishonest: &Dishonest) -> Result<ZerocheckClaim<EF>, ZerocheckError> {
+        let (check, operands) = fixture(seed);
+        let packed = [
+            operands[0].as_slice(),
+            operands[1].as_slice(),
+            operands[2].as_slice(),
+        ];
+        let proof = prove_dishonest(&check, &packed, &mut challenger(), dishonest);
+        verify(&check, &proof)
+    }
+
+    #[test]
+    fn the_mirrored_prover_agrees_with_the_real_one() {
+        // Invariant: with nothing substituted, this prover is the honest prover.
+        //
+        // Every rejection below therefore isolates one substitution.
+        //
+        // None of them is a drift between the mirror and the code it mirrors.
+        let (check, operands) = fixture(0x111A);
+        let packed = [
+            operands[0].as_slice(),
+            operands[1].as_slice(),
+            operands[2].as_slice(),
+        ];
+
+        let mirrored = prove_dishonest(&check, &packed, &mut challenger(), &Dishonest::default());
+        let (honest, claim) = check.prove::<EF, _>(&packed, LOG_HEIGHT, &mut challenger());
+
+        assert_eq!(mirrored.message, honest.message);
+        assert_eq!(mirrored.blends, honest.blends);
+        assert_eq!(mirrored.residual.claimed_sum, honest.residual.claimed_sum);
+        assert_eq!(mirrored.residual.round_polys, honest.residual.round_polys);
+        assert_eq!(mirrored.opening.claimed_sum, honest.opening.claimed_sum);
+        assert_eq!(mirrored.opening.round_polys, honest.opening.round_polys);
+
+        let verified = verify(&check, &mirrored).unwrap();
+        assert_eq!(verified.point, claim.point);
+        assert_eq!(verified.value, claim.value);
+    }
+
+    #[test]
+    fn a_residual_sum_the_message_does_not_give_is_rejected() {
+        // Substitution: the residual rounds run on a sum of the prover's choosing.
+        //
+        //     honest:  sum = the round message read at the skip challenge
+        //     here:    sum = that, plus one
+        //
+        // The transcript is consistent with it.
+        //
+        // All that is left is the check reading the message back and comparing.
+        let dishonest = Dishonest {
+            residual_claim: Some(SmallRng::seed_from_u64(0x2350).random::<EF>()),
+            ..Dishonest::default()
+        };
+
+        assert_eq!(
+            round_trip(0x2351, &dishonest).unwrap_err(),
+            ZerocheckError::ResidualClaimMismatch
+        );
+    }
+
+    #[test]
+    fn blends_that_do_not_satisfy_the_constraint_are_rejected() {
+        // Substitution: the proof carries blends of the prover's choosing.
+        //
+        // The residual rounds pin only the constraint of the blends.
+        //
+        // That is one equation in three unknowns, so the blends are checked against it.
+        //
+        // They are bound before the batching challenge, but binding does not make them right.
+        //
+        // What refuses these is the constraint, read by the verifier.
+        let dishonest = Dishonest {
+            blends: Some(vec![EF::ONE, EF::ONE, EF::ONE]),
+            ..Dishonest::default()
+        };
+
+        assert_eq!(
+            round_trip(0xB1E0, &dishonest).unwrap_err(),
+            ZerocheckError::BlendConstraintMismatch
+        );
+    }
+
+    #[test]
+    fn an_opening_sum_the_blends_do_not_give_is_rejected() {
+        // Substitution: the opening rounds run on a sum of the prover's choosing.
+        //
+        // The sumcheck driver reads its starting sum from the proof.
+        //
+        // Nothing inside the reduction ties that sum to the blends the round left behind.
+        //
+        // The check that does is the one this pins.
+        let dishonest = Dishonest {
+            opening_claim: Some(SmallRng::seed_from_u64(0x09E0).random::<EF>()),
+            ..Dishonest::default()
+        };
+
+        assert_eq!(
+            round_trip(0x09E1, &dishonest).unwrap_err(),
+            ZerocheckError::OpeningClaimMismatch
+        );
+    }
+
+    #[test]
+    fn the_batching_challenge_follows_the_blends() {
+        // The blends are bound before the batching challenge is drawn.
+        //
+        // Were they not, a prover seeing it could move value between two blends.
+        //
+        // Their batch would be unchanged and the opening check above would pass.
+        //
+        // Forcing the challenge to one has the same effect.
+        //
+        // So this pins that it is drawn at all, and that it moves with what it separates.
+        let (check, operands) = fixture(0x6A3);
+        let packed = [
+            operands[0].as_slice(),
+            operands[1].as_slice(),
+            operands[2].as_slice(),
+        ];
+
+        // The challenge an honest run draws.
+        let (_, honest) = check.prove::<EF, _>(&packed, LOG_HEIGHT, &mut challenger());
+
+        // The challenge a run carrying different blends draws.
+        let dishonest = Dishonest {
+            blends: Some(vec![EF::ONE, EF::ONE, EF::ONE]),
+            ..Dishonest::default()
+        };
+        let mut transcript_challenger = challenger();
+        let forged = prove_dishonest(&check, &packed, &mut transcript_challenger, &dishonest);
+
+        assert_ne!(forged.opening.claimed_sum, honest.value);
+        assert_ne!(honest.gamma, EF::ONE);
+    }
+
+    #[test]
+    fn a_discharge_refuses_openings_of_the_wrong_width() {
+        // The claim knows how many operands it was batched over.
+        //
+        // A batch of another width is therefore refused rather than weighed.
+        let (check, operands) = fixture(0xC07);
+        let packed = [
+            operands[0].as_slice(),
+            operands[1].as_slice(),
+            operands[2].as_slice(),
+        ];
+        let (_, claim) = check.prove::<EF, _>(&packed, LOG_HEIGHT, &mut challenger());
+
+        assert_eq!(
+            claim.discharge(&[EF::ZERO; 2]).unwrap_err(),
+            ZerocheckError::OpeningCountMismatch {
+                expected: ARITY,
+                actual: 2,
+            }
+        );
+        assert_eq!(
+            claim.discharge(&[EF::ZERO; ARITY]).unwrap_err(),
+            ZerocheckError::OpeningsDoNotMatchClaim
+        );
     }
 }
