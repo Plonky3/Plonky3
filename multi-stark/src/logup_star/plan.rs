@@ -485,8 +485,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "does not embed injectively in this field")]
     fn rejects_a_table_the_field_cannot_index() {
-        // Past the field's width two entries would share an embedding, and a pushforward
-        // could then move weight between them unseen.
+        // Past the field's width two entries would share an embedding.
+        //
+        // A pushforward could then move weight between them unseen.
         //
         // Catching it here beats panicking deep inside the verifier's own evaluation.
         let claims = [Binary::ONE];

@@ -23,10 +23,10 @@ use super::plan::BlockRole;
 use super::product::{self, ProductProver};
 use super::prover::PRODUCT_DEGREE;
 use super::transcript::{LogupStarProverTranscript, LogupStarShape};
-use super::witness::{Weights, leaf_tables, weights};
+use super::witness::Weights;
 use super::{
     LogupStarError, LogupStarPlan, LogupStarProof, Reader, ReaderWitness, TableLookup,
-    TableWitness, position, statement_values,
+    TableWitness, position,
 };
 use crate::fractional_gkr::{Fraction, LeafNumerator, prove_fractional_gkr};
 
@@ -345,7 +345,7 @@ fn reading_one_entry_an_even_number_of_times_does_not_cancel() {
         readers: &reader_witnesses,
     }];
 
-    let weights = weights(&plan, &lookups, &witness, Binary::ONE);
+    let weights = Weights::build(&plan, &lookups, &witness, Binary::ONE);
     let pushforward = &weights.pushforwards[0];
 
     assert_eq!(pushforward[1], Binary::ONE - point[1]);
@@ -413,11 +413,11 @@ fn one_challenge_per_table_is_what_stops_two_tables_cancelling() {
         .map(|(columns, readers)| TableWitness { columns, readers })
         .collect::<Vec<_>>();
 
-    let mut weights = weights(&plan, &lookups, &witness, Binary::ONE);
+    let mut weights = Weights::build(&plan, &lookups, &witness, Binary::ONE);
 
     // An honest run sums to zero whatever the challenges are.
     let distinct = [Binary::interpolation_node(5), Binary::interpolation_node(9)];
-    let (numerator, denominator) = leaf_tables(&plan, &witness, &weights, &distinct);
+    let (numerator, denominator) = weights.leaf_tables(&plan, &witness, &distinct);
     assert_eq!(
         fraction_sum(numerator.as_slice(), denominator.as_slice()),
         Binary::ZERO
@@ -427,7 +427,7 @@ fn one_challenge_per_table_is_what_stops_two_tables_cancelling() {
     weights.pushforwards[1][1] += Binary::ONE;
 
     // One challenge per table puts the two errors over different denominators.
-    let (numerator, denominator) = leaf_tables(&plan, &witness, &weights, &distinct);
+    let (numerator, denominator) = weights.leaf_tables(&plan, &witness, &distinct);
     assert_ne!(
         fraction_sum(numerator.as_slice(), denominator.as_slice()),
         Binary::ZERO,
@@ -436,7 +436,7 @@ fn one_challenge_per_table_is_what_stops_two_tables_cancelling() {
 
     // One shared challenge puts them over the same denominator, where they cancel exactly.
     let shared = [Binary::interpolation_node(5); 2];
-    let (numerator, denominator) = leaf_tables(&plan, &witness, &weights, &shared);
+    let (numerator, denominator) = weights.leaf_tables(&plan, &witness, &shared);
     assert_eq!(
         fraction_sum(numerator.as_slice(), denominator.as_slice()),
         Binary::ZERO,
@@ -447,20 +447,23 @@ fn one_challenge_per_table_is_what_stops_two_tables_cancelling() {
 #[test]
 #[should_panic(expected = "fraction GKR input fractions must sum to zero")]
 fn weight_moved_between_two_tables_cannot_be_hidden() {
-    // The companion test above shows the algebra: under one shared challenge the two errors
-    // sit over the same denominator and cancel, and under one challenge per table they do not.
+    // The companion test above shows the algebra.
+    //
+    // Under one shared challenge the two errors sit over the same denominator and cancel.
+    //
+    // Under one challenge per table they do not.
     //
     // This one drives the real prover, so it also guards the code that keeps them apart.
     //
     // Fixture state: two tables of four entries, one reader of two rows each.
     //
-    // Mutation: move a unit of weight off one table's entry 1 and onto the other's, after
-    // the pushforwards are built and before they are bound.
+    // Mutation: move a unit of weight off one table's entry 1 and onto the other's.
+    //
+    // It moves after the pushforwards are built and before they are bound.
     //
     // The fractions then no longer sum to zero and the reduction refuses to run.
     //
-    // Were both tables to share a challenge, the sum would vanish and the cheat would go
-    // through.
+    // Under a shared challenge the sum would vanish and the cheat would go through.
     let mut rng = SmallRng::seed_from_u64(0x0_C4EA7);
     let instance = Instance::<Binary, Binary>::random(&mut rng, &[(2, 1, &[1]), (2, 1, &[1])]);
 
@@ -475,9 +478,9 @@ fn weight_moved_between_two_tables_cannot_be_hidden() {
     let mut sponge = binary_challenger();
     let mut transcript = LogupStarProverTranscript::<_, Binary, Binary>::new(&mut sponge, &shape);
 
-    transcript.statement(&statement_values(&lookups));
+    transcript.statement(&TableLookup::statement(&lookups));
     let reader_batching = transcript.reader_batching();
-    let mut built = weights(&plan, &lookups, &witness, reader_batching);
+    let mut built = Weights::build(&plan, &lookups, &witness, reader_batching);
 
     built.pushforwards[0][1] -= Binary::ONE;
     built.pushforwards[1][1] += Binary::ONE;
@@ -487,7 +490,7 @@ fn weight_moved_between_two_tables_cannot_be_hidden() {
     }
     let entry_challenges = transcript.entry_challenges(plan.num_tables());
 
-    let (numerator, denominator) = leaf_tables(&plan, &witness, &built, &entry_challenges);
+    let (numerator, denominator) = built.leaf_tables(&plan, &witness, &entry_challenges);
     let numerator = PolyMaybePacked::Scalar(numerator);
     let denominator = PolyMaybePacked::Scalar(denominator);
     transcript.fraction_reduction(|challenger| {
@@ -534,24 +537,31 @@ fn a_position_outside_the_table_is_rejected_while_scattering() {
         readers: &reader_witnesses,
     }];
 
-    let _ = weights(&plan, &lookups, &witness, Binary::ONE);
+    let _ = Weights::build(&plan, &lookups, &witness, Binary::ONE);
 }
 
 #[test]
 fn no_pushforward_can_close_the_pole_an_out_of_range_read_opens() {
     // Fixture state: one four-entry table, one reader of two rows, rows naming 0 and 4.
     //
-    // Entry 4 is one past the last entry, so the reader's second fraction sits over the
-    // pole `c - iota(4)`, while every table fraction sits over some `iota(e) - c`, e < 4.
+    // Entry 4 is one past the last entry.
+    //
+    // The reader's second fraction therefore sits over the pole `c - iota(4)`.
+    //
+    // Every table fraction sits over some `iota(e) - c` with `e < 4`.
     //
     //     reader:   w_0 / (c - iota(0))    w_1 / (c - iota(4))   <- nothing sits here
     //     table:   -Y_e / (c - iota(e))    for e in 0, 1, 2, 3
     //
     // The embedding is injective, so no table entry reaches the second pole.
     //
-    // The pushforward is the only part of this a prover chooses, and two scatters stand
-    // in for every choice: the offending row's weight dropped, and the same weight moved
-    // onto entry 0, where it would cancel if the two poles could be confused.
+    // The pushforward is the only part of this a prover chooses.
+    //
+    // Two scatters stand in for every choice.
+    //
+    // One drops the offending row's weight.
+    //
+    // The other moves it onto entry 0, where it would cancel if the poles were confused.
     //
     // Neither sum vanishes, which is why a position column carries no range constraint.
     let mut rng = SmallRng::seed_from_u64(0x004A_1101);
@@ -594,7 +604,7 @@ fn no_pushforward_can_close_the_pole_an_out_of_range_read_opens() {
             )],
             pushforwards: vec![scatter.to_vec()],
         };
-        let (numerator, denominator) = leaf_tables(&plan, &witness, &built, &[challenge]);
+        let (numerator, denominator) = built.leaf_tables(&plan, &witness, &[challenge]);
 
         assert_ne!(
             fraction_sum(numerator.as_slice(), denominator.as_slice()),
@@ -605,26 +615,32 @@ fn no_pushforward_can_close_the_pole_an_out_of_range_read_opens() {
 
 #[test]
 fn an_out_of_range_read_hidden_behind_a_zero_weight_is_rejected() {
-    // The companion test above shows that the fractions of an out-of-range read never sum
-    // to zero, and the reduction refuses to run on a sum that does not vanish.
+    // The companion test above shows such fractions never sum to zero.
     //
-    // So the only proof a prover can build for such a read is one that lies about the
-    // numerator side, and this test drives the real verifier against that proof.
+    // The reduction refuses to run on a sum that does not vanish.
     //
-    // Fixture state: one four-entry table of one column, one reader of two rows naming
-    // 0 and 4, with entry 4 one past the table.
+    // So the only proof a prover can build for such a read lies about the numerator side.
     //
-    // Mutation: the offending row is given weight zero, on the reader side and in the
-    // pushforward alike, which is what makes the leaf fractions sum to zero.
+    // This test drives the real verifier against that proof.
+    //
+    // Fixture state: one four-entry table of one column, one reader of two rows.
+    //
+    // The rows name 0 and 4, and entry 4 is one past the table.
+    //
+    // Mutation: the offending row is given weight zero, on both sides.
+    //
+    // That is what makes the leaf fractions sum to zero.
     //
     //     honest row weights   [w_0, w_1]
     //     what is proved       [w_0,   0]
     //
-    // Everything else is built honestly, including the position claim, which still opens
-    // a column naming entry 4.
+    // Everything else is built honestly.
     //
-    // A verifier rebuilds every reader weight from the claim point alone, so the forged
-    // numerator is caught where the reduction is tied back to the statement.
+    // The position claim still opens a column naming entry 4.
+    //
+    // A verifier rebuilds every reader weight from the claim point alone.
+    //
+    // The forged numerator is caught where the reduction is tied back to the statement.
     let mut rng = SmallRng::seed_from_u64(0x004A_1102);
     let point = Point::<Binary>::rand(&mut rng, 1);
     let column = Poly::<Binary>::rand(&mut rng, 2).as_slice().to_vec();
@@ -658,11 +674,12 @@ fn an_out_of_range_read_hidden_behind_a_zero_weight_is_rejected() {
     let mut sponge = binary_challenger();
     let mut transcript = LogupStarProverTranscript::<_, Binary, Binary>::new(&mut sponge, &shape);
 
-    transcript.statement(&statement_values(&lookups));
+    transcript.statement(&TableLookup::statement(&lookups));
     let reader_batching = transcript.reader_batching();
 
-    // One reader earns the zeroth power of the batching challenge, so the weights below
-    // are the honest ones with the offending row struck out.
+    // One reader earns the zeroth power of the batching challenge.
+    //
+    // The weights below are the honest ones with the offending row struck out.
     let forged = Weights {
         readers: vec![Poly::new(vec![kept, Binary::ZERO])],
         pushforwards: vec![vec![kept, Binary::ZERO, Binary::ZERO, Binary::ZERO]],
@@ -672,7 +689,7 @@ fn an_out_of_range_read_hidden_behind_a_zero_weight_is_rejected() {
     }
     let entry_challenges = transcript.entry_challenges(plan.num_tables());
 
-    let (numerator, denominator) = leaf_tables(&plan, &witness, &forged, &entry_challenges);
+    let (numerator, denominator) = forged.leaf_tables(&plan, &witness, &entry_challenges);
     let numerator = PolyMaybePacked::Scalar(numerator);
     let denominator = PolyMaybePacked::Scalar(denominator);
     let (fraction_gkr, gkr_output) = transcript.fraction_reduction(|challenger| {
@@ -711,8 +728,9 @@ fn an_out_of_range_read_hidden_behind_a_zero_weight_is_rejected() {
         column_batching,
     );
 
-    // The forged pushforward was built to support the claim the statement carries, so the
-    // product sumcheck starts from the sum a verifier asks for.
+    // The forged pushforward was built to support the claim the statement carries.
+    //
+    // The product sumcheck therefore starts from the sum a verifier asks for.
     assert_eq!(
         claimed_sum,
         product::claimed_sum(&lookups, reader_batching, column_batching)
@@ -773,8 +791,9 @@ fn tampered_verdict(
 
 #[test]
 fn rejects_a_tampered_pushforward() {
-    // The pushforward is what the whole reduction pins down, so moving one entry of it has
-    // to land somewhere.
+    // The pushforward is what the whole reduction pins down.
+    //
+    // Moving one entry of it has to land somewhere.
     //
     // Where it lands says which property is doing the work.
     //
@@ -848,18 +867,21 @@ fn hex(bytes: &[u8; 32]) -> String {
 
 #[test]
 fn a_fixed_statement_always_produces_the_same_proof() {
-    // Every challenge in the run is derived, so the whole proof is a function of the
-    // statement and the witness.
+    // Every challenge in the run is derived.
     //
-    // Pinning it catches a change in any derivation, including one that keeps prover and
-    // verifier agreeing and so leaves every round trip green.
+    // The whole proof is therefore a function of the statement and the witness.
+    //
+    // Pinning it catches a change in any derivation.
+    //
+    // That includes one keeping prover and verifier agreed, which no round trip would show.
     //
     // Fixture state: two tables of four entries, one reader each, fixed seed.
     //
     // A failure here is not automatically a bug.
     //
-    // It means the transcript changed, and the new digest is right exactly when that
-    // change was intended.
+    // It means the transcript changed.
+    //
+    // The new digest is right exactly when that change was intended.
     let mut rng = SmallRng::seed_from_u64(0x0_901D);
     let instance = Instance::<Binary, Binary>::random(&mut rng, &[(2, 1, &[2]), (2, 2, &[1])]);
 
@@ -882,8 +904,9 @@ fn a_fixed_statement_always_produces_the_same_proof() {
 fn a_proof_survives_a_round_trip_through_serialization() {
     // A proof crosses a wire, so a decoded one has to be worth exactly what the original was.
     //
-    // Verifying the decoded proof is a stronger check than comparing fields, since it also
-    // catches a field that survives the encoding but lands in the wrong place.
+    // Verifying the decoded proof is a stronger check than comparing fields.
+    //
+    // It also catches a field that survives the encoding but lands in the wrong place.
     let mut rng = SmallRng::seed_from_u64(0x0_5E4D);
     let instance = Instance::<Binary, Binary>::random(&mut rng, &[(3, 2, &[4, 2])]);
 
@@ -917,8 +940,11 @@ fn rejects_claims_the_witness_never_produced() {
     //
     // The shapes are unchanged, so only the claims differ.
     //
-    // The claims are bound before any challenge is drawn, so a different statement draws a
-    // different challenge stream and the reduction stops agreeing with itself.
+    // The claims are bound before any challenge is drawn.
+    //
+    // A different statement draws a different challenge stream.
+    //
+    // The reduction then stops agreeing with itself.
     let mut rng = SmallRng::seed_from_u64(0x0FA1_5E00);
     let mut instance = Instance::<Binary, Binary>::random(&mut rng, &[(3, 1, &[4])]);
 

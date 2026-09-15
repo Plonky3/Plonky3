@@ -11,7 +11,7 @@ use super::plan::{BlockRole, LogupStarPlan};
 use super::proof::{LogupStarOutput, LogupStarProof, TableOutput};
 use super::prover::PRODUCT_DEGREE;
 use super::transcript::{LogupStarShape, LogupStarVerifierTranscript};
-use super::{TableLookup, position, product, statement_values};
+use super::{TableLookup, position, product};
 use crate::fractional_gkr::verify_fractional_gkr;
 
 impl<F, EF> LogupStarProof<F, EF>
@@ -76,7 +76,7 @@ where
         let mut transcript =
             LogupStarVerifierTranscript::<Challenger, F, EF>::new(challenger, &shape);
 
-        transcript.statement(&statement_values(lookups));
+        transcript.statement(&TableLookup::statement(lookups));
         let reader_batching = transcript.reader_batching();
         for pushforward in &self.pushforwards {
             transcript.pushforward(pushforward);

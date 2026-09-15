@@ -24,165 +24,169 @@ pub(crate) struct Weights<EF> {
     pub(crate) pushforwards: Vec<Vec<EF>>,
 }
 
-/// Build the equality weights and scatter them into one pushforward per table.
-///
-/// The pushforward is the only object the reduction adds.
-///
-/// It is as wide as the table rather than as wide as the readers.
-///
-/// # Panics
-///
-/// Panics if a reader's row count disagrees with its claim point.
-///
-/// Panics if a row names an entry the table does not have.
-pub(crate) fn weights<F, EF>(
-    plan: &LogupStarPlan,
-    lookups: &[TableLookup<'_, EF>],
-    witness: &[TableWitness<'_, F>],
-    batching: EF,
-) -> Weights<EF>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    // Readers of one table are weighted by consecutive powers of the batching challenge.
-    //
-    // Only readers of the same table are ever combined.
-    //
-    // So the largest table fixes how many powers the whole reduction needs.
-    let scales = batching
-        .powers()
-        .take(plan.max_readers_per_table())
-        .collect();
+impl<EF: Field> Weights<EF> {
+    /// Build the equality weights and scatter them into one pushforward per table.
+    ///
+    /// The pushforward is the only object the reduction adds.
+    ///
+    /// It is as wide as the table rather than as wide as the readers.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a reader's row count disagrees with its claim point.
+    ///
+    /// Panics if a row names an entry the table does not have.
+    pub(crate) fn build<F>(
+        plan: &LogupStarPlan,
+        lookups: &[TableLookup<'_, EF>],
+        witness: &[TableWitness<'_, F>],
+        batching: EF,
+    ) -> Self
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        // Readers of one table are weighted by consecutive powers of the batching challenge.
+        //
+        // Only readers of the same table are ever combined.
+        //
+        // So the largest table fixes how many powers the whole reduction needs.
+        let scales = batching
+            .powers()
+            .take(plan.max_readers_per_table())
+            .collect();
 
-    // Expand one equality tensor per reader, its scale folded into the expansion.
-    //
-    // Seeding the expansion with the scale keeps this to a single pass over a single table.
-    let readers = lookups
-        .iter()
-        .flat_map(|lookup| lookup.readers.iter().zip(&scales))
-        .map(|(reader, &scale)| Poly::new_from_point(reader.point.as_slice(), scale))
-        .collect::<Vec<_>>();
+        // Expand one equality tensor per reader, its scale folded into the expansion.
+        //
+        // Seeding the expansion with the scale keeps this to a single pass over a single table.
+        let readers = lookups
+            .iter()
+            .flat_map(|lookup| lookup.readers.iter().zip(&scales))
+            .map(|(reader, &scale)| Poly::new_from_point(reader.point.as_slice(), scale))
+            .collect::<Vec<_>>();
 
-    // Scatter each table's readers onto its entries and sum.
-    //
-    //     Y[v] = sum over readers, over rows i naming v, of that row's weight
-    let pushforwards = lookups
-        .iter()
-        .zip(witness)
-        .enumerate()
-        .map(|(table, (lookup, table_witness))| {
-            let num_entries = 1 << lookup.num_variables;
-            let first = plan.reader_offset(table);
+        // Scatter each table's readers onto its entries and sum.
+        //
+        //     Y[v] = sum over readers, over rows i naming v, of that row's weight
+        let pushforwards = lookups
+            .iter()
+            .zip(witness)
+            .enumerate()
+            .map(|(table, (lookup, table_witness))| {
+                let num_entries = 1 << lookup.num_variables;
+                let first = plan.reader_offset(table);
 
-            for (index, reader_witness) in table_witness.readers.iter().enumerate() {
-                assert_eq!(
-                    reader_witness.positions.len(),
-                    readers[first + index].num_evals(),
-                    "a reader's row count must match its claim point"
-                );
-            }
+                for (index, reader_witness) in table_witness.readers.iter().enumerate() {
+                    assert_eq!(
+                        reader_witness.positions.len(),
+                        readers[first + index].num_evals(),
+                        "a reader's row count must match its claim point"
+                    );
+                }
 
-            // One pass over every row of the table, readers included.
-            //
-            // A pass per reader would seed and merge a table-sized accumulator per split per
-            // reader, which costs readers times splits times entries rather than rows.
-            //
-            // Rows split across threads and each split fills its own copy of the table, since
-            // scattering in place would let two rows naming one entry race.
-            //
-            // The splits merge afterwards, because addition ignores order.
-            (0..table_witness.readers.len())
-                .into_par_iter()
-                .flat_map(|index| {
-                    table_witness.readers[index]
-                        .positions
-                        .par_iter()
-                        .zip(readers[first + index].as_slice().par_iter())
-                })
-                .par_fold_reduce(
-                    || EF::zero_vec(num_entries),
-                    |mut split, (&entry, &weight)| {
-                        *split
-                            .get_mut(entry)
-                            .expect("a row names an entry outside its table") += weight;
-                        split
-                    },
-                    |mut left, right| {
-                        EF::add_slices(&mut left, &right);
-                        left
-                    },
-                )
-        })
-        .collect();
+                // One pass over every row of the table, readers included.
+                //
+                // A pass per reader would seed a table-sized accumulator per split, per reader.
+                //
+                // That costs readers times splits times entries rather than rows.
+                //
+                // Rows split across threads, and each split fills its own copy of the table.
+                //
+                // Scattering in place would let two rows naming one entry race.
+                //
+                // The splits merge afterwards, because addition ignores order.
+                (0..table_witness.readers.len())
+                    .into_par_iter()
+                    .flat_map(|index| {
+                        table_witness.readers[index]
+                            .positions
+                            .par_iter()
+                            .zip(readers[first + index].as_slice().par_iter())
+                    })
+                    .par_fold_reduce(
+                        || EF::zero_vec(num_entries),
+                        |mut split, (&entry, &weight)| {
+                            *split
+                                .get_mut(entry)
+                                .expect("a row names an entry outside its table") += weight;
+                            split
+                        },
+                        |mut left, right| {
+                            EF::add_slices(&mut left, &right);
+                            left
+                        },
+                    )
+            })
+            .collect();
 
-    Weights {
-        readers,
-        pushforwards,
-    }
-}
-
-/// Materialize the padded fraction tables the reduction runs over.
-///
-/// Every block writes one fraction per leaf it owns:
-///
-/// ```text
-///     reader block   weight of the row        /  challenge - position named by the row
-///     table  block   weight over the entry    /  position of the entry - challenge
-///     padding        0                        /  1
-/// ```
-///
-/// The table side enters negated, so an honest statement makes the whole sum vanish.
-///
-/// The reduction is then handed a numerator of zero rather than one read off a proof.
-///
-/// Padding contributes a zero over a one, which adds nothing and divides by nothing.
-pub(crate) fn leaf_tables<F, EF>(
-    plan: &LogupStarPlan,
-    witness: &[TableWitness<'_, F>],
-    weights: &Weights<EF>,
-    entry_challenges: &[EF],
-) -> (Poly<EF>, Poly<EF>)
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    let height = 1 << plan.num_variables;
-    let mut numerator = EF::zero_vec(height);
-    let mut denominator = vec![EF::ONE; height];
-
-    for block in &plan.blocks {
-        let span = block.offset..block.offset + (1 << block.num_variables);
-        let challenge = entry_challenges[block.table];
-        let numerator = &mut numerator[span.clone()];
-        let denominator = &mut denominator[span];
-
-        match block.role {
-            BlockRole::Reader { index } => {
-                let positions = witness[block.table].readers[index].positions;
-                let weights = weights.readers[plan.reader_offset(block.table) + index].as_slice();
-
-                numerator.copy_from_slice(weights);
-                denominator
-                    .par_iter_mut()
-                    .zip(positions.par_iter())
-                    .for_each(|(denominator, &entry)| {
-                        *denominator = challenge - position::embed::<F>(entry);
-                    });
-            }
-            BlockRole::Table => {
-                numerator.copy_from_slice(&weights.pushforwards[block.table]);
-                denominator
-                    .par_iter_mut()
-                    .enumerate()
-                    .for_each(|(entry, denominator)| {
-                        *denominator = EF::from(position::embed::<F>(entry)) - challenge;
-                    });
-            }
+        Self {
+            readers,
+            pushforwards,
         }
     }
 
-    (Poly::new(numerator), Poly::new(denominator))
+    /// Materialize the padded fraction tables the reduction runs over.
+    ///
+    /// Every block writes one fraction per leaf it owns:
+    ///
+    /// ```text
+    ///     reader block   weight of the row        /  challenge - position named by the row
+    ///     table  block   weight over the entry    /  position of the entry - challenge
+    ///     padding        0                        /  1
+    /// ```
+    ///
+    /// The table side enters negated, so an honest statement makes the whole sum vanish.
+    ///
+    /// The reduction is then handed a numerator of zero rather than one read off a proof.
+    ///
+    /// Padding contributes a zero over a one, which adds nothing and divides by nothing.
+    pub(crate) fn leaf_tables<F>(
+        &self,
+        plan: &LogupStarPlan,
+        witness: &[TableWitness<'_, F>],
+        entry_challenges: &[EF],
+    ) -> (Poly<EF>, Poly<EF>)
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        let height = 1 << plan.num_variables;
+        let mut numerator = EF::zero_vec(height);
+        let mut denominator = vec![EF::ONE; height];
+
+        for block in &plan.blocks {
+            let span = block.offset..block.offset + (1 << block.num_variables);
+            let challenge = entry_challenges[block.table];
+            let numerator = &mut numerator[span.clone()];
+            let denominator = &mut denominator[span];
+
+            match block.role {
+                BlockRole::Reader { index } => {
+                    let positions = witness[block.table].readers[index].positions;
+                    let weights = self.readers[plan.reader_offset(block.table) + index].as_slice();
+
+                    numerator.copy_from_slice(weights);
+                    denominator
+                        .par_iter_mut()
+                        .zip(positions.par_iter())
+                        .for_each(|(denominator, &entry)| {
+                            *denominator = challenge - position::embed::<F>(entry);
+                        });
+                }
+                BlockRole::Table => {
+                    numerator.copy_from_slice(&self.pushforwards[block.table]);
+                    denominator
+                        .par_iter_mut()
+                        .enumerate()
+                        .for_each(|(entry, denominator)| {
+                            *denominator = EF::from(position::embed::<F>(entry)) - challenge;
+                        });
+                }
+            }
+        }
+
+        (Poly::new(numerator), Poly::new(denominator))
+    }
 }
 
 #[cfg(test)]
@@ -270,7 +274,7 @@ mod tests {
             readers: &reader_witnesses,
         }];
 
-        let built = weights(&plan, &lookups, &witness, batching);
+        let built = Weights::build(&plan, &lookups, &witness, batching);
 
         // Scatter the same weights by hand, one row at a time.
         let mut expected = B::zero_vec(1 << fixture.table_variables);
@@ -310,7 +314,7 @@ mod tests {
             readers: &reader_witnesses,
         }];
 
-        let built = weights(&plan, &lookups, &witness, B::ONE);
+        let built = Weights::build(&plan, &lookups, &witness, B::ONE);
 
         assert_eq!(built.pushforwards[0][3], B::ZERO);
         assert_eq!(
@@ -346,8 +350,8 @@ mod tests {
             readers: &reader_witnesses,
         }];
 
-        let built = weights(&plan, &lookups, &witness, B::ONE);
-        let (numerator, denominator) = leaf_tables(&plan, &witness, &built, &[challenge]);
+        let built = Weights::build(&plan, &lookups, &witness, B::ONE);
+        let (numerator, denominator) = built.leaf_tables(&plan, &witness, &[challenge]);
 
         for block in &plan.blocks {
             let offset = block.offset;
@@ -406,9 +410,9 @@ mod tests {
             columns: &columns,
             readers: &reader_witnesses,
         }];
-        let built = weights(&plan, &lookups, &witness, B::ONE);
+        let built = Weights::build(&plan, &lookups, &witness, B::ONE);
         let (numerator, denominator) =
-            leaf_tables(&plan, &witness, &built, &[B::interpolation_node(9)]);
+            built.leaf_tables(&plan, &witness, &[B::interpolation_node(9)]);
 
         for leaf in 6..8 {
             assert_eq!(numerator.as_slice()[leaf], B::ZERO);
@@ -440,9 +444,9 @@ mod tests {
             readers: &reader_witnesses,
         }];
 
-        let built = weights(&plan, &lookups, &witness, batching);
+        let built = Weights::build(&plan, &lookups, &witness, batching);
         let (numerator, denominator) =
-            leaf_tables(&plan, &witness, &built, &[B::interpolation_node(13)]);
+            built.leaf_tables(&plan, &witness, &[B::interpolation_node(13)]);
 
         let sum = iter::zip(numerator.as_slice(), denominator.as_slice())
             .map(|(&numerator, &denominator)| numerator * denominator.inverse())

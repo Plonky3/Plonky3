@@ -417,30 +417,36 @@ where
 fn a_fixed_base_leaf_instance_always_produces_the_same_proof() {
     // The classical lookup path hands the reduction a base-field numerator.
     //
-    // Every challenge in a run is derived, so the proof, the openings it closes on and the
-    // sponge it leaves behind are all functions of the two input tables.
+    // Every challenge in a run is derived.
     //
-    // Pinning a digest of the three is what ties this path to a fixed reference, rather
-    // than to a second run of the same code.
+    // The proof, its openings and the sponge it leaves are functions of the two inputs.
+    //
+    // A digest of the three ties this path to a fixed reference.
+    //
+    // Comparing against a second run of the same code would tie it to nothing.
     //
     // Fixture state: a fixed seed, variable counts 1 through 8, scalar storage.
     //
-    // Only the scalar runs feed the digest, because the lane count is a property of the
-    // machine the test runs on:
+    // Only the scalar runs feed the digest.
+    //
+    // The lane count is a property of the machine the test runs on:
     //
     //     one target:     n = 1 .. 8   ->  packed from n = 2
     //     another:        n = 1 .. 8   ->  packed from n = 3
     //
-    // A digest over both storages would therefore cover a different number of runs per
-    // target and could not be written down.
+    // A digest over both storages would cover a different number of runs per target.
     //
-    // The packed storage is pinned against the scalar run instead, wherever the target
-    // offers it, which says the same thing without leaving the field.
+    // No single value could then be written down.
+    //
+    // The packed storage is pinned against the scalar run instead, where it exists.
+    //
+    // That says the same thing without leaving the field.
     //
     // A failure here is not automatically a bug.
     //
-    // It means the transcript changed, and the new digest is right exactly when that
-    // change was intended.
+    // It means the transcript changed.
+    //
+    // The new digest is right exactly when that change was intended.
     let mut rng = SmallRng::seed_from_u64(0x0_6014E);
     let mut transcript = Vec::new();
 
@@ -454,8 +460,9 @@ fn a_fixed_base_leaf_instance_always_produces_the_same_proof() {
         let mut challenger = fresh_challenger();
         let (proof, output) = prove_base_leaf(&numer, &scalar, &mut challenger);
 
-        // What the surrounding protocol would draw next, so a change the proof bytes
-        // cannot show still surfaces here.
+        // What the surrounding protocol would draw next.
+        //
+        // A change the proof bytes cannot show still surfaces here.
         let next = challenger.sample_algebra_element::<EF>();
 
         transcript.extend(postcard::to_allocvec(&proof).expect("a proof serializes"));
@@ -465,8 +472,9 @@ fn a_fixed_base_leaf_instance_always_produces_the_same_proof() {
         );
         transcript.extend(postcard::to_allocvec(&next).expect("a challenge serializes"));
 
-        // Packing moves the trailing variables into lanes, so a table has to be wide
-        // enough to address them before the packed form exists at all.
+        // Packing moves the trailing variables into lanes.
+        //
+        // A table has to be wide enough to address them for a packed form to exist.
         if lanes > 0 && num_variables >= lanes {
             let packed = PolyMaybePacked::Packed(denom.pack::<F, EF>());
             let mut packed_challenger = fresh_challenger();

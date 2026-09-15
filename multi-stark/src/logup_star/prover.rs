@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field, PackedValue};
+use p3_field::{ExtensionField, PackedValue};
 use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_sumcheck::generic_degree::RoundProver;
@@ -15,8 +15,8 @@ use super::plan::{BlockRole, LogupStarPlan};
 use super::product::{self, ProductProver};
 use super::proof::{LogupStarOutput, LogupStarProof, TableOutput};
 use super::transcript::{LogupStarProverTranscript, LogupStarShape};
-use super::witness::{leaf_tables, weights};
-use super::{TableLookup, TableWitness, position, statement_values};
+use super::witness::Weights;
+use super::{TableLookup, TableWitness, position};
 use crate::fractional_gkr::{Fraction, LeafNumerator, prove_fractional_gkr};
 
 impl<F, EF> LogupStarProof<F, EF>
@@ -80,13 +80,14 @@ where
 
         // Phase 1: bind what is being proved, then weigh the readers of each table.
         //
-        // Every challenge below is a function of the claims, so none of them can be seen
-        // before the claims are fixed.
+        // Every challenge below is a function of the claims.
+        //
+        // None of them can be seen before the claims are fixed.
         //
         // The pushforward depends on the batching challenge, so it is drawn next.
-        transcript.statement(&statement_values(lookups));
+        transcript.statement(&TableLookup::statement(lookups));
         let reader_batching = transcript.reader_batching();
-        let weights = weights(&plan, lookups, witness, reader_batching);
+        let weights = Weights::build(&plan, lookups, witness, reader_batching);
         for pushforward in &weights.pushforwards {
             transcript.pushforward(pushforward);
         }
@@ -98,9 +99,12 @@ where
 
         // Phase 3: prove the fractions sum to zero.
         //
-        // The tables are packed when the field has lanes to fill and the cube is wide enough
-        // to address them, which is what lets the reduction use its SIMD kernel.
-        let (numerator, denominator) = leaf_tables(&plan, witness, &weights, &entry_challenges);
+        // The tables are packed when the field has lanes to fill.
+        //
+        // The cube also has to be wide enough to address those lanes.
+        //
+        // That is what lets the reduction use its SIMD kernel.
+        let (numerator, denominator) = weights.leaf_tables(&plan, witness, &entry_challenges);
         // A field with one lane per element would only pay for the copy.
         let lanes = log2_strict_usize(F::Packing::WIDTH);
         let (numerator, denominator) = if lanes > 0 && plan.num_variables >= lanes {
@@ -126,8 +130,9 @@ where
 
         // Phase 4: open each reader's position column at the point the reduction reached.
         //
-        // The column is the reader's rows under the table-position embedding, which is what
-        // the verifier rebuilds the denominator side from.
+        // The column is the reader's rows under the table-position embedding.
+        //
+        // That is what the verifier rebuilds the denominator side from.
         let mut position_claims = vec![EF::ZERO; plan.num_readers()];
         for block in &plan.blocks {
             let BlockRole::Reader { index } = block.role else {
@@ -196,7 +201,9 @@ where
                 table
                     .columns
                     .iter()
-                    .map(|column| eval_base_column::<F, EF>(column, &own))
+                    .map(|column| {
+                        SplitEq::<F, EF>::new_packed(&own, EF::ONE).eval_base(Poly::new(*column))
+                    })
                     .collect()
             })
             .collect::<Vec<Vec<EF>>>();
@@ -240,12 +247,3 @@ where
 ///
 /// Its summand is a pushforward times a column, both multilinear.
 pub(crate) const PRODUCT_DEGREE: usize = 2;
-
-/// Evaluate one base-field table column at an extension-field point.
-fn eval_base_column<F: Field, EF: ExtensionField<F>>(
-    column: &[F],
-    point: &p3_multilinear_util::point::Point<EF>,
-) -> EF {
-    p3_multilinear_util::split_eq::SplitEq::<F, EF>::new_packed(point, EF::ONE)
-        .eval_base(Poly::new(column))
-}

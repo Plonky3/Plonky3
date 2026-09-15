@@ -20,8 +20,9 @@
 //!
 //! What is being proved is bound before anything is drawn.
 //!
-//! Every challenge below weighs the claims, so a prover that saw one first could choose
-//! claims the weighing cancels.
+//! Every challenge below weighs the claims.
+//!
+//! A prover that saw one first could choose claims the weighing cancels.
 //!
 //! The reader batching challenge precedes the pushforwards, which are built from it.
 //!
@@ -276,8 +277,9 @@ impl LogupStarShape {
         // Two statements can agree on every total above and still differ below.
         //
         // They may split readers between tables differently, or pull different columns.
-        // Each table's reader count precedes its reader heights, so two statements that
-        // merely split the same readers differently are separated here.
+        // Each table's reader count precedes its own reader heights.
+        //
+        // Two statements that merely split the same readers differently part here.
         for table in &self.tables {
             separator
                 .instance(&(table.width as u64).to_be_bytes())
@@ -609,8 +611,9 @@ mod tests {
         play_with(shape, prover, B::ONE, B::ONE)
     }
 
-    /// Play every step, with one statement value and one pushforward entry under the caller's
-    /// control, and return what the next draw off the shared sponge would be.
+    /// Play every step, with one statement value and one pushforward entry as given.
+    ///
+    /// Returns what the next draw off the shared sponge would be.
     fn play_with(shape: &LogupStarShape, prover: bool, claim: B, pushforward: B) -> B {
         let mut sponge = challenger();
         let mut pushforwards = shape
@@ -703,8 +706,9 @@ mod tests {
 
     #[test]
     fn a_claim_reaches_the_sponge_before_anything_is_drawn() {
-        // Every challenge below weighs the claims, so a prover that could see one before
-        // fixing them could pick claims the weighing cancels.
+        // Every challenge below weighs the claims.
+        //
+        // A prover seeing one before fixing them could pick claims the weighing cancels.
         //
         // Binding the statement first is what stops that, and this is what binding means:
         // one different claimed value moves the whole stream.
@@ -717,8 +721,9 @@ mod tests {
 
     #[test]
     fn a_pushforward_reaches_the_sponge_before_the_entry_challenges() {
-        // A pushforward that were not bound could be chosen after its own challenge, leaving
-        // a prover one linear constraint per table to satisfy instead of a commitment.
+        // An unbound pushforward could be chosen after its own challenge.
+        //
+        // A prover would then face one linear constraint per table instead of a commitment.
         //
         // Fixture state: two runs differing only in entry zero of the first pushforward.
         let shape = shape(3, 1, &[2]);
@@ -745,8 +750,9 @@ mod tests {
 
     #[test]
     fn each_table_draws_its_own_entry_challenge() {
-        // One shared challenge would let two tables miscount opposite entries and cancel, so
-        // the draw has to separate them.
+        // One shared challenge would let two tables miscount opposite entries and cancel.
+        //
+        // The draw has to separate them.
         let shape = shape(3, 1, &[2]);
         let two_tables = LogupStarShape {
             tables: vec![table(3, 1, &[2]), table(3, 1, &[2])],
@@ -768,13 +774,15 @@ mod tests {
 
     #[test]
     fn how_readers_split_between_tables_reaches_the_seed() {
-        // Two tables of the same size and width, and readers of the same height, can still
-        // be a different statement depending on which table each reader belongs to.
+        // Two tables of one size and width, read by equal readers, can still differ.
+        //
+        // Which table each reader belongs to is what differs.
         //
         //     [2 readers | 1 reader]   versus   [1 reader | 2 readers]
         //
-        // Totals alone do not separate those, so each table's reader count is bound with
-        // its reader heights rather than after them.
+        // Totals alone do not separate those.
+        //
+        // Each table's reader count is bound with its heights rather than after them.
         let left = LogupStarShape {
             tables: vec![table(3, 1, &[2, 2]), table(3, 1, &[2])],
             num_variables: 5,

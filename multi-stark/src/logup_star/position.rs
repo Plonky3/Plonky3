@@ -11,13 +11,13 @@ use p3_multilinear_util::point::Point;
 ///     iota(v) = sum_{k : bit k of v is set} interpolation_node(2^k)
 /// ```
 ///
-/// Defining it this way, rather than as the field's own enumeration of a position, is what
-/// makes the closed form below its multilinear extension.
+/// Defining it over bits is what makes the closed form below its multilinear extension.
 ///
 /// That enumeration promises injectivity and nothing about how it treats bits.
 ///
-/// An implementation free to choose could make the explicit table and the closed form
-/// disagree, and this definition cannot.
+/// An implementation free to choose could part the explicit table from the closed form.
+///
+/// This definition cannot.
 ///
 /// The two coincide in odd characteristic, extensions included, and over a binary tower.
 ///
@@ -32,11 +32,11 @@ pub fn embed<F: Field>(entry: usize) -> F {
 
 /// Whether a table of this many entries embeds injectively.
 ///
-/// Two entries sharing an embedding would share a pole, which lets a pushforward move weight
-/// between them unseen.
+/// Two entries sharing an embedding would share a pole.
 ///
-/// The bound is conservative by one bit over a binary tower, where the field would just hold
-/// a full table.
+/// A pushforward could then move weight between them unseen.
+///
+/// The bound is conservative by one bit over a binary tower, which would hold a full table.
 ///
 /// A table that large leaves the embedding no headroom and buys nothing.
 pub(crate) fn fits<F: Field>(num_variables: usize) -> bool {
@@ -106,11 +106,13 @@ mod tests {
 
     #[test]
     fn the_bit_sum_agrees_with_the_field_enumeration() {
-        // The embedding is defined over the bits so that the closed form below is provably
-        // its extension, rather than relying on the enumeration to treat bits additively.
+        // The embedding is defined over bits so the closed form is provably its extension.
         //
-        // Both fields here happen to agree with the enumeration, and pinning that keeps the
-        // definition honest about what it is equivalent to today.
+        // Leaning on the enumeration to treat bits additively assumes more than it promises.
+        //
+        // Both fields here happen to agree with the enumeration.
+        //
+        // Pinning that keeps the definition honest about what it matches today.
         for entry in 0..512usize {
             assert_eq!(embed::<Binary>(entry), Binary::interpolation_node(entry));
         }

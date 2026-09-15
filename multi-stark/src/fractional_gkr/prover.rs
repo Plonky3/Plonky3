@@ -767,11 +767,13 @@ where
     let num_variables = fraction.n.num_variables();
     assert_eq!(num_variables, fraction.d.num_variables());
 
-    // The round kernel reads the two halves side by side, so an extension-field numerator
-    // has to be stored the way its denominator is.
+    // The round kernel reads the two halves side by side.
     //
-    // Nothing downstream can recover from a mixed pair, and where it would surface depends
-    // on the size, so it is rejected here rather than in one of the arms below.
+    // An extension-field numerator therefore has to be stored the way its denominator is.
+    //
+    // Nothing downstream can recover from a mixed pair.
+    //
+    // Where it would surface depends on the size, so it is rejected here instead.
     if let LeafNumerator::Ext(numer) = fraction.n {
         assert_eq!(
             matches!(numer, PolyMaybePacked::Packed(_)),

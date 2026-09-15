@@ -42,8 +42,9 @@
 //!
 //! # What the caller owes
 //!
-//! The claim point must be a challenge drawn after the position column and the table are
-//! committed, or the argument loses its free range check.
+//! The claim point must be drawn after the position column and the table are committed.
+//!
+//! A point chosen earlier costs the argument its free range check.
 //!
 //! # References
 //!
@@ -74,14 +75,15 @@ pub use proof::{LogupStarOutput, LogupStarProof, TableOutput};
 ///
 /// # Soundness
 ///
-/// The claim point must be a challenge the surrounding protocol drew after committing both
-/// the position column and the table.
+/// The claim point must be drawn after the position column and the table are committed.
 ///
 /// The reduction takes the point as given and cannot check this.
 ///
-/// A point chosen before those commitments, or reused across them, costs the argument its
-/// free range check: an out-of-range position is caught because the residue it leaves is a
-/// nonzero multilinear evaluated at a point the prover could not predict.
+/// A point chosen before those commitments costs the free range check.
+///
+/// An out-of-range position is caught because it leaves a nonzero multilinear behind.
+///
+/// That multilinear is evaluated at a point the prover could not predict.
 #[derive(Clone, Copy, Debug)]
 pub struct Reader<'a, EF> {
     /// Point at which every pulled column is claimed.
@@ -110,22 +112,20 @@ impl<EF: Field> TableLookup<'_, EF> {
     /// Every value that fixes this table's half of the statement, in reader order.
     ///
     /// One reader contributes its claim point and then its claimed values.
-    pub(crate) fn statement_values(&self) -> impl Iterator<Item = EF> + '_ {
+    fn statement_values(&self) -> impl Iterator<Item = EF> + '_ {
         self.readers
             .iter()
             .flat_map(|reader| reader.point.as_slice().iter().chain(reader.claims).cloned())
     }
-}
 
-/// Every value that fixes the whole statement, in table order then reader order.
-///
-/// Both sides bind this before drawing anything, so neither can choose a claim after seeing
-/// a challenge that weighs it.
-pub(crate) fn statement_values<EF: Field>(lookups: &[TableLookup<'_, EF>]) -> Vec<EF> {
-    lookups
-        .iter()
-        .flat_map(TableLookup::statement_values)
-        .collect()
+    /// Every value that fixes a whole statement, in table order then reader order.
+    ///
+    /// Both sides bind this before drawing anything.
+    ///
+    /// Neither can then choose a claim after seeing a challenge that weighs it.
+    pub(crate) fn statement(lookups: &[Self]) -> Vec<EF> {
+        lookups.iter().flat_map(Self::statement_values).collect()
+    }
 }
 
 /// Prover data behind one reader.
@@ -133,8 +133,9 @@ pub(crate) fn statement_values<EF: Field>(lookups: &[TableLookup<'_, EF>]) -> Ve
 pub struct ReaderWitness<'a> {
     /// Table entry each row pulls, one per row.
     ///
-    /// The committed column is this list under the position embedding, which sums the
-    /// interpolation nodes of the bits an entry has set.
+    /// The committed column is this list under the position embedding.
+    ///
+    /// That embedding sums the interpolation nodes of the bits an entry has set.
     ///
     /// That embedding is what the reduction rebuilds the column from.
     pub positions: &'a [usize],
