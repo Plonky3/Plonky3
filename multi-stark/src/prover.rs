@@ -264,10 +264,11 @@ where
 
     // 6. Open each main trace table at its suffix of the common bound point.
     let opening = transcript.main_opening(|challenger| {
+        let schedule = instances.main_schedule(&point);
         config.pcs().open_at(
             prover_data,
-            &instances.opening_protocol(),
-            &instances.main_points(&point),
+            schedule.protocol(),
+            schedule.points(),
             challenger,
         )
     });
@@ -286,10 +287,11 @@ where
             .preprocessed
             .as_ref()
             .expect("preprocessed proving key is missing for an AIR with preprocessed columns");
+        let schedule = instances.preprocessed_schedule(&point);
         config.preprocessed_pcs().open_at(
             preprocessed.prover_data.clone(),
-            &instances.preprocessed_opening_protocol(),
-            &instances.preprocessed_points(&point),
+            schedule.protocol(),
+            schedule.points(),
             challenger,
         )
     });
