@@ -40,13 +40,18 @@
 //!
 //! That is a field element, and no reduction modulo anything ever touches it.
 //!
+//! # What the caller owes
+//!
+//! The claim point must be a challenge drawn after the position column and the table are
+//! committed, or the argument loses its free range check.
+//!
 //! # References
 //!
 //! - Soukhanov. Logup*: faster, cheaper logup argument for small-table indexed lookups. <https://eprint.iacr.org/2025/946>
 
 mod error;
 mod plan;
-pub mod position;
+pub(crate) mod position;
 mod product;
 mod proof;
 mod prover;
@@ -57,12 +62,26 @@ mod witness;
 #[cfg(test)]
 mod tests;
 
+use alloc::vec::Vec;
+
 pub use error::LogupStarError;
+use p3_field::Field;
 use p3_multilinear_util::point::Point;
 pub use plan::LogupStarPlan;
 pub use proof::{LogupStarOutput, LogupStarProof, TableOutput};
 
 /// One reader's claim on the values it pulled out of a table.
+///
+/// # Soundness
+///
+/// The claim point must be a challenge the surrounding protocol drew after committing both
+/// the position column and the table.
+///
+/// The reduction takes the point as given and cannot check this.
+///
+/// A point chosen before those commitments, or reused across them, costs the argument its
+/// free range check: an out-of-range position is caught because the residue it leaves is a
+/// nonzero multilinear evaluated at a point the prover could not predict.
 #[derive(Clone, Copy, Debug)]
 pub struct Reader<'a, EF> {
     /// Point at which every pulled column is claimed.
@@ -80,13 +99,33 @@ pub struct TableLookup<'a, EF> {
     pub readers: &'a [Reader<'a, EF>],
 }
 
-impl<EF> TableLookup<'_, EF> {
+impl<EF: Field> TableLookup<'_, EF> {
     /// Number of columns each table entry carries.
     ///
     /// Every reader pulls the whole entry, so its claim count is that width.
     pub fn width(&self) -> usize {
         self.readers.first().map_or(0, |reader| reader.claims.len())
     }
+
+    /// Every value that fixes this table's half of the statement, in reader order.
+    ///
+    /// One reader contributes its claim point and then its claimed values.
+    pub(crate) fn statement_values(&self) -> impl Iterator<Item = EF> + '_ {
+        self.readers
+            .iter()
+            .flat_map(|reader| reader.point.as_slice().iter().chain(reader.claims).cloned())
+    }
+}
+
+/// Every value that fixes the whole statement, in table order then reader order.
+///
+/// Both sides bind this before drawing anything, so neither can choose a claim after seeing
+/// a challenge that weighs it.
+pub(crate) fn statement_values<EF: Field>(lookups: &[TableLookup<'_, EF>]) -> Vec<EF> {
+    lookups
+        .iter()
+        .flat_map(TableLookup::statement_values)
+        .collect()
 }
 
 /// Prover data behind one reader.

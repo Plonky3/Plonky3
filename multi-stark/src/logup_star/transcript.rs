@@ -3,6 +3,7 @@
 //! # Shape
 //!
 //! ```text
+//!     statement                    every claim point and claimed value
 //!     reader batching              one extension element
 //!     pushforward                  one message per table, as wide as that table
 //!     entry challenges             one extension element per table
@@ -16,6 +17,11 @@
 //! ```
 //!
 //! # Soundness
+//!
+//! What is being proved is bound before anything is drawn.
+//!
+//! Every challenge below weighs the claims, so a prover that saw one first could choose
+//! claims the weighing cancels.
 //!
 //! The reader batching challenge precedes the pushforwards, which are built from it.
 //!
@@ -48,7 +54,7 @@ use p3_challenger::fs::{
     Kind, Length, ProverState, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample};
-use p3_field::ExtensionField;
+use p3_field::{BasedVectorSpace, ExtensionField};
 
 use super::plan::LogupStarPlan;
 
@@ -57,6 +63,9 @@ const VERSION: u8 = 1;
 
 /// Protocol name bound into the transcript seed.
 const NAME: &[u8] = b"p3-multi-stark-logup-star";
+
+/// Step label of the claim points and claimed values the reduction is about.
+const STATEMENT: &str = "statement";
 
 /// Step label of the challenge weighting the readers of one table against each other.
 const READER_BATCHING: &str = "reader_batching";
@@ -98,35 +107,41 @@ struct FractionReduction;
 /// Type-level name of the sub-protocol the product claims are delegated to.
 struct ProductSumcheck;
 
+/// Numbers that fix one table's part of the transcript.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogupStarTableShape {
+    /// Base-two logarithm of the number of table entries.
+    pub num_variables: usize,
+    /// Number of columns each entry carries.
+    pub width: usize,
+    /// Base-two logarithm of each reader's row count, in the table's reader order.
+    pub readers: Vec<usize>,
+}
+
 /// Numbers that fix the transcript of one reduction.
 ///
 /// Both sides read these off their own copy of the statement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LogupStarShape {
-    /// Base-two logarithm of each table's entry count, in statement order.
-    table_variables: Vec<usize>,
-    /// Number of columns each table's entries carry, in statement order.
-    table_widths: Vec<usize>,
-    /// Base-two logarithm of each reader's row count, tables in order and readers within them.
-    reader_variables: Vec<usize>,
+    /// One entry per table, in statement order.
+    pub tables: Vec<LogupStarTableShape>,
     /// Variable count of the padded leaf table the fraction reduction consumes.
-    num_variables: usize,
+    pub num_variables: usize,
 }
 
 impl LogupStarShape {
     /// Read the shape off a layout.
+    #[must_use]
     pub fn new(plan: &LogupStarPlan) -> Self {
         Self {
-            table_variables: plan
+            tables: plan
                 .tables
                 .iter()
-                .map(|table| table.num_variables)
-                .collect(),
-            table_widths: plan.tables.iter().map(|table| table.width).collect(),
-            reader_variables: plan
-                .tables
-                .iter()
-                .flat_map(|table| table.readers.iter().copied())
+                .map(|table| LogupStarTableShape {
+                    num_variables: table.num_variables,
+                    width: table.width,
+                    readers: table.readers.clone(),
+                })
                 .collect(),
             num_variables: plan.num_variables,
         }
@@ -134,7 +149,27 @@ impl LogupStarShape {
 
     /// Total number of column claims the reduction closes on.
     fn num_column_claims(&self) -> usize {
-        self.table_widths.iter().sum()
+        self.tables.iter().map(|table| table.width).sum()
+    }
+
+    /// Number of readers across every table.
+    fn num_readers(&self) -> usize {
+        self.tables.iter().map(|table| table.readers.len()).sum()
+    }
+
+    /// Number of extension values that fix what is being proved.
+    ///
+    /// A reader contributes its claim point and one claimed value per table column.
+    fn num_statement_values(&self) -> usize {
+        self.tables
+            .iter()
+            .flat_map(|table| {
+                table
+                    .readers
+                    .iter()
+                    .map(move |&height| height + table.width)
+            })
+            .sum()
     }
 
     /// Describe the transcript this shape fixes.
@@ -157,8 +192,18 @@ impl LogupStarShape {
             Interaction::algebra::<F, EF>(Hierarchy::Atomic, Kind::Message, label, length)
         };
 
-        // The readers of one table are weighted by powers of this, so it precedes their weights.
-        let mut steps = vec![challenge(READER_BATCHING, Length::Scalar)];
+        // What is being proved is bound before anything is drawn.
+        //
+        // Without it a prover could pick claims after seeing the challenges that weigh them.
+        let mut steps = vec![
+            Interaction::algebra::<F, F>(
+                Hierarchy::Atomic,
+                Kind::Public,
+                STATEMENT,
+                Length::Fixed(self.num_statement_values() * <EF as BasedVectorSpace<F>>::DIMENSION),
+            ),
+            challenge(READER_BATCHING, Length::Scalar),
+        ];
 
         // One pushforward per table, each as wide as the table it summarizes.
         //
@@ -166,15 +211,15 @@ impl LogupStarShape {
         //
         // They reach the fingerprint through the step lengths, not the instance label.
         steps.extend(
-            self.table_variables
+            self.tables
                 .iter()
-                .map(|&num_variables| message(PUSHFORWARD, Length::Fixed(1 << num_variables))),
+                .map(|table| message(PUSHFORWARD, Length::Fixed(1 << table.num_variables))),
         );
 
         // Every pushforward is bound before any challenge that tests one is drawn.
         steps.push(challenge(
             ENTRY_CHALLENGES,
-            Length::Fixed(self.table_variables.len()),
+            Length::Fixed(self.tables.len()),
         ));
 
         steps.push(Interaction::marker::<FractionReduction>(
@@ -189,10 +234,7 @@ impl LogupStarShape {
         ));
 
         // The reduction closes on one position-column value per reader, which the caller opens.
-        steps.push(message(
-            POSITION_CLAIMS,
-            Length::Fixed(self.reader_variables.len()),
-        ));
+        steps.push(message(POSITION_CLAIMS, Length::Fixed(self.num_readers())));
 
         // Drawn once the reduction has fixed the point everything below is claimed at.
         steps.push(challenge(COLUMN_BATCHING, Length::Scalar));
@@ -228,17 +270,21 @@ impl LogupStarShape {
         // How wide the padded leaf table is, and how many tables and readers share it.
         separator
             .instance(&(self.num_variables as u64).to_be_bytes())
-            .instance(&(self.table_variables.len() as u64).to_be_bytes())
-            .instance(&(self.reader_variables.len() as u64).to_be_bytes());
+            .instance(&(self.tables.len() as u64).to_be_bytes())
+            .instance(&(self.num_readers() as u64).to_be_bytes());
 
         // Two statements can agree on every total above and still differ below.
         //
         // They may split readers between tables differently, or pull different columns.
-        for width in &self.table_widths {
-            separator.instance(&(*width as u64).to_be_bytes());
-        }
-        for num_variables in &self.reader_variables {
-            separator.instance(&(*num_variables as u64).to_be_bytes());
+        // Each table's reader count precedes its reader heights, so two statements that
+        // merely split the same readers differently are separated here.
+        for table in &self.tables {
+            separator
+                .instance(&(table.width as u64).to_be_bytes())
+                .instance(&(table.readers.len() as u64).to_be_bytes());
+            for height in &table.readers {
+                separator.instance(&(*height as u64).to_be_bytes());
+            }
         }
 
         separator
@@ -270,6 +316,20 @@ where
             state: ProverState::new(challenger, &separator),
             _ef: PhantomData,
         }
+    }
+
+    /// Bind what is being proved, before anything is drawn from the sponge.
+    ///
+    /// Both sides hold these already, so they are absorbed rather than sent.
+    ///
+    /// # Arguments
+    ///
+    /// - `statement`: every reader's claim point and claimed values, in statement order.
+    pub fn statement(&mut self, statement: &[EF]) {
+        self.state.add_public_scalars::<F, FieldToFieldCodec<F>>(
+            STATEMENT,
+            &EF::flatten_to_base(statement.to_vec()),
+        );
     }
 
     /// Draw the challenge weighting the readers of one table against each other.
@@ -382,6 +442,15 @@ where
             state: VerifierState::new(challenger, &separator, &[]),
             _ef: PhantomData,
         }
+    }
+
+    /// Bind what is being proved, exactly as the prover bound it.
+    pub fn statement(&mut self, statement: &[EF]) {
+        self.state
+            .observe_public_scalars::<F, FieldToFieldCodec<F>>(
+                STATEMENT,
+                &EF::flatten_to_base(statement.to_vec()),
+            );
     }
 
     /// Redraw the challenge weighting the readers of one table against each other.
@@ -504,6 +573,15 @@ mod tests {
         Chal::from_hasher(b"p3-logup-star-transcript-test".to_vec(), Keccak256Hash)
     }
 
+    /// One table of the given size and width, read by readers of the given heights.
+    fn table(num_variables: usize, width: usize, readers: &[usize]) -> LogupStarTableShape {
+        LogupStarTableShape {
+            num_variables,
+            width,
+            readers: readers.to_vec(),
+        }
+    }
+
     /// A shape over one table of the given size, read by readers of the given heights.
     fn shape(table_variables: usize, width: usize, readers: &[usize]) -> LogupStarShape {
         let points = readers
@@ -518,7 +596,7 @@ mod tests {
                 claims: &claims,
             })
             .collect::<Vec<_>>();
-        LogupStarShape::new(&LogupStarPlan::new(&[TableLookup {
+        LogupStarShape::new(&LogupStarPlan::new::<B, B>(&[TableLookup {
             num_variables: table_variables,
             readers: &readers,
         }]))
@@ -528,22 +606,32 @@ mod tests {
     ///
     /// The values are arbitrary; what is being compared is the sponge they leave behind.
     fn play(shape: &LogupStarShape, prover: bool) -> B {
+        play_with(shape, prover, B::ONE, B::ONE)
+    }
+
+    /// Play every step, with one statement value and one pushforward entry under the caller's
+    /// control, and return what the next draw off the shared sponge would be.
+    fn play_with(shape: &LogupStarShape, prover: bool, claim: B, pushforward: B) -> B {
         let mut sponge = challenger();
-        let pushforwards = shape
-            .table_variables
+        let mut pushforwards = shape
+            .tables
             .iter()
-            .map(|&num_variables| vec![B::ONE; 1 << num_variables])
+            .map(|table| vec![B::ONE; 1 << table.num_variables])
             .collect::<Vec<_>>();
-        let positions = vec![B::ONE; shape.reader_variables.len()];
+        pushforwards[0][0] = pushforward;
+        let positions = vec![B::ONE; shape.num_readers()];
+        let mut statement = vec![B::ONE; shape.num_statement_values()];
+        statement[0] = claim;
         let columns = vec![B::ONE; shape.num_column_claims()];
 
         if prover {
             let mut transcript = LogupStarProverTranscript::<Chal, B, B>::new(&mut sponge, shape);
+            transcript.statement(&statement);
             let _ = transcript.reader_batching();
             for pushforward in &pushforwards {
                 transcript.pushforward(pushforward);
             }
-            let _ = transcript.entry_challenges(shape.table_variables.len());
+            let _ = transcript.entry_challenges(shape.tables.len());
             transcript.fraction_reduction(|_| ());
             transcript.position_claims(&positions);
             let _ = transcript.column_batching();
@@ -552,11 +640,12 @@ mod tests {
             transcript.finish();
         } else {
             let mut transcript = LogupStarVerifierTranscript::<Chal, B, B>::new(&mut sponge, shape);
+            transcript.statement(&statement);
             let _ = transcript.reader_batching();
             for pushforward in &pushforwards {
                 transcript.pushforward(pushforward);
             }
-            let _ = transcript.entry_challenges(shape.table_variables.len());
+            let _ = transcript.entry_challenges(shape.tables.len());
             transcript.fraction_reduction(|_| ());
             transcript.position_claims(&positions);
             let _ = transcript.column_batching();
@@ -566,6 +655,16 @@ mod tests {
         }
 
         sponge.sample()
+    }
+
+    /// Play out the steps below the entry challenges, which the driver insists on.
+    fn finish(mut transcript: LogupStarProverTranscript<'_, Chal, B, B>, shape: &LogupStarShape) {
+        transcript.fraction_reduction(|_| ());
+        transcript.position_claims(&vec![B::ONE; shape.num_readers()]);
+        let _ = transcript.column_batching();
+        transcript.product_sumcheck(|_| ());
+        transcript.column_claims(&vec![B::ONE; shape.num_column_claims()]);
+        transcript.finish();
     }
 
     #[test]
@@ -603,6 +702,93 @@ mod tests {
     }
 
     #[test]
+    fn a_claim_reaches_the_sponge_before_anything_is_drawn() {
+        // Every challenge below weighs the claims, so a prover that could see one before
+        // fixing them could pick claims the weighing cancels.
+        //
+        // Binding the statement first is what stops that, and this is what binding means:
+        // one different claimed value moves the whole stream.
+        let shape = shape(3, 1, &[2, 2]);
+        assert_ne!(
+            play_with(&shape, true, B::ONE, B::ONE),
+            play_with(&shape, true, B::ZERO, B::ONE)
+        );
+    }
+
+    #[test]
+    fn a_pushforward_reaches_the_sponge_before_the_entry_challenges() {
+        // A pushforward that were not bound could be chosen after its own challenge, leaving
+        // a prover one linear constraint per table to satisfy instead of a commitment.
+        //
+        // Fixture state: two runs differing only in entry zero of the first pushforward.
+        let shape = shape(3, 1, &[2]);
+        let mut sponge = challenger();
+        let mut transcript = LogupStarProverTranscript::<Chal, B, B>::new(&mut sponge, &shape);
+        transcript.statement(&vec![B::ONE; shape.num_statement_values()]);
+        let _ = transcript.reader_batching();
+        let mut pushforward = [B::ONE; 8];
+        transcript.pushforward(&pushforward);
+        let bound = transcript.entry_challenges(1);
+        finish(transcript, &shape);
+
+        let mut sponge = challenger();
+        let mut transcript = LogupStarProverTranscript::<Chal, B, B>::new(&mut sponge, &shape);
+        transcript.statement(&vec![B::ONE; shape.num_statement_values()]);
+        let _ = transcript.reader_batching();
+        pushforward[0] = B::ZERO;
+        transcript.pushforward(&pushforward);
+        let moved = transcript.entry_challenges(1);
+        finish(transcript, &shape);
+
+        assert_ne!(bound, moved);
+    }
+
+    #[test]
+    fn each_table_draws_its_own_entry_challenge() {
+        // One shared challenge would let two tables miscount opposite entries and cancel, so
+        // the draw has to separate them.
+        let shape = shape(3, 1, &[2]);
+        let two_tables = LogupStarShape {
+            tables: vec![table(3, 1, &[2]), table(3, 1, &[2])],
+            num_variables: shape.num_variables,
+        };
+
+        let mut sponge = challenger();
+        let mut transcript = LogupStarProverTranscript::<Chal, B, B>::new(&mut sponge, &two_tables);
+        transcript.statement(&vec![B::ONE; two_tables.num_statement_values()]);
+        let _ = transcript.reader_batching();
+        transcript.pushforward(&[B::ONE; 8]);
+        transcript.pushforward(&[B::ONE; 8]);
+        let challenges = transcript.entry_challenges(2);
+        finish(transcript, &two_tables);
+
+        assert_eq!(challenges.len(), 2);
+        assert_ne!(challenges[0], challenges[1]);
+    }
+
+    #[test]
+    fn how_readers_split_between_tables_reaches_the_seed() {
+        // Two tables of the same size and width, and readers of the same height, can still
+        // be a different statement depending on which table each reader belongs to.
+        //
+        //     [2 readers | 1 reader]   versus   [1 reader | 2 readers]
+        //
+        // Totals alone do not separate those, so each table's reader count is bound with
+        // its reader heights rather than after them.
+        let left = LogupStarShape {
+            tables: vec![table(3, 1, &[2, 2]), table(3, 1, &[2])],
+            num_variables: 5,
+        };
+        let right = LogupStarShape {
+            tables: vec![table(3, 1, &[2]), table(3, 1, &[2, 2])],
+            num_variables: 5,
+        };
+
+        assert_ne!(left, right);
+        assert_ne!(play(&left, true), play(&right, true));
+    }
+
+    #[test]
     fn the_entry_challenges_are_never_zero() {
         // The first table entry embeds to zero.
         //
@@ -613,6 +799,7 @@ mod tests {
         let mut sponge = challenger();
         let mut transcript = LogupStarProverTranscript::<Chal, B, B>::new(&mut sponge, &shape);
 
+        transcript.statement(&vec![B::ONE; shape.num_statement_values()]);
         let _ = transcript.reader_batching();
         transcript.pushforward(&[B::ONE; 8]);
         let challenges = transcript.entry_challenges(1);
