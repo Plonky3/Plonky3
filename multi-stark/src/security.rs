@@ -18,15 +18,19 @@ use p3_air::boundary;
 use p3_air::symbolic::AirLayout;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_field::Field;
-use p3_lookup::InteractionSymbolicBuilder;
-use p3_security::multilinear::{MultilinearAirParams, MultilinearLookupParams, reduction_terms};
+use p3_lookup::{IndexedLookupError, InteractionSymbolicBuilder};
+use p3_security::multilinear::{
+    MultilinearAirParams, MultilinearLogupStarParams, MultilinearLookupParams, reduction_terms,
+};
 use p3_security::{ErrorBits, SecurityTerm};
 use p3_sumcheck::{PrescribedOpeningSecurity, PrescribedPointPcs};
+use p3_util::log2_ceil_usize;
 use thiserror::Error;
 
 use crate::VerifierInstances;
 use crate::config::{Commitment, MultiStarkConfig};
 use crate::folder::{VerifierAir, boundary_io_pins};
+use crate::indexed::IndexedPlan;
 use crate::instance::Instances;
 use crate::lookup::{LookupError, LookupPlan};
 use crate::selectors::{PeriodicError, periodic_num_variables};
@@ -41,6 +45,9 @@ pub enum SecurityError {
     /// The lookup counting argument or its field is unsupported.
     #[error("lookup security: {0}")]
     Lookup(#[from] LookupError),
+    /// The indexed lookups the AIRs declare do not describe a reduction.
+    #[error("indexed lookup security: {0}")]
+    IndexedLookup(#[from] IndexedLookupError),
     /// Periodic columns do not fit the declared trace dimensions.
     #[error("periodic security: {0}")]
     Periodic(#[from] PeriodicError),
@@ -132,6 +139,65 @@ impl MultiStarkSecurityReport {
                 self.unassessed.push(label);
                 0.0
             }
+        }
+    }
+}
+
+impl IndexedPlan {
+    /// Read the shape the soundness bound is charged against.
+    ///
+    /// Every number here comes from the AIRs and the trace heights.
+    ///
+    /// None of them is read off a proof, which is what lets a verifier trust the bound.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice.
+    ///
+    /// A plan exists only when some AIR declares a table, and a table always has a reader.
+    pub(crate) fn security_params(&self) -> MultilinearLogupStarParams {
+        // Blocks are laid down tallest first, each at a multiple of its own height.
+        //
+        // The run of used leaves therefore has no gaps.
+        //
+        //     leaves = sum over tables of (entries + rows of every reader)
+        //
+        // The padded table is the next power of two.
+        //
+        // Its extra leaves carry a zero over a one, so they hold no pole.
+        let num_leaves = self
+            .tables()
+            .iter()
+            .map(|plan| {
+                let readers = plan
+                    .readers
+                    .iter()
+                    .map(|reader| 1usize << reader.num_variables)
+                    .sum::<usize>();
+                (1usize << plan.table.num_variables) + readers
+            })
+            .sum::<usize>();
+
+        MultilinearLogupStarParams {
+            num_variables: log2_ceil_usize(num_leaves),
+            num_leaves,
+            max_readers_per_table: self
+                .tables()
+                .iter()
+                .map(|plan| plan.readers.len())
+                .max()
+                .expect("a plan exists only when some table is declared"),
+            max_table_variables: self
+                .tables()
+                .iter()
+                .map(|plan| plan.table.num_variables)
+                .max()
+                .expect("a plan exists only when some table is declared"),
+            num_column_claims: self
+                .tables()
+                .iter()
+                .map(|plan| plan.table.columns.len())
+                .sum(),
         }
     }
 }
@@ -297,6 +363,11 @@ where
         num_fractions,
         max_message_width: plan.max_width,
     });
+    // The same plan feeds the soundness terms and the opening shapes below.
+    //
+    // An assessment covering fewer batches than the proof opens overstates the bound.
+    let indexed = IndexedPlan::build::<C::Val, C::Challenge, A>(&instances.airs(), &heights)?;
+    let logup_star = indexed.as_ref().map(IndexedPlan::security_params);
     let num_variables = heights
         .iter()
         .copied()
@@ -318,6 +389,7 @@ where
                 // A skip round would change the accounting, so it is declared
                 // absent rather than defaulted.
                 skip: None,
+                logup_star,
             },
             field_bits,
             nonzero_field_bits,
@@ -325,6 +397,15 @@ where
         unassessed: Vec::new(),
     };
     let num_reduction_terms = report.terms.len();
+    // The scheme is assessed against the opening protocol verification actually runs.
+    //
+    // The indexed-lookup reduction closes on two further points per table it touches.
+    //
+    // Those batches have to reach the protocol built here, not only the one opened with.
+    //
+    // A protocol missing them assesses a smaller opening than the proof performs.
+    //
+    // It also understates the candidate count subtracted from every reduction term below.
     let mut log2_candidates = report.add_opening_evidence(
         "main-pcs",
         config
