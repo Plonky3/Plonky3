@@ -54,6 +54,30 @@ pub struct ZerocheckClaim<EF> {
     pub value: EF,
 }
 
+impl<EF: Field> ZerocheckClaim<EF> {
+    /// Whether the committed openings at this claim's point recombine to its value.
+    ///
+    /// # Overview
+    ///
+    /// This is the last step of the chain, and the one a caller holding a commitment runs:
+    ///
+    /// ```text
+    ///     open every operand at the point  ->  recombine under the challenge  ->  compare
+    /// ```
+    ///
+    /// The recombination is the same batching the reduction proved over.
+    ///
+    /// It is taken from here rather than rebuilt by every caller.
+    ///
+    /// # Arguments
+    ///
+    /// The openings in operand order, as the constraint reads them.
+    #[must_use]
+    pub fn is_answered_by(&self, openings: &[EF]) -> bool {
+        SkipOpening::batch_claims(openings, self.gamma) == self.value
+    }
+}
+
 /// Reasons a binary zerocheck rejects.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ZerocheckError {
@@ -399,7 +423,11 @@ where
         // The reduction's final value still carries the Lagrange weight.
         //
         // The verifier reads that for itself and divides it out.
-        let opening = SkipOpening::new(self.round.selector::<EF>(lambda).lagrange().clone());
+        //
+        // Only the vector is needed here.
+        //
+        // The round hands that over without the byte table its own row reading uses.
+        let opening = SkipOpening::new(self.round.lagrange::<EF>(lambda));
         let weight = opening.lagrange_at(&tau);
         if weight.is_zero() {
             return Err(ZerocheckError::DegenerateOpening);
