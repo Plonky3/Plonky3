@@ -75,43 +75,44 @@ where
             let num_entries = 1 << lookup.num_variables;
             let first = plan.reader_offset(table);
 
-            table_witness.readers.iter().enumerate().fold(
-                EF::zero_vec(num_entries),
-                |mut pushforward, (index, reader_witness)| {
-                    let weights = readers[first + index].as_slice();
-                    assert_eq!(
-                        reader_witness.positions.len(),
-                        weights.len(),
-                        "a reader's row count must match its claim point"
-                    );
+            for (index, reader_witness) in table_witness.readers.iter().enumerate() {
+                assert_eq!(
+                    reader_witness.positions.len(),
+                    readers[first + index].num_evals(),
+                    "a reader's row count must match its claim point"
+                );
+            }
 
-                    // Rows split across threads, each split filling its own copy of the table.
-                    //
-                    // Scattering in place would let two rows naming one entry race.
-                    //
-                    // The splits merge afterwards, since addition ignores order.
-                    let scattered = reader_witness
+            // One pass over every row of the table, readers included.
+            //
+            // A pass per reader would seed and merge a table-sized accumulator per split per
+            // reader, which costs readers times splits times entries rather than rows.
+            //
+            // Rows split across threads and each split fills its own copy of the table, since
+            // scattering in place would let two rows naming one entry race.
+            //
+            // The splits merge afterwards, because addition ignores order.
+            (0..table_witness.readers.len())
+                .into_par_iter()
+                .flat_map(|index| {
+                    table_witness.readers[index]
                         .positions
                         .par_iter()
-                        .zip(weights.par_iter())
-                        .par_fold_reduce(
-                            || EF::zero_vec(num_entries),
-                            |mut split, (&entry, &weight)| {
-                                *split
-                                    .get_mut(entry)
-                                    .expect("a row names an entry outside its table") += weight;
-                                split
-                            },
-                            |mut left, right| {
-                                EF::add_slices(&mut left, &right);
-                                left
-                            },
-                        );
-
-                    EF::add_slices(&mut pushforward, &scattered);
-                    pushforward
-                },
-            )
+                        .zip(readers[first + index].as_slice().par_iter())
+                })
+                .par_fold_reduce(
+                    || EF::zero_vec(num_entries),
+                    |mut split, (&entry, &weight)| {
+                        *split
+                            .get_mut(entry)
+                            .expect("a row names an entry outside its table") += weight;
+                        split
+                    },
+                    |mut left, right| {
+                        EF::add_slices(&mut left, &right);
+                        left
+                    },
+                )
         })
         .collect();
 
@@ -261,7 +262,7 @@ mod tests {
             num_variables: fixture.table_variables,
             readers: &readers,
         }];
-        let plan = LogupStarPlan::new(&lookups);
+        let plan = LogupStarPlan::new::<B, B>(&lookups);
         let reader_witnesses = fixture.reader_witnesses();
         let columns = [fixture.column.as_slice()];
         let witness = [TableWitness {
@@ -301,7 +302,7 @@ mod tests {
             num_variables: 2,
             readers: &readers,
         }];
-        let plan = LogupStarPlan::new(&lookups);
+        let plan = LogupStarPlan::new::<B, B>(&lookups);
         let reader_witnesses = fixture.reader_witnesses();
         let columns = [fixture.column.as_slice()];
         let witness = [TableWitness {
@@ -337,7 +338,7 @@ mod tests {
             num_variables: 2,
             readers: &readers,
         }];
-        let plan = LogupStarPlan::new(&lookups);
+        let plan = LogupStarPlan::new::<B, B>(&lookups);
         let reader_witnesses = fixture.reader_witnesses();
         let columns = [fixture.column.as_slice()];
         let witness = [TableWitness {
@@ -396,7 +397,7 @@ mod tests {
             num_variables: 2,
             readers: &readers,
         }];
-        let plan = LogupStarPlan::new(&lookups);
+        let plan = LogupStarPlan::new::<B, B>(&lookups);
         assert_eq!(plan.num_variables, 3);
 
         let reader_witnesses = fixture.reader_witnesses();
@@ -431,7 +432,7 @@ mod tests {
             num_variables: 2,
             readers: &readers,
         }];
-        let plan = LogupStarPlan::new(&lookups);
+        let plan = LogupStarPlan::new::<B, B>(&lookups);
         let reader_witnesses = fixture.reader_witnesses();
         let columns = [fixture.column.as_slice()];
         let witness = [TableWitness {

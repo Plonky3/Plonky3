@@ -5,44 +5,46 @@ use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PackedValue};
 use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
+use p3_multilinear_util::split_eq::SplitEq;
 use p3_sumcheck::generic_degree::RoundProver;
+use p3_util::log2_strict_usize;
 
 use super::plan::{BlockRole, LogupStarPlan};
 use super::product::{self, ProductProver};
 use super::proof::{LogupStarOutput, LogupStarProof, TableOutput};
 use super::transcript::{LogupStarProverTranscript, LogupStarShape};
 use super::witness::{leaf_tables, weights};
-use super::{TableLookup, TableWitness};
+use super::{TableLookup, TableWitness, position, statement_values};
 use crate::fractional_gkr::{Fraction, LeafNumerator, prove_fractional_gkr};
 
-/// Prove one indexed-lookup reduction.
-///
-/// # Arguments
-///
-/// - `lookups`: the statement, one entry per table.
-/// - `witness`: the tables and the entry each reader row names, in the same order.
-/// - `challenger`: sponge of the surrounding protocol, borrowed for the run.
-///
-/// # Returns
-///
-/// The proof, and the evaluation claims the caller must discharge against its commitments.
-///
-/// # Panics
-///
-/// Panics if the statement and the witness disagree on how many tables or readers there are.
-///
-/// Panics if a row names an entry its table does not have.
-///
-/// Panics if the claims the statement carries are not the ones the witness produces.
-///
-/// That means the caller was asked to prove something false.
 impl<F, EF> LogupStarProof<F, EF>
 where
     F: TranscriptField,
     EF: ExtensionField<F>,
 {
+    /// Prove one indexed-lookup reduction.
+    ///
+    /// # Arguments
+    ///
+    /// - `lookups`: the statement, one entry per table.
+    /// - `witness`: the tables and the entry each reader row names, in the same order.
+    /// - `challenger`: sponge of the surrounding protocol, borrowed for the run.
+    ///
+    /// # Returns
+    ///
+    /// The proof, and the evaluation claims the caller must discharge against its commitments.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the statement and the witness disagree on how many tables or readers there are.
+    ///
+    /// Panics if a row names an entry its table does not have.
+    ///
+    /// Panics if the claims the statement carries are not the ones the witness produces.
+    ///
+    /// That means the caller was asked to prove something false.
     #[tracing::instrument(skip_all, name = "prove logup*")]
     pub fn prove<Challenger>(
         lookups: &[TableLookup<'_, EF>],
@@ -76,9 +78,13 @@ where
         let mut transcript =
             LogupStarProverTranscript::<Challenger, F, EF>::new(challenger, &shape);
 
-        // Phase 1: weigh the readers of each table against each other, then scatter.
+        // Phase 1: bind what is being proved, then weigh the readers of each table.
         //
-        // The pushforward depends on this challenge, so it is drawn first.
+        // Every challenge below is a function of the claims, so none of them can be seen
+        // before the claims are fixed.
+        //
+        // The pushforward depends on the batching challenge, so it is drawn next.
+        transcript.statement(&statement_values(lookups));
         let reader_batching = transcript.reader_batching();
         let weights = weights(&plan, lookups, witness, reader_batching);
         for pushforward in &weights.pushforwards {
@@ -92,12 +98,22 @@ where
 
         // Phase 3: prove the fractions sum to zero.
         //
-        // The tables stay scalar rather than packed.
-        //
-        // That lets their blocks be read back below without a second pass over the positions.
+        // The tables are packed when the field has lanes to fill and the cube is wide enough
+        // to address them, which is what lets the reduction use its SIMD kernel.
         let (numerator, denominator) = leaf_tables(&plan, witness, &weights, &entry_challenges);
-        let numerator = PolyMaybePacked::Scalar(numerator);
-        let denominator = PolyMaybePacked::Scalar(denominator);
+        // A field with one lane per element would only pay for the copy.
+        let lanes = log2_strict_usize(F::Packing::WIDTH);
+        let (numerator, denominator) = if lanes > 0 && plan.num_variables >= lanes {
+            (
+                PolyMaybePacked::Packed(numerator.pack::<F, EF>()),
+                PolyMaybePacked::Packed(denominator.pack::<F, EF>()),
+            )
+        } else {
+            (
+                PolyMaybePacked::Scalar(numerator),
+                PolyMaybePacked::Scalar(denominator),
+            )
+        };
         let (fraction_gkr, gkr_output) = transcript.fraction_reduction(|challenger| {
             prove_fractional_gkr(
                 Fraction {
@@ -108,26 +124,23 @@ where
             )
         });
 
-        // Phase 4: read each reader's position value off the block it owns.
+        // Phase 4: open each reader's position column at the point the reduction reached.
         //
-        // A reader block holds `challenge - iota(position)`.
-        //
-        // The equality weights of a point sum to one.
-        //
-        // So the block's value there is the challenge minus the position column's.
-        let PolyMaybePacked::Scalar(denominator) = &denominator else {
-            unreachable!("the leaf tables are built scalar");
-        };
+        // The column is the reader's rows under the table-position embedding, which is what
+        // the verifier rebuilds the denominator side from.
         let mut position_claims = vec![EF::ZERO; plan.num_readers()];
         for block in &plan.blocks {
             let BlockRole::Reader { index } = block.role else {
                 continue;
             };
-            let span = block.offset..block.offset + (1 << block.num_variables);
             let own = block.subpoint(&gkr_output.point, plan.num_variables);
-            let value = Poly::new(&denominator.as_slice()[span]).eval_ext::<F>(&own);
+            let column = witness[block.table].readers[index]
+                .positions
+                .iter()
+                .map(|&entry| position::embed::<F>(entry))
+                .collect::<Vec<_>>();
             position_claims[plan.reader_offset(block.table) + index] =
-                entry_challenges[block.table] - value;
+                SplitEq::<F, EF>::new_packed(&own, EF::ONE).eval_base(Poly::new(column.as_slice()));
         }
         transcript.position_claims(&position_claims);
 

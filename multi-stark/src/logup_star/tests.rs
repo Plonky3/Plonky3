@@ -1,5 +1,6 @@
-use alloc::vec;
+use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_binary_field::{BinaryChallenger, BinaryField128};
@@ -9,17 +10,25 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
+use p3_multilinear_util::split_eq::SplitEq;
+use p3_sumcheck::generic_degree::RoundProver;
+use p3_symmetric::CryptographicHasher;
 use proptest::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-use super::witness::{leaf_tables, weights};
+use super::plan::BlockRole;
+use super::product::{self, ProductProver};
+use super::prover::PRODUCT_DEGREE;
+use super::transcript::{LogupStarProverTranscript, LogupStarShape};
+use super::witness::{Weights, leaf_tables, weights};
 use super::{
     LogupStarError, LogupStarPlan, LogupStarProof, Reader, ReaderWitness, TableLookup,
-    TableWitness, position,
+    TableWitness, position, statement_values,
 };
+use crate::fractional_gkr::{Fraction, LeafNumerator, prove_fractional_gkr};
 
 type Small = BabyBear;
 type SmallExt = BinomialExtensionField<Small, 4>;
@@ -238,7 +247,7 @@ where
     assert_eq!(prover_next, verifier_next);
 
     // The reduction is worth nothing unless the claims it leaves are the true evaluations.
-    let plan = LogupStarPlan::new(&lookups);
+    let plan = LogupStarPlan::new::<F, EF>(&lookups);
     for (table, output) in verifier_output.tables.iter().enumerate() {
         // A table is claimed at the last coordinates of the shared table point.
         let table_variables = instance.table_variables[table];
@@ -323,7 +332,7 @@ fn reading_one_entry_an_even_number_of_times_does_not_cancel() {
         num_variables: 2,
         readers: &readers,
     }];
-    let plan = LogupStarPlan::new(&lookups);
+    let plan = LogupStarPlan::new::<Binary, Binary>(&lookups);
 
     let positions = vec![1usize, 0, 1, 0];
     let reader_witnesses = vec![ReaderWitness {
@@ -389,7 +398,7 @@ fn one_challenge_per_table_is_what_stops_two_tables_cancelling() {
             readers,
         })
         .collect::<Vec<_>>();
-    let plan = LogupStarPlan::new(&lookups);
+    let plan = LogupStarPlan::new::<Binary, Binary>(&lookups);
 
     let positions = [vec![0usize, 1], vec![1usize, 2]];
     let reader_witnesses = positions
@@ -436,6 +445,63 @@ fn one_challenge_per_table_is_what_stops_two_tables_cancelling() {
 }
 
 #[test]
+#[should_panic(expected = "fraction GKR input fractions must sum to zero")]
+fn weight_moved_between_two_tables_cannot_be_hidden() {
+    // The companion test above shows the algebra: under one shared challenge the two errors
+    // sit over the same denominator and cancel, and under one challenge per table they do not.
+    //
+    // This one drives the real prover, so it also guards the code that keeps them apart.
+    //
+    // Fixture state: two tables of four entries, one reader of two rows each.
+    //
+    // Mutation: move a unit of weight off one table's entry 1 and onto the other's, after
+    // the pushforwards are built and before they are bound.
+    //
+    // The fractions then no longer sum to zero and the reduction refuses to run.
+    //
+    // Were both tables to share a challenge, the sum would vanish and the cheat would go
+    // through.
+    let mut rng = SmallRng::seed_from_u64(0x0_C4EA7);
+    let instance = Instance::<Binary, Binary>::random(&mut rng, &[(2, 1, &[1]), (2, 1, &[1])]);
+
+    let readers = instance.readers();
+    let lookups = instance.lookups(&readers);
+    let columns = instance.column_views();
+    let reader_witnesses = instance.reader_witnesses();
+    let witness = Instance::<Binary, Binary>::witness(&columns, &reader_witnesses);
+
+    let plan = LogupStarPlan::new::<Binary, Binary>(&lookups);
+    let shape = LogupStarShape::new(&plan);
+    let mut sponge = binary_challenger();
+    let mut transcript = LogupStarProverTranscript::<_, Binary, Binary>::new(&mut sponge, &shape);
+
+    transcript.statement(&statement_values(&lookups));
+    let reader_batching = transcript.reader_batching();
+    let mut built = weights(&plan, &lookups, &witness, reader_batching);
+
+    built.pushforwards[0][1] -= Binary::ONE;
+    built.pushforwards[1][1] += Binary::ONE;
+
+    for pushforward in &built.pushforwards {
+        transcript.pushforward(pushforward);
+    }
+    let entry_challenges = transcript.entry_challenges(plan.num_tables());
+
+    let (numerator, denominator) = leaf_tables(&plan, &witness, &built, &entry_challenges);
+    let numerator = PolyMaybePacked::Scalar(numerator);
+    let denominator = PolyMaybePacked::Scalar(denominator);
+    transcript.fraction_reduction(|challenger| {
+        prove_fractional_gkr(
+            Fraction {
+                n: LeafNumerator::Ext(&numerator),
+                d: &denominator,
+            },
+            challenger,
+        )
+    });
+}
+
+#[test]
 #[should_panic(expected = "a row names an entry outside its table")]
 fn a_position_outside_the_table_is_rejected_while_scattering() {
     // A position column is fixed before the claim point is drawn.
@@ -454,7 +520,7 @@ fn a_position_outside_the_table_is_rejected_while_scattering() {
         num_variables: 2,
         readers: &readers,
     }];
-    let plan = LogupStarPlan::new(&lookups);
+    let plan = LogupStarPlan::new::<Binary, Binary>(&lookups);
 
     // Entry four is one past the last entry of a four-entry table.
     let positions = vec![0usize, 4];
@@ -469,6 +535,219 @@ fn a_position_outside_the_table_is_rejected_while_scattering() {
     }];
 
     let _ = weights(&plan, &lookups, &witness, Binary::ONE);
+}
+
+#[test]
+fn no_pushforward_can_close_the_pole_an_out_of_range_read_opens() {
+    // Fixture state: one four-entry table, one reader of two rows, rows naming 0 and 4.
+    //
+    // Entry 4 is one past the last entry, so the reader's second fraction sits over the
+    // pole `c - iota(4)`, while every table fraction sits over some `iota(e) - c`, e < 4.
+    //
+    //     reader:   w_0 / (c - iota(0))    w_1 / (c - iota(4))   <- nothing sits here
+    //     table:   -Y_e / (c - iota(e))    for e in 0, 1, 2, 3
+    //
+    // The embedding is injective, so no table entry reaches the second pole.
+    //
+    // The pushforward is the only part of this a prover chooses, and two scatters stand
+    // in for every choice: the offending row's weight dropped, and the same weight moved
+    // onto entry 0, where it would cancel if the two poles could be confused.
+    //
+    // Neither sum vanishes, which is why a position column carries no range constraint.
+    let mut rng = SmallRng::seed_from_u64(0x004A_1101);
+    let point = Point::<Binary>::rand(&mut rng, 1);
+    let challenge: Binary = rng.random();
+
+    let readers = vec![Reader {
+        point: &point,
+        claims: &[Binary::ONE],
+    }];
+    let lookups = vec![TableLookup {
+        num_variables: 2,
+        readers: &readers,
+    }];
+    let plan = LogupStarPlan::new::<Binary, Binary>(&lookups);
+
+    let positions = vec![0usize, 4];
+    let reader_witnesses = vec![ReaderWitness {
+        positions: &positions,
+    }];
+    let column = vec![Binary::ONE; 4];
+    let columns = vec![column.as_slice()];
+    let witness = vec![TableWitness {
+        columns: &columns,
+        readers: &reader_witnesses,
+    }];
+
+    // The equality weights of the two rows, which no prover chooses.
+    let row_weights = Poly::<Binary>::new_from_point(point.as_slice(), Binary::ONE);
+    let [first, second] = [row_weights.as_slice()[0], row_weights.as_slice()[1]];
+
+    for scatter in [
+        [first, Binary::ZERO, Binary::ZERO, Binary::ZERO],
+        [first + second, Binary::ZERO, Binary::ZERO, Binary::ZERO],
+    ] {
+        let built = Weights {
+            readers: vec![Poly::<Binary>::new_from_point(
+                point.as_slice(),
+                Binary::ONE,
+            )],
+            pushforwards: vec![scatter.to_vec()],
+        };
+        let (numerator, denominator) = leaf_tables(&plan, &witness, &built, &[challenge]);
+
+        assert_ne!(
+            fraction_sum(numerator.as_slice(), denominator.as_slice()),
+            Binary::ZERO,
+        );
+    }
+}
+
+#[test]
+fn an_out_of_range_read_hidden_behind_a_zero_weight_is_rejected() {
+    // The companion test above shows that the fractions of an out-of-range read never sum
+    // to zero, and the reduction refuses to run on a sum that does not vanish.
+    //
+    // So the only proof a prover can build for such a read is one that lies about the
+    // numerator side, and this test drives the real verifier against that proof.
+    //
+    // Fixture state: one four-entry table of one column, one reader of two rows naming
+    // 0 and 4, with entry 4 one past the table.
+    //
+    // Mutation: the offending row is given weight zero, on the reader side and in the
+    // pushforward alike, which is what makes the leaf fractions sum to zero.
+    //
+    //     honest row weights   [w_0, w_1]
+    //     what is proved       [w_0,   0]
+    //
+    // Everything else is built honestly, including the position claim, which still opens
+    // a column naming entry 4.
+    //
+    // A verifier rebuilds every reader weight from the claim point alone, so the forged
+    // numerator is caught where the reduction is tied back to the statement.
+    let mut rng = SmallRng::seed_from_u64(0x004A_1102);
+    let point = Point::<Binary>::rand(&mut rng, 1);
+    let column = Poly::<Binary>::rand(&mut rng, 2).as_slice().to_vec();
+
+    // The weight of the row that stays, and the claim the forged pushforward supports.
+    let row_weights = Poly::<Binary>::new_from_point(point.as_slice(), Binary::ONE);
+    let kept = row_weights.as_slice()[0];
+    let claims = vec![kept * column[0]];
+
+    let readers = vec![Reader {
+        point: &point,
+        claims: &claims,
+    }];
+    let lookups = vec![TableLookup {
+        num_variables: 2,
+        readers: &readers,
+    }];
+
+    let positions = vec![0usize, 4];
+    let reader_witnesses = vec![ReaderWitness {
+        positions: &positions,
+    }];
+    let columns = vec![column.as_slice()];
+    let witness = vec![TableWitness {
+        columns: &columns,
+        readers: &reader_witnesses,
+    }];
+
+    let plan = LogupStarPlan::new::<Binary, Binary>(&lookups);
+    let shape = LogupStarShape::new(&plan);
+    let mut sponge = binary_challenger();
+    let mut transcript = LogupStarProverTranscript::<_, Binary, Binary>::new(&mut sponge, &shape);
+
+    transcript.statement(&statement_values(&lookups));
+    let reader_batching = transcript.reader_batching();
+
+    // One reader earns the zeroth power of the batching challenge, so the weights below
+    // are the honest ones with the offending row struck out.
+    let forged = Weights {
+        readers: vec![Poly::new(vec![kept, Binary::ZERO])],
+        pushforwards: vec![vec![kept, Binary::ZERO, Binary::ZERO, Binary::ZERO]],
+    };
+    for pushforward in &forged.pushforwards {
+        transcript.pushforward(pushforward);
+    }
+    let entry_challenges = transcript.entry_challenges(plan.num_tables());
+
+    let (numerator, denominator) = leaf_tables(&plan, &witness, &forged, &entry_challenges);
+    let numerator = PolyMaybePacked::Scalar(numerator);
+    let denominator = PolyMaybePacked::Scalar(denominator);
+    let (fraction_gkr, gkr_output) = transcript.fraction_reduction(|challenger| {
+        prove_fractional_gkr(
+            Fraction {
+                n: LeafNumerator::Ext(&numerator),
+                d: &denominator,
+            },
+            challenger,
+        )
+    });
+
+    // The position column is opened honestly: its second row still names entry 4.
+    let block = plan
+        .blocks
+        .iter()
+        .find(|block| matches!(block.role, BlockRole::Reader { .. }))
+        .expect("the plan lays out the single reader");
+    let own = block.subpoint(&gkr_output.point, plan.num_variables);
+    let embedded = positions
+        .iter()
+        .map(|&entry| position::embed::<Binary>(entry))
+        .collect::<Vec<_>>();
+    let position_claims = vec![
+        SplitEq::<Binary, Binary>::new_packed(&own, Binary::ONE)
+            .eval_base(Poly::new(embedded.as_slice())),
+    ];
+    transcript.position_claims(&position_claims);
+
+    let column_batching = transcript.column_batching();
+    let all_columns = vec![witness[0].columns];
+    let (mut product_prover, claimed_sum) = ProductProver::new::<Binary>(
+        plan.max_table_variables,
+        &forged.pushforwards,
+        &all_columns,
+        column_batching,
+    );
+
+    // The forged pushforward was built to support the claim the statement carries, so the
+    // product sumcheck starts from the sum a verifier asks for.
+    assert_eq!(
+        claimed_sum,
+        product::claimed_sum(&lookups, reader_batching, column_batching)
+    );
+
+    let (product, product_point) = transcript.product_sumcheck(|challenger| {
+        product_prover.prove::<Binary, _>(
+            challenger,
+            plan.max_table_variables,
+            PRODUCT_DEGREE,
+            0,
+            claimed_sum,
+        )
+    });
+
+    let column_claims = vec![vec![
+        SplitEq::<Binary, Binary>::new_packed(&product_point, Binary::ONE)
+            .eval_base(Poly::new(column.as_slice())),
+    ]];
+    transcript.column_claims(&column_claims.concat());
+    transcript.finish();
+
+    let proof = LogupStarProof {
+        pushforwards: forged.pushforwards,
+        fraction_gkr,
+        position_claims,
+        product,
+        column_claims,
+    };
+
+    let mut verifier_challenger = binary_challenger();
+    assert_eq!(
+        proof.verify(&lookups, &mut verifier_challenger).map(|_| ()),
+        Err(LogupStarError::LeafNumerator)
+    );
 }
 
 /// Build one honest binary-field proof, mutate it, and return the verifier's verdict.
@@ -546,6 +825,49 @@ fn rejects_a_pushforward_of_the_wrong_width() {
     );
 }
 
+/// Digest of one proof's encoding, so a change in what the run derives is visible.
+fn proof_digest(proof: &LogupStarProof<Binary, Binary>) -> [u8; 32] {
+    let bytes = postcard::to_allocvec(proof).expect("a proof serializes");
+    Keccak256Hash.hash_iter(bytes)
+}
+
+/// Lowercase hexadecimal, so a digest reads as one string in an assertion.
+fn hex(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[test]
+fn a_fixed_statement_always_produces_the_same_proof() {
+    // Every challenge in the run is derived, so the whole proof is a function of the
+    // statement and the witness.
+    //
+    // Pinning it catches a change in any derivation, including one that keeps prover and
+    // verifier agreeing and so leaves every round trip green.
+    //
+    // Fixture state: two tables of four entries, one reader each, fixed seed.
+    //
+    // A failure here is not automatically a bug.
+    //
+    // It means the transcript changed, and the new digest is right exactly when that
+    // change was intended.
+    let mut rng = SmallRng::seed_from_u64(0x0_901D);
+    let instance = Instance::<Binary, Binary>::random(&mut rng, &[(2, 1, &[2]), (2, 2, &[1])]);
+
+    let readers = instance.readers();
+    let lookups = instance.lookups(&readers);
+    let columns = instance.column_views();
+    let reader_witnesses = instance.reader_witnesses();
+    let witness = Instance::<Binary, Binary>::witness(&columns, &reader_witnesses);
+
+    let mut challenger = binary_challenger();
+    let (proof, _) = LogupStarProof::prove(&lookups, &witness, &mut challenger);
+
+    assert_eq!(
+        hex(&proof_digest(&proof)),
+        "460d8984f75ef5c7bcad06133f058e3fbe051dcf21124462500b4259d4bb2f8d"
+    );
+}
+
 #[test]
 fn a_proof_survives_a_round_trip_through_serialization() {
     // A proof crosses a wire, so a decoded one has to be worth exactly what the original was.
@@ -584,6 +906,9 @@ fn rejects_claims_the_witness_never_produced() {
     // Mutation: verify it against a statement claiming the reader pulled something else.
     //
     // The shapes are unchanged, so only the claims differ.
+    //
+    // The claims are bound before any challenge is drawn, so a different statement draws a
+    // different challenge stream and the reduction stops agreeing with itself.
     let mut rng = SmallRng::seed_from_u64(0x0FA1_5E00);
     let mut instance = Instance::<Binary, Binary>::random(&mut rng, &[(3, 1, &[4])]);
 
@@ -604,7 +929,9 @@ fn rejects_claims_the_witness_never_produced() {
     let mut challenger = binary_challenger();
     assert_eq!(
         proof.verify(&lookups, &mut challenger).map(|_| ()),
-        Err(LogupStarError::ProductClaimedSum)
+        Err(LogupStarError::FractionGkr(
+            crate::fractional_gkr::FractionGkrError::LayerConsistency { layer: 1 }
+        ))
     );
 }
 

@@ -7,7 +7,7 @@ use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_util::log2_ceil_usize;
 
-use super::TableLookup;
+use super::{TableLookup, position};
 
 /// What a block of leaves carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,7 +100,9 @@ impl LogupStarPlan {
     /// Panics if a table has no entries, since the reduction needs a variable to split on.
     ///
     /// Panics if two readers of one table disagree on how many columns they pull.
-    pub fn new<EF: Field>(lookups: &[TableLookup<'_, EF>]) -> Self {
+    ///
+    /// Panics if a table has more entries than the base field embeds injectively.
+    pub fn new<F: Field, EF: ExtensionField<F>>(lookups: &[TableLookup<'_, EF>]) -> Self {
         assert!(!lookups.is_empty(), "a reduction needs at least one table");
 
         // Read the shape off the statement, checking as we go that it describes a reduction.
@@ -114,6 +116,11 @@ impl LogupStarPlan {
                 assert!(
                     lookup.num_variables > 0,
                     "a table needs at least one variable for the reduction to split on"
+                );
+                assert!(
+                    position::fits::<F>(lookup.num_variables),
+                    "a table of 2^{} entries does not embed injectively in this field",
+                    lookup.num_variables
                 );
 
                 // Every reader pulls the whole entry, so one width serves the table.
@@ -298,7 +305,7 @@ mod tests {
         let claims = [Binary::ONE];
         let owned = points(&[1, 5, 2]);
         let readers = readers_over(&owned, &claims);
-        let plan = LogupStarPlan::new(&[TableLookup {
+        let plan = LogupStarPlan::new::<Binary, Binary>(&[TableLookup {
             num_variables: 3,
             readers: &readers,
         }]);
@@ -319,7 +326,7 @@ mod tests {
         let claims = [Binary::ONE];
         let owned = points(&[5, 2, 3, 2]);
         let readers = readers_over(&owned, &claims);
-        let plan = LogupStarPlan::new(&[TableLookup {
+        let plan = LogupStarPlan::new::<Binary, Binary>(&[TableLookup {
             num_variables: 4,
             readers: &readers,
         }]);
@@ -343,7 +350,7 @@ mod tests {
         let claims = [Binary::ONE];
         let owned = points(&[5, 2, 3, 2]);
         let readers = readers_over(&owned, &claims);
-        let plan = LogupStarPlan::new(&[TableLookup {
+        let plan = LogupStarPlan::new::<Binary, Binary>(&[TableLookup {
             num_variables: 4,
             readers: &readers,
         }]);
@@ -376,7 +383,7 @@ mod tests {
         let claims = [Binary::ONE];
         let owned = points(&[2]);
         let readers = readers_over(&owned, &claims);
-        let exact = LogupStarPlan::new(&[TableLookup {
+        let exact = LogupStarPlan::new::<Binary, Binary>(&[TableLookup {
             num_variables: 2,
             readers: &readers,
         }]);
@@ -385,7 +392,7 @@ mod tests {
         // Adding a 2^1 reader takes the total to ten, which rounds up to sixteen.
         let owned = points(&[2, 1]);
         let readers = readers_over(&owned, &claims);
-        let padded = LogupStarPlan::new(&[TableLookup {
+        let padded = LogupStarPlan::new::<Binary, Binary>(&[TableLookup {
             num_variables: 2,
             readers: &readers,
         }]);
@@ -415,7 +422,7 @@ mod tests {
                 readers,
             })
             .collect::<Vec<_>>();
-        let plan = LogupStarPlan::new(&lookups);
+        let plan = LogupStarPlan::new::<Binary, Binary>(&lookups);
 
         assert_eq!(plan.num_readers(), 6);
         assert_eq!(plan.reader_offset(0), 0);
@@ -441,19 +448,22 @@ mod tests {
             readers: &readers,
         }];
 
-        assert_eq!(LogupStarPlan::new(&lookups), LogupStarPlan::new(&lookups));
+        assert_eq!(
+            LogupStarPlan::new::<Binary, Binary>(&lookups),
+            LogupStarPlan::new::<Binary, Binary>(&lookups)
+        );
     }
 
     #[test]
     #[should_panic(expected = "a reduction needs at least one table")]
     fn rejects_a_statement_with_no_table() {
-        let _ = LogupStarPlan::new::<Binary>(&[]);
+        let _ = LogupStarPlan::new::<Binary, Binary>(&[]);
     }
 
     #[test]
     #[should_panic(expected = "a table with no reader has nothing to prove")]
     fn rejects_a_table_nobody_reads() {
-        let _ = LogupStarPlan::new(&[TableLookup::<Binary> {
+        let _ = LogupStarPlan::new::<Binary, Binary>(&[TableLookup::<Binary> {
             num_variables: 2,
             readers: &[],
         }]);
@@ -466,8 +476,24 @@ mod tests {
         let claims = [Binary::ONE];
         let owned = points(&[1]);
         let readers = readers_over(&owned, &claims);
-        let _ = LogupStarPlan::new(&[TableLookup {
+        let _ = LogupStarPlan::new::<Binary, Binary>(&[TableLookup {
             num_variables: 0,
+            readers: &readers,
+        }]);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not embed injectively in this field")]
+    fn rejects_a_table_the_field_cannot_index() {
+        // Past the field's width two entries would share an embedding, and a pushforward
+        // could then move weight between them unseen.
+        //
+        // Catching it here beats panicking deep inside the verifier's own evaluation.
+        let claims = [Binary::ONE];
+        let owned = points(&[1]);
+        let readers = readers_over(&owned, &claims);
+        let _ = LogupStarPlan::new::<Binary, Binary>(&[TableLookup {
+            num_variables: 128,
             readers: &readers,
         }]);
     }
@@ -489,7 +515,7 @@ mod tests {
                 claims: &narrow,
             },
         ];
-        let _ = LogupStarPlan::new(&[TableLookup {
+        let _ = LogupStarPlan::new::<Binary, Binary>(&[TableLookup {
             num_variables: 2,
             readers: &readers,
         }]);

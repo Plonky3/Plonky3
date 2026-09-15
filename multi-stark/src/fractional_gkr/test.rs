@@ -1,3 +1,7 @@
+use alloc::string::String;
+use alloc::vec::Vec;
+use alloc::{format, vec};
+
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_binary_field::{BinaryChallenger, BinaryField32, BinaryField128, TowerLevel};
 use p3_challenger::fs::TranscriptField;
@@ -7,6 +11,7 @@ use p3_field::{ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
+use p3_symmetric::CryptographicHasher;
 use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
@@ -406,6 +411,67 @@ where
             );
         }
     }
+}
+
+#[test]
+fn a_fixed_base_leaf_instance_always_produces_the_same_proof() {
+    // The classical lookup path hands the reduction a base-field numerator.
+    //
+    // Every challenge in a run is derived, so the proof, the openings it closes on and the
+    // sponge it leaves behind are all functions of the two input tables.
+    //
+    // Pinning a digest of the three is what ties this path to a fixed reference, rather
+    // than to a second run of the same code.
+    //
+    // Fixture state: a fixed seed, variable counts 1 through 8, and both denominator
+    // storages at each count.
+    //
+    //     n = 1 .. 8   x   { scalar, packed }
+    //
+    // A failure here is not automatically a bug.
+    //
+    // It means the transcript changed, and the new digest is right exactly when that
+    // change was intended.
+    let mut rng = SmallRng::seed_from_u64(0x0_6014E);
+    let mut transcript = Vec::new();
+
+    for num_variables in 1..=8 {
+        let (numer, denom) = zero_sum::<F, EF>(&mut rng, num_variables);
+
+        // Packing needs one variable per lane, so a narrow table only runs scalar.
+        let lanes = log2_strict_usize(<F as Field>::Packing::WIDTH);
+        let mut storages = vec![PolyMaybePacked::Scalar(denom.clone())];
+        if num_variables >= lanes {
+            storages.push(PolyMaybePacked::Packed(denom.pack::<F, EF>()));
+        }
+
+        for storage in &storages {
+            let mut challenger = fresh_challenger();
+            let (proof, output) = prove_base_leaf(&numer, storage, &mut challenger);
+
+            transcript.extend(postcard::to_allocvec(&proof).expect("a proof serializes"));
+            transcript.extend(
+                postcard::to_allocvec(&(&output.numerator, &output.denominator))
+                    .expect("an opening serializes"),
+            );
+
+            // What the surrounding protocol would draw next, so a change the proof bytes
+            // cannot show still surfaces here.
+            let next = challenger.sample_algebra_element::<EF>();
+            transcript.extend(postcard::to_allocvec(&next).expect("a challenge serializes"));
+        }
+    }
+
+    let digest = Keccak256Hash.hash_iter(transcript);
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    assert_eq!(
+        hex,
+        "b52004a51464f2a4ecfcfdcbde390bd183094598cbbb361bad1e6fed88df5115"
+    );
 }
 
 #[test]

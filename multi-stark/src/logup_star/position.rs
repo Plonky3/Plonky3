@@ -5,16 +5,40 @@ use p3_multilinear_util::point::Point;
 
 /// Embed one table position.
 ///
-/// Over a prime field this is the integer itself.
+/// The embedding is the sum of the basis elements the position's set bits pick out:
 ///
-/// Over a binary tower it is the element whose bit pattern is that integer.
+/// ```text
+///     iota(v) = sum_{k : bit k of v is set} interpolation_node(2^k)
+/// ```
 ///
-/// Both are injective as far as the field reaches.
+/// Defining it this way, rather than as the field's own enumeration of a position, is what
+/// makes the closed form below its multilinear extension.
 ///
-/// That is what lets the fraction identity tell two table entries apart.
+/// That enumeration promises injectivity and nothing about how it treats bits.
+///
+/// An implementation free to choose could make the explicit table and the closed form
+/// disagree, and this definition cannot.
+///
+/// Over both a prime field and a binary tower the two coincide, which a test pins.
 #[inline]
 pub fn embed<F: Field>(entry: usize) -> F {
-    F::interpolation_node(entry)
+    (0..usize::BITS as usize)
+        .filter(|bit| (entry >> bit) & 1 == 1)
+        .map(|bit| F::interpolation_node(1 << bit))
+        .sum()
+}
+
+/// Whether a table of this many entries embeds injectively.
+///
+/// Two entries sharing an embedding would share a pole, which lets a pushforward move weight
+/// between them unseen.
+///
+/// The bound is conservative by one bit over a binary tower, where the field would just hold
+/// a full table.
+///
+/// A table that large leaves the embedding no headroom and buys nothing.
+pub(crate) fn fits<F: Field>(num_variables: usize) -> bool {
+    num_variables < F::bits()
 }
 
 /// Evaluate the multilinear extension of the embedding.
@@ -76,6 +100,32 @@ mod tests {
         assert_eq!(embed::<Small>(0), Small::ZERO);
         assert_eq!(embed::<Small>(1), Small::ONE);
         assert_eq!(embed::<Small>(7), Small::from_u8(7));
+    }
+
+    #[test]
+    fn the_bit_sum_agrees_with_the_field_enumeration() {
+        // The embedding is defined over the bits so that the closed form below is provably
+        // its extension, rather than relying on the enumeration to treat bits additively.
+        //
+        // Both fields here happen to agree with the enumeration, and pinning that keeps the
+        // definition honest about what it is equivalent to today.
+        for entry in 0..512usize {
+            assert_eq!(embed::<Binary>(entry), Binary::interpolation_node(entry));
+        }
+        for entry in 0..512usize {
+            assert_eq!(embed::<Small>(entry), Small::interpolation_node(entry));
+        }
+    }
+
+    #[test]
+    fn a_table_only_fits_while_its_entries_stay_distinct() {
+        // A binary tower holds every bit pattern, so the bound is its width.
+        assert!(fits::<Binary>(127));
+        assert!(!fits::<Binary>(128));
+
+        // A prime field runs out sooner, and the enumeration would wrap rather than panic.
+        assert!(fits::<Small>(30));
+        assert!(!fits::<Small>(31));
     }
 
     #[test]

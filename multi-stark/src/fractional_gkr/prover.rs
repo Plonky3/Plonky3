@@ -753,6 +753,8 @@ fn restore_equality_factor<EF: Field>(
 ///
 /// Panics if the numerator and denominator have different variable counts, if
 /// they have no variables, or if the fully reduced root denominator is zero.
+///
+/// Panics if an extension-field numerator and its denominator disagree on storage.
 pub fn prove_fractional_gkr<F, EF, Challenger>(
     fraction: LeafFraction<'_, F, EF>,
     challenger: &mut Challenger,
@@ -764,6 +766,19 @@ where
 {
     let num_variables = fraction.n.num_variables();
     assert_eq!(num_variables, fraction.d.num_variables());
+
+    // The round kernel reads the two halves side by side, so an extension-field numerator
+    // has to be stored the way its denominator is.
+    //
+    // Nothing downstream can recover from a mixed pair, and where it would surface depends
+    // on the size, so it is rejected here rather than in one of the arms below.
+    if let LeafNumerator::Ext(numer) = fraction.n {
+        assert_eq!(
+            matches!(numer, PolyMaybePacked::Packed(_)),
+            matches!(fraction.d, PolyMaybePacked::Packed(_)),
+            "{MIXED_LEAF_STORAGE}"
+        );
+    }
     assert!(
         num_variables >= 1,
         "fraction GKR requires at least one input variable"
