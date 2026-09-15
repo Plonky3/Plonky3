@@ -1457,6 +1457,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::testing::pow_difficulties;
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, PrimeCharacteristicRing};
@@ -2000,5 +2001,62 @@ mod tests {
             payload.downcast_ref::<&str>().copied(),
             Some("the commitment scheme panicked")
         );
+    }
+
+    #[test]
+    fn the_described_grinding_matches_the_configured_difficulty() {
+        // Invariant: a grinding difficulty lives in two places.
+        //
+        //     transcript  ->  the bits the pattern describes
+        //     model       ->  the bits this protocol's own report credits
+        //
+        // Both read the same configuration, so they must agree site for site.
+        //
+        // STIR prices its own grinding, so the shared budget never compares it.
+        //
+        // Fixture state: the batch-of-one shape, ground and unground.
+        // The fixture grinds at zero everywhere.
+        //
+        // The ground case therefore sets each site to a distinct difficulty.
+        //
+        // Sharing one value would let a swapped pair pass.
+        for ground in [false, true] {
+            let mut shape = shape();
+            if ground {
+                for instance in &mut shape.instances {
+                    instance.final_folding_pow_bits = 5;
+                    instance.final_pow_bits = 6;
+                    for round in &mut instance.rounds {
+                        round.folding_pow_bits = 3;
+                        round.pow_bits = 4;
+                    }
+                }
+            }
+
+            // Four sites: two per round, two in the closing phase.
+            //
+            // A zero difficulty describes no step, so it contributes nothing.
+            let mut expected: Vec<(&str, usize)> = Vec::new();
+            for round in 0..shape.max_rounds() {
+                for (label, bits) in [
+                    (FOLDING_POW, shape.folding_pow_bits(round)),
+                    (QUERY_POW, shape.query_pow_bits(round)),
+                ] {
+                    if bits > 0 {
+                        expected.push((label, bits));
+                    }
+                }
+            }
+            for (label, bits) in [
+                (FINAL_FOLDING_POW, shape.final_folding_pow_bits()),
+                (FINAL_POW, shape.final_pow_bits()),
+            ] {
+                if bits > 0 {
+                    expected.push((label, bits));
+                }
+            }
+
+            assert_eq!(pow_difficulties(&shape.pattern::<F, EF>()), expected);
+        }
     }
 }
