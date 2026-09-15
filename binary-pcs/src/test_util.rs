@@ -105,8 +105,9 @@ mod conformance {
         //     verifier: observe_commitment(root, b) -> b
         //     a and b must sample alike
         //
-        // A binary tower field is not a transcript field, so this scheme binds the
-        // root directly, and the property still has to hold.
+        // This scheme binds through the layout's typed commitment phase, like the others.
+        //
+        // The property is therefore checked the same way.
         const NUM_VARIABLES: usize = 6;
 
         let mut rng = SmallRng::seed_from_u64(0xB1DA);

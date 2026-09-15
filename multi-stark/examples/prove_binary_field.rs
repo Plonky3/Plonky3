@@ -391,10 +391,8 @@ mod tests {
             .commit(config.build_witness(vec![table]), &mut challenger())
             .unwrap();
         for seed in [b"first opening".as_slice(), b"second opening".as_slice()] {
-            use p3_challenger::CanObserve;
-
             let mut prover = Challenger::from_hasher(seed.to_vec(), Keccak256Hash);
-            prover.observe(commitment.clone());
+            config.pcs.observe_commitment(&commitment, &mut prover);
             let cloned = data.clone();
             for (actual, expected) in cloned.table(0).iter_polys().zip(expected.iter_polys()) {
                 assert_eq!(actual, expected);

@@ -89,7 +89,6 @@ fn binary_pcs_supplies_composed_prescribed_security() {
 
 #[test]
 fn claim_boundaries_cover_successors_and_both_opening_modes() {
-    use p3_challenger::CanObserve;
     for (nv, security, folding, cap) in [(1, 124, 1, 6), (4, 119, 2, 381)] {
         let low = BinaryPcsConfig::try_new(nv, params(2, 0, 40))
             .unwrap()
@@ -119,7 +118,7 @@ fn claim_boundaries_cover_successors_and_both_opening_modes() {
                 let mut vc = challenger();
                 let mut guarded_ch = pc.clone();
                 let result = if prescribed {
-                    vc.observe(root.clone());
+                    prover.observe_commitment(&root, &mut vc);
                     let points: Vec<Point<F>> = protocol
                         .iter_openings()
                         .map(|_| Point::new((0..nv).map(|_| pc.sample_algebra_element()).collect()))

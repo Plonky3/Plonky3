@@ -27,7 +27,8 @@ use crate::PcsLayout;
 use crate::fold::fold_codeword_batch;
 use crate::params::BinaryPcsConfig;
 use crate::proof::RoundProof;
-use crate::verifier::{flat_coset_indices, sample_query_cosets};
+use crate::transcript::BinaryPcsProverTranscript;
+use crate::verifier::flat_coset_indices;
 
 /// Preprocessing depth the commit phase lays out inside a committed row.
 ///
@@ -139,7 +140,7 @@ pub(crate) fn fold_rounds_with<const BIND_EACH_ROUND: bool, MT, Ch>(
     prover_data: BinaryPcsProverData<MT>,
     config: &BinaryPcsConfig,
     mmcs: &MT,
-    challenger: &mut Ch,
+    transcript: &mut BinaryPcsProverTranscript<'_, Ch>,
 ) -> (
     MT::ProverData<DenseMatrix<BinaryField128>>,
     SumcheckData<BinaryField128, BinaryField128>,
@@ -151,6 +152,7 @@ where
     MT: Mmcs<BinaryField128>,
     Ch: FieldChallenger<BinaryField128>
         + GrindingChallenger<Witness = BinaryField128>
+        + CanSampleUniformBits<BinaryField128>
         + CanObserve<MT::Commitment>,
 {
     let BinaryPcsProverData {
@@ -159,7 +161,8 @@ where
     } = prover_data;
 
     let mut sumcheck_data = SumcheckData::default();
-    let (mut sumcheck, mut randomness) = layout.into_sumcheck(&mut sumcheck_data, 0, challenger);
+    let (mut sumcheck, mut randomness) =
+        transcript.fold_batch(|challenger| layout.into_sumcheck(&mut sumcheck_data, 0, challenger));
     assert_eq!(
         randomness.num_variables(),
         0,
@@ -182,7 +185,16 @@ where
         let mut challenges = Vec::with_capacity(arity);
         for round in start..start + arity {
             let challenge = tracing::info_span!("sumcheck round", round).in_scope(|| {
-                sumcheck.compute_sumcheck_polynomials(&mut sumcheck_data, challenger, 1, 0, None)
+                // A sumcheck round seeds a sub-transcript of its own.
+                transcript.fold_batch(|challenger| {
+                    sumcheck.compute_sumcheck_polynomials(
+                        &mut sumcheck_data,
+                        challenger,
+                        1,
+                        0,
+                        None,
+                    )
+                })
             });
             challenges.push(challenge.as_slice()[0]);
             randomness.extend(&challenge);
@@ -208,7 +220,7 @@ where
         if batch + 1 < num_batches {
             let (commitment, round_data) = tracing::info_span!("commit folded codeword")
                 .in_scope(|| mmcs.commit_matrix(RowMajorMatrix::new(folded, 1)));
-            challenger.observe(commitment.clone());
+            transcript.oracle_commitment(commitment.clone());
             rounds.push(RoundCommitment {
                 commitment,
                 merkle_data: round_data,
@@ -264,7 +276,7 @@ pub(crate) struct QueryProofs<MT: Mmcs<BinaryField128>> {
 pub(crate) fn open_queries<MT, Ch>(
     config: &BinaryPcsConfig,
     mmcs: &MT,
-    challenger: &mut Ch,
+    transcript: &mut BinaryPcsProverTranscript<'_, Ch>,
     base_merkle_data: &MT::ProverData<DenseMatrix<BinaryField128>>,
     rounds: &[RoundCommitment<MT>],
     final_codeword: &[BinaryField128],
@@ -283,10 +295,16 @@ where
 
     // The last word is sent in the clear, not committed by a Merkle root. Bind every
     // symbol before grinding or sampling so it cannot be chosen after seeing queries.
-    challenger.observe_slice(final_codeword);
-    let pow_witness = challenger.grind(config.pow_bits());
+    transcript.final_codeword(final_codeword);
+    let pow_witness = transcript.query_pow();
 
-    let indices = sample_query_cosets(config, challenger);
+    // The draw indexes pairs, so each position is lifted back to a coset start.
+    let shift = config.log_folding_factor() - 1;
+    let indices: Vec<usize> = transcript
+        .query_pairs()
+        .into_iter()
+        .map(|pair| pair << shift)
+        .collect();
     let base_indices = flat_coset_indices(&indices, 0, config.log_folding_factor());
     let (base_values, base_multi_proof) = mmcs.open_multi_batch(&base_indices, base_merkle_data);
     let base_opened_values = single_matrix_rows(base_values);
@@ -344,6 +362,7 @@ mod tests {
     use crate::fold::fold_codeword;
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::test_util::{challenger, mmcs};
+    use crate::transcript::{BinaryPcsProverTranscript, BinaryPcsShape};
 
     type F = BinaryField128;
 
@@ -448,8 +467,11 @@ mod tests {
 
         let mut ch = challenger();
         let (_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        let mut transcript = BinaryPcsProverTranscript::new(&mut ch, BinaryPcsShape::new(&config));
         let (_merkle_data, _sumcheck_data, rounds, randomness, final_codeword) =
-            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut ch);
+            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut transcript);
+        // Only the fold phase runs here, so the driver is released rather than closed.
+        transcript.abort();
 
         assert_eq!(rounds.len(), config.num_fold_rounds() - 1);
         assert_eq!(randomness.num_variables(), NUM_VARIABLES);
@@ -521,8 +543,13 @@ mod tests {
                 &mmcs_instance,
                 SuffixProver::<F, F>::new_witness(vec![table.clone()], 0),
             );
+            let mut got_t =
+                BinaryPcsProverTranscript::new(&mut got_ch, BinaryPcsShape::new(&config));
             let (_, got_sumcheck, got_rounds, got_randomness, got_final) =
-                fold_rounds_with::<false, _, _>(got_data, &config, &mmcs_instance, &mut got_ch);
+                fold_rounds_with::<false, _, _>(got_data, &config, &mmcs_instance, &mut got_t);
+            // Only the fold phase runs here, so the driver is released rather than closed.
+            got_t.abort();
+            drop(got_t);
 
             // Reference route, from an identically seeded challenger.
             let mut want_ch = challenger();
@@ -532,8 +559,12 @@ mod tests {
                 &mmcs_instance,
                 SuffixProver::<F, F>::new_witness(vec![table], 0),
             );
+            let mut want_t =
+                BinaryPcsProverTranscript::new(&mut want_ch, BinaryPcsShape::new(&config));
             let (_, want_sumcheck, want_rounds, want_randomness, want_final) =
-                fold_rounds_with::<true, _, _>(want_data, &config, &mmcs_instance, &mut want_ch);
+                fold_rounds_with::<true, _, _>(want_data, &config, &mmcs_instance, &mut want_t);
+            want_t.abort();
+            drop(want_t);
 
             // Round by round first, so a discrepancy is localised to the round that drifted.
             assert_eq!(
