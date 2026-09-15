@@ -1,4 +1,5 @@
 use alloc::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
 use alloc::slice;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -46,99 +47,81 @@ struct VectorPair<F> {
     bitrev_twiddles: Vec<F>,
 }
 
+/// Compute missing twiddles outside cache locks: Rayon may run another transform sharing the cache.
+/// Concurrent misses can duplicate work; all callers reuse the first published entry.
+fn get_or_compute_cached<K: Ord, V: ?Sized>(
+    cache: &RwLock<BTreeMap<K, Arc<V>>>,
+    key: K,
+    compute: impl FnOnce() -> Arc<V>,
+) -> Arc<V> {
+    if let Some(value) = cache.read().get(&key) {
+        return value.clone();
+    }
+    let value = compute();
+    // Declare the guard after `value` so an unused table is dropped after unlocking.
+    let mut entries = cache.write();
+    match entries.entry(key) {
+        Entry::Occupied(entry) => entry.get().clone(),
+        Entry::Vacant(entry) => entry.insert(value).clone(),
+    }
+}
+
 impl<F> Radix2DitParallel<F>
 where
     F: TwoAdicField + Ord,
 {
     fn get_or_compute_twiddles(&self, log_h: usize) -> Arc<VectorPair<F>> {
-        // Fast path: Check for the value with a cheap read lock.
-        if let Some(pair) = self.twiddles.read().get(&log_h) {
-            return pair.clone();
-        }
+        get_or_compute_cached(&self.twiddles, log_h, || {
+            let half_h = (1 << log_h) >> 1;
+            let root = F::two_adic_generator(log_h);
+            let twiddles = root.powers().collect_n(half_h);
+            let mut bitrev_twiddles = twiddles.clone();
+            reverse_slice_index_bits(&mut bitrev_twiddles);
 
-        // Slow path: The value doesn't exist. Acquire a write lock.
-        let mut w_lock = self.twiddles.write();
-
-        // Double-check and compute if necessary.
-        w_lock
-            .entry(log_h)
-            .or_insert_with(|| {
-                let half_h = (1 << log_h) >> 1;
-                let root = F::two_adic_generator(log_h);
-                let twiddles = root.powers().collect_n(half_h);
-                let mut bitrev_twiddles = twiddles.clone();
-                reverse_slice_index_bits(&mut bitrev_twiddles);
-
-                Arc::new(VectorPair {
-                    twiddles,
-                    bitrev_twiddles,
-                })
+            Arc::new(VectorPair {
+                twiddles,
+                bitrev_twiddles,
             })
-            .clone()
+        })
     }
 
     fn get_or_compute_coset_twiddles(&self, (log_h, shift): (usize, F)) -> Arc<[Vec<F>]> {
-        let key = (log_h, shift);
-        // Fast path: Try to get the value with a cheap read lock first.
-        if let Some(twiddles) = self.coset_twiddles.read().get(&key) {
-            return twiddles.clone();
-        }
-        // Slow path: The value isn't there, so we need to compute it.
-        // Acquire a write lock to ensure only one thread does the computation.
-        let mut w_lock = self.coset_twiddles.write();
-        // Double-check: Another thread might have inserted it while we waited for the lock.
-        // The `entry` API handles this check and insertion atomically.
-        w_lock
-            .entry(key)
-            .or_insert_with(|| {
-                let mid = log_h.div_ceil(2);
-                let h = 1 << log_h;
-                let root = F::two_adic_generator(log_h);
-                (0..log_h)
-                    .map(|layer| {
-                        let shift_power = shift.exp_power_of_2(layer);
-                        let powers = Powers {
-                            base: root.exp_power_of_2(layer),
-                            current: shift_power,
-                        };
-                        let mut twiddles = powers.collect_n(h >> (layer + 1));
-                        let layer_rev = log_h - 1 - layer;
-                        if layer_rev >= mid {
-                            reverse_slice_index_bits(&mut twiddles);
-                        }
-                        twiddles
-                    })
-                    .collect::<Vec<_>>()
-                    .into()
-            })
-            .clone()
+        get_or_compute_cached(&self.coset_twiddles, (log_h, shift), || {
+            let mid = log_h.div_ceil(2);
+            let h = 1 << log_h;
+            let root = F::two_adic_generator(log_h);
+            (0..log_h)
+                .map(|layer| {
+                    let shift_power = shift.exp_power_of_2(layer);
+                    let powers = Powers {
+                        base: root.exp_power_of_2(layer),
+                        current: shift_power,
+                    };
+                    let mut twiddles = powers.collect_n(h >> (layer + 1));
+                    let layer_rev = log_h - 1 - layer;
+                    if layer_rev >= mid {
+                        reverse_slice_index_bits(&mut twiddles);
+                    }
+                    twiddles
+                })
+                .collect::<Vec<_>>()
+                .into()
+        })
     }
 
     fn get_or_compute_inverse_twiddles(&self, log_h: usize) -> Arc<VectorPair<F>> {
-        // Fast path: First, check for the value using a cheap read lock.
-        if let Some(pair) = self.inverse_twiddles.read().get(&log_h) {
-            return pair.clone();
-        }
-        // Slow path: The value doesn't exist. Acquire a write lock.
-        let mut w_lock = self.inverse_twiddles.write();
-        // Double-check: Another thread might have created the entry while we waited.
-        // The `entry` API handles this check and the insertion atomically.
-        w_lock
-            .entry(log_h)
-            .or_insert_with(|| {
-                // This computation only runs if the entry is truly vacant.
-                let half_h = (1 << log_h) >> 1;
-                let root_inv = F::two_adic_generator(log_h).inverse();
-                let twiddles = root_inv.powers().collect_n(half_h);
-                let mut bitrev_twiddles = twiddles.clone();
-                reverse_slice_index_bits(&mut bitrev_twiddles);
+        get_or_compute_cached(&self.inverse_twiddles, log_h, || {
+            let half_h = (1 << log_h) >> 1;
+            let root_inv = F::two_adic_generator(log_h).inverse();
+            let twiddles = root_inv.powers().collect_n(half_h);
+            let mut bitrev_twiddles = twiddles.clone();
+            reverse_slice_index_bits(&mut bitrev_twiddles);
 
-                Arc::new(VectorPair {
-                    twiddles,
-                    bitrev_twiddles,
-                })
+            Arc::new(VectorPair {
+                twiddles,
+                bitrev_twiddles,
             })
-            .clone()
+        })
     }
 }
 
@@ -167,7 +150,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 
     fn coset_dft_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> Self::Evaluations {
         reverse_matrix_index_bits(&mut mat);
-        coset_dft(self, &mut mat.as_view_mut(), shift);
+        coset_dft(self, &mut mat.as_view_mut(), shift, 0, &|_, _| {});
         BitReversalPerm::new_view(mat)
     }
 
@@ -199,11 +182,47 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
     #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
     fn coset_lde_batch_with_transform<T>(
         &self,
-        mut mat: RowMajorMatrix<F>,
+        mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
         transform: T,
     ) -> Self::Evaluations
+    where
+        T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+    {
+        self.lde_with_consumer(mat, added_bits, shift, transform, &|_, _| {})
+    }
+
+    fn lde_output_block_rows(&self, input_height: usize, _added_bits: usize) -> usize {
+        1 << (log2_strict_usize(input_height) / 2)
+    }
+
+    #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
+    fn coset_lde_batch_with_blocks<T, C>(
+        &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        transform: T,
+        consume: C,
+    ) -> Self::Evaluations
+    where
+        T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+        C: Fn(usize, RowMajorMatrixView<'_, F>) + Sync,
+    {
+        self.lde_with_consumer(mat, added_bits, shift, transform, &consume)
+    }
+}
+
+impl<F: TwoAdicField + Ord> Radix2DitParallel<F> {
+    fn lde_with_consumer<T>(
+        &self,
+        mut mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        transform: T,
+        consume: &(impl Fn(usize, RowMajorMatrixView<'_, F>) + Sync),
+    ) -> BitReversedMatrixView<RowMajorMatrix<F>>
     where
         T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
     {
@@ -236,6 +255,15 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 
         let g_big = F::two_adic_generator(log_h + added_bits);
 
+        // Resolve tables before the forward transforms, indexed by the exponent of g_big.
+        let coset_twiddles: Vec<_> = (0..(1usize << added_bits))
+            .into_par_iter()
+            .map(|coset_idx| {
+                let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
+                self.get_or_compute_coset_twiddles((log_h, total_shift))
+            })
+            .collect();
+
         let mat_ptr = mat.values.as_mut_ptr();
         let rest_ptr = unsafe { (mat_ptr as *mut MaybeUninit<F>).add(w * h) };
         let first_slice: &mut [F] = unsafe { slice::from_raw_parts_mut(mat_ptr, w * h) };
@@ -247,15 +275,19 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             .map(|slice| RowMajorMatrixViewMut::new(slice, w))
             .collect_vec();
 
-        for coset_idx in 1..(1 << added_bits) {
-            let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
-            let coset_idx = reverse_bits_len(coset_idx, added_bits);
-            let dest = &mut rest_cosets_mat[coset_idx - 1]; // - 1 because we removed the first matrix.
-            coset_dft_oop(self, &first_coset_mat.as_view(), dest, total_shift);
-        }
+        // Each task writes a disjoint destination while sharing the coefficient matrix.
+        // Physical slot k + 1 holds coset reverse_bits_len(k + 1, added_bits).
+        let src = first_coset_mat.as_view();
+        rest_cosets_mat
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(k, dest)| {
+                let coset_idx = reverse_bits_len(k + 1, added_bits);
+                coset_dft_oop(&src, dest, &coset_twiddles[coset_idx], (k + 1) * h, consume);
+            });
 
-        // Now run a forward DFT on the very first coset, this time in-place.
-        coset_dft(self, &mut first_coset_mat.as_view_mut(), shift);
+        // Join all coefficient readers and consumers before coset zero overwrites the coefficients.
+        coset_dft(self, &mut first_coset_mat.as_view_mut(), shift, 0, consume);
 
         // SAFETY: We wrote all values above.
         unsafe {
@@ -270,6 +302,8 @@ fn coset_dft<F: TwoAdicField + Ord>(
     dft: &Radix2DitParallel<F>,
     mat: &mut RowMajorMatrixViewMut<'_, F>,
     shift: F,
+    row_base: usize,
+    consume: &(impl Fn(usize, RowMajorMatrixView<'_, F>) + Sync),
 ) {
     let log_h = log2_strict_usize(mat.height());
     let mid = log_h.div_ceil(2);
@@ -282,21 +316,39 @@ fn coset_dft<F: TwoAdicField + Ord>(
     // For the second half, we flip the DIT, working in bit-reversed order.
     reverse_matrix_index_bits(mat);
 
-    second_half_general(mat, mid, &twiddles);
+    second_half_general(mat, mid, &twiddles, row_base, consume);
 }
 
-/// Like `coset_dft`, except out-of-place.
+/// Like `coset_dft`, except out-of-place and using precomputed twiddles.
+///
+/// Tables must use the layer layout of `get_or_compute_coset_twiddles` for the
+/// source height and intended shift. Each layer contains `height >> (layer + 1)` entries.
+///
+/// # Panics
+/// Panics if the matrix dimensions or twiddle table dimensions do not match,
+/// or if the height is not a positive power of two.
 #[instrument(level = "debug", skip_all)]
-fn coset_dft_oop<F: TwoAdicField + Ord>(
-    dft: &Radix2DitParallel<F>,
+fn coset_dft_oop<F: Field>(
     src: &RowMajorMatrixView<'_, F>,
     dst_maybe: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
-    shift: F,
+    twiddles: &[Vec<F>],
+    row_base: usize,
+    consume: &(impl Fn(usize, RowMajorMatrixView<'_, F>) + Sync),
 ) {
     assert_eq!(src.dimensions(), dst_maybe.dimensions());
 
     let log_h = log2_strict_usize(dst_maybe.height());
+    // Short tables can leave destination rows uninitialized before the casts below.
+    assert_eq!(twiddles.len(), log_h, "incorrect number of twiddle layers");
+    for (layer, table) in twiddles.iter().enumerate() {
+        assert_eq!(
+            table.len(),
+            src.height() >> (layer + 1),
+            "incorrect twiddle count for layer {layer}"
+        );
+    }
 
+    let mid = log_h.div_ceil(2);
     if log_h == 0 {
         // This is an edge case where first_half_general_oop doesn't work, as it expects there to be
         // at least one layer in the network, so we just copy instead.
@@ -304,27 +356,27 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
             transmute::<&RowMajorMatrixView<'_, F>, &RowMajorMatrixView<'_, MaybeUninit<F>>>(src)
         };
         dst_maybe.copy_from(src_maybe);
-        return;
+    } else {
+        // The first half looks like a normal DIT.
+        first_half_general_oop(src, dst_maybe, mid, twiddles);
     }
 
-    let mid = log_h.div_ceil(2);
-
-    let twiddles = dft.get_or_compute_coset_twiddles((log_h, shift));
-
-    // The first half looks like a normal DIT.
-    first_half_general_oop(src, dst_maybe, mid, &twiddles);
-
-    // dst is now initialized.
+    // SAFETY: The copy or first FFT half initialized every destination element.
     let dst = unsafe {
         transmute::<&mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>, &mut RowMajorMatrixViewMut<'_, F>>(
             dst_maybe,
         )
     };
 
+    if log_h == 0 {
+        consume(row_base, dst.as_view());
+        return;
+    }
+
     // For the second half, we flip the DIT, working in bit-reversed order.
     reverse_matrix_index_bits(dst);
 
-    second_half_general(dst, mid, &twiddles);
+    second_half_general(dst, mid, twiddles, row_base, consume);
 }
 
 /// This can be used as the first half of a DIT butterfly network.
@@ -512,6 +564,8 @@ fn second_half_general<F: Field>(
     mat: &mut RowMajorMatrixViewMut<'_, F>,
     mid: usize,
     twiddles_rev: &[Vec<F>],
+    row_base: usize,
+    consume: &(impl Fn(usize, RowMajorMatrixView<'_, F>) + Sync),
 ) {
     let log_h = log2_strict_usize(mat.height());
     mat.par_row_chunks_exact_mut(1 << (log_h - mid))
@@ -530,6 +584,7 @@ fn second_half_general<F: Field>(
                 );
                 backwards = !backwards;
             }
+            consume(row_base + thread * submat.height(), submat.as_view());
         });
 }
 
@@ -787,6 +842,9 @@ fn dit_layer_rev<F: Field>(
 
 #[cfg(test)]
 mod tests {
+    use alloc::sync::Weak;
+    use core::sync::atomic::{AtomicBool, Ordering};
+
     use p3_baby_bear::BabyBear;
     use p3_field::TwoAdicField;
     use p3_matrix::Matrix;
@@ -797,6 +855,116 @@ mod tests {
     use super::*;
 
     type F = BabyBear;
+
+    #[test]
+    fn cache_hit_reuses_table_without_computing() {
+        let cache = RwLock::new(BTreeMap::new());
+        let expected: Arc<[u64]> = alloc::vec![1, 2, 3].into();
+        let first = get_or_compute_cached(&cache, 4, || expected.clone());
+        let second = get_or_compute_cached(&cache, 4, || {
+            panic!("a cached table must not be recomputed")
+        });
+
+        assert!(Arc::ptr_eq(&first, &expected));
+        assert!(Arc::ptr_eq(&second, &expected));
+    }
+
+    #[test]
+    fn cache_miss_reuses_entry_inserted_during_computation() {
+        let cache = RwLock::new(BTreeMap::new());
+        let inserted = Arc::new(17_u64);
+        let result = get_or_compute_cached(&cache, 4, || {
+            // Model another caller publishing the same key while this one computes.
+            cache
+                .try_write()
+                .expect("twiddle construction must not hold a cache lock")
+                .insert(4, inserted.clone());
+            Arc::new(23_u64)
+        });
+
+        assert!(Arc::ptr_eq(&result, &inserted));
+        assert!(Arc::ptr_eq(cache.read().get(&4).unwrap(), &inserted));
+    }
+
+    #[test]
+    fn cache_miss_drops_unused_table_after_unlocking() {
+        type Cache = RwLock<BTreeMap<usize, Arc<DropProbe>>>;
+
+        #[derive(Default)]
+        struct DropProbe {
+            cache: Weak<Cache>,
+            dropped: Arc<AtomicBool>,
+        }
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                if let Some(cache) = self.cache.upgrade() {
+                    assert!(
+                        cache.try_write().is_some(),
+                        "discarded table must be dropped after unlocking the cache"
+                    );
+                }
+                self.dropped.store(true, Ordering::Relaxed);
+            }
+        }
+
+        let cache = Arc::new(Cache::new(BTreeMap::new()));
+        let inserted = Arc::new(DropProbe::default());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let result = get_or_compute_cached(&cache, 4, || {
+            cache
+                .try_write()
+                .expect("twiddle construction must not hold a cache lock")
+                .insert(4, inserted.clone());
+            Arc::new(DropProbe {
+                cache: Arc::downgrade(&cache),
+                dropped: dropped.clone(),
+            })
+        });
+
+        assert!(Arc::ptr_eq(&result, &inserted));
+        assert!(dropped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    #[should_panic(expected = "incorrect number of twiddle layers")]
+    fn coset_dft_oop_rejects_missing_twiddle_layer() {
+        let dft = Radix2DitParallel::<F>::default();
+        let mut twiddles = dft
+            .get_or_compute_coset_twiddles((3, F::GENERATOR))
+            .to_vec();
+        twiddles.pop();
+        let src = RowMajorMatrix::new(alloc::vec![F::ONE; 8], 1);
+        let mut dst = RowMajorMatrix::new(alloc::vec![MaybeUninit::uninit(); 8], 1);
+
+        coset_dft_oop(
+            &src.as_view(),
+            &mut dst.as_view_mut(),
+            &twiddles,
+            0,
+            &|_, _| {},
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "incorrect twiddle count for layer 2")]
+    fn coset_dft_oop_rejects_short_twiddle_layer() {
+        let dft = Radix2DitParallel::<F>::default();
+        let mut twiddles = dft
+            .get_or_compute_coset_twiddles((3, F::GENERATOR))
+            .to_vec();
+        twiddles[2].clear();
+        let src = RowMajorMatrix::new(alloc::vec![F::ONE; 8], 1);
+        let mut dst = RowMajorMatrix::new(alloc::vec![MaybeUninit::uninit(); 8], 1);
+
+        coset_dft_oop(
+            &src.as_view(),
+            &mut dst.as_view_mut(),
+            &twiddles,
+            0,
+            &|_, _| {},
+        );
+    }
 
     #[test]
     fn coset_dft_idft_roundtrip() {
