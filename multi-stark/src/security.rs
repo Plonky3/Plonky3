@@ -315,8 +315,7 @@ where
                 constraint_degree: max_degree,
                 lookup,
                 // This prover spends one round per variable.
-                //
-                // A univariate-skip round would change the accounting, so it is declared
+                // A skip round would change the accounting, so it is declared
                 // absent rather than defaulted.
                 skip: None,
             },
