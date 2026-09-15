@@ -4,7 +4,7 @@ use core::ops::Range;
 
 use p3_field::PackedValue;
 
-use crate::Matrix;
+use crate::{Matrix, wrapping_row_index};
 use crate::bitrev::BitReversibleMatrix;
 
 /// A matrix wrapper that exposes a contiguous range of columns from an inner matrix.
@@ -152,7 +152,7 @@ where
         P: PackedValue<Value = T>,
     {
         self.vertically_packed_row::<P>(r)
-            .chain(self.vertically_packed_row::<P>(r + step))
+            .chain(self.vertically_packed_row::<P>(wrapping_row_index(r, step, self.height())))
             .collect()
     }
 }

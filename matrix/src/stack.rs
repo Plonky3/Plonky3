@@ -3,7 +3,7 @@ use core::ops::Deref;
 
 use p3_field::PackedValue;
 
-use crate::Matrix;
+use crate::{Matrix, wrapping_row_index};
 use crate::bitrev::BitReversibleMatrix;
 use crate::dense::RowMajorMatrixView;
 
@@ -231,7 +231,7 @@ impl<T: Send + Sync + Clone, Left: Matrix<T>, Right: Matrix<T>> Matrix<T>
         P: PackedValue<Value = T>,
     {
         self.vertically_packed_row::<P>(r)
-            .chain(self.vertically_packed_row::<P>(r + step))
+            .chain(self.vertically_packed_row::<P>(wrapping_row_index(r, step, self.height())))
             .collect()
     }
 }
