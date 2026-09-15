@@ -19,13 +19,15 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use hashbrown::HashMap;
 use p3_air::{Air, BaseAir};
 use p3_field::{ExtensionField, Field};
 use p3_lookup::indexed::{IndexedLookupError, IndexedLookups, TraceWindow};
 use p3_lookup::symbolic::InteractionSymbolicBuilder;
 use p3_multilinear_util::point::Point;
+use p3_sumcheck::layout::Table;
 
-use crate::logup_star::{Reader, TableLookup, position};
+use crate::logup_star::{Reader, ReaderWitness, TableLookup, TableWitness, position};
 use crate::opening::TableOpening;
 
 /// Where one table lives and how big it is.
@@ -259,26 +261,16 @@ impl IndexedPlan {
         point: &Point<EF>,
         openings: &[TableOpening<'_, EF>],
     ) -> IndexedStatement<EF> {
-        let mut points = Vec::with_capacity(self.num_readers());
-        let mut claims = Vec::with_capacity(self.num_readers());
-
-        for table in &self.tables {
-            for reader in &table.readers {
-                assert!(
-                    point.num_variables() >= reader.num_variables,
-                    "the bound point must cover every reader's trace"
-                );
-
-                // The reader's own coordinates are the trailing ones, as everywhere else.
-                let own = point
-                    .split_at(point.num_variables() - reader.num_variables)
-                    .1;
-
+        let claims = self
+            .tables
+            .iter()
+            .flat_map(|table| &table.readers)
+            .map(|reader| {
                 let opened = openings
                     .get(reader.air)
                     .expect("every AIR taking part carries an opening")
                     .local;
-                let pulled = reader
+                reader
                     .payload
                     .iter()
                     .map(|&column| {
@@ -286,10 +278,54 @@ impl IndexedPlan {
                             .get(column)
                             .expect("a reader pulls a column its AIR opened")
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Vec<_>>()
+            })
+            .collect();
 
-                points.push(own);
-                claims.push(pulled);
+        self.statement_from_claims(point, claims)
+    }
+
+    /// The statement a verifier holds, whose claims come from the proof rather than a trace.
+    ///
+    /// The points are still derived here, so no proof value decides where a claim is taken.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the bound point is shorter than a reader's own trace.
+    ///
+    /// Panics when the claim list does not describe every reader's pulled columns.
+    pub fn statement_from_claims<EF: Field>(
+        &self,
+        point: &Point<EF>,
+        claims: Vec<Vec<EF>>,
+    ) -> IndexedStatement<EF> {
+        assert_eq!(
+            claims.len(),
+            self.num_readers(),
+            "the claim list must carry one entry per reader"
+        );
+
+        let mut points = Vec::with_capacity(self.num_readers());
+        let mut reader = 0;
+        for table in &self.tables {
+            for placement in &table.readers {
+                assert!(
+                    point.num_variables() >= placement.num_variables,
+                    "the bound point must cover every reader's trace"
+                );
+                assert_eq!(
+                    claims[reader].len(),
+                    placement.payload.len(),
+                    "every reader claims one value per column it pulls"
+                );
+
+                // The reader's own coordinates are the trailing ones, as everywhere else.
+                points.push(
+                    point
+                        .split_at(point.num_variables() - placement.num_variables)
+                        .1,
+                );
+                reader += 1;
             }
         }
 
@@ -346,6 +382,15 @@ impl<EF: Field> IndexedStatement<EF> {
             .collect()
     }
 
+    /// What each reader claims it pulled, in plan order.
+    ///
+    /// These travel in the proof.
+    ///
+    /// A verifier has no other way to hold them before the opening.
+    pub fn claims(&self) -> &[Vec<EF>] {
+        &self.claims
+    }
+
     /// Group the readers into one entry per table, in plan order.
     ///
     /// # Panics
@@ -370,6 +415,127 @@ impl<EF: Field> IndexedStatement<EF> {
                 first += count;
                 lookup
             })
+            .collect()
+    }
+}
+
+/// Prover data behind one batch's indexed lookups, owned so the reduction can borrow it.
+pub struct IndexedWitness<'a, F> {
+    /// Entry each reader row names, grouped by table then reader, in plan order.
+    positions: Vec<Vec<Vec<usize>>>,
+    /// The columns each table's entries carry, in plan order.
+    columns: Vec<Vec<&'a [F]>>,
+}
+
+impl<'a, F: Field> IndexedWitness<'a, F> {
+    /// Read the tables and the entry each reader row names out of the committed traces.
+    ///
+    /// A position column holds the entry under the embedding, not the entry itself.
+    ///
+    /// The entry is recovered by embedding every entry the table has and matching.
+    ///
+    /// That costs one pass over a table the reduction already walks.
+    ///
+    /// It also makes an out-of-range row a miss rather than a wrong answer.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a position column names something no entry of its table embeds to.
+    ///
+    /// Panics when a plan names a trace the batch does not carry.
+    pub fn build(
+        plan: &IndexedPlan,
+        main: &'a [&'a Table<F>],
+        preprocessed: &'a [Option<&'a Table<F>>],
+    ) -> Self {
+        let mut positions = Vec::with_capacity(plan.tables().len());
+        let mut columns = Vec::with_capacity(plan.tables().len());
+
+        for table in plan.tables() {
+            // Where the table's own columns live decides which commitment holds them.
+            let source = match table.table.window {
+                TraceWindow::Main => *main
+                    .get(table.table.air)
+                    .expect("a table's AIR carries a main trace"),
+                TraceWindow::Preprocessed => preprocessed
+                    .get(table.table.air)
+                    .copied()
+                    .flatten()
+                    .expect("a preprocessed table's AIR carries a preprocessed trace"),
+            };
+            columns.push(
+                table
+                    .table
+                    .columns
+                    .iter()
+                    .map(|&column| source.poly(column).into_slice())
+                    .collect(),
+            );
+
+            // One entry per embedding, so a row's committed value names its entry.
+            let entries = 1usize << table.table.num_variables;
+            let mut entry_of = HashMap::with_capacity(entries);
+            for entry in 0..entries {
+                entry_of.insert(position::embed::<F>(entry), entry);
+            }
+
+            positions.push(
+                table
+                    .readers
+                    .iter()
+                    .map(|reader| {
+                        let named = main
+                            .get(reader.air)
+                            .expect("a reader's AIR carries a main trace")
+                            .poly(reader.position)
+                            .into_slice();
+                        named
+                            .iter()
+                            .map(|value| {
+                                *entry_of
+                                    .get(value)
+                                    .expect("a row names an entry outside its table")
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            );
+        }
+
+        Self { positions, columns }
+    }
+
+    /// Borrowing view of every reader, grouped by table, in plan order.
+    ///
+    /// The result is kept by the caller, because the witness below borrows from it.
+    pub fn readers(&self) -> Vec<Vec<ReaderWitness<'_>>> {
+        self.positions
+            .iter()
+            .map(|table| {
+                table
+                    .iter()
+                    .map(|positions| ReaderWitness { positions })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Group the tables and their readers into what the reduction consumes.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the reader list does not match the one this witness describes.
+    pub fn tables<'b>(&'b self, readers: &'b [Vec<ReaderWitness<'b>>]) -> Vec<TableWitness<'b, F>> {
+        assert_eq!(
+            readers.len(),
+            self.columns.len(),
+            "the reader list must be the one this witness describes"
+        );
+
+        self.columns
+            .iter()
+            .zip(readers)
+            .map(|(columns, readers)| TableWitness { columns, readers })
             .collect()
     }
 }

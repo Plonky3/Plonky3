@@ -48,16 +48,7 @@ pub(super) struct BoundPoints<'a, EF> {
     pub(super) table: Option<&'a Point<EF>>,
 }
 
-impl<'a, EF> BoundPoints<'a, EF> {
-    /// The points of a run that reached no indexed reduction.
-    pub(super) const fn at(bound: &'a Point<EF>) -> Self {
-        Self {
-            bound,
-            position: None,
-            table: None,
-        }
-    }
-
+impl<EF> BoundPoints<'_, EF> {
     /// The point a batch names.
     ///
     /// # Panics
@@ -809,7 +800,11 @@ mod tests {
         )]);
 
         let bound = labelled(1);
-        let _ = layout.schedule(&BoundPoints::at(&bound));
+        let _ = layout.schedule(&BoundPoints {
+            bound: &bound,
+            position: None,
+            table: None,
+        });
     }
 
     #[test]

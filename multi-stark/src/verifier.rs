@@ -53,6 +53,15 @@ where
     /// The batch's indexed lookups do not describe a reduction.
     #[error("indexed lookup: {0}")]
     IndexedLookup(p3_lookup::IndexedLookupError),
+    /// The indexed reduction failed its own checks.
+    #[error("indexed reduction: {0}")]
+    IndexedReduction(crate::logup_star::LogupStarError),
+    /// A reader's claim is not the value the commitment opens at the bound point.
+    #[error("an indexed reader claims a value its trace does not open to")]
+    IndexedClaimsUnopened,
+    /// The proof and the AIRs disagree on whether an indexed reduction exists.
+    #[error("indexed reduction present but not expected, or absent but described")]
+    UnexpectedIndexedReduction,
     /// An AIR names a public boundary cell or public value it does not have.
     #[error("instance {instance} boundary IO: {error}")]
     BoundaryIo {
@@ -106,10 +115,11 @@ where
 ///     3. replay public values, one step per instance
 ///     4. verify the lookup reduction (if any)  -> delegated
 ///     5. verify zerocheck sumcheck             -> delegated, yields bound point r
-///     6. open main tables at r                 -> delegated, bound to the main commitment
-///     7. open preprocessed tables at r (if any)
+///     6. verify the indexed reduction (if any) -> delegated, closes on two further points
+///     7. open main tables                      -> at r and the reduction's own points
+///     8. open preprocessed tables (if any)
 ///                                              -> delegated, bound to the preprocessed commitment
-///     8. recompute the batched constraint at r and match the reduced sum
+///     9. recompute the batched constraint at r, and match every indexed claim
 /// ```
 ///
 /// Both sides walk one pattern, and each driver checks only its own party against it:
@@ -282,6 +292,38 @@ where
         }
     };
 
+    // 6. Verify the indexed reduction against the point the zerocheck bound.
+    //
+    // The claims come from the proof, since only the opening supplies committed values.
+    //
+    // The closing check is what ties them to the commitment.
+    let indexed = match (indexed_plan.as_ref(), proof.indexed.as_ref()) {
+        (Some(plan), Some(round)) => {
+            let statement =
+                plan.statement_from_claims(&reduction.point, round.reader_claims.clone());
+            let readers = statement.readers();
+            let lookups = statement.lookups(&readers);
+
+            match transcript
+                .indexed_lookup(|challenger| round.reduction.verify(&lookups, challenger))
+            {
+                Ok(output) => Some((statement, output)),
+                Err(error) => {
+                    transcript.abort();
+                    return Err(VerificationError::IndexedReduction(error));
+                }
+            }
+        }
+        (None, None) => None,
+        // The shape describes the bracket exactly when the AIRs declare a read.
+        //
+        // The two disagree only if the proof carries a section nobody asked for.
+        _ => {
+            transcript.abort();
+            return Err(VerificationError::UnexpectedIndexedReduction);
+        }
+    };
+
     // Invariant: a return between here and the driver's `finish` must release the driver first.
     //
     //     main opening            -> Begin, the scheme's own run, End, on any outcome
@@ -294,8 +336,12 @@ where
 
     // 6. Open the committed main trace tables at their suffixes of the bound point.
     // The returned values are bound to the main commitment.
-    let main_layout = instances.main_layout(None);
-    let main_schedule = main_layout.schedule(&BoundPoints::at(&reduction.point));
+    let main_layout = instances.main_layout(indexed_plan.as_ref());
+    let main_schedule = main_layout.schedule(&BoundPoints {
+        bound: &reduction.point,
+        position: indexed.as_ref().map(|(_, out)| &out.position_point),
+        table: indexed.as_ref().map(|(_, out)| &out.table_point),
+    });
     let main_evals = match transcript.main_opening(|challenger| {
         config.pcs().verify_at(
             &proof.commitment,
@@ -315,8 +361,12 @@ where
 
     // 7. Open the preprocessed tables at their suffixes of the same bound point.
     // The owned batches are kept local so the closing check can borrow them.
-    let preprocessed_layout = instances.preprocessed_layout(None);
-    let preprocessed_schedule = preprocessed_layout.schedule(&BoundPoints::at(&reduction.point));
+    let preprocessed_layout = instances.preprocessed_layout(indexed_plan.as_ref());
+    let preprocessed_schedule = preprocessed_layout.schedule(&BoundPoints {
+        bound: &reduction.point,
+        position: None,
+        table: indexed.as_ref().map(|(_, out)| &out.table_point),
+    });
     let opened_preprocessed = transcript.preprocessed_opening(|challenger| {
         let commitment = preprocessed_commitment
             .expect("a described preprocessed commitment is checked before the replay");
@@ -354,6 +404,20 @@ where
             TableOpening::new(batch.current(), next_columns, batch.next())
         })
         .collect::<Vec<_>>();
+
+    // The indexed reduction ran on claims the proof supplied, which nothing had authenticated.
+    //
+    // The opening has now produced the committed values at that same point.
+    //
+    // Comparing the two is what binds the reduction to the commitment.
+    if let Some((statement, _)) = &indexed {
+        let plan = indexed_plan
+            .as_ref()
+            .expect("an indexed statement comes from an indexed plan");
+        if statement.claims() != plan.statement(&reduction.point, &main_openings).claims() {
+            return Err(VerificationError::IndexedClaimsUnopened);
+        }
+    }
 
     // Build one preprocessed opening view per instance, in instance order.
     //

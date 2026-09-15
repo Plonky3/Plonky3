@@ -11,10 +11,12 @@ use p3_sumcheck::PrescribedPointPcs;
 use crate::ProverInstances;
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 use crate::folder::ProverAir;
-use crate::indexed::IndexedPlan;
+use crate::indexed::{IndexedPlan, IndexedWitness};
 use crate::instance::{BoundPoints, ProverParts};
+use crate::logup_star::LogupStarProof;
 use crate::lookup::prove_lookup;
-use crate::proof::MultiStarkProof;
+use crate::opening::TableOpening;
+use crate::proof::{IndexedLookupProof, MultiStarkProof};
 use crate::security::{SecurityError, assess_statement};
 use crate::transcript::{MultiStarkProverTranscript, MultiStarkShape};
 use crate::zerocheck::AirZerocheck;
@@ -74,8 +76,9 @@ where
 ///     3. bind public values, one step per instance
 ///     4. lookup reduction (if any)  -> delegated
 ///     5. zerocheck reduction        -> delegated, yields bound point r
-///     6. open main tables at r      -> delegated, openings bound to the main commitment
-///     7. open preprocessed tables at r (if any)
+///     6. indexed reduction (if any) -> delegated, closes on two further points
+///     7. open main tables           -> delegated, at r and the reduction's own points
+///     8. open preprocessed tables (if any)
 ///                                   -> delegated, bound to the preprocessed commitment
 /// ```
 ///
@@ -268,16 +271,58 @@ where
             challenger,
         )
     });
+    // 6. Reduce every indexed lookup against the point the zerocheck bound.
+    //
+    // The reduction needs what each reader pulled there.
+    //
+    // The zerocheck has just produced exactly those values.
+    //
+    // It leaves claims at two further points, which the opening below covers.
+    let indexed_round = indexed_plan.as_ref().map(|plan| {
+        let next_columns = instances.next_columns();
+        let openings = zerocheck_proof
+            .local
+            .iter()
+            .zip(&zerocheck_proof.next)
+            .zip(&next_columns)
+            .map(|((local, next), next_columns)| TableOpening::new(local, next_columns, next))
+            .collect::<Vec<_>>();
+        let statement = plan.statement(&point, &openings);
+
+        let readers = statement.readers();
+        let lookups = statement.lookups(&readers);
+        let witness = IndexedWitness::build(plan, &tables, &preprocessed_tables);
+        let reader_views = witness.readers();
+        let table_views = witness.tables(&reader_views);
+
+        let (reduction, output) = transcript
+            .indexed_lookup(|challenger| LogupStarProof::prove(&lookups, &table_views, challenger));
+        (
+            IndexedLookupProof {
+                reader_claims: statement.claims().to_vec(),
+                reduction,
+            },
+            output,
+        )
+    });
+    let (indexed_round, indexed_output) = match indexed_round {
+        Some((round, output)) => (Some(round), Some(output)),
+        None => (None, None),
+    };
+
     let sumcheck = zerocheck_proof.sumcheck;
 
     drop(tables);
     drop(preprocessed_tables);
 
-    // 6. Open each main trace table at its suffix of the common bound point.
+    // 7. Open each main trace table at every point a claim was left at.
+    let main_layout = instances.main_layout(indexed_plan.as_ref());
     let opening = transcript.main_opening(|challenger| {
-        let schedule = instances
-            .main_layout(None)
-            .schedule(&BoundPoints::at(&point));
+        let schedule = main_layout.schedule(&BoundPoints {
+            bound: &point,
+            position: indexed_output.as_ref().map(|out| &out.position_point),
+            table: indexed_output.as_ref().map(|out| &out.table_point),
+        });
         config.pcs().open_at(
             prover_data,
             schedule.protocol(),
@@ -301,8 +346,12 @@ where
             .as_ref()
             .expect("preprocessed proving key is missing for an AIR with preprocessed columns");
         let schedule = instances
-            .preprocessed_layout(None)
-            .schedule(&BoundPoints::at(&point));
+            .preprocessed_layout(indexed_plan.as_ref())
+            .schedule(&BoundPoints {
+                bound: &point,
+                position: None,
+                table: indexed_output.as_ref().map(|out| &out.table_point),
+            });
         config.preprocessed_pcs().open_at(
             preprocessed.prover_data.clone(),
             schedule.protocol(),
@@ -326,7 +375,7 @@ where
     Ok(MultiStarkProof {
         commitment,
         lookup: lookup_proof,
-        indexed: None,
+        indexed: indexed_round,
         sumcheck,
         opening,
         preprocessed_opening,

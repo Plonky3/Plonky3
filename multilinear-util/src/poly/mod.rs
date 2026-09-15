@@ -70,6 +70,17 @@ pub struct Poly<F, S = Vec<F>>(pub(crate) S, PhantomData<F>);
 /// Borrowed view of a multilinear polynomial's evaluation table.
 pub type PolyView<'a, F> = Poly<F, &'a [F]>;
 
+impl<'a, F> PolyView<'a, F> {
+    /// The evaluations this view borrows, for as long as the table it came from lives.
+    ///
+    /// Taking a reference through the view instead would tie the slice to the view.
+    #[inline]
+    #[must_use]
+    pub const fn into_slice(self) -> &'a [F] {
+        self.0
+    }
+}
+
 impl<F, S> Poly<F, S>
 where
     S: Borrow<[F]>,
