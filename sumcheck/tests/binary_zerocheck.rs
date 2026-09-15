@@ -105,14 +105,12 @@ fn verify_and_discharge(
 
     // The commitment would open each operand at the claimed point.
     //
-    // Recombining those openings under the batching challenge must match the claimed value.
-    let mut recombined = EF::ZERO;
-    for operand in (0..3).rev() {
-        let opened = witness.multilinear(operand).eval_base(&claim.point);
-        recombined = recombined * claim.gamma + opened;
-    }
+    // The claim itself owns the recombination, so a caller cannot batch them differently.
+    let openings = (0..3)
+        .map(|operand| witness.multilinear(operand).eval_base(&claim.point))
+        .collect::<Vec<_>>();
 
-    Ok(recombined == claim.value)
+    Ok(claim.is_answered_by(&openings))
 }
 
 #[test]
